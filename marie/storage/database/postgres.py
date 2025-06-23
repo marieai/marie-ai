@@ -13,11 +13,11 @@ class PostgresqlMixin:
     provider = "postgres"
 
     def _setup_storage(
-        self,
-        config: Dict[str, Any],
-        create_table_callback: Optional[Callable] = None,
-        reset_table_callback: Optional[Callable] = None,
-        connection_only=False,
+            self,
+            config: Dict[str, Any],
+            create_table_callback: Optional[Callable] = None,
+            reset_table_callback: Optional[Callable] = None,
+            connection_only=False,
     ) -> None:
         """
         Setup PostgreSQL connection pool.
@@ -71,8 +71,16 @@ class PostgresqlMixin:
             self._close_connection(self.connection)
 
     def _close_connection(self, connection):
-        # restore it to the pool
-        self.postgreSQL_pool.putconn(connection)
+        """Return connection to pool """
+        try:
+            # restore it to the pool
+            self.postgreSQL_pool.putconn(connection)
+        except Exception as e:
+            self.logger.warning(f"Error returning connection to pool: {e}")
+            try:
+                connection.close()
+            except:
+                pass  # Connection might already be closed
 
     def _get_connection(self):
         # by default psycopg2 is not auto-committing
@@ -83,9 +91,9 @@ class PostgresqlMixin:
         return connection
 
     def _init_table(
-        self,
-        create_table_callback: Optional[Callable] = None,
-        reset_table_callback: Optional[Callable] = None,
+            self,
+            create_table_callback: Optional[Callable] = None,
+            reset_table_callback: Optional[Callable] = None,
     ) -> None:
         """
         Use table if exists or create one if it doesn't.
@@ -118,30 +126,53 @@ class PostgresqlMixin:
         ).fetchall()[0][0]
 
     def _execute_sql_gracefully(
-        self,
-        statement: object,
-        data: object = tuple(),
-        *,
-        named_cursor_name: Optional[str] = None,
-        itersize: Optional[int] = 10000,
-        connection: Optional[psycopg2.extensions.connection] = None,
+            self,
+            statement: object,
+            data: object = tuple(),
+            *,
+            named_cursor_name: Optional[str] = None,
+            itersize: Optional[int] = 10000,
+            connection: Optional[psycopg2.extensions.connection] = None,
+            max_retries: int = 3,
     ) -> psycopg2.extras.DictCursor:
         conn = connection or self.connection
+
+        for attempt in range(max_retries):
+            try:
+                cursor = conn.cursor(named_cursor_name) if named_cursor_name else conn.cursor()
+                if named_cursor_name:
+                    cursor.itersize = itersize
+
+                cursor.execute(statement, data if data else statement)
+                conn.commit()
+                return cursor
+
+            except psycopg2.InterfaceError as error:
+                if "connection already closed" not in str(error):
+                    self._safe_rollback(conn)
+                    raise
+
+                # Connection closed - try to get new one
+                if connection is not None or attempt == max_retries - 1:
+                    raise  # Can't retry external connections or last attempt
+
+                self.logger.warning(f"Connection closed, retrying ({attempt + 1}/{max_retries})")
+                conn = self._get_fresh_connection()
+
+            except Exception as error:
+                self.logger.error(f"SQL error: {error}")
+                self._safe_rollback(conn)
+                raise
+
+    def _safe_rollback(self, conn):
+        """Rollback without raising on closed connections."""
         try:
-            if named_cursor_name:
-                cursor = conn.cursor(named_cursor_name)
-                cursor.itersize = itersize
-            else:
-                cursor = conn.cursor()
-            if data:
-                cursor.execute(statement, data)
-            else:
-                cursor.execute(statement)
-            return cursor
-        except (Exception, psycopg2.Error) as error:
-            # except psycopg2.errors.UniqueViolation as error:
-            self.logger.debug(f"Error while executing {statement}: {error}.")
             conn.rollback()
-            raise error
-        finally:
-            conn.commit()
+        except psycopg2.InterfaceError:
+            pass  # Connection already closed
+
+    def _get_fresh_connection(self):
+        """Get a new connection from pool and update self.connection."""
+        self._close_connection(self.connection)
+        self.connection = self._get_connection()
+        return self.connection

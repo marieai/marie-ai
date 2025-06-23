@@ -1635,7 +1635,6 @@ class WorkerRequestHandler:
                 self.logger.error(
                     f"Error recording job status SUCCEEDED {job_id} : {e}"
                 )
-                print(e)
 
     def _request_attributes(self, requests: List["DataRequest"]) -> Dict:
         exec_endpoint: str = requests[0].header.exec_endpoint
