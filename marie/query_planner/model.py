@@ -23,6 +23,8 @@ class QueryPlannersConf:
     """Represents the query planners configuration."""
 
     planners: List[PlannerConf]
+    watch_wheels: bool = False
+    wheel_directories: List[str] = None
 
     def __post_init__(self):
         if not isinstance(self.planners, list):
@@ -47,6 +49,8 @@ class QueryPlannersConf:
                 raise ValueError("Missing 'query_planners' in configuration")
 
             query_planners_data = data['query_planners']
+            watch_wheels = query_planners_data.get('watch_wheels', False)
+            wheel_directories = query_planners_data.get('wheel_directories', [])
 
             if 'planners' not in query_planners_data:
                 raise ValueError("Missing 'planners' in query_planners")
@@ -73,7 +77,11 @@ class QueryPlannersConf:
                     )
                 )
 
-            return cls(planners=planners)
+            return cls(
+                planners=planners,
+                watch_wheels=watch_wheels,
+                wheel_directories=wheel_directories,
+            )
 
         except yaml.YAMLError as e:
             raise yaml.YAMLError(f"YAML parsing error: {str(e)}")
@@ -97,7 +105,14 @@ class QueryPlannersConf:
                 )
             )
 
-        return cls(planners=planners)
+        watch_wheels = data.get('watch_wheels', False)
+        wheel_directories = data.get('wheel_directories', [])
+
+        return cls(
+            planners=planners,
+            watch_wheels=watch_wheels,
+            wheel_directories=wheel_directories,
+        )
 
     def get_planner_by_name(self, name: str) -> PlannerConf:
         """Get a planner by name."""
@@ -117,9 +132,11 @@ class QueryPlannersConf:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format."""
         return {
+            'watch_wheels': self.watch_wheels,
+            'wheel_directories': self.wheel_directories or [],
             'planners': [
                 {'name': p.name, 'py_module': p.py_module} for p in self.planners
-            ]
+            ],
         }
 
 
@@ -127,6 +144,9 @@ class QueryPlannersConf:
 if __name__ == "__main__":
     yaml_content = """
     query_planners:
+      watch_wheels: True
+      wheel_directories:
+        - /mnt/data/marie-ai/config/wheels    
       planners:
         - name: tid_100985
           py_module: grapnel_g5.query.tid_100985.query

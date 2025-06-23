@@ -159,6 +159,16 @@ class EtcdClient(object):
         self._grpc_options: List[Tuple[str, Any]] = grpc_options or []
         self._is_multi_endpoint: bool = len(self._endpoints) > 1
 
+        # convert endpoint to  etcd3.Endpoint
+        if self._is_multi_endpoint:
+            secure = (
+                True if self._ca_cert or self._cert_key or self._cert_cert else False
+            )
+            self._endpoints = [
+                etcd3.Endpoint(host=host, port=port, secure=secure)
+                for host, port in self._endpoints
+            ]
+
         self.connect()
 
     def _normalize_endpoints(self, endpoints, etcd_host, etcd_port):
@@ -265,6 +275,9 @@ class EtcdClient(object):
 
         if self._is_multi_endpoint:
             client_kwargs['endpoints'] = self._endpoints
+            # we need to pop the grpc_options from client_kwargs as they are not part of the constructor
+            client_kwargs.pop('grpc_options')
+
             return MultiEndpointEtcd3Client(**client_kwargs)
         else:
             # Use single endpoint client

@@ -28,11 +28,21 @@ docker exec -it etcd etcdctl get "" --prefix=true
 docker exec -it etcd etcdctl get "" --from-key
 ```
 
+Multinode etcd cluster:
+
+```bash
+docker exec -it etcd etcdctl --endpoints=mariectl-002:2379,mariectl-003:2379,mariectl-004:2379 get "" --prefix=true
+```
+
+
+
 
 ## Purge the etcd data
 
 ```bash
 docker exec -it etcd etcdctl del "" --from-key=true
+
+docker exec -it etcd etcdctl --endpoints=mariectl-002:2379,mariectl-003:2379,mariectl-004:2379  del "" --from-key=true
 ```
 
 ## Install the `etcd3` package

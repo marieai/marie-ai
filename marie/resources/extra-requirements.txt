@@ -35,15 +35,13 @@ numpy:                       standard,core
 # Pinning to version 3.20.2 as this will cause issues with tensorboard
 #protobuf==3.20.2:            standard,core
 protobuf>=3.20.2, <4.24:            standard,core
-grpcio>=1.46.0,<=1.68.0:    core
-grpcio-reflection>=1.46.0,<=1.68.0:  core
-grpcio-health-checking>=1.46.0,<=1.68.0:  core
+grpcio>=1.46.0,<=1.57.0:    core
+grpcio-reflection>=1.46.0,<=1.57.0:  core
+grpcio-health-checking>=1.46.0,<=1.57.0:  core
 pyyaml>=5.3.1:              standard,core
 packaging>=20.0:            standard,core
-# docarray>=0.16.4:           standard,core
-# docarray==0.19.1:           standard,core
-#docarray>=0.19.1,<0.30.0:    standard,core
-docarray>=0.16.4:           core
+# We have to be on 0.40.0 for the latest version of docarray, newer version causes startup process
+docarray>=0.16.4,<=0.40.0:  core
 
 prometheus_client:          standard,perf
 psutil:                     perf,standard,devel
@@ -59,32 +57,33 @@ opentelemetry-instrumentation-aiohttp-client>=0.33b0:    perf,standard,devel
 opentelemetry-instrumentation-fastapi>=0.33b0: perf,standard,devel
 opentelemetry-exporter-otlp-proto-grpc>=1.13.0: perf,standard,devel
 
-fastapi>=0.76.0:            standard,devel
+fastapi>=0.100.1:            standard,devel
 uvicorn[standard]<=0.23.1:  standard,devel
 docker:                     standard,devel
 pathspec:                   standard,devel
 filelock:                   standard,devel
 requests:                   standard,devel
 websockets:                 standard,devel
-pydantic:                   core
+# very important that we pin this to 2.10.0, otherwise it will cause issues  in models.CustomConfig
+pydantic==2.10.0:           core
 python-multipart:           standard,devel
 aiofiles:                   standard,devel
 aiohttp:                    standard,devel
 aiostream:                  standard,devel
 
-pytest:                     test
+pytest<8.0.0:               test
 pytest-timeout:             test
 pytest-mock:                test
 pytest-cov==3.0.0:          test
 coverage==6.2:              test
 pytest-repeat:              test
-pytest-asyncio:             test
+pytest-asyncio<0.23.0:      test
 pytest-reraise:             test
 mock:                       test
 requests-mock:              test
 pytest-custom_exit_code:    test
-black==22.3.0:              test
-kubernetes>=18.20.0:        test
+black==24.3.0:              test
+kubernetes>=18.20.0,<31.0.0: test
 pytest-kind==22.11.1:       test
 pytest-lazy-fixture:        test
 torch:                      cicd
@@ -98,7 +97,8 @@ transformers:                 standard,core
 anyconfig:                    standard,core
 
 python-consul2:               standard,devel
-fastwer==0.1.3:               standard,core
+# PROVIDED VIA CUSTOM WHEEL
+#fastwer==0.1.3:               standard,core
 matplotlib:                   standard,core
 albumentations:               standard,core
 dominate==2.7.0:              standard,core
@@ -106,8 +106,6 @@ lmdb:                         standard,core
 natsort:                      standard,core
 celery:                       standard,core
 
-# opencv-python==4.5.4.60:      standard,core
-#opencv-python==4.7.0.68:      standard,core
 # MEMORY LEAK FIXED RELATED TO  https://github.com/opencv/opencv/issues/23633
 opencv-python==4.8.1.78:      standard,core
 
@@ -117,7 +115,7 @@ PyPDF4:                       standard,core
 reportlab:                    standard,core
 pycocotools:                  standard,core
 nltk:                         standard,core
-timm==0.6.12:                 standard,core
+timm==1.0.11:                 standard,core
 #segmentation-models-pytorch:  standard,core
 Wand:                         standard,core
 
@@ -126,18 +124,18 @@ pybind11:                     standard,core
 jsons:                        standard,core
 shapely:                      standard,core
 gradio:                       devel
-psycopg2-binary==2.8.6:       standard,core
+psycopg2-binary==2.9.10:      standard,core
 pytest:                       standard,core
 nlpaug:                       standard,core
 munch:                        standard,core
 
 # opentelemetry-api:          standard,core
 
-onnx==1.15.0:                 standard,core
-onnxruntime==1.20.0:          standard,core
+onnx:                         standard,core
+onnxruntime:                  standard,core
 onnxruntime-gpu:              standard,core
-onnxconverter_common==1.13.0: standard,core
-onnxmltools:                  standard,core
+# onnxconverter_common==1.13.0: standard,core
+# onnxmltools:                  standard,core
 
 pika:                         standard,core
 sentencepiece:                standard,core
@@ -153,8 +151,9 @@ omegaconf==2.3.0:             standard,core
 hydra-core==1.3.1:            standard,core
 Pillow-SIMD:                  standard,core
 
+# INSTALLED VIA CONTAINER BUILD
 # https://github.com/facebookresearch/detectron2/issues/5010
-pillow~=9.5:                  standard,core
+# pillow~=9.5:                  standard,core
 
 pytesseract:                  standard,core
 patchify==0.2.3:              standard,core
@@ -168,4 +167,17 @@ seaborn:                      standard,core
 textual:                      standard,core
 textual_textarea:             standard,core
 textual_fastdatatable:        standard,core
-etcd3:                        standard,core
+# PROVIDED VIA CUSTOM WHEEL
+# etcd3:                        standard,core
+
+typing_extensions>=4.12.2:    standard,core
+# DIRECTLY INSTALLED IN container
+vllm==0.7.3:                  standard,core
+rtree:                        standard,core
+scikit-image:                  standard,core
+filetype:                      standard,core
+dataclasses_json:              standard,core
+
+faiss-gpu-cu12:                standard,core
+sentence-transformers==4.1.0:  standard,core
+watchdog:                      standard,core

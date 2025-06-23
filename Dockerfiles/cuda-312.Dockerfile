@@ -25,14 +25,14 @@ LABEL org.opencontainers.image.vendor="Marie AI" \
       org.opencontainers.image.description="Build multimodal AI services via cloud native technologies" \
       org.opencontainers.image.authors="hello@marieai.co" \
       org.opencontainers.image.url="https://github.com/marieai/marie-ai" \
-      org.opencontainers.image.documentation="https://docs.marieai.co"
+      org.opencontainers.image.documentation="https://docs.marieai.co" \
+      org.opencontainers.image.created=${BUILD_DATE} \
+      org.opencontainers.image.source="https://github.com/marieai/marie-ai${VCS_REF}" \
+      org.opencontainers.image.version=${MARIE_VERSION} \
+      org.opencontainers.image.revision=${VCS_REF}
 
 
 ENV DEBIAN_FRONTEND=noninteractive
-
-# constant, wont invalidate cache
-ENV PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Tweak this list to reduce build time
 # https://developer.nvidia.com/cuda-gpus
@@ -50,7 +50,7 @@ ENV PIP_DEFAULT_TIMEOUT=100 \
 RUN test -e /usr/local/cuda/bin/nvcc
 RUN /usr/local/cuda/bin/nvcc --version
 
-RUN apt-get update && \
+RUN apt-get update -o APT::Update::Error-Mode=any && \
     DEBIAN_FRONTEND=noninteractive apt-get -qq install software-properties-common
 RUN add-apt-repository ppa:deadsnakes/ppa
 
@@ -93,9 +93,9 @@ RUN ln -sf /usr/bin/python3.12 /usr/bin/python3 \
 # Install requirements
 # change on extra-requirements.txt, setup.py will invalid the cache
 COPY requirements.txt extra-requirements.txt setup.py /tmp/
-COPY ./patches/* /tmp/patches/
-COPY ./wheels/* /tmp/wheels/
-
+# Copy directories
+COPY patches/ /tmp/patches/
+COPY wheels/ /tmp/wheels/
 
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3.12 -m venv $VIRTUAL_ENV
@@ -114,9 +114,6 @@ RUN python3 --version \
 RUN python3 -m pip install /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl \
     && python3 -m pip install /tmp/wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl
 
-# RUN python3 -m pip install intel-openmp
-# RUN /bin/bash -c ". /opt/venv/bin/activate \
-#     && python3 -c 'import torch; print(torch.__version__); print(torch.cuda.is_available())'"
 
 RUN python3 -m pip install omegaconf==2.3.0 \
     && python3 /tmp/patches/patch-omegaconf-py312.py --no-confirm
@@ -124,10 +121,15 @@ RUN python3 -m pip install omegaconf==2.3.0 \
 # Order is important, need to install detectron2 last expected version is 0.6
 # We also disable build isolation to avoid issues with error in detectron2 : No module named 'torch'
 
-RUN python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 \
+RUN python3 -m pip install torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 \
     && python3 -m pip install git+https://github.com/facebookresearch/fvcore \
     && python3 -m pip install git+https://github.com/marieai/fairseq.git  \
     && python3 -m pip install --no-build-isolation  git+https://github.com/facebookresearch/detectron2.git -v 
+
+# Installing VLLM independently to avoid issues with torch version, down the road we will use as  --constraint constraints.txt
+RUN python3 -m pip install vllm==0.7.3
+# ISSUE https://github.com/marieai/marie-ai/issues/136
+RUN python3 -m pip install pillow==9.5.0
 
 RUN cd /tmp/ \
     && python3 -m pip install --default-timeout=100 --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
@@ -164,7 +166,7 @@ LABEL org.opencontainers.image.created=${BUILD_DATE} \
 
 
 # Install necessary apt packages
-RUN apt-get update && \
+RUN apt-get update -o APT::Update::Error-Mode=any && \
     DEBIAN_FRONTEND=noninteractive apt-get -qq install software-properties-common
 RUN add-apt-repository ppa:deadsnakes/ppa
 
@@ -174,7 +176,7 @@ RUN apt-get update && \
         tzdata \
         python3.12 \
         python3.12-venv \
-        python3.12-dev \        
+        python3.12-dev \
         python3-opencv \
         git \
         git-lfs \
@@ -216,7 +218,7 @@ COPY ./im-policy.xml /etc/ImageMagick-6/policy.xml
 COPY . /marie/
 
 # Testing force copy
-COPY ./marie/proto/docarray_v2/ /marie/proto/docarray_v1/
+COPY ./marie/proto/docarray_v1/ /marie/proto/docarray_v1/
 COPY ./marie/proto/docarray_v2/ /marie/proto/docarray_v2/
 
 
