@@ -93,13 +93,17 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         if namespace is None:
             namespace = b"DEFAULT"
 
-        query = f"SELECT key, value FROM {self.table} WHERE key = '{key.decode()}'  AND namespace = '{namespace.decode()}' AND is_deleted = FALSE"
-        cursor = self._execute_sql_gracefully(query, data=())
+        cursor = None
+        try:
+            query = f"SELECT key, value FROM {self.table} WHERE key = '{key.decode()}'  AND namespace = '{namespace.decode()}' AND is_deleted = FALSE"
+            cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True)
+            result = cursor.fetchone()
 
-        result = cursor.fetchone()
-        if result and (result[0] is not None):
-            return result[1]
-        return None
+            if result and (result[0] is not None):
+                return result[1]
+            return None
+        finally:
+            self._close_cursor(cursor)
 
     async def internal_kv_multi_get(
         self,
@@ -138,12 +142,16 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             DO 
             UPDATE SET value = '{value.decode()}', updated_at = current_timestamp
         """
+        cursor = None
+        try:
+            query = insert_q + upsert_q if overwrite else insert_q
+            cursor = self._execute_sql_gracefully(query, return_cursor=True)
 
-        query = insert_q + upsert_q if overwrite else insert_q
-        cursor = self._execute_sql_gracefully(query)
-        if cursor is None:
-            return 0
-        return cursor.rowcount
+            if cursor is None:
+                return 0
+            return cursor.rowcount
+        finally:
+            self._close_cursor(cursor)
 
     async def internal_kv_del(
         self,
@@ -160,9 +168,15 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             raise NotImplementedError
         else:
             query = f"DELETE FROM {self.table} WHERE key = '{key.decode()}' AND namespace = '{namespace.decode()}'"
-            cursor = self._execute_sql_gracefully(query, data=())
-            if cursor is not None:
-                return 1
+            cursor = None
+
+            try:
+                cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True)
+                if cursor is not None:
+                    return 1
+            finally:
+                self._close_cursor(cursor)
+
         return 0
 
     async def internal_kv_exists(
@@ -177,12 +191,17 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             namespace = b"DEFAULT"
         result = []
         with self:
+            cursor = None
             try:
                 query = f"SELECT key  FROM {self.table} WHERE  namespace = '{namespace.decode()}' AND is_deleted = FALSE"
-                for record in self._execute_sql_gracefully(query, data=()):
+                cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True)
+
+                for record in cursor:
                     result.append(record[0])
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error executing sql statement: {error}")
+            finally:
+                self._close_cursor(cursor)
         return result
 
     def internal_kv_reset(self) -> None:

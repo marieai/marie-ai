@@ -10,7 +10,13 @@ services:
 #    image: postgres:${POSTGRES_VERSION}
     # pgvector/pgvector:pg16
     image: ghcr.io/ferretdb/postgres-documentdb:17-0.103.0
-    command: postgres -c 'max_connections=200'
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_preload_libraries=pg_stat_statements
+      -c pg_stat_statements.track=all
+      -c enable_partition_pruning=on
+      -c constraint_exclusion=partition
     restart: on-failure
     ports:
       - "5432:5432"

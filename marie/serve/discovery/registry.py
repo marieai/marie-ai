@@ -8,7 +8,9 @@ import etcd3
 
 from marie.helper import get_or_reuse_loop
 from marie.serve.discovery.address import JsonAddress, PlainAddress
+from marie.serve.discovery.container import EtcdConfig
 from marie.serve.discovery.etcd_client import EtcdClient
+from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
 from marie.serve.discovery.util import form_service_key
 from marie.utils.timer import RepeatedTimer
 
@@ -60,7 +62,24 @@ class EtcdServiceRegistry(ServiceRegistry):
         """
         if etcd_host is None and etcd_client is None:
             raise ValueError("etcd_host or etcd_client must be provided.")
-        self._client = etcd_client if etcd_client else EtcdClient(etcd_host, etcd_port)
+
+        if etcd_client and (etcd_host or etcd_port):
+            log.warning(
+                "Both etcd_client and etcd_host/etcd_port are provided. Using etcd_client."
+            )
+        if etcd_client:
+            if not isinstance(etcd_client, EtcdClient):
+                raise TypeError("etcd_client must be an instance of EtcdClient.")
+            self._client = etcd_client
+        else:
+            args_dict = {
+                "discovery_host": etcd_host,
+                "discovery_port": etcd_port,
+            }
+            etcd_args = convert_to_etcd_args(args_dict)
+            etcd_config = EtcdConfig.from_dict(etcd_args)
+            self._client = get_etcd_client(etcd_args)
+
         self._leases = {}
         self._services = {}
         self._loop = get_or_reuse_loop()

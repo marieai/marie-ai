@@ -22,7 +22,7 @@ ARG PIP_EXTRA_INDEX_URL="https://www.piwheels.org/simple"
 LABEL org.opencontainers.image.vendor="Marie AI" \
       org.opencontainers.image.licenses="Apache 2.0" \
       org.opencontainers.image.title="MarieAI" \
-      org.opencontainers.image.description="Build multimodal AI services via cloud native technologies" \
+      org.opencontainers.image.description="Deploy production-ready AI agent systems for document processing, content analysis, and multimodal intelligence via containerized cloud services" \
       org.opencontainers.image.authors="hello@marieai.co" \
       org.opencontainers.image.url="https://github.com/marieai/marie-ai" \
       org.opencontainers.image.documentation="https://docs.marieai.co" \
@@ -127,6 +127,8 @@ RUN python3 -m pip install torch==2.5.1 torchvision torchaudio --index-url https
     && python3 -m pip install --no-build-isolation  git+https://github.com/facebookresearch/detectron2.git -v 
 
 # Installing VLLM independently to avoid issues with torch version, down the road we will use as  --constraint constraints.txt
+RUN python3 -m pip install psutil
+RUN python3 -m pip install flash-attn==2.7.2.post1 --no-build-isolation
 RUN python3 -m pip install vllm==0.7.3
 # ISSUE https://github.com/marieai/marie-ai/issues/136
 RUN python3 -m pip install pillow==9.5.0

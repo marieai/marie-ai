@@ -69,6 +69,9 @@ def parse_markdown_markdown(text: str, return_content=True) -> str:
 
     If no ```markdown block is found, returns an empty string.
     """
+    if not text:
+        return "" if return_content else ""
+
     if "```markdown" not in text:
         return text if return_content else ""
     text = text.split("```markdown")[1].strip().strip("```").strip()
@@ -86,6 +89,9 @@ def check_content_type(text: str) -> str:
         "markdown" if ```markdown is found.
         "none" otherwise.
     """
+    if not text:
+        return "none"
+
     if "```json" in text:
         return "json"
     elif "```markdown" in text:

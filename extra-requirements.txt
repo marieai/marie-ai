@@ -94,7 +94,7 @@ strawberry-graphql>=0.96.0: cicd,devel
 watchfiles>=0.18.0:           devel
 urllib3>=1.25.9,<2.0.0:       core
 transformers==4.49:           standard,core
-flash-attn==2.7.2.post1:      standard,core
+#flash-attn==2.7.2.post1:      standard,core
 anyconfig:                    standard,core
 
 # python-consul2:               standard,devel
@@ -162,7 +162,7 @@ colorcet:                     standard,core
 fast_pytorch_kmeans:          standard,core
 
 sahi:                         standard,core
-clip:                         standard,core
+openai-clip:                  standard,core
 efficientnet-pytorch:         standard,core
 seaborn:                      standard,core
 textual:                      standard,core

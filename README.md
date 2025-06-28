@@ -57,7 +57,7 @@ docker run --rm  -it marieai/marie:3.0.19-cuda
 
 ```shell
 docker run --rm  -it --entrypoint /bin/bash  marieai/marie:4.0.0-cuda
-
+[extra-requirements.txt-CUDA](extra-requirements.txt-CUDA)
 marie server --start --uses sample.yml  
 ```
 

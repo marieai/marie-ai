@@ -1,0 +1,35 @@
+services:
+  s3server:
+    image: zenko/cloudserver:latest
+    container_name: marie-s3
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - REMOTE_MANAGEMENT_DISABLE=1
+      - S3DATA=multiple
+      - S3BACKEND=file # mem, file, or sproxyd
+      - ENDPOINT=s3.host.local
+
+    networks:
+      - marie_default
+    volumes:
+      - ./config/zenko/authdata.json:/usr/src/app/conf/authdata.json
+      - ./config/zenko/locationConfig.json:/usr/src/app/locationConfig.json
+#       until we figure out how to get the config.json to work (mv: cannot move 'config.json.tmp' to 'config.json': Device or resource busy)
+#      - ./config/zenko/config.json:/usr/src/app/config.json
+      - ~/s3/data:/usr/src/app/localData
+      - ~/s3/metadata:/usr/src/app/localMetadata
+      - ~/.aws/credentials:/root/.aws/credentials
+
+# Container networking setup
+# docker network create --driver=bridge marie_default
+# sysctl net.ipv4.conf.all.forwarding=1
+
+## ############### Networks ###############
+networks:
+  marie_default:
+    external: true
+
+# Reference:
+#    https://s3-server.readthedocs.io/en/latest/DOCKER.html#in-production-w-a-docker-hosted-cloudserver

@@ -93,8 +93,9 @@ watchfiles>=0.18.0:           devel
 urllib3>=1.25.9,<2.0.0:       core
 anyconfig:                    standard,core
 
-python-consul2:               standard,devel
-fastwer==0.1.3:               standard,core
+# python-consul2:               standard,devel
+# PROVIDED VIA CUSTOM WHEEL
+#fastwer==0.1.3:              standard,core
 matplotlib:                   standard,core
 albumentations:               standard,core
 dominate==2.7.0:              standard,core
@@ -109,10 +110,7 @@ imagecodecs:                  standard,core
 imutils:                      standard,core
 PyPDF4:                       standard,core
 reportlab:                    standard,core
-pycocotools:                  standard,core
-nltk:                         standard,core
-# timm==1.0.11:                 standard,core
-#segmentation-models-pytorch:  standard,core
+
 Wand:                         standard,core
 
 Cython:                       standard,core
@@ -128,7 +126,6 @@ munch:                        standard,core
 # opentelemetry-api:          standard,core
 
 pika:                         standard,core
-sentencepiece:                standard,core
 Levenshtein:                  standard,core
 boto3:                       standard,core
 sqlalchemy:                   standard,core
@@ -146,13 +143,12 @@ pillow~=9.5:                  standard,core
 
 patchify==0.2.3:              standard,core
 colorcet:                     standard,core
-
-clip:                         standard,core
 seaborn:                      standard,core
 textual:                      standard,core
 textual_textarea:             standard,core
 textual_fastdatatable:        standard,core
-etcd3:                        standard,core
+# PROVIDED VIA CUSTOM WHEEL
+# etcd3:                        standard,core
 
 typing_extensions>=4.12.2:    standard,core
 rtree:                        standard,core

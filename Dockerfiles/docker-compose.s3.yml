@@ -1,35 +1,22 @@
 services:
   s3server:
-    image: zenko/cloudserver:latest
+    image: minio/minio:latest
     container_name: marie-s3
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8000:9000"        # S3 API port (MinIO default)
+      - "8001:9001"        # MinIO Console UI
     environment:
-      - REMOTE_MANAGEMENT_DISABLE=1
-      - S3DATA=multiple
-      - S3BACKEND=file # mem, file, or sproxyd
-      - ENDPOINT=s3.host.local
-
+      MINIO_ROOT_USER: marieadmin            # Change these for production!
+      MINIO_ROOT_PASSWORD: marietopsecret    # Change these for production!
+    command: server /data --console-address ":9001"
+    volumes:
+      - /mnt/data/s3:/data      # Persistent storage for buckets
     networks:
       - marie_default
-    volumes:
-      - ./config/zenko/authdata.json:/usr/src/app/conf/authdata.json
-      - ./config/zenko/locationConfig.json:/usr/src/app/locationConfig.json
-#       until we figure out how to get the config.json to work (mv: cannot move 'config.json.tmp' to 'config.json': Device or resource busy)
-#      - ./config/zenko/config.json:/usr/src/app/config.json
-      - ~/s3/data:/usr/src/app/localData
-      - ~/s3/metadata:/usr/src/app/localMetadata
-      - ~/.aws/credentials:/root/.aws/credentials
 
-# Container networking setup
-# docker network create --driver=bridge marie_default
-# sysctl net.ipv4.conf.all.forwarding=1
-
-## ############### Networks ###############
 networks:
   marie_default:
     external: true
 
-# Reference:
-#    https://s3-server.readthedocs.io/en/latest/DOCKER.html#in-production-w-a-docker-hosted-cloudserver
+# see tools/setup-s3-users.sh

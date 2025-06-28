@@ -252,7 +252,7 @@ class JobSupervisor:
 
         # Enqueue job for processing, this will be processed in the background but it guarantees order of execution
         await self._submission_queue.put(curr_info)
-        self.logger.info(f"Job {self._job_id} enqueued for submission.")
+        self.logger.debug(f"Job {self._job_id} enqueued for submission.")
 
         if self.DEFAULT_JOB_TIMEOUT_S > 0:
             try:

@@ -34,6 +34,7 @@ from marie.importer import ImportExtensions
 from marie.job.common import JobInfoStorageClient, JobStatus
 from marie.proto import jina_pb2
 from marie.serve.discovery.container import EtcdConfig
+from marie.serve.discovery.etcd_client import ConnectionState
 from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
 from marie.serve.executors import BaseExecutor, __dry_run_endpoint__
 from marie.serve.instrumentation import MetricsTimer
@@ -1726,15 +1727,28 @@ class WorkerRequestHandler:
 
     def setup_heartbeat(self):
         """
-        Set up an asynchronous heartbeat process.
+        Set up an asynchronous heartbeat process with connection state monitoring.
         :return: None
         """
-        self.logger.debug("Calling heartbeat setup")
+        self.logger.info("Calling heartbeat setup")
 
         if self._lease and self._heartbeat_thread and self._heartbeat_thread.is_alive():
             raise RuntimeError(
                 f"A heartbeat with lease {self._lease} is currently running. Cannot start another."
             )
+
+        self._etcd_client.add_connection_event_handler(
+            ConnectionState.CONNECTED, self._on_etcd_connected
+        )
+        self._etcd_client.add_connection_event_handler(
+            ConnectionState.DISCONNECTED, self._on_etcd_disconnected
+        )
+        self._etcd_client.add_connection_event_handler(
+            ConnectionState.RECONNECTING, self._on_etcd_reconnecting
+        )
+        self._etcd_client.add_connection_event_handler(
+            ConnectionState.FAILED, self._on_etcd_failed
+        )
 
         def _heartbeat_setup():
             self.logger.debug(
@@ -1750,33 +1764,91 @@ class WorkerRequestHandler:
 
             while True:
                 try:
-                    self.heartbeat()
-                    failures = 0
+                    current_state = self._etcd_client.get_connection_state()
+                    if (
+                        current_state == ConnectionState.CONNECTED
+                        or current_state is None
+                    ):
+                        self.heartbeat()
+                        failures = 0
+                    else:
+                        # Skip heartbeat but don't treat as failure
+                        self.logger.debug(
+                            f"Skipping heartbeat - connection state: {current_state.name}"
+                        )
 
                 except Exception as e:
                     failures += 1
+                    current_state = self._etcd_client.get_connection_state()
+                    state_info = (
+                        f" (connection: {current_state.name})" if current_state else ""
+                    )
+
+                    self.logger.error(
+                        f"Error in heartbeat attempt {failures}/{max_failures}{state_info}: {e}"
+                    )
+                    self.logger.debug(f"Traceback: {traceback.format_exc()}")
+
+                    # Calculate backoff time
                     base_delay = min(
                         initial_backoff * (2 ** (failures - 1)), max_backoff
                     )
                     jitter = random.uniform(0, base_delay * 0.5)
                     backoff_time = base_delay + jitter
 
-                    self.logger.error(
-                        f"Error in heartbeat attempt {failures}/{max_failures}: {e}"
-                    )
-                    self.logger.debug(f"Traceback: {traceback.format_exc()}")
-                    self.logger.warning(
-                        f"Retrying heartbeat in {backoff_time:.2f} seconds (exponential backoff with jitter)..."
-                    )
+                    # Don't count failures during known disconnections
+                    if current_state in [
+                        ConnectionState.DISCONNECTED,
+                        ConnectionState.RECONNECTING,
+                        ConnectionState.FAILED,
+                    ]:
+                        failures = min(failures, max_failures - 1)
+                        backoff_time = self._heartbeat_time
+                        self.logger.debug("Not counting failure - connection is down")
+                    else:
+                        self.logger.warning(
+                            f"Retrying heartbeat in {backoff_time:.2f} seconds"
+                        )
 
                     if failures >= max_failures:
                         self.logger.error(
                             f"Max failures reached ({max_failures}). Heartbeat process will stop."
                         )
-                        break  # Exit the heartbeat loop after max retry attempts
+                        break
 
                     time.sleep(backoff_time)
+                    continue
+
                 time.sleep(self._heartbeat_time)
 
         self._heartbeat_thread = threading.Thread(target=_heartbeat_setup, daemon=True)
         self._heartbeat_thread.start()
+
+    def _on_etcd_connected(self, event):
+        """Handle etcd connection established."""
+        self.logger.info("Request handler: etcd connection established")
+        current_state = self._etcd_client.get_connection_state()
+        self.logger.info(f"Event handler - connection state is now: {current_state}")
+
+        # we need to reacquire the lease if it was lost
+        self.reacquire_lease()
+
+    def _on_etcd_disconnected(self, event):
+        """Handle etcd connection lost."""
+        self.logger.warning(f"Request handler: etcd connection lost - {event.error}")
+        current_state = self._etcd_client.get_connection_state()
+        self.logger.info(f"Event handler - connection state is now: {current_state}")
+
+    def _on_etcd_reconnecting(self, event):
+        """Handle etcd reconnection attempt."""
+        self.logger.info("Request handler: etcd reconnection in progress")
+        current_state = self._etcd_client.get_connection_state()
+        self.logger.info(f"Event handler - connection state is now: {current_state}")
+
+    def _on_etcd_failed(self, event):
+        """Handle etcd connection failed permanently."""
+        self.logger.error(
+            f"Request handler: etcd connection failed permanently - {event.error}"
+        )
+        current_state = self._etcd_client.get_connection_state()
+        self.logger.info(f"Event handler - connection state is now: {current_state}")

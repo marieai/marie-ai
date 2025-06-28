@@ -4,10 +4,9 @@ from typing import List, Optional
 
 from docarray import DocList
 
-from marie.api.docs import DOC_KEY_INDEXER, DOC_KEY_PAGE_NUMBER
+from marie.api.docs import DOC_KEY_INDEXER
 from marie.logging_core.logger import MarieLogger
 from marie.pipe.base import PipelineComponent, PipelineContext, PipelineResult
-from marie.utils import filter_node
 
 
 class LLMIndexerPipelineComponent(PipelineComponent, ABC):
@@ -15,7 +14,7 @@ class LLMIndexerPipelineComponent(PipelineComponent, ABC):
         self,
         name: str,
         document_indexers: dict,
-        llm_tasks: dict,
+        llm_tasks: list,
         logger: MarieLogger = None,
         silence_exceptions: bool = False,
     ) -> None:

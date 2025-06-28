@@ -153,7 +153,7 @@ class LLMPipeline(BasePipeline):
 
         # Track pipline execution time for metrics
         with TimeContext(f"### {self.pipeline_name} LLMPipeline info") as tc:
-            self.execute_llm_pipeline(frames, metadata, ocr_results)
+            self.execute_llm_pipeline(frames, metadata, ocr_results, runtime_conf)
             metadata[f"delta_time_{self.pipeline_name}"] = tc.now()
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
@@ -161,7 +161,7 @@ class LLMPipeline(BasePipeline):
 
         return metadata
 
-    def execute_llm_pipeline(self, frames, metadata, ocr_results):
+    def execute_llm_pipeline(self, frames, metadata, ocr_results, runtime_conf: dict):
         if self.classifier_groups:
             if "classifications" not in metadata:
                 metadata["classifications"] = []
@@ -179,6 +179,7 @@ class LLMPipeline(BasePipeline):
             processing_group_pipeline[group].append(classifier_component)
             grouped_sub_classifiers[group] = sub_classifiers
 
+        llm_task_config = runtime_conf.get("llm_tasks", {})
         for group, indexer_group in self.indexer_groups.items():
             self.logger.info(
                 f"Processing llm pipeline/group :  {self.pipeline_name}, {group}"
@@ -187,7 +188,13 @@ class LLMPipeline(BasePipeline):
                 LLMIndexerPipelineComponent(
                     name="mmllm_pipeline_component",
                     document_indexers=indexer_group["indexers"],
-                    llm_tasks=indexer_group.get("llm_tasks", []),
+                    llm_tasks=[
+                        task
+                        for task in indexer_group.get("llm_tasks", [])
+                        if llm_task_config.get(task, {"enabled": True}).get(
+                            "enabled", True
+                        )
+                    ],
                 )
             )
 

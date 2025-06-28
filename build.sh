@@ -2,6 +2,9 @@
 
 # Marie AI Docker Build Script
 # This script builds the Marie AI Docker image with profile support and standard pip configuration
+set -e
+CPU_COUNT=$(grep -c ^processor /proc/cpuinfo)
+CPU_COUNT=$((CPU_COUNT-1))
 
 readonly DEFAULT_VERSION="4.0.0"
 readonly VERSION="${MARIE_VERSION:-$DEFAULT_VERSION}"
@@ -218,6 +221,7 @@ build_image() {
 
     DOCKER_BUILDKIT=0 docker build . \
         --network=host \
+        --cpuset-cpus="0-$CPU_COUNT" \
         --build-arg PIP_TAG="$PIP_TAG" \
         --build-arg VCS_REF=$(git rev-parse HEAD) \
         --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
