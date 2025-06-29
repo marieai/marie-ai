@@ -547,7 +547,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         await self.notify_event()
 
-    async def _heartbeat_loop(self, interval: float = 2.0):
+    async def _heartbeat_loop(self, interval: float = 5.0):
         """Periodic heartbeat logger showing scheduler state."""
         while self.running:
             try:
@@ -568,8 +568,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.debug(f"     DAG IDs          : [{shown}{suffix}]")
 
                 states = self.count_states()
-                print_state_summary(states)
-                self.diagnose_pool()
+                # print_state_summary(states)
+                # self.diagnose_pool()
+
                 # print_dag_concurrency_status_compact(self.dag_concurrency_manager.get_configuration_summary())
 
                 await asyncio.sleep(interval)

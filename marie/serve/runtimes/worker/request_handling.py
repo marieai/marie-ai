@@ -33,8 +33,8 @@ from marie.helper import get_full_version, get_internal_ip
 from marie.importer import ImportExtensions
 from marie.job.common import JobInfoStorageClient, JobStatus
 from marie.proto import jina_pb2
+from marie.serve.discovery.base import ConnectionState
 from marie.serve.discovery.container import EtcdConfig
-from marie.serve.discovery.etcd_client import ConnectionState
 from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
 from marie.serve.executors import BaseExecutor, __dry_run_endpoint__
 from marie.serve.instrumentation import MetricsTimer
@@ -43,6 +43,7 @@ from marie.serve.runtimes.worker.batch_queue import BatchQueue
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
 from marie.utils.network import get_ip_address
+from marie.utils.timing import exponential_backoff
 from marie.utils.types import strtobool
 
 if docarray_v2:
@@ -1788,13 +1789,9 @@ class WorkerRequestHandler:
                         f"Error in heartbeat attempt {failures}/{max_failures}{state_info}: {e}"
                     )
                     self.logger.debug(f"Traceback: {traceback.format_exc()}")
-
-                    # Calculate backoff time
-                    base_delay = min(
-                        initial_backoff * (2 ** (failures - 1)), max_backoff
+                    backoff_time = exponential_backoff(
+                        failures, initial_backoff, max_backoff
                     )
-                    jitter = random.uniform(0, base_delay * 0.5)
-                    backoff_time = base_delay + jitter
 
                     # Don't count failures during known disconnections
                     if current_state in [

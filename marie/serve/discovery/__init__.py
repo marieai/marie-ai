@@ -80,10 +80,6 @@ class DiscoveryServiceMixin:
         service_ttl = 6
         heartbeat_time = 2
 
-        if True:
-            self.logger.info("Service discovery is disabled")
-            return
-
         etcd_registry = EtcdServiceRegistry(
             self.discovery_host,
             self.discovery_port,
