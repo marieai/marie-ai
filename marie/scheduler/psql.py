@@ -203,6 +203,8 @@ class JobSubmissionRequest(NamedTuple):
 
 
 class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
+    _mapper_warnings_shown = set()
+
     """A PostgreSQL-based job scheduler."""
 
     def __init__(self, config: Dict[str, Any], job_manager: JobManager):
@@ -370,6 +372,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             # create_dag_resolve_state_function(schema),
             create_sql_from_file(
                 schema,
+                os.path.join(__default_schema_dir__, "create_indexes.sql"),
+            ),
+            create_sql_from_file(
+                schema,
                 os.path.join(__default_schema_dir__, "job_dependencies.sql"),
             ),
             create_sql_from_file(
@@ -387,6 +393,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             create_sql_from_file(
                 schema,
                 os.path.join(__default_schema_dir__, "delete_dag_and_jobs.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__default_schema_dir__, "delete_dags_and_jobs.sql"),
             ),
             create_sql_from_file(
                 schema,
@@ -448,6 +458,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 os.path.join(__default_schema_dir__, "unsuspend_work.sql"),
             ),
             create_sql_from_file(
+                schema,
+                os.path.join(__default_schema_dir__, "sync_job_dependencies.sql"),
+            ),
+            create_sql_from_file(
                 schema, os.path.join(__default_psql_dir__, "cron_job_init.sql")
             ),
         ]
@@ -462,6 +476,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
            SELECT pg_advisory_unlock(1);
            COMMIT;
            """
+
+        # Write query to temp file for review
+        tmp_path = "/tmp/marie/psql"
+        os.makedirs(tmp_path, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        query_file = os.path.join(tmp_path, f"locked_query_{timestamp}.sql")
+
+        try:
+            with open(query_file, 'w') as f:
+                f.write(locked_query)
+            self.logger.info(f"Wrote locked query to: {query_file}")
+        except Exception as e:
+            self.logger.error(f"Failed to write query to file: {e}")
 
         with self:
             try:
@@ -568,8 +595,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.debug(f"     DAG IDs          : [{shown}{suffix}]")
 
                 states = self.count_states()
-                # print_state_summary(states)
-                # self.diagnose_pool()
+                print_state_summary(states)
+                self.diagnose_pool()
 
                 # print_dag_concurrency_status_compact(self.dag_concurrency_manager.get_configuration_summary())
 
@@ -2075,10 +2102,12 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
             metadata = meta_dict["metadata"]
             wi.data['metadata'].update(metadata)
         else:
-            logger.warning(
-                f"No mapper configuration found for {query_planner_name}, "
-                "using default metadata."
-            )
+            if query_planner_name not in PostgreSQLJobScheduler._mapper_warnings_shown:
+                logger.warning(
+                    f"No mapper configuration found for {query_planner_name}, "
+                    "using default metadata."
+                )
+                PostgreSQLJobScheduler._mapper_warnings_shown.add(query_planner_name)
 
         if i == 0:
             # this should already been handled by the query planner

@@ -2,7 +2,6 @@ ALTER SYSTEM SET max_connections = 500;
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
-
 -- Create extension if not exists
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 

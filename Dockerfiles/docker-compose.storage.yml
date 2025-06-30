@@ -7,14 +7,15 @@
 services:
   psql:
     container_name: marie-psql-server
-#    image: postgres:${POSTGRES_VERSION}
-    # pgvector/pgvector:pg16
     image: ghcr.io/ferretdb/postgres-documentdb:17-0.103.0
     command: >
       postgres
       -c max_connections=200
-      -c shared_preload_libraries=pg_stat_statements
+      -c shared_preload_libraries=pg_stat_statements,pg_cron,pg_documentdb
       -c pg_stat_statements.track=all
+      -c pg_stat_statements.max=10000
+      -c pg_stat_statements.track_utility=off
+      -c pg_stat_statements.save=on
       -c enable_partition_pruning=on
       -c constraint_exclusion=partition
     restart: on-failure
@@ -24,6 +25,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=postgres
+      - POSTGRES_SHARED_PRELOAD_LIBRARIES=pg_stat_statements,pg_cron,pg_documentdb
     volumes:
       - psql_data:/var/lib/postgresql/data
       - ./config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql

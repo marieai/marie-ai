@@ -45,6 +45,14 @@ docker exec -it etcd etcdctl del "" --from-key=true
 docker exec -it etcd etcdctl --endpoints=mariectl-002:2379,mariectl-003:2379,mariectl-004:2379  del "" --from-key=true
 ```
 
+## Maitenance jobs
+
+```bash
+docker exec -it etcd etcdctl --endpoints=mariectl-001:2379 alarm list
+docker exec -it etcd etcdctl --endpoints=mariectl-001:2379 defrag
+```
+
+
 ## Install the `etcd3` package
 
 Install the `etcd3` package from source code  as the `GRPC` version or `marie` is not compatible with the current version of the `etcd3` package.

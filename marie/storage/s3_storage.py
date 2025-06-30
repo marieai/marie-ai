@@ -341,7 +341,11 @@ class S3StorageHandler(PathHandler):
 
         # uploading file to s3
         try:
-            extra_args = {"ServerSideEncryption": "AES256"}
+            # FIXME : This will throw an error with MINIO
+            # ERROR  marie@30 Unable to upload to bucket 'marie' : An error occurred (NotImplemented) when calling the PutObject operation: Server side encryption specified
+            #        but KMS is not configured (KMS not configured for a server side encrypted objects)
+            # extra_args = {"ServerSideEncryption": "AES256"}
+            extra_args = {}
             # If S3 object_name was not specified, use file_name
             if key == "":
                 key = os.path.basename(src_path)

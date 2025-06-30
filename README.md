@@ -132,6 +132,9 @@ Remove files from the bucket
 aws s3 rm  s3://marie --recursive --profile marie --endpoint-url http://localhost:8000
 ```
 
+```shell
+aws s3 rb s3://mybucket --profile marie --endpoint-url http://localhost:8000
+```
 
 # Production setup
 

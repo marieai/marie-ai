@@ -341,7 +341,11 @@ class PostgresqlMixin:
                 cursor = conn.cursor(named_cursor_name) if named_cursor_name else conn.cursor()
                 if named_cursor_name:
                     cursor.itersize = itersize
-                cursor.execute(statement, data if data else statement)
+
+                if data and data != statement:
+                    cursor.execute(statement, data)
+                else:
+                    cursor.execute(statement)
                 conn.commit()
 
                 if return_cursor:

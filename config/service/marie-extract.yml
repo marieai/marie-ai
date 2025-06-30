@@ -239,7 +239,8 @@ executors:
          py_modules:
            - marie.executor.text
      timeout_ready: 3000000
-     replicas: ${{ CONTEXT.gpu_device_count }}
+     replicas: 1
+#     replicas: ${{ CONTEXT.gpu_device_count }}
 
      env:
        CUDA_VISIBLE_DEVICES: RR
