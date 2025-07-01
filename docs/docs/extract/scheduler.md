@@ -1,3 +1,4 @@
+
 # Marie Scheduler: Execution and Scheduling Behavior
 
 ## Overview
@@ -19,13 +20,85 @@ Marie Scheduler uses a global planner that evaluates job execution order based o
 
 ---
 
+## SLA-Based Priority System
+
+Marie Scheduler calculates a numeric priority score for every job based on SLA deadlines. These values are used directly by the global planner to determine execution order.
+
+### Priority Semantics
+
+- **Higher values = more urgent**
+- Jobs are scored using 15-minute time buckets
+- Late jobs accumulate higher scores as time passes
+- Upcoming jobs receive lower scores inversely weighted by time
+- Jobs with no SLA are assigned the lowest score (`0`)
+
+---
+
+### Priority Tiers
+
+| Tier                    | Condition                          | Priority Range  |
+|-------------------------|-------------------------------------|-----------------|
+| **Overdue Hard SLA**    | `NOW() > hard_sla`                  | 1000–1999       |
+| **Overdue Soft SLA**    | `NOW() > soft_sla` (no hard SLA)    | 500–999         |
+| **Upcoming Soft SLA**   | `soft_sla > NOW()`                  | 1–499           |
+| **No SLA**              | SLA not defined                     | 0               |
+
+- Each bucket = 15 minutes (900 seconds)
+- `LEAST(...)` and `GREATEST(...)` clamp scores to prevent runaway values or negatives
+
+---
+
+### Priority Update Logic
+
+The following SQL logic is used by the Marie Scheduler to update job priorities:
+
+```sql
+CREATE OR REPLACE FUNCTION marie_scheduler.refresh_job_priority()
+RETURNS void AS $$
+DECLARE
+    now_time TIMESTAMP := NOW();
+BEGIN
+    UPDATE marie_scheduler.job
+    SET priority = (
+          CASE
+            WHEN hard_sla IS NOT NULL AND NOW() > hard_sla THEN
+              1000 + LEAST(
+                999,
+                FLOOR(EXTRACT(EPOCH FROM (NOW() - hard_sla)) / 900)
+              )  -- overdue hard SLA
+            WHEN soft_sla IS NOT NULL AND NOW() > soft_sla THEN
+              500 + LEAST(
+                499,
+                FLOOR(EXTRACT(EPOCH FROM (NOW() - soft_sla)) / 900)
+              )   -- overdue soft SLA
+            WHEN soft_sla IS NOT NULL THEN
+              GREATEST(
+                1,
+                500 - CEIL(EXTRACT(EPOCH FROM (soft_sla - NOW())) / 900)
+              )   -- upcoming soft SLA
+            ELSE
+              0   -- no SLA
+        END
+    )
+    WHERE state IN ('created', 'retry');
+END;
+
+```
+
+This function is called:
+
+- After N (default 10) job creations
+- Periodically via a background scheduler(e.g., every 1 minutes via pg_cron)
+
+---
+
 ## GlobalPriorityExecutionPlanner
 
 This is the core algorithm used to compute job sort order globally across all queues:
 
 ### Sort Order:
 - `job_level`: deeper DAG jobs scheduled first
-- `priority`: lower numeric priority = more urgent
+- `priority`: higher number = more urgent
 - `free_slots`: more available slots preferred
 - `is_new_dag`: existing DAGs preferred
 - `estimated_runtime`: shorter is better
@@ -59,7 +132,7 @@ This is the core algorithm used to compute job sort order globally across all qu
   +--------------------------------------------------------------+
   | Sort by:                                                     |
   |   - job_level (desc)                                         |
-  |   - priority (desc: lower value = higher urgency)            |
+  |   - priority (desc: higher number = more urgent)             |
   |   - free_slots (desc)                                        |
   |   - DAG activity (existing DAGs preferred)                   |
   |   - estimated_runtime (asc)                                  |
@@ -162,6 +235,7 @@ When jobs complete, DAG state is resolved to determine if execution is finished.
 ## Conclusion
 
 Marie Scheduler's planning system balances SLA pressure, system throughput, and execution fairness. It is designed to support bursty DAG workloads, enforce soft and hard deadlines, and provide predictable behavior under constrained resources.
+
 ---
 
 ## Pluggable Execution Planner Interface
@@ -215,4 +289,3 @@ def plan(
     ...
 ```
 
-This provides a powerful extension point for organizations with custom fairness policies, latency goals, or runtime prediction systems.

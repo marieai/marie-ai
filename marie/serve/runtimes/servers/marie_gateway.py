@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 from rich.traceback import install
 
 import marie
@@ -194,7 +194,31 @@ class MarieServerGateway(CompositeServer):
         self.resolver = None
 
         def _extend_rest_function(app):
-            from fastapi import Request
+            from fastapi import HTTPException, Request
+            from fastapi.responses import JSONResponse
+
+            @app.exception_handler(Exception)
+            async def global_exception_handler(request: Request, exc: Exception):
+                self.logger.error(f"Unhandled exception: {exc}")
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "status": "error",
+                        "message": "Internal server error",
+                        "detail": (
+                            str(exc)
+                            if self.args.debug
+                            else "An unexpected error occurred"
+                        ),
+                    },
+                )
+
+            @app.exception_handler(HTTPException)
+            async def http_exception_handler(request: Request, exc: HTTPException):
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content={"status": "error", "message": exc.detail},
+                )
 
             @app.on_event("shutdown")
             async def _shutdown():
@@ -233,21 +257,94 @@ class MarieServerGateway(CompositeServer):
                 return {"result": "ok"}
 
             @app.api_route(
+                path="/api/debug",
+                methods=["GET"],
+                summary="Get scheduler debug information /api/debug",
+            )
+            async def get_debug_info():
+                """
+                Get debug information from the job scheduler.
+                :return:
+                """
+                self.logger.info(f"Debug info requested at {datetime.now()}")
+                try:
+                    debug_data = self.job_scheduler.debug_info()
+                    return {"status": "OK", "result": debug_data}
+                except Exception as e:
+                    self.logger.error(f"Error getting debug info: {str(e)}")
+                    return {
+                        "status": "error",
+                        "result": f"Failed to get debug info: {str(e)}",
+                    }
+
+            @app.api_route(
+                path="/api/debug/reset-dags",
+                methods=["POST"],
+                summary="Reset active DAGs /api/debug/reset-dags",
+            )
+            async def reset_active_dags():
+                """
+                Reset the active DAGs in the job scheduler.
+                :return:
+                """
+                self.logger.info(f"Reset active DAGs requested at {datetime.now()}")
+                try:
+                    result = self.job_scheduler.reset_active_dags()
+                    if result["success"]:
+                        return {"status": "OK", "result": result}
+                    else:
+                        return {"status": "error", "result": result}
+                except Exception as e:
+                    self.logger.error(f"Error resetting active DAGs: {str(e)}")
+                    return {
+                        "status": "error",
+                        "result": f"Failed to reset active DAGs: {str(e)}",
+                    }
+
+            async def list_jobs_handler(request: Request):
+                try:
+                    self.logger.info(f"Received request at {datetime.now()}")
+                    params = request.path_params
+                    state = params.get("state")
+
+                    if state:
+                        jobs = await self.job_scheduler.list_jobs(state=state)
+                    else:
+                        jobs = await self.job_scheduler.list_jobs()
+
+                    return {"status": "OK", "result": jobs}
+
+                except ValueError as e:
+                    # Handle invalid state parameter from job scheduler
+                    self.logger.warning(f"Invalid job state parameter: {e}")
+                    return {
+                        "status": "error",
+                        "message": str(e),
+                        "code": "INVALID_STATE",
+                    }
+
+                except Exception as e:
+                    self.logger.error(f"Error listing jobs: {e}")
+                    return {
+                        "status": "error",
+                        "message": f"Failed to retrieve jobs: {str(e)}",
+                        "code": "INTERNAL_ERROR",
+                    }
+
+            # allows us to list jobs with or without state parameter and last slash
+            app.add_api_route(
+                path="/api/jobs",
+                endpoint=list_jobs_handler,
+                methods=["GET"],
+                summary="Job listing endpoint /api/jobs with state filter",
+            )
+
+            app.add_api_route(
                 path="/api/jobs/{state}",
+                endpoint=list_jobs_handler,
                 methods=["GET"],
                 summary=f"Job listing endpoint /api/jobs",
             )
-            async def list_jobs(request: Request):
-                self.logger.info(f"Received request at {datetime.now()}")
-                params = request.path_params
-                state = params.get("state")
-
-                if state:
-                    jobs = await self.job_scheduler.list_jobs(state=state)
-                else:
-                    jobs = await self.job_scheduler.list_jobs()
-
-                return {"status": "OK", "result": jobs}
 
             @app.api_route(
                 path="/api/jobsXX/{job_id}",
@@ -301,7 +398,13 @@ class MarieServerGateway(CompositeServer):
                 #         "job_id" : "12345",
                 #     }, "data": None}
 
-                payload = await request.json()
+                # Parse request payload with error handling
+                try:
+                    payload = await request.json()
+                except Exception as e:
+                    self.logger.error(f"Failed to parse JSON payload: {str(e)}")
+                    raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
                 header = payload.get("header", {})
                 message = payload.get("parameters", {})
 
@@ -312,20 +415,50 @@ class MarieServerGateway(CompositeServer):
                 req.parameters = message
 
                 async def caller(req: DataRequest):
-                    decoded = await self.decode_request(req)
-                    if isinstance(decoded, AsyncIterator):
-                        async for response in decoded:
-                            yield response
-                    else:
-                        yield decoded
+                    try:
+                        decoded = await self.decode_request(req)
+                        if isinstance(decoded, AsyncIterator):
+                            async for response in decoded:
+                                yield response
+                        else:
+                            yield decoded
+                    except Exception as e:
+                        self.logger.error(f"Error in caller function: {str(e)}")
+                        raise
 
-                event_generator = caller(req)
-                response = await event_generator.__anext__()
-                return {"header": {}, "parameters": response.parameters, "data": None}
+                try:
+                    event_generator = caller(req)
+                    response = await event_generator.__anext__()
+
+                    # Validate response structure
+                    if not hasattr(response, 'parameters'):
+                        self.logger.error(
+                            "Response object missing parameters attribute"
+                        )
+                        raise HTTPException(
+                            status_code=500,
+                            detail="Invalid response format from processing",
+                        )
+
+                    return {
+                        "header": {},
+                        "parameters": response.parameters,
+                        "data": None,
+                    }
+
+                except StopAsyncIteration:
+                    self.logger.error("No response generated from event generator")
+                    raise HTTPException(
+                        status_code=500, detail="No response generated from processing"
+                    )
+                except Exception as e:
+                    self.logger.error(f"Error processing request: {str(e)}")
+                    raise HTTPException(
+                        status_code=500, detail=f"Processing error: {str(e)}"
+                    )
 
                 # event_generator = _gen_dict_documents(caller(req))
                 # return EventSourceResponse(event_generator)
-
                 # # ['header', 'parameters', 'routes', 'data'
                 # return {"header": {}, "parameters": {}, "data": None}
 
@@ -405,7 +538,7 @@ class MarieServerGateway(CompositeServer):
 
         :raises ValueError: If the action provided in the message is not recognized.
         """
-
+        #
         action = message.get("action")  # list
         self.logger.info(f"Handling nodes action : {action}")
         if action == "list":
@@ -752,7 +885,6 @@ class MarieServerGateway(CompositeServer):
                     raise e
                 raise RuntimeFailToStart(
                     f"Initialize etcd client failed on {etcd_host}:{etcd_port}, ensure the etcd server is running.",
-                    details=str(e),
                 )
 
         task = asyncio.create_task(_start_watcher())
@@ -939,16 +1071,16 @@ class MarieServerGateway(CompositeServer):
                         "gateway": ctrl_address,
                     }
                     self.deployment_nodes[executor].append(deployment_details)
-                    self.logger.info(
+                    self.logger.debug(
                         f"Discovered endpoint: {executor} : {deployment_details}"
                     )
 
         for executor, nodes in self.deployment_nodes.items():
-            self.logger.info(
+            self.logger.debug(
                 f"Discovered nodes for executor : {executor}, {len(nodes)}"
             )
             for node in nodes:
-                self.logger.info(f"\tNode : {node}")
+                self.logger.debug(f"\tNode : {node}")
 
         # await self.update_gateway_streamer()
 
@@ -974,7 +1106,6 @@ class MarieServerGateway(CompositeServer):
             graph_description[executor] = ["end-gateway"]
 
         self.logger.info(f"graph_description: {graph_description}")
-
         # FIXME: testing with only one executor
         deployments_addresses = {}
         graph_descriptionXXXX = {

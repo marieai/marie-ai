@@ -106,7 +106,10 @@ class JobManager:
         For each job, we will spawn a coroutine to monitor it.
         Each will be added to self._running_jobs and reconciled.
         """
-        self.logger.debug("Recovering running jobs.")
+        self.logger.info("Recovering running jobs.")
+        #  FIXME: This is a temporary fix to avoid running this on startup.
+        # THIS IS CAUSING SLOW STARTUP, DISABLED FOR NOW
+        # SELECT key, value FROM kv_store_worker WHERE key = 'marie_internal/job_info_0685b232-8b4b-7ab6-8000-dfdc7df44311'  AND namespace = 'job' AND is_deleted = FALSE
         try:
             all_jobs = await self._job_info_client.get_all_jobs()
             for job_id, job_info in all_jobs.items():

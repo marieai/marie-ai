@@ -203,6 +203,8 @@ class JobSubmissionRequest(NamedTuple):
 
 
 class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
+    _mapper_warnings_shown = set()
+
     """A PostgreSQL-based job scheduler."""
 
     def __init__(self, config: Dict[str, Any], job_manager: JobManager):
@@ -224,6 +226,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.sync_task = None
         self.monitoring_task = None
         self._worker_task = None
+        self._sync_dag_task = None
         self._submission_count = 0
         self._pending_requests = {}  # Track pending requests by ID
         self._request_queue = Queue()  # Buffer up to 1000 requests
@@ -232,14 +235,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             "scheduler_mode", "parallel"
         )  # "serial" or "parallel"
         self.scheduler_mode = "serial"
-        self._event_queue = asyncio.Queue()
+        self._event_queue = Queue()
 
         lock_free = True
         self._lock = (
             contextlib.AsyncExitStack() if lock_free else asyncio.Lock()
         )  # Lock to prevent concurrent access to the database
 
-        max_workers = config.get("max_workers", 5)
+        max_workers = config.get("max_workers", 1)
         self._db_executor = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="sync-db-executor"
         )
@@ -280,6 +283,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         # print(f'dag_config : ', dag_config)
         # print(f'count  = {count}')
         # print(self.dag_concurrency_manager.get_configuration_summary())
+        self._start_time = datetime.now(timezone.utc)
 
     async def handle_job_event(self, event_type: str, message: Any):
         """
@@ -368,6 +372,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             # create_dag_resolve_state_function(schema),
             create_sql_from_file(
                 schema,
+                os.path.join(__default_schema_dir__, "create_indexes.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__default_schema_dir__, "job_dependencies.sql"),
+            ),
+            create_sql_from_file(
+                schema,
                 os.path.join(__default_schema_dir__, "resolve_dag_state.sql"),
             ),
             create_sql_from_file(
@@ -376,7 +388,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             ),
             create_sql_from_file(
                 schema,
+                os.path.join(__default_schema_dir__, "refresh_job_priority.sql"),
+            ),
+            create_sql_from_file(
+                schema,
                 os.path.join(__default_schema_dir__, "delete_dag_and_jobs.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__default_schema_dir__, "delete_dags_and_jobs.sql"),
             ),
             create_sql_from_file(
                 schema,
@@ -438,6 +458,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 os.path.join(__default_schema_dir__, "unsuspend_work.sql"),
             ),
             create_sql_from_file(
+                schema,
+                os.path.join(__default_schema_dir__, "sync_job_dependencies.sql"),
+            ),
+            create_sql_from_file(
                 schema, os.path.join(__default_psql_dir__, "cron_job_init.sql")
             ),
         ]
@@ -453,6 +477,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
            COMMIT;
            """
 
+        # Write query to temp file for review
+        tmp_path = "/tmp/marie/psql"
+        os.makedirs(tmp_path, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        query_file = os.path.join(tmp_path, f"locked_query_{timestamp}.sql")
+
+        try:
+            with open(query_file, 'w') as f:
+                f.write(locked_query)
+            self.logger.info(f"Wrote locked query to: {query_file}")
+        except Exception as e:
+            self.logger.error(f"Failed to write query to file: {e}")
+
         with self:
             try:
                 self._execute_sql_gracefully(locked_query)
@@ -461,7 +498,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.warning("Tables already exist, skipping creation.")
                 else:
                     self.logger.error(f"Error creating tables: {error}")
-                    self.connection.rollback()
                     raise RuntimeFailToStart(
                         f"Failed to create tables in schema '{schema}': {error}"
                     )
@@ -473,18 +509,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
            TRUNCATE {schema}.job, {schema}.archive
            """
         with self:
-            try:
-                self._execute_sql_gracefully(query)
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error clearing tables: {error}")
-                self.connection.rollback()
+            self._execute_sql_gracefully(query)
 
     async def is_installed(self) -> bool:
         """check if the tables are installed"""
         schema = DEFAULT_SCHEMA
         with self:
+            cursor = None
             try:
-                cursor = self._execute_sql_gracefully(version_table_exists(schema))
+                cursor = self._execute_sql_gracefully(
+                    version_table_exists(schema), return_cursor=True
+                )
                 if cursor and cursor.rowcount > 0:
                     result = cursor.fetchone()
                     if result and result[0] is not None:
@@ -494,19 +529,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 raise RuntimeFailToStart(
                     f"Unable to check installation in schema '{schema}': {error}"
                 )
-        return False
+            finally:
+                self._close_cursor(cursor)
 
     async def create_queue(self, queue_name: str) -> None:
         """Setup the queue for the scheduler."""
-
         with self:
-            try:
-                self._execute_sql_gracefully(
-                    create_queue(DEFAULT_SCHEMA, queue_name, {})
-                )
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error setting up queue: {error}")
-                self.connection.rollback()
+            self._execute_sql_gracefully(create_queue(DEFAULT_SCHEMA, queue_name, {}))
 
     async def start(self) -> None:
         """
@@ -528,7 +557,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.running = True
         # self.sync_task = asyncio.create_task(self._sync())
         # self.monitoring_task = asyncio.create_task(self._monitor())
-        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+        self._heartbeat_task = asyncio.create_task(
+            self._heartbeat_loop()
+        )  # THIS SHOULD BE IN OWN EVENT LOOP
+
         if self.scheduler_mode == "parallelXXX":
             self._producer_task = asyncio.create_task(self._producer_loop())
             self._consumer_task = asyncio.create_task(self._consumer_loop())
@@ -538,9 +571,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self._worker_task = asyncio.create_task(self._process_submission_queue())
         # self._sync_dag_task = asyncio.create_task(self._sync_dag())
+
         await self.notify_event()
 
-    async def _heartbeat_loop(self, interval: float = 10.0):
+    async def _heartbeat_loop(self, interval: float = 5.0):
         """Periodic heartbeat logger showing scheduler state."""
         while self.running:
             try:
@@ -560,8 +594,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     suffix = '...' if len(active_dags) > 5 else ''
                     self.logger.debug(f"     DAG IDs          : [{shown}{suffix}]")
 
-                states = await self.count_states()
+                states = self.count_states()
                 print_state_summary(states)
+                self.diagnose_pool()
+
                 # print_dag_concurrency_status_compact(self.dag_concurrency_manager.get_configuration_summary())
 
                 await asyncio.sleep(interval)
@@ -787,19 +823,109 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if self._worker_task:
             tasks.append(self._worker_task)
 
+        if self.sync_task:
+            tasks.append(self.sync_task)
+
+        if self._sync_dag_task:
+            tasks.append(self._sync_dag_task)
+
         for task in tasks:
             if task and not task.done():
                 try:
                     await asyncio.wait_for(task, timeout)
                 except asyncio.TimeoutError:
+                    task_name = getattr(task, '_name', task.__class__.__name__)
                     self.logger.warning(
-                        "Monitoring task did not complete in time and was cancelled"
+                        f"Task did not complete in time, cancelling it : {task_name}"
                     )
+                    task.cancel()
+                    try:
+                        await task  # Wait for cancellation
+                    except asyncio.CancelledError:
+                        self.logger.debug("Task cancelled successfully")
                 except asyncio.CancelledError:
                     pass
+                except Exception as e:
+                    self.logger.error(f"Unexpected error during task shutdown: {e}")
 
-    def debug_info(self) -> str:
-        print("Debugging info")
+    def debug_info(self):
+        """
+        Return comprehensive debugging information about the scheduler's current state.
+
+        Returns:
+            dict: Dictionary containing various debugging information including:
+                - Scheduler status and configuration
+                - Task states and counters
+                - Queue information
+                - Database connection status
+                - Active DAGs and jobs summary
+        """
+
+        current_time = datetime.now(timezone.utc)
+
+        debug_data = {
+            "scheduler_info": {
+                "running": self.running,
+                "scheduler_mode": self.scheduler_mode,
+                "max_concurrent_dags": self.max_concurrent_dags,
+                "known_queues": list(self.known_queues) if self.known_queues else [],
+                "active_dags_count": len(self.active_dags) if self.active_dags else 0,
+            },
+            "timing_info": {
+                "current_time": current_time.isoformat(),
+                "start_time": self._start_time.isoformat(),
+                "uptime_seconds": (current_time - self._start_time).total_seconds(),
+                "uptime_human": str(current_time - self._start_time),
+            },
+            "counters": {
+                "fetch_counter": self._fetch_counter,
+                "submission_count": self._submission_count,
+                "pending_requests": (
+                    len(self._pending_requests) if self._pending_requests else 0
+                ),
+            },
+            "queues": {
+                "request_queue_size": (
+                    self._request_queue.qsize() if self._request_queue else 0
+                ),
+                "event_queue_size": (
+                    self._event_queue.qsize() if self._event_queue else 0
+                ),
+            },
+            "execution_planning": {
+                "execution_planner_available": self.execution_planner is not None,
+            },
+        }
+
+        # Add active DAGs information if available
+        if self.active_dags:
+            debug_data["active_dags"] = {
+                dag_id: {
+                    "dag_id": dag_id,
+                    "status": (
+                        getattr(dag_info, 'status', 'unknown')
+                        if hasattr(dag_info, 'status')
+                        else 'unknown'
+                    ),
+                }
+                for dag_id, dag_info in self.active_dags.items()
+            }
+
+        # Add queue status information
+        try:
+            queue_status = self.get_queue_status()
+            debug_data["queue_status"] = queue_status
+        except Exception as e:
+            debug_data["queue_status_error"] = str(e)
+
+        # Add job state counts if available
+        try:
+            state_counts = self.count_states()
+            debug_data["job_state_counts"] = state_counts
+        except Exception as e:
+            debug_data["job_state_counts_error"] = str(e)
+
+        return debug_data
 
     async def enqueue(self, work_info: WorkInfo) -> str | None:
         """
@@ -816,7 +942,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         # FIXME : This is a hack to allow the job to be re-submitted after a failure
         await self.job_manager.job_info_client().delete_info(submission_id)
-
         try:
             returned_id = await self.job_manager.submit_job(
                 entrypoint=entrypoint,
@@ -1053,7 +1178,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def _handle_priority_refresh(self):
         """Handle priority refresh"""
         refresh_interval = getattr(self, 'priority_refresh_interval', 10)
-        self._submission_count += 1
 
         if self._submission_count % refresh_interval == 0:
             await self._refresh_job_priorities()
@@ -1070,11 +1194,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             request = None
             try:
                 request = await self._request_queue.get()
-                print(request.work_info)
                 try:
                     result = await self.__submit_job(
                         request.work_info, request.overwrite
                     )
+                    self._submission_count += 1
                     await self._handle_priority_refresh()
 
                     if not request.result_future.done():
@@ -1083,6 +1207,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         f"Successfully processed job: {request.work_info.id}"
                     )
 
+                except ValueError as e:
+                    self.logger.warning(
+                        f"Job submission issue for {request.work_info.id}: {e}"
+                    )
+                    if not request.result_future.done():
+                        request.result_future.set_result(request.work_info.id)
                 except Exception as e:
                     if not request.result_future.done():
                         request.result_future.set_exception(e)
@@ -1102,7 +1232,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if request:
                     self._request_queue.task_done()
 
-    async def get_queue_status(self) -> dict:
+    def get_queue_status(self) -> dict:
         """Get current status of the submission queue"""
         return {
             "queue_size": self._request_queue.qsize(),
@@ -1125,22 +1255,26 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         dag_name = f"{dag_id}_dag"
         work_info.dag_id = dag_id
         query_plan_dag, topological_sorted_nodes = query_plan_work_items(work_info)
+        connection = None
+
         try:
             # important that we use new connection for each job submission
-            connection = self._get_connection()
             try:
                 # insert the DAG, we will serialize the DAG to JSON and Pickle
                 # this will allow us to re-create the DAG from the database without having to re-plan the DAG
                 json_serialized_dag = query_plan_dag.model_dump()
+                connection = self._get_connection()
                 cursor = self._execute_sql_gracefully(
                     insert_dag(DEFAULT_SCHEMA, dag_id, dag_name, json_serialized_dag),
                     connection=connection,
+                    return_cursor=True,
                 )
                 # we will use the cursor to get the new dag id but it should be the same as dag_id
                 new_dag_key = (
                     result[0] if cursor and (result := cursor.fetchone()) else None
                 )
                 self.logger.info(f"DAG inserted with ID: {new_dag_key}")
+                self._close_cursor(cursor)
 
                 for i, dag_work_info in enumerate(topological_sorted_nodes):
                     cursor = self._execute_sql_gracefully(
@@ -1149,27 +1283,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             dag_work_info,
                         ),
                         connection=connection,
+                        return_cursor=True,
                     )
                     new_dag_key = cursor is not None and cursor.rowcount > 0
                     if i == 0:
                         new_key_added = new_dag_key
 
+                    self._close_cursor(cursor)
+
                 return new_key_added, new_dag_key
 
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error creating job: {error}")
-                if connection:
-                    connection.rollback()
                 raise ValueError(
                     f"Job creation for submission_id {submission_id} failed. "
                     f"Please check the logs for more information. {error}"
                 )
         finally:
-            if connection:
-                try:
-                    self._close_connection(connection)
-                except Exception as e:
-                    self.logger.warning(f"Error returning connection to pool: {e}")
+            self._close_connection(connection)
 
     async def __submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> str:
         """
@@ -1224,13 +1355,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def _mark_active(self, label: str, query: str) -> bool:
         self.logger.debug(f"Marking {label} as active")
         with self:
+            cursor = None
             try:
-                cursor = self._execute_sql_gracefully(query)
+                cursor = self._execute_sql_gracefully(query, return_cursor=True)
                 return result[0] if cursor and (result := cursor.fetchone()) else False
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error updating {label}: {error}")
-                self.connection.rollback()
                 return False
+            finally:
+                self._close_cursor(cursor)
 
     async def is_valid_submission(
         self, work_info: WorkInfo, policy: ExistingWorkPolicy
@@ -1388,7 +1521,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.handle_job_event,
         )
 
-    async def count_states(self) -> Dict[str, Dict[str, int]]:
+    def count_states(self) -> Dict[str, Dict[str, int]]:
         """
         Fetch and count job states from the database.
 
@@ -1396,13 +1529,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         state_count_default = {key.lower(): 0 for key in WorkState.__members__.keys()}
         counts = []
+        cursor = None
 
         with self:
             try:
-                cursor = self._execute_sql_gracefully(count_states(DEFAULT_SCHEMA))
+                cursor = self._execute_sql_gracefully(
+                    count_states(DEFAULT_SCHEMA), return_cursor=True
+                )
                 counts = cursor.fetchall()
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error handling job event: {error}")
+            finally:
+                self._close_cursor(cursor)
 
         states = {"queues": {}}
         for item in counts:
@@ -1442,18 +1580,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         while self.running:
             self.logger.debug(f"Polling jobs status : {wait_time}")
             await asyncio.sleep(wait_time)
+
             try:
                 monitored_on = None
+                cursor = None
+
                 try:
                     cursor = self._execute_sql_gracefully(
                         try_set_monitor_time(
                             DEFAULT_SCHEMA,
                             monitor_state_interval_seconds=int(MONITORING_POLL_PERIOD),
-                        )
+                        ),
+                        return_cursor=True,
                     )
                     monitored_on = cursor.fetchone()
                 except (Exception, psycopg2.Error) as error:
                     self.logger.error(f"Error handling job event: {error}")
+                finally:
+                    self._close_cursor(cursor)
 
                 if monitored_on is None:
                     self.logger.error("Error setting monitor time")
@@ -1482,6 +1626,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 else:
                     return complete_jobs(schema, name, ids, output)
 
+            cursor = None
+
             try:
                 cursor = self._execute_sql_gracefully(
                     complete_jobs_wrapper(
@@ -1490,7 +1636,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         [job_id],
                         {"on_complete": "done", **(output_metadata or {})},
                         force,
-                    )
+                    ),
+                    return_cursor=True,
                 )
                 counts = cursor.fetchone()[0]
                 if counts > 0:
@@ -1499,6 +1646,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.error(f"Error completing job: {job_id}")
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error completing job: {error}")
+            finally:
+                self._close_cursor(cursor)
 
     async def fail(
         self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
@@ -1620,8 +1769,71 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         # https://github.com/marieai/marie-ai/issues/134
         await self._loop.run_in_executor(None, self._blocking_sync_dag)
 
-    def _blocking_sync_dag(self):
+    def _blocking_sync_dag(self, interval: int = 30) -> None:
+        """
+        Validate that DAGs in memory still exist and are active in database
+        """
+        self.logger.info(f"Starting DAG sync polling (interval: {interval}s)")
+
+        while self.running:
+            cursor = None
+
+            try:
+                if not self.active_dags:
+                    self.logger.debug("No active DAGs in memory to validate")
+                    time.sleep(interval)
+                    continue
+
+                memory_dag_ids = list(self.active_dags.keys())
+                self.logger.debug(f"Validating {len(memory_dag_ids)} DAGs in memory")
+
+                placeholders = ','.join(['%s'] * len(memory_dag_ids))
+                query = f"""
+                    SELECT id FROM marie_scheduler.dag 
+                    WHERE id IN ({placeholders}) AND state = 'active'
+                """
+
+                cursor = self._execute_sql_gracefully(
+                    query, memory_dag_ids, return_cursor=True
+                )
+                if not cursor:
+                    self.logger.warning("No result from DAG validation query")
+                    time.sleep(interval)
+                    continue
+
+                valid_dag_records = cursor.fetchall()
+                valid_db_dags = {record[0] for record in valid_dag_records}
+                invalid_dags = set(memory_dag_ids) - valid_db_dags
+
+                if invalid_dags:
+                    self.logger.info(
+                        f"Found {len(invalid_dags)} invalid DAGs in memory"
+                    )
+                    for dag_id in invalid_dags:
+                        self._remove_dag_from_memory(
+                            dag_id, "no longer active or deleted in database"
+                        )
+                else:
+                    self.logger.debug("All DAGs in memory are still valid")
+
+            except Exception as error:
+                self.logger.error(f"Error validating DAGs: {error}")
+            finally:
+                self._close_cursor(cursor)
+            time.sleep(interval)
+        self.logger.debug(f"DAG sync polling stopped")
+
+    def _remove_dag_from_memory(self, dag_id: str, reason: str):
+        """Centralized method to remove DAG from memory with logging"""
+        if dag_id in self.active_dags:
+            del self.active_dags[dag_id]
+            self.logger.warning(f"Removed DAG {dag_id} from active_dags ({reason})")
+        else:
+            self.logger.debug(f"DAG {dag_id} not in active_dags ({reason})")
+
+    def _blocking_sync_dag_events(self):
         self.logger.info("Starting BLOCKING-DAG synchronization")
+        import json
         import select
 
         conn = self._get_connection()
@@ -1632,13 +1844,50 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.info("Listening for DAG changes...")
 
             while self.running:
-                print("Waiting for notifications on 'dag_state_changed' channel...")
+                self.logger.info(
+                    "Waiting for notifications on 'dag_state_changed' channel..."
+                )
                 if select.select([conn], [], [], 5) == ([], [], []):
                     continue  # Timeout, no notifications
                 conn.poll()
                 while conn.notifies:
                     notify = conn.notifies.pop(0)
-                    self.logger.info(f"Received NOTIFY: {notify.payload}")
+                    self.logger.info(
+                        f"Received NOTIFY: {notify.channel} - {notify.payload}"
+                    )
+
+                    try:
+                        payload_data = json.loads(notify.payload)
+                        operation = payload_data.get('operation')
+                        dag_id = payload_data.get('dag_id')
+
+                        if operation == 'DELETE':
+                            # Handle DAG deletion
+                            if dag_id in self.active_dags:
+                                del self.active_dags[dag_id]
+                                self.logger.warning(
+                                    f"Removed deleted DAG {dag_id} from active_dags"
+                                )
+                        elif operation == 'UPDATE':
+                            if True:
+                                continue  # Skip updates for now
+
+                            old_state = payload_data.get('old_state')
+                            new_state = payload_data.get('new_state')
+                            self.logger.info(
+                                f"DAG {dag_id} state changed: {old_state} -> {new_state}"
+                            )
+                            # Remove from active_dags if no longer active
+                            if new_state != 'active' and dag_id in self.active_dags:
+                                del self.active_dags[dag_id]
+                                self.logger.warning(
+                                    f"Removed DAG {dag_id} from active_dags (state: {new_state})"
+                                )
+
+                    except json.JSONDecodeError as e:
+                        self.logger.error(f"Error parsing notification payload: {e}")
+                    except Exception as e:
+                        self.logger.error(f"Error handling notification: {e}")
 
         except Exception as e:
             self.logger.error(f"Error in listener: {e}")
@@ -1665,9 +1914,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.logger.debug(f"🔍 Resolving DAG status: {work_info.dag_id}")
 
         with self:
+            cursor = None
+
             try:
                 resolve_query = f"SELECT {DEFAULT_SCHEMA}.resolve_dag_state('{work_info.dag_id}'::uuid);"
-                cursor = self._execute_sql_gracefully(resolve_query)
+                cursor = self._execute_sql_gracefully(resolve_query, return_cursor=True)
                 dag_state = (
                     result[0] if cursor and (result := cursor.fetchone()) else None
                 )
@@ -1716,6 +1967,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error resolving DAG status: {error}")
                 raise error
+            finally:
+                self._close_cursor(cursor)
 
     def get_dag_by_id(self, dag_id: str) -> QueryPlan | None:
         """
@@ -1727,8 +1980,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             return self.active_dags[dag_id]
 
         try:
+            cursor = None
             with self:
-                cursor = self._execute_sql_gracefully(load_dag(DEFAULT_SCHEMA, dag_id))
+                cursor = self._execute_sql_gracefully(
+                    load_dag(DEFAULT_SCHEMA, dag_id), return_cursor=True
+                )
                 result = cursor.fetchone()
                 if result and result[0]:
                     dag_definition = result[0]
@@ -1740,8 +1996,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     return None
         except Exception as e:
             self.logger.error(f"❌ Error loading DAG {dag_id}: {e}")
-            raise e
             return None
+        finally:
+            self._close_cursor(cursor)
 
     def _is_noop_query_definition(self, node: QueryDefinition) -> bool:
         """
@@ -1777,6 +2034,41 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     def get_available_slots(self) -> dict[str, int]:
         return available_slots_by_executor(ClusterState.deployments)
 
+    def reset_active_dags(self):
+        """
+        Reset the active DAGs dictionary, clearing all currently tracked DAGs.
+        This can be useful for debugging or when you need to force a fresh state.
+
+        Returns:
+            dict: Information about the reset operation including count of cleared DAGs
+        """
+        try:
+            cleared_count = len(self.active_dags) if self.active_dags else 0
+            cleared_dags = list(self.active_dags.keys()) if self.active_dags else []
+
+            # Reset the active DAGs
+            self.active_dags = {}
+
+            self.logger.info(f"Reset active DAGs: cleared {cleared_count} DAGs")
+            if cleared_dags:
+                self.logger.debug(f"Cleared DAGs: {cleared_dags}")
+
+            return {
+                "success": True,
+                "cleared_count": cleared_count,
+                "cleared_dags": cleared_dags,
+                "message": f"Successfully reset active DAGs, cleared {cleared_count} DAGs",
+            }
+        except Exception as e:
+            error_msg = f"Failed to reset active DAGs: {str(e)}"
+            self.logger.error(error_msg)
+            return {
+                "success": False,
+                "error": error_msg,
+                "cleared_count": 0,
+                "cleared_dags": [],
+            }
+
 
 def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo]]:
     # from metadata or fallback to name They can be this same
@@ -1811,10 +2103,12 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
             metadata = meta_dict["metadata"]
             wi.data['metadata'].update(metadata)
         else:
-            logger.warning(
-                f"No mapper configuration found for {query_planner_name}, "
-                "using default metadata."
-            )
+            if query_planner_name not in PostgreSQLJobScheduler._mapper_warnings_shown:
+                logger.warning(
+                    f"No mapper configuration found for {query_planner_name}, "
+                    "using default metadata."
+                )
+                PostgreSQLJobScheduler._mapper_warnings_shown.add(query_planner_name)
 
         if i == 0:
             # this should already been handled by the query planner

@@ -90,3 +90,16 @@ class JobScheduler(abc.ABC):
             values indicating the count of available slots for each type.
         """
         ...
+
+    def reset_active_dags(self):
+        """
+        Reset the active DAGs dictionary, clearing all currently tracked DAGs.
+        This can be useful for debugging or when you need to force a fresh state.
+
+        Returns:
+            dict: Information about the reset operation including count of cleared DAGs
+        """
+        return {
+            "message": "Active DAGs reset",
+            "cleared_dags_count": 0,
+        }

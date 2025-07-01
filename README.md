@@ -57,7 +57,7 @@ docker run --rm  -it marieai/marie:3.0.19-cuda
 
 ```shell
 docker run --rm  -it --entrypoint /bin/bash  marieai/marie:4.0.0-cuda
-
+[extra-requirements.txt-CUDA](extra-requirements.txt-CUDA)
 marie server --start --uses sample.yml  
 ```
 
@@ -132,6 +132,9 @@ Remove files from the bucket
 aws s3 rm  s3://marie --recursive --profile marie --endpoint-url http://localhost:8000
 ```
 
+```shell
+aws s3 rb s3://mybucket --profile marie --endpoint-url http://localhost:8000
+```
 
 # Production setup
 

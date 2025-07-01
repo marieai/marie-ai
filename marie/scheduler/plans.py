@@ -310,35 +310,6 @@ def _complete_jobs_query(
     """
 
 
-def _complete_jobs_queryXXXXXXXX(
-    schema: str, name: str, ids: list, output: dict, state_condition: str
-):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
-    return f"""
-    WITH completed AS (
-        UPDATE {schema}.job
-        SET completed_on = now(),
-            state = '{WorkState.COMPLETED.value}',
-            output = {Json(output)}::jsonb
-        WHERE name = '{name}'
-          AND id IN ({','.join(f"'{_id}'" for _id in ids)})
-          AND {state_condition}
-        RETURNING id
-    ), update_dependencies AS (
-        UPDATE {schema}.job AS j
-        --SET dependencies = j.dependencies - jsonb_build_array(j.id)
-        SET dependencies = (
-            SELECT jsonb_agg(elem)
-            FROM jsonb_array_elements(j.dependencies) elem
-            WHERE elem != to_jsonb(j.id)
-        )
-        FROM completed AS c
-        WHERE j.dependencies @> jsonb_build_array(c.id)
-    )
-    SELECT COUNT(*) FROM completed
-    """
-
-
 def complete_jobs(schema: str, name: str, ids: list, output: dict):
     state_condition = f"state = '{WorkState.ACTIVE.value}'"
     return _complete_jobs_query(schema, name, ids, output, state_condition)

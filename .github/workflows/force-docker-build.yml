@@ -34,7 +34,7 @@ jobs:
       fail-fast: false
       matrix:
         pip_tag: [ "", "perf", "standard", "devel"]  # default: "" = core
-        py_version: [ "3.7", "3.8", "3.9" , "3.10", "3.11"]  # default "" = 3.7
+        py_version: [ "3.7", "3.8", "3.9" , "3.10", "3.11", "3.11"]  # default "" = 3.7
     steps:
       - uses: actions/checkout@v2.5.0
         with:

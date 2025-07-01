@@ -871,7 +871,9 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
 
     if conf.get("processing", {}).get("render_markdown", False):
         render_document_markdown(doc, os.path.join(output_dir, "document.md"))
-        # render_document_markdown_structured(doc, os.path.join(output_dir, "structured.md"))
+        render_document_markdown_structured(
+            doc, os.path.join(output_dir, "structured.md")
+        )
         SerializationManager.serialize(doc, os.path.join(output_dir, "document.pkl"))
 
     convert_document_to_structure(

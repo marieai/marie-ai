@@ -1,4 +1,11 @@
-CREATE OR REPLACE FUNCTION marie_scheduler.reset_active_dags_and_jobs()
+-- This function resets the state of active DAGs and their associated jobs to 'created'.
+-- Usage:
+-- Single job name
+-- SELECT reset_active_dags_and_jobs(ARRAY['gen5_extract']);
+-- Multiple job names
+-- SELECT reset_active_dags_and_jobs(ARRAY['gen5_extract', 'gen4_validate']);
+
+CREATE OR REPLACE FUNCTION marie_scheduler.reset_active_dags_and_jobs(p_job_names TEXT[])
 RETURNS void
 LANGUAGE plpgsql
 AS $$
@@ -6,24 +13,30 @@ DECLARE
     dag_count  INTEGER;
     job_count  INTEGER;
 BEGIN
-    -- Reset active DAGs
-    UPDATE marie_scheduler.dag
-    SET
-        state        = 'created',
-        started_on   = NULL,
-        completed_on = NULL
-    WHERE state = 'active';
-    GET DIAGNOSTICS dag_count = ROW_COUNT;
-
-    -- Reset active jobs (for those DAGs)
+    -- Reset active jobs with name in list
     UPDATE marie_scheduler.job
     SET
         state        = 'created',
         started_on   = NULL,
         completed_on = NULL
-    WHERE state = 'active';
+    WHERE state = 'active'
+      AND name = ANY(p_job_names);
     GET DIAGNOSTICS job_count = ROW_COUNT;
 
-    RAISE NOTICE 'Reset % DAG(s) and % job(s) to created.', dag_count, job_count;
+    -- Reset DAGs associated with those jobs
+    UPDATE marie_scheduler.dag
+    SET
+        state        = 'created',
+        started_on   = NULL,
+        completed_on = NULL
+    WHERE state = 'active'
+      AND id IN (
+          SELECT DISTINCT dag_id
+          FROM marie_scheduler.job
+          WHERE name = ANY(p_job_names)
+      );
+    GET DIAGNOSTICS dag_count = ROW_COUNT;
+
+    RAISE NOTICE 'Reset % job(s) and % DAG(s) to created for job name(s): %.', job_count, dag_count, p_job_names;
 END;
 $$

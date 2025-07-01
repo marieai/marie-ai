@@ -1,120 +1,34 @@
 import functools
-import logging
+import queue
+import threading
 import time
 from collections import namedtuple
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple, Union
 from urllib.parse import quote as _quote
-from urllib.parse import unquote
 
 import etcd3
 import grpc
-from etcd3 import MultiEndpointEtcd3Client, etcdrpc
-from etcd3.client import Etcd3Client, EtcdTokenCallCredentials
+from etcd3 import MultiEndpointEtcd3Client
+from etcd3.client import Etcd3Client
 from grpc._channel import _Rendezvous
 
-__all__ = ["EtcdClient", "Event"]
-
 from marie.excepts import RuntimeFailToStart
+from marie.logging_core.predefined import default_logger as logger
+from marie.serve.discovery.base import ConnectionEvent, ConnectionState
+from marie.serve.discovery.state_tracker import StateTracker
+from marie.serve.discovery.util import (
+    _slash,
+    make_dict_from_pairs,
+    parse_netloc,
+    reconn_reauth_adaptor,
+)
 
+__all__ = ["EtcdClient", "Event"]
 Event = namedtuple("Event", "key event value")
-log = logging.getLogger(__name__)
-
 quote = functools.partial(_quote, safe="")
 
 
-def make_dict_from_pairs(key_prefix, pairs, path_sep="/"):
-    result = {}
-    len_prefix = len(key_prefix)
-    if isinstance(pairs, dict):
-        iterator = pairs.items()
-    else:
-        iterator = pairs
-    for k, v in iterator:
-        if not k.startswith(key_prefix):
-            continue
-        subkey = k[len_prefix:]
-        if subkey.startswith(path_sep):
-            subkey = subkey[1:]
-        path_components = subkey.split("/")
-        parent = result
-        for p in path_components[:-1]:
-            p = unquote(p)
-            if p not in parent:
-                parent[p] = {}
-            if p in parent and not isinstance(parent[p], dict):
-                root = parent[p]
-                parent[p] = {"": root}
-            parent = parent[p]
-        parent[unquote(path_components[-1])] = v
-    return result
-
-
-def _slash(v: str):
-    return v.rstrip("/") + "/" if len(v) > 0 else ""
-
-
-def reauthenticate(etcd_sync, creds, executor):
-    # This code is taken from the constructor of etcd3.client.Etcd3Client class.
-    # Related issue: kragniz/python-etcd3#580
-    etcd_sync.auth_stub = etcdrpc.AuthStub(etcd_sync.channel)
-    auth_request = etcdrpc.AuthenticateRequest(
-        name=creds["user"],
-        password=creds["password"],
-    )
-    resp = etcd_sync.auth_stub.Authenticate(auth_request, etcd_sync.timeout)
-    etcd_sync.metadata = (("token", resp.token),)
-    etcd_sync.call_credentials = grpc.metadata_call_credentials(
-        EtcdTokenCallCredentials(resp.token)
-    )
-
-
-def reconn_reauth_adaptor(meth: Callable):
-    """
-    Retry connection and authentication for the given method.
-
-    :param meth: The method to be wrapped.
-    :return: The wrapped method.
-    """
-
-    @functools.wraps(meth)
-    def wrapped(self, *args, **kwargs):
-        num_reauth_tries = 0
-        num_reconn_tries = 0
-        while True:
-            try:
-                return meth(self, *args, **kwargs)
-            except etcd3.exceptions.ConnectionFailedError:
-                if num_reconn_tries >= 20:
-                    log.warning(
-                        "etcd3 connection failed more than %d times. retrying after 1 sec...",
-                        num_reconn_tries,
-                    )
-                else:
-                    log.debug("etcd3 connection failed. retrying after 1 sec...")
-                time.sleep(1.0)
-                num_reconn_tries += 1
-                continue
-            except grpc.RpcError as e:
-                if (
-                    e.code() == grpc.StatusCode.UNAUTHENTICATED
-                    or (
-                        e.code() == grpc.StatusCode.UNKNOWN
-                        and "invalid auth token" in e.details()
-                    )
-                ) and self._creds:
-                    if num_reauth_tries > 0:
-                        raise
-                    reauthenticate(self.client, self._creds, None)
-                    log.debug("etcd3 reauthenticated due to auth token expiration.")
-                    num_reauth_tries += 1
-                    continue
-                else:
-                    raise
-
-    return wrapped
-
-
-# https://github.com/qqq-tech/backend.ai-common/blob/main/src/ai/backend/common/etcd.py
 class EtcdClient(object):
     """A etcd client proxy."""
 
@@ -139,13 +53,9 @@ class EtcdClient(object):
         timeout: float = 5.0,
         grpc_options: Optional[List[Tuple[str, Any]]] = None,
     ):
-
         self.client: Optional[Union[Etcd3Client, MultiEndpointEtcd3Client]] = None
         self._host: Optional[str] = etcd_host
         self._port: Optional[int] = etcd_port
-        self._endpoints: List[Tuple[str, int]] = self._normalize_endpoints(
-            endpoints, etcd_host, etcd_port
-        )
         self._client_idx: int = 0
         self._cluster: Optional[List[Any]] = None
         self.encoding: str = encoding
@@ -157,19 +67,212 @@ class EtcdClient(object):
         self._cert_cert: Optional[str] = cert_cert
         self._timeout: float = timeout
         self._grpc_options: List[Tuple[str, Any]] = grpc_options or []
-        self._is_multi_endpoint: bool = len(self._endpoints) > 1
 
-        # convert endpoint to  etcd3.Endpoint
-        if self._is_multi_endpoint:
-            secure = (
-                True if self._ca_cert or self._cert_key or self._cert_cert else False
-            )
-            self._endpoints = [
-                etcd3.Endpoint(host=host, port=port, secure=secure)
-                for host, port in self._endpoints
-            ]
+        # convert endpoint to  etcd3.Endpoint if need to
+        normal_endpoints: List[Tuple[str, int]] = self._normalize_endpoints(
+            endpoints, etcd_host, etcd_port
+        )
+        self._is_multi_endpoint: bool = len(normal_endpoints) > 1
+        secure = True if self._ca_cert or self._cert_key or self._cert_cert else False
+        self._endpoints = [
+            etcd3.Endpoint(host=host, port=port, secure=secure)
+            for host, port in normal_endpoints
+        ]
+
+        self._state_lock = threading.RLock()
+        self._active_watches: Set[int] = set()
+
+        self.event_queue = queue.Queue()
+        self._processor_thread = None
+        self._processor_running = False
+        self.state_tracker = StateTracker(ttl=60)  # 60 seconds TTL for state tracking
+
+        self._processor_ready = threading.Event()
+        self._monitor_ready = threading.Event()
+
+        self._connection_state = ConnectionState.DISCONNECTED
+        self._connection_event_handlers: Dict[
+            ConnectionState, List[Callable[[ConnectionEvent], None]]
+        ] = {
+            ConnectionState.CONNECTED: [],
+            ConnectionState.DISCONNECTED: [],
+            ConnectionState.RECONNECTING: [],
+            ConnectionState.FAILED: [],
+        }
+        self._connection_monitor_thread = None
+        self._connection_monitor_running = False
+        self._last_successful_operation = time.time()
+
+        self._reconnect_attempts: int = 0
+        self._max_reconnect_attempts: int = 10
+        self._shutting_down = False
+
+        self._start_event_processor()
+
+        if not self._processor_ready.wait(timeout=5.0):
+            raise RuntimeFailToStart("Event processor failed to start within timeout")
+
+        self._start_connection_monitor()
+
+        if not self._monitor_ready.wait(timeout=5.0):
+            logger.warning("Connection monitor did not start within timeout")
 
         self.connect()
+
+    def add_connection_event_handler(
+        self, state: ConnectionState, handler: Callable[[ConnectionEvent], None]
+    ):
+        """Add an event handler for connection state changes"""
+        with self._state_lock:
+            self._connection_event_handlers[state].append(handler)
+
+    def remove_connection_event_handler(
+        self, state: ConnectionState, handler: Callable[[ConnectionEvent], None]
+    ):
+        """Remove an event handler for connection state changes"""
+        with self._state_lock:
+            if handler in self._connection_event_handlers[state]:
+                self._connection_event_handlers[state].remove(handler)
+
+    def _set_connection_state(
+        self, new_state: ConnectionState, error: Exception = None
+    ):
+        """Set the connection state and notify handlers"""
+        # Prevent recursion during shutdown
+        if self._shutting_down:
+            return
+
+        handlers_to_call = []
+        old_state = None
+
+        with self._state_lock:
+            logger.info(f"Setting connection state: {new_state} (error: {error})")
+            old_state = self._connection_state
+
+            if old_state != new_state:
+                self._connection_state = new_state
+                event = ConnectionEvent(old_state, new_state, error)
+                handlers = self._connection_event_handlers.get(new_state, [])
+                handlers_to_call = list(handlers)
+
+        for handler in handlers_to_call:
+            try:
+                handler(event)
+            except Exception as e:
+                logger.error(f"Error in connection event handler: {e}")
+
+        if old_state != new_state:
+            logger.info(
+                f"EtcdClient connection state changed: {old_state.value} -> {new_state.value}"
+            )
+
+            if not self._shutting_down:
+                if new_state == ConnectionState.DISCONNECTED:
+                    self._attempt_immediate_reconnection()
+                elif new_state == ConnectionState.CONNECTED:
+                    self._reconnect_attempts = 0
+
+    def _attempt_immediate_reconnection(self):
+        """Attempt reconnection immediately when disconnected"""
+        if self._reconnect_attempts >= self._max_reconnect_attempts:
+            logger.error(
+                f"Maximum reconnection attempts ({self._max_reconnect_attempts}) reached"
+            )
+            self._set_connection_state(ConnectionState.FAILED)
+            return
+
+        delay = min(5 * (1.5**self._reconnect_attempts), 60)
+        self._reconnect_attempts += 1
+
+        logger.info(
+            f"Scheduling reconnection attempt #{self._reconnect_attempts} in {delay:.1f} seconds"
+        )
+
+        # this will prevent the asyncio loop from being blocked
+        timer = threading.Timer(delay, self._do_reconnection_attempt)
+        timer.daemon = True
+        timer.start()
+
+    def _do_reconnection_attempt(self):
+        """Execute reconnection attempt"""
+        current_state = self.get_connection_state()
+        if current_state != ConnectionState.DISCONNECTED:
+            return
+
+        try:
+            logger.info(
+                f"Attempting automatic reconnection #{self._reconnect_attempts}..."
+            )
+            self.reconnect()
+            self._last_successful_operation = time.time()
+
+        except Exception as e:
+            logger.error(
+                f"Automatic reconnection attempt #{self._reconnect_attempts} failed: {e}"
+            )
+            self._set_connection_state(ConnectionState.DISCONNECTED, e)
+
+    def get_connection_state(self) -> ConnectionState:
+        """Get the current connection state"""
+        with self._state_lock:
+            return self._connection_state
+
+    def _start_connection_monitor(self):
+        """Start monitoring connection health"""
+        if (
+            self._connection_monitor_thread
+            and self._connection_monitor_thread.is_alive()
+        ):
+            return
+
+        self._monitor_ready.clear()
+        self._connection_monitor_running = True
+        self._connection_monitor_thread = threading.Thread(
+            target=self._monitor_connection_health,
+            name="etcd-connection-monitor",
+            daemon=True,
+        )
+        self._connection_monitor_thread.start()
+
+    def _monitor_connection_health(self):
+        """Monitor connection health and update state accordingly"""
+        logger.info("Started etcd connection monitor")
+        self._monitor_ready.set()
+
+        check_interval = 5.0
+        failure_threshold = 15.0
+
+        while self._connection_monitor_running:
+            try:
+                current_time = time.time()
+                time_since_last_success = current_time - self._last_successful_operation
+
+                if time_since_last_success > failure_threshold:
+                    current_state = self.get_connection_state()
+                    if current_state == ConnectionState.CONNECTED:
+                        self._set_connection_state(ConnectionState.DISCONNECTED)
+
+                try:
+                    self.get("__health_check__")
+                    self._last_successful_operation = current_time
+
+                    current_state = self.get_connection_state()
+                    if current_state in [
+                        ConnectionState.DISCONNECTED,
+                        ConnectionState.FAILED,
+                    ]:
+                        self._set_connection_state(ConnectionState.CONNECTED)
+
+                except Exception as e:
+                    current_state = self.get_connection_state()
+                    if current_state == ConnectionState.CONNECTED:
+                        self._set_connection_state(ConnectionState.DISCONNECTED, e)
+
+                time.sleep(check_interval)
+
+            except Exception as e:
+                logger.error(f"Error in connection health monitor: {e}")
+                time.sleep(check_interval)
 
     def _normalize_endpoints(self, endpoints, etcd_host, etcd_port):
         """Normalize various input formats to a list of (host, port) tuples."""
@@ -255,36 +358,43 @@ class EtcdClient(object):
 
     def _create_client(self) -> Union[Etcd3Client, MultiEndpointEtcd3Client]:
         """Create the appropriate etcd client based on endpoint configuration."""
-        client_kwargs = {
-            'timeout': self._timeout,
-            'grpc_options': self._grpc_options,
-        }
+        try:
+            client_kwargs = {
+                'timeout': self._timeout,
+                'grpc_options': self._grpc_options,
+            }
 
-        # Add credentials
-        if self._creds:
-            client_kwargs['user'] = self._creds.get("user")
-            client_kwargs['password'] = self._creds.get("password")
+            # Add credentials
+            if self._creds:
+                client_kwargs['user'] = self._creds.get("user")
+                client_kwargs['password'] = self._creds.get("password")
 
-        # Add TLS certificates if provided
-        if self._ca_cert:
-            client_kwargs['ca_cert'] = self._ca_cert
-        if self._cert_key:
-            client_kwargs['cert_key'] = self._cert_key
-        if self._cert_cert:
-            client_kwargs['cert_cert'] = self._cert_cert
+            # Add TLS certificates if provided
+            if self._ca_cert:
+                client_kwargs['ca_cert'] = self._ca_cert
+            if self._cert_key:
+                client_kwargs['cert_key'] = self._cert_key
+            if self._cert_cert:
+                client_kwargs['cert_cert'] = self._cert_cert
 
-        if self._is_multi_endpoint:
-            client_kwargs['endpoints'] = self._endpoints
-            # we need to pop the grpc_options from client_kwargs as they are not part of the constructor
-            client_kwargs.pop('grpc_options')
+            if self._is_multi_endpoint:
+                client_kwargs['endpoints'] = self._endpoints
+                # we need to pop the grpc_options from client_kwargs as they are not part of the constructor
+                client_kwargs.pop('grpc_options')
 
-            return MultiEndpointEtcd3Client(**client_kwargs)
-        else:
-            # Use single endpoint client
-            host, port = self._endpoints[0]
-            client_kwargs['host'] = host
-            client_kwargs['port'] = port
-            return etcd3.client(**client_kwargs)
+                return MultiEndpointEtcd3Client(**client_kwargs)
+            else:
+                # Use single endpoint client
+                host, port = parse_netloc(self._endpoints[0].netloc)
+                logger.info(f"Parsed endpoint netloc - host: {host}, port: {port}")
+
+                client_kwargs['host'] = host
+                client_kwargs['port'] = port
+
+                return etcd3.client(**client_kwargs)
+        except Exception as e:
+            logger.error(f"Failed to create etcd client: {e}")
+            raise
 
     def _mangle_key(self, key: str) -> bytes:
         if key.startswith("/"):
@@ -322,7 +432,7 @@ class EtcdClient(object):
                     if not self._is_multi_endpoint:
                         # Only cycle through cluster members for single endpoint
                         self._client_idx = (self._client_idx + 1) % len(self._cluster)
-                    log.info(f"Failed with exception {e}, retry after 1 second.")
+                    logger.info(f"Failed with exception {e}, retry after 1 second.")
                     time.sleep(1)
                     continue
                 raise e  # raise exception if not in suffer status code
@@ -331,84 +441,287 @@ class EtcdClient(object):
                 if not self._is_multi_endpoint:
                     # Only cycle through cluster members for single endpoint
                     self._client_idx = (self._client_idx + 1) % len(self._cluster)
-                log.info(f"Failed with exception {e}, retry after 1 second.")
+                logger.info(f"Failed with exception {e}, retry after 1 second.")
                 time.sleep(1)
 
         raise ValueError(f"Failed after {times} times.")
 
-        raise ValueError(f"Failed after {times} times.")
+    def _create_watch_callback(
+        self,
+        raw_key: bytes,
+        event_callback: Callable,
+        return_type=None,
+        use_queue=False,
+    ):
+        """Create a watch callback function with common event processing logic"""
 
-    def _watch(
+        def _watch_callback(response):
+            try:
+                if isinstance(response, grpc.RpcError):
+                    if response.code() == grpc.StatusCode.UNAVAILABLE or (
+                        response.code() == grpc.StatusCode.UNKNOWN
+                        and "invalid auth token" not in response.details()
+                    ):
+                        logger.error(f"Watch connection error detected: {response}")
+                        self._set_connection_state(
+                            ConnectionState.DISCONNECTED, response
+                        )
+                        return
+
+                for ev in response.events:
+                    try:
+                        logger.debug(f"Received etcd event: {ev}")
+                        if isinstance(ev, etcd3.events.PutEvent):
+                            ev_type = "put"
+                        elif isinstance(ev, etcd3.events.DeleteEvent):
+                            ev_type = "delete"
+                        else:
+                            raise TypeError("Not recognized etcd event type.")
+
+                        key = self._demangle_key(ev.key)
+                        value = ev.value.decode(self.encoding) if ev.value else None
+
+                        if return_type == 'dict':
+                            scope_prefix = ""
+                            raw_key_str = raw_key.decode("utf-8")
+                            key_prefix = self._demangle_key(
+                                f"{_slash(scope_prefix)}{raw_key_str}"
+                            )
+                            pair_sets = {key: value}
+                            pairs = make_dict_from_pairs(
+                                f"{_slash(scope_prefix)}{key_prefix}", pair_sets, "/"
+                            )
+                            value = pairs
+
+                        state_key = f"{key}:{ev_type}"
+                        event = Event(key, ev_type, value)
+
+                        if self.state_tracker.has_state_changed(state_key, value):
+                            logger.debug(
+                                f"State changed for {key}: {ev_type} -> fired event"
+                            )
+                            if use_queue:
+                                event_data = {
+                                    'key': self._demangle_key(ev.key),
+                                    'event': event,
+                                    'callback': event_callback,
+                                }
+                                self.event_queue.put(event_data)
+                            else:
+                                event_callback(self._demangle_key(ev.key), event)
+
+                            self._last_successful_operation = time.time()
+                        else:
+                            logger.debug(
+                                f"State unchanged for {key}: {ev_type} -> skipped event"
+                            )
+                    except Exception as e:
+                        logger.error(f"Error processing watch event: {e}")
+
+            except Exception as e:
+                logger.error(f"Error in watch callback: {e}")
+                if isinstance(e, (grpc.RpcError, ConnectionError)):
+                    error_msg = str(e).lower()
+                    if any(
+                        keyword in error_msg
+                        for keyword in ['unavailable', 'socket closed', 'connection']
+                    ):
+                        logger.warning(
+                            f"Connection error detected in watch callback: {e}"
+                        )
+                        self._set_connection_state(ConnectionState.DISCONNECTED, e)
+
+        return _watch_callback
+
+    def _watch_internal(
         self, raw_key: bytes, event_callback: Callable, prefix: bool = False, **kwargs
     ) -> int:
-        """Watch a key in etcd."""
-        log.info(
-            f"Watching raw key: {raw_key}",
+        """Internal watch method that handles the actual etcd watch creation"""
+        logger.info(f"Creating internal watch for key: {raw_key}, prefix: {prefix}")
+
+        return_type = kwargs.get('return_type')
+        callback = self._create_watch_callback(
+            raw_key=raw_key,
+            event_callback=event_callback,
+            return_type=return_type,
+            use_queue=False,
         )
-        return_type = 'dict'
-
-        def _watch_callback(response: etcd3.watch.WatchResponse):
-            if isinstance(response, grpc.RpcError):
-                if response.code() == grpc.StatusCode.UNAVAILABLE or (
-                    response.code() == grpc.StatusCode.UNKNOWN
-                    and "invalid auth token" not in response.details()
-                ):
-                    # server restarting or terminated
-                    return
-                else:
-                    raise RuntimeError(f"Unexpected RPC Error: {response}")
-
-            for ev in response.events:
-                log.info(f"Received etcd event: {ev}")
-                if isinstance(ev, etcd3.events.PutEvent):
-                    ev_type = "put"
-                elif isinstance(ev, etcd3.events.DeleteEvent):
-                    ev_type = "delete"
-                else:
-                    raise TypeError("Not recognized etcd event type.")
-                # etcd3 library uses a separate thread for its watchers.
-                key = self._demangle_key(ev.key)
-                value = ev.value.decode(self.encoding)
-
-                if return_type == 'dict':
-                    scope_prefix = ""
-                    raw_key_str = raw_key.decode("utf-8")
-                    key_prefix = self._demangle_key(
-                        f"{_slash(scope_prefix)}{raw_key_str}"
-                    )
-                    pair_sets = {key: value}
-                    pairs = make_dict_from_pairs(
-                        f"{_slash(scope_prefix)}{key_prefix}", pair_sets, "/"
-                    )
-                    value = pairs
-
-                event = Event(key, ev_type, value)
-                event_callback(self._demangle_key(ev.key), event)
 
         try:
             if prefix:
                 watch_id = self.client.add_watch_prefix_callback(
-                    raw_key, _watch_callback, **kwargs
+                    raw_key, callback, **kwargs
                 )
             else:
-                watch_id = self.client.add_watch_callback(
-                    raw_key, _watch_callback, **kwargs
+                watch_id = self.client.add_watch_callback(raw_key, callback, **kwargs)
+
+            logger.info(
+                f"Internal watch created with ID: {watch_id} for key: {raw_key}"
+            )
+            if watch_id is None:
+                logger.error(
+                    f"Invalid watch_id received: {watch_id} for key: {raw_key}"
                 )
+                return None
+
             return watch_id
         except Exception as ex:
-            raise ex
+            logger.error(f"Failed to create internal watch for key {raw_key}: {ex}")
+            raise RuntimeError(
+                f"Failed to create internal watch for key: {raw_key}"
+            ) from ex
+
+    def _watch(
+        self, raw_key: bytes, event_callback: Callable, prefix: bool = False, **kwargs
+    ) -> int:
+        """Enhanced watch method with monitoring support"""
+        logger.info(f"Creating watch for key: {raw_key}, prefix: {prefix}")
+
+        # return_type = kwargs.get('return_type')
+        return_type = 'dict'
+        callback = self._create_watch_callback(
+            raw_key=raw_key,
+            event_callback=event_callback,
+            return_type=return_type,
+            use_queue=True,
+        )
+
+        try:
+            if prefix:
+                watch_id = self.client.add_watch_prefix_callback(
+                    raw_key, callback, **kwargs
+                )
+            else:
+                watch_id = self.client.add_watch_callback(raw_key, callback, **kwargs)
+
+            logger.info(f"Etcd client returned watch_id: {watch_id} for key: {raw_key}")
+            if watch_id is None:
+                logger.error(
+                    f"Invalid watch_id received: {watch_id} for key: {raw_key}"
+                )
+                return None
+
+            with self._state_lock:
+                self._active_watches.add(watch_id)
+
+            logger.info(f"Watch established with ID: {watch_id} for key: {raw_key}")
+            return watch_id
+
+        except Exception as ex:
+            logger.error(f"Failed to create watch for key {raw_key}: {ex}")
+            raise RuntimeError(f"Failed to create watch for key: {raw_key}") from ex
+
+    @reconn_reauth_adaptor
+    def cancel_watch(self, watch_id):
+        """Cancel a watch."""
+        try:
+            with self._state_lock:
+                if watch_id in self._active_watches:
+                    self.client.cancel_watch(watch_id)
+                    self._active_watches.discard(watch_id)
+                    logger.info(f"Cancelled watch {watch_id}")
+                    return True
+                else:
+                    logger.warning(f"Watch {watch_id} not found in active watches")
+                    return False
+        except Exception as e:
+            logger.error(f"Failed to cancel watch {watch_id}: {e}")
+            return False
+
+    def _start_event_processor(self):
+        """Start single event processor thread"""
+        if (
+            self._processor_running
+            and self._processor_thread
+            and self._processor_thread.is_alive()
+        ):
+            return
+
+        self._processor_running = True
+        self._processor_ready.clear()
+
+        self._processor_thread = threading.Thread(
+            target=self._process_events, daemon=True, name="etcd-event-processor"
+        )
+        self._processor_thread.start()
+        logger.info("Event processor thread started")
+
+    def _process_events(self):
+        """Process events from the queue"""
+        try:
+            self._processor_ready.set()
+            logger.info("Event processor is ready")
+
+            while self._processor_running:
+                try:
+                    event_data = self.event_queue.get(timeout=1)
+
+                    key = event_data['key']
+                    event = event_data['event']
+                    callback = event_data['callback']
+
+                    try:
+                        queue_size = self.event_queue.qsize()
+                        logger.debug(
+                            f"Event queue size: {queue_size} : {datetime.now()}"
+                        )
+                        callback(key, event)
+                    except Exception as e:
+                        logger.error(f"Callback error for key {key}: {e}")
+
+                except queue.Empty:
+                    continue
+                except Exception as e:
+                    logger.error(f"Event processor error: {e}")
+
+        except Exception as e:
+            logger.error(f"Critical error in event processor: {e}")
+            raise
+        finally:
+            logger.info("Event processor stopped")
+            self._processor_running = False
+
+    def get_watch_stats(self) -> Dict:
+        """Get simple watch statistics."""
+        with self._state_lock:
+            return {
+                "active_watches": len(self._active_watches),
+                "watch_ids": list(self._active_watches),
+            }
 
     @reconn_reauth_adaptor
     def watch(self, key: str, callback, **kwargs):
+        logger.info(f"Adding watch callback for: {key}")
         scope_prefix = ""
         mangled_key = self._mangle_key(f"{_slash(scope_prefix)}{key}")
-        return self._watch(mangled_key, callback, **kwargs)
+        watch_id = self._watch(mangled_key, callback, **kwargs)
+        if watch_id is not None:
+            logger.info(f"Successfully created prefix watch {watch_id} for: {key}")
+            return watch_id
+        else:
+            logger.error(
+                f"Failed to create prefix watch for: {key} - got None watch_id"
+            )
+            raise RuntimeError(f"Failed to create prefix watch for: {key}")
 
     @reconn_reauth_adaptor
     def add_watch_prefix_callback(self, key_prefix: str, callback: Callable, **kwargs):
+        """Watch all keys with a given prefix"""
+        logger.info(f"Adding watch prefix callback for: {key_prefix}")
+
         scope_prefix = ""
         mangled_key = self._mangle_key(f"{_slash(scope_prefix)}{key_prefix}")
-        return self._watch(mangled_key, callback, prefix=True, **kwargs)
+        watch_id = self._watch(mangled_key, callback, prefix=True, **kwargs)
+        if watch_id is not None:
+            logger.info(
+                f"Successfully created prefix watch {watch_id} for: {key_prefix}"
+            )
+            return watch_id
+        else:
+            logger.error(
+                f"Failed to create prefix watch for: {key_prefix} - got None watch_id"
+            )
+            raise RuntimeError(f"Failed to create prefix watch for: {key_prefix}")
 
     @reconn_reauth_adaptor
     def get(self, key: str) -> tuple:
@@ -531,137 +844,174 @@ class EtcdClient(object):
         return self.client.replace(mangled_key, initial_val, new_val)
 
     @reconn_reauth_adaptor
-    def cancel_watch(self, watch_id):
-        return self.client.cancel_watch(watch_id)
-
-    @reconn_reauth_adaptor
-    def reconnect(self) -> bool:
+    def reconnect(self):
         """
-        Reconnect to etcd. This method is used to recover from a connection failure.
-        :return: True if reconnected successfully. False otherwise.
+        Reconnect to etcd with proper state management.
+        This method is called when explicit reconnection is needed.
         """
-        log.warning("Reconnecting to etcd.")
         try:
-            connected = self.connect()
+            self._set_connection_state(ConnectionState.RECONNECTING)
+            logger.info("Explicitly reconnecting to etcd...")
+            if self.client:
+                try:
+                    self.client.close()
+                except:
+                    pass
+
+            if self._is_multi_endpoint:
+                self._client_idx = 0
+
+            connected = (
+                self.connect()
+            )  # Recreate the client, this is the easiest and clenest way
+            if not connected:
+                self._set_connection_state(ConnectionState.FAILED)
+                return False
+            logger.warning(f"Reconnected to etcd.")
+
+            try:
+                self.get("__reconnect_test__")
+                logger.info("Reconnection test successful")
+            except Exception as test_error:
+                logger.warning(f"Reconnection test failed: {test_error}")
+
+            logger.info("Successfully reconnected to etcd")
+            self._set_connection_state(ConnectionState.CONNECTED)
+            self._last_successful_operation = time.time()
+
+            return True
+
         except Exception as e:
-            log.error(f"Failed to reconnect to etcd. {e}")
-            connected = False
-        log.warning(f"Reconnected to etcd. {connected}")
-        return connected
+            logger.error(f"Failed to reconnect to etcd: {e}")
+            self._set_connection_state(ConnectionState.FAILED, e)
+            raise
 
     def connect(self) -> bool:
-        """Connect to etcd using the appropriate client type."""
+        """Connect to etcd using the appropriate client type with connection state management."""
         times = 0
         last_ex = None
+
+        # Set initial state to reconnecting (connecting for the first time)
+        self._set_connection_state(ConnectionState.RECONNECTING)
 
         while times < self.retry_times:
             try:
                 self.client = self._create_client()
 
                 if self._is_multi_endpoint:
-                    log.info(
+                    logger.info(
                         f'Connected to etcd using multi-endpoint client: {self._endpoints}'
                     )
-                    # For multi-endpoint client, we use the client directly
                     self._cluster = [self.client]
                 else:
-                    host, port = self._endpoints[0]
-                    log.info(
+                    host, port = parse_netloc(self._endpoints[0].netloc)
+                    logger.info(
                         f'Connected to etcd using single-endpoint client: {host}:{port}'
                     )
-                    # Build cluster from members for single endpoint
                     self._cluster = [
                         member._etcd_client for member in self.client.members
                     ]
+
+                self._set_connection_state(ConnectionState.CONNECTED)
+                self._last_successful_operation = time.time()
 
                 break
 
             except grpc.RpcError as e:
                 times += 1
                 last_ex = e
+                if times == 1:
+                    self._set_connection_state(ConnectionState.DISCONNECTED, e)
+
                 if e.code() in (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.UNKNOWN):
-                    log.error(
-                        f"etcd3 connection failed. retrying after 1 sec, attempt # {times} of {self.retry_times}"
+                    logger.error(
+                        f"etcd3 connection failed. retrying after 2 sec, attempt # {times} of {self.retry_times}"
                     )
+                    if times < self.retry_times:
+                        self._set_connection_state(ConnectionState.RECONNECTING, e)
                     time.sleep(1)
                     continue
-                raise e
+                else:
+                    self._set_connection_state(ConnectionState.FAILED, e)
+                    raise e
+
             except Exception as e:
                 times += 1
                 last_ex = e
-                log.error(
-                    f"etcd3 connection failed with {e}. retrying after 1 sec, attempt # {times} of {self.retry_times}"
+
+                if times == 1:
+                    self._set_connection_state(ConnectionState.DISCONNECTED, e)
+
+                logger.error(
+                    f"etcd3 connection failed with {e}. retrying after 2 sec, attempt # {times} of {self.retry_times}"
                 )
+
+                if times < self.retry_times:
+                    self._set_connection_state(ConnectionState.RECONNECTING, e)
                 time.sleep(1)
 
         if times >= self.retry_times:
+            self._set_connection_state(ConnectionState.FAILED, last_ex)
             raise RuntimeFailToStart(
                 f"Initialize etcd client failed after {self.retry_times} times. Due to {last_ex}"
             )
 
-        log.info(f'Connected to etcd with namespace "{self.ns}"')
+        logger.info(f'Connected to etcd with namespace "{self.ns}"')
         return True
 
+    def close(self):
+        """Close the client"""
+        try:
+            logger.info("Closing EtcdClient...")
+            self._shutting_down = True
 
-def client_examples():
-    # These all work the same way
-    etcd_client = EtcdClient("localhost", 2379, namespace="marie")
-    etcd_client = EtcdClient(etcd_host="localhost", etcd_port=2379, namespace="marie")
-    etcd_client = EtcdClient(endpoints=["localhost:2379"], namespace="marie")
+            with self._state_lock:
+                self._connection_state = ConnectionState.DISCONNECTED
+                self._processor_running = False
+                self._connection_monitor_running = False
+                self._processor_ready.clear()
+                self._monitor_ready.clear()
 
-    # List of endpoints as strings in t etcd_host format
-    etcd_client = EtcdClient(
-        etcd_host="etcd-node1.example.com:2379, etcd-node2.example.com,etcd-node3.example.com:2379",
-    )
+                total_handlers = sum(
+                    len(handlers)
+                    for handlers in self._connection_event_handlers.values()
+                )
+                if total_handlers > 0:
+                    logger.debug(f"Clearing {total_handlers} connection event handlers")
 
-    # List of tuples
-    etcd_client = EtcdClient(
-        endpoints=[
-            ("etcd-node1.example.com", 2379),
-            ("etcd-node2.example.com", 2379),
-            ("etcd-node3.example.com", 2379),
-        ],
-        namespace="marie",
-    )
+                for state in list(self._connection_event_handlers.keys()):
+                    self._connection_event_handlers[state].clear()
 
-    # List of strings with ports
-    etcd_client = EtcdClient(
-        endpoints=[
-            "etcd-node1.example.com:2379",
-            "etcd-node2.example.com:2379",
-            "etcd-node3.example.com:2379",
-        ],
-        namespace="marie",
-    )
+            for thread in [self._processor_thread, self._connection_monitor_thread]:
+                if thread and thread.is_alive():
+                    thread.join(timeout=5.0)
+                    if thread.is_alive():
+                        logger.error(f"Thread {thread.name} failed to terminate")
 
-    # Mixed formats (defaults to port 2379 if not specified)
-    etcd_client = EtcdClient(
-        endpoints=[
-            "etcd-node1.example.com",  # Uses port 2379
-            "etcd-node2.example.com:2380",  # Uses port 2380
-            ("etcd-node3.example.com", 2381),  # Uses port 2381
-        ],
-        namespace="marie",
-    )
+            with self._state_lock:
+                for watch_id in list(self._active_watches):
+                    try:
+                        self.client.cancel_watch(watch_id)
+                    except:
+                        pass
 
+                self._active_watches.clear()
 
-if __name__ == "__main__":
-    etcd_client = EtcdClient("localhost", 2379)
-    etcd_client.put("key", "Value XYZ")
+            try:
+                while not self.event_queue.empty():
+                    try:
+                        self.event_queue.get_nowait()
+                    except:
+                        break
+            except Exception as e:
+                logger.warning(f"Error clearing event queue: {e}")
 
-    kv = etcd_client.get("key")
-    print(etcd_client.get("key"))
-    # etcd_client.delete('key')
-    print(etcd_client.get("key"))
-
-    kv = {"key1": "Value 1", "key2": "Value 2", "key3": "Value 3"}
-
-    etcd_client.put_prefix("prefix", kv)
-
-    print(etcd_client.get_prefix("prefix"))
-
-    print("------ GET ALL ---------")
-    for kv in etcd_client.get_all():
-        v = kv[0].decode("utf8")
-        k = kv[1].key.decode("utf8")
-        print(k, v)
+            if self.client:
+                try:
+                    self.client.close()
+                except:
+                    pass
+        except Exception as e:
+            logger.error(f"Error during EtcdClient close: {e}")
+            self._connection_state = ConnectionState.DISCONNECTED
+            raise

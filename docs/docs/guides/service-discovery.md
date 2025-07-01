@@ -8,7 +8,7 @@ Here we are going to show how to use the `EtcdServiceResolver` to resolve servic
 ```bash
 docker run  -d  -p 2379:2379  --name etcd \
 -v /usr/share/ca-certificates/:/etc/ssl/certs \
-quay.io/coreos/etcd:v3.5.14 /usr/local/bin/etcd -advertise-client-urls \
+quay.io/coreos/etcd:v3.6.1 /usr/local/bin/etcd -advertise-client-urls \
 http://0.0.0.0:2379 -listen-client-urls http://0.0.0.0:2379 \
 --log-level=info \
 --log-outputs=stdout
@@ -34,8 +34,8 @@ Multinode etcd cluster:
 docker exec -it etcd etcdctl --endpoints=mariectl-002:2379,mariectl-003:2379,mariectl-004:2379 get "" --prefix=true
 ```
 
-
-
+# mas_uSLP7ULm7vYTDCiSe8Wo8N1yP99m4H0sB3BT5sCbB_RzEw6HFL3yTQ
+# mau_fOnxOM0VYfPvKRrOJixpwgSiqOqXy1IKIjmqttXZyK8YACJ09CNhPw
 
 ## Purge the etcd data
 
@@ -44,6 +44,14 @@ docker exec -it etcd etcdctl del "" --from-key=true
 
 docker exec -it etcd etcdctl --endpoints=mariectl-002:2379,mariectl-003:2379,mariectl-004:2379  del "" --from-key=true
 ```
+
+## Maitenance jobs
+
+```bash
+docker exec -it etcd etcdctl --endpoints=mariectl-001:2379 alarm list
+docker exec -it etcd etcdctl --endpoints=mariectl-001:2379 defrag
+```
+
 
 ## Install the `etcd3` package
 

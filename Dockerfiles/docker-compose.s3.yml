@@ -1,35 +1,76 @@
 services:
   s3server:
-    image: zenko/cloudserver:latest
-    container_name: marie-s3
+    image: minio/minio:latest
+    container_name: marie-s3-server
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8000:9000"        # S3 API port (MinIO default)
+      - "8001:9001"        # MinIO Console UI
     environment:
-      - REMOTE_MANAGEMENT_DISABLE=1
-      - S3DATA=multiple
-      - S3BACKEND=file # mem, file, or sproxyd
-      - ENDPOINT=s3.host.local
-
+      MINIO_ROOT_USER: marieadmin            # Change these for production!
+      MINIO_ROOT_PASSWORD: marietopsecret    # Change these for production!
+      # Disable server-side encryption to avoid KMS requirement
+      SERVER_SIDE_ENCRYPTION: "off"
+      # Explicitly disable all encryption features
+      MINIO_KMS_AUTO_ENCRYPTION: "off"
+    command: server /data --console-address ":9001"
+    volumes:
+      - /mnt/data/s3:/data      # Persistent storage for buckets
     networks:
       - marie_default
+    healthcheck:
+
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  mc-setup:
+    image: minio/mc:latest
+    container_name: marie-mc-setup
+    depends_on:
+      s3server:
+        condition: service_healthy
+    environment:
+      MC_HOST_localminio: http://marieadmin:marietopsecret@s3server:9000
     volumes:
-      - ./config/zenko/authdata.json:/usr/src/app/conf/authdata.json
-      - ./config/zenko/locationConfig.json:/usr/src/app/locationConfig.json
-#       until we figure out how to get the config.json to work (mv: cannot move 'config.json.tmp' to 'config.json': Device or resource busy)
-#      - ./config/zenko/config.json:/usr/src/app/config.json
-      - ~/s3/data:/usr/src/app/localData
-      - ~/s3/metadata:/usr/src/app/localMetadata
-      - ~/.aws/credentials:/root/.aws/credentials
+      - mc-config:/root/.mc
+    networks:
+      - marie_default
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set localminio http://s3server:9000 marieadmin marietopsecret;
+      mc admin user add localminio MARIEACCESSKEY MARIESECRETACCESSKEY;
+      mc admin policy attach localminio readwrite --user MARIEACCESSKEY;
+      # Explicitly create bucket and clear any encryption
+      mc mb localminio/marie --ignore-existing;
+      mc encrypt clear localminio/marie 2>/dev/null || true;
+      # Also try to remove any bucket policies that might enforce encryption
+      mc admin policy remove localminio default-encryption 2>/dev/null || true;
+      echo 'MinIO setup completed successfully!';
+      tail -f /dev/null
+      "
 
-# Container networking setup
-# docker network create --driver=bridge marie_default
-# sysctl net.ipv4.conf.all.forwarding=1
+  mc-client:
+    image: minio/mc:latest
+    container_name: marie-mc-client
+    depends_on:
+      - mc-setup
+    volumes:
+      - mc-config:/root/.mc
+    networks:
+      - marie_default
+    profiles:
+      - tools
+    entrypoint: /bin/sh
+    stdin_open: true
+    tty: true
 
-## ############### Networks ###############
+volumes:
+  mc-config:
+
 networks:
   marie_default:
     external: true
 
-# Reference:
-#    https://s3-server.readthedocs.io/en/latest/DOCKER.html#in-production-w-a-docker-hosted-cloudserver
+# see tools/setup-s3-users.sh
