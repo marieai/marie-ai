@@ -246,7 +246,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._db_executor = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="sync-db-executor"
         )
-
+        self.logger.info(
+            f"Using ThreadPoolExecutor for database operations with : {max_workers} workers."
+        )
         if self.known_queues is None or len(self.known_queues) == 0:
             raise BadConfigSource("Queue names are required for JobScheduler")
         self.logger.info(f"Queue names to monitor: {self.known_queues}")
@@ -757,7 +759,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if scheduled_any:
                     try:
                         await asyncio.wait_for(
-                            ClusterState.scheduled_event.wait(), timeout=1
+                            ClusterState.scheduled_event.wait(), timeout=2
                         )  # THIS SHOULD BE SAME AS ETCD lease time
                     except asyncio.TimeoutError:
                         self.logger.warning("Timeout waiting for schedule confirmation")

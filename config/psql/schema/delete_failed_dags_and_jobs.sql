@@ -1,8 +1,9 @@
+CREATE OR REPLACE FUNCTION marie_scheduler.delete_failed_dags_and_jobs()
+RETURNS void
+LANGUAGE plpgsql
 
-create function marie_scheduler.delete_failed_dags_and_jobs() returns void
-    language plpgsql
-as
-$$
+AS $$
+
 DECLARE
     deleted_job_count  INTEGER;
     deleted_dag_count  INTEGER;

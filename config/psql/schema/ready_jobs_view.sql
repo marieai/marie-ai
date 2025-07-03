@@ -1,5 +1,5 @@
 
-create view marie_scheduler.ready_jobs_view
+CREATE OR REPLACE VIEW marie_scheduler.ready_jobs_view 
             (id, name, priority, data, state, retry_limit, retry_count, retry_delay, retry_backoff, start_after,
              started_on, expire_in, created_on, completed_on, keep_until, output, dead_letter, policy, dependencies,
              dag_id, job_level, duration, sla_interval, soft_sla, hard_sla, sla_miss_logged)

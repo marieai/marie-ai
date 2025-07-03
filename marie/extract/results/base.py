@@ -1,9 +1,9 @@
 import logging
 import re
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from marie import check
-from marie.extract.results.registry import parser_registry
+from marie.extract.results.registry import component_registry
 from marie.extract.schema import Segment
 from marie.extract.structures.concrete_annotations import TypedAnnotation
 from marie.extract.structures.line_with_meta import LineWithMeta
@@ -22,17 +22,12 @@ def initialize_parsers_from_config(config: Union[Dict[str, Any], List[str]]):
     if isinstance(config, list):
         config = {'external_parser_modules': config}
 
-    return parser_registry.initialize_from_config(config)
-
-
-def install_wheels_from_directory(wheel_directory: str, watch: bool = True):
-    """Install wheels from directory with optional watching"""
-    return parser_registry.install_wheels_from_directory(wheel_directory, watch)
+    return component_registry.initialize_from_config(config)
 
 
 def load_external_parsers(module_names: List[str]):
     """Load external parser modules by name"""
-    return parser_registry.initialize_external_parsers(module_names)
+    return component_registry.initialize_external_components(module_names)
 
 
 def locate_line(

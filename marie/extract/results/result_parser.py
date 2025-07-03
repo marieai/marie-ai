@@ -17,7 +17,7 @@ from marie.constants import __model_path__
 from marie.executor.ner.utils import draw_box, get_font, visualize_icr
 from marie.extract.readers.meta_reader.meta_reader import MetaReader
 from marie.extract.results.base import _annotate_segment, extract_page_id, locate_line
-from marie.extract.results.registry import parser_registry
+from marie.extract.results.registry import component_registry
 from marie.extract.results.result_converter import convert_document_to_structure
 from marie.extract.results.util import generate_distinct_colors
 from marie.extract.schema import ExtractionResult, Segment, TableExtractionResult
@@ -804,7 +804,7 @@ def render_document_markdown_structured(
             all_annotations.extend(page_annotations)
 
     if not all_annotations:
-        print("No annotations found in the document.")
+        logging.warning("No annotations found in the document.")
         return
 
     # Calculate column widths to align content
@@ -822,18 +822,23 @@ def render_document_markdown_structured(
     markdown_output.append("\n")
     markdown_string = "\n".join(markdown_output)
 
-    print(markdown_string)
+    logging.debug(markdown_string)
     try:
         with open(output_file, "w", encoding="utf-8") as file:
             file.write(markdown_string)
-        print(f"Markdown output written to {output_file}")
+        logging.info(f"Markdown output written to {output_file}")
     except IOError as e:
-        print(f"Error writing to file {output_file}: {e}")
+        logging.error(f"Error writing to file {output_file}: {e}")
 
 
 def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
     """
-    Main entrypoint: runs all registered parsers and optional markdown rendering.
+    Main entry point for parsing results. Executes all registered parsers and optionally renders markdown outputs.
+
+    :param working_dir: The directory containing the working files.
+    :param metadata: Metadata associated with the document.
+    :param conf: Configuration object specifying annotators and processing options.
+    :raises ValueError: If the specified working directory does not exist.
     """
 
     logging.info(f"Parsing results from {working_dir}")
@@ -843,6 +848,7 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
     agent_output_dir = os.path.join(working_dir, "agent-output")
     output_dir = os.path.join(working_dir, "parsed-result")
     frames_dir = os.path.join(working_dir, "frames")
+
     os.makedirs(agent_output_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -857,7 +863,7 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
 
     for name, ann_conf in conf.annotators.items():
         target = ann_conf.get("parser", name)
-        parser_fn = parser_registry.get_parser(target)
+        parser_fn = component_registry.get_parser(target)
         if not parser_fn:
             logging.warning(f"No parser registered for '{target}'")
             raise ValueError(f"Parser '{target}' not found in registry")

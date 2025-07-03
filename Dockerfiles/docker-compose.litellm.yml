@@ -1,0 +1,40 @@
+
+version: '3.8'
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: marie-litellm
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-1234}
+      - LITELLM_SALT_KEY=${LITELLM_SALT_KEY:-sk-1234}
+      - DATABASE_URL=${LITELLM_DATABASE_URL:-}
+      - STORE_MODEL_IN_DB=${LITELLM_STORE_MODEL_IN_DB:-true}
+      - LITELLM_LOG=${LITELLM_LOG:-INFO}
+      - LITELLM_PORT=${LITELLM_PORT:-4000}
+      - LITELLM_PROXY_CONFIG_PATH=${LITELLM_PROXY_CONFIG_PATH:-/app/config.yaml}
+    volumes:
+      - ./litellm:/app/config:ro
+      - litellm_logs:/app/logs
+    networks:
+      - marie_default
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "marie.service=litellm"
+      - "marie.description=LiteLLM proxy server for AI model routing"
+
+volumes:
+  litellm_logs:
+    driver: local
+
+networks:
+  marie_default:
+    external: true

@@ -249,7 +249,6 @@ class JobManager:
 
                 await asyncio.sleep(self.JOB_MONITOR_LOOP_PERIOD_S)
             except Exception as e:
-                raise e
                 is_alive = False
                 job_status = await self._job_info_client.get_status(job_id)
                 job_error_message = None
