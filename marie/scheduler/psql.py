@@ -539,6 +539,22 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         with self:
             self._execute_sql_gracefully(create_queue(DEFAULT_SCHEMA, queue_name, {}))
 
+    async def get_defined_queues(self) -> set[str]:
+        """Setup the queue for the scheduler."""
+
+        with self:
+            try:
+                cursor = self._execute_sql_gracefully(f"SELECT name FROM {DEFAULT_SCHEMA}.queue")
+                if cursor and cursor.rowcount > 0:
+                    result = cursor.fetchall()
+                    return {name[0] for name in result}
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error getting known queues: {error}")
+                raise RuntimeFailToStart(
+                    f"Unable to find queues in schema '{DEFAULT_SCHEMA}': {error}"
+                )
+            return set()
+
     async def start(self) -> None:
         """
         Starts the job scheduling agent.
@@ -551,10 +567,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not installed:
             self.create_tables(DEFAULT_SCHEMA)
 
-            for work_queue in self.known_queues:
-                self.logger.info(f"Create queue: {work_queue}")
-                await self.create_queue(work_queue)
-                await self.create_queue(f"${work_queue}_dlq")
+        defined_queues = await self.get_defined_queues()
+        for work_queue in self.known_queues.difference(defined_queues):
+            self.logger.info(f"Create queue: {work_queue}")
+            await self.create_queue(work_queue)
+            await self.create_queue(f"${work_queue}_dlq")
 
         self.running = True
         # self.sync_task = asyncio.create_task(self._sync())
@@ -2098,6 +2115,7 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
         wi.id = node.task_id
         wi.job_level = job_levels[task_id]
 
+        # if any(wi.name in name for name in ('gen5_extract', 'corr')):
         if has_mapper_config(__default_extract_dir__, query_planner_name):
             meta = JobMetadata.from_task(node, query_planner_name)
             meta_dict = meta.model_dump()  # need plain dict
