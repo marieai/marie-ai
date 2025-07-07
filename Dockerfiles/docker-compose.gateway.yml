@@ -10,14 +10,14 @@ services:
     container_name: 'marieai-gateway'
     init: true
     tty: true
-    network_mode: host
-
+    networks:
+      - marie_default
     command: >
       gateway 
       --uses /etc/marie/config/service/extract/${GATEWAY_CONFIG_TAG:-marie-gateway-4.0.0.yml}
       --protocols HTTP GRPC
       --ports 51000 52000
-      --extra-search-paths /mnt/data/marie-ai/config/extra_py_modules
+      --extra-search-paths /etc/marie/config/config/extra_py_modules
 
     environment:
       - MARIE_CACHE_SKIP_LOAD=true
@@ -29,9 +29,10 @@ services:
       - JINA_LOG_LEVEL=${GATEWAY_LOG_LEVEL:-DEBUG}
 
     volumes:
-      - gateway_config:/etc/marie/config:ro
-      - gateway_models:/etc/marie/model_zoo:rw
-      - gateway_policy:/etc/ImageMagick-6/policy.xml:ro
+      - /mnt/data/marie-ai/config:/etc/marie/config:ro
+      - /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw
+      - /mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - /mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
 
     logging:
       driver: local
@@ -46,34 +47,9 @@ services:
       retries: 3
       start_period: 60s
 
-    networks:
-      - marie_default
-
     labels:
       - "marie.service=gateway"
       - "marie.version=${GATEWAY_IMAGE_TAG:-4.0.0-cpu}"
-
-volumes:
-  gateway_config:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${GATEWAY_CONFIG_PATH:-/mnt/data/marie-ai/config}
-
-  gateway_models:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${GATEWAY_MODEL_PATH:-/mnt/data/marie-ai/model_zoo}
-
-  gateway_policy:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${GATEWAY_CONFIG_PATH:-/mnt/data/marie-ai/config}/service/im-policy.xml
 
 networks:
   marie_default:
