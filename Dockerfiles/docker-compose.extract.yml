@@ -9,7 +9,9 @@ services:
     container_name: 'marieai-${EXTRACT_STACK_NAME:-dev}-server'
     init: true
     tty: true
-
+    network_mode: host
+#    networks:
+#      - marie_default
     command: >
       server --start 
       --uses /etc/marie/config/service/extract/${EXTRACT_CONFIG_TAG:-marie-extract-4.0.0.yml}
@@ -55,9 +57,6 @@ services:
       timeout: 30s
       retries: 3
       start_period: 300s
-
-    networks:
-      - marie_default
 
     labels:
       - "marie.service=extract-executor"

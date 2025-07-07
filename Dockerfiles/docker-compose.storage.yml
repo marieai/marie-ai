@@ -30,8 +30,9 @@ services:
     volumes:
       - psql_data:/var/lib/postgresql/data
       - /mnt/data/marie-ai/config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql
-    networks:
-      - marie_default
+    network_mode: host
+#    networks:
+#      - marie_default
 volumes:
   psql_data:
     driver: local
