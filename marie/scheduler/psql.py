@@ -542,7 +542,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         with self:
             try:
-                cursor = self._execute_sql_gracefully(f"SELECT name FROM {DEFAULT_SCHEMA}.queue")
+                cursor = self._execute_sql_gracefully(f"SELECT name FROM {DEFAULT_SCHEMA}.queue", return_cursor=True)
                 if cursor and cursor.rowcount > 0:
                     result = cursor.fetchall()
                     return {name[0] for name in result}
