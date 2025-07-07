@@ -63,7 +63,7 @@ if [ -x "$(command -v nvidia-smi)" ]; then
         sudo nvidia-ctk runtime configure --runtime=docker
 
         sudo systemctl restart docker
-        sudo docker run --rm --runtime=nvidia --gpus all nvidia/cuda:11.6.2-base-ubuntu20.04 nvidia-smi
+        sudo docker run --rm --runtime=nvidia --gpus all nvidia/cuda:12.4.1-base-ubuntu20.04 nvidia-smi
 else
     echo "nvidia-smi not found, skipping NVIDIA Docker toolkit installation"
 fi

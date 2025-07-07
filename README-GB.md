@@ -100,7 +100,7 @@ chmod +x $DOCKER_CONFIG/cli-plugins/docker-compose
 ```
 
 
-```sh
+```sh[gateway.yml](../../../../../mnt/data/marie-ai/config/service/gateway.yml)
 ln -s ./config/.env.dev ./.env
 docker compose down --volumes --remove-orphans && DOCKER_BUILDKIT=1 docker compose -f docker-compose.yml  --project-directory . up --build --remove-orphans
 ```

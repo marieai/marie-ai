@@ -10,7 +10,7 @@ from marie.api.docs import AssetKeyDoc
 from marie.executor.extract import DocumentAnnotatorExecutor
 from marie.executor.extract.util import prepare_asset_directory
 from marie.extract.results.base import initialize_parsers_from_config
-from marie.extract.results.registry import parser_registry
+from marie.extract.results.registry import component_registry
 from marie.extract.results.result_parser import parse_results
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
@@ -43,12 +43,12 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
         logger.info(f"Failed modules: {result['failed']}")
         logger.info(f"Total parsers available: {result['total_parsers']}")
 
-        reg_parsers = parser_registry.list_parsers()
+        reg_parsers = component_registry.list_parsers()
         logger.info("Available parsers:")
         for parser_name in reg_parsers:
             logger.info(f"- {parser_name}")
 
-        info = parser_registry.get_parser_info()
+        info = component_registry.get_parser_info()
         logger.info(f"Parser info:\n{pformat(info)}")
         logger.info(f"Started executor : {self.__class__.__name__}")
 
@@ -98,7 +98,6 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
         )
         frames = frames_from_docs(docs)
 
-        ##########
         root_asset_dir, frames_dir, metadata_file = prepare_asset_directory(
             frames=frames,
             local_path=local_downloaded_s3_path,
@@ -108,7 +107,6 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
         )
         self.logger.info(f"root_asset_dir = {root_asset_dir}")
 
-        # self.logger.info(f"Downloaded assets to {metadata_file}")
         metadata = load_json_file(metadata_file)
         unstructured_meta = {
             'ref_id': ref_id,

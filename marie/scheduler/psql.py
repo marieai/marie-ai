@@ -246,7 +246,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._db_executor = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="sync-db-executor"
         )
-
+        self.logger.info(
+            f"Using ThreadPoolExecutor for database operations with : {max_workers} workers."
+        )
         if self.known_queues is None or len(self.known_queues) == 0:
             raise BadConfigSource("Queue names are required for JobScheduler")
         self.logger.info(f"Queue names to monitor: {self.known_queues}")
@@ -537,6 +539,22 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         with self:
             self._execute_sql_gracefully(create_queue(DEFAULT_SCHEMA, queue_name, {}))
 
+    async def get_defined_queues(self) -> set[str]:
+        """Setup the queue for the scheduler."""
+
+        with self:
+            try:
+                cursor = self._execute_sql_gracefully(f"SELECT name FROM {DEFAULT_SCHEMA}.queue")
+                if cursor and cursor.rowcount > 0:
+                    result = cursor.fetchall()
+                    return {name[0] for name in result}
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error getting known queues: {error}")
+                raise RuntimeFailToStart(
+                    f"Unable to find queues in schema '{DEFAULT_SCHEMA}': {error}"
+                )
+            return set()
+
     async def start(self) -> None:
         """
         Starts the job scheduling agent.
@@ -549,10 +567,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not installed:
             self.create_tables(DEFAULT_SCHEMA)
 
-            for work_queue in self.known_queues:
-                self.logger.info(f"Create queue: {work_queue}")
-                await self.create_queue(work_queue)
-                await self.create_queue(f"${work_queue}_dlq")
+        defined_queues = await self.get_defined_queues()
+        for work_queue in self.known_queues.difference(defined_queues):
+            self.logger.info(f"Create queue: {work_queue}")
+            await self.create_queue(work_queue)
+            await self.create_queue(f"${work_queue}_dlq")
 
         self.running = True
         # self.sync_task = asyncio.create_task(self._sync())
@@ -757,7 +776,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if scheduled_any:
                     try:
                         await asyncio.wait_for(
-                            ClusterState.scheduled_event.wait(), timeout=1
+                            ClusterState.scheduled_event.wait(), timeout=2
                         )  # THIS SHOULD BE SAME AS ETCD lease time
                     except asyncio.TimeoutError:
                         self.logger.warning("Timeout waiting for schedule confirmation")

@@ -22,13 +22,14 @@ services:
     ports:
       - "5432:5432"
     environment:
+      - POSTGRES_HOST_AUTH_METHOD=trust
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=postgres
       - POSTGRES_SHARED_PRELOAD_LIBRARIES=pg_stat_statements,pg_cron,pg_documentdb
     volumes:
       - psql_data:/var/lib/postgresql/data
-      - ./config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - /mnt/data/marie-ai/config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - marie_default
 volumes:

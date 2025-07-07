@@ -13,27 +13,35 @@
 --     )gb
 -- );
 
-create function marie_scheduler.delete_dags_and_jobs(p_dag_ids uuid[]) returns void
-    language plpgsql
-as
+
+
+CREATE OR REPLACE FUNCTION marie_scheduler.delete_dags_and_jobs(p_dag_ids uuid[])
+RETURNS void
+LANGUAGE plpgsql
+AS
 $$
 DECLARE
-    p_id uuid;
-    job_count int := 0;
-    dag_count int := 0;
-    temp_count int;
+    dep_count int;
+    job_count int;
+    dag_count int;
 BEGIN
-    FOREACH p_id IN ARRAY p_dag_ids
-    LOOP
-        DELETE FROM marie_scheduler.job WHERE dag_id = p_id;
-        GET DIAGNOSTICS temp_count = ROW_COUNT;
-        job_count := job_count + temp_count;
+    -- Delete dependencies first
+    DELETE FROM marie_scheduler.job_dependencies
+    USING marie_scheduler.job j
+    WHERE j.id = job_dependencies.depends_on_id
+      AND j.dag_id = ANY(p_dag_ids);
+    GET DIAGNOSTICS dep_count = ROW_COUNT;
 
-        DELETE FROM marie_scheduler.dag WHERE id = p_id;
-        GET DIAGNOSTICS temp_count = ROW_COUNT;
-        dag_count := dag_count + temp_count;
-    END LOOP;
+    -- Delete jobs
+    DELETE FROM marie_scheduler.job
+    WHERE dag_id = ANY(p_dag_ids);
+    GET DIAGNOSTICS job_count = ROW_COUNT;
 
-    RAISE NOTICE 'Deleted % job(s) and % dag(s)', job_count, dag_count;
+    -- Delete DAGs
+    DELETE FROM marie_scheduler.dag
+    WHERE id = ANY(p_dag_ids);
+    GET DIAGNOSTICS dag_count = ROW_COUNT;
+
+    RAISE NOTICE 'Deleted % dependencies, % jobs, and % dags', dep_count, job_count, dag_count;
 END;
 $$;
