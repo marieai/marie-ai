@@ -541,10 +541,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def get_defined_queues(self) -> set[str]:
         """Setup the queue for the scheduler."""
-
+        cursor = None
         with self:
             try:
-                cursor = self._execute_sql_gracefully(f"SELECT name FROM {DEFAULT_SCHEMA}.queue")
+                cursor = self._execute_sql_gracefully(
+                    f"SELECT name FROM {DEFAULT_SCHEMA}.queue", return_cursor=True
+                )
                 if cursor and cursor.rowcount > 0:
                     result = cursor.fetchall()
                     return {name[0] for name in result}
@@ -553,6 +555,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 raise RuntimeFailToStart(
                     f"Unable to find queues in schema '{DEFAULT_SCHEMA}': {error}"
                 )
+            finally:
+                self._close_cursor(cursor)
             return set()
 
     async def start(self) -> None:
@@ -2115,7 +2119,6 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
         wi.id = node.task_id
         wi.job_level = job_levels[task_id]
 
-        # if any(wi.name in name for name in ('gen5_extract', 'corr')):
         if has_mapper_config(__default_extract_dir__, query_planner_name):
             meta = JobMetadata.from_task(node, query_planner_name)
             meta_dict = meta.model_dump()  # need plain dict

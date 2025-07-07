@@ -8,6 +8,15 @@ from marie.wheel_manager import (
     WheelInstallationCallback,
 )
 
+from .base_validator import (
+    BaseValidator,
+    FunctionValidatorWrapper,
+    ValidationContext,
+    ValidationResult,
+    ValidationStage,
+    ValidationSummary,
+)
+
 
 class RegistryWheelCallback:
     """Callback handler for wheel installation events in the registry"""
@@ -42,10 +51,11 @@ class ComponentRegistry:
 
     def __init__(self):
         self._parsers: Dict[str, Callable] = {}
-        self._validators: Dict[str, Callable] = {}
+        self._validators: Dict[str, BaseValidator] = {}
         self._core_initialized = False
         self._external_modules_loaded = False
         self._auto_load_core = True
+
         # Wheel management components
         self._wheel_manager = PipWheelManager()
         self._wheel_watcher = WheelDirectoryWatcher(self._wheel_manager)
@@ -63,14 +73,35 @@ class ComponentRegistry:
         return decorator
 
     def register_validator(self, name: str):
-        """Decorator to register a validator function"""
+        """Decorator to register a validator (BaseValidator instance, class, or function)"""
 
-        def decorator(func: Callable):
-            self._validators[name] = func
+        def decorator(validator):
+            if isinstance(validator, type) and issubclass(validator, BaseValidator):
+                # If it's a validator class, instantiate it
+                validator_instance = validator()
+                validator_instance.name = name
+                self._validators[name] = validator_instance
+            elif isinstance(validator, BaseValidator):
+                validator.name = name
+                self._validators[name] = validator
+            elif callable(validator):
+                # Function must take ValidationContext and return ValidationResult
+                wrapped_validator = FunctionValidatorWrapper(name, validator)
+                self._validators[name] = wrapped_validator
+            else:
+                raise ValueError(
+                    f"Invalid validator type: {type(validator)}. Must be BaseValidator class/instance or callable."
+                )
+
             logger.debug(f"Registered validator: {name}")
-            return func
+            return validator
 
         return decorator
+
+    def register_validator_instance(self, validator: BaseValidator):
+        """Register a validator instance directly"""
+        self._validators[validator.name] = validator
+        logger.debug(f"Registered validator instance: {validator.name}")
 
     def initialize_core_components(self):
         """Initialize core components (parsers, validators) if not already done"""
@@ -143,7 +174,6 @@ class ComponentRegistry:
             'total_validators': len(self._validators),
         }
 
-        # Handle wheel directories
         wheel_directories = config.get('wheel_directories', [])
         wheel_watch = config.get('watch_wheels', True)
 
@@ -175,7 +205,7 @@ class ComponentRegistry:
             logger.warning(f"Parser '{name}' not found. Available: {available}")
         return parser
 
-    def get_validator(self, name: str) -> Optional[Callable]:
+    def get_validator(self, name: str) -> Optional[BaseValidator]:
         """Get a validator by name, auto-initializing core components if needed"""
         if not self._core_initialized and self._auto_load_core:
             self.initialize_core_components()
@@ -197,6 +227,44 @@ class ComponentRegistry:
         if not self._core_initialized and self._auto_load_core:
             self.initialize_core_components()
         return list(self._validators.keys())
+
+    def list_validators_for_stage(self, stage: ValidationStage) -> List[str]:
+        """List validators that support a specific validation stage"""
+        if not self._core_initialized and self._auto_load_core:
+            self.initialize_core_components()
+
+        return [
+            name
+            for name, validator in self._validators.items()
+            if validator.supports_stage(stage)
+        ]
+
+    def validators(self):
+        """Get all registered validators"""
+        if not self._core_initialized and self._auto_load_core:
+            self.initialize_core_components()
+        return self._validators
+
+    def get_validation_info(self) -> Dict[str, Any]:
+        """Get detailed validation configuration information"""
+        if not self._core_initialized and self._auto_load_core:
+            self.initialize_core_components()
+
+        validator_info = {}
+        for name, validator in self._validators.items():
+            validator_info[name] = {
+                'name': validator.name,
+                'supported_stages': [
+                    stage.value for stage in validator.supported_stages
+                ],
+                'type': type(validator).__name__,
+            }
+
+        return {
+            'total_validators': len(self._validators),
+            'validator_details': validator_info,
+            'available_stages': [stage.value for stage in ValidationStage],
+        }
 
     def get_registry_info(self) -> Dict[str, Any]:
         """Get detailed information about the registry"""
@@ -233,6 +301,7 @@ class ComponentRegistry:
         if parser_docs:
             info['parser_descriptions'] = parser_docs
 
+        info['validation'] = self.get_validation_info()
         return info
 
     def get_wheel_manager(self) -> PipWheelManager:
