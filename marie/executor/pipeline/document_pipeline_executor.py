@@ -1,29 +1,25 @@
 import os
+import shutil
 import warnings
-from typing import Any, Optional
+from datetime import datetime
+from typing import List, Optional
 
 import torch
 from docarray import DocList
 
-from marie import requests, safely_encoded
-from marie.api import value_from_payload_or_args
-from marie.api.docs import AssetKeyDoc, StorageDoc
-from marie.boxes import PSMode
+from marie import requests
+from marie.api.docs import AssetKeyDoc
+from marie.common.file_io import get_cache_dir
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.mdc import MDC
 from marie.logging_core.predefined import default_logger as logger
-from marie.models.utils import (
-    initialize_device_settings,
-    setup_torch_optimizations,
-    torch_gc,
-)
-from marie.ocr import CoordinateFormat
+from marie.models.utils import initialize_device_settings, setup_torch_optimizations
 from marie.pipe.components import s3_asset_path, store_assets, update_existing_meta
 from marie.storage import StorageManager
 from marie.utils.docs import docs_from_asset, frames_from_docs
-from marie.utils.image_utils import ensure_max_page_size, hash_frames_fast
+from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.network import get_ip_address
 from marie.utils.utils import ensure_exists
@@ -158,162 +154,27 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
 
         return job_id, ref_id, ref_type, queue_id, payload
 
-    def get_frames_from_docs(self, docs: DocList[AssetKeyDoc]):
+    def get_frames_from_docs(self, docs: DocList[AssetKeyDoc], page_limit=None):
         """
         Load and preprocess frames from a single document asset.
 
         :param docs: DocList containing exactly one AssetKeyDoc.
+        :param page_limit: The maximum number of frames to load. (None = no limit)
         :raises ValueError: If no or multiple documents are provided.
-        :return: List of image frames (e.g., numpy arrays).
+        :return: List of image frames (e.g., numpy arrays), and the local asset path
         """
         if len(docs) == 0:
             raise ValueError("Expected single document. No documents found")
         if len(docs) > 1:
             raise ValueError("Expected single document. Multiple documents found.")
 
-        doc = docs[0]
-        self.logger.debug(
-            f"Load documents from specified document asset key: {doc.asset_key}"
-        )
+        doc: AssetKeyDoc = docs[0]
+        self.logger.debug(f"Document asset key: {doc.asset_key}")
+        # limited_pages = self.get_limit_pages(page_limit, len(doc.pages))
         docs = docs_from_asset(doc.asset_key, doc.pages)
-
-        src_frames = frames_from_docs(docs)
-        changed, frames = ensure_max_page_size(src_frames)
-        if changed:
-            self.logger.warning(f"Page size of frames was changed ")
-            for i, (s, f) in enumerate(zip(src_frames, frames)):
-                self.logger.warning(f"Frame[{i}] changed : {s.shape} -> {f.shape}")
+        frames = frames_from_docs(docs)
 
         return frames
-
-    def run_pipeline(
-        self, pipeline, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
-    ):
-        """
-        Execute the provided Pipeline on a single document asset.
-
-        :param pipeline: Pipeline instance to execute.
-        :param docs: DocList containing a single AssetKeyDoc.
-        :param parameters: Dictionary of request parameters including payload.
-        :raises ValueError: If pipeline execution fails.
-        :return: Safely encoded response bytes containing status, runtime_info, and metadata.
-        """
-        job_id, ref_id, ref_type, queue_id, payload = self.extract_base_parameters(
-            parameters
-        )
-        frames = self.get_frames_from_docs(docs)
-
-        # https://github.com/marieai/marie-ai/issues/51
-        regions = payload.get("regions", [])
-        for region in regions:
-            region["id"] = f'{int(region["id"])}'
-            region["x"] = int(region["x"])
-            region["y"] = int(region["y"])
-            region["w"] = int(region["w"])
-            region["h"] = int(region["h"])
-            region["pageIndex"] = int(region["pageIndex"])
-
-        # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
-        coordinate_format = CoordinateFormat.from_value(
-            value_from_payload_or_args(payload, "format", default="xywh")
-        )
-        pms_mode = PSMode.from_value(
-            value_from_payload_or_args(payload, "mode", default="")
-        )
-
-        self.logger.debug(
-            "ref_id, ref_type frames , regions , pms_mode, coordinate_format, checksum: "
-            f"{ref_id}, {ref_type},  {len(frames)}, {len(regions)}, {pms_mode}, {coordinate_format}"
-        )
-
-        self.logger.info("Extracting Runtime Config from features list")
-        runtime_conf = {}
-        pipeline_names = [
-            conf["pipeline"]["name"] for conf in pipeline.pipelines_config
-        ]
-        for feature in payload.get("features", []):
-            if feature.get("type") != "pipeline":
-                continue
-            name = feature.get("name")
-            if name and any(name == p_name for p_name in pipeline_names):
-                runtime_conf = feature
-        self.logger.debug(f"Resolved Runtime Config: {runtime_conf}")
-
-        try:
-            metadata = pipeline.execute(
-                ref_id=ref_id,
-                ref_type=ref_type,
-                frames=frames,
-                pms_mode=pms_mode,
-                coordinate_format=coordinate_format,
-                regions=regions,
-                queue_id=queue_id,
-                job_id=job_id,
-                runtime_conf=runtime_conf,
-            )
-        except BaseException as error:
-            self.logger.error(f"Pipeline error : {error}", exc_info=True)
-            torch_gc()
-            MDC.remove("request_id")
-            raise error
-
-        if metadata is None:
-            self.logger.error(f"Metadata is None, this should not happen")
-            raise ValueError("Pipeline Execution Error: Metadata is None")
-
-        # NOTE: see todo on self.persist function
-        # self.persist(ref_id, ref_type, metadata)
-
-        include_ocr = value_from_payload_or_args(payload, "return_ocr", default=False)
-        # strip out ocr results from metadata
-        if not include_ocr and "ocr" in metadata:
-            del metadata["ocr"]
-        del frames
-        del regions
-
-        torch_gc()
-        MDC.remove("request_id")
-
-        response = {
-            "status": "success",
-            "runtime_info": self.runtime_info,
-            "metadata": metadata,
-        }
-        converted = safely_encoded(lambda x: x)(response)
-        return converted
-
-    # TODO: Persist only what is needed. This function is currently not doing anything on self.store
-    def persist(self, ref_id: str, ref_type: str, results: Any) -> None:
-        """Persist results"""
-
-        def _tags(index: int, ftype: str, checksum: str):
-            return {
-                "action": "classifier",
-                "index": index,
-                "type": ftype,
-                "ttl": 48 * 60,
-                "checksum": checksum,
-                "runtime": self.runtime_info,
-            }
-
-        if self.storage_enabled:
-            # frame_checksum = hash_frames_fast(frames=[frame])
-
-            docs = DocList[StorageDoc](
-                [
-                    StorageDoc(
-                        content=results,
-                        tags=_tags(-1, "metadata", ref_id),
-                    )
-                ]
-            )
-
-            self.store(
-                ref_id=ref_id,
-                ref_type=ref_type,
-                store_mode="content",
-                docs=docs,
-            )
 
     @requests(on="/merge/metadata")
     def merge_metadata(
@@ -329,12 +190,7 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
         """
         job_id, ref_id, ref_type, _, payload = self.extract_base_parameters(parameters)
         frames = self.get_frames_from_docs(docs)
-
-        # create local asset directory
-        frame_checksum = hash_frames_fast(frames=frames)
-        root_asset_dir = ensure_exists(
-            os.path.join("/tmp/generators", frame_checksum, job_id)
-        )
+        root_asset_dir = create_working_dir(frames)
 
         features = payload.get("features", [])
         meta_folders = [
@@ -433,3 +289,19 @@ def fetch_assets(
             except Exception as e:
                 logger.error(f"Error fetching assets from {dir_to_fetch} : {e}")
     return s3_root_path
+
+
+def create_working_dir(frames: List, backup: bool = False) -> str:
+    frame_checksum = hash_frames_fast(frames=frames)
+    generators_dir = os.path.join(get_cache_dir(), "generators")
+    os.makedirs(generators_dir, exist_ok=True)
+
+    # create backup name by appending a timestamp
+    if backup:
+        if os.path.exists(os.path.join(generators_dir, frame_checksum)):
+            ts = datetime.now().strftime("%Y%m%d%H%M%S")
+            shutil.move(
+                os.path.join(generators_dir, frame_checksum),
+                os.path.join(generators_dir, f"{frame_checksum}-{ts}"),
+            )
+    return ensure_exists(os.path.join(generators_dir, frame_checksum))
