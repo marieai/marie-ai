@@ -22,7 +22,7 @@ services:
 #      - marie_default
     healthcheck:
 
-#      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"] # NO port 9000 in host mode
+#      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"] # NO port 9000 in host mode (remapped to be backward compatible with zenko s3)
       test: ["CMD", "curl", "-f", "http://localhost:8000/minio/health/live"]
       interval: 30s
       timeout: 20s
@@ -35,11 +35,12 @@ services:
       s3server:
         condition: service_healthy
     environment:
-      MC_HOST_localminio: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@s3server:9000
+      MC_HOST_localminio: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@localhost:8000
     volumes:
       - mc-config:/root/.mc
-    networks:
-      - marie_default
+    network_mode: host
+#    networks:
+#      - marie_default
     restart: "no"
     healthcheck:
       test: ["CMD", "mc", "alias", "list", "localminio"]
@@ -50,7 +51,7 @@ services:
     entrypoint: >
       /bin/sh -c "
       echo 'Starting MinIO setup...';
-      mc alias set localminio http://s3server:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
+      mc alias set localminio http://localhost:8000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
       mc admin user add localminio ${MARIE_ACCESS_KEY} ${MARIE_SECRET_ACCESS_KEY} || echo 'User may already exist';
       mc admin policy attach localminio readwrite --user ${MARIE_ACCESS_KEY} || echo 'Policy may already be attached';
       mc mb localminio/marie --ignore-existing;
@@ -67,8 +68,9 @@ services:
       - mc-setup
     volumes:
       - mc-config:/root/.mc
-    networks:
-      - marie_default
+    network_mode: host
+#    networks:
+#      - marie_default
     profiles:
       - tools
     entrypoint: /bin/sh

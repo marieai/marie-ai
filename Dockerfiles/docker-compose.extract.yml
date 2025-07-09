@@ -51,12 +51,12 @@ services:
         max-size: "100m"
         max-file: "10"
 
-    healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/status', timeout=5)"]
-      interval: 60s
-      timeout: 30s
-      retries: 3
-      start_period: 300s
+#    healthcheck:
+#      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/status', timeout=5)"]
+#      interval: 60s
+#      timeout: 30s
+#      retries: 3
+#      start_period: 300s
 
     labels:
       - "marie.service=extract-executor"

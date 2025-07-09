@@ -3,13 +3,7 @@ MODEL:
   PIXEL_MEAN: [ 127.5, 127.5, 127.5 ]
   PIXEL_STD: [ 127.5, 127.5, 127.5 ]
   # Path relative to model zoo root directory (default __model_path__)
-#  WEIGHTS: "unilm/dit/text_detection/paper-tuned-184/model_0001999.pth-1600.pth" # GOOD
-#  WEIGHTS: "unilm/dit/text_detection/tuned-2500-LARGE-v5/model_0053999.pth" # GOOD
-#  WEIGHTS: "unilm/dit/text_detection/tuned-4000-LARGE/model_0095999.pth" # GOOD- IN PROD AS OF 04/08/2024
-#  WEIGHTS: "unilm/dit/text_detection/tuned-4000-LARGE-04082024/model_0109999.pth" # GOOD
-#  WEIGHTS: "unilm/dit/text_detection/tuned-4000-LARGE-04082024/model_0145999.pth" # 04-11-2024
-#  WEIGHTS: "unilm/dit/text_detection/tuned-4000-LARGE-04082024/model_0155999.pth" # 04-16-2024
-  WEIGHTS: "unilm/dit/text_detection/tuned-4000-LARGE-05302024/model_0147999.pth" # 05-30-2024
+  WEIGHTS: "unilm/dit/text_detection/tuned-4000-LARGE/model_final.pth" # 05-30-2024
   VIT:
     NAME: "dit_large_patch16"
     OUT_FEATURES: [ "layer7", "layer11", "layer15", "layer23" ]

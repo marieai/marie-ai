@@ -385,7 +385,7 @@ bootstrap_system() {
         echo -e "${YELLOW}⏳ Waiting for infrastructure services to be healthy (excluding setup containers)...${NC}"
 
         # Build list of services to wait for (excluding setup containers)
-        local services_to_wait=("s3server" "psql-server" "rabbitmq" "etcd-single")
+        local services_to_wait=("s3server" "psql" "rabbitmq" "etcd-single")
 
         if [ "$DEPLOY_LITELLM" = "true" ]; then
             services_to_wait+=("litellm")
