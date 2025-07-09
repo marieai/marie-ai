@@ -10,8 +10,9 @@ services:
     container_name: 'marieai-gateway'
     init: true
     tty: true
-    networks:
-      - marie_default
+    network_mode: host
+#    networks:
+#      - marie_default
     command: >
       gateway 
       --uses /etc/marie/config/service/extract/${GATEWAY_CONFIG_TAG:-marie-gateway-4.0.0.yml}
@@ -41,7 +42,7 @@ services:
         max-file: "10"
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:52000/status"]
+      test: ["CMD", "curl", "-f", "http://localhost:51000/status"]
       interval: 30s
       timeout: 10s
       retries: 3

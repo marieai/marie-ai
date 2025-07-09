@@ -1,3 +1,4 @@
+
 #!/bin/bash
 set -e
 
@@ -28,13 +29,127 @@ echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}    Marie-AI System Bootstrap${NC}"
 echo -e "${BLUE}========================================${NC}"
 
-stop_all_services() {
-    echo -e "${YELLOW}Stopping all Marie-AI services...${NC}"
-    echo ""
+# Function to handle orphan removal based on environment
+get_orphan_flag() {
+    if [ "${COMPOSE_IGNORE_ORPHANS:-}" = "true" ]; then
+        echo ""
+    else
+        echo "--remove-orphans"
+    fi
+}
+
+get_running_services() {
+    local service_type="$1"  # "infrastructure" or "application" or "all"
+
+    case "$service_type" in
+        "infrastructure")
+            # Only check for infrastructure containers
+            docker ps --format "table {{.Names}}\t{{.Status}}" --filter "name=marie-s3-server" --filter "name=marie-psql-server" --filter "name=marie-rabbitmq" --filter "name=etcd-single" --filter "name=marie-litellm" --filter "name=marie-mc-setup" 2>/dev/null | tail -n +2
+            ;;
+        "application")
+            # Only check for application containers (gateway, extract, etc.)
+            docker ps --format "table {{.Names}}\t{{.Status}}" --filter "name=marie-gateway" --filter "name=marie-extract" 2>/dev/null | tail -n +2
+            ;;
+        "all"|*)
+            # Check for all Marie containers
+            docker ps --format "table {{.Names}}\t{{.Status}}" --filter "name=${PROJECT_NAME}" 2>/dev/null | tail -n +2
+            ;;
+    esac
+}
+
+check_running_services() {
+    local service_type="all"
+
+    # Determine which services to check based on deployment configuration
+    if [ "$DEPLOY_INFRASTRUCTURE" = "true" ] && ([ "$DEPLOY_GATEWAY" = "true" ] || [ "$DEPLOY_EXTRACT" = "true" ]); then
+        service_type="all"
+    elif [ "$DEPLOY_INFRASTRUCTURE" = "true" ]; then
+        service_type="infrastructure"
+    elif [ "$DEPLOY_GATEWAY" = "true" ] || [ "$DEPLOY_EXTRACT" = "true" ]; then
+        service_type="application"
+    fi
+
+    local running_services
+    running_services=$(get_running_services "$service_type")
+
+    if [ -n "$running_services" ]; then
+        echo -e "${YELLOW}Found running Marie-AI containers:${NC}"
+        echo -e "${BLUE}NAMES               STATUS${NC}"
+        echo "$running_services"
+        echo ""
+        echo -e "${YELLOW}⚠️  Warning: Running services detected!${NC}"
+
+        if [ "$service_type" = "infrastructure" ]; then
+            echo "To ensure a clean bootstrap, existing infrastructure services should be stopped."
+        elif [ "$service_type" = "application" ]; then
+            echo "To ensure a clean bootstrap, existing application services should be stopped."
+        else
+            echo "To ensure a clean bootstrap, existing services should be stopped."
+        fi
+
+        echo ""
+        echo "Options:"
+        if [ "$service_type" = "infrastructure" ]; then
+            echo "1) Stop and remove infrastructure services (recommended)"
+            echo "2) Stop infrastructure compose services only"
+        elif [ "$service_type" = "application" ]; then
+            echo "1) Stop and remove application services (recommended)"
+            echo "2) Stop application compose services only"
+        else
+            echo "1) Stop and remove all Marie-AI containers (recommended)"
+            echo "2) Stop compose services only"
+        fi
+        echo "3) Continue without cleanup (may cause conflicts)"
+        echo "4) Exit"
+        echo ""
+
+        local choice
+        read -p "Choose an option (1-4): " choice
+
+        case $choice in
+            1)
+                if [ "$service_type" = "infrastructure" ]; then
+                    stop_infrastructure_services
+                elif [ "$service_type" = "application" ]; then
+                    stop_application_services
+                else
+                    stop_all_services
+                fi
+                ;;
+            2)
+                if [ "$service_type" = "infrastructure" ]; then
+                    stop_infrastructure_compose_services
+                elif [ "$service_type" = "application" ]; then
+                    stop_application_compose_services
+                else
+                    stop_all_compose_services
+                fi
+                ;;
+            3)
+                echo -e "${YELLOW}Continuing with existing services...${NC}"
+                ;;
+            4)
+                echo -e "${BLUE}Exiting...${NC}"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid option. Exiting...${NC}"
+                exit 1
+                ;;
+        esac
+        echo ""
+    fi
+}
+
+stop_infrastructure_services() {
+    echo -e "${YELLOW}Stopping infrastructure services...${NC}"
+
+    local orphan_flag
+    orphan_flag=$(get_orphan_flag)
 
     # Stop infrastructure services
     echo -e "${BLUE}🔧 Stopping infrastructure services...${NC}"
-    docker compose --env-file $ENV_FILE \
+    COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE \
         --project-name marie-infrastructure \
         -f ./Dockerfiles/docker-compose.storage.yml \
         -f ./Dockerfiles/docker-compose.s3.yml \
@@ -42,16 +157,115 @@ stop_all_services() {
         -f ./Dockerfiles/docker-compose.etcd.yml \
         -f ./Dockerfiles/docker-compose.litellm.yml \
         --project-directory . \
-        down --volumes --remove-orphans 2>/dev/null || echo "No infrastructure services to stop"
+        down --volumes $orphan_flag 2>/dev/null || echo "No infrastructure services to stop"
+
+    # Stop any remaining infrastructure containers
+    local containers
+    containers=$(docker ps -q --filter "name=marie-s3-server" --filter "name=marie-psql-server" --filter "name=marie-rabbitmq" --filter "name=etcd-single" --filter "name=marie-litellm" --filter "name=marie-mc-setup" 2>/dev/null || true)
+    if [ -n "$containers" ]; then
+        echo "Stopping remaining infrastructure containers..."
+        docker stop $containers 2>/dev/null || true
+        docker rm $containers 2>/dev/null || true
+    fi
+
+    echo -e "${GREEN}✅ Infrastructure services stopped!${NC}"
+}
+
+stop_application_services() {
+    echo -e "${YELLOW}Stopping application services...${NC}"
+
+    local orphan_flag
+    orphan_flag=$(get_orphan_flag)
 
     # Stop application services
     echo -e "${BLUE}🚀 Stopping application services...${NC}"
-    docker compose --env-file $ENV_FILE \
+    COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE \
         --project-name marie-application \
         -f ./Dockerfiles/docker-compose.gateway.yml \
         -f ./Dockerfiles/docker-compose.extract.yml \
         --project-directory . \
-        down --volumes --remove-orphans 2>/dev/null || echo "No application services to stop"
+        down --volumes $orphan_flag 2>/dev/null || echo "No application services to stop"
+
+    # Stop any remaining application containers
+    local containers
+    containers=$(docker ps -q --filter "name=marie-gateway" --filter "name=marie-extract" 2>/dev/null || true)
+    if [ -n "$containers" ]; then
+        echo "Stopping remaining application containers..."
+        docker stop $containers 2>/dev/null || true
+        docker rm $containers 2>/dev/null || true
+    fi
+
+    echo -e "${GREEN}✅ Application services stopped!${NC}"
+}
+
+stop_infrastructure_compose_services() {
+    echo -e "${YELLOW}Stopping infrastructure compose services...${NC}"
+
+    local orphan_flag
+    orphan_flag=$(get_orphan_flag)
+
+    COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE \
+        --project-name marie-infrastructure \
+        -f ./Dockerfiles/docker-compose.storage.yml \
+        -f ./Dockerfiles/docker-compose.s3.yml \
+        -f ./Dockerfiles/docker-compose.rabbitmq.yml \
+        -f ./Dockerfiles/docker-compose.etcd.yml \
+        -f ./Dockerfiles/docker-compose.litellm.yml \
+        --project-directory . \
+        down $orphan_flag 2>/dev/null || echo "No infrastructure services to stop"
+
+    echo -e "${GREEN}✅ Infrastructure compose services stopped!${NC}"
+}
+
+stop_application_compose_services() {
+    echo -e "${YELLOW}Stopping application compose services...${NC}"
+
+    local orphan_flag
+    orphan_flag=$(get_orphan_flag)
+
+    COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE \
+        --project-name marie-application \
+        -f ./Dockerfiles/docker-compose.gateway.yml \
+        -f ./Dockerfiles/docker-compose.extract.yml \
+        --project-directory . \
+        down $orphan_flag 2>/dev/null || echo "No application services to stop"
+
+    echo -e "${GREEN}✅ Application compose services stopped!${NC}"
+}
+
+stop_all_compose_services() {
+    echo -e "${YELLOW}Stopping all compose services...${NC}"
+    stop_infrastructure_compose_services
+    stop_application_compose_services
+}
+
+stop_all_services() {
+    echo -e "${YELLOW}Stopping all Marie-AI services...${NC}"
+    echo ""
+
+    local orphan_flag
+    orphan_flag=$(get_orphan_flag)
+
+    # Stop infrastructure services
+    echo -e "${BLUE}🔧 Stopping infrastructure services...${NC}"
+    COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE \
+        --project-name marie-infrastructure \
+        -f ./Dockerfiles/docker-compose.storage.yml \
+        -f ./Dockerfiles/docker-compose.s3.yml \
+        -f ./Dockerfiles/docker-compose.rabbitmq.yml \
+        -f ./Dockerfiles/docker-compose.etcd.yml \
+        -f ./Dockerfiles/docker-compose.litellm.yml \
+        --project-directory . \
+        down --volumes $orphan_flag 2>/dev/null || echo "No infrastructure services to stop"
+
+    # Stop application services
+    echo -e "${BLUE}🚀 Stopping application services...${NC}"
+    COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE \
+        --project-name marie-application \
+        -f ./Dockerfiles/docker-compose.gateway.yml \
+        -f ./Dockerfiles/docker-compose.extract.yml \
+        --project-directory . \
+        down --volumes $orphan_flag 2>/dev/null || echo "No application services to stop"
 
     # Stop any remaining Marie containers
     echo -e "${BLUE}🧹 Cleaning up remaining containers...${NC}"
@@ -66,19 +280,6 @@ stop_all_services() {
     if [ -n "$containers" ]; then
         echo "Removing remaining containers..."
         docker rm $containers 2>/dev/null || true
-    fi
-
-    # Clean up networks
-    echo -e "${BLUE}🌐 Cleaning up networks...${NC}"
-    if docker network ls | grep -q marie_default; then
-        local network_containers
-        network_containers=$(docker network inspect marie_default --format='{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null || true)
-        if [ -z "$network_containers" ]; then
-            echo "Removing marie_default network..."
-            docker network rm marie_default 2>/dev/null || true
-        else
-            echo "marie_default network still has containers, skipping removal"
-        fi
     fi
 
     # Clean up unused volumes
@@ -103,139 +304,13 @@ show_deployment_config() {
     echo ""
 }
 
-check_running_services() {
-    local running_containers
-    running_containers=$(docker ps --filter "name=${PROJECT_NAME}" --format "table {{.Names}}\t{{.Status}}" 2>/dev/null || true)
-
-    if [ -n "$running_containers" ] && [ "$(echo "$running_containers" | wc -l)" -gt 1 ]; then
-        echo -e "${YELLOW}Found running Marie-AI containers:${NC}"
-        echo "$running_containers"
-        return 0
-    else
-        return 1
-    fi
-}
-
-check_compose_services() {
-    local services_exist=false
-
-    for compose_file in "${COMPOSE_FILES[@]}"; do
-        if [ -f "$compose_file" ]; then
-            local services
-            services=$(docker compose -f "$compose_file" ps --services 2>/dev/null || true)
-            if [ -n "$services" ]; then
-                local running_services
-                running_services=$(docker compose -f "$compose_file" ps --filter "status=running" --format "table {{.Service}}\t{{.Status}}" 2>/dev/null || true)
-                if [ -n "$running_services" ] && [ "$(echo "$running_services" | wc -l)" -gt 1 ]; then
-                    if [ "$services_exist" = false ]; then
-                        echo -e "${YELLOW}Found running compose services:${NC}"
-                        services_exist=true
-                    fi
-                    echo -e "${YELLOW}From $compose_file:${NC}"
-                    echo "$running_services"
-                fi
-            fi
-        fi
-    done
-
-    if [ "$services_exist" = true ]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-prompt_cleanup() {
-    echo ""
-    echo -e "${RED} Warning: Running services detected!${NC}"
-    echo "To ensure a clean bootstrap, existing services should be stopped."
-    echo ""
-    echo "Options:"
-    echo "1) Stop and remove all Marie-AI containers (recommended)"
-    echo "2) Stop compose services only"
-    echo "3) Continue without cleanup (may cause conflicts)"
-    echo "4) Exit"
-    echo ""
-
-    while true; do
-        read -p "Choose an option [1-4]: " choice
-        case $choice in
-            1)
-                cleanup_all_containers
-                break
-                ;;
-            2)
-                cleanup_compose_services
-                break
-                ;;
-            3)
-                echo -e "${YELLOW}Continuing without cleanup...${NC}"
-                break
-                ;;
-            4)
-                echo -e "${RED}Bootstrap cancelled.${NC}"
-                exit 0
-                ;;
-            *)
-                echo -e "${RED}Invalid option. Please choose 1-4.${NC}"
-                ;;
-        esac
-    done
-}
-
-cleanup_all_containers() {
-    echo -e "${YELLOW}Stopping and removing all Marie-AI containers...${NC}"
-
-    local containers
-    containers=$(docker ps -q --filter "name=${PROJECT_NAME}" 2>/dev/null || true)
-    if [ -n "$containers" ]; then
-        echo "Stopping containers..."
-        docker stop $containers
-    fi
-
-    containers=$(docker ps -aq --filter "name=${PROJECT_NAME}" 2>/dev/null || true)
-    if [ -n "$containers" ]; then
-        echo "Removing containers..."
-        docker rm $containers
-    fi
-
-    if docker network ls | grep -q marie_default; then
-        echo "Checking marie_default network..."
-        local network_containers
-        network_containers=$(docker network inspect marie_default --format='{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null || true)
-        if [ -z "$network_containers" ]; then
-            echo "Removing unused marie_default network..."
-            docker network rm marie_default 2>/dev/null || true
-        fi
-    fi
-
-    echo -e "${GREEN}  Container cleanup completed.${NC}"
-}
-
-cleanup_compose_services() {
-    echo -e "${YELLOW}Stopping Docker Compose services...${NC}"
-
-    for compose_file in "${COMPOSE_FILES[@]}"; do
-        if [ -f "$compose_file" ]; then
-            echo "Processing $compose_file..."
-            docker compose \
-                --env-file "$ENV_FILE" \
-                -f "$compose_file" \
-                --project-directory . \
-                down --remove-orphans 2>/dev/null || true
-        fi
-    done
-
-    echo -e "${GREEN}  Compose cleanup completed.${NC}"
-}
-
 validate_environment() {
     if [ ! -f "$ENV_FILE" ]; then
-        echo -e "${RED} Environment file not found: $ENV_FILE${NC}"
+        echo -e "${RED}❌ Environment file not found: $ENV_FILE${NC}"
         echo "Please ensure the environment file exists before running bootstrap."
         exit 1
     fi
-    echo -e "${GREEN} Environment file found: $ENV_FILE${NC}"
+    echo -e "${GREEN}✅ Environment file found: $ENV_FILE${NC}"
 }
 
 validate_compose_files() {
@@ -260,47 +335,20 @@ validate_compose_files() {
             if [ "$is_optional" = false ]; then
                 missing_files+=("$compose_file")
             else
-                echo -e "${YELLOW} Optional file missing: $compose_file${NC}"
+                echo -e "${YELLOW}⚠️  Optional file missing: $compose_file${NC}"
             fi
         fi
     done
 
     if [ ${#missing_files[@]} -gt 0 ]; then
-        echo -e "${RED} Missing required compose files:${NC}"
+        echo -e "${RED}❌ Missing required compose files:${NC}"
         for file in "${missing_files[@]}"; do
             echo "  - $file"
         done
         exit 1
     fi
 
-    echo -e "${GREEN} All required compose files found.${NC}"
-}
-
-build_compose_command() {
-    local compose_cmd="docker compose --env-file $ENV_FILE"
-
-    if [ "$DEPLOY_INFRASTRUCTURE" = "true" ]; then
-        compose_cmd="$compose_cmd -f ./Dockerfiles/docker-compose.storage.yml"
-        compose_cmd="$compose_cmd -f ./Dockerfiles/docker-compose.s3.yml"
-        compose_cmd="$compose_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
-        compose_cmd="$compose_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
-
-        # LiteLLM is part of infrastructure
-        if [ "$DEPLOY_LITELLM" = "true" ] && [ -f "./Dockerfiles/docker-compose.litellm.yml" ]; then
-            compose_cmd="$compose_cmd -f ./Dockerfiles/docker-compose.litellm.yml"
-        fi
-    fi
-
-    if [ "$DEPLOY_GATEWAY" = "true" ] && [ -f "./Dockerfiles/docker-compose.gateway.yml" ]; then
-        compose_cmd="$compose_cmd -f ./Dockerfiles/docker-compose.gateway.yml"
-    fi
-
-    if [ "$DEPLOY_EXTRACT" = "true" ] && [ -f "./Dockerfiles/docker-compose.extract.yml" ]; then
-        compose_cmd="$compose_cmd -f ./Dockerfiles/docker-compose.extract.yml"
-    fi
-
-    compose_cmd="$compose_cmd --project-directory ."
-    echo "$compose_cmd"
+    echo -e "${GREEN}✅ All required compose files found.${NC}"
 }
 
 bootstrap_system() {
@@ -310,8 +358,8 @@ bootstrap_system() {
     source "$ENV_FILE"
     echo -e "${GREEN}✅ Environment loaded from $ENV_FILE${NC}"
 
-    echo "Creating marie_default network..."
-    docker network create marie_default 2>/dev/null || echo "Network marie_default already exists"
+    local orphan_flag
+    orphan_flag=$(get_orphan_flag)
 
     # Stage 1: Start infrastructure services with separate project name
     if [ "$DEPLOY_INFRASTRUCTURE" = "true" ]; then
@@ -330,11 +378,65 @@ bootstrap_system() {
 
         infra_compose_cmd="$infra_compose_cmd --project-directory ."
 
-        echo "Starting infrastructure services..."
-        eval "$infra_compose_cmd up -d --build --remove-orphans"
+        echo "Starting infrastructure services with host networking..."
+        # Use host networking for all services
+        COMPOSE_NETWORK_MODE=host eval "$infra_compose_cmd up -d --build $orphan_flag"
 
-        echo -e "${YELLOW}⏳ Waiting for infrastructure services to be healthy...${NC}"
-        eval "$infra_compose_cmd up --wait"
+        echo -e "${YELLOW}⏳ Waiting for infrastructure services to be healthy (excluding setup containers)...${NC}"
+
+        # Build list of services to wait for (excluding setup containers)
+        local services_to_wait=("s3server" "psql" "rabbitmq" "etcd-single")
+
+        if [ "$DEPLOY_LITELLM" = "true" ]; then
+            services_to_wait+=("litellm")
+        fi
+
+        # Wait only for specific services, excluding setup containers
+        COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE \
+            --project-name marie-infrastructure \
+            -f ./Dockerfiles/docker-compose.storage.yml \
+            -f ./Dockerfiles/docker-compose.s3.yml \
+            -f ./Dockerfiles/docker-compose.rabbitmq.yml \
+            -f ./Dockerfiles/docker-compose.etcd.yml \
+            $([ "$DEPLOY_LITELLM" = "true" ] && echo "-f ./Dockerfiles/docker-compose.litellm.yml") \
+            --project-directory . \
+            up --wait ${services_to_wait[@]}
+
+        # Check if mc-setup completed successfully
+        echo -e "${YELLOW}Checking MinIO setup completion...${NC}"
+        local setup_attempts=30
+        local setup_attempt=1
+
+        while [ $setup_attempt -le $setup_attempts ]; do
+            local setup_status
+            setup_status=$(docker inspect marie-mc-setup --format='{{.State.Status}}' 2>/dev/null || echo "not_found")
+
+            if [ "$setup_status" = "exited" ]; then
+                local exit_code
+                exit_code=$(docker inspect marie-mc-setup --format='{{.State.ExitCode}}' 2>/dev/null || echo "1")
+                if [ "$exit_code" = "0" ]; then
+                    echo -e "${GREEN}✅ MinIO setup completed successfully${NC}"
+                    break
+                else
+                    echo -e "${RED}❌ MinIO setup failed with exit code $exit_code${NC}"
+                    echo "Setup logs:"
+                    docker logs marie-mc-setup --tail 20
+                    exit 1
+                fi
+            elif [ "$setup_status" = "not_found" ]; then
+                echo -e "${RED}❌ MinIO setup container not found${NC}"
+                exit 1
+            elif [ $setup_attempt -eq $setup_attempts ]; then
+                echo -e "${RED}❌ MinIO setup did not complete within expected time${NC}"
+                echo "Current status: $setup_status"
+                docker logs marie-mc-setup --tail 20
+                exit 1
+            else
+                echo "  Attempt $setup_attempt/$setup_attempts - MinIO setup status: $setup_status"
+                sleep 2
+                ((setup_attempt++))
+            fi
+        done
 
         echo -e "${GREEN}✅ Infrastructure services are ready${NC}"
     fi
@@ -359,9 +461,9 @@ bootstrap_system() {
     app_compose_cmd="$app_compose_cmd --project-directory ."
 
     if [ "$has_app_services" = true ]; then
-        echo "Starting application services..."
-        # Now --remove-orphans won't affect infrastructure services
-        eval "$app_compose_cmd up -d --build --remove-orphans"
+        echo "Starting application services with host networking..."
+        # Use host networking for application services too
+        COMPOSE_NETWORK_MODE=host eval "$app_compose_cmd up -d --build $orphan_flag"
     else
         echo -e "${YELLOW}No application services configured to start${NC}"
     fi
@@ -378,7 +480,7 @@ bootstrap_system() {
 show_all_services_status() {
     if [ "$DEPLOY_INFRASTRUCTURE" = "true" ]; then
         echo -e "${BLUE}Infrastructure Services:${NC}"
-        docker compose --env-file $ENV_FILE \
+        COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE \
             --project-name marie-infrastructure \
             -f ./Dockerfiles/docker-compose.storage.yml \
             -f ./Dockerfiles/docker-compose.s3.yml \
@@ -392,7 +494,7 @@ show_all_services_status() {
     if [ "$DEPLOY_GATEWAY" = "true" ] || [ "$DEPLOY_EXTRACT" = "true" ]; then
         echo ""
         echo -e "${BLUE}Application Services:${NC}"
-        docker compose --env-file $ENV_FILE \
+        COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE \
             --project-name marie-application \
             -f ./Dockerfiles/docker-compose.gateway.yml \
             -f ./Dockerfiles/docker-compose.extract.yml \
@@ -408,7 +510,8 @@ show_service_endpoints() {
     if [ "$DEPLOY_INFRASTRUCTURE" = "true" ]; then
         echo -e "${GREEN}Infrastructure Services:${NC}"
         echo "  🐰 RabbitMQ Management: http://localhost:15672 (guest/guest)"
-        echo "  💾 MinIO Console: http://localhost:8001 (marieadmin/marietopsecret)"
+        echo "  💾 MinIO S3 API: http://localhost:9000 (marieadmin/marietopsecret)"
+        echo "  💾 MinIO Console: http://localhost:9001 (marieadmin/marietopsecret)"
         echo "  📊 Monitoring: http://localhost:3000"
         echo "  🗄️  etcd: http://localhost:2379"
 
@@ -519,11 +622,7 @@ main() {
     validate_environment
     validate_compose_files
 
-    if check_running_services || check_compose_services; then
-        prompt_cleanup
-    else
-        echo -e "${GREEN}✅ No conflicting services found.${NC}"
-    fi
+    check_running_services
 
     bootstrap_system
 
@@ -537,7 +636,6 @@ main() {
     echo "  View logs: docker compose logs -f [service_name]"
     echo "  Stop services: docker compose down"
     echo "  Stop and cleanup: docker compose down --volumes --remove-orphans"
-    echo "  Scale extract executors: docker compose up -d --scale marie-extract-executor=3"
     if [ "$DEPLOY_LITELLM" = "true" ]; then
         echo "  View LiteLLM logs: docker compose logs -f litellm"
         echo "  LiteLLM health check: curl http://localhost:4000/health"

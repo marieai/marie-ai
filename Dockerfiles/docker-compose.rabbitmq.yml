@@ -22,8 +22,9 @@ services:
     volumes:
         - rabbitmq_data:/var/lib/rabbitmq
         - rabbitmq_log:/var/log/rabbitmq
-    networks:
-        - marie_default
+    network_mode: host
+#    networks:
+#        - marie_default
 
 volumes:
   rabbitmq_data:

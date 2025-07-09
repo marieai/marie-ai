@@ -166,7 +166,9 @@ class OptimizedDetectronPredictor:
                         return self.invoke_model(original_image, raise_oom=True)
                     elif "not implemented for Half" in str(e) and not raise_oom:
                         self.logger.warning(f"Error: {e}")
-                        self.logger.warning("Re-initializing model with half_precision=False and retrying.")
+                        self.logger.warning(
+                            "Re-initializing model with half_precision=False and retrying."
+                        )
                         self.reinitialize_model(half_precision=False)
                         return self.invoke_model(original_image, raise_oom=True)
                     else:

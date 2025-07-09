@@ -48,7 +48,7 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
         for parser_name in reg_parsers:
             logger.info(f"- {parser_name}")
 
-        info = component_registry.get_parser_info()
+        info = component_registry.get_registry_info()
         logger.info(f"Parser info:\n{pformat(info)}")
         logger.info(f"Started executor : {self.__class__.__name__}")
 

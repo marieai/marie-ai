@@ -15,11 +15,14 @@ from pydantic import ValidationError
 from marie.components.table_rec import TableRecPredictor
 from marie.constants import __model_path__
 from marie.executor.ner.utils import draw_box, get_font, visualize_icr
+from marie.extract.models.match import SubzeroResult
 from marie.extract.readers.meta_reader.meta_reader import MetaReader
 from marie.extract.results.base import _annotate_segment, extract_page_id, locate_line
+from marie.extract.results.base_validator import ValidationContext
 from marie.extract.results.registry import component_registry
 from marie.extract.results.result_converter import convert_document_to_structure
 from marie.extract.results.util import generate_distinct_colors
+from marie.extract.results.validation_report import generate_validation_report
 from marie.extract.schema import ExtractionResult, Segment, TableExtractionResult
 from marie.extract.structures import SerializationManager, UnstructuredDocument
 from marie.extract.structures.cell_with_meta import CellWithMeta
@@ -833,7 +836,7 @@ def render_document_markdown_structured(
 
 def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
     """
-    Main entry point for parsing results. Executes all registered parsers and optionally renders markdown outputs.
+    Main entry point for parsing results. Executes all registered parsers and optionally validates their outputs.
 
     :param working_dir: The directory containing the working files.
     :param metadata: Metadata associated with the document.
@@ -859,7 +862,12 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
 
     files = sorted(f for f in os.listdir(frames_dir) if f.lower().endswith(".png"))
     frames = [frames_from_file(os.path.join(frames_dir, f))[0] for f in files]
-    doc = create_unstructured_doc(frames, metadata)
+    doc: UnstructuredDocument = create_unstructured_doc(frames, metadata)
+
+    # Track validation results for all parsers
+    all_validation_summaries = []
+    validation_enabled = conf.get("validation", {}).get("enabled", True)
+    fail_on_validation_errors = conf.get("validation", {}).get("fail_on_errors", False)
 
     for name, ann_conf in conf.annotators.items():
         target = ann_conf.get("parser", name)
@@ -871,6 +879,66 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
         try:
             logging.info(f"Running parser '{target}' for '{name}'")
             parser_fn(doc, working_dir, DIRS[name], conf)
+
+            # Validate parser output if validation is enabled
+            if validation_enabled:
+                logging.info(f"Validating output from parser '{target}'")
+
+                # Get validator names from config or use defaults
+                validator_names = ann_conf.get("validators", None)
+                if validator_names is None:
+                    # Use validation configuration or default to all validators that support the stage
+                    validator_names = conf.get("validation", {}).get(
+                        "default_validators", None
+                    )
+
+                # Run validation
+                validation_summary = component_registry.validate_parser_output(
+                    doc=doc,
+                    parser_name=target,
+                    working_dir=working_dir,
+                    src_dir=DIRS[name],
+                    conf=conf,
+                    validator_names=validator_names,
+                    metadata=metadata,
+                    frames=frames,
+                )
+
+                all_validation_summaries.append(validation_summary)
+
+                # Log validation results
+                if validation_summary.overall_valid:
+                    logging.info(
+                        f"✓ Parser '{target}' validation passed ({validation_summary.total_warnings} warnings)"
+                    )
+                else:
+                    logging.error(
+                        f"✗ Parser '{target}' validation failed ({validation_summary.total_errors} errors, {validation_summary.total_warnings} warnings)"
+                    )
+
+                    # Log specific errors and warnings
+                    for result in validation_summary.results:
+                        for error in result.errors:
+                            logging.error(f"  {result.validator_name}: {error}")
+                        for warning in result.warnings:
+                            logging.warning(f"  {result.validator_name}: {warning}")
+
+                    # Optionally fail fast on validation errors
+                    if fail_on_validation_errors:
+                        critical_errors = validation_summary.get_errors_by_severity(
+                            "CRITICAL"
+                        )
+                        if critical_errors:
+                            raise ValueError(
+                                f"Critical validation errors in parser '{target}': {[str(e) for e in critical_errors]}"
+                            )
+
+                        # Or fail on any errors if configured
+                        if validation_summary.total_errors > 0:
+                            raise ValueError(
+                                f"Validation failed for parser '{target}' with {validation_summary.total_errors} errors"
+                            )
+
         except Exception as e:
             logging.error(f"Error in parser '{target}': {e}")
             raise e
@@ -882,6 +950,70 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
         )
         SerializationManager.serialize(doc, os.path.join(output_dir, "document.pkl"))
 
-    convert_document_to_structure(
+    # Convert document to structured output and validate converter output
+    logging.info("Converting document to structured output")
+    results: SubzeroResult = convert_document_to_structure(
         doc, conf, os.path.join(output_dir, "structured-output.md")
     )
+
+    # Validate converter output if validation is enabled
+    if validation_enabled:
+        logging.info("Validating converter output")
+
+        # Get converter validators from config
+        converter_validators = conf.get("validation", {}).get(
+            "converter_validators", None
+        )
+
+        converter_context = ValidationContext.create_converter_context(
+            original_doc=doc,
+            converter_output=results,
+            working_dir=working_dir,
+            conf=conf,
+            metadata=metadata,
+        )
+
+        # Run converter validation
+        converter_validation = component_registry.validate_document(
+            doc=results,  # The converter output
+            context=converter_context,
+            validator_names=converter_validators,
+        )
+
+        all_validation_summaries.append(converter_validation)
+
+        # Log converter validation results
+        if converter_validation.overall_valid:
+            logging.info(
+                f"✓ Converter validation passed ({converter_validation.total_warnings} warnings)"
+            )
+        else:
+            logging.error(
+                f"✗ Converter validation failed ({converter_validation.total_errors} errors, {converter_validation.total_warnings} warnings)"
+            )
+
+            # Log specific errors and warnings
+            for result in converter_validation.results:
+                for error in result.errors:
+                    logging.error(f"  {result.validator_name}: {error}")
+                for warning in result.warnings:
+                    logging.warning(f"  {result.validator_name}: {warning}")
+
+            # Optionally fail on converter validation errors
+            if fail_on_validation_errors:
+                critical_errors = converter_validation.get_errors_by_severity(
+                    "CRITICAL"
+                )
+                if critical_errors:
+                    raise ValueError(
+                        f"Critical validation errors in converter output: {[str(e) for e in critical_errors]}"
+                    )
+
+                if converter_validation.total_errors > 0:
+                    raise ValueError(
+                        f"Converter validation failed with {converter_validation.total_errors} errors"
+                    )
+
+    # Generate validation report if validation was enabled
+    if validation_enabled and all_validation_summaries:
+        generate_validation_report(all_validation_summaries, output_dir)

@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from marie.logging_core.predefined import default_logger as logger
-from marie.utils.overlap import find_overlap_vertical, find_overlap_total
+from marie.utils.overlap import find_overlap_total, find_overlap_vertical
 
 
 def find_line_number(lines: List[List[int]], box: List[int]) -> int:
@@ -19,7 +19,7 @@ def find_line_number(lines: List[List[int]], box: List[int]) -> int:
     :return: line_number or -1 if line was not determined
     """
     line_number = -1
-    overlaps, indexes, scores = find_overlap_total(box, lines);
+    overlaps, indexes, scores = find_overlap_total(box, lines)
 
     if len(indexes) == 1:
         line_number = indexes[0] + 1

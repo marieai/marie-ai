@@ -6,7 +6,7 @@ services:
       - "2379:2379"
       - "2380:2380"
     volumes:
-      - ./data:/etcd-data
+      - etcd_data:/etcd-data
     command:
       - /usr/local/bin/etcd
       - --name=single
@@ -18,17 +18,20 @@ services:
       - --initial-cluster=single=http://127.0.0.1:2380
       - --initial-cluster-state=new
 
-    networks:
-      - marie_default
+    network_mode: host
+#    networks:
+#      - marie_default
 
     healthcheck:
-      test: >
-        etcdctl endpoint health
-        --endpoints=http://127.0.0.1:2379
+      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
       interval: 30s
       timeout: 10s
       retries: 3
     restart: on-failure
+
+volumes:
+  etcd_data:
+    driver: local
 
 networks:
   marie_default:

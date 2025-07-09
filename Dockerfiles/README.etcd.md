@@ -118,7 +118,10 @@ Use this setup for testing or development:
      --key=/etc/etcd/certs/server-key.pem \
      endpoint health --cluster
    ```
-
+    
+    ```bash
+    docker exec etcd-single etcdctl endpoint health --endpoints=http://127.0.0.1:2379
+    ```
 ---
 
 ## Multi-Node Cluster Deployment
