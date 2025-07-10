@@ -1,3 +1,4 @@
+import json
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -11,10 +12,11 @@ from marie.logging_core.predefined import default_logger as logger
 class ValidationStage(Enum):
     """Defines the stage at which validation occurs"""
 
-    PARSE_OUTPUT = (
-        "parse_output"  # Validation after parsing output doc = UnstructuredDocument
-    )
-    CONVERTER_OUTPUT = "converter_output"  # Validation after converting UnstructuredDocument to MatchResult
+    # Validation after parsing output doc = UnstructuredDocument
+    PARSE_OUTPUT = "parse_output"
+    # Validation after converting UnstructuredDocument to MatchResult
+    CONVERTER_OUTPUT = "converter_output"
+    # Validation before any processing, e.g., checking input data integrity
     PRE_PROCESSING = "pre_processing"
 
 
@@ -47,7 +49,7 @@ class ValidationWarning:
 
 @dataclass
 class ValidationResult:
-    """Structured validation result"""
+    """Validation result"""
 
     valid: bool
     errors: List[ValidationError] = field(default_factory=list)
@@ -140,6 +142,69 @@ class ValidationContext:
             conf=conf,
         )
 
+    def dump_state(self, include_input_data: bool = False) -> Dict[str, Any]:
+        """
+        Dump the current state of the ValidationContext for debugging purposes.
+
+        Args:
+            include_input_data: Whether to include input_data in the dump (can be large)
+
+        Returns:
+            Dictionary containing the context state
+        """
+        state = {
+            'stage': self.stage.value,
+            'parser_name': self.parser_name,
+            'working_dir': self.working_dir,
+            'src_dir': self.src_dir,
+            'metadata': self.metadata,
+            'conf_type': type(self.conf).__name__ if self.conf else None,
+            'input_data_type': (
+                type(self.input_data).__name__ if self.input_data else None
+            ),
+        }
+
+        if include_input_data:
+            state['input_data'] = self.input_data
+
+        return state
+
+    def dump_state_json(
+        self, include_input_data: bool = False, max_depth: int = 3, indent: int = 2
+    ) -> str:
+        """
+        Dump the context state as a JSON string.
+
+        Args:
+            include_input_data: Whether to include input_data in the dump
+            max_depth: Maximum depth for nested object serialization
+            indent: JSON indentation level
+
+        Returns:
+            JSON string representation of the context state
+        """
+        state = self.dump_state(include_input_data, max_depth)
+        return json.dumps(state, indent=indent, default=str)
+
+    def log_state(self, log_level: str = "DEBUG", include_input_data: bool = False):
+        """
+        Log the context state using the logger.
+
+        Args:
+            log_level: Log level ("DEBUG", "INFO", "WARNING", "ERROR")
+            include_input_data: Whether to include input_data in the log
+        """
+        state_json = self.dump_state_json(include_input_data)
+
+        log_func = {
+            "DEBUG": logger.debug,
+            "INFO": logger.info,
+            "WARNING": logger.warning,
+            "ERROR": logger.error,
+        }.get(log_level.upper(), logger.debug)
+
+        log_func(f"ValidationContext State:\n{state_json}")
+
 
 @dataclass
 class ValidationSummary:
@@ -204,6 +269,41 @@ class BaseValidator(ABC):
         """Check if validator supports the given stage"""
         return stage in self.supported_stages
 
+    def dump_context_state(
+        self, context: ValidationContext, include_input_data: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Dump the validation context state for debugging.
+
+        Args:
+            context: ValidationContext to dump
+            include_input_data: Whether to include input_data in the dump
+
+        Returns:
+            Dictionary containing the context state
+        """
+        return context.dump_state(include_input_data=include_input_data)
+
+    def log_context_state(
+        self,
+        context: ValidationContext,
+        log_level: str = "DEBUG",
+        include_input_data: bool = False,
+    ):
+        """
+        Log the validation context state.
+
+        Args:
+            context: ValidationContext to log
+            log_level: Log level to use
+            include_input_data: Whether to include input_data in the log
+        """
+        logger.log(
+            getattr(logger, log_level.lower(), logger.debug).__self__.level,
+            f"[{self.name}] Validation Context State:",
+        )
+        context.log_state(log_level, include_input_data)
+
 
 class FunctionValidatorWrapper(BaseValidator):
     """
@@ -228,7 +328,6 @@ class FunctionValidatorWrapper(BaseValidator):
         """
         super().__init__(name, supported_stages)
         self.func = func
-        logger.debug(f"Created FunctionValidatorWrapper '{name}'")
 
     def _validate_internal(self, context: ValidationContext) -> ValidationResult:
         """Execute the wrapped function with ValidationContext"""

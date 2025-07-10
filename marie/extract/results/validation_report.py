@@ -1,9 +1,12 @@
 import os
 
+from marie.extract.results.base_validator import ValidationSummary
 from marie.logging_core.predefined import default_logger as logger
 
 
-def generate_validation_report(validation_summaries: list, output_dir: str):
+def generate_validation_report(
+    validation_summaries: list[ValidationSummary], output_dir: str
+):
     """Generate a comprehensive validation report"""
     import json
     from datetime import datetime
@@ -25,7 +28,6 @@ def generate_validation_report(validation_summaries: list, output_dir: str):
         "parser_results": [],
     }
 
-    # Detailed results for each parser
     for vs in validation_summaries:
         parser_result = {
             "parser_name": vs.parser_name,
@@ -54,12 +56,10 @@ def generate_validation_report(validation_summaries: list, output_dir: str):
 
         report["parser_results"].append(parser_result)
 
-    #  JSON report
     report_file = os.path.join(output_dir, "validation_report.json")
     with open(report_file, "w") as f:
         json.dump(report, f, indent=2)
 
-    #  markdown report
     markdown_report = generate_markdown_validation_report(report)
     with open(os.path.join(output_dir, "validation_report.md"), "w") as f:
         f.write(markdown_report)
