@@ -1279,6 +1279,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         work_info.dag_id = dag_id
         query_plan_dag, topological_sorted_nodes = query_plan_work_items(work_info)
         connection = None
+        cursor = None
 
         try:
             # important that we use new connection for each job submission
@@ -1323,6 +1324,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     f"Please check the logs for more information. {error}"
                 )
         finally:
+            self._close_cursor(cursor)
             self._close_connection(connection)
 
     async def __submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> str:
@@ -1860,10 +1862,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         import select
 
         conn = self._get_connection()
+        cur = None
         try:
             conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
             cur = conn.cursor()
             cur.execute("LISTEN dag_state_changed;")
+            self._close_cursor(cur)
+
             self.logger.info("Listening for DAG changes...")
 
             while self.running:
@@ -1915,6 +1920,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         except Exception as e:
             self.logger.error(f"Error in listener: {e}")
         finally:
+            self._close_cursor(cur)
             self._close_connection(conn)
 
     async def notify_event(self) -> bool:

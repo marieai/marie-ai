@@ -81,7 +81,8 @@ class PostgresqlMixin:
         """Return connection to pool """
         try:
             # restore it to the pool
-            self.postgreSQL_pool.putconn(connection)
+            if connection:
+                self.postgreSQL_pool.putconn(connection)
         except Exception as e:
             self.logger.warning(f"Error returning connection to pool: {e}")
             try:
