@@ -244,6 +244,12 @@ class LLMPipeline(BasePipeline):
         """
         filename, _, _ = split_filename(ref_id)
         meta_filename = f"{filename}.{infix}.json"
+        # Save pipeline checkpoint
+        pipeline_meta_path = os.path.join(root_asset_dir, self.pipeline_name)
+        ensure_exists(pipeline_meta_path)
+        store_json_object(metadata, os.path.join(pipeline_meta_path, meta_filename))
+
+        # Main save to meta file
         meta_path = os.path.join(root_asset_dir, meta_filename)
         if os.path.exists(meta_path):
             self.logger.debug(f"Loading existing meta data : {meta_path}")
