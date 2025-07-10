@@ -18,7 +18,7 @@ class EtcdConfig:
     )
     namespace: str = field(default_factory=lambda: os.getenv('ETCD_NAMESPACE', 'marie'))
     timeout_sec: float = field(
-        default_factory=lambda: float(os.getenv('ETCD_TIMEOUT_SEC', '5.0'))
+        default_factory=lambda: float(os.getenv('ETCD_TIMEOUT_SEC', '30.0'))
     )
     retry_times: int = field(
         default_factory=lambda: int(os.getenv('ETCD_RETRY_TIMES', '10'))
@@ -99,7 +99,11 @@ class EtcdConfig:
             if ':' in option_pair:
                 key, value = option_pair.split(':', 1)
                 try:
-                    if '.' in value:
+                    if value.lower() == 'true':
+                        value = True
+                    elif value.lower() == 'false':
+                        value = False
+                    elif '.' in value:
                         value = float(value)
                     else:
                         value = int(value)
@@ -120,7 +124,7 @@ class EtcdConfig:
                 'namespace', os.getenv('ETCD_NAMESPACE', 'marie')
             ),
             timeout_sec=config_dict.get(
-                'timeout_sec', float(os.getenv('ETCD_TIMEOUT_SEC', '5.0'))
+                'timeout_sec', float(os.getenv('ETCD_TIMEOUT_SEC', '30.0'))
             ),
             retry_times=config_dict.get(
                 'retry_times', int(os.getenv('ETCD_RETRY_TIMES', '10'))
@@ -176,6 +180,10 @@ class EtcdServiceContainer:
                 UserWarning,
             )
 
+        grpc_options = etcd_config.grpc_options
+        if isinstance(grpc_options, dict):
+            grpc_options = [(k, v) for k, v in grpc_options.items()]
+
         return EtcdClient(
             etcd_host=etcd_config.host,
             etcd_port=etcd_config.port,
@@ -186,7 +194,7 @@ class EtcdServiceContainer:
             ca_cert=etcd_config.ca_cert,
             cert_key=etcd_config.cert_key,
             cert_cert=etcd_config.cert_cert,
-            grpc_options=etcd_config.grpc_options,
+            grpc_options=grpc_options,
         )
 
     @classmethod

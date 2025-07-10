@@ -65,8 +65,32 @@ class EtcdClient(object):
         self._ca_cert: Optional[str] = ca_cert
         self._cert_key: Optional[str] = cert_key
         self._cert_cert: Optional[str] = cert_cert
-        self._timeout: float = timeout
-        self._grpc_options: List[Tuple[str, Any]] = grpc_options or []
+        self._timeout: float = timeout or 30
+
+        default_grpc_options = [
+            ('grpc.keepalive_time_ms', 30000),  # 30 seconds
+            ('grpc.keepalive_timeout_ms', 5000),  # 5 seconds
+            ('grpc.keepalive_permit_without_calls', True),
+            ('grpc.http2.max_pings_without_data', 0),
+            ('grpc.http2.min_time_between_pings_ms', 10000),
+            ('grpc.max_receive_message_length', 1 * 1024 * 1024),  # 1MB
+            ('grpc.max_send_message_length', 1 * 1024 * 1024),  # 1MB
+            ('grpc.max_connection_idle_ms', 30000),
+            ('grpc.max_connection_age_ms', 300000),  # 5 minutes
+            ('grpc.max_connection_age_grace_ms', 5000),
+        ]
+        if grpc_options:
+            if isinstance(grpc_options, dict):
+                grpc_options = [(k, v) for k, v in grpc_options.items()]
+
+            # Merge with defaults (user options override defaults)
+            option_keys = [opt[0] for opt in grpc_options]
+            filtered_defaults = [
+                opt for opt in default_grpc_options if opt[0] not in option_keys
+            ]
+            self._grpc_options = filtered_defaults + grpc_options
+        else:
+            self._grpc_options = default_grpc_options
 
         # convert endpoint to  etcd3.Endpoint if need to
         normal_endpoints: List[Tuple[str, int]] = self._normalize_endpoints(
@@ -363,7 +387,6 @@ class EtcdClient(object):
                 'timeout': self._timeout,
                 'grpc_options': self._grpc_options,
             }
-
             # Add credentials
             if self._creds:
                 client_kwargs['user'] = self._creds.get("user")
@@ -467,6 +490,20 @@ class EtcdClient(object):
                             ConnectionState.DISCONNECTED, response
                         )
                         return
+
+                # Check if response has events attribute before accessing it
+                if not hasattr(response, 'events'):
+                    logger.error(
+                        f"Response object does not have 'events' attribute: {type(response)}"
+                    )
+                    if isinstance(response, grpc.RpcError):
+                        logger.error(
+                            f"Unhandled gRPC error in watch callback: {response}"
+                        )
+                        self._set_connection_state(
+                            ConnectionState.DISCONNECTED, response
+                        )
+                    return
 
                 for ev in response.events:
                     try:
