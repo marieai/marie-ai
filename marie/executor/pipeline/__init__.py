@@ -1,1 +1,4 @@
-from .document_llm_pipeline_executor import DocumentLLMPipelineExecutor
+from .document_llm_pipeline_executor import (
+    DocumentLLMPipelineExecutor,
+    PipelineExecutor,
+)

@@ -362,6 +362,10 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
             pipeline_meta_path = os.path.join(
                 root_asset_dir, meta_folder, meta_filename
             )
+            if not os.path.exists(pipeline_meta_path):
+                raise FileNotFoundError(
+                    f"Meta data for {meta_folder} not found in remote or local storage."
+                )
             pipeline_meta = load_json_file(pipeline_meta_path, True)
             metadata = update_existing_meta(metadata, pipeline_meta)
         metadata["pipeline"] = ",".join(meta_folders)
