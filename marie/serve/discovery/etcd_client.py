@@ -387,6 +387,7 @@ class EtcdClient(object):
                 'timeout': self._timeout,
                 'grpc_options': self._grpc_options,
             }
+
             # Add credentials
             if self._creds:
                 client_kwargs['user'] = self._creds.get("user")
