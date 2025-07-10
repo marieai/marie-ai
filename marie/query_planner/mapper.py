@@ -145,9 +145,7 @@ class JobMetadata(BaseModel):
         )
         logger.debug(f"Task Type: {task_type}, Method: {method}, Params: {params}")
 
-        executor_endpoint = "executor://endpoint"
         has_executor = "://" in endpoint
-        executor = endpoint.split("://")[0] if has_executor else None
 
         if method == "EXECUTOR_ENDPOINT":
             executor_endpoint = endpoint
