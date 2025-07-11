@@ -539,7 +539,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         with self:
             self._execute_sql_gracefully(create_queue(DEFAULT_SCHEMA, queue_name, {}))
 
-    async def get_defined_queues(self) -> set[str]:
+    async def _get_defined_queues(self) -> set[str]:
         """Setup the queue for the scheduler."""
         cursor = None
         with self:
@@ -571,7 +571,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not installed:
             self.create_tables(DEFAULT_SCHEMA)
 
-        defined_queues = await self.get_defined_queues()
+        defined_queues = await self._get_defined_queues()
         for work_queue in self.known_queues.difference(defined_queues):
             self.logger.info(f"Create queue: {work_queue}")
             await self.create_queue(work_queue)
@@ -1645,63 +1645,68 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     ):
         # self.logger.info(f"Job completed : {job_id}, {work_item}")
         self.logger.info(f"Job completed : {job_id}")
-        with self:
 
-            def complete_jobs_wrapper(
-                schema: str, name: str, ids: list, output: dict, _force: bool
-            ):
-                if _force:
-                    return complete_jobs_by_id(schema, name, ids, output)
-                else:
-                    return complete_jobs(schema, name, ids, output)
+        def complete_jobs_wrapper(
+            schema: str, name: str, ids: list, output: dict, _force: bool
+        ):
+            if _force:
+                return complete_jobs_by_id(schema, name, ids, output)
+            else:
+                return complete_jobs(schema, name, ids, output)
 
-            cursor = None
-
-            try:
-                cursor = self._execute_sql_gracefully(
-                    complete_jobs_wrapper(
-                        DEFAULT_SCHEMA,
-                        work_item.name,
-                        [job_id],
-                        {"on_complete": "done", **(output_metadata or {})},
-                        force,
-                    ),
-                    return_cursor=True,
-                )
-                counts = cursor.fetchone()[0]
-                if counts > 0:
-                    self.logger.debug(f"Completed job: {job_id} : {counts}")
-                else:
-                    self.logger.error(f"Error completing job: {job_id}")
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error completing job: {error}")
-            finally:
-                self._close_cursor(cursor)
+        conn = None
+        cursor = None
+        try:
+            conn = self._get_connection()
+            cursor = self._execute_sql_gracefully(
+                complete_jobs_wrapper(
+                    DEFAULT_SCHEMA,
+                    work_item.name,
+                    [job_id],
+                    {"on_complete": "done", **(output_metadata or {})},
+                    force,
+                ),
+                return_cursor=True,
+                connection=conn,
+            )
+            counts = cursor.fetchone()[0]
+            if counts > 0:
+                self.logger.debug(f"Completed job: {job_id} : {counts}")
+            else:
+                self.logger.error(f"Error completing job: {job_id}")
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error completing job: {error}")
+        finally:
+            self._close_cursor(cursor)
+            self.close_connection(conn)
 
     async def fail(
         self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
     ):
         self.logger.info(f"Job failed : {job_id}")
         cursor = None
-        with self:
-            try:
-                cursor = self._execute_sql_gracefully(
-                    fail_jobs_by_id(
-                        DEFAULT_SCHEMA,
-                        work_item.name,
-                        [job_id],
-                        {"on_complete": "failed", **(output_metadata or {})},
-                    )
-                )
-                counts = cursor.fetchone()[0]
-                if counts > 0:
-                    self.logger.info(f"Completed failed job: {job_id}")
-                else:
-                    self.logger.error(f"Error completing failed job: {job_id}")
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error completing failed job: {error}")
-            finally:
-                self._close_cursor(cursor)
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = self._execute_sql_gracefully(
+                fail_jobs_by_id(
+                    DEFAULT_SCHEMA,
+                    work_item.name,
+                    [job_id],
+                    {"on_complete": "failed", **(output_metadata or {})},
+                ),
+                connection=conn
+            )
+            counts = cursor.fetchone()[0]
+            if counts > 0:
+                self.logger.info(f"Completed failed job: {job_id}")
+            else:
+                self.logger.error(f"Error completing failed job: {job_id}")
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error completing failed job: {error}")
+        finally:
+            self._close_cursor(cursor)
+            self.close_connection(conn)
 
     async def _sync(self):
         """
@@ -1953,62 +1958,66 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     ) -> bool:
         self.logger.debug(f"🔍 Resolving DAG status: {work_info.dag_id}")
 
-        with self:
-            cursor = None
+        cursor = None
+        conn = None
 
-            try:
-                resolve_query = f"SELECT {DEFAULT_SCHEMA}.resolve_dag_state('{work_info.dag_id}'::uuid);"
-                cursor = self._execute_sql_gracefully(resolve_query, return_cursor=True)
-                dag_state = (
-                    result[0] if cursor and (result := cursor.fetchone()) else None
+        try:
+            conn = self._get_connection()
+            resolve_query = f"SELECT {DEFAULT_SCHEMA}.resolve_dag_state('{work_info.dag_id}'::uuid);"
+            cursor = self._execute_sql_gracefully(resolve_query, return_cursor=True, connection=conn)
+            dag_state = (
+                result[0] if cursor and (result := cursor.fetchone()) else None
+            )
+            self._close_cursor(cursor)
+            self._close_connection(conn)
+
+            self.logger.debug(f"Resolved DAG state: {dag_state}")
+
+            if dag_state not in ("completed", "failed"):
+                self.logger.debug(f"DAG is still in progress: {work_info.dag_id}")
+                return False
+
+            if work_info.dag_id in self.active_dags:
+                del self.active_dags[work_info.dag_id]
+                self.logger.debug(f"Removed DAG from cache: {work_info.dag_id}")
+
+            self.logger.info(
+                f"Resolved DAG status: {work_info.dag_id}, status={dag_state}"
+            )
+            # notification
+            event_name = work_info.data.get("name", work_info.name)
+            api_key = work_info.data.get("api_key", None)
+            metadata = work_info.data.get("metadata", {})
+            ref_type = metadata.get("ref_type")
+
+            if not api_key or not event_name:
+                self.logger.warning(
+                    f"Missing API key or event name: api_key={api_key}, event_name={event_name}"
                 )
-                self.logger.debug(f"Resolved DAG state: {dag_state}")
+                return False
 
-                if dag_state not in ("completed", "failed"):
-                    self.logger.debug(f"DAG is still in progress: {work_info.dag_id}")
-                    return False
+            status = "OK" if dag_state == "completed" else "FAILED"
 
-                if work_info.dag_id in self.active_dags:
-                    del self.active_dags[work_info.dag_id]
-                    self.logger.debug(f"Removed DAG from cache: {work_info.dag_id}")
+            await mark_as_complete(
+                api_key=api_key,
+                job_id=work_info.dag_id,
+                event_name=event_name,
+                job_tag=ref_type,
+                status=status,
+                timestamp=int(time.time()),
+                payload=metadata,
+            )
 
-                self.logger.info(
-                    f"Resolved DAG status: {work_info.dag_id}, status={dag_state}"
-                )
-                # notification
-                event_name = work_info.data.get("name", work_info.name)
-                api_key = work_info.data.get("api_key", None)
-                metadata = work_info.data.get("metadata", {})
-                ref_type = metadata.get("ref_type")
+            self.logger.debug(
+                f"DAG notification sent: {work_info.dag_id}, status={status}"
+            )
+            return True
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error resolving DAG status: {error}")
+            self._close_cursor(cursor)
+            self._close_connection(conn)
+            raise error
 
-                if not api_key or not event_name:
-                    self.logger.warning(
-                        f"Missing API key or event name: api_key={api_key}, event_name={event_name}"
-                    )
-                    return False
-
-                status = "OK" if dag_state == "completed" else "FAILED"
-
-                await mark_as_complete(
-                    api_key=api_key,
-                    job_id=work_info.dag_id,
-                    event_name=event_name,
-                    job_tag=ref_type,
-                    status=status,
-                    timestamp=int(time.time()),
-                    payload=metadata,
-                )
-
-                self.logger.debug(
-                    f"DAG notification sent: {work_info.dag_id}, status={status}"
-                )
-                return True
-
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error resolving DAG status: {error}")
-                raise error
-            finally:
-                self._close_cursor(cursor)
 
     def get_dag_by_id(self, dag_id: str) -> QueryPlan | None:
         """
