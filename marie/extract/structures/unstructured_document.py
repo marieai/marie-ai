@@ -7,7 +7,6 @@ from rtree import index
 import marie.check as check
 from marie.extract.structures.line_with_meta import LineWithMeta
 from marie.extract.structures.table import Table
-from marie.logging_core.predefined import default_logger as logger
 
 
 class UnstructuredDocument:

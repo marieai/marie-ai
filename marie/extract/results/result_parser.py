@@ -18,9 +18,13 @@ from marie.executor.ner.utils import draw_box, get_font, visualize_icr
 from marie.extract.models.match import SubzeroResult
 from marie.extract.readers.meta_reader.meta_reader import MetaReader
 from marie.extract.results.base import _annotate_segment, extract_page_id, locate_line
-from marie.extract.results.base_validator import ValidationContext
+from marie.extract.results.base_validator import ValidationContext, ValidationSummary
 from marie.extract.results.registry import component_registry
 from marie.extract.results.result_converter import convert_document_to_structure
+from marie.extract.results.result_validator import (
+    validate_document,
+    validate_parser_output,
+)
 from marie.extract.results.util import generate_distinct_colors
 from marie.extract.results.validation_report import generate_validation_report
 from marie.extract.schema import ExtractionResult, Segment, TableExtractionResult
@@ -30,16 +34,17 @@ from marie.extract.structures.concrete_annotations import TypedAnnotation
 from marie.extract.structures.line_with_meta import LineWithMeta
 from marie.extract.structures.table import Table
 from marie.extract.structures.table_metadata import TableMetadata
+from marie.logging_core.predefined import default_logger as logger
 from marie.utils.docs import frames_from_file
 from marie.utils.json import load_json_file
 from marie.utils.overlap import merge_bboxes_as_block
 
 
-def load_layout_config(base_dir: str, layout_dir: str) -> OmegaConf:
+def load_layout_config(base_dir: str, layout_dir: str, debug_config=False) -> OmegaConf:
     # TODO : THIS NEEDS TO BE CONFIGURABLE
-    print('----' * 20)
     layout_dir = os.path.expanduser(layout_dir)
     base_dir = os.path.expanduser(base_dir)
+
     # root config
     base_cfg_path = os.path.join(base_dir, "base-config.yml")
     field_cfg_path = os.path.join(base_dir, "field-config.yml")
@@ -61,7 +66,7 @@ def load_layout_config(base_dir: str, layout_dir: str) -> OmegaConf:
         for k, v in merged_conf.grounding.items()
     }
 
-    if False:
+    if debug_config:
         with open("merged_config_output.yml", "w") as yaml_file:
             yaml_file.write(OmegaConf.to_yaml(merged_conf))
             print(OmegaConf.to_yaml(merged_conf))
@@ -107,26 +112,22 @@ def create_unstructured_doc(frames: list, metadata: dict) -> UnstructuredDocumen
 
 
 def highlight_tables(doc: UnstructuredDocument, frames: list, output_dir: str):
-    logging.info(f"Highlight tables")
+    logger.info(f"Highlight tables")
 
     for page_id in range(doc.page_count):
-        print(f"Page {page_id + 1}")
         frame = frames[page_id]
-        print(f"Frame {type(frame)}")
         lines = doc.lines_for_page(page_id)
-        # filter all the TABLE and TABLE Hcreate_unstructured_docEADER annotations
+        # filter all the TABLE and TABLE create_unstructured_doc HEADER annotations
         collected_lines = []
         for line in lines:
             if line.annotations is None:
                 continue
             for annotation in line.annotations:
                 if annotation.annotation_type == "TABLE":
-                    print(f"Annotation {annotation} > {line}")
+                    logger.debug(f"Annotation {annotation} > {line}")
                     collected_lines.append(line)
 
         # Highlight the lines in the image by getting the bounding box for highlighted lines
-        print(f"Collected lines {len(collected_lines)}")
-
         viz_img = None
         if not isinstance(frame, Image.Image):
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -138,16 +139,14 @@ def highlight_tables(doc: UnstructuredDocument, frames: list, output_dir: str):
         draw = ImageDraw.Draw(viz_img, "RGBA")  # Ensure RGBA mode for transparency
         font = get_font(size)
         for i, line in enumerate(collected_lines):
-            print(f"Line {line} >> {line.metadata}")
+            logger.debug(f"Line {line} >> {line.metadata}")
             x, y, w, h = line.metadata.model.bbox
             box = line.metadata.model.bbox
             draw_box(
                 draw,
                 box,
                 None,  # f"{q_text} : {q_confidence}",
-                (255, 0, 0, 128),  # Example: semi-transparent red
-                # (*get_random_color(), 128),  # Add transparency (alpha=128)
-                # (*get_random_color(), 128),  # Add transparency (alpha=128)
+                (255, 0, 0, 128),  # semi-transparent red
                 font,
             )
 
@@ -167,10 +166,8 @@ def render_document_markdown(
     Returns:
         None
     """
-    markdown_output = []
-    markdown_output.append("# Document in Markdown Format\n")
+    markdown_output = ["# Document in Markdown Format\n"]
 
-    # Iterate through the pages in the document
     for page_id in range(doc.page_count):
         markdown_output.append(f"## Page {page_id + 1}\n")
         lines = doc.lines_for_page(page_id)
@@ -201,13 +198,12 @@ def render_document_markdown(
 
     markdown_string = "\n".join(markdown_output)
 
-    print(markdown_string)
     try:
         with open(output_file, "w", encoding="utf-8") as file:
             file.write(markdown_string)
-        print(f"Markdown output written to {output_file}")
+        logger.info(f"Markdown output written to {output_file}")
     except IOError as e:
-        print(f"Error writing to file {output_file}: {e}")
+        logger.error(f"Error writing to file {output_file}: {e}")
 
 
 def correct_row_numbers(extraction_items: List[Segment]) -> List[Segment]:
@@ -323,8 +319,8 @@ def process_extractions(
     lines_for_page: list[LineWithMeta] = sorted(
         doc.lines_for_page(page_id), key=lambda ln: ln.metadata.line_id
     )
-    print(f"lines => {len(lines_for_page)} >")
-    print(f"Detailed extraction result for page {page_id}")
+    logger.info(f"lines => {len(lines_for_page)} >")
+    logger.info(f"Detailed extraction result for page {page_id}")
 
     extractions = correct_row_numbers(result.extractions)
     for segment in extractions:
@@ -356,7 +352,7 @@ def process_extractions(
             )
             continue
 
-        print(f"   --> Line : {meta_line}")
+        logger.info(f"   --> Line : {meta_line}")
         _annotate_segment(annotation_type, meta_line, segment)
 
 
@@ -364,13 +360,13 @@ def extract_tables(
     doc: UnstructuredDocument, frames: list, metadata: dict[str, any], output_dir: str
 ):
     YELLOW_COLOR = (0, 255, 255)  # OpenCV uses BGR, so this represents yellow
-    print("Extracting tables...")
+    logger.info("Extracting tables...")
     model_path = os.path.join(__model_path__, "table_recognition", "2025_02_18")
     # table_rec_predictor = TableRecPredictor(checkpoint=model_path)
     table_rec_predictor = _get_table_rec(model_path)
 
     for page_id in range(doc.page_count):
-        print(f"Page {page_id + 1}")
+        logger.info(f"Page {page_id + 1}")
         frame = frames[page_id]
         lines = doc.lines_for_page(page_id)
         all_tables = []
@@ -386,13 +382,13 @@ def extract_tables(
                     and annotation.name == "TABLE_START"
                 ):
                     if collecting:
-                        print(
+                        logger.warning(
                             f"Warning: Nested TABLE_START found without TABLE_END. Closing previous table."
                         )
                         all_tables.append(table_lines)
                         table_lines = []
                     collecting = True
-                    print(f"Table start found: {annotation} > {line}")
+                    logger.info(f"Table start found: {annotation} > {line}")
                 if collecting and annotation.name not in ["TABLE_START", "TABLE_END"]:
                     table_lines.append(line)
                 if (
@@ -400,12 +396,12 @@ def extract_tables(
                     and annotation.name == "TABLE_END"
                 ):
                     if collecting:
-                        print(f"Table end found: {annotation} > {line}")
+                        logger.info(f"Table end found: {annotation} > {line}")
                         all_tables.append(table_lines)
                         table_lines = []
                         collecting = False
                     else:
-                        print(
+                        logger.warning(
                             f"Warning: TABLE_END found without matching TABLE_START. Skipping."
                         )
         if collecting:
@@ -864,14 +860,17 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
     frames = [frames_from_file(os.path.join(frames_dir, f))[0] for f in files]
     doc: UnstructuredDocument = create_unstructured_doc(frames, metadata)
 
-    # Track validation results for all parsers
     all_validation_summaries = []
     validation_enabled = conf.get("validation", {}).get("enabled", True)
     fail_on_validation_errors = conf.get("validation", {}).get("fail_on_errors", False)
 
+    logger.info(f"Validation  enabled: {validation_enabled}")
+    logger.info(f"Fail on validation errors: {fail_on_validation_errors}")
+
     for name, ann_conf in conf.annotators.items():
         target = ann_conf.get("parser", name)
         parser_fn = component_registry.get_parser(target)
+
         if not parser_fn:
             logging.warning(f"No parser registered for '{target}'")
             raise ValueError(f"Parser '{target}' not found in registry")
@@ -893,7 +892,7 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
                     )
 
                 # Run validation
-                validation_summary = component_registry.validate_parser_output(
+                validation_summary: ValidationSummary = validate_parser_output(
                     doc=doc,
                     parser_name=target,
                     working_dir=working_dir,
@@ -950,13 +949,12 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
         )
         SerializationManager.serialize(doc, os.path.join(output_dir, "document.pkl"))
 
-    # Convert document to structured output and validate converter output
     logging.info("Converting document to structured output")
     results: SubzeroResult = convert_document_to_structure(
         doc, conf, os.path.join(output_dir, "structured-output.md")
     )
 
-    # Validate converter output if validation is enabled
+    # Validate converter output
     if validation_enabled:
         logging.info("Validating converter output")
 
@@ -973,9 +971,8 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
             metadata=metadata,
         )
 
-        # Run converter validation
-        converter_validation = component_registry.validate_document(
-            doc=results,  # The converter output
+        converter_validation = validate_document(
+            # doc=results,  # The converter output
             context=converter_context,
             validator_names=converter_validators,
         )
@@ -992,14 +989,12 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
                 f"✗ Converter validation failed ({converter_validation.total_errors} errors, {converter_validation.total_warnings} warnings)"
             )
 
-            # Log specific errors and warnings
             for result in converter_validation.results:
                 for error in result.errors:
                     logging.error(f"  {result.validator_name}: {error}")
                 for warning in result.warnings:
                     logging.warning(f"  {result.validator_name}: {warning}")
 
-            # Optionally fail on converter validation errors
             if fail_on_validation_errors:
                 critical_errors = converter_validation.get_errors_by_severity(
                     "CRITICAL"
@@ -1014,6 +1009,5 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
                         f"Converter validation failed with {converter_validation.total_errors} errors"
                     )
 
-    # Generate validation report if validation was enabled
     if validation_enabled and all_validation_summaries:
         generate_validation_report(all_validation_summaries, output_dir)
