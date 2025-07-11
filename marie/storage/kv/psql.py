@@ -142,10 +142,12 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             DO 
             UPDATE SET value = '{value.decode()}', updated_at = current_timestamp
         """
-        cursor = None
-        try:
-            query = insert_q + upsert_q if overwrite else insert_q
-            cursor = self._execute_sql_gracefully(query, return_cursor=True)
+
+        with self:
+            cursor = None
+            try:
+                query = insert_q + upsert_q if overwrite else insert_q
+                cursor = self._execute_sql_gracefully(query, return_cursor=True)
 
             if cursor is None:
                 return 0
