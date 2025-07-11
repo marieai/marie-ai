@@ -32,59 +32,58 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         """
         self.logger.info(f"Creating table : {table_name}")
 
-        with self:
-            self._execute_sql_gracefully(
-                f"""
-                CREATE TABLE IF NOT EXISTS {self.table} (
-                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                    namespace VARCHAR(1024) NULL,
-                    key VARCHAR(1024) NOT NULL,
-                    value JSONB NULL,
-                    shard int DEFAULT 0,
-                    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-                    updated_at timestamp with time zone DEFAULT NULL,
-                    is_deleted BOOL DEFAULT FALSE
-                );
-                CREATE UNIQUE INDEX idx_{self.table}_ns_key ON {self.table} (namespace, key);
-    
-                CREATE TABLE IF NOT EXISTS {self.table}_history (
-                    history_id SERIAL PRIMARY KEY,
-                    id UUID,
-                    namespace VARCHAR(1024),
-                    key VARCHAR(1024),
-                    value JSONB,
-                    shard int,
-                    created_at timestamp with time zone,
-                    updated_at timestamp with time zone,
-                    is_deleted BOOL,
-                    change_time timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-                    operation CHAR(1) CHECK (operation IN ('I', 'U', 'D'))
-                );
-    
-                CREATE OR REPLACE FUNCTION log_changes_{self.table}() RETURNS TRIGGER AS $$
-                BEGIN
-                    IF (TG_OP = 'INSERT') THEN
-                        INSERT INTO {self.table}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
-                        VALUES (NEW.id, NEW.namespace, NEW.key, NEW.value, NEW.shard, NEW.created_at, NEW.updated_at, NEW.is_deleted, 'I');
-                        RETURN NEW;
-                    ELSIF (TG_OP = 'UPDATE') THEN
-                        INSERT INTO {self.table}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
-                        VALUES (NEW.id, NEW.namespace, NEW.key, NEW.value, NEW.shard, NEW.created_at, NEW.updated_at, NEW.is_deleted, 'U');
-                        RETURN NEW;
-                    ELSIF (TG_OP = 'DELETE') THEN
-                        INSERT INTO {self.table}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
-                        VALUES (OLD.id, OLD.namespace, OLD.key, OLD.value, OLD.shard, OLD.created_at, OLD.updated_at, OLD.is_deleted, 'D');
-                        RETURN OLD;
-                    END IF;
-                    RETURN NULL;
-                END;
-                $$ LANGUAGE plpgsql;
-    
-                CREATE TRIGGER log_changes_{self.table}_trigger
-                AFTER INSERT OR UPDATE OR DELETE ON {self.table}
-                FOR EACH ROW EXECUTE FUNCTION log_changes_{self.table}();
-                """
-            )
+        self._execute_sql_gracefully(
+            f"""
+            CREATE TABLE IF NOT EXISTS {self.table} (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                namespace VARCHAR(1024) NULL,
+                key VARCHAR(1024) NOT NULL,
+                value JSONB NULL,
+                shard int DEFAULT 0,
+                created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+                updated_at timestamp with time zone DEFAULT NULL,
+                is_deleted BOOL DEFAULT FALSE
+            );
+            CREATE UNIQUE INDEX idx_{self.table}_ns_key ON {self.table} (namespace, key);
+
+            CREATE TABLE IF NOT EXISTS {self.table}_history (
+                history_id SERIAL PRIMARY KEY,
+                id UUID,
+                namespace VARCHAR(1024),
+                key VARCHAR(1024),
+                value JSONB,
+                shard int,
+                created_at timestamp with time zone,
+                updated_at timestamp with time zone,
+                is_deleted BOOL,
+                change_time timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+                operation CHAR(1) CHECK (operation IN ('I', 'U', 'D'))
+            );
+
+            CREATE OR REPLACE FUNCTION log_changes_{self.table}() RETURNS TRIGGER AS $$
+            BEGIN
+                IF (TG_OP = 'INSERT') THEN
+                    INSERT INTO {self.table}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
+                    VALUES (NEW.id, NEW.namespace, NEW.key, NEW.value, NEW.shard, NEW.created_at, NEW.updated_at, NEW.is_deleted, 'I');
+                    RETURN NEW;
+                ELSIF (TG_OP = 'UPDATE') THEN
+                    INSERT INTO {self.table}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
+                    VALUES (NEW.id, NEW.namespace, NEW.key, NEW.value, NEW.shard, NEW.created_at, NEW.updated_at, NEW.is_deleted, 'U');
+                    RETURN NEW;
+                ELSIF (TG_OP = 'DELETE') THEN
+                    INSERT INTO {self.table}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
+                    VALUES (OLD.id, OLD.namespace, OLD.key, OLD.value, OLD.shard, OLD.created_at, OLD.updated_at, OLD.is_deleted, 'D');
+                    RETURN OLD;
+                END IF;
+                RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            CREATE TRIGGER log_changes_{self.table}_trigger
+            AFTER INSERT OR UPDATE OR DELETE ON {self.table}
+            FOR EACH ROW EXECUTE FUNCTION log_changes_{self.table}();
+            """
+        )
 
     async def internal_kv_get(
         self, key: bytes, namespace: Optional[bytes], timeout: Optional[float] = None
@@ -94,18 +93,19 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         if namespace is None:
             namespace = b"DEFAULT"
 
-        with self:
-            cursor = None
-            try:
-                query = f"SELECT key, value FROM {self.table} WHERE key = '{key.decode()}'  AND namespace = '{namespace.decode()}' AND is_deleted = FALSE"
-                cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True)
-                result = cursor.fetchone()
+        cursor = None
+        conn = None
+        try:
+            query = f"SELECT key, value FROM {self.table} WHERE key = '{key.decode()}'  AND namespace = '{namespace.decode()}' AND is_deleted = FALSE"
+            cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True, connection=conn)
+            result = cursor.fetchone()
 
-                if result and (result[0] is not None):
-                    return result[1]
-                return None
-            finally:
-                self._close_cursor(cursor)
+            if result and (result[0] is not None):
+                return result[1]
+            return None
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
 
     async def internal_kv_multi_get(
         self,
@@ -145,17 +145,19 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             UPDATE SET value = '{value.decode()}', updated_at = current_timestamp
         """
 
-        with self:
-            cursor = None
-            try:
-                query = insert_q + upsert_q if overwrite else insert_q
-                cursor = self._execute_sql_gracefully(query, return_cursor=True)
+        cursor = None
+        conn = None
+        try:
+            conn = self._get_connection()
+            query = insert_q + upsert_q if overwrite else insert_q
+            cursor = self._execute_sql_gracefully(query, return_cursor=True, connection = conn)
 
-                if cursor is None:
-                    return 0
-                return cursor.rowcount
-            finally:
-                self._close_cursor(cursor)
+            if cursor is None:
+                return 0
+            return cursor.rowcount
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
 
     async def internal_kv_del(
         self,
@@ -172,15 +174,16 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             raise NotImplementedError
         else:
             query = f"DELETE FROM {self.table} WHERE key = '{key.decode()}' AND namespace = '{namespace.decode()}'"
-            with self:
-                cursor = None
+            cursor = None
+            conn = None
 
-                try:
-                    cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True)
-                    if cursor is not None:
-                        return 1
-                finally:
-                    self._close_cursor(cursor)
+            try:
+                cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True, connection = conn)
+                if cursor is not None:
+                    return 1
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
 
         return 0
 
@@ -195,26 +198,33 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         if namespace is None:
             namespace = b"DEFAULT"
         result = []
-        with self:
-            cursor = None
-            try:
-                query = f"SELECT key  FROM {self.table} WHERE  namespace = '{namespace.decode()}' AND is_deleted = FALSE"
-                cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True)
 
-                for record in cursor:
-                    result.append(record[0])
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error executing sql statement: {error}")
-            finally:
-                self._close_cursor(cursor)
+        cursor = None
+        conn = None
+        try:
+            conn = self._get_connection()
+            query = f"SELECT key  FROM {self.table} WHERE  namespace = '{namespace.decode()}' AND is_deleted = FALSE"
+            cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True, connection=conn)
+
+            for record in cursor:
+                result.append(record[0])
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error executing sql statement: {error}")
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
         return result
 
     def internal_kv_reset(self) -> None:
         self.logger.info(f"internal_kv_reset : {self.table}")
-        with self:
-            self._execute_sql_gracefully(f"DROP TABLE IF EXISTS {self.table}")
-            self._execute_sql_gracefully(f"DROP TABLE IF EXISTS {self.table}_history")
-            self._execute_sql_gracefully(f"DROP FUNCTION IF EXISTS log_changes_{self.table} CASCADE")
+        conn = None
+        try:
+            conn = self._get_connection()
+            self._execute_sql_gracefully(f"DROP TABLE IF EXISTS {self.table}", connection=conn)
+            self._execute_sql_gracefully(f"DROP TABLE IF EXISTS {self.table}_history", connection=conn)
+            self._execute_sql_gracefully(f"DROP FUNCTION IF EXISTS log_changes_{self.table} CASCADE", connection=conn)
+        finally:
+            self._close_connection(conn)
 
     def debug_info(self) -> str:
         return "PostgreSQLKV"

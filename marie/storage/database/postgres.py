@@ -272,16 +272,20 @@ class PostgresqlMixin:
         return None
 
     def _table_exists(self) -> bool:
-        with self:
-            cursor = None
-            try:
-                cursor = self._execute_sql_gracefully(
-                    "SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name=%s)",
-                    (self.table,), return_cursor=True
-                )
-                return cursor.fetchall()[0][0]
-            finally:
-                self._close_cursor(cursor)
+        cursor = None
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = self._execute_sql_gracefully(
+                "SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name=%s)",
+                (self.table,),
+                return_cursor=True,
+                connection = conn
+            )
+            return cursor.fetchall()[0][0]
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
 
     def _execute_sql_gracefullyX(
             self,
