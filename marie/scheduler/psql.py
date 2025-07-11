@@ -1608,21 +1608,23 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
             try:
                 monitored_on = None
-                cursor = None
 
-                try:
-                    cursor = self._execute_sql_gracefully(
-                        try_set_monitor_time(
-                            DEFAULT_SCHEMA,
-                            monitor_state_interval_seconds=int(MONITORING_POLL_PERIOD),
-                        ),
-                        return_cursor=True,
-                    )
-                    monitored_on = cursor.fetchone()
-                except (Exception, psycopg2.Error) as error:
-                    self.logger.error(f"Error handling job event: {error}")
-                finally:
-                    self._close_cursor(cursor)
+                with self:
+                    cursor = None
+
+                    try:
+                        cursor = self._execute_sql_gracefully(
+                            try_set_monitor_time(
+                                DEFAULT_SCHEMA,
+                                monitor_state_interval_seconds=int(MONITORING_POLL_PERIOD),
+                            ),
+                            return_cursor=True,
+                        )
+                        monitored_on = cursor.fetchone()
+                    except (Exception, psycopg2.Error) as error:
+                        self.logger.error(f"Error handling job event: {error}")
+                    finally:
+                        self._close_cursor(cursor)
 
                 if monitored_on is None:
                     self.logger.error("Error setting monitor time")
@@ -1678,6 +1680,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
     ):
         self.logger.info(f"Job failed : {job_id}")
+        cursor = None
         with self:
             try:
                 cursor = self._execute_sql_gracefully(
@@ -1695,6 +1698,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.error(f"Error completing failed job: {job_id}")
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error completing failed job: {error}")
+            finally:
+                self._close_cursor(cursor)
 
     async def _sync(self):
         """
@@ -1801,50 +1806,51 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.logger.info(f"Starting DAG sync polling (interval: {interval}s)")
 
         while self.running:
-            cursor = None
+            with self:
+                cursor = None
 
-            try:
-                if not self.active_dags:
-                    self.logger.debug("No active DAGs in memory to validate")
-                    time.sleep(interval)
-                    continue
+                try:
+                    if not self.active_dags:
+                        self.logger.debug("No active DAGs in memory to validate")
+                        time.sleep(interval)
+                        continue
 
-                memory_dag_ids = list(self.active_dags.keys())
-                self.logger.debug(f"Validating {len(memory_dag_ids)} DAGs in memory")
+                    memory_dag_ids = list(self.active_dags.keys())
+                    self.logger.debug(f"Validating {len(memory_dag_ids)} DAGs in memory")
 
-                placeholders = ','.join(['%s'] * len(memory_dag_ids))
-                query = f"""
-                    SELECT id FROM marie_scheduler.dag 
-                    WHERE id IN ({placeholders}) AND state = 'active'
-                """
+                    placeholders = ','.join(['%s'] * len(memory_dag_ids))
+                    query = f"""
+                        SELECT id FROM marie_scheduler.dag 
+                        WHERE id IN ({placeholders}) AND state = 'active'
+                    """
 
-                cursor = self._execute_sql_gracefully(
-                    query, memory_dag_ids, return_cursor=True
-                )
-                if not cursor:
-                    self.logger.warning("No result from DAG validation query")
-                    time.sleep(interval)
-                    continue
-
-                valid_dag_records = cursor.fetchall()
-                valid_db_dags = {record[0] for record in valid_dag_records}
-                invalid_dags = set(memory_dag_ids) - valid_db_dags
-
-                if invalid_dags:
-                    self.logger.info(
-                        f"Found {len(invalid_dags)} invalid DAGs in memory"
+                    cursor = self._execute_sql_gracefully(
+                        query, memory_dag_ids, return_cursor=True
                     )
-                    for dag_id in invalid_dags:
-                        self._remove_dag_from_memory(
-                            dag_id, "no longer active or deleted in database"
-                        )
-                else:
-                    self.logger.debug("All DAGs in memory are still valid")
+                    if not cursor:
+                        self.logger.warning("No result from DAG validation query")
+                        time.sleep(interval)
+                        continue
 
-            except Exception as error:
-                self.logger.error(f"Error validating DAGs: {error}")
-            finally:
-                self._close_cursor(cursor)
+                    valid_dag_records = cursor.fetchall()
+                    valid_db_dags = {record[0] for record in valid_dag_records}
+                    invalid_dags = set(memory_dag_ids) - valid_db_dags
+
+                    if invalid_dags:
+                        self.logger.info(
+                            f"Found {len(invalid_dags)} invalid DAGs in memory"
+                        )
+                        for dag_id in invalid_dags:
+                            self._remove_dag_from_memory(
+                                dag_id, "no longer active or deleted in database"
+                            )
+                    else:
+                        self.logger.debug("All DAGs in memory are still valid")
+
+                except Exception as error:
+                    self.logger.error(f"Error validating DAGs: {error}")
+                finally:
+                    self._close_cursor(cursor)
             time.sleep(interval)
         self.logger.debug(f"DAG sync polling stopped")
 

@@ -272,15 +272,16 @@ class PostgresqlMixin:
         return None
 
     def _table_exists(self) -> bool:
-        cursor = None
-        try:
-            cursor = self._execute_sql_gracefully(
-                "SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name=%s)",
-                (self.table,), return_cursor=True
-            )
-            return cursor.fetchall()[0][0]
-        finally:
-            self._close_cursor(cursor)
+        with self:
+            cursor = None
+            try:
+                cursor = self._execute_sql_gracefully(
+                    "SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name=%s)",
+                    (self.table,), return_cursor=True
+                )
+                return cursor.fetchall()[0][0]
+            finally:
+                self._close_cursor(cursor)
 
     def _execute_sql_gracefullyX(
             self,
@@ -375,12 +376,12 @@ class PostgresqlMixin:
 
                 self.logger.warning(f"Connection closed, retrying ({attempt + 1}/{max_retries})")
                 conn = self._get_fresh_connection()
-
             except Exception as error:
                 self.logger.error(f"SQL error: {error}")
                 self._safe_rollback(conn)
                 self._close_cursor(cursor)
                 raise
+        return None
 
     def _safe_rollback(self, conn):
         """Rollback without raising on closed connections."""
