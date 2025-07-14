@@ -1281,48 +1281,47 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         connection = None
         cursor = None
 
+        # important that we use new connection for each job submission
         try:
-            # important that we use new connection for each job submission
-            try:
-                # insert the DAG, we will serialize the DAG to JSON and Pickle
-                # this will allow us to re-create the DAG from the database without having to re-plan the DAG
-                json_serialized_dag = query_plan_dag.model_dump()
-                connection = self._get_connection()
+            # insert the DAG, we will serialize the DAG to JSON and Pickle
+            # this will allow us to re-create the DAG from the database without having to re-plan the DAG
+            json_serialized_dag = query_plan_dag.model_dump()
+            connection = self._get_connection()
+            cursor = self._execute_sql_gracefully(
+                insert_dag(DEFAULT_SCHEMA, dag_id, dag_name, json_serialized_dag),
+                connection=connection,
+                return_cursor=True,
+            )
+            # we will use the cursor to get the new dag id but it should be the same as dag_id
+            new_dag_key = (
+                result[0] if cursor and (result := cursor.fetchone()) else None
+            )
+            self.logger.info(f"DAG inserted with ID: {new_dag_key}")
+            self._close_cursor(cursor)
+
+            for i, dag_work_info in enumerate(topological_sorted_nodes):
                 cursor = self._execute_sql_gracefully(
-                    insert_dag(DEFAULT_SCHEMA, dag_id, dag_name, json_serialized_dag),
+                    insert_job(
+                        DEFAULT_SCHEMA,
+                        dag_work_info,
+                    ),
                     connection=connection,
                     return_cursor=True,
                 )
-                # we will use the cursor to get the new dag id but it should be the same as dag_id
-                new_dag_key = (
-                    result[0] if cursor and (result := cursor.fetchone()) else None
-                )
-                self.logger.info(f"DAG inserted with ID: {new_dag_key}")
+                new_dag_key = cursor is not None and cursor.rowcount > 0
+                if i == 0:
+                    new_key_added = new_dag_key
+
                 self._close_cursor(cursor)
 
-                for i, dag_work_info in enumerate(topological_sorted_nodes):
-                    cursor = self._execute_sql_gracefully(
-                        insert_job(
-                            DEFAULT_SCHEMA,
-                            dag_work_info,
-                        ),
-                        connection=connection,
-                        return_cursor=True,
-                    )
-                    new_dag_key = cursor is not None and cursor.rowcount > 0
-                    if i == 0:
-                        new_key_added = new_dag_key
+            return new_key_added, new_dag_key
 
-                    self._close_cursor(cursor)
-
-                return new_key_added, new_dag_key
-
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error creating job: {error}")
-                raise ValueError(
-                    f"Job creation for submission_id {submission_id} failed. "
-                    f"Please check the logs for more information. {error}"
-                )
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error creating job: {error}")
+            raise ValueError(
+                f"Job creation for submission_id {submission_id} failed. "
+                f"Please check the logs for more information. {error}"
+            )
         finally:
             self._close_cursor(cursor)
             self._close_connection(connection)
@@ -1817,8 +1816,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             conn = None
 
             try:
-                conn = self._get_connection()
-
                 if not self.active_dags:
                     self.logger.debug("No active DAGs in memory to validate")
                     time.sleep(interval)
@@ -1833,11 +1830,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     WHERE id IN ({placeholders}) AND state = 'active'
                 """
 
-                cursor = self._execute_sql_gracefully(
-                    query, memory_dag_ids, return_cursor=True, connection=conn
-                )
+                conn = self._get_connection()
+                cursor = self._execute_sql_gracefully(query, memory_dag_ids, return_cursor=True, connection=conn)
                 if not cursor:
                     self.logger.warning("No result from DAG validation query")
+                    self._close_connection(conn)
                     time.sleep(interval)
                     continue
 
@@ -1877,9 +1874,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         import json
         import select
 
-        conn = self._get_connection()
+        conn = None
         cur = None
         try:
+            conn = self._get_connection()
             conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
             cur = conn.cursor()
             cur.execute("LISTEN dag_state_changed;")

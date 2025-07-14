@@ -96,6 +96,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         cursor = None
         conn = None
         try:
+            conn = self._get_connection()
             query = f"SELECT key, value FROM {self.table} WHERE key = '{key.decode()}'  AND namespace = '{namespace.decode()}' AND is_deleted = FALSE"
             cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True, connection=conn)
             result = cursor.fetchone()
@@ -150,7 +151,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         try:
             conn = self._get_connection()
             query = insert_q + upsert_q if overwrite else insert_q
-            cursor = self._execute_sql_gracefully(query, return_cursor=True, connection = conn)
+            cursor = self._execute_sql_gracefully(query, return_cursor=True, connection=conn)
 
             if cursor is None:
                 return 0
@@ -178,7 +179,8 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             conn = None
 
             try:
-                cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True, connection = conn)
+                conn = self._get_connection()
+                cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True, connection=conn)
                 if cursor is not None:
                     return 1
             finally:
