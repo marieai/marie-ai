@@ -1677,7 +1677,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.error(f"Error completing job: {error}")
         finally:
             self._close_cursor(cursor)
-            self.close_connection(conn)
+            self._close_connection(conn)
 
     async def fail(
         self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
@@ -1705,7 +1705,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.error(f"Error completing failed job: {error}")
         finally:
             self._close_cursor(cursor)
-            self.close_connection(conn)
+            self._close_connection(conn)
 
     async def _sync(self):
         """
