@@ -81,7 +81,8 @@ class PostgresqlMixin:
         """Return connection to pool """
         try:
             # restore it to the pool
-            self.postgreSQL_pool.putconn(connection)
+            if connection:
+                self.postgreSQL_pool.putconn(connection)
         except Exception as e:
             self.logger.warning(f"Error returning connection to pool: {e}")
             try:
@@ -96,14 +97,6 @@ class PostgresqlMixin:
                 cursor.close()
         except Exception as e:
             pass
-
-    def _get_connectionXX(self):
-        # by default psycopg2 is not auto-committing
-        # this means we can have rollbacks
-        # and maintain ACID-ity
-        connection = self.postgreSQL_pool.getconn()
-        connection.autocommit = False
-        return connection
 
     def _get_connection(self):
         """
@@ -272,55 +265,18 @@ class PostgresqlMixin:
 
     def _table_exists(self) -> bool:
         cursor = None
+        conn = None
         try:
+            conn = self._get_connection()
             cursor = self._execute_sql_gracefully(
                 "SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name=%s)",
-                (self.table,), return_cursor=True
+                (self.table,),
+                return_cursor=True,
+                connection = conn
             )
             return cursor.fetchall()[0][0]
         finally:
             self._close_cursor(cursor)
-
-    def _execute_sql_gracefullyX(
-            self,
-            statement: object,
-            data: object = tuple(),
-            *,
-            named_cursor_name: Optional[str] = None,
-            itersize: Optional[int] = 10000,
-            connection: Optional[psycopg2.extensions.connection] = None,
-            max_retries: int = 3,
-    ) -> psycopg2.extras.DictCursor | None:
-        conn = connection or self.connection
-
-        for attempt in range(max_retries):
-            try:
-                cursor = conn.cursor(named_cursor_name,
-                                     cursor_factory=psycopg2.extras.RealDictCursor) if named_cursor_name else conn.cursor(
-                    cursor_factory=psycopg2.extras.RealDictCursor)
-                if named_cursor_name:
-                    cursor.itersize = itersize
-                cursor.execute(statement, data if data else statement)
-                conn.commit()
-
-                return cursor
-
-            except psycopg2.InterfaceError as error:
-                if "connection already closed" not in str(error):
-                    self._safe_rollback(conn)
-                    raise
-
-                # Connection closed - try to get new one
-                if connection is not None or attempt == max_retries - 1:
-                    raise  # Can't retry external connections or last attempt
-
-                self.logger.warning(f"Connection closed, retrying ({attempt + 1}/{max_retries})")
-                conn = self._get_fresh_connection()
-
-            except Exception as error:
-                self.logger.error(f"SQL error: {error}")
-                self._safe_rollback(conn)
-                raise
 
     def _execute_sql_gracefully(
             self,
@@ -380,6 +336,7 @@ class PostgresqlMixin:
                 self._safe_rollback(conn)
                 self._close_cursor(cursor)
                 raise
+        return None
 
     def _safe_rollback(self, conn):
         """Rollback without raising on closed connections."""
