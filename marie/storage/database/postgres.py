@@ -36,10 +36,11 @@ class PostgresqlMixin:
             password = config["password"]
             database = config["database"]
             max_connections = int(config.get("max_connections", 10))
+            min_connections = int(config.get("min_connections", 1))
 
             # ThreadedConnectionPool
             self.postgreSQL_pool = psycopg2.pool.ThreadedConnectionPool(
-                1,
+                min_connections,
                 max_connections,
                 user=username,
                 password=password,
@@ -88,6 +89,7 @@ class PostgresqlMixin:
             try:
                 connection.close()
             except:
+                self.logger.warning(f"Error closing connection: {e}")
                 pass  # Connection might already be closed
 
     def _close_cursor(self, cursor):
