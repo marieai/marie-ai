@@ -94,9 +94,11 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             namespace = b"DEFAULT"
 
         cursor = None
+        conn = None
         try:
+            conn = self._get_connection()
             query = f"SELECT key, value FROM {self.table} WHERE key = '{key.decode()}'  AND namespace = '{namespace.decode()}' AND is_deleted = FALSE"
-            cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True)
+            cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True, connection=conn)
             result = cursor.fetchone()
 
             if result and (result[0] is not None):
@@ -104,6 +106,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             return None
         finally:
             self._close_cursor(cursor)
+            self._close_connection(conn)
 
     async def internal_kv_multi_get(
         self,
@@ -142,16 +145,20 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             DO 
             UPDATE SET value = '{value.decode()}', updated_at = current_timestamp
         """
+
         cursor = None
+        conn = None
         try:
+            conn = self._get_connection()
             query = insert_q + upsert_q if overwrite else insert_q
-            cursor = self._execute_sql_gracefully(query, return_cursor=True)
+            cursor = self._execute_sql_gracefully(query, return_cursor=True, connection=conn)
 
             if cursor is None:
                 return 0
             return cursor.rowcount
         finally:
             self._close_cursor(cursor)
+            self._close_connection(conn)
 
     async def internal_kv_del(
         self,
@@ -169,13 +176,16 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         else:
             query = f"DELETE FROM {self.table} WHERE key = '{key.decode()}' AND namespace = '{namespace.decode()}'"
             cursor = None
+            conn = None
 
             try:
-                cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True)
+                conn = self._get_connection()
+                cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True, connection=conn)
                 if cursor is not None:
                     return 1
             finally:
                 self._close_cursor(cursor)
+                self._close_connection(conn)
 
         return 0
 
@@ -190,28 +200,33 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         if namespace is None:
             namespace = b"DEFAULT"
         result = []
-        with self:
-            cursor = None
-            try:
-                query = f"SELECT key  FROM {self.table} WHERE  namespace = '{namespace.decode()}' AND is_deleted = FALSE"
-                cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True)
 
-                for record in cursor:
-                    result.append(record[0])
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error executing sql statement: {error}")
-            finally:
-                self._close_cursor(cursor)
+        cursor = None
+        conn = None
+        try:
+            conn = self._get_connection()
+            query = f"SELECT key  FROM {self.table} WHERE  namespace = '{namespace.decode()}' AND is_deleted = FALSE"
+            cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True, connection=conn)
+
+            for record in cursor:
+                result.append(record[0])
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error executing sql statement: {error}")
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
         return result
 
     def internal_kv_reset(self) -> None:
         self.logger.info(f"internal_kv_reset : {self.table}")
-
-        self._execute_sql_gracefully(f"DROP TABLE IF EXISTS {self.table}")
-        self._execute_sql_gracefully(f"DROP TABLE IF EXISTS {self.table}_history")
-        self._execute_sql_gracefully(
-            f"DROP FUNCTION IF EXISTS log_changes_{self.table} CASCADE"
-        )
+        conn = None
+        try:
+            conn = self._get_connection()
+            self._execute_sql_gracefully(f"DROP TABLE IF EXISTS {self.table}", connection=conn)
+            self._execute_sql_gracefully(f"DROP TABLE IF EXISTS {self.table}_history", connection=conn)
+            self._execute_sql_gracefully(f"DROP FUNCTION IF EXISTS log_changes_{self.table} CASCADE", connection=conn)
+        finally:
+            self._close_connection(conn)
 
     def debug_info(self) -> str:
         return "PostgreSQLKV"
