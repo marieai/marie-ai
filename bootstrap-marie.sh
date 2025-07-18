@@ -1,4 +1,3 @@
-
 #!/bin/bash
 set -e
 
@@ -18,7 +17,11 @@ COMPOSE_FILES=(
     "./Dockerfiles/docker-compose.extract.yml"
     "./Dockerfiles/docker-compose.litellm.yml"
 )
-ENV_FILE="./config/.env.dev"
+
+COMPOSE_ADDITIONAL_FILES="${COMPOSE_ADDITIONAL_FILES:-}"  # may be overwritten by CLI flag
+
+# ENV_FILE can come from env or CLI; default path below
+ENV_FILE="${ENV_FILE:-./config/.env.dev}"
 
 DEPLOY_GATEWAY=${DEPLOY_GATEWAY:-true}
 DEPLOY_EXTRACT=${DEPLOY_EXTRACT:-true}
@@ -28,6 +31,19 @@ DEPLOY_LITELLM=${DEPLOY_LITELLM:-true}
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}    Marie-AI System Bootstrap${NC}"
 echo -e "${BLUE}========================================${NC}"
+
+# Append any extra compose files provided via ENV/CLI
+append_additional_compose_files() {
+    IFS=',' read -ra ADDITIONAL_FILES <<< "$COMPOSE_ADDITIONAL_FILES"
+    for file in "${ADDITIONAL_FILES[@]}"; do
+        if [ -n "$file" ] && [ -f "$file" ]; then
+            COMPOSE_FILES+=("$file")
+            echo -e "${GREEN}✔ Added additional compose file: $file${NC}"
+        elif [ -n "$file" ]; then
+            echo -e "${YELLOW}⚠ Missing additional compose file: $file (skipped)${NC}"
+        fi
+    done
+}
 
 # Function to handle orphan removal based on environment
 get_orphan_flag() {
@@ -536,6 +552,14 @@ show_service_endpoints() {
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --env-file)
+                ENV_FILE="$2"
+                shift 2
+                ;;
+            --additional-files)
+                COMPOSE_ADDITIONAL_FILES="$2"
+                shift 2
+                ;;
             --stop-all)
                 stop_all_services
                 exit 0
@@ -592,6 +616,8 @@ show_help() {
     echo "Usage: $0 [options]"
     echo ""
     echo "Options:"
+    echo "  --env-file PATH       Path to .env file (default: ./config/.env.dev)"
+    echo "  --additional-files    FILE1.yml[,FILE2.yml]  Extra docker‑compose files to include"
     echo "  --stop-all            Stop and remove all Marie-AI services and containers"
     echo "  --no-gateway          Skip gateway deployment"
     echo "  --no-extract          Skip extract executor deployment"
@@ -618,6 +644,7 @@ show_help() {
 main() {
     parse_args "$@"
 
+    append_additional_compose_files
     show_deployment_config
     validate_environment
     validate_compose_files

@@ -1,143 +1,187 @@
+```text
+ ██████   ██████   █████████   ███████████   █████ ██████████              █████████   █████      /\   /\   
+░░██████ ██████   ███░░░░░███ ░░███░░░░░███ ░░███ ░░███░░░░░█             ███░░░░░███ ░░███      //\\_//\\     ____
+ ░███░█████░███  ░███    ░███  ░███    ░███  ░███  ░███  █ ░             ░███    ░███  ░███      \_     _/    /   /
+ ░███░░███ ░███  ░███████████  ░██████████   ░███  ░██████    ██████████ ░███████████  ░███       / * * \    /^^^]
+ ░███ ░░░  ░███  ░███░░░░░███  ░███░░░░░███  ░███  ░███░░█   ░░░░░░░░░░  ░███░░░░░███  ░███       \_\O/_/    [   ] 
+ ░███      ░███  ░███    ░███  ░███    ░███  ░███  ░███ ░   █            ░███    ░███  ░███        /   \_    [   /
+ █████     █████ █████   █████ █████   █████ █████ ██████████            █████   █████ █████       \     \_  /  /
+░░░░░     ░░░░░ ░░░░░   ░░░░░ ░░░░░   ░░░░░ ░░░░░ ░░░░░░░░░░            ░░░░░   ░░░░░ ░░░░░        [ [ /  \/ _/
+```
+
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+
 # Marie-AI
 
-Integrate AI-powered document pipeline into your applications
+Marie-AI is an **Agentic Document Intelligence Platform**. It orchestrates a network of autonomous, specialized AI agents—each responsible for tasks like OCR, classification, NER, and document transformation—delivering robust, scalable, and extensible document understanding for modern enterprise needs.
 
-## Documentation
+---
 
-See the [MarieAI docs](https://docs.marieai.co).
+## 🚀 Quick Start
 
-## Installation
+For the fastest way to try Marie-AI, see our [Quick Start Guide](./bootstrap.md).
 
-You don't need this source code unless you want to modify the package. If you just
-want to use the package, just run:
+---
 
+## Orchestrating Intelligence
+
+Marie-AI leverages an agentic design to deliver:
+- **Autonomous Agents:** Modular executors act as agents, each with clear responsibilities.
+- **Composable Workflows:** Agents are orchestrated and dynamically routed based on your goals.
+- **Extensible & Modular:** Easily add, swap, or customize agents for new workflows.
+- **Goal-Driven Automation:** Instruct Marie-AI with high-level objectives and let agents handle the execution.
+
+> **Marie-AI brings the next generation of agentic AI to document processing and intelligence!**
+
+---
+
+## 🚀 Features
+
+- **Agent-based Architecture:** Modular executors/agents for OCR, classification, NER, transformation, and more.
+- **End-to-End Automation:** From ingestion to extraction and delivery, with minimal human intervention.
+- **Job Scheduling & SLAs:** Advanced job orchestration with support for **soft and hard Service Level Agreements**.
+- **DAG-Driven Execution:** Workflows and jobs are managed as Directed Acyclic Graphs (DAGs) for dependency-aware, parallel, and fault-tolerant execution.
+- **Flexible Deployment:** Use as a Python package, Docker container, or standalone service.
+- **CLI Utility:** `marie` command-line tool for streamlined local or remote processing.
+- **Production Hardened:** Robust release/versioning, CI/CD, observability, and telemetry.
+
+---
+
+## 🏥 Real-World Usage: Document Extraction from Unstructured Data
+
+Marie-AI excels at extracting structured information from unstructured or semi-structured documents across diverse industries, including:
+
+- **Healthcare:** Extract patient data, clinical findings, and insurance details from forms, medical records, and lab reports.
+- **Legal:** Parse contracts, agreements, and case documents for entity extraction, clause identification, and compliance checks.
+- **Real Estate:** Digitize and extract fields from deeds, lease agreements, mortgage forms, and appraisals.
+- **Finance:** Automate extraction from invoices, receipts, KYC documents, and bank statements.
+- **Government/Education:** Process applications, certificates, and official records at scale.
+
+Whether your data lives in scans, PDFs, or complex document batches, Marie-AI’s agentic pipeline automates the end-to-end process: OCR, classification, entity extraction, table/form detection, and custom business logic.
+
+---
+
+## 🔗 Model Support & LLM Integration
+
+Marie-AI works seamlessly with a variety of language models:
+
+- **Off-the-shelf LLMs:** Instantly connect to state-of-the-art models such as GPT, T5, BERT, and more for fast setup and broad generalization.
+- **Fine-tuned/Custom LLMs:** Easily integrate your own or third-party fine-tuned models to enable domain-specific extraction, reasoning, and compliance—perfect for specialized use cases in healthcare, legal, real estate, and beyond.
+- **Plug-and-play architecture:** Swap models or orchestrate multiple agents powered by different LLMs within a single workflow, ensuring flexibility as your needs and the LLM landscape evolve.
+
+With Marie-AI, your document intelligence pipeline can adapt to the latest advances in large language models—whether you need generic understanding or highly specialized, compliant extraction.
+
+---
+
+## ⏱️ Job Scheduling, SLAs, and DAGs
+
+Marie-AI includes a production-grade job scheduling subsystem for managing and orchestrating document processing workflows at scale.
+
+- **Job Scheduler:** Schedule, enqueue, and monitor jobs with support for immediate or delayed execution.
+- **SLA Management:** Define **soft** and **hard** SLAs per job or workflow, ensuring deadline-driven execution and automatic escalation or retries.
+- **DAG Workflows:** Jobs are executed as **Directed Acyclic Graphs (DAGs)**, allowing complex dependency management, parallel step execution, and robust error handling. Each node in the DAG can represent an agent or processing step.
+- **Policies & Retry:** Fine-grained control over job policies, priority, backoff strategies, and retries.
+- **Monitoring:** Real-time state tracking for all jobs and DAGs, with SQL and API interfaces for querying job status, logs, and history.
+
+> *Example:*
+> - Submit a batch extraction job as a DAG. The scheduler will coordinate all dependent steps, track their state, and enforce SLA requirements.
+> - Use SQL or API to monitor progress and handle maintenance (pause, stop, restart, or purge jobs).
+
+---
+
+## 📚 Documentation
+
+See [**docs.marieai.co**](https://docs.marieai.co) for full guides and advanced usage.
+
+---
+
+## 💾 Installation
+
+**Stable release via PyPI:**
 ```sh
 pip install --upgrade marieai
 ```
 
-Install from source with:
-
+**From source:**
 ```sh
 pip install -e .
 ```
 
-Build docker container:
-
+**Docker:**
 ```sh
-DOCKER_BUILDKIT=1 docker build . --build-arg PIP_TAG="standard" -f ./Dockerfiles/gpu.Dockerfile  -t marieai/marie:3.0-cuda 
+DOCKER_BUILDKIT=1 docker build . --build-arg PIP_TAG="standard" -f ./Dockerfiles/gpu.Dockerfile -t marieai/marie:3.0-cuda
 ```
-
-## Command-line interface
-
-This library additionally provides an `marie` command-line utility which makes it easy to interact with the API 
-from your terminal. Run `marie -h` for usage.
-
-## Example code
-
-Examples of how to use this library to accomplish various tasks can be found in the MarieAI documentation. 
-It contains code examples for:
-
-* Document cleanup
-* Optical character recognition (OCR)
-* Document Classification
-* Document Splitter
-* Named Entity Recognition
-* Form detection
-* And more
-
-
-## Run with default entrypoint
-
-```shell
-docker run --rm  -it marieai/marie:3.0.19-cuda
-```
-
-## Run the server with custom entrypoint
-
-```shell
-docker run --rm  -it --entrypoint /bin/bash  marieai/marie:4.0.0-cuda
-[extra-requirements.txt-CUDA](extra-requirements.txt-CUDA)
-marie server --start --uses sample.yml  
-```
-
-## Telemetry
-https://telemetry.marieai.co/
-
-TODO :MOVE TO DOCS
-
-# S3 Cloud Storage
-```shell
-docker compose -f  docker-compose.s3.yml --project-directory . up  --build --remove-orphans
-```
-
-CrossFTP
-
-
-## Configure AWS CLI Credentials.
-
-```shell
-vi ~/.aws/credentials
-[marie] # this should be in the file
-aws_access_key_id=your_access_key_id
-aws_secret_access_key=your_secret_access_key
-```
-
- 
-
-## Pull the Docker image.
-
-```shell
-docker pull zenko/cloudserver
-```
-
-## Create and start the container.
-
-
+Or pull an official image:
 ```sh
-docker run --rm -it --name marie-s3-server -p 8000:8000 \
--e SCALITY_ACCESS_KEY_ID=MARIEACCESSKEY \
--e SCALITY_SECRET_ACCESS_KEY=MARIESECRETACCESSKEY \
--e S3DATA=multiple \
--e S3BACKEND=mem zenko/cloudserver
+docker pull marieai/marie:latest
 ```
 
-```
-SCALITY_ACCESS_KEY_ID : Your AWS ACCESS KEY 
-SCALITY_SECRET_ACCESS_KEY: Your AWS SECRET ACCESS KEY 
-S3BACKEND: Currently using memory storage
-```
+---
 
-## Verify Installation.
+## 🛠️ Quick Start
 
-```shell
-aws s3 mb s3://mybucket  --profile marie --endpoint-url http://localhost:8000 --region us-west-2
+Run with default entrypoint:
+```sh
+docker run --rm -it marieai/marie:3.0.19-cuda
 ```
 
-```shell
-aws s3 ls --profile marie --endpoint-url http://localhost:8000
+Run server with custom entrypoint:
+```sh
+docker run --rm -it --entrypoint /bin/bash marieai/marie:3.0.30-cuda
+marie server --start --uses sample.yml
 ```
 
-```shell
-aws s3 cp some_file.txt s3://mybucket  --profile marie --endpoint-url http://localhost:8000
+---
+
+## 🖥️ Command-Line Interface
+
+Interact with the API from your terminal:
+```sh
+marie -h
 ```
 
+---
 
-```shell
-aws s3 --profile marie --endpoint-url=http://127.0.0.1:8000 ls --recursive s3://
-```
+## 🔥 Example Use Cases
 
-Remove files from the bucket
-```shell
-aws s3 rm  s3://marie --recursive --profile marie --endpoint-url http://localhost:8000
-```
+- Autonomous document cleanup and OCR
+- Agent-driven document classification and splitting
+- Named Entity Recognition (NER) as an agent
+- Form and table detection
+- Custom agent pipeline composition
 
-```shell
-aws s3 rb s3://mybucket --profile marie --endpoint-url http://localhost:8000
-```
+See [MarieAI docs](https://docs.marieai.co) for full code samples and advanced scenarios.
 
-# Production setup
+---
+
+## 🔄 Release & Versioning
+
+Marie is released via PyPI and Docker Hub. See [RELEASE.md](RELEASE.md) for details on versioning, release cycles, and manual release workflows.
+
+---
+
+## 📝 Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for coding standards, naming conventions, and how to get started. Please open issues or pull requests for bugs, feature requests, or documentation improvements.
+
+---
+
+## 📰 Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a summary of recent changes and new features.
+
+---
+
+## 📄 License
+
+Marie-AI is [Apache 2.0 licensed](LICENSE).
+
+---
+
+## 🙏 Credits
+
+This project uses and builds upon many open source components. See [NOTICE](NOTICE) for details.
+
+---
 
 
-Configuration for the S3 server will be stored in the following files:
-https://towardsdatascience.com/10-lessons-i-learned-training-generative-adversarial-networks-gans-for-a-year-c9071159628
