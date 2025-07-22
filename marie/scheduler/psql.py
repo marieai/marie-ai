@@ -653,8 +653,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if current_time - ts > ACTIVATION_TIMEOUT:
                     recently_activated_dags.remove((dag_id, ts))
 
-        dag_id = None
+        dag_id = None  # this is the last dag_id that was processed
         max_concurrent_dags = self.max_concurrent_dags
+
         while self.running:
             try:
                 self.logger.debug(
@@ -701,9 +702,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     flat_jobs.append((ep, wi))
 
                 cleanup_recently_activated_dags()
-                recently_activated_dag_ids = set(
-                    dag_id for dag_id, _ in recently_activated_dags
-                )
+                recently_activated_dag_ids = set(d for d, _ in recently_activated_dags)
+
                 flat_jobs = self.execution_planner.plan(
                     flat_jobs,
                     slots_by_executor,
@@ -739,6 +739,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     dag = self.get_dag_by_id(dag_id)
 
                     if dag is None:
+                        self._remove_dag_from_memory(dag_id, "DAG not found: {dag_id}")
                         raise ValueError(f"DAG not found: {dag_id}")
 
                     if dag_id not in self.active_dags:
@@ -796,18 +797,35 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.logger.error("Poll loop exception", exc_info=True)
                 failures += 1
 
-                self._remove_dag_from_memory(
-                    dag_id, "no longer active or deleted in database"
-                )
+                self._remove_dag_from_memory(dag_id, "poll loop exception ")
 
                 if failures >= 5:
                     self.logger.warning("Too many failures — entering cooldown")
                     await asyncio.sleep(60)
                     failures = 0
+                    # TODO : Fire ENGINE FAILURE NOTIFICATION
 
-    async def debug_work_plans(self, flat_jobs, records_by_queue):
-        # Debug: Write the flat jobs plan to a file
-        from datetime import datetime
+    async def debug_work_plans(
+        self,
+        flat_jobs: list[Tuple[str, WorkInfo]],
+        records_by_queue: dict[str, list[Any]],
+    ) -> None:
+        """
+        Debugs and writes work plans involving queues and job details to a file if the
+        environment variable `MARIE_DEBUG_QUERY_PLAN` is set.
+
+        :param flat_jobs: A collection of jobs and their associated work information
+            represented as a list of tuples. Each tuple contains an entry point and
+            its corresponding work details.
+        :param records_by_queue: A dictionary mapping queue names to the list of records
+            associated with each queue.
+        :return: None if the debug operation completes. If the environment variable
+            `MARIE_DEBUG_QUERY_PLAN` is not set, the function immediately returns without
+            performing any operation.
+        """
+
+        if "MARIE_DEBUG_QUERY_PLAN" not in os.environ:
+            return
 
         os.makedirs("/tmp/marie/plans", exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1700,6 +1718,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     [job_id],
                     {"on_complete": "failed", **(output_metadata or {})},
                 ),
+                return_cursor=True,
                 connection=conn,
             )
             counts = cursor.fetchone()[0]
