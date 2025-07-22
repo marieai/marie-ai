@@ -653,6 +653,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if current_time - ts > ACTIVATION_TIMEOUT:
                     recently_activated_dags.remove((dag_id, ts))
 
+        dag_id = None
         max_concurrent_dags = self.max_concurrent_dags
         while self.running:
             try:
@@ -794,6 +795,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             except Exception as e:
                 self.logger.error("Poll loop exception", exc_info=True)
                 failures += 1
+
+                self._remove_dag_from_memory(
+                    dag_id, "no longer active or deleted in database"
+                )
+
                 if failures >= 5:
                     self.logger.warning("Too many failures — entering cooldown")
                     await asyncio.sleep(60)
