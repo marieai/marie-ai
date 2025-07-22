@@ -36,10 +36,12 @@ class PostgresqlMixin:
             password = config["password"]
             database = config["database"]
             max_connections = int(config.get("max_connections", 10))
+            min_connections = int(config.get("min_connections", 1))
+            application_name = config.get("application_name", "marie_scheduler")
 
             # ThreadedConnectionPool
             self.postgreSQL_pool = psycopg2.pool.ThreadedConnectionPool(
-                1,
+                min_connections,
                 max_connections,
                 user=username,
                 password=password,
@@ -50,7 +52,7 @@ class PostgresqlMixin:
                 # HINT:  Available values: serializable, repeatable read, read committed, read uncommitted.
                 **{
                     # 'options': "-c default_transaction_isolation=read committed",
-                    'application_name': 'marie_scheduler'
+                    'application_name': application_name
                 }
             )
 
@@ -88,6 +90,7 @@ class PostgresqlMixin:
             try:
                 connection.close()
             except:
+                self.logger.warning(f"Error closing connection: {e}")
                 pass  # Connection might already be closed
 
     def _close_cursor(self, cursor):
@@ -277,6 +280,7 @@ class PostgresqlMixin:
             return cursor.fetchall()[0][0]
         finally:
             self._close_cursor(cursor)
+            self._close_connection(conn)
 
     def _execute_sql_gracefully(
             self,
