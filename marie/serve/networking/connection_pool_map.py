@@ -2,7 +2,6 @@ import os
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 from marie.logging_core.logger import MarieLogger
-from marie.serve.networking import LoadBalancer
 from marie.serve.networking.instrumentation import (
     _NetworkingHistograms,
     _NetworkingMetrics,
@@ -28,7 +27,6 @@ class _ConnectionPoolMap:
         tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
         channel_options: Optional[list] = None,
         load_balancer_type: Optional[str] = "round_robin",
-        load_balancer: Optional[LoadBalancer] = None,
     ):
         self._logger = logger
         # this maps deployments to shards or heads
@@ -45,7 +43,6 @@ class _ConnectionPoolMap:
         self.tracing_client_interceptor = tracing_client_interceptor
         self.channel_options = channel_options
         self.load_balancer_type = load_balancer_type
-        self.load_balancer = load_balancer
 
     def add_replica(self, deployment: str, shard_id: int, address: str):
         self._add_connection(deployment, shard_id, address, "shards")
@@ -150,7 +147,6 @@ class _ConnectionPoolMap:
                 deployment_name=deployment,
                 channel_options=self.channel_options,
                 load_balancer_type=self.load_balancer_type,
-                load_balancer=self.load_balancer,
             )
             self._deployments[deployment][type][entity_id] = connection_list
 

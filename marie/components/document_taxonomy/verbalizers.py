@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from marie.logging_core.predefined import default_logger as logger
 from marie.utils.overlap import merge_bboxes_as_block
 
 
@@ -181,13 +182,14 @@ def _quantize(values, n=99):
     Takes a list of values and returns the returns a list of buckets
     after quantizing the values to n buckets
     """
-    if not values:
-        return []  # Return an empty list if input is empty
-
     min_value = min(values)
     max_value = max(values)
     bucket_width = (max_value - min_value) / n
     bucket_indices = []
+
+    if bucket_width == 0:  # Avoid division by zero
+        bucket_width = 1
+
     for value in values:
         index = int(
             (value - min_value) / bucket_width
@@ -205,7 +207,7 @@ def normalize_box(box, width, height):
     ]
 
 
-def normalize_and_quantize(metadata):
+def normalize_and_quantize(metadata: Dict) -> tuple:
     """
     Normalize and quantize the bounding boxes in the metadata
     """
@@ -224,7 +226,7 @@ def normalize_and_quantize(metadata):
         actual_box = [x, y, x + w, y + h]
         actual_boxes.append(actual_box)
 
-    # finally, normalize the bounding boxes
+    # normalize the bounding boxes
     normalized_boxes = []
     for box in actual_boxes:
         normalized_box = normalize_box(box, image_width, image_height)
@@ -232,7 +234,8 @@ def normalize_and_quantize(metadata):
         y_mid = (normalized_box[1] + normalized_box[3]) / 2
         normalized_boxes.append([x_mid, y_mid])
 
-    print(normalized_boxes)
+    if len(normalized_boxes) == 0:
+        return [], [], []
 
     xs = _quantize([int(x[0]) for x in normalized_boxes])
     ys = _quantize([int(x[1]) for x in normalized_boxes])
@@ -259,63 +262,94 @@ def verbalizers_LMDX(metadata):
     return lines
 
 
-def verbalizers_SPATIAL_FORMAT(metadata):
+def verbalizers_SPATIAL_FORMAT(metadata, min_spacing=2, target_columns=160):
     """
-    SpatialFormat Uses the geometries to restore the original document layout via insertion of spaces and newlines.
-    To this end, the characters are placed on a grid such that their spatial location is similar to that on the document
-    https://arxiv.org/pdf/2402.09841v1
+    Aligns words using quantized grid with:
+    - Dynamic char width
+    - Global column compression
+    - Whole-word block placement
     """
-    lines = copy.deepcopy(metadata["lines"])
     words = metadata["words"]
-
     meta = metadata["meta"]["imageSize"]
     width = meta["width"]
-    height = meta["height"]
 
-    char_width = 8.44
-    cols = ceil(width // char_width)
+    # character width estimation
+    word_widths = [w["box"][2] for w in words if len(w["text"]) > 0]
+    word_lengths = [len(w["text"]) for w in words if len(w["text"]) > 0]
+
+    if word_lengths:
+        avg_char_width = np.mean(word_widths) / np.mean(word_lengths)
+    else:
+        avg_char_width = width / target_columns  # fallback
+
+    char_width = max(4.0, min(avg_char_width, 10.0))
+    max_chars_per_line = ceil(width / char_width)
+    cols = max_chars_per_line
 
     x_space = np.arange(0, width, 1)
-    bins = np.linspace(0, width, cols)
-    bins = np.array(bins).astype(np.int32)
+    bins = np.linspace(0, width, cols).astype(np.int32)
     x_hist = np.digitize(x_space, bins, right=True)
-    max_characters_per_line = ceil(width // char_width)
 
     lines = copy.deepcopy(metadata["lines"])
     xs, ys, normalized_boxes = normalize_and_quantize(metadata)
-    index = 0
 
-    for line, qx, qy in zip(lines, xs, ys):
-        wordids = line[
-            "wordids"
-        ]  # this are Word ID not Indexes, each word is assigned a unique ID when it is created
-        line_bbox_xywh = [int(x) for x in line["bbox"]]
-        x, y, w, h = line_bbox_xywh
+    if len(normalized_boxes) == 0:
+        logger.warning("No normalized boxes found in metadata.")
+        return []
+
+    all_word_positions = []  # Stores [(line_index, grid_index, word)]
+
+    for line_idx, (line, qx, qy, normal_box) in enumerate(
+        zip(lines, xs, ys, normalized_boxes)
+    ):
+        wordids = line["wordids"]
         aligned_words = [w for w in words if w["id"] in wordids]
-        last_space = 0
-        line_buffer = " " * max_characters_per_line
-        SPACES = 4
 
-        for idx, word in enumerate(aligned_words):
-            curr_box = aligned_words[idx]["box"]
+        for word in aligned_words:
+            x, y, w, h = word["box"]
             text = word["text"]
-            x2, y2, w2, h2 = curr_box
-            grid_space = x_hist[x2]
-            spaces = max(
-                1, (grid_space - last_space)
-            )  # Compress each four spaces to one
-            last_space = grid_space + len(
-                text
-            )  # Update last_space to the end of the current word
-            line_buffer = (
-                line_buffer[:last_space] + text + line_buffer[last_space + len(text) :]
-            )
-            # print(f"{grid_space} : {spaces}  > {text}")
 
-        line_buffer = line_buffer.replace(" " * SPACES, " ")
-        line_buffer = line_buffer.rstrip()
-        line["text"] = f"{line_buffer} {qx:02d}|{qy:02d}"
-        index += 1
+            x_clamped = min(x, len(x_hist) - 1)
+            grid_index = x_hist[x_clamped]
+            all_word_positions.append((line_idx, grid_index, text))
+
+    # Column usage
+    column_usage = [0] * max_chars_per_line
+    for _, grid_index, _ in all_word_positions:
+        if grid_index < max_chars_per_line:
+            column_usage[grid_index] += 1
+
+    active_columns = [i for i, count in enumerate(column_usage) if count > 0]
+
+    # column compression map
+    compressed_column_map = {}
+    new_idx = 0
+    for i, col in enumerate(active_columns):
+        compressed_column_map[col] = new_idx
+        next_col = (
+            active_columns[i + 1] if i + 1 < len(active_columns) else col + min_spacing
+        )
+        gap = max(min_spacing, next_col - col)
+        new_idx += gap
+
+    final_line_length = max(compressed_column_map.values()) + 40  # some breathing room
+
+    # compressed lines
+    final_buffers = [[" "] * final_line_length for _ in range(len(lines))]
+
+    for line_idx, grid_index, text in all_word_positions:
+        if grid_index in compressed_column_map:
+            insert_pos = compressed_column_map[grid_index]
+            if insert_pos + len(text) <= final_line_length:
+                target_buffer = final_buffers[line_idx]
+                slice_ = target_buffer[insert_pos : insert_pos + len(text)]
+                if all(c == " " for c in slice_):  # no overlap
+                    for offset, char in enumerate(text):
+                        target_buffer[insert_pos + offset] = char
+
+    for idx, line in enumerate(lines):
+        line["text"] = "".join(final_buffers[idx]).rstrip()
+
     return lines
 
 

@@ -43,6 +43,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry.metrics import Meter
     from prometheus_client import CollectorRegistry, Summary
 
+import asyncio
+import inspect
+
 default_endpoints_proto = jina_pb2.EndpointsProto()
 default_endpoints_proto.endpoints.extend([__default_endpoint__])
 
@@ -71,7 +74,6 @@ class GrpcConnectionPool:
         tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
         channel_options: Optional[list] = None,
         load_balancer_type: Optional[str] = "round_robin",
-        load_balancer: Optional[LoadBalancer] = None,
     ):
         self._logger = logger or MarieLogger(self.__class__.__name__)
         self.channel_options = channel_options
@@ -156,7 +158,6 @@ class GrpcConnectionPool:
             tracing_client_interceptor=self.tracing_client_interceptor,
             channel_options=self.channel_options,
             load_balancer_type=load_balancer_type,
-            load_balancer=load_balancer,
         )
         self._deployment_address_map = {}
 
@@ -185,6 +186,7 @@ class GrpcConnectionPool:
         :param retries: number of retries per gRPC call. If <0 it defaults to max(3, num_replicas)
         :return: list of asyncio.Task items for each send call
         """
+        print('deployment name to send requests to:', deployment)
         results = []
         connections = []
         if polling_type == PollingType.ANY:
@@ -267,6 +269,7 @@ class GrpcConnectionPool:
         :return: asyncio.Task representing the send call
         """
         replicas = self._connections.get_replicas(deployment, head, shard_id)
+        (self._logger.debug(f'found replicas for deployment {deployment}'))
         if replicas:
             result = self._send_requests(
                 requests,
@@ -277,9 +280,13 @@ class GrpcConnectionPool:
                 retries=retries,
                 send_callback=send_callback,
             )
+            if result is None:
+                self._logger.warning(
+                    f"no available connections for deployment {deployment} and shard {shard_id}"
+                )
             return result
         else:
-            self._logger.debug(
+            self._logger.warning(
                 f"no available connections for deployment {deployment} and shard {shard_id}"
             )
             return None
@@ -522,6 +529,14 @@ class GrpcConnectionPool:
 
         return async_generator_wrapper()
 
+    async def _safe_send_callback(self, send_callback, requests, ctx):
+        try:
+            result = send_callback(requests, ctx)
+            if inspect.isawaitable(result):
+                await result
+        except Exception as e:
+            self._logger.error(f"send_callback failed (ignored): {e}")
+
     def _send_requests(
         self,
         requests: List[Request],
@@ -568,19 +583,16 @@ class GrpcConnectionPool:
                 tried_addresses.add(current_connection.address)
                 connections.incr_usage(current_connection.address)
                 try:
-                    if send_callback and callable(send_callback):
-                        try:
-                            send_callback(
-                                requests,
-                                {
-                                    "request_id": requests[0].request_id,
-                                    "address": current_connection.address,
-                                    "deployment": current_connection.deployment_name,
-                                },
-                            )
-                        except Exception as e:
-                            self._logger.error(f"Error in send_callback: {e}")
-
+                    if callable(send_callback):
+                        ctx = {
+                            "request_id": requests[0].request_id,
+                            "address": current_connection.address,
+                            "deployment": current_connection.deployment_name,
+                        }
+                        await self._safe_send_callback(send_callback, requests, ctx)
+                        # asyncio.create_task(
+                        #     self._safe_send_callback(send_callback, requests, ctx)
+                        # )
                     return await current_connection.send_requests(
                         requests=requests,
                         metadata=metadata,

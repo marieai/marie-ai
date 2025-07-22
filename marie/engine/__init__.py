@@ -34,13 +34,13 @@ __MULTIMODAL_MODELS__ = [
 ]
 
 
-def _check_if_multimodal(engine_name: str):
+def check_if_multimodal(engine_name: str):
     mapped_name = MODEL_NAME_MAP.get(engine_name)
     return engine_name in __MULTIMODAL_MODELS__ or mapped_name in __MULTIMODAL_MODELS__
 
 
 def validate_multimodal_engine(engine):
-    if not _check_if_multimodal(engine.model_string):
+    if not check_if_multimodal(engine.model_string):
         raise ValueError(
             f"The engine provided is not multimodal. Please provide a multimodal engine, one of the following: {__MULTIMODAL_MODELS__}"
         )
@@ -60,7 +60,7 @@ def get_engine(engine_name: str, provider: str = 'vllm', **kwargs) -> EngineLM:
         return VLLMEngine(
             system_prompt="You are a helpful assistant for processing documents.",
             model_name=engine_name,
-            is_multimodal=_check_if_multimodal(engine_name),
+            is_multimodal=check_if_multimodal(engine_name),
             cache=False,
             processor_kwargs={  # All parameters will be passed dynamically to the processor
                 'min_pixels': 1 * 28 * 28,

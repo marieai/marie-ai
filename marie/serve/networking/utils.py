@@ -1,3 +1,4 @@
+import asyncio
 import ipaddress
 import os
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
@@ -138,20 +139,28 @@ def send_health_check_sync(
 
 async def send_health_check_async(
     target: str,
-    timeout=99.0,
-    tls=False,
+    timeout: float = 99.0,
+    tls: bool = False,
     root_certificates: Optional[str] = None,
+    max_retries: int = 3,
+    retry_delay: float = 2.0,
 ) -> health_pb2.HealthCheckResponse:
     """
-    Sends a request asynchronously to the target via grpc
-    :param target: where to send the request to, like 126.0.0.1:8080
-    :param timeout: timeout for the send
-    :param tls: if True, use tls encryption for the grpc channel
-    :param root_certificates: the path to the root certificates for tls, only used if tls is True
-    :returns: the response health check
-    """
+    Sends a health check request asynchronously to the target via gRPC.
+    Retries on DEADLINE_EXCEEDED or UNAVAILABLE errors.
 
-    for i in range(2):
+    :param target: Target address like 127.0.0.1:8080
+    :param timeout: gRPC call timeout
+    :param tls: Use TLS
+    :param root_certificates: Root certs path for TLS
+    :param max_retries: Number of retry attempts
+    :param retry_delay: Delay between retries (in seconds)
+    :returns: HealthCheckResponse
+    """
+    health_check_req = health_pb2.HealthCheckRequest()
+    health_check_req.service = ""
+
+    for attempt in range(max_retries):
         try:
             async with get_grpc_channel(
                 target,
@@ -159,13 +168,19 @@ async def send_health_check_async(
                 asyncio=True,
                 root_certificates=root_certificates,
             ) as channel:
-                health_check_req = health_pb2.HealthCheckRequest()
-                health_check_req.service = ""
                 stub = health_pb2_grpc.HealthStub(channel)
                 return await stub.Check(health_check_req, timeout=timeout)
+
         except grpc.RpcError as e:
-            if e.code() != grpc.StatusCode.UNAVAILABLE or i == 1:
-                raise
+            if e.code() in (
+                grpc.StatusCode.DEADLINE_EXCEEDED,
+                grpc.StatusCode.UNAVAILABLE,
+            ):
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                    continue
+            raise
+
         except Exception as e:
             raise e
 

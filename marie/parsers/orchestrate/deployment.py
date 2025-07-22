@@ -3,6 +3,7 @@
 import argparse
 
 from marie.enums import DeploymentRoleType
+from marie.parsers import mixin_discovery_parser
 from marie.parsers.helper import _SHOW_ALL_ARGS, KVAppendAction, add_arg_group
 from marie.parsers.orchestrate.runtimes.remote import _mixin_http_server_parser
 
@@ -57,8 +58,7 @@ def mixin_base_deployment_parser(parser):
         action=KVAppendAction,
         metavar="KEY: VALUE",
         nargs="*",
-        help="""Dictionary of kwargs arguments that will be passed to Job Monitoring service.
-        """,
+        help="Dictionary of kwargs arguments that will be passed to Job Monitoring service.",
     )
 
     # hidden CLI used for internal only
@@ -81,4 +81,5 @@ def mixin_base_deployment_parser(parser):
         help="If set, connect to deployment using tls encryption",
     )
 
+    mixin_discovery_parser(gp)
     _mixin_http_server_parser(gp)

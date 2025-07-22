@@ -100,7 +100,7 @@ chmod +x $DOCKER_CONFIG/cli-plugins/docker-compose
 ```
 
 
-```sh
+```sh[gateway.yml](../../../../../mnt/data/marie-ai/config/service/gateway.yml)
 ln -s ./config/.env.dev ./.env
 docker compose down --volumes --remove-orphans && DOCKER_BUILDKIT=1 docker compose -f docker-compose.yml  --project-directory . up --build --remove-orphans
 ```
@@ -546,3 +546,7 @@ GOD_OCR2
 https://github.com/infiniflow/ragflow
 
 https://www.upstage.ai/
+
+# AGENT BASED LLMS
+https://github.com/microsoft/UFO/blob/main/ufo/prompter/basic.py#L13
+https://github.com/DataBassGit/AgentForge/blob/main/src/agentforge/agent.py

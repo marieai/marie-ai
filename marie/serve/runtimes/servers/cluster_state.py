@@ -40,6 +40,7 @@ class _ClusterState:
     @deployment_nodes.setter
     def deployment_nodes(self, value: Dict[str, Any]) -> None:
         self._deployment_nodes = value
+        self._deployments_last_updated = time.time()
 
 
 ClusterState = _ClusterState()

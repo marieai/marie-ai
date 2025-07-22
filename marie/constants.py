@@ -99,3 +99,8 @@ __config_dir__ = _os.path.join(__default_mount_point__, "config")
 __marie_home__ = _os.path.join(str(_Path.home()), ".marie")
 
 DEPLOYMENT_STATUS_PREFIX = "deployments/status"
+
+# default directories
+__default_extract_dir__ = _os.path.join(__config_dir__, "extract")
+__default_psql_dir__ = _os.path.join(__config_dir__, "psql")
+__default_schema_dir__ = _os.path.join(__config_dir__, "psql/schema")

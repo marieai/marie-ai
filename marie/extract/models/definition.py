@@ -12,7 +12,7 @@ from marie.extract.models.base import (
     SelectionType,
     SelectorSet,
 )
-from marie.extract.readers.meta_reader.meta_reader import MetaReader
+from marie.extract.readers import MetaReader
 from marie.extract.structures.unstructured_document import UnstructuredDocument
 
 
@@ -32,6 +32,7 @@ class FieldMapping(BaseModel):
     name: Optional[str] = None
     functions: Optional[List[str]] = None
     ref_field_name: Optional[str] = None
+    field_def: Optional[Dict[str, Any]] = None
 
     def __str__(self) -> str:
         return f"{self.name} : {self.search_perimeter}"
@@ -74,6 +75,10 @@ class Layer(BaseModel):
     # field_anchors: List['FieldAnchor'] = []
     constraints: List["Constraint"] = []
     color_index: int = 0
+
+    # this is used to store the raw table config
+    # TODO : Replace with a proper table config class
+    table_config_raw: Optional[Dict[str, Any]] = None
 
     class Config:
         arbitrary_types_allowed = True

@@ -24,6 +24,9 @@ class WorkInfo(BaseModel):
     keep_until: datetime
     policy: Optional[str] = None
     dependencies: Optional[list[str]] = None
+    job_level: int = 0
+    soft_sla: Optional[datetime] = None
+    hard_sla: Optional[datetime] = None
 
 
 class JobSubmissionModel(BaseModel):

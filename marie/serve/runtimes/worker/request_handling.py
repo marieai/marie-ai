@@ -3,6 +3,7 @@ import asyncio
 import functools
 import json
 import os
+import random
 import tempfile
 import threading
 import time
@@ -23,21 +24,26 @@ from typing import (
 
 from google.protobuf.struct_pb2 import Struct
 from grpc_health.v1 import health_pb2
+from grpc_health.v1.health_pb2 import HealthCheckResponse
 
 from marie._docarray import DocumentArray, docarray_v2
 from marie.constants import DEPLOYMENT_STATUS_PREFIX, __default_endpoint__
 from marie.excepts import BadConfigSource, RuntimeTerminated
-from marie.helper import get_full_version
+from marie.helper import get_full_version, get_internal_ip
 from marie.importer import ImportExtensions
 from marie.job.common import JobInfoStorageClient, JobStatus
 from marie.proto import jina_pb2
-from marie.serve.discovery.etcd_client import EtcdClient
+from marie.serve.discovery.base import ConnectionState
+from marie.serve.discovery.container import EtcdConfig
+from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
 from marie.serve.executors import BaseExecutor, __dry_run_endpoint__
 from marie.serve.instrumentation import MetricsTimer
+from marie.serve.networking.utils import host_is_local
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
 from marie.utils.network import get_ip_address
+from marie.utils.timing import exponential_backoff
 from marie.utils.types import strtobool
 
 if docarray_v2:
@@ -96,12 +102,14 @@ class WorkerRequestHandler:
 
         runtime_name = kwargs.get("runtime_name", None)
         node_info['deployment_name'] = deployment_name
+        host = node_info.get('host')
+        node_info['host'] = get_internal_ip() if host and host_is_local(host) else host
         self.node_info = node_info
 
         if self.metrics_registry:
             with ImportExtensions(
                 required=True,
-                help_text="You need to install the `prometheus_client` to use the montitoring functionality of marie",
+                help_text="You need to install the `prometheus_client` to use the monitoring functionality of marie",
             ):
                 from prometheus_client import Counter, Summary
 
@@ -184,15 +192,23 @@ class WorkerRequestHandler:
 
         self._job_info_client = self._init_job_info_client(self.args.kv_store_kwargs)
 
+        # discovery
+        args_dict = {k: v for k, v in vars(self.args).items() if v is not None}
+        etcd_args = convert_to_etcd_args(args_dict)
+
+        etcd_config = EtcdConfig.from_dict(etcd_args)
+        self._lease_time = etcd_config.lease_sec
+        self._heartbeat_time = etcd_config.heartbeat_sec
         self._heartbeat_thread = None
-        self._lease_time = 5
-        self._heartbeat_time = 2
         self._lease = None
-        self._etcd_client = self._init_etcd("localhost", 2379)
-        self._worker_state = None
+
+        self._etcd_client = get_etcd_client(etcd_args)
+        self._lease = self._etcd_client.lease(self._lease_time)
+        self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
         self._set_deployment_status(
             health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
         )
+        self.setup_heartbeat()
 
     def _http_fastapi_default_app(self, **kwargs):
         from marie.serve.runtimes.worker.http_fastapi_app import (  # For Gateway, it works as for head
@@ -264,7 +280,7 @@ class WorkerRequestHandler:
         with ImportExtensions(
             required=True,
             logger=self.logger,
-            help_text="""hot reload requires watchfiles dependency to be installed. You can do `pip install 
+            help_text="""hot reload requires watchfiles dependency to be installed. You can do `pip install
                 watchfiles""",
         ):
             from watchfiles import awatch
@@ -366,6 +382,11 @@ class WorkerRequestHandler:
         metrics_registry: Optional["CollectorRegistry"] = None,
         meter: Optional["metrics.Meter"] = None,
     ):
+        """Initialize the monitoring system.
+
+        :param metrics_registry: Optional prometheus metrics registry for monitoring
+        :param meter: Optional metrics meter for monitoring
+        """
 
         if metrics_registry:
 
@@ -679,10 +700,9 @@ class WorkerRequestHandler:
         """
 
         self._record_request_size_monitoring(requests)
-        self.logger.info(f"*** Setup requests: {requests}")
-
         params = self._parse_params(requests[0].parameters, self._executor.metas.name)
         self._setup_req_doc_array_cls(requests, exec_endpoint, is_response=False)
+
         return requests, params
 
     async def handle_generator(
@@ -749,10 +769,15 @@ class WorkerRequestHandler:
                 return requests[0]
 
         requests, params = self._setup_requests(requests, exec_endpoint)
-        # self.logger.info(f"requests TO MONITOR : {exec_endpoint} -- {requests}")
         job_id = None
         if params is not None:
             job_id = params.get("job_id", None)
+
+        if job_id is None:
+            raise RuntimeError(
+                f"Job ID is not provided in the parameters for endpoint {exec_endpoint}. "
+                "Please ensure that the job_id is included in the request parameters."
+            )
 
         self.logger.info(f"requests TO MONITOR : {exec_endpoint} -- {job_id}")
         await self._record_started_job(job_id, requests, params)
@@ -839,6 +864,7 @@ class WorkerRequestHandler:
                 )
                 _ = self._set_result(requests, return_data, docs, http=http)
             except asyncio.CancelledError:
+                # this could be due to client disconnect or Executor raising an exception of CancelledError
                 self.logger.warning("Task was cancelled due to client disconnect")
                 client_disconnected = True
                 raise
@@ -1209,7 +1235,6 @@ class WorkerRequestHandler:
         :param is_generator: whether the request should be handled with streaming
         :returns: the response request
         """
-        self.logger.info("recv a process_data request")
         with MetricsTimer(
             self._summary, self._receiving_request_seconds, self._metric_attributes
         ):
@@ -1503,7 +1528,7 @@ class WorkerRequestHandler:
         e: Exception,
         metadata_attributes: Optional[Dict],
     ):
-        print(f"Record job failed: {job_id} - {e}")
+        self.logger.info(f"Record job failed: {job_id} - {e}")
         if self.is_dry_run(requests):
             return
 
@@ -1523,7 +1548,7 @@ class WorkerRequestHandler:
                 # Clear the frames after extracting the information to avoid memory leaks
                 traceback.clear_frames(tb)
 
-                detail = "Internal Server Error"
+                detail = "Internal Server Error - request handler failed"
                 silence_exceptions = strtobool(
                     os.environ.get("MARIE_SILENCE_EXCEPTIONS", "false")
                 )
@@ -1554,15 +1579,15 @@ class WorkerRequestHandler:
                     },
                 )
             except Exception as e:
-                self.logger.error(f"Error in recording job status: {e}")
+                self.logger.error(f"Error recording job status FAILED {job_id} : {e}")
 
     async def _record_started_job(
         self, job_id: str, requests: List["DataRequest"], params
     ):
-        print(f"Record job started: {job_id}")
         if self.is_dry_run(requests):
             return
 
+        self.logger.debug(f"Record job started: {job_id}")
         self._set_deployment_status(
             health_pb2.HealthCheckResponse.ServingStatus.SERVING
         )
@@ -1579,7 +1604,8 @@ class WorkerRequestHandler:
                     },
                 )
             except Exception as e:
-                self.logger.error(f"Error recording job status: {e}")
+                self.logger.error(f"Error recording job status RUNNING {job_id} : {e}")
+                print(e)
 
     async def _record_successful_job(
         self,
@@ -1587,10 +1613,10 @@ class WorkerRequestHandler:
         requests: List["DataRequest"],
         metadata_attributes: Optional[Dict],
     ):
-        print(f"Record job success: {job_id}")
         if self.is_dry_run(requests):
             return
 
+        self.logger.debug(f"Record job success: {job_id}")
         self._set_deployment_status(
             health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
         )
@@ -1608,7 +1634,9 @@ class WorkerRequestHandler:
                     },
                 )
             except Exception as e:
-                self.logger.error(f"Error recording job status: {e}")
+                self.logger.error(
+                    f"Error recording job status SUCCEEDED {job_id} : {e}"
+                )
 
     def _request_attributes(self, requests: List["DataRequest"]) -> Dict:
         exec_endpoint: str = requests[0].header.exec_endpoint
@@ -1623,12 +1651,6 @@ class WorkerRequestHandler:
             "host": get_ip_address(flush_cache=False),
         }
 
-    def _init_etcd(self, etcd_host, etcd_port):
-        etcd_client = EtcdClient(etcd_host, etcd_port, namespace="marie")
-        self.setup_heartbeat()
-
-        return etcd_client
-
     def _set_deployment_status(
         self, status: health_pb2.HealthCheckResponse.ServingStatus
     ):
@@ -1636,76 +1658,194 @@ class WorkerRequestHandler:
         Set the status of a deployment address in etcd. This will refresh lease for the deployment address.
         :param status: Status of the worker
         """
-        print(f"Setting deployment status: {status}")
+        self.logger.debug(f"Setting deployment status: {status}")
 
         self._worker_state = status
         node_info = self.node_info
         deployment_name = node_info['deployment_name']
         address = f"{node_info['host']}:{node_info['port']}"
 
-        from grpc_health.v1.health_pb2 import HealthCheckResponse
-
         status_str = HealthCheckResponse.ServingStatus.Name(status)
         key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
 
-        self._lease = self._etcd_client.lease(self._lease_time)
-        self._etcd_client.put(key, status_str, lease=self._lease)
-        self.logger.info(
-            f"lease: {self._lease} - key: {key} - state: {status_str}  time: {self._lease_time}"
-        )
+        try:
+            self.logger.debug(
+                f"Updating lease key: {key} - state: {status_str} - lease time: {self._lease_time}"
+            )
+            self._etcd_client.put(key, status_str, lease=self._lease)
+        except Exception as e:
+            self.logger.error(f"Failed to update deployment status in etcd: {e}")
+            raise
 
     def heartbeat(self):
-        """service heartbeat."""
+        """Service heartbeat. Refresh the lease and handle TTL expiration."""
         if self._lease is None:
+            self.logger.warning("Lease is None, skipping heartbeat.")
             return
-        self.logger.info(
-            f"Heartbeat : {self._worker_state} - {self._lease.remaining_ttl}"
+
+        self.logger.debug(
+            f"Heartbeat: {self._worker_state} - TTL: {self._lease.remaining_ttl}"
         )
         try:
-            self.logger.debug(f"Refreshing lease for:  {self._lease.remaining_ttl}")
+            self.logger.debug(
+                f"Refreshing lease: TTL before refresh = {self._lease.remaining_ttl}"
+            )
             ret = self._lease.refresh()[0]
+
             if ret.TTL == 0:
                 self.logger.warning(
-                    f"Lease expired, setting status to lost state : {self._worker_state}"
+                    f"Lease expired (TTL=0), attempting to recover lease."
                 )
                 self._set_deployment_status(self._worker_state)
+                self.reacquire_lease()  # Attempt to recover
+            else:
+                # Refresh successful — reflect current status in etcd
+                self._set_deployment_status(self._worker_state)
         except Exception as e:
-            raise e
+            if "etcdserver: requested lease not found" in str(e):
+                self.logger.warning(
+                    "Lease not found on etcd server, attempting to reacquire."
+                )
+                self.reacquire_lease()
+            else:
+                self.logger.error("Unexpected error during heartbeat.")
+                raise
+
+    def reacquire_lease(self):
+        """
+        Attempt to reacquire a lease and rebind the service key.
+        """
+        try:
+            self.logger.info("Attempting to reacquire etcd lease...")
+            self._lease = self._etcd_client.lease(self._lease_time)
+            self._set_deployment_status(
+                health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
+            )
+            self.logger.info(f"Reacquired lease ID: {self._lease.id}")
+        except Exception as e:
+            self.logger.error(f"Failed to reacquire lease: {e}")
+            raise
 
     def setup_heartbeat(self):
         """
-        Set up an asynchronous heartbeat process.
+        Set up an asynchronous heartbeat process with connection state monitoring.
         :return: None
         """
+        self.logger.info("Calling heartbeat setup")
 
-        self.logger.debug("Calling heartbeat setup")
         if self._lease and self._heartbeat_thread and self._heartbeat_thread.is_alive():
             raise RuntimeError(
-                f"A heartbeat with lease {self._lease} is currently in running. Cannot start another."
+                f"A heartbeat with lease {self._lease} is currently running. Cannot start another."
             )
 
+        self._etcd_client.add_connection_event_handler(
+            ConnectionState.CONNECTED, self._on_etcd_connected
+        )
+        self._etcd_client.add_connection_event_handler(
+            ConnectionState.DISCONNECTED, self._on_etcd_disconnected
+        )
+        self._etcd_client.add_connection_event_handler(
+            ConnectionState.RECONNECTING, self._on_etcd_reconnecting
+        )
+        self._etcd_client.add_connection_event_handler(
+            ConnectionState.FAILED, self._on_etcd_failed
+        )
+
         def _heartbeat_setup():
-            print(
-                f"Setting up heartbeat for etcd request handler : {self._heartbeat_time}"
+            self.logger.debug(
+                f"Starting heartbeat thread, interval: {self._heartbeat_time}s"
             )
+
             failures = 0
-            max_failures = 3
+            max_failures = 5
+            initial_backoff = 2
+            max_backoff = 30
 
             time.sleep(self._heartbeat_time)
 
             while True:
                 try:
-                    self.heartbeat()
-                    failures = 0
+                    current_state = self._etcd_client.get_connection_state()
+                    if (
+                        current_state == ConnectionState.CONNECTED
+                        or current_state is None
+                    ):
+                        self.heartbeat()
+                        failures = 0
+                    else:
+                        # Skip heartbeat but don't treat as failure
+                        self.logger.debug(
+                            f"Skipping heartbeat - connection state: {current_state.name}"
+                        )
+
                 except Exception as e:
                     failures += 1
-                    self.logger.error(
-                        f"Error in heartbeat ({failures}/{max_failures}): {e}"
+                    current_state = self._etcd_client.get_connection_state()
+                    state_info = (
+                        f" (connection: {current_state.name})" if current_state else ""
                     )
+
+                    self.logger.error(
+                        f"Error in heartbeat attempt {failures}/{max_failures}{state_info}: {e}"
+                    )
+                    self.logger.debug(f"Traceback: {traceback.format_exc()}")
+                    backoff_time = exponential_backoff(
+                        failures, initial_backoff, max_backoff
+                    )
+
+                    # Don't count failures during known disconnections
+                    if current_state in [
+                        ConnectionState.DISCONNECTED,
+                        ConnectionState.RECONNECTING,
+                        ConnectionState.FAILED,
+                    ]:
+                        failures = min(failures, max_failures - 1)
+                        backoff_time = self._heartbeat_time
+                        self.logger.debug("Not counting failure - connection is down")
+                    else:
+                        self.logger.warning(
+                            f"Retrying heartbeat in {backoff_time:.2f} seconds"
+                        )
+
                     if failures >= max_failures:
-                        self.logger.error("Max failures reached, stopping heartbeat.")
+                        self.logger.error(
+                            f"Max failures reached ({max_failures}). Heartbeat process will stop."
+                        )
                         break
+
+                    time.sleep(backoff_time)
+                    continue
+
                 time.sleep(self._heartbeat_time)
 
         self._heartbeat_thread = threading.Thread(target=_heartbeat_setup, daemon=True)
         self._heartbeat_thread.start()
+
+    def _on_etcd_connected(self, event):
+        """Handle etcd connection established."""
+        self.logger.info("Request handler: etcd connection established")
+        current_state = self._etcd_client.get_connection_state()
+        self.logger.info(f"Event handler - connection state is now: {current_state}")
+
+        # we need to reacquire the lease if it was lost
+        self.reacquire_lease()
+
+    def _on_etcd_disconnected(self, event):
+        """Handle etcd connection lost."""
+        self.logger.warning(f"Request handler: etcd connection lost - {event.error}")
+        current_state = self._etcd_client.get_connection_state()
+        self.logger.info(f"Event handler - connection state is now: {current_state}")
+
+    def _on_etcd_reconnecting(self, event):
+        """Handle etcd reconnection attempt."""
+        self.logger.info("Request handler: etcd reconnection in progress")
+        current_state = self._etcd_client.get_connection_state()
+        self.logger.info(f"Event handler - connection state is now: {current_state}")
+
+    def _on_etcd_failed(self, event):
+        """Handle etcd connection failed permanently."""
+        self.logger.error(
+            f"Request handler: etcd connection failed permanently - {event.error}"
+        )
+        current_state = self._etcd_client.get_connection_state()
+        self.logger.info(f"Event handler - connection state is now: {current_state}")

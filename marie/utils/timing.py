@@ -1,3 +1,6 @@
+import random
+
+
 def format_duration(milliseconds):
     """Given milliseconds, return human readable duration string such as:
     533ms, 2.1s, 4m52s, 34m12s, 1h4m.
@@ -31,3 +34,18 @@ def format_duration(milliseconds):
         hours = int(milliseconds // (1000 * 60 * 60))
         minutes = int(milliseconds % (1000 * 60 * 60) // (1000 * 60))
         return f"{hours}h{minutes}m"
+
+
+def exponential_backoff(failures: int, initial_backoff: int, max_backoff: int) -> float:
+    """
+    Calculates an exponential backoff time with a random jitter based on the number
+    of failures. The backoff time increases exponentially with the number of
+    failures, but is capped at a maximum value. A random jitter is then added to
+    avoid synchronized retries in large systems.
+
+    :return: The calculated backoff time in seconds as a float.
+    """
+    base_delay = min(initial_backoff * (2 ** (failures - 1)), max_backoff)
+    jitter = random.uniform(0, base_delay * 0.5)
+    backoff_time = base_delay + jitter
+    return backoff_time

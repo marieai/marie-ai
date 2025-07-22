@@ -1,0 +1,57 @@
+# ############### Marie-AI Gateway ###############
+
+# Container networking setup
+# docker network create --driver=bridge marie_default
+
+services:
+  marie-gateway:
+    image: marieai/marie-gateway:${GATEWAY_IMAGE_TAG:-4.0.0-cpu}
+    restart: unless-stopped
+    container_name: 'marieai-gateway'
+    init: true
+    tty: true
+    network_mode: host
+#    networks:
+#      - marie_default
+    command: >
+      gateway 
+      --uses /etc/marie/config/service/extract/${GATEWAY_CONFIG_TAG:-marie-gateway-4.0.0.yml}
+      --protocols HTTP GRPC
+      --ports 51000 52000
+      --extra-search-paths /etc/marie/config/config/extra_py_modules
+
+    environment:
+      - MARIE_CACHE_SKIP_LOAD=true
+      - MARIE_DEFAULT_MOUNT=/etc/marie
+      - MARIE_LOG_CONFIG=docker
+      - MARIE_DEPLOYMENT_NAME=marie
+      - COLUMNS=180
+      - JINA_MP_START_METHOD=fork
+      - JINA_LOG_LEVEL=${GATEWAY_LOG_LEVEL:-DEBUG}
+
+    volumes:
+      - /mnt/data/marie-ai/config:/etc/marie/config:ro
+      - /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw
+      - /mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - /mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
+
+    logging:
+      driver: local
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:51000/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    labels:
+      - "marie.service=gateway"
+      - "marie.version=${GATEWAY_IMAGE_TAG:-4.0.0-cpu}"
+
+networks:
+  marie_default:
+    external: true

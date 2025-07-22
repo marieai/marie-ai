@@ -5,9 +5,13 @@
   gather_facts: true
   vars:
     stack_name: "dev"
-    image_tag: 3.0.26-cuda
-    config_tagCORR: marie-3.0.2x-corr.yml
-    config_tag: marie-3.0.21.yml
+    
+    image_tag: 3.0.30-cuda
+    config_tag: marie-3.0.30.yml
+    
+    image_tagLAST: 3.0.26-cuda
+    config_tagLAST: marie-3.0.21.yml
+    
     server_port: 8080
   tasks:
 #    - name: Create network
@@ -64,6 +68,7 @@
           - "/mnt/data/marie-ai/config:/etc/marie/config:ro"
           - "/mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw"
           - "/mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro"
+          - "/mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw"
 
 # Docker debug command
 # docker container ls -aq | xargs --no-run-if-empty docker stop && docker rm $(docker ps --filter status=exited -q)

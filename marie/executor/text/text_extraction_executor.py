@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 import warnings
 from typing import Any, Optional, Union
@@ -7,7 +8,7 @@ import numpy as np
 import torch
 from docarray import DocList
 
-from marie import Executor, requests, safely_encoded
+from marie import Executor, monitor, requests, safely_encoded
 from marie.api import value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc, OutputDoc, StorageDoc
 from marie.boxes import PSMode
@@ -23,13 +24,14 @@ from marie.models.utils import (
 )
 from marie.ocr import CoordinateFormat
 from marie.pipe import ExtractPipeline
+from marie.storage import StorageManager
 from marie.utils.docs import docs_from_asset, frames_from_docs
 from marie.utils.image_utils import ensure_max_page_size, hash_frames_fast
 from marie.utils.network import get_ip_address
 from marie.utils.types import strtobool
 
 
-class TextExtractionExecutor(Executor, StorageMixin):
+class TextExtractionExecutor(MarieExecutor, StorageMixin):
     """
     Executor for extracting text.
     Text extraction can either be executed out over the entire image or over selected regions of interests (ROIs)
@@ -46,6 +48,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
+        kwargs['storage'] = storage
         super().__init__(**kwargs)
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
@@ -79,7 +82,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
                 resolved_devices[0],
             )
         self.device = resolved_devices[0]
-        has_cuda = True if self.device.type.startswith("cuda") else False
+        self.has_cuda = True if self.device.type.startswith("cuda") else False
 
         num_threads = max(1, torch.get_num_threads())
         if not self.device.type.startswith("cuda") and (
@@ -103,7 +106,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
 
         setup_torch_optimizations(num_threads=num_threads)
         self.show_error = True  # show prediction errors
-        self.pipeline = ExtractPipeline(pipeline_config=pipeline, cuda=has_cuda)
+        # self.pipeline = ExtractPipeline(pipeline_config=pipeline, cuda=has_cuda)
 
         instance_name = "not_defined"
         if kwargs is not None:
@@ -116,7 +119,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
             "model": "",
             "host": get_ip_address(),
             "workspace": self.workspace,
-            "use_cuda": has_cuda,
+            "use_cuda": self.has_cuda,
         }
 
         self.storage_enabled = False
@@ -124,9 +127,18 @@ class TextExtractionExecutor(Executor, StorageMixin):
             sconf = storage["psql"]
             self.setup_storage(sconf.get("enabled", False), sconf)
 
+        connected = StorageManager.ensure_connection("s3://", silence_exceptions=False)
+        logger.warning(f"S3 connection status : {connected}")
+
+        self.pipeline = ExtractPipeline(pipeline_config=pipeline, cuda=self.has_cuda)
+
     @requests(on="/document/extract")
     # @safely_encoded # BREAKS WITH docarray 0.39 as it turns this into a LegacyDocument which is not supported
     def extract(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
+
+        print('TEXT-EXTRACT')
+        print(parameters)
+        print(docs)
 
         if len(docs) == 0:
             return {"error": "empty payload"}
@@ -231,6 +243,18 @@ class TextExtractionExecutor(Executor, StorageMixin):
                 runtime_conf=runtime_conf,
             )
 
+            if metadata is None:
+                self.logger.warning(
+                    f"Metadata is None, this can happen if no text was found"
+                )
+                response = {
+                    "status": "failed",
+                    "runtime_info": self.runtime_info,
+                    "metadata": {},
+                }
+                converted = safely_encoded(lambda x: x)(response)
+                return converted
+
             del frames
             del regions
 
@@ -325,9 +349,15 @@ class TextExtractionExecutorMock(MarieExecutor):
         :param dtype: inference data type, if None defaults to torch.float32 if device == 'cpu' else torch.float16.
         """
         super().__init__(**kwargs)
-        import time
 
         logger.info(f"Starting mock executor : {time.time()}")
+        logger.info(f"Starting executor : {self.__class__.__name__}")
+        logger.info(f"Runtime args : {kwargs.get('runtime_args')}")
+        logger.info(f"Pipeline config: {pipeline}")
+        logger.info(f"Device : {device}")
+        logger.info(f"Num worker preprocess : {num_worker_preprocess}")
+        logger.info(f"Kwargs : {kwargs}")
+
         setup_torch_optimizations()
 
         self.show_error = True  # show prediction errors
@@ -355,6 +385,8 @@ class TextExtractionExecutorMock(MarieExecutor):
 
         logger.info(f"Runtime info: {self.runtime_info}")
         logger.info(f"Pipeline : {pipeline}")
+        connected = StorageManager.ensure_connection("s3://", silence_exceptions=False)
+        logger.warning(f"S3 connection status : {connected}")
 
     # @requests(on="/document/status")
     # def status(self, parameters, **kwargs):
@@ -366,7 +398,7 @@ class TextExtractionExecutorMock(MarieExecutor):
     # def validate(self, parameters, **kwargs):
     #     return {"valid": True}
 
-    @requests(on="/document/extract")
+    @requests(on="/document/extractXXXX")
     # @safely_encoded # BREAKS WITH docarray 0.39
     def extract(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
         print("TEXT-EXTRACT")
@@ -405,8 +437,6 @@ class TextExtractionExecutorMock(MarieExecutor):
         #     ]
         # )
 
-        import time
-
         if "payload" not in parameters or parameters["payload"] is None:
             return {"error": "empty payload"}
         else:
@@ -433,7 +463,7 @@ class TextExtractionExecutorMock(MarieExecutor):
         converted = safely_encoded(lambda x: x)(self.runtime_info)
         return converted
 
-    @requests(on="/extract")
+    @requests(on="/document/extract")
     async def func_extract(
         self,
         docs: DocList[AssetKeyDoc],
@@ -451,7 +481,10 @@ class TextExtractionExecutorMock(MarieExecutor):
         #     raise Exception("random error in exec")
         # for doc in docs:
         #     doc.text += " First Exec"
-        sec = 2
+        sec = 3600
+        sec = 5
+        # sec = random.randint(1, 5)
+
         print(f"Sleeping for {sec} seconds : ", time.time())
         time.sleep(sec)
 
@@ -489,11 +522,7 @@ class LLMExtractionExecutorMock(MarieExecutor):
         :param dtype: inference data type, if None defaults to torch.float32 if device == 'cpu' else torch.float16.
         """
         super().__init__(**kwargs)
-        import time
-
         logger.info(f"Starting mock executor : {time.time()}")
-        setup_torch_optimizations()
-
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
         use_cuda = torch.cuda.is_available()
@@ -556,8 +585,6 @@ class LLMExtractionExecutorMock(MarieExecutor):
 
         print(f"{frame_len=}")
         # this value will be stuffed in the  resp.parameters["__results__"] as we are using raw Responses
-
-        import time
 
         if "payload" not in parameters or parameters["payload"] is None:
             return {"error": "empty payload"}

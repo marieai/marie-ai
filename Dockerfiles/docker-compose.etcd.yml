@@ -1,0 +1,38 @@
+services:
+  etcd-single:
+    image: quay.io/coreos/etcd:v3.6.1
+    container_name: etcd-single
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    volumes:
+      - etcd_data:/etcd-data
+    command:
+      - /usr/local/bin/etcd
+      - --name=single
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://127.0.0.1:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://127.0.0.1:2380
+      - --initial-cluster=single=http://127.0.0.1:2380
+      - --initial-cluster-state=new
+
+    network_mode: host
+#    networks:
+#      - marie_default
+
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: on-failure
+
+volumes:
+  etcd_data:
+    driver: local
+
+networks:
+  marie_default:
+    external: true

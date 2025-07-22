@@ -1,66 +1,60 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
-
 from marie.extract.models.base import Location, Page, PageDetails, Rectangle
 from marie.extract.models.definition import Layer, RowExtractionStrategy
+from marie.extract.structures.line_with_meta import LineWithMeta
+
+# Covnerted from pydantic to dataclass as it is not used for serialization or validation
+# we will render the dataclass to json when needed
 
 
 class MatchSectionVisitor(ABC):
     @abstractmethod
     def visit(self, result: "MatchSection") -> None:
-        """
-        :param result: An instance of MatchSection containing the result data.
-        :return: None
-        """
         pass
 
 
 class ResultType(str, Enum):
     ANCHOR = "ANCHOR"
     BLOB = "BLOB"
+    TEXT = "TEXT"
+    ANNOTATION = "ANNOTATION"
+    CUTPOINT = "CUTPOINT"
 
 
-class ScanResult(BaseModel):
+@dataclass
+class ScanResult:
     owner_identifier: Optional[str] = None
-    page: int
-    type: ResultType
-    area: Rectangle
-    confidence: float
-    x_offset: int
-    y_offset: int
+    page: int = 0
+    type: ResultType = ResultType.TEXT
+    area: Rectangle = None
+    confidence: float = 0.0
+    x_offset: int = 0
+    y_offset: int = 0
     selection_type: str = "POSITIVE"
-
-    def __str__(self) -> str:
-        return f"Owner Identifier: {self.owner_identifier}, Page: {self.page}, Type: {self.type}, Area: {self.area}, Confidence: {self.confidence}, X Offset: {self.x_offset}, Y Offset: {self.y_offset}, Selection Type: {self.selection_type}"
+    line: Optional[LineWithMeta] = None
 
 
-class ScoredMatchResult(BaseModel):
-    score: float
-    items: List[ScanResult]
-    index: int
-    candidates: List[ScanResult]
-
-    def __str__(self) -> str:
-        return f"Score: {self.score}, Items: {self.items}, Index: {self.index}, Candidates: {self.candidates}"
+@dataclass
+class ScoredMatchResult:
+    score: float = 0.0
+    items: List[ScanResult] = field(default_factory=list)
+    index: int = 0
+    candidates: List[ScanResult] = field(default_factory=list)
 
 
 class LocationType(str, Enum):
     START = "START"
     STOP = "STOP"
-    CONTINUE = "CONTINUE"
+    CONTINUATION = "CONTINUATION"
 
 
+@dataclass
 class TypedScanResult(ScanResult):
-    def __init__(
-        self,
-        input: ScanResult,
-        location_type: LocationType,
-    ):
-        super().__init__(input)
-        self.location_type = location_type
+    location_type: LocationType = LocationType.START
 
     @staticmethod
     def wrap(
@@ -68,30 +62,52 @@ class TypedScanResult(ScanResult):
     ) -> List["TypedScanResult"]:
         if not candidates:
             return []
-        return [TypedScanResult(candidate, location_type) for candidate in candidates]
+        return [
+            TypedScanResult(location_type=location_type, **vars(candidate))
+            for candidate in candidates
+        ]
 
-    def __str__(self) -> str:
-        return f"{self.location_type} - {super().__str__()}"
 
-
-class Span(BaseModel):
-    page: int
-    y: int
-    h: int
+@dataclass
+class Span:
+    page: int = 0
+    y: int = 0
+    h: int = 0
     msg: Optional[str] = None
 
-    def __str__(self) -> str:
-        return f"page = {self.page}, y = {self.y}, h = {self.h}, msg = {self.msg}"
 
-
-class MatchField(BaseModel):
+@dataclass
+class MatchField:
     owner_field_identifier: Optional[str] = None
-    fid: int
+    fid: int = 0
     data: Optional[str] = None
     scan_result: Optional[ScanResult] = None
 
-    def __str__(self) -> str:
-        return f"Field ID {self.owner_field_identifier} {self.scan_result}"
+
+# this class is used to store the field final extraction result
+@dataclass
+class Field:
+    field_name: Optional[str] = field(default=None)
+    field_type: Optional[str] = field(default=None)
+    is_required: bool = field(default=False)
+    composite_field: bool = field(default=False)
+    value: Optional[str] = field(default=None)
+    x: int = field(default=0)
+    y: int = field(default=0)
+    width: int = field(default=0)
+    height: int = field(default=0)
+    date_format: Optional[str] = field(default=None)
+    name_format: Optional[str] = field(default=None)
+    column_name: Optional[str] = field(default=None)
+    page: int = field(default=0)
+    xdpi: int = field(default=0)
+    ydpi: int = field(default=0)
+    confidence: float = field(default=0.0)
+    scrubbed: bool = field(default=False)
+    uuid: Optional[str] = field(default=None)
+    reference_uuid: Optional[str] = field(default=None)
+    layer_name: Optional[str] = field(default=None)
+    value_original: Optional[str] = field(default=None)
 
 
 class MatchSectionType(str, Enum):
@@ -100,69 +116,51 @@ class MatchSectionType(str, Enum):
     REJECTED = "REJECTED"
 
 
-class MatchFieldRow(BaseModel):
-    fields: Optional[List[MatchField]] = Field(default_factory=list)
-    children: List["MatchFieldRow"] = Field(default_factory=list)
-    details: Optional[PageDetails] = None
-
-    def __str__(self) -> str:
-        builder = [self.__class__.__name__]
-        if self.fields:
-            for field in self.fields:
-                grs = field.scan_result
-                builder.append(f"  > {grs}")
-        if self.children:
-            for child in self.children:
-                builder.append(f"\n               {child}")
-        return "".join(builder)
+@dataclass
+class MatchFieldRow:
+    # fields: List[MatchField] = field(default_factory=list)
+    fields: List[Field] = field(default_factory=list)
+    children: List["MatchFieldRow"] = field(default_factory=list)
 
 
-class MatchSection(BaseModel):
-    sections: List["MatchSection"] = []
+@dataclass
+class MatchSection:
+    sections: List["MatchSection"] = field(default_factory=list)
     parent: Optional["MatchSection"] = None
     type: MatchSectionType = MatchSectionType.CONTENT
     start_candidates: Optional[List["ScanResult"]] = None
     stop_candidates: Optional[List["ScanResult"]] = None
-
-    # fields: List['MatchField'] = []
-    # matched_field_rows: List['MatchFieldRowModel'] = []
-    # matched_non_repeating_fields: List['MatchField'] = []
-    # matched_document_level_fields: List['MatchField'] = []
-
-    # Start location of this section, they do not necessarily equal the start and stop of spans
     start: Optional[Location] = None
     stop: Optional[Location] = None
-
-    span: Optional[List["Span"]] = None
-
+    span: Optional[List["Span"]] = field(default_factory=list)
     label: str = "NO-LABEL"
     x_offset: int = 0
     y_offset: int = 0
-
     row_extraction_strategy: Optional[RowExtractionStrategy] = None
     owner_layer: Optional[Layer] = None
+    pages: Optional[List["Page"]] = None
 
-    pages: Optional[List['Page']] = None
+    # moving away from the old way of storing the page number and y position
+    matched_type: str = "LINE"  # LINE, COORDINATE
 
-    def __str__(self) -> str:
-        return f"{self.label} : Sections [ start [ {self.start} ] stop [ {self.stop} ] size = {len(self.sections)}  span -> {self.span}"
+    # NEED TO HAVE BETTER way to attach results with provided schema
+    # Moving away from MatchedField and using Field directly - too much abstraction
+    matched_non_repeating_fields: Optional[List["Field"]] = None
+    matched_field_rows: Optional[List["MatchFieldRow"]] = None
 
     def set_pages(self, pages: List[Page]) -> None:
         self.pages = pages
 
     def visit(self, visitor: "MatchSectionVisitor") -> None:
-        """
-        :param visitor: An instance of MatchSectionVisitor that will be used to invoke the visit method.
-        :return: None
-        """
         visitor.visit(self)
 
+    def add_section(self, sec: "MatchSection") -> None:
+        """Safely adds a section to the SubzeroResult instance."""
+        self.sections.append(sec)
 
+
+@dataclass
 class SubzeroResult(MatchSection):
-    """
-    Matched document information
-    """
-
     def __init__(self, label: Optional[str] = None):
         super().__init__(label=label)
         self.type = MatchSectionType.WRAPPER

@@ -40,10 +40,8 @@ grpcio-reflection>=1.46.0,<=1.57.0:  core
 grpcio-health-checking>=1.46.0,<=1.57.0:  core
 pyyaml>=5.3.1:              standard,core
 packaging>=20.0:            standard,core
-# docarray>=0.16.4:           standard,core
-# docarray==0.19.1:           standard,core
-#docarray>=0.19.1,<0.30.0:    standard,core
-docarray>=0.16.4:           core
+# We have to be on 0.40.0 for the latest version of docarray, newer version causes startup process
+docarray>=0.16.4,<=0.40.0:  core
 
 prometheus_client:          standard,perf
 psutil:                     perf,standard,devel
@@ -66,7 +64,8 @@ pathspec:                   standard,devel
 filelock:                   standard,devel
 requests:                   standard,devel
 websockets:                 standard,devel
-pydantic:                   core
+# very important that we pin this to 2.10.0, otherwise it will cause issues  in models.CustomConfig
+pydantic==2.10.0:           core
 python-multipart:           standard,devel
 aiofiles:                   standard,devel
 aiohttp:                    standard,devel
@@ -87,18 +86,16 @@ black==24.3.0:              test
 kubernetes>=18.20.0,<31.0.0: test
 pytest-kind==22.11.1:       test
 pytest-lazy-fixture:        test
-torch:                      cicd
 psutil:                     test
 strawberry-graphql>=0.96.0: cicd,devel
 
-
 watchfiles>=0.18.0:           devel
 urllib3>=1.25.9,<2.0.0:       core
-transformers:                 standard,core
 anyconfig:                    standard,core
 
-python-consul2:               standard,devel
-fastwer==0.1.3:               standard,core
+# python-consul2:               standard,devel
+# PROVIDED VIA CUSTOM WHEEL
+#fastwer==0.1.3:              standard,core
 matplotlib:                   standard,core
 albumentations:               standard,core
 dominate==2.7.0:              standard,core
@@ -106,8 +103,6 @@ lmdb:                         standard,core
 natsort:                      standard,core
 celery:                       standard,core
 
-# opencv-python==4.5.4.60:      standard,core
-#opencv-python==4.7.0.68:      standard,core
 # MEMORY LEAK FIXED RELATED TO  https://github.com/opencv/opencv/issues/23633
 opencv-python==4.8.1.78:      standard,core
 
@@ -115,10 +110,7 @@ imagecodecs:                  standard,core
 imutils:                      standard,core
 PyPDF4:                       standard,core
 reportlab:                    standard,core
-pycocotools:                  standard,core
-nltk:                         standard,core
-timm==1.0.11:                 standard,core
-#segmentation-models-pytorch:  standard,core
+
 Wand:                         standard,core
 
 Cython:                       standard,core
@@ -126,21 +118,14 @@ pybind11:                     standard,core
 jsons:                        standard,core
 shapely:                      standard,core
 gradio:                       devel
-psycopg2-binary==2.8.6:       standard,core
+psycopg2-binary==2.9.10:      standard,core
 pytest:                       standard,core
 nlpaug:                       standard,core
 munch:                        standard,core
 
 # opentelemetry-api:          standard,core
 
-onnx:                         standard,core
-onnxruntime:                  standard,core
-onnxruntime-gpu:              standard,core
-# onnxconverter_common==1.13.0: standard,core
-# onnxmltools:                  standard,core
-
 pika:                         standard,core
-sentencepiece:                standard,core
 Levenshtein:                  standard,core
 boto3:                       standard,core
 sqlalchemy:                   standard,core
@@ -156,23 +141,18 @@ Pillow-SIMD:                  standard,core
 # https://github.com/facebookresearch/detectron2/issues/5010
 pillow~=9.5:                  standard,core
 
-pytesseract:                  standard,core
 patchify==0.2.3:              standard,core
 colorcet:                     standard,core
-fast_pytorch_kmeans:          standard,core
-
-sahi:                         standard,core
-clip:                         standard,core
-efficientnet-pytorch:         standard,core
 seaborn:                      standard,core
 textual:                      standard,core
 textual_textarea:             standard,core
 textual_fastdatatable:        standard,core
-etcd3:                        standard,core
+# PROVIDED VIA CUSTOM WHEEL
+# etcd3:                        standard,core
 
 typing_extensions>=4.12.2:    standard,core
-#vllm:                         standard,core
 rtree:                        standard,core
 scikit-image:                  standard,core
 filetype:                      standard,core
 dataclasses_json:              standard,core
+watchdog:                      standard,core

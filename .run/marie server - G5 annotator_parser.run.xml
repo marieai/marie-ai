@@ -1,0 +1,35 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="marie server - G5 annotator_parser" type="PythonConfigurationType" factoryName="Python" folderName="G5-Annotators" singleton="false">
+    <module name="marie-ai" />
+    <option name="ENV_FILES" value="$PROJECT_DIR$/config/.grpc.env" />
+    <option name="INTERPRETER_OPTIONS" value="" />
+    <option name="PARENT_ENVS" value="true" />
+    <envs>
+      <env name="PYTHONUNBUFFERED" value="1" />
+      <env name="COLUMNS" value="180" />
+      <env name="CUDA_VISIBLE_DEVICES" value="0" />
+      <env name="GRPC_VERBOSITY" value="debug" />
+      <env name="JINA_MP_START_METHOD" value="spawn" />
+      <env name="MARIE_CACHE_LOCK_TIMEOUT" value="10" />
+      <env name="MARIE_DEBUG" value="0" />
+      <env name="MARIE_DEBUG_PORT" value="5678" />
+      <env name="MARIE_DEFAULT_MOUNT" value="/mnt/data/marie-ai" />
+      <env name="OPENAI_API_KEY" value="EMPTY" />
+      <env name="OPENAI_API_BASE" value="http://0.0.0.0:4000" />
+    </envs>
+    <option name="SDK_HOME" value="" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/" />
+    <option name="IS_MODULE_SDK" value="true" />
+    <option name="ADD_CONTENT_ROOTS" value="false" />
+    <option name="ADD_SOURCE_ROOTS" value="false" />
+    <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+    <option name="SCRIPT_NAME" value="$PROJECT_DIR$/marie/__main__.py" />
+    <option name="PARAMETERS" value="server --start --uses /mnt/data/marie-ai/config/service/g5/marie-g5-annotator_parser.yml" />
+    <option name="SHOW_COMMAND_LINE" value="false" />
+    <option name="EMULATE_TERMINAL" value="false" />
+    <option name="MODULE_MODE" value="false" />
+    <option name="REDIRECT_INPUT" value="false" />
+    <option name="INPUT_FILE" value="" />
+    <method v="2" />
+  </configuration>
+</component>

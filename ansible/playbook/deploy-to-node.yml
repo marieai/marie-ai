@@ -1,6 +1,6 @@
 ---
 - name: Marie-AI Cluster - Provisioning
-  hosts: ml_cluster
+  hosts: "{{ target_group }}"
   gather_facts: false
 
   tasks:
@@ -8,6 +8,34 @@
     shell: whoami
     register: out
   - debug: var=out.stdout_lines
+
+
+  - name: Ensure cifs-utils is installed
+    apt:
+      name: cifs-utils
+      state: present
+    become_user: root
+    become: yes
+    become_method: sudo
+  - debug: var=out.stdout_lines
+
+
+  - name: Ensure nfs-common is installed
+    apt:
+      name: nfs-common
+      state: present
+    become_user: root
+    become: yes
+    become_method: sudo
+  - debug: var=out.stdout_lines
+
+
+  - name: Wait for dpkg lock to be released
+    command: "sleep 10"
+    retries: 5
+    delay: 10
+    register: result
+    until: result.rc == 0
 
   # mount the share to /mnt/data/marie-ai on the node to be able to access the model files and configuration
   - name: Mount /mnt/data/marie-ai

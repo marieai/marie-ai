@@ -1,12 +1,15 @@
 import asyncio
 import time
+from collections.abc import Sequence
 from typing import Dict, List, Optional, Union
 
+import grpc
 from docarray import BaseDoc, DocList
 from docarray.documents import TextDoc
+from grpc.aio import AioRpcError
 
 from marie.constants import DEPLOYMENT_STATUS_PREFIX
-from marie.job.common import ActorHandle, JobInfoStorageClient, JobStatus
+from marie.job.common import ActorHandle, JobInfo, JobInfoStorageClient, JobStatus
 from marie.job.event_publisher import EventPublisher
 from marie.job.job_distributor import JobDistributor
 from marie.logging_core.logger import MarieLogger
@@ -17,12 +20,6 @@ from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.types_core.request.data import DataRequest
-
-
-async def fn():
-    print('fn-THAT SLEEPS START')
-    await asyncio.sleep(1.5)
-    print('fn-THAT SLEEPS DONE')
 
 
 class JobSupervisor:
@@ -42,18 +39,107 @@ class JobSupervisor:
         job_info_client: JobInfoStorageClient,
         job_distributor: JobDistributor,
         event_publisher: EventPublisher,
+        etcd_client: EtcdClient,
     ):
         self.logger = MarieLogger(self.__class__.__name__)
         self._job_id = job_id
         self._job_info_client = job_info_client
         self._job_distributor = job_distributor
         self._event_publisher = event_publisher
+        self._etcd_client = etcd_client
         self.request_info = None
-        self._etcd_client = EtcdClient("localhost", 2379, namespace="marie")
 
         self._active_tasks = set()
+        self._submission_queue = asyncio.Queue()
 
-    async def ping(self):
+    async def ping(self) -> bool:
+        """
+        Perform a health-check ping against the configured executor deployment.
+
+        Returns:
+            True if the executor responds successfully;
+            False if the RPC was cancelled by the peer;
+            otherwise raises RuntimeError.
+        """
+        if not self.request_info:
+            # No target configured, assume healthy
+            return True
+        # FIXME : this is a hack to skip the health check due to overhead and killing GRPC
+        if True:
+            self.logger.debug('Skipping health-check ping')
+            return True
+
+        request_id = self.request_info.get("request_id")
+        address = self.request_info.get("address")
+        deployment = self.request_info.get("deployment")
+        endpoint = "_jina_dry_run_"
+
+        self.logger.debug(
+            "Health-check: sending ping to %s (request_id=%s, deployment=%s)",
+            address,
+            request_id,
+            deployment,
+        )
+
+        async with get_grpc_channel(address=address, asyncio=True) as channel:
+            stub = _ConnectionStubs(
+                address=address,
+                channel=channel,
+                deployment_name=deployment,
+                metrics=_NetworkingMetrics(
+                    sending_requests_time_metrics=None,
+                    received_response_bytes=None,
+                    send_requests_bytes_metrics=None,
+                ),
+                histograms=_NetworkingHistograms(),
+            )
+
+            # dry-run request
+            doc = TextDoc(text=f"ping : {deployment}@_jina_dry_run_")
+            request = DataRequest()
+            request.document_array_cls = DocList[BaseDoc]()
+            request.header.exec_endpoint = "_jina_dry_run_"
+            request.header.target_executor = deployment
+            request.parameters = {
+                "job_id": self._job_id,
+            }
+            request.data.docs = DocList([doc])
+
+            try:
+                response, _ = await stub.send_requests(
+                    requests=[request], metadata={}, compression=False, timeout=60
+                )
+                self.logger.debug("Health-check response: %s", response)
+
+                if response.status.code != jina_pb2.StatusProto.SUCCESS:
+                    raise RuntimeError(
+                        f"Health-check endpoint '{endpoint}' returned status {response.status.code}"
+                    )
+
+                return True
+
+            except AioRpcError as rpc_err:
+                # Gracefully handle peer-initiated cancellations
+                if rpc_err.code() == grpc.StatusCode.CANCELLED:
+                    self.logger.warning(
+                        "Health-check ping to %s cancelled by peer (request_id=%s)",
+                        address,
+                        request_id,
+                    )
+                    return False
+
+                self.logger.error("Health-check ping AioRpcError: %s", rpc_err)
+                raise RuntimeError(f"Error during health-check ping: {rpc_err}")
+
+            except Exception as exc:
+                msg = (
+                    f"Health-check ping to {address} for request_id={request_id} "
+                    f"on deployment={deployment} failed: {exc}"
+                )
+                self.logger.error(msg)
+                raise RuntimeError(msg)
+
+    async def pingX(self):
         """Used to check the health of the executor/deployment."""
         request_info = self.request_info
         if request_info is None:
@@ -164,11 +250,14 @@ class JobSupervisor:
                 },
             )
 
-        # invoke the job submission in the background
+        # Enqueue job for processing, this will be processed in the background but it guarantees order of execution
+        await self._submission_queue.put(curr_info)
+        self.logger.debug(f"Job {self._job_id} enqueued for submission.")
+
         if self.DEFAULT_JOB_TIMEOUT_S > 0:
             try:
                 await asyncio.wait_for(
-                    self._submit_job_in_background(curr_info),
+                    self._submit_job_in_background(),
                     timeout=self.DEFAULT_JOB_TIMEOUT_S,
                 )
             except asyncio.TimeoutError:
@@ -185,10 +274,10 @@ class JobSupervisor:
                             message="Job submission timed out.",
                         )
         else:
-            task = asyncio.create_task(self._submit_job_in_background(curr_info))
-            # task = asyncio.create_task(fn())
-            print(task)
-        self.logger.info(f"Job {self._job_id} submitted in the background.")
+            task = asyncio.create_task(self._submit_job_in_background())
+            self._active_tasks.add(task)
+            task.add_done_callback(lambda t: self._active_tasks.discard(t))
+        self.logger.info(f"Job submitted in the background : {self._job_id}")
 
     def send_callback(
         self, requests: Union[List[DataRequest] | DataRequest], request_info: Dict
@@ -199,20 +288,25 @@ class JobSupervisor:
         :param requests: The requests that were sent.
         :param request_info: The request info.
         """
-        if isinstance(requests, list):
-            request = requests[0]
-        else:
-            request = [requests]
+        request = (
+            requests[0] if isinstance(requests, Sequence) and requests else requests
+        )
+
+        if not request:
+            self.logger.error("No valid requests provided.")
+            return
+
         self.request_info = request_info
 
-        print('send_callback self.request_info:', self.request_info)
-        print('send_callback requests:', requests)
+        required_keys = ["request_id", "address", "deployment"]
+        if not all(key in request_info for key in required_keys):
+            self.logger.error(f"Missing required keys in request_info: {request_info}")
+            return
 
         # FIXME : This is a hack to trigger the event n iJob Scheduler
         request_id = request_info["request_id"]
         address = request_info["address"]
         deployment_name = request_info["deployment"]
-
         self.logger.info(f"Sent request to {address} on deployment {deployment_name}")
 
         from grpc_health.v1.health_pb2 import HealthCheckResponse
@@ -223,22 +317,132 @@ class JobSupervisor:
         status_str = HealthCheckResponse.ServingStatus.Name(status)
         key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
 
-        _lease_time = 5
-        _lease = self._etcd_client.lease(_lease_time)
-        res = self._etcd_client.put(key, status_str, lease=_lease)
+        # FIXME : This needs to be configured via config
+        try:
+            _lease_time = 5
+            _lease = self._etcd_client.lease(_lease_time)
+            res = self._etcd_client.put(key, status_str, lease=_lease)
+            self.logger.debug(
+                f"Updated Etcd with key {key}, status: {status_str}, lease time: {_lease_time}"
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to update Etcd for key {key}: {e}")
+        finally:
+            self.logger.debug(
+                f"Setting scheduled_event for request_id: {request_info['request_id']}"
+            )
+            ClusterState.scheduled_event.set()
 
-        ClusterState.scheduled_event.set()
-
-    async def _submit_job_in_background(self, curr_info):
+    async def _submit_job_in_background(self):
         try:
             start_time = time.monotonic()
-            self.logger.info(f"Submitting job {self._job_id} in the background.")
+            job_info: JobInfo = await self._submission_queue.get()
+
+            self.logger.debug(f"Starting background submission for job: {self._job_id}")
+            response = await self._job_distributor.send(
+                submission_id=self._job_id,
+                job_info=job_info,
+                send_callback=self.send_callback,
+            )
+
+            elapsed = time.monotonic() - start_time
+            self.logger.info(
+                f"Job processed successfully in {elapsed:.2f}s for job {self._job_id}"
+            )
+
+            self.logger.debug(
+                f"Response received for job {self._job_id} | "
+                f"Status: {response.status.code} | "
+                f"Parameters: {response.parameters} | "
+                f"Docs: {response.data.docs}"
+            )
+
+            # This monitoring strategy allows us to have Floating Executors that can be used to run jobs outside of the main
+            # deployment. This is useful for running jobs that are not part of the main deployment, but are still part of the
+            # same deployment workflow.
+            # Example would be calling a custom API, MPC or tools that we don't control.
+
+            # If the job is already in a terminal state, then we don't need to update it. This can happen if the
+            # job was cancelled while the job was being submitted.
+            # or while the job was marked from the EXECUTOR worker node as "STOPPED", "SUCCEEDED", "FAILED".
+
+            current_status = await self._job_info_client.get_status(self._job_id)
+
+            if response.status.code == jina_pb2.StatusProto.SUCCESS:
+                if current_status.is_terminal():
+                    self.logger.debug(
+                        f"Job {self._job_id} already in terminal state: {current_status}. Event will still be published."
+                    )
+                    await self._event_publisher.publish(
+                        current_status,
+                        {
+                            "job_id": self._job_id,
+                            "status": current_status,
+                            "message": f"Job {self._job_id} already completed with status {current_status}.",
+                            "jobinfo_replace_kwargs": False,
+                        },
+                    )
+                else:
+                    await self._job_info_client.put_status(
+                        self._job_id, JobStatus.SUCCEEDED
+                    )
+
+            else:
+                # Failure path
+                exception_proto = response.status.exception
+                error_name = str(exception_proto.name)
+
+                if current_status.is_terminal():
+                    self.logger.warning(
+                        f"Job {self._job_id} failed but is already in terminal state: {current_status}. Event will still be published."
+                    )
+                    await self._event_publisher.publish(
+                        current_status,
+                        {
+                            "job_id": self._job_id,
+                            "status": current_status,
+                            "message": f"Job {self._job_id} failed but already marked terminal: {current_status}.",
+                            "jobinfo_replace_kwargs": False,
+                        },
+                    )
+                else:
+                    await self._job_info_client.put_status(
+                        self._job_id, JobStatus.FAILED, message=error_name
+                    )
+
+        except Exception as e:
+            from marie.excepts import InternalNetworkError
+
+            error_message = str(e)
+            error_label = (
+                "Communication error with deployment"
+                if isinstance(e, InternalNetworkError)
+                else "Internal server error - job supervisor"
+            )
+
+            self.logger.error(
+                f"Exception during job submission for {self._job_id}: {error_message}"
+            )
+
+            await self._job_info_client.put_status(
+                self._job_id, JobStatus.FAILED, message=error_label
+            )
+
+            # Raising here ensures the task failure is visible to debuggers, but you can suppress this in production.
+            raise
+
+    async def _submit_job_in_backgroundV1(self):
+        try:
+            start_time = time.monotonic()
+            curr_info: JobInfo = await self._submission_queue.get()
+            self.logger.info(f"Submitting job in the background : {self._job_id}")
             response = await self._job_distributor.send(
                 submission_id=self._job_id,
                 job_info=curr_info,
                 send_callback=self.send_callback,
             )
-            self.logger.info(f"Job {self._job_id} submitted successfully.")
+            print(f'response : {response}')
+            self.logger.info(f"Job submitted successfully : {self._job_id}")
             mid_time = time.monotonic()
             print(f"Submission took {mid_time - start_time:.2f} seconds")
 
@@ -263,7 +467,7 @@ class JobSupervisor:
             job_status = await self._job_info_client.get_status(self._job_id)
             if response.status.code == jina_pb2.StatusProto.SUCCESS:
                 if job_status.is_terminal():
-                    self.logger.warning(
+                    self.logger.debug(
                         f"Job {self._job_id} is already in terminal state {job_status}."
                     )
                     # triggers the event to update the WorkStatus
@@ -305,9 +509,130 @@ class JobSupervisor:
                     )
 
             end_time = time.monotonic()
-            print(f"Full background process took {end_time - mid_time:.2f} seconds")
         except Exception as e:
-            await self._job_info_client.put_status(
-                self._job_id, JobStatus.FAILED, message=str(e)
+            import json
+
+            error_message = (
+                json.dumps({"error": str(e)})
+                if isinstance(e, Exception)
+                else json.dumps({"error": str(e.__class__)})
             )
+
+            #  FIXME  : Need to store the exception in the message similar to the error_response in marie_gateway
+            from marie.excepts import InternalNetworkError
+
+            name = 'Internal server error - job supervisor'
+            if isinstance(e, InternalNetworkError):
+                name = "Communication error with deployment"
+
+            await self._job_info_client.put_status(
+                self._job_id, JobStatus.FAILED, message=f"{name}"
+            )
+
+            # we should not rethrow the exception here as it will not be caught by the caller
+            # good during debugging but not in production
             raise e
+
+    async def _submit_job_in_backgroundXXXX(self, curr_info: JobInfo):
+        try:
+            start_time = time.monotonic()
+            self.logger.info(f"Submitting job in the background : {self._job_id}")
+
+            last_response = None
+            stream_error = None
+            async for resp, err in self._job_distributor.send_stream(
+                submission_id=self._job_id,
+                job_info=curr_info,
+                send_callback=self.send_callback,
+            ):
+                now = time.monotonic()
+                self.logger.debug(
+                    f"[{self._job_id}] chunk after {now - start_time:.3f}s: resp={resp}, err={err}"
+                )
+
+                if err:
+                    self.logger.error(f"[{self._job_id}] executor error: {err}")
+                    stream_error = err
+                    # stop on first executor error
+                    break
+
+                last_response = resp
+
+            mid_time = time.monotonic()
+            print(f"Streaming took {mid_time - start_time:.2f} seconds")
+
+            # Determine final job outcome
+            # If we never got a response, treat as failure
+            if stream_error or last_response is None:
+                # mark FAILED
+                await self._job_info_client.put_status(
+                    self._job_id,
+                    JobStatus.FAILED,
+                    message=str(stream_error or "No response received from executors"),
+                )
+                return
+
+            # Otherwise inspect the final DataRequest for overall success
+            final_status = last_response.status
+            job_status = await self._job_info_client.get_status(self._job_id)
+
+            if final_status.code == jina_pb2.StatusProto.SUCCESS:
+                if job_status.is_terminal():
+                    self.logger.debug(
+                        f"Job {self._job_id} already terminal: {job_status}"
+                    )
+                    await self._event_publisher.publish(
+                        job_status,
+                        {
+                            "job_id": self._job_id,
+                            "status": job_status,
+                            "message": f"Job {self._job_id} already in terminal state {job_status}.",
+                            "jobinfo_replace_kwargs": False,
+                        },
+                    )
+                else:
+                    await self._job_info_client.put_status(
+                        self._job_id, JobStatus.SUCCEEDED
+                    )
+            else:
+                # final_status is ERROR
+                exc = final_status.exception
+                err_name = str(exc.name)
+                if job_status.is_terminal():
+                    self.logger.warning(
+                        f"Job {self._job_id} already terminal: {job_status}"
+                    )
+                    await self._event_publisher.publish(
+                        job_status,
+                        {
+                            "job_id": self._job_id,
+                            "status": job_status,
+                            "message": f"Job {self._job_id} already in terminal state {job_status}.",
+                            "jobinfo_replace_kwargs": False,
+                        },
+                    )
+                else:
+                    await self._job_info_client.put_status(
+                        self._job_id, JobStatus.FAILED, message=err_name
+                    )
+
+            end_time = time.monotonic()
+            print(f"Full background process took {end_time - mid_time:.2f} seconds")
+
+        except Exception as e:
+            import json
+
+            msg = json.dumps({"error": str(e)})
+            from marie.excepts import InternalNetworkError
+
+            name = (
+                "Communication error with deployment"
+                if isinstance(e, InternalNetworkError)
+                else "Internal server error - job supervisor"
+            )
+
+            await self._job_info_client.put_status(
+                self._job_id, JobStatus.FAILED, message=name
+            )
+            # rethrow if you want to see it in logs; otherwise you can drop this
+            raise

@@ -64,6 +64,7 @@ class PostgreSQLHandler:
         password: str = "default_pwd",
         database: str = "postgres",
         table: Optional[str] = "default_table",
+        min_connections: int = 1,
         max_connections: int = 5,
         dump_dtype: type = np.float64,
         dry_run: bool = False,
@@ -80,7 +81,7 @@ class PostgreSQLHandler:
 
         if not dry_run:
             self.postgreSQL_pool = psycopg2.pool.SimpleConnectionPool(
-                1,
+                min_connections,
                 max_connections,
                 user=username,
                 password=password,

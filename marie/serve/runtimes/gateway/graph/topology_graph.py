@@ -216,14 +216,19 @@ class TopologyGraph:
 
             async def task():
                 if self._endpoints_proto is None:
-                    self.logger.debug(f"Getting Endpoints data from {self.name}")
+                    self.logger.info(f"Getting Endpoints data from {self.name}")
                     endpoints_proto = await connection_pool.send_discover_endpoint(
                         self.name, retries=self._retries
                     )
+                    self.logger.info(f"Got Endpoints data from {self.name}")
                     # TODO: Try more often should not be able to start, synchronization issue
                     if endpoints_proto is not None:
                         endp, _ = endpoints_proto
                         self.endpoints = endp.endpoints
+
+                        self.logger.info(
+                            f"Endpoints data from {self.name} : > {self.endpoints}"
+                        )
                         if docarray_v2:
                             from docarray.documents.legacy import LegacyDocument
 
@@ -456,7 +461,20 @@ class TopologyGraph:
                         return request, metadata
                     # otherwise, send to executor and get response
                     try:
-                        result = await connection_pool.send_requests_once(
+
+                        # Debug information to log and understand the process
+                        self.logger.debug(
+                            f"Sending requests for deployment: {self.name}"
+                        )
+                        # self.logger.info(f"Metadata: {metadata}")
+                        self.logger.debug(f"Endpoint: {endpoint}")
+                        self.logger.debug(
+                            f"Request parameters: {req_to_send.parameters}"
+                        )
+                        self.logger.debug(f"Timeout: {self._timeout_send}")
+                        self.logger.debug(f"Retries: {self._retries}")
+
+                        task = connection_pool.send_requests_once(
                             requests=self.parts_to_send,
                             deployment=self.name,
                             metadata=self._metadata,
@@ -466,9 +484,22 @@ class TopologyGraph:
                             retries=self._retries,
                             send_callback=send_callback,
                         )
+                        if task is None:
+                            raise Exception(
+                                f"Failed to send requests to {self.name} at endpoint {endpoint}"
+                            )
+                        result = await task
                         if issubclass(type(result), BaseException):
                             raise result
                         else:
+                            if result is None:
+                                print("Received None from send_requests_once")
+                                print(task)
+                                print(result)
+                                self.logger.error(
+                                    f"Received None from {self.name} for request {request}"
+                                )
+
                             resp, metadata = result
 
                         if docarray_v2:
@@ -511,6 +542,7 @@ class TopologyGraph:
                         self.logger.error(
                             f"Exception sending requests to {self.name}: {err}"
                         )
+                        print(traceback.format_exc())
                         raise err
 
                     self.end_time = datetime.utcnow()
@@ -875,6 +907,9 @@ class TopologyGraph:
                         )
                         for node in self.all_nodes
                     ]
+                    if tasks_to_get_endpoints is None:
+                        raise Exception("No tasks to get endpoints")
+
                     await asyncio.gather(*tasks_to_get_endpoints)
                     endpoints = set()
                     for node in self.all_nodes:

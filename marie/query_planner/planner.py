@@ -1,20 +1,21 @@
-import json
 import traceback
 from collections import defaultdict, deque
 from io import StringIO
 from pprint import pprint
+from typing import Callable
 
-import numpy as np
+import matplotlib.pyplot as plt
+import networkx as nx
 import yaml
 
 from marie.job.job_manager import generate_job_id, increment_uuid7str
+from marie.logging_core.predefined import default_logger as logger
 from marie.query_planner.base import (
-    ExecutorEndpointQueryDefinition,
-    LlmQueryDefinition,
     NoopQueryDefinition,
-    PythonFunctionQueryDefinition,
+    PlannerInfo,
     Query,
     QueryPlan,
+    QueryPlanRegistry,
     QueryType,
 )
 from marie.query_planner.mapper import JobMetadata
@@ -75,10 +76,15 @@ def plan_to_yaml(plan: QueryPlan, output_path: str = "query_plan_pretty.yaml") -
 def print_sorted_nodes(sorted_nodes: list[str], plan: QueryPlan) -> None:
     """
     Pretty prints the sorted nodes, with their descriptions, and the query plan in sorted order.
+    Currently disabled - will log a warning and return immediately.
 
     :param sorted_nodes: List of nodes in topologically sorted order.
     :param plan: The QueryPlan object.
     """
+    if True:
+        logger.warning("Skipping sorted nodes output")
+        return
+
     print("\n" + "=" * 60)
     print("Topologically Sorted Nodes:")
     print("=" * 60)
@@ -166,224 +172,131 @@ def topological_sort(plan: QueryPlan) -> list:
     return sorted_nodes
 
 
-def query_planner(frame_count: int, layout: str) -> QueryPlan:
+def compute_job_levels(sorted_nodes: list[str], plan: QueryPlan) -> dict[str, int]:
     """
-    Plan a structured query execution graph for document annotation, adding SEGMENT, FIELD & TABLE Extraction, and COLLATOR steps.
-    :param frame_count: Number of frames to process.
-    :param layout: The layout of the document.
-    :return: The QueryPlan for the structured query execution graph.
+    Given a list of node IDs in topological order and the original QueryPlan,
+    compute a job_level for each node representing its distance from the nearest root.
 
-    Example:
-    START -> ROOT (Annotator) -> Frame1 -> Frame2 -> MERGE -> COLLATOR -> END
-
+    :param sorted_nodes: Node IDs in topological order.
+    :param plan: The original QueryPlan with dependency information.
+    :return: A dict mapping node_id to its level (int).
     """
-    base_job_id = generate_job_id()
+    # Build a map from node_id to its dependencies for quick lookup
+    dependency_map = {node.task_id: node.dependencies for node in plan.nodes}
 
-    current_id = 0
-    # Root node for the entire process
+    # Initialize all levels to 0
+    job_level = {node_id: 0 for node_id in sorted_nodes}
+
+    # Iterate in topological order, so dependencies are processed first
+    for node_id in sorted_nodes:
+        deps = dependency_map.get(node_id, []) or []
+        if deps:
+            # level = max level of dependencies + 1
+            max_dep_level = max(job_level.get(dep, 0) for dep in deps)
+            job_level[node_id] = max_dep_level + 1
+
+    return job_level
+
+
+def _load_query_planner(planner_name: str) -> Callable:
+    """
+    Dynamically load the query planner based on the planner name.
+
+    :param planner_name: The name of the query planner to load.
+    :return: A callable query planner function.
+    :raise ValueError: If the query planner name is invalid.
+    """
+    import os
+
+    logger.debug(f"Loading query planner: {planner_name}")
+    try:
+        return QueryPlanRegistry.get(planner_name)
+    except ValueError as e:
+        logger.error(f"Error loading query planner: {e}")
+        if os.getenv("MARIE_DEBUG_QUERY_PLANNER", "false").lower() == "true":
+            logger.error(
+                f"Available planners: {list(QueryPlanRegistry.list_planners())}"
+            )
+        raise
+
+
+def query_planner(planner_info: PlannerInfo) -> QueryPlan:
+    query_planner_name = planner_info.name
+    try:
+        query_planner_fn = _load_query_planner(query_planner_name)
+    except ValueError as e:
+        logger.error(f"Error loading query planner: {e}")
+        raise
+
+    plan = query_planner_fn(planner_info)
+    if not plan:
+        error_message = (
+            f"Query planner '{query_planner_name}' returned an invalid plan."
+        )
+        logger.error(error_message)
+        raise ValueError(error_message)
+
+    # Technically DAG can have multiple roots, but we want to enforce
+    # a single root node as that will be used as the entry point
+    strict = True
+    plan = ensure_single_entry_point(plan, planner_info, strict)
+    logger.debug(f"Query planning completed successfully for: {query_planner_name}")
+    return plan
+
+
+def ensure_single_entry_point(
+    query_plan: QueryPlan, planner_info: PlannerInfo, strict: bool = False
+) -> QueryPlan:
+    """
+    Ensure the query plan has a single entry point by creating a synthetic root node
+    that connects to all natural root nodes in the DAG.
+
+    Args:
+        query_plan:  QueryPlan object to update with a synthetic root node
+        planner_info: PlannerInfo object containing base_id and current_id
+
+    Returns:
+        Tuple of (updated query plan, incremented current_id)
+        :param strict:
+    """
+    nodes = query_plan.nodes
+    base_job_id = planner_info.base_id
+    current_id = planner_info.current_id
+
+    referenced_nodes = set()
+    for node in nodes:
+        referenced_nodes.update(node.dependencies)
+
+    # Find natural root nodes (nodes that aren't dependencies of any other node)
+    natural_roots = [node for node in nodes if node.task_id not in referenced_nodes]
+
+    strict = False
+    if strict and len(natural_roots) != 1:
+        error_message = (
+            f"Query plan must have exactly one root node, found {len(natural_roots)}"
+        )
+        logger.error(error_message)
+        raise ValueError(error_message)
+
+    if len(natural_roots) == 1:
+        return query_plan
+
+    current_id += 1
     root = Query(
         task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: START",
+        query_str=f"{current_id}: ROOT",
         dependencies=[],
         node_type=QueryType.COMPUTE,
         definition=NoopQueryDefinition(),
     )
-    current_id += 1
 
-    annotator_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: Document annotator",
-        dependencies=[root.task_id],
-        node_type=QueryType.COMPUTE,
-        definition=NoopQueryDefinition(),
-    )
-    current_id += 1
+    for natural_root in natural_roots:
+        natural_root.dependencies.append(root.task_id)
 
-    steps = []
-    frame_joiners = []
-    frame_annotators = []
+    query_plan.nodes.insert(0, root)
+    planner_info.current_id = current_id
 
-    for i in range(frame_count):
-        # Frame segmentation step
-        frame_annotator = Query(
-            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-            query_str=f"{current_id}: Annotate frame {i} ROIs",
-            dependencies=[annotator_node.task_id],  # No dependency
-            node_type=QueryType.COMPUTE,
-            definition=NoopQueryDefinition(params={"layout": layout}),
-        )
-        current_id += 1
-        frame_annotators.append(frame_annotator)
-
-        step_start = Query(
-            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-            query_str=f"{current_id}: ROI_START for frame {i}",
-            dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
-            node_type=QueryType.COMPUTE,
-            definition=LlmQueryDefinition(
-                model_name="qwen_v2_5_vl",
-                endpoint="annotator/roi",
-                params={"layout": layout, "roi": "start"},
-            ),
-        )
-        current_id += 1
-
-        step_end = Query(
-            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-            query_str=f"{current_id}: ROI_END for frame {i}",
-            dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
-            node_type=QueryType.COMPUTE,
-            definition=LlmQueryDefinition(
-                model_name="qwen_v2_5_vl",
-                endpoint="annotator/roi",
-                params={"layout": layout, "roi": "end"},
-            ),
-        )
-        current_id += 1
-
-        step_relation = Query(
-            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-            query_str=f"{current_id}: ROI_RELATION for frame {i}",
-            dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
-            node_type=QueryType.COMPUTE,
-            definition=LlmQueryDefinition(
-                model_name="qwen_v2_5_vl",
-                endpoint="annotator/roi",
-                params={"layout": layout, "roi": "relation"},
-            ),
-        )
-        current_id += 1
-
-        steps.extend([frame_annotator, step_start, step_end, step_relation])
-
-        # Frame-level joiner now depends on all frame annotations
-        joiner = Query(
-            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-            query_str=f"{current_id}: Merge frame {i}",
-            dependencies=[step_start.task_id, step_end.task_id, step_relation.task_id],
-            node_type=QueryType.MERGER,
-            definition=NoopQueryDefinition(params={'layout': layout}),
-        )
-        current_id += 1
-
-        frame_joiners.append(joiner)
-
-    # Global joiner (Merging results from all frames)
-    global_joiner = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: Merge all frames",
-        dependencies=[
-            joiner.task_id for joiner in frame_joiners
-        ],  # Depends on all frame joiners
-        node_type=QueryType.MERGER,
-        definition=NoopQueryDefinition(params={'layout': layout}),
-    )
-    current_id += 1
-
-    # Additional Processing Steps after Global Joiner
-    segment_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: SEGMENT extracted data",
-        dependencies=[global_joiner.task_id],  # Depends on global merged results
-        node_type=QueryType.COMPUTE,
-        definition=ExecutorEndpointQueryDefinition(
-            endpoint="extract_executor://segmenter",
-            params={'layout': layout, 'function': 'segment_data'},
-        ),
-    )
-    current_id += 1
-
-    document_value_extract_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: DOC VALUE EXTRACT",
-        dependencies=[segment_node.task_id],  # Depends on segmentation step
-        node_type=QueryType.EXTRACTOR,
-        definition=LlmQueryDefinition(
-            model_name="qwen_v2_5_vl",
-            endpoint="extract/field_doc",
-            params={'layout': layout, 'extractor': 'doc'},
-        ),
-    )
-    current_id += 1
-
-    field_value_extract_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: FIELD VALUE EXTRACT",
-        dependencies=[segment_node.task_id],  # Depends on segmentation step
-        node_type=QueryType.EXTRACTOR,
-        definition=LlmQueryDefinition(
-            model_name="qwen_v2_5_vl",
-            endpoint="extract/field",
-            params={'layout': layout, 'extractor': 'field'},
-        ),
-    )
-    current_id += 1
-
-    table_value_extract_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: TABLE VALUE EXTRACT",
-        dependencies=[segment_node.task_id],  # Depends on segmentation step
-        node_type=QueryType.EXTRACTOR,
-        definition=LlmQueryDefinition(
-            model_name="qwen_v2_5_vl",
-            endpoint="extract/table",
-            params={'layout': layout, 'extractor': 'table'},
-        ),
-    )
-    current_id += 1
-
-    # EXTRACT node now depends on both field & table extraction steps
-    extract_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: EXTRACT insights",
-        dependencies=[
-            document_value_extract_node.task_id,
-            field_value_extract_node.task_id,
-            table_value_extract_node.task_id,
-        ],
-        node_type=QueryType.MERGER,
-        definition=PythonFunctionQueryDefinition(
-            endpoint="evaluator",
-            params={'layout': layout, 'function': 'extract_insights'},
-        ),
-    )
-    current_id += 1
-
-    collator_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: COLLATOR: Compile structured output",
-        dependencies=[extract_node.task_id],  # Depends on extraction step
-        node_type=QueryType.MERGER,
-        definition=PythonFunctionQueryDefinition(
-            endpoint="evaluator", params={'layout': layout, 'function': 'data_collator'}
-        ),
-    )
-    current_id += 1
-
-    end_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: END",
-        dependencies=[collator_node.task_id],  # Depends on extraction step
-        node_type=QueryType.COMPUTE,
-        definition=NoopQueryDefinition(params={'layout': layout}),
-    )
-
-    return QueryPlan(
-        nodes=[root]
-        + [annotator_node]
-        + steps
-        + frame_joiners
-        + [
-            global_joiner,
-            segment_node,
-            document_value_extract_node,
-            field_value_extract_node,
-            table_value_extract_node,
-            extract_node,
-            collator_node,
-        ]
-        + [end_node]
-    )
+    return query_plan
 
 
 def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.png"):
@@ -394,11 +307,17 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
     :param plan: The QueryPlan to visualize.
     :param output_path: The file path to save the graph image (default: 'query_plan_graph.png').
     """
-    import matplotlib.pyplot as plt
-    import networkx as nx
+
+    # https://mermaid.live/
+    mermaid_code = generate_mermaid_from_query_plan(plan)
+    print(mermaid_code)
 
     # Create a directed graph (DiGraph)
     graph = nx.DiGraph()
+
+    if False:
+        logger.warning("Skipping graph visualization")
+        return
 
     # Add nodes and edges to the graph in a consistent order
     for node in sorted(plan.nodes, key=lambda x: x.task_id):  # Sort nodes by ID
@@ -439,7 +358,10 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
 
     # Use a consistent hierarchical layout (Graphviz) for reproducibility
     try:
-        pos = nx.nx_agraph.graphviz_layout(graph, prog="dot")  # Top-down layout
+        # pos = nx.nx_agraph.graphviz_layout(graph, prog="dot")  # Top-down layout
+        pos = nx.nx_agraph.graphviz_layout(
+            graph, prog="dot", args='-Gnodesep=0.6 -Granksep=1.2'
+        )
     except ImportError:
         # If Graphviz is not available, fall back to spring_layout with a fixed seed
         pos = nx.spring_layout(graph, seed=42)  # Setting a seed for consistent results
@@ -500,24 +422,59 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
 
     # Save the graph locally
     plt.savefig(output_path, format="png", dpi=300)  # Save with high resolution
-    print(f"Graph saved successfully as '{output_path}'")
 
     plt.show()
 
 
-if __name__ == "__main__":
-    question = "Annotate documents with named entities."
-    frame_count = 3
-    layout = "12345"
+def nx_to_mermaid(graph: nx.DiGraph) -> str:
+    lines = ["```mermaid", "flowchart TD"]
 
-    plan = query_planner(frame_count, layout)
-    pprint(plan.model_dump())
-    visualize_query_plan_graph(plan)
-    # yml_str = plan_to_yaml(plan)
-    # pprint(yml_str)
+    for source, target in graph.edges():
+        lines.append(f"    {source} --> {target}")
 
-    sorted_nodes = topological_sort(plan)
-    print_sorted_nodes(sorted_nodes, plan)
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def generate_mermaid_from_query_plan(plan: QueryPlan) -> str:
+    """
+    Generate Mermaid flowchart syntax from a QueryPlan.
+
+    Args:
+        plan (QueryPlan): The query plan object with nodes.
+
+    Returns:
+        str: Mermaid diagram code.
+    """
+    # Build nodes dictionary for quick lookup
+    nodes = {node.task_id: node for node in plan.nodes}
+
+    lines = ["graph TD"]  # top-down graph
+
+    # Define nodes with labels, wrap or shorten long labels if needed
+    import textwrap
+
+    def wrap_label(label, max_len=30):
+        return "<br>".join(textwrap.wrap(label, max_len))
+
+    for node in plan.nodes:
+        label = wrap_label(node.query_str)
+        # Mermaid node id: sanitize task_id (e.g., remove dashes)
+        node_id = node.task_id.replace("-", "_")
+        lines.append(f'    {node_id}["{label}"]')
+
+    # Add edges based on dependencies
+    for node in plan.nodes:
+        node_id = node.task_id.replace("-", "_")
+        for dep in node.dependencies:
+            dep_id = dep.replace("-", "_")
+            lines.append(f'    {dep_id} --> {node_id}')
+
+    return "\n".join(lines)
+
+
+def print_query_plan(plan: QueryPlan, layout: str) -> None:
+    """Print the query plan in a human-readable format."""
 
     executors = []
     for node in plan.nodes:
@@ -529,7 +486,26 @@ if __name__ == "__main__":
         except Exception as e:
             traceback.print_exc()
             print(f"Error creating metadata for node {node.task_id}: {e}")
-
     print("Executors:", executors)
     for exec in executors:
         print(f"Executor: {exec}")
+
+
+if __name__ == "__main__":
+    question = "Annotate documents with named entities."
+    frame_count = 3
+    layout = "extract"
+    planner_info = PlannerInfo(name="extract", base_id=generate_job_id())
+    plan = query_planner(planner_info)
+    pprint(plan.model_dump())
+    visualize_query_plan_graph(plan)
+    mermaid = generate_mermaid_from_query_plan(plan)
+    # yml_str = plan_to_yaml(plan)
+    # pprint(yml_str)
+
+    json_serialized = plan.model_dump()
+    reconstructed_plan = QueryPlan(**json_serialized)
+    sorted_nodes = topological_sort(plan)
+    print_sorted_nodes(sorted_nodes, plan)
+
+    print_query_plan(plan, layout)

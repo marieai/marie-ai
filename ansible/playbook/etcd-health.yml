@@ -1,0 +1,23 @@
+---
+- name: ETCD cluster health check
+  hosts: etcd_cluster
+  become: true
+  become_user: gpu-svc
+
+  vars:
+    etcd_endpoints: >-
+      {{ groups['etcd_cluster'] | map('extract', hostvars, 'ansible_host') |
+         map('regex_replace', '^', 'http://') |
+         map('regex_replace', '$', ':2379') |
+         join(',') }}
+
+  tasks:
+    - name: Run etcdctl endpoint health
+      shell: |
+        ETCDCTL_API=3 etcdctl \
+          --endpoints={{ etcd_endpoints }} \
+          endpoint health --write-out=table
+      register: etcd_health
+
+    - debug:
+        msg: "{{ etcd_health.stdout_lines }}"

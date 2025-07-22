@@ -70,6 +70,8 @@ class AdaptedVisionTransformer(VisionTransformer):
             kwargs.pop("pretrained_cfg")
         if "pretrained_cfg_overlay" in kwargs :
             kwargs.pop("pretrained_cfg_overlay")
+        if "cache_dir" in kwargs :
+            kwargs.pop("cache_dir")
         super().__init__(*args, **kwargs)
 
         # After timm update, the following code is needed to init dist token

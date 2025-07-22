@@ -1,11 +1,14 @@
-import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+import io
+import os
+import time
+from pathlib import Path
+from typing import Any
+from typing import Dict, List, Optional, Union
 
 import boto3
+from boto3.s3.transfer import TransferConfig
 from botocore.exceptions import ClientError, EndpointConnectionError
-
-import io
 
 from marie.excepts import BadConfigSource, raise_exception
 from marie.storage import PathHandler
@@ -18,8 +21,10 @@ except ImportError:
 StrOrBytesPath = Union[str, Path, os.PathLike]
 
 from marie.logging_core.predefined import default_logger as logger
-from marie.logging_core.logger import MarieLogger
-
+# Disable thread use/transfer concurrency
+# this need to be configurable
+# doding tthis to prevent: cannot schedule new futures after interpreter shutdown
+config = TransferConfig(use_threads=False)
 
 def is_file_like(obj) -> bool:
     """
@@ -336,7 +341,11 @@ class S3StorageHandler(PathHandler):
 
         # uploading file to s3
         try:
-            extra_args = {"ServerSideEncryption": "AES256"}
+            # FIXME : This will throw an error with MINIO
+            # ERROR  marie@30 Unable to upload to bucket 'marie' : An error occurred (NotImplemented) when calling the PutObject operation: Server side encryption specified
+            #        but KMS is not configured (KMS not configured for a server side encrypted objects)
+            # extra_args = {"ServerSideEncryption": "AES256"}
+            extra_args = {}
             # If S3 object_name was not specified, use file_name
             if key == "":
                 key = os.path.basename(src_path)
@@ -359,7 +368,7 @@ class S3StorageHandler(PathHandler):
         s = S3Url(path)
         try:
             bytes_buffer = io.BytesIO()
-            self.s3.Bucket(s.bucket).download_fileobj(s.key, bytes_buffer)
+            self.s3.Bucket(s.bucket).download_fileobj(s.key, bytes_buffer, Config=config)
 
             return bytes_buffer.getvalue()
         except Exception as e:
@@ -379,40 +388,43 @@ class S3StorageHandler(PathHandler):
 
     # download  file from s3 to local path
     def _read_to_file(
-        self,
-        path: str,
-        local_src: str | os.PathLike | io.BytesIO,
-        overwrite=False,
-        **kwargs: Any,
+            self,
+            path: str,
+            local_src: str | os.PathLike | io.BytesIO,
+            overwrite=False,
+            retries: int = 3,
+            **kwargs: Any,
     ):
         s = S3Url(path)
         bucket = self.s3.Bucket(s.bucket)
+        sleep_time: float = 1.0
+        file_like = is_file_like(local_src)
 
-        file_like = False
-        if is_file_like(local_src):
-            file_like = True
+        for attempt in range(1, retries + 1):
+            try:
+                if not file_like:
+                    if overwrite:
+                        if os.path.exists(local_src) and os.path.isfile(local_src):
+                            os.remove(local_src)
+                    else:
+                        if os.path.exists(local_src):
+                            raise Exception(f"File {local_src} already exists")
+                    os.makedirs(os.path.dirname(local_src), exist_ok=True)
 
-        try:
-            if not file_like:
-                if overwrite:
-                    if os.path.exists(local_src) and os.path.isfile(local_src):
-                        os.remove(local_src)
+                if file_like:
+                    bucket.download_fileobj(s.key, local_src, Config=config)
                 else:
-                    if os.path.exists(local_src):
-                        raise Exception(f"File {local_src} already exists")
-                # make sure the directory exists
-                os.makedirs(os.path.dirname(local_src), exist_ok=True)
+                    with open(local_src, "wb") as data:
+                        bucket.download_fileobj(s.key, data, Config=config)
+                return
 
-            if file_like:
-                bucket.download_fileobj(s.key, local_src)
-            else:
-                with open(local_src, "wb") as data:
-                    bucket.download_fileobj(s.key, data)
-
-        except Exception as e:
-            logger.error(f"Unable to write file from bucket '{s.bucket}' : {e}")
-            if not self.suppress_errors:
-                raise e
+            except Exception as e:
+                logger.error(f"Attempt {attempt} failed to write file from bucket '{s.bucket}': {e}")
+                if attempt < retries:
+                    time.sleep(sleep_time)
+                else:
+                    if not self.suppress_errors:
+                        raise e
 
     def _list(self, path: str, return_full_path=False, **kwargs: Any) -> List[str]:
         """List all files in current bucket in s3 storage"""

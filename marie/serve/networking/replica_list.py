@@ -1,10 +1,8 @@
-import traceback
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Union
 from urllib.parse import urlparse
 
 from grpc.aio import ClientInterceptor
 
-from marie.excepts import EstablishGrpcConnectionError
 from marie.serve.networking.balancer.load_balancer import LoadBalancer, LoadBalancerType
 from marie.serve.networking.connection_stub import create_async_channel_stub
 from marie.serve.networking.instrumentation import (
@@ -37,7 +35,6 @@ class _ReplicaList:
         load_balancer_type: Optional[
             Union[LoadBalancerType, str]
         ] = LoadBalancerType.ROUND_ROBIN,
-        load_balancer: Optional[LoadBalancer] = None,
     ):
         self.runtime_name = runtime_name
         self._connections = []
@@ -53,12 +50,10 @@ class _ReplicaList:
 
         # a set containing all the ConnectionStubs that will be created using add_connection
         # this set is not updated in reset_connection and remove_connection
-        if load_balancer is not None:
-            self.load_balancer = load_balancer
-        else:
-            self.load_balancer = LoadBalancer.get_load_balancer(
-                load_balancer_type, deployment_name, logger
-            )
+        self.load_balancer = LoadBalancer.create_load_balancer(
+            load_balancer_type, deployment_name, logger
+        )
+        self._logger.info(f'Load balancer type: {load_balancer_type}')
 
     async def reset_connection(self, address: str, deployment_name: str):
         """

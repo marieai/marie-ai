@@ -6,13 +6,14 @@ import pytest
 from pydantic import BaseModel
 from uuid_extensions import uuid7str
 
-from marie_server.job.common import JobStatus
-from marie_server.job.job_manager import JobManager
-from marie_server.scheduler import PostgreSQLJobScheduler
-from marie_server.scheduler.job_scheduler import JobScheduler
-from marie_server.scheduler.models import WorkInfo
-from marie_server.scheduler.state import WorkState
-from marie_server.storage.in_memory import InMemoryKV
+from marie.job.common import JobStatus
+from marie.job.job_manager import JobManager
+from marie.scheduler import PostgreSQLJobScheduler
+from marie.scheduler.job_scheduler import JobScheduler
+from marie.scheduler.models import WorkInfo
+from marie.scheduler.state import WorkState
+from marie.serve.discovery.etcd_client import EtcdClient
+from marie.storage.kv.in_memory import InMemoryKV
 from tests.core.test_job_manager import NoopJobDistributor
 from tests.core.test_utils import async_delay, async_wait_for_condition_async_predicate
 
@@ -20,7 +21,7 @@ from tests.core.test_utils import async_delay, async_wait_for_condition_async_pr
 
 
 def compare_pydantic_models(
-    model1: BaseModel, model2: BaseModel, excludes: List
+        model1: BaseModel, model2: BaseModel, excludes: List
 ) -> Dict[str, Any]:
     """Compare two Pydantic models and return the differences.
     :param model1: model1 to compare
@@ -43,7 +44,7 @@ def compare_pydantic_models(
 
 
 async def check_job_scheduler_succeeded(
-    job_scheduler: JobScheduler, job_id: str
+        job_scheduler: JobScheduler, job_id: str
 ) -> bool:
     data = await job_scheduler.get_job(job_id)
     status = data._worker_state
@@ -54,7 +55,7 @@ async def check_job_scheduler_succeeded(
 
 
 async def update_job_scheduler_status(
-    job_scheduler: JobScheduler, job_id: str, job_status: WorkState
+        job_scheduler: JobScheduler, job_id: str, job_status: WorkState
 ) -> None:
     await job_scheduler.put_status(job_id, job_status)
 
@@ -99,9 +100,11 @@ async def job_manager(tmp_path):
         "max_pool_size": 5,
         "max_connections": 5,
     }
-
     # storage = PostgreSQLKV(config=storage_config, reset=True)
-    yield JobManager(storage=storage, job_distributor=NoopJobDistributor())
+
+    etcd_client = EtcdClient("localhost", 2379, namespace="marie")
+
+    yield JobManager(storage=storage, job_distributor=NoopJobDistributor(), etcd_client=etcd_client)
 
 
 @pytest.mark.asyncio
@@ -254,7 +257,7 @@ async def test_simultaneous_with_same_id(job_scheduler: JobScheduler):
 
 @pytest.mark.asyncio
 async def test_job_scheduler_submission(
-    job_scheduler: JobScheduler, job_manager: JobManager
+        job_scheduler: JobScheduler, job_manager: JobManager
 ):
     JobManager.SLOTS_AVAILABLE = 1
 
@@ -274,7 +277,7 @@ async def test_job_scheduler_submission(
 
 @pytest.mark.asyncio
 async def test_job_scheduler_completion(
-    job_scheduler: JobScheduler, job_manager: JobManager
+        job_scheduler: JobScheduler, job_manager: JobManager
 ):
     JobManager.SLOTS_AVAILABLE = 1
 

@@ -127,7 +127,7 @@ class MajorityVoter(VotingStrategy):
                 ]
                 topK = sorted(best, key=lambda x: x.score, reverse=True)[:2]
                 diff = abs(topK[0].score - topK[1].score)
-                if diff < self.max_diff:
+                if diff > self.max_diff:
                     return topK[0]
                 else:
                     return ClassificationResult(
@@ -223,7 +223,7 @@ class MaxScoreVoter(VotingStrategy):
             ]
             topK = sorted(tmp_results, key=lambda x: x.score, reverse=True)[:2]
             diff = abs(topK[0].score - topK[1].score)
-            if diff < self.max_diff:
+            if diff > self.max_diff:
                 return topK[0]
             else:
                 return ClassificationResult(

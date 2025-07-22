@@ -2,7 +2,7 @@ from marie.helper import GATEWAY_NAME
 from marie.parsers.helper import _SHOW_ALL_ARGS
 from marie.parsers.logging import mixin_suppress_root_logging_parser
 from marie.parsers.orchestrate.pod import (
-    mixin_gateway_discovery_parser,
+    mixin_discovery_parser,
     mixin_gateway_job_scheduler_parser,
     mixin_gateway_kv_store_parser,
 )
@@ -122,7 +122,7 @@ def set_gateway_runtime_args_parser(parser=None):
     )
 
     mixin_gateway_streamer_parser(parser)
-    mixin_gateway_discovery_parser(parser)
+    mixin_discovery_parser(parser)
     mixin_pod_runtime_args_parser(parser, pod_type="gateway")
     mixin_prefetch_parser(parser)
     _add_host(parser)

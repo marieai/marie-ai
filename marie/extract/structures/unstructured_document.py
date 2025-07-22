@@ -6,6 +6,7 @@ from rtree import index
 
 import marie.check as check
 from marie.extract.structures.line_with_meta import LineWithMeta
+from marie.extract.structures.table import Table
 
 
 class UnstructuredDocument:
@@ -14,14 +15,28 @@ class UnstructuredDocument:
     """
 
     def __init__(
-        self, lines: List[LineWithMeta], metadata: Dict[str, Any] = None
+        self, lines: List[LineWithMeta], tables: List[Table], metadata: Dict[str, Any]
     ) -> None:
         self.metadata = metadata
-        self.lines = lines
+        # this original metadata from source *.meta.json
+        self.source_metadata = (
+            metadata.get("source_metadata", None) if metadata else None
+        )
+        if not self.source_metadata:
+            raise ValueError("source_metadata is required in the metadata")
+
+        self.lines: List[LineWithMeta] = lines
+        self.tables: List[Table] = tables if tables is not None else []
         self.rtree_by_page = {}
         self.insert(lines)
-
         self._lines_by_page = defaultdict(list)
+        # FIXME: this is not correct, we currently assume that all pages are present. but this is not always the case
+        self._page_count = int(self.source_metadata.get("pages", 0))
+        # Initialize an empty list for each expected page to ensure contiguous page ID mapping,
+        # even if some pages are blank.
+        for page_id in range(self._page_count):
+            self._lines_by_page[page_id] = []
+
         for line in lines:
             self._lines_by_page[line.metadata.page_id].append(line)
 
@@ -87,7 +102,8 @@ class UnstructuredDocument:
 
     @property
     def page_count(self) -> int:
-        return len(set(line.metadata.page_id for line in self.lines))
+        # return len(set(line.metadata.page_id for line in self.lines))
+        return self._page_count
 
     def to_text(
         self,
@@ -145,9 +161,21 @@ class UnstructuredDocument:
     def lines_for_page(self, page_id: int) -> List[LineWithMeta]:
         """
         Retrieve all lines belonging to the specified page_id.
+        :param page_id: The page ID for which to retrieve lines.
+        :return: A list of LineWithMeta objects associated with the specified page ID.
         """
         check.int_param(page_id, "page_id")
         return self._lines_by_page[page_id]
+
+    def tables_for_page(self, page_id: int) -> List[Table]:
+        """
+        Retrieve all tables belonging to the specified page_id.
+
+        :param page_id: The page ID for which to retrieve tables.
+        :return: A list of Table objects associated with the specified page ID.
+        """
+        check.int_param(page_id, "page_id")
+        return [table for table in self.tables if table.metadata.page_id == page_id]
 
     @property
     def page_ids(self) -> List[int]:
@@ -157,3 +185,14 @@ class UnstructuredDocument:
             List[int]: A sorted list of unique page IDs.
         """
         return sorted(set(line.metadata.page_id for line in self.lines))
+
+    def insert_table(self, table: Table) -> None:
+        """
+        Insert a new table into the document.
+
+        :param table: Table object to be added to the document.
+        """
+        if not isinstance(table, Table):
+            raise ValueError("The object to insert must be an instance of Table.")
+
+        self.tables.append(table)

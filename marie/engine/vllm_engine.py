@@ -85,9 +85,10 @@ class VLLMEngine(EngineLM):
         model_name = MODEL_NAME_MAP[
             model_name
         ]  # Returns: "Qwen/Qwen2.5-VL-3B-Instruct"
+
         engine_config = MODEL_MAP[model_name]  # Returns: config_qwen2_5_vl
-        self.llm, self.prompt, self.stop_token_ids = engine_config(
-            model_name, "image" if is_multimodal else "text"
+        self.llm, self.prompt, self.stop_token_ids, self.default_mm_processor_kwargs = (
+            engine_config(model_name, "image" if is_multimodal else "text")
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -231,8 +232,19 @@ class VLLMEngine(EngineLM):
         """
         system_prompt = system_prompt or self.system_prompt
         if self.is_multimodal:
+            # Use mm_processor_kwargs from kwargs if provided, otherwise fall back to default
+            # mm_processor_kwargs should be a dict with keys like 'min_pixels', 'max_pixels', `# 'fps', etc.
+            mm_kwargs = kwargs.get(
+                'mm_processor_kwargs',
+                (
+                    self.default_mm_processor_kwargs
+                    if self.default_mm_processor_kwargs
+                    else {}
+                ),
+            )
             batch_content = [
-                open_ai_like_formatting(content) for content in batch_content
+                open_ai_like_formatting(content, **mm_kwargs)
+                for content in batch_content
             ]
 
         messages_list = [
@@ -318,7 +330,7 @@ class VLLMEngine(EngineLM):
             )
         except Exception as e:
             self.logger.error(f"❌ Batch inference failed: {e}")
-            return ["ERROR: Inference failed"] * len(batch_content)
+            return ["ERROR: Batch Inference failed"] * len(batch_content)
 
         ordered_outputs = [
             output.outputs[0].text if output.outputs else "" for output in batch_outputs
@@ -337,7 +349,7 @@ class VLLMEngine(EngineLM):
             "tokens_per_second": round(tokens_per_second, 2),
         }
 
-        self.logger.info(f"✅ Batch inference completed in {elapsed_time:.2f} sec")
+        self.logger.info(f"Batch inference completed in {elapsed_time:.2f} sec")
         self.logger.info(
             f"📊 Batch Stats: Requests={len(batch_content)}, Tokens={total_tokens}, TPS={tokens_per_second:.2f}"
         )

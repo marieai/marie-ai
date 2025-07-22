@@ -42,25 +42,11 @@ class OptimizedDetectronPredictor:
         )
 
         self.cfg = cfg.clone()  # cfg can be modified by model
-        self.model = build_model(self.cfg)
-        # FIXME: This is causing the model to fail
-        # self.model = self.optimize_model(self.model)
-
-        if self.half_precision:
-            self.logger.info("Detectron half precision enabled")
-            self.model = self.model.half()
-            self.model.to(self.cfg.MODEL.DEVICE)
-
-        for param in self.model.parameters():
-            param.grad = None
-
-        self.model.eval()
 
         if len(cfg.DATASETS.TEST):
             self.metadata = MetadataCatalog.get(cfg.DATASETS.TEST[0])
 
-        checkpointer = DetectionCheckpointer(self.model)
-        checkpointer.load(cfg.MODEL.WEIGHTS)
+        self.model = self.initialize_model()
 
         self.aug = T.ResizeShortestEdge(
             [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST
@@ -81,7 +67,33 @@ class OptimizedDetectronPredictor:
         """
         return self.invoke_model(original_image, raise_oom=False)
 
-    def invoke_model(self, original_image, raise_oom=False):
+    def initialize_model(self):
+        model = build_model(self.cfg)
+        # FIXME: This is causing the model to fail
+        # self.model = self.optimize_model(self.model)
+
+        if self.half_precision:
+            self.logger.info("Detectron half precision enabled")
+            model = model.half()
+            model.to(self.cfg.MODEL.DEVICE)
+
+        for param in model.parameters():
+            param.grad = None
+
+        model.eval()
+
+        checkpointer = DetectionCheckpointer(model)
+        checkpointer.load(self.cfg.MODEL.WEIGHTS)
+
+        return model
+
+    def reinitialize_model(self, half_precision):
+        del self.model
+        torch.cuda.empty_cache()
+        self.half_precision = half_precision
+        self.model = self.initialize_model()
+
+    def invoke_model(self, original_image: np.ndarray, raise_oom: bool = False) -> dict:
         """
         Invoke the model with the given image.
 
@@ -89,9 +101,6 @@ class OptimizedDetectronPredictor:
         :param raise_oom:  whether to raise OOM exception or not
         :return:  the output of the model for one image only.
         """
-        if raise_oom:
-            self.logger.warning("OOM detected, clearing cache and retrying")
-
         with torch.inference_mode():
             with torch.no_grad():  # https://github.com/sphinx-doc/sphinx/issues/4258
                 try:
@@ -144,7 +153,6 @@ class OptimizedDetectronPredictor:
                     else:
                         predictions = self.model([inputs])[0]
 
-                    del inputs
                     return predictions
                 except RuntimeError as e:
                     if "out of memory" in str(e) and not raise_oom:
@@ -154,10 +162,22 @@ class OptimizedDetectronPredictor:
                                 del p.grad
                         if hasattr(torch.cuda, "empty_cache"):
                             torch.cuda.empty_cache()
+                        self.logger.warning("OOM detected, clearing cache and retrying")
+                        return self.invoke_model(original_image, raise_oom=True)
+                    elif "not implemented for Half" in str(e) and not raise_oom:
+                        self.logger.warning(f"Error: {e}")
+                        self.logger.warning(
+                            "Re-initializing model with half_precision=False and retrying."
+                        )
+                        self.reinitialize_model(half_precision=False)
                         return self.invoke_model(original_image, raise_oom=True)
                     else:
                         raise e
                 finally:
+                    if 'image' in locals():
+                        del image
+                    if 'inputs' in locals():
+                        del inputs
                     torch_gc()
 
     def optimize_model(self, model: nn.Module) -> Callable | Module:

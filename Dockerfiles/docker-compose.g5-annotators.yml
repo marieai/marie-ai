@@ -1,0 +1,228 @@
+# Marie-AI G5 Annotator Services
+# This file is designed to run the G5 Annotator and G5 LLM Annotator services.
+
+services:
+  annotator-g5-llm:
+    image: marieai/marie:${EXTRACT_IMAGE_TAG:-4.0.0-cuda}
+    restart: unless-stopped
+    container_name: 'marie-annotator-g5-llm-server'
+    init: true
+    tty: true
+    network_mode: host
+    command: >
+      server --start 
+      --uses /etc/marie/config/service/g5/marie-g5-annotator_llm.yml
+    environment:
+      # Common environment variables from JetBrains .run.xml
+      - PYTHONUNBUFFERED=1
+      - COLUMNS=180
+      - GRPC_VERBOSITY=debug
+      - JINA_MP_START_METHOD=spawn
+      - MARIE_CACHE_LOCK_TIMEOUT=10
+      - MARIE_DEBUG=0
+      - MARIE_DEBUG_PORT=5678
+      - MARIE_DEFAULT_MOUNT=/etc/marie # Path inside the container
+      - OPENAI_API_KEY=EMPTY
+      - OPENAI_API_BASE=http://0.0.0.0:4000
+      # Added for consistency with other services
+      - MARIE_LOG_CONFIG=docker
+      - JINA_LOG_LEVEL=${ANNOTATOR_LOG_LEVEL:-DEBUG}
+    volumes:
+      # Volumes mapped from the host to the container
+      - /mnt/data/marie-ai/config:/etc/marie/config:ro
+      - /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw
+      - /mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - /mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # Based on CUDA_VISIBLE_DEVICES=0 in the run configuration
+              count: 1
+              capabilities: [gpu, compute, utility]
+    logging:
+      driver: local
+      options:
+        max-size: "100m"
+        max-file: "10"
+    labels:
+      - "marie.service=annotator-g5-llm"
+
+  annotator-g5-table:
+    image: marieai/marie:${EXTRACT_IMAGE_TAG:-4.0.0-cuda}
+    restart: unless-stopped
+    container_name: 'marie-annotator-g5-table-server'
+    init: true
+    tty: true
+    network_mode: host
+    command: >
+      server --start
+      --uses /etc/marie/config/service/g5/marie-g5-annotator_table.yml
+    environment:
+      - PYTHONUNBUFFERED=1
+      - COLUMNS=180
+      - GRPC_VERBOSITY=debug
+      - JINA_MP_START_METHOD=spawn
+      - MARIE_CACHE_LOCK_TIMEOUT=10
+      - MARIE_DEBUG=0
+      - MARIE_DEBUG_PORT=5678
+      - MARIE_DEFAULT_MOUNT=/etc/marie
+      - OPENAI_API_KEY=EMPTY
+      - OPENAI_API_BASE=http://0.0.0.0:4000
+      - MARIE_LOG_CONFIG=docker
+      - JINA_LOG_LEVEL=${ANNOTATOR_LOG_LEVEL:-DEBUG}
+    volumes:
+      - /mnt/data/marie-ai/config:/etc/marie/config:ro
+      - /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw
+      - /mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - /mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility]
+    logging:
+      driver: local
+      options:
+        max-size: "100m"
+        max-file: "10"
+    labels:
+      - "marie.service=annotator-g5-table"
+
+  annotator-g5-parser:
+    image: marieai/marie:${EXTRACT_IMAGE_TAG:-4.0.0-cuda}
+    restart: unless-stopped
+    container_name: 'marie-annotator-g5-parser-server'
+    init: true
+    tty: true
+    network_mode: host
+    command: >
+      server --start
+      --uses /etc/marie/config/service/g5/marie-g5-annotator_parser.yml
+    environment:
+      - PYTHONUNBUFFERED=1
+      - COLUMNS=180
+      - GRPC_VERBOSITY=debug
+      - JINA_MP_START_METHOD=spawn
+      - MARIE_CACHE_LOCK_TIMEOUT=10
+      - MARIE_DEBUG=0
+      - MARIE_DEBUG_PORT=5678
+      - MARIE_DEFAULT_MOUNT=/etc/marie
+      - OPENAI_API_KEY=EMPTY
+      - OPENAI_API_BASE=http://0.0.0.0:4000
+      - MARIE_LOG_CONFIG=docker
+      - JINA_LOG_LEVEL=${ANNOTATOR_LOG_LEVEL:-DEBUG}
+    volumes:
+      - /mnt/data/marie-ai/config:/etc/marie/config:ro
+      - /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw
+      - /mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - /mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility]
+    logging:
+      driver: local
+      options:
+        max-size: "100m"
+        max-file: "10"
+    labels:
+      - "marie.service=annotator-g5-parser"
+
+  annotator-g5-embeddings:
+    image: marieai/marie:${EXTRACT_IMAGE_TAG:-4.0.0-cuda}
+    restart: unless-stopped
+    container_name: 'marie-annotator-g5-embeddings-server'
+    init: true
+    tty: true
+    network_mode: host
+    command: >
+      server --start
+      --uses /etc/marie/config/service/g5/marie-g5-annotator_embeddings.yml
+    environment:
+      - PYTHONUNBUFFERED=1
+      - COLUMNS=180
+      - GRPC_VERBOSITY=debug
+      - JINA_MP_START_METHOD=spawn
+      - MARIE_CACHE_LOCK_TIMEOUT=10
+      - MARIE_DEBUG=0
+      - MARIE_DEBUG_PORT=5678
+      - MARIE_DEFAULT_MOUNT=/etc/marie
+      - OPENAI_API_KEY=EMPTY
+      - OPENAI_API_BASE=http://0.0.0.0:4000
+      - MARIE_LOG_CONFIG=docker
+      - JINA_LOG_LEVEL=${ANNOTATOR_LOG_LEVEL:-DEBUG}
+    volumes:
+      - /mnt/data/marie-ai/config:/etc/marie/config:ro
+      - /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw
+      - /mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - /mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility]
+    logging:
+      driver: local
+      options:
+        max-size: "100m"
+        max-file: "10"
+    labels:
+      - "marie.service=annotator-g5-embeddings"
+
+  annotator-g5-table-parser:
+    image: marieai/marie:${EXTRACT_IMAGE_TAG:-4.0.0-cuda}
+    restart: unless-stopped
+    container_name: 'marie-annotator-g5-table-parser-server'
+    init: true
+    tty: true
+    network_mode: host
+    command: >
+      server --start
+      --uses /etc/marie/config/service/g5/marie-g5-annotator_table_parser.yml
+    environment:
+      - PYTHONUNBUFFERED=1
+      - COLUMNS=180
+      - GRPC_VERBOSITY=debug
+      - JINA_MP_START_METHOD=spawn
+      - MARIE_CACHE_LOCK_TIMEOUT=10
+      - MARIE_DEBUG=0
+      - MARIE_DEBUG_PORT=5678
+      - MARIE_DEFAULT_MOUNT=/etc/marie
+      - OPENAI_API_KEY=EMPTY
+      - OPENAI_API_BASE=http://0.0.0.0:4000
+      - MARIE_LOG_CONFIG=docker
+      - JINA_LOG_LEVEL=${ANNOTATOR_LOG_LEVEL:-DEBUG}
+    volumes:
+      - /mnt/data/marie-ai/config:/etc/marie/config:ro
+      - /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw
+      - /mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - /mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility]
+    logging:
+      driver: local
+      options:
+        max-size: "100m"
+        max-file: "10"
+    labels:
+      - "marie.service=annotator-g5-table-parser"
+
+networks:
+  marie_default:
+    external: true
+
+

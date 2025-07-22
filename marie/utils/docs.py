@@ -2,7 +2,7 @@ import imghdr
 import io
 import os
 import tempfile
-from typing import Any, AnyStr, List, Optional, Union
+from typing import Any, AnyStr, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -18,6 +18,7 @@ from marie import Document, DocumentArray
 from marie._core.definitions.events import AssetKey
 from marie.api.docs import DOC_KEY_PAGE_NUMBER, MarieDoc
 from marie.common.file_io import StrOrBytesPath
+from marie.logging_core.predefined import default_logger as logger
 from marie.storage import StorageManager
 from marie.utils.utils import ensure_exists
 
@@ -41,8 +42,8 @@ def get_document_type(file_path: str):
         try:
             PyPDF4.PdfFileReader(open(file_path, "rb"))
             file_type = "pdf"
-        except PdfReadError:
-            print("invalid PDF file")
+        except PdfReadError as e:
+            print(f"invalid PDF file : {e}")
         else:
             pass
 
@@ -308,15 +309,16 @@ def docs_from_file(
 
 
 def docs_from_asset(
-    asset_key: str, pages: Optional[List[int]] = None
-) -> DocList[MarieDoc]:
+    asset_key: str, pages: Optional[List[int]] = None, return_file_path: bool = False
+) -> Union[DocList[MarieDoc], Tuple[DocList[MarieDoc], str]]:
     """
-    Create DocumentArray from image file. This will create one document per page in the image file, if the image
-    is large and has many pages this can be very memory intensive.
+    Create DocumentArray from image file. This will create one document per page in the image
+    file, if the image is large and has many pages this can be very memory intensive.
 
-    :param asset_key:  asset key to the resource
-    :param pages:  list of pages to extract from document NONE or empty list will extract all pages from document
-    :return: DocList[MarieDoc] with tensor content
+    :param asset_key: asset key to the resource
+    :param pages: list of pages to extract from the document. NONE or empty list will extract all pages from document
+    :param return_file_path: whether to return the path of the downloaded file
+    :return: DocList[MarieDoc] with tensor content or a tuple (DocList[MarieDoc], file_path) if return_file_path is True
     """
 
     uri = asset_key
@@ -327,17 +329,22 @@ def docs_from_asset(
             f"Unable to read file from {uri} no suitable storage manager configured"
         )
 
-    # make sure the directory exists
+    # Ensure the directory exists
     ensure_exists(f"/tmp/marie")
+
     # Read remote file to a byte array
     with tempfile.NamedTemporaryFile(dir="/tmp/marie", delete=False) as temp_file_out:
-        # with open("/tmp/sample.tiff", "w") as temp_file_out:
-        # print(f"Reading file from {uri} to {temp_file_out.name}")
+        print(f"Reading file from {uri} to {temp_file_out.name}")
+
+        connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
+        if not connected:
+            logger.error(f"Error restoring assets : Could not connect to S3")
+            raise ValueError("Error restoring assets : Could not connect to S3")
+
         if not StorageManager.exists(uri):
             raise ValueError(f"Remote file does not exist : {uri}")
 
         StorageManager.read_to_file(uri, temp_file_out, overwrite=True)
-        # Read the file to a byte array
         temp_file_out.seek(0)
         data = temp_file_out.read()
         path = temp_file_out.name
@@ -354,7 +361,8 @@ def docs_from_asset(
         raise FileNotFoundError(f"File not found : {path}")
 
     loaded, frames = load_image(path)
-    # no pages specified, we will use all pages as documents
+
+    # No pages specified, we will use all pages as documents
     if pages is None or len(pages) == 0:
         pages = [i for i in range(len(frames))]
 
@@ -366,6 +374,10 @@ def docs_from_asset(
                 continue
             doc = MarieDoc(tensor=frame)
             docs.append(doc)
+
+    # Return documents and optionally the file path
+    if return_file_path:
+        return docs, path
     return docs
 
 

@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 from marie.excepts import EstablishGrpcConnectionError
 from marie.logging_core.logger import MarieLogger
 from marie.serve.networking.balancer.load_balancer import LoadBalancer
@@ -14,7 +16,10 @@ class LeastConnectionsLoadBalancer(LoadBalancer):
 
     def __init__(self, deployment_name: str, logger: MarieLogger):
         super().__init__(deployment_name, logger)
-        self._rr_counter = 0  # round robin counter
+        self._rr_counter = 0
+        self.selection_counter = defaultdict(
+            int
+        )  # Tracks how many times each connection is selected
 
     async def _get_next_connection(self, num_retries=3):
         # Find the connection with the least active connections
@@ -31,12 +36,6 @@ class LeastConnectionsLoadBalancer(LoadBalancer):
 
         if len(min_use_connections) == 1:
             self._rr_counter = 0
-
-        self._logger.debug(
-            f"least_connection_balancer.py: min_use_connections: {min_use_connections}"
-            f" min_active_connections: {min_active_connections}"
-            f" self._rr_counter: {self._rr_counter}"
-        )
 
         # Round robin between the connections with the least active connections
         try:
@@ -55,7 +54,7 @@ class LeastConnectionsLoadBalancer(LoadBalancer):
                     )
             elif connection is None:
                 # give control back to async event loop so connection resetting can be completed; then retry
-                self._logger.debug(
+                self._logger.info(
                     f" No valid connection found for {self._deployment_name}, give chance for potential resetting of connection"
                 )
                 return await self._get_next_connection(num_retries=num_retries - 1)
@@ -64,7 +63,17 @@ class LeastConnectionsLoadBalancer(LoadBalancer):
             self._rr_counter = 0
             connection = min_use_connections[self._rr_counter]
         self._rr_counter = (self._rr_counter + 1) % len(min_use_connections)
+
+        # Update selection stats
+        if connection:
+            self.selection_counter[connection.address] += 1
+        self.print_selection_stats()
         return connection
+
+    def print_selection_stats(self):
+        self._logger.debug(f"Connection selection stats for {self._deployment_name}:")
+        for address, count in self.selection_counter.items():
+            self._logger.debug(f"  {address}: selected {count} times")
 
     def close(self):
         pass

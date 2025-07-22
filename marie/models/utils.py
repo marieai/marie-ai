@@ -185,3 +185,4 @@ def setup_torch_optimizations(num_threads: int = -1):
         torch.jit.enable_onednn_fusion(True)
     except Exception as e:
         raise e
+

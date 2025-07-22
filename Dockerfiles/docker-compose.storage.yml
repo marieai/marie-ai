@@ -1,5 +1,3 @@
-version: "3.9"
-
 # ############### Networks ###############
 
 # Container networking setup
@@ -9,20 +7,32 @@ version: "3.9"
 services:
   psql:
     container_name: marie-psql-server
-#    image: postgres:${POSTGRES_VERSION}
-    # pgvector/pgvector:pg16
-    image: pgvector/pgvector:pg${POSTGRES_VERSION}
-    command: postgres -c 'max_connections=200'
-    restart: unless-stopped
+    image: ghcr.io/ferretdb/postgres-documentdb:17-0.103.0
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_preload_libraries=pg_stat_statements,pg_cron,pg_documentdb
+      -c pg_stat_statements.track=all
+      -c pg_stat_statements.max=10000
+      -c pg_stat_statements.track_utility=off
+      -c pg_stat_statements.save=on
+      -c enable_partition_pruning=on
+      -c constraint_exclusion=partition
+    restart: on-failure
     ports:
       - "5432:5432"
     environment:
+      - POSTGRES_HOST_AUTH_METHOD=trust
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=postgres
+      - POSTGRES_SHARED_PRELOAD_LIBRARIES=pg_stat_statements,pg_cron,pg_documentdb
     volumes:
       - psql_data:/var/lib/postgresql/data
-      - ./config/pgvector/init.sql:/docker-entrypoint-initdb.d/init.sql
-
+      - /mnt/data/marie-ai/config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    network_mode: host
+#    networks:
+#      - marie_default
 volumes:
   psql_data:
     driver: local
@@ -37,7 +47,16 @@ networks:
 
 # docker compose  --env-file ./config/.env  -f ./Dockerfiles/docker-compose.storage.yml --project-directory . up  --build --remove-orphans
 
-# cleanup
-# docker volume rm marie-ai_psql_data  --force
-# docker container rm marie-psql-server  --force  --volumes
+#  forcibly remove volume and container for full reset
 # docker compose  --env-file ./config/.env  -f ./Dockerfiles/docker-compose.storage.yml --project-directory . down --remove-orphans
+# docker volume rm marie_psql_data  --force
+# docker container rm marie-psql-server  --force  --volumes
+
+# If you need to reset the PostgreSQL container and its data volume, follow these steps:
+
+# 1. Stop and remove the container
+# docker container stop marie-psql-server
+# docker container rm marie-psql-server --volumes --force
+
+# 2. Remove the named volume (now it's safe)
+# docker volume rm marie_psql_data

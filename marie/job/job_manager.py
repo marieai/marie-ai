@@ -18,7 +18,9 @@ from marie.job.scheduling_strategies import (
     SchedulingStrategyT,
 )
 from marie.logging_core.logger import MarieLogger
+from marie.serve.discovery.etcd_client import EtcdClient
 from marie.storage.kv.storage_client import StorageArea
+from marie.utils.utils import get_exception_traceback
 
 # The max time to wait for the JobSupervisor to start before failing the job.
 DEFAULT_JOB_START_TIMEOUT_SECONDS = 60 * 15
@@ -77,13 +79,18 @@ class JobManager:
         self,
         storage: StorageArea,
         job_distributor: JobDistributor,
+        etcd_client: EtcdClient,
     ):
+        if etcd_client is None:
+            raise Exception("EtcdClient is not configured")
+
         self.logger = MarieLogger(self.__class__.__name__)
         self._job_distributor = job_distributor
         self.event_publisher = EventPublisher()
         self._log_client = JobLogStorageClient()
-        self.monitored_jobs = set()
+        self._etcd_client = etcd_client
         self._job_info_client = JobInfoStorageClientProxy(self.event_publisher, storage)
+        self.monitored_jobs = set()
 
         try:
             self.event_logger = get_event_logger()
@@ -99,7 +106,10 @@ class JobManager:
         For each job, we will spawn a coroutine to monitor it.
         Each will be added to self._running_jobs and reconciled.
         """
-        self.logger.debug("Recovering running jobs.")
+        self.logger.info("Recovering running jobs.")
+        #  FIXME: This is a temporary fix to avoid running this on startup.
+        # THIS IS CAUSING SLOW STARTUP, DISABLED FOR NOW
+        # SELECT key, value FROM kv_store_worker WHERE key = 'marie_internal/job_info_0685b232-8b4b-7ab6-8000-dfdc7df44311'  AND namespace = 'job' AND is_deleted = FALSE
         try:
             all_jobs = await self._job_info_client.get_all_jobs()
             for job_id, job_info in all_jobs.items():
@@ -119,7 +129,7 @@ class JobManager:
         This is necessary because we need to handle the case where the
         JobSupervisor dies unexpectedly.
         """
-        self.logger.info(f"Monitoring job : {job_id}.")
+        self.logger.debug(f"Monitoring job : {job_id}.")
         if job_id in self.monitored_jobs:
             self.logger.debug(f"Job {job_id} is already being monitored.")
             return
@@ -138,7 +148,7 @@ class JobManager:
         @param job_supervisor: The actor handle for the job supervisor.
         """
 
-        self.logger.info(f"Monitoring job internal : {job_id}.")
+        self.logger.debug(f"Monitoring job internal : {job_id}.")
 
         timeout = float(
             os.environ.get(
@@ -151,9 +161,8 @@ class JobManager:
         while is_alive:
             try:
                 job_status = await self._job_info_client.get_status(job_id)
-                self.logger.info(f"Monitored job status: {job_id} : {job_status}")
-                # print("len(self.monitored_jobs): ", len(self.monitored_jobs))
-                # print("has_available_slot: ", self.has_available_slot())
+                self.logger.debug(f"Monitored job status: {job_id} : {job_status}")
+
                 if job_status.is_terminal():
                     if job_status == JobStatus.SUCCEEDED:
                         is_alive = False
@@ -331,7 +340,9 @@ class JobManager:
         # Wait for `_recover_running_jobs` to run before accepting submissions to
         # avoid duplicate monitoring of the same job.
         await self._recover_running_jobs_event.wait()
-        self.logger.info(f"Starting job with submission_id: {submission_id}")
+        self.logger.info(
+            f"Starting job with submission_id: {submission_id} on entrypoint: {entrypoint}"
+        )
 
         job_info = JobInfo(
             entrypoint=entrypoint,
@@ -376,6 +387,7 @@ class JobManager:
                 job_info_client=self._job_info_client,
                 job_distributor=self._job_distributor,
                 event_publisher=self.event_publisher,
+                etcd_client=self._etcd_client,
             )
             await supervisor.run(_start_signal_actor=_start_signal_actor)
 
@@ -386,7 +398,7 @@ class JobManager:
             )
             self.logger.info(f"Started job with submission_id: {submission_id}")
         except Exception as e:
-            tb_str = traceback.format_exc()
+            tb_str = get_exception_traceback()
 
             self.logger.warning(
                 f"Failed to start supervisor actor for job {submission_id}: '{e}'"

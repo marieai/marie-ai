@@ -1,12 +1,12 @@
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from omegaconf import DictConfig, OmegaConf
 from pydantic import BaseModel, Field
 
-from marie.constants import __config_dir__
+from marie.constants import __config_dir__, __default_extract_dir__
 from marie.query_planner.base import Query
 
 logger = logging.getLogger(__name__)
@@ -28,11 +28,14 @@ class BaseOperator(BaseModel):
     Base schema for an operator object.
     """
 
+    # this values will overwrtie the parameters in the work item meta
     name: str
-    type: str = "job"
-    uri: str = "s3://bucket/key"
     on: str = Field(..., description="Specifies which executor handles this operator.")
     name: str = Field(..., description="The name of the operator.")
+    # this parameter dict will be passed in directly without modification
+    op_params: Dict[str, Any] = Field(
+        default_factory=dict, description="The parameters of the operator."
+    )
 
 
 class ExtractorOperatorConfig(BaseOperator):
@@ -59,17 +62,29 @@ class MergerOperatorConfig(BaseOperator):
     pass
 
 
-def get_layout_config(layout_name: str) -> DictConfig:
+def has_mapper_config(base_dir: str, layout_name: str) -> bool:
+    """
+    Check if the mapper configuration file exists for a given layout.
+
+    :param base_dir: The base directory where the configuration files are located.
+    :param layout_name: The identifier for the layout configuration.
+    :return: True if the configuration file exists, False otherwise.
+    """
+    layout_cfg_path = os.path.join(base_dir, f"TID-{layout_name}", "mapper.yml")
+    return os.path.exists(layout_cfg_path)
+
+
+def get_mapper_config(base_dir: str, layout_name: str) -> DictConfig:
     """
     Generate a configuration dictionary by merging a base configuration file
     with a layout-specific file. The resulting configuration is made read-only.
 
+    :param base_dir: The base directory where the configuration files are located.
     :param layout_name: The identifier for the layout configuration.
     :return: A read-only merged configuration as a DictConfig.
     """
-    base_dir = os.path.join(__config_dir__, "extract")
-    base_cfg_path = os.path.join(base_dir, "base.yml")
-    layout_cfg_path = os.path.join(base_dir, layout_name, "layout.yml")
+    base_cfg_path = os.path.join(base_dir, "base", "mapper.yml")
+    layout_cfg_path = os.path.join(base_dir, f"TID-{layout_name}", "mapper.yml")
 
     parent_cfg = OmegaConf.load(base_cfg_path)
     layout_cfg = OmegaConf.load(layout_cfg_path)
@@ -82,6 +97,7 @@ def get_layout_config(layout_name: str) -> DictConfig:
 class JobMetadata(BaseModel):
     """
     Schema encapsulating job metadata.
+    API KEY will be populated during request creation.
     """
 
     name: str
@@ -100,7 +116,9 @@ class JobMetadata(BaseModel):
         :param layout: Designates which layout configuration to apply.
         :return: A populated JobMetadata object.
         """
-        logger.info("Processing task: %s", task)
+        logger.info(
+            f"Processing task: {task}",
+        )
 
         task_type = task.node_type
         task_definition = task.definition
@@ -115,31 +133,48 @@ class JobMetadata(BaseModel):
         if not task_type:
             raise ValueError("Node type is not defined in the task.")
 
-        layout_conf = get_layout_config(layout)
-        logger.debug("Loaded layout config: %s", layout_conf)
-        logger.debug("Task Type: %s, Method: %s, Params: %s", task_type, method, params)
+        if not os.path.exists(__default_extract_dir__):
+            raise FileNotFoundError(
+                f"Base directory does not exist: {__default_extract_dir__}. "
+                "Ensure the configuration files are correctly set up."
+            )
 
-        executor_endpoint = "executor://endpoint"
+        layout_conf = get_mapper_config(__default_extract_dir__, layout)
+        logger.debug(
+            f"Loaded layout config: {layout_conf}",
+        )
+        logger.debug(f"Task Type: {task_type}, Method: {method}, Params: {params}")
+
         has_executor = "://" in endpoint
 
         if method == "EXECUTOR_ENDPOINT":
             executor_endpoint = endpoint
         elif method == "PYTHON_FUNCTION":
             serverless_exec = layout_conf.serverless_executor or "default"
-            executor_endpoint = (
-                endpoint if has_executor else f"{serverless_exec}://{endpoint}"
-            )
+            if has_executor:
+                executor_endpoint = (
+                    endpoint  # Use original endpoint if it has an executor
+                )
+            else:
+                # Normalize the endpoint path by removing leading slashes
+                endpoint_path = endpoint.lstrip('/')
+                executor_endpoint = f"{serverless_exec}://{endpoint_path}"
         elif method == "LLM":
             model_name = getattr(task_definition, "model_name", None)
             if not model_name:
                 raise ValueError("model_name is required for an LLM method.")
-            executor = layout_conf.model_executors.get(model_name)
-            if not executor:
-                raise ValueError(
-                    f"Executor not found for model: {model_name}. "
-                    f"Available executors: {layout_conf.model_executors}"
-                )
-            executor_endpoint = f"{executor}://{endpoint}"
+            if has_executor:
+                executor_endpoint = endpoint  # Use the original endpoint as-is
+            else:
+                executor = layout_conf.model_executors.get(model_name)
+                if not executor:
+                    raise ValueError(
+                        f"Executor not found for model: {model_name}. "
+                        f"Available executors: {layout_conf.model_executors}"
+                    )
+                endpoint_path = endpoint.lstrip('/')
+                executor_endpoint = f"{executor}://{endpoint_path}"
+            params['model_name'] = model_name
         elif method == "NOOP":
             executor_endpoint = "noop://noop"
         else:
@@ -148,8 +183,7 @@ class JobMetadata(BaseModel):
         # Determine which operator class to create
         operator_class = JobMetadataFactory.get_metadata_class(task_type)
         operator_instance = operator_class(
-            on=executor_endpoint,
-            name=task.query_str,
+            on=executor_endpoint, name=task.query_str, op_params=params
         )
 
         return cls(
@@ -180,7 +214,6 @@ class JobMetadataFactory:
         return type_mapping.get(node_type, BaseOperator)
 
 
-# ✅ Example Usage
 if __name__ == "__main__":
     task_fragment_extractor = {
         "task_id": "067adccc-8316-74a1-8000-202ea146a07b",
