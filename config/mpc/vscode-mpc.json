@@ -1,0 +1,9 @@
+{
+	"servers": {
+		"marieai-mcp": {
+			"url": "http://localhost:51000/mcp",
+			"type": "sse"
+		}
+	},
+	"inputs": []
+}

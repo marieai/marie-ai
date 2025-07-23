@@ -11,7 +11,8 @@ from urllib.parse import urlparse
 import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi_mcp import FastApiMCP
 from rich.traceback import install
 
 import marie
@@ -193,9 +194,26 @@ class MarieServerGateway(CompositeServer):
         # FIXME : The resolver watch_service is not implemented correctly
         self.resolver = None
 
-        def _extend_rest_function(app):
+        def _extend_rest_function(app: "FastAPI"):
             from fastapi import HTTPException, Request
             from fastapi.responses import JSONResponse
+
+            def _setup_mcp(app: "FastAPI"):
+                """
+                Sets up the Model Context Protocol (MCP) extension for our application.
+                :param app: The FastAPI application instance to set up the MCP extension for.
+                """
+                self.logger.info("Setting up Model Context Protocol extension")
+                mcp = FastApiMCP(
+                    app,
+                    description='Marie Gateway MPC Server',
+                    describe_all_responses=True,
+                    describe_full_response_schema=True,
+                    include_operations=["invoke", "list_jobs", "list_jobs_state"],
+                )
+
+                mcp.mount()
+                return mcp
 
             @app.exception_handler(Exception)
             async def global_exception_handler(request: Request, exc: Exception):
@@ -331,12 +349,13 @@ class MarieServerGateway(CompositeServer):
                         "code": "INTERNAL_ERROR",
                     }
 
-            # allows us to list jobs with or without state parameter and last slash
+            # allows us to list jobs with or without a state parameter and last slash
             app.add_api_route(
                 path="/api/jobs",
                 endpoint=list_jobs_handler,
                 methods=["GET"],
                 summary="Job listing endpoint /api/jobs with state filter",
+                operation_id="list_jobs",
             )
 
             app.add_api_route(
@@ -344,6 +363,7 @@ class MarieServerGateway(CompositeServer):
                 endpoint=list_jobs_handler,
                 methods=["GET"],
                 summary=f"Job listing endpoint /api/jobs",
+                operation_id="list_jobs_state",
             )
 
             @app.api_route(
@@ -386,6 +406,7 @@ class MarieServerGateway(CompositeServer):
                 methods=["POST"],
                 summary="Invoke a new command /api/v1/invoke",
                 dependencies=[Depends(TokenBearer())],
+                operation_id="invoke",
             )
             async def invoke_command(
                 request: Request, token: str = Depends(TokenBearer())
@@ -461,6 +482,8 @@ class MarieServerGateway(CompositeServer):
                 # return EventSourceResponse(event_generator)
                 # # ['header', 'parameters', 'routes', 'data'
                 # return {"header": {}, "parameters": {}, "data": None}
+
+            _setup_mcp(app)
 
             return app
 
@@ -796,6 +819,7 @@ class MarieServerGateway(CompositeServer):
         setup_toast_events(self.args.get("toast", {}))
         setup_storage(self.args.get("storage", {}))
         setup_auth(self.args.get("auth", {}))
+
         await self.setup_service_discovery(
             etcd_host=self.args["discovery_host"],
             etcd_port=self.args["discovery_port"],

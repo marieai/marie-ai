@@ -1,0 +1,10 @@
+{
+    "mcpServers": {
+        "marieai-mcp": {
+            "type": "sse",
+            "url": "http://127.0.0.1:51000/mcp",
+            "description": "Local MarieAI MCP Server",
+            "note": "For SSE connections, add this URL directly in your MCP Client"
+        }
+    }
+}

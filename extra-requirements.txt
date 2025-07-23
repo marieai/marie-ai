@@ -156,3 +156,4 @@ scikit-image:                  standard,core
 filetype:                      standard,core
 dataclasses_json:              standard,core
 watchdog:                      standard,core
+fastapi-mcp:                   standard,core
