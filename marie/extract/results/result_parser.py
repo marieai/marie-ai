@@ -40,40 +40,6 @@ from marie.utils.json import load_json_file
 from marie.utils.overlap import merge_bboxes_as_block
 
 
-def load_layout_config(base_dir: str, layout_dir: str, debug_config=False) -> OmegaConf:
-    # TODO : THIS NEEDS TO BE CONFIGURABLE
-    layout_dir = os.path.expanduser(layout_dir)
-    base_dir = os.path.expanduser(base_dir)
-
-    # root config
-    base_cfg_path = os.path.join(base_dir, "base-config.yml")
-    field_cfg_path = os.path.join(base_dir, "field-config.yml")
-    # layout config
-    layout_cfg_path = os.path.join(layout_dir, "config.yml")
-    base_cfg = OmegaConf.load(base_cfg_path)
-    field_cfg = OmegaConf.load(field_cfg_path)
-    specific_cfg = OmegaConf.load(layout_cfg_path)
-    merged_conf = OmegaConf.merge(field_cfg, base_cfg, specific_cfg)
-
-    # Keys can come in few formats
-    # - PATIENT NAME
-    # - PATIENT    NAME
-    # - PATIENT_NAME
-    # for that we will normalize spaces into underscores (_)
-
-    merged_conf.grounding = {
-        k: [entry.replace(" ", "_") for entry in v]
-        for k, v in merged_conf.grounding.items()
-    }
-
-    if debug_config:
-        with open("merged_config_output.yml", "w") as yaml_file:
-            yaml_file.write(OmegaConf.to_yaml(merged_conf))
-            print(OmegaConf.to_yaml(merged_conf))
-
-    return merged_conf
-
-
 @lru_cache(maxsize=None)
 def _get_table_rec(model_path: str, **kwargs) -> TableRecPredictor:
     table_rec_predictor = TableRecPredictor(checkpoint=model_path)

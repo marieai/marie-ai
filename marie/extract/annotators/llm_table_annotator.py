@@ -22,6 +22,7 @@ class LLMTableAnnotator(LLMAnnotator):
         working_dir: str,
         annotator_conf: dict[str, Any],
         layout_conf: dict[str, Any],
+        **kwargs: Any,
     ):
         """Initialize the table annotator.
 
@@ -30,7 +31,7 @@ class LLMTableAnnotator(LLMAnnotator):
             annotator_conf: Configuration for the annotator.
             layout_conf: Configuration for the layout.
         """
-        super().__init__(working_dir, annotator_conf, layout_conf)
+        super().__init__(working_dir, annotator_conf, layout_conf, **kwargs)
         self.silence_exceptions = False
         self.logger.info(f"Initializing {self.__class__.__name__}...")
 

@@ -24,7 +24,7 @@ services:
 
 #      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"] # NO port 9000 in host mode (remapped to be backward compatible with zenko s3)
       test: ["CMD", "curl", "-f", "http://localhost:8000/minio/health/live"]
-      interval: 30s
+      interval: 10s
       timeout: 20s
       retries: 3
 

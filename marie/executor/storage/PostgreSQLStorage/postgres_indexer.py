@@ -23,8 +23,8 @@ class PostgreSQLStorage:
         password: str = "123456",
         database: str = "postgres",
         table: str = "default_table",
-        min_connections = 1,
-        max_connections = 5,
+        min_connections=1,
+        max_connections=5,
         traversal_paths: str = "@r",
         return_embeddings: bool = True,
         dry_run: bool = False,
@@ -101,6 +101,9 @@ class PostgreSQLStorage:
         :param docs: list of Documents
         :param parameters: parameters to the request,
         """
+
+        print("PsqlToastHandler.mixin called docs:", docs)
+
         if docs is None:
             return
 

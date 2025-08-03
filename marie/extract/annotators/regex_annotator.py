@@ -2,7 +2,7 @@ import json
 import os
 import os.path
 import re
-from typing import List
+from typing import Any, List
 
 from marie.extract.annotators.base import AnnotatorCapabilities, DocumentAnnotator
 from marie.extract.structures.unstructured_document import UnstructuredDocument
@@ -18,8 +18,9 @@ class RegexAnnotator(DocumentAnnotator):
     def __init__(
         self,
         working_dir: str,
-        annotator_conf: dict[str, any],
-        layout_conf: dict[str, any],
+        annotator_conf: dict[str, Any],
+        layout_conf: dict[str, Any],
+        **kwargs: Any,
     ):
         super().__init__()
         self.logger = MarieLogger(context=self.__class__.__name__)

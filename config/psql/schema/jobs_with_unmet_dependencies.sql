@@ -16,16 +16,16 @@ AS $$
         j.dependencies,
         j.dag_id,
         j.job_level
-    FROM marie_scheduler.job AS j
-    WHERE j.dependencies IS NOT NULL
-      AND jsonb_array_length(j.dependencies) > 0
-      AND EXISTS (
-          SELECT 1
-          FROM marie_scheduler.job AS d
-          WHERE d.id IN (
-              SELECT value::uuid
-              FROM jsonb_array_elements_text(j.dependencies)
-          )
-          AND d.state != 'completed'
-      );
+    FROM
+        marie_scheduler.job AS j
+    WHERE EXISTS (
+        SELECT 1
+        FROM
+            marie_scheduler.job_dependencies AS jd
+        JOIN
+            marie_scheduler.job AS d ON jd.depends_on_id = d.id
+        WHERE
+            jd.job_id = j.id AND d.state != 'completed'
+    );
+
 $$;

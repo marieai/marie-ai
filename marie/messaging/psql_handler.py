@@ -1,11 +1,7 @@
-import asyncio
-from pydoc import TextDoc
 from typing import Any, List
 
 from docarray import DocList
-from docarray.documents import ImageDoc
 
-from marie import Document, DocumentArray
 from marie.api.docs import StorageDoc
 from marie.excepts import BadConfigSource
 from marie.executor.mixin import StorageMixin
@@ -44,13 +40,14 @@ class PsqlToastHandler(ToastHandler, StorageMixin):
         try:
             if not self.storage_enabled:
                 return
-
+            print("PsqlToastHandler.__notify_task called with:", notification)
             await self.persist(
                 ref_id=notification.jobid,
                 ref_type=notification.event if notification.event else "NA",
                 results=notification,
             )
         except Exception as e:
+            print("PsqlToastHandler.__notify_task Exception:", e)
             if silence_exceptions:
                 self.logger.warning(
                     "Toast enabled but config not setup correctly", exc_info=1
@@ -61,6 +58,7 @@ class PsqlToastHandler(ToastHandler, StorageMixin):
                 ) from e
 
     async def notify(self, notification: EventMessage, **kwargs: Any) -> bool:
+        print("PsqlToastHandler.notify called with:", notification)
         if not self.storage_enabled:
             return False
 
