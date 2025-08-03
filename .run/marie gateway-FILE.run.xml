@@ -19,7 +19,7 @@
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/marie/__main__.py" />
-    <option name="PARAMETERS" value="gateway --uses /mnt/data/marie-ai/config/service/gateway.yml --protocols HTTP GRPC --ports 51000 52000 --extra-search-paths /mnt/data/marie-ai/config/extra_py_modules" />
+    <option name="PARAMETERS" value="gateway --uses /mnt/data/marie-ai/config/service/marie-gateway-4.0.0.yml --protocols HTTP GRPC --ports 51000 52000 --extra-search-paths /mnt/data/marie-ai/config/extra_py_modules" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
     <option name="MODULE_MODE" value="false" />
