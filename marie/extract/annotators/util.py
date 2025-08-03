@@ -20,11 +20,26 @@ from marie.engine.output_parser import (
     parse_markdown_markdown,
 )
 from marie.extract.structures.unstructured_document import UnstructuredDocument
+from marie.helper import run_async
 from marie.logging_core.predefined import default_logger as logger
 from marie.utils.docs import frames_from_file
 from marie.utils.utils import batchify
 
 SYSTEM_PROMPT = ""  # Placeholder for the system prompt
+
+
+def load_prompt(prompt_file: str) -> str:
+    """Load the prompt text from a file.
+    :param prompt_file: Path to the prompt file.
+    :return: The prompt text as a string.
+    """
+    try:
+        with open(os.path.expanduser(prompt_file), "r", encoding="utf-8") as f:
+            prompt = f.read().strip()
+        return prompt
+    except FileNotFoundError:
+        logger.error(f"Unable to find the file: {prompt_file}")
+        raise
 
 
 def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
@@ -326,6 +341,8 @@ def scan_and_process_images(
     expect_output: str = None,  # "json", "markdown", "none"
 ) -> None:
     """
+    Synchronous wrapper for the ascan_and_process_images function.
+
     Scans the source directory for image files, processes each image
     with the specified prompt,
     and saves the processed outputs to the output directory.
@@ -341,41 +358,17 @@ def scan_and_process_images(
     Returns:
         None
     """
-    if not os.path.exists(source_dir):
-        raise FileNotFoundError(f"Source directory {source_dir} does not exist.")
-
-    # we are only interested in the images in the source directory
-    files = [
-        f
-        for f in sorted(os.listdir(source_dir))
-        if f.lower().endswith((".png", ".tif"))
-    ]
-
-    # TODO : this should be configurable via the config file
-    batch_size = 16  # HOW TO DETERMINE THIS ?
-    num_batches = (len(files) + batch_size - 1) // batch_size
-    batched_files = batchify(files, batch_size)
-
-    logging.info(
-        "Starting batch processing of %d images in %d batches.", len(files), num_batches
+    coroutine = ascan_and_process_images(
+        source_dir=source_dir,
+        output_dir=output_dir,
+        prompt=prompt,
+        document=document,
+        engine=engine,
+        is_multimodal=is_multimodal,
+        expect_output=expect_output,
     )
 
-    frames = []
-    for file in files:
-        frames_t = frames_from_file(os.path.join(source_dir, file))
-        frames.append(frames_t[0])
-
-    batch_input_generator = prepare_batch_with_meta(
-        batched_files, frames, document, prompt, source_dir
-    )
-    for batch_index, batch_input in enumerate(batch_input_generator, start=1):
-        process_batch(
-            batch_input,
-            engine,
-            output_dir,
-            is_multimodal=is_multimodal,
-            expect_output=expect_output,
-        )
+    return run_async(coroutine)
 
 
 async def ascan_and_process_images(

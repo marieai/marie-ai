@@ -1278,8 +1278,8 @@ def iscoroutinefunction(func: Callable):
     return inspect.iscoroutinefunction(func)
 
 
-def run_async(func, *args, **kwargs):
-    """Generalized asyncio.run for jupyter notebook.
+def run_async(func, *args, **kwargs) -> Any:
+    """Generalized asyncio.run for running async from non-asyncio context.
 
     When running inside jupyter, an eventloop already exists, can't be stopped, can't be killed.
     Directly calling asyncio.run will fail, as This function cannot be called when another asyncio event loop
@@ -1294,12 +1294,35 @@ def run_async(func, *args, **kwargs):
     :return: asyncio.run(func)
     """
 
+    if inspect.iscoroutine(func):
+        # The 'func' argument is already a coroutine object.
+        coro = func
+        if args or kwargs:
+            raise ValueError(
+                "Cannot pass extra args or kwargs when func is already a coroutine object."
+            )
+    elif callable(func):
+        # The 'func' argument is a coroutine function; call it to get the coroutine object.
+        coro = func(*args, **kwargs)
+    else:
+        raise TypeError(
+            "The 'func' argument must be a callable coroutine function or a coroutine object."
+        )
+
     class _RunThread(threading.Thread):
-        """Create a running thread when in Jupyter notebook."""
+        """Create a running thread to execute the coroutine."""
+
+        def __init__(self):
+            super().__init__()
+            self.result = None
+            self.exception = None
 
         def run(self):
-            """Run given `func` asynchronously."""
-            self.result = asyncio.run(func(*args, **kwargs))
+            """Run the given coroutine in a new event loop."""
+            try:
+                self.result = asyncio.run(coro)
+            except Exception as e:
+                self.exception = e
 
     try:
         loop = asyncio.get_running_loop()
@@ -1307,21 +1330,15 @@ def run_async(func, *args, **kwargs):
         loop = None
 
     if loop and loop.is_running():
-        # eventloop already exist
-        # running inside Jupyter
         thread = _RunThread()
         thread.start()
         thread.join()
-        try:
-            return thread.result
-        except AttributeError:
-            from marie.excepts import BadClient
-
-            raise BadClient(
-                "something wrong when running the eventloop, result can not be retrieved"
-            )
+        if thread.exception:
+            # If an exception was captured in the thread, re-raise it in the main thread.
+            raise thread.exception
+        return thread.result
     else:
-        return asyncio.run(func(*args, **kwargs))
+        return asyncio.run(coro)
 
 
 def slugify(value):

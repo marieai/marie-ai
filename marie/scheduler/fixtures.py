@@ -357,7 +357,8 @@ def create_dag_table(schema: str):
             sla_interval interval,
             soft_sla timestamp with time zone,
             hard_sla timestamp with time zone,
-            sla_miss_logged boolean not null default false
+            sla_miss_logged boolean not null default false,
+            PRIMARY KEY (id)  --  Ensures compatibility with foreign key constraints
         );
     """
 

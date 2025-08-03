@@ -229,14 +229,12 @@ def fetch_next_job(schema: str):
         batch_size: int = 1,
         include_metadata: bool = False,
         priority: bool = True,
-        mark_as_active: bool = False,
     ) -> str:
         """
         Constructs a SQL query that calls the stored function to fetch the next job(s),
         using the standardized DAG-aware dependency logic and state transitions.
         """
-        # Use schema-qualified function call
-        function_call = f"{schema}.fetch_next_job('{name}', {batch_size}, {'TRUE' if mark_as_active else 'FALSE'})"
+        function_call = f"{schema}.fetch_next_job('{name}', {batch_size})"
 
         # Select only relevant columns if include_metadata is False
         if include_metadata:

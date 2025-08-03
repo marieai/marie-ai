@@ -171,7 +171,7 @@ def print_state_summary(job_states_data: Dict[str, Any]):
         logger.error(traceback.format_exc())
 
 
-def print_slots_table(slots: dict[str, int]) -> None:
+def print_slots_table(slots: dict[str, int], max_slots: dict[str, int] = None) -> None:
     console = Console()
     table = Table(
         title="⚙️  Available Slots",
@@ -183,9 +183,18 @@ def print_slots_table(slots: dict[str, int]) -> None:
     table.add_column("Slot Type", justify="left", style="cyan", no_wrap=False)
     table.add_column("Count", justify="center", style="magenta", no_wrap=False)
 
-    slots_s = dict(sorted(slots.items()))
-    for slot_type, count in slots_s.items():
-        table.add_row(slot_type, str(count))
+    if max_slots:
+        table.add_column("Max Seen", justify="center", style="green", no_wrap=False)
+
+    keys = sorted(
+        list(set(slots.keys()) | set(max_slots.keys() if max_slots else set()))
+    )
+
+    for slot_type in keys:
+        row = [slot_type, str(slots.get(slot_type, "-"))]
+        if max_slots:
+            row.append(str(max_slots.get(slot_type, "-")))
+        table.add_row(*row)
 
     console.print(table)
 
@@ -375,6 +384,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             create_sql_from_file(
                 schema,
                 os.path.join(__default_schema_dir__, "create_indexes.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__default_schema_dir__, "create_constraints.sql"),
             ),
             create_sql_from_file(
                 schema,
@@ -599,17 +612,29 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def _heartbeat_loop(self, interval: float = 5.0):
         """Periodic heartbeat logger showing scheduler state."""
+
+        _seen_executors = set()
+        _max_seen_executors = {}
+
         while self.running:
             try:
                 queue_size = self._event_queue.qsize()
                 slot_info = available_slots_by_executor(ClusterState.deployments)
                 active_dags = list(self.active_dags.keys())
+                _seen_executors.update(slot_info.keys())
+
+                for executor, count in slot_info.items():
+                    current_max = _max_seen_executors.get(executor, 0)
+                    _max_seen_executors[executor] = max(current_max, count)
 
                 self.logger.info("🔄  Scheduler Heartbeat")
                 self.logger.info(f"  🧭  Mode              : {self.scheduler_mode}")
                 self.logger.info(f"  📦  Queue Size        : {queue_size}")
+                self.logger.info(
+                    f"  👀  Visible Executors : {len(_seen_executors)} (max: {_max_seen_executors})"
+                )
                 self.logger.info(f"  ⚙️   Available Slots ")
-                print_slots_table(slot_info)
+                print_slots_table(slot_info, _max_seen_executors)
                 self.logger.info(f"  🧠  Active DAGs        : {len(active_dags)}")
 
                 if active_dags:
@@ -621,11 +646,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 print_state_summary(states)
                 self.diagnose_pool()
 
-                # print_dag_concurrency_status_compact(self.dag_concurrency_manager.get_configuration_summary())
-
                 await asyncio.sleep(interval)
             except Exception as e:
-                self.logger.error(f"❌ Heartbeat loop error: {e}")
+                self.logger.error(f"Heartbeat loop error: {e}")
                 await asyncio.sleep(5)
 
     async def _producer_loop(self):
@@ -1028,7 +1051,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             batch_size=limit,
                             include_metadata=False,
                             priority=True,
-                            mark_as_active=False,
                         )
                         # we can't use named cursors as it will throw an error
                         cursor = self.connection.cursor()
