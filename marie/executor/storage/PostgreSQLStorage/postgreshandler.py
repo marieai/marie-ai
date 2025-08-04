@@ -152,7 +152,8 @@ class PostgreSQLHandler:
             CREATE EXTENSION IF NOT EXISTS vector;
             
             CREATE TABLE IF NOT EXISTS {self.table} (
-                doc_id VARCHAR PRIMARY KEY,
+                event_id SERIAL PRIMARY KEY,
+                doc_id VARCHAR NOT NULL,
                 ref_id VARCHAR(64) not null,
                 ref_type VARCHAR(64) not null,
                 store_mode VARCHAR(32) not null,
@@ -211,14 +212,11 @@ class PostgreSQLHandler:
         :param kwargs: other keyword arguments
         :return record: List of Document's id added
         """
-
         if "ref_id" not in kwargs or "ref_type" not in kwargs:
             raise ValueError("ref_id and ref_type must be provided in kwargs.")
 
         ref_id = kwargs.pop("ref_id")
         ref_type = kwargs.pop("ref_type")
-
-        print("PsqlToastHandler.add called ref_id:", ref_id)
 
         with self:
             cursor = self.connection.cursor()

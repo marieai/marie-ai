@@ -3,13 +3,10 @@ from typing import Dict
 import numpy as np
 from docarray import DocList
 
-from marie import DocumentArray, Executor
 from marie.api.docs import StorageDoc
 from marie.logging_core.logger import MarieLogger
 
 from .postgreshandler import PostgreSQLHandler
-
-# https://github.com/jina-ai/executor-hnsw-postgres/blob/main/executor/postgres_indexer.py
 
 
 class PostgreSQLStorage:
@@ -101,12 +98,8 @@ class PostgreSQLStorage:
         :param docs: list of Documents
         :param parameters: parameters to the request,
         """
-
-        print("PsqlToastHandler.mixin called docs:", docs)
-
         if docs is None:
             return
-
         self.handler.add(
             docs,
             store_mode,

@@ -16,6 +16,7 @@ class GlobalPriorityExecutionPlanner:
 
       # https://www.mdpi.com/2079-9292/10/16/1874
       # https://openreview.net/forum?id=km4omm25me
+      # https://ocw.mit.edu/courses/6-042j-mathematics-for-computer-science-spring-2015/mit6_042js15_session17.pdf
     """
 
     def plan(

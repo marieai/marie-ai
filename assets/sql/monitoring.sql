@@ -1,11 +1,26 @@
-TRUNCATE marie_scheduler.dag;
-TRUNCATE marie_scheduler.job;
-TRUNCATE marie_scheduler.dag_history;
-TRUNCATE marie_scheduler.job_history;
 
+-- CLEAR ALL DATA
+------------------------------------
+TRUNCATE marie_scheduler.dag;
+TRUNCATE marie_scheduler.dag_history;
+TRUNCATE marie_scheduler.job CASCADE ;
+TRUNCATE marie_scheduler.job_history;
 TRUNCATE kv_store_worker;
 TRUNCATE kv_store_worker_history;
-------------------------------------------
+TRUNCATE  event_tracking
+-------------------------------------
+
+DROP SCHEMA marie_scheduler CASCADE;
+
+select * from marie_scheduler.fetch_next_job('extract', 25000)
+
+   SELECT d.id, d.state, COUNT(j.*) as job_count,
+          COUNT(CASE WHEN j.state = 'completed' THEN 1 END) as completed_jobs
+   FROM marie_scheduler.dag d
+   LEFT JOIN marie_scheduler.job j ON d.id = j.dag_id
+   GROUP BY d.id, d.state;
+
+
 # DESTRUCTIVE OPS
 -- SELECT marie_scheduler.reset_all()
 -- SELECT marie_scheduler.reset_completed_dags_and_jobs()

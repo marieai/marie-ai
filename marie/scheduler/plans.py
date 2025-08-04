@@ -172,21 +172,18 @@ def insert_version(schema: str, version: str) -> str:
     return query
 
 
-def count_states(schema: str):
+def count_job_states(schema: str):
     """
     Count the number of jobs in each state.
+    """
+    return f"SELECT * FROM {schema}.count_job_states()"
 
-    Example usage:
-    schema = 'public'
-    print(count_states(schema))
-    :param schema:
-    :return:
+
+def count_dag_states(schema: str):
     """
-    return f"""
-    SELECT name, state, count(*) size
-    FROM {schema}.job
-    GROUP BY ROLLUP(name), ROLLUP(state)
+    Count the number of dags in each state.
     """
+    return f"SELECT * FROM {schema}.count_dag_states()"
 
 
 def cancel_jobs(schema: str, name: str, ids: list):

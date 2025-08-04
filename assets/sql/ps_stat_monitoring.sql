@@ -169,3 +169,15 @@ SELECT
     (SELECT setting::int FROM pg_settings WHERE name = 'pg_stat_statements.max') as max_statements
 FROM pg_stat_statements;
 
+
+
+
+
+------------------ STORAGE USAGE -------------
+
+SELECT
+    schemaname || '.' || relname AS table,
+    pg_size_pretty(pg_total_relation_size(relid)) AS total_size
+FROM pg_catalog.pg_statio_user_tables
+ORDER BY pg_total_relation_size(relid) DESC
+LIMIT 20;

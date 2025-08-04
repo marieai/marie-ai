@@ -100,13 +100,6 @@ class StorageMixin:
         :param docs:
         """
         try:
-            print("PsqlToastHandler.mixin called with:", ref_id)
-            print(
-                "PsqlToastHandler.mixin called self.storage_enabled:",
-                self.storage_enabled,
-            )
-            print("PsqlToastHandler.mixin called self.storage:", self.storage)
-
             if self.storage_enabled and self.storage is not None:
                 self.storage.add(
                     docs, store_mode, {"ref_id": ref_id, "ref_type": ref_type}
