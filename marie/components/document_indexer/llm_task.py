@@ -2,8 +2,9 @@ import json
 import os
 import re
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
+import numpy as np
 from pydantic import BaseModel, Field
 
 from marie.logging_core.predefined import default_logger as logger
@@ -16,7 +17,7 @@ def identity(x, *args, **kwargs) -> str:
 
 
 def append_ocr_lines(
-    prompt: str, words: List[str] = None, lines: List[int] = None, **kwargs
+    prompt: str, words: List[str] = None, boxes=None, lines: List[int] = None, **kwargs
 ) -> str:
     """
     Appends line-numbered OCR text to a base prompt.
@@ -34,17 +35,46 @@ def append_ocr_lines(
         return prompt
 
     line_map = defaultdict(list)
-    for word, line_num in zip(words, lines):
-        line_map[line_num].append(word)
+    for word, line_num, box in zip(words, lines, boxes):
+        line_map[line_num].append((word, box))
 
-    numbered_lines = [
-        f"{line} | {' '.join(line_map[line])}" for line in sorted(line_map)
-    ]
-    return f"{prompt}\n{md_wrap('\n'.join(numbered_lines))}"
+    # Spatially algin words into lines
+    char_width = 8.44
+    width = max(x + w for (x, y, w, h) in boxes)
+    cols = int(width // char_width)
+    x_space = np.arange(0, width, 1)
+    bins = np.linspace(0, width, cols)
+    bins = np.array(bins).astype(np.int32)
+    x_hist = np.digitize(x_space, bins, right=True)
+    max_characters_per_line = cols
+
+    buffer = []
+    min_indent = max_characters_per_line
+    for line_num, line_words in line_map.items():
+        line_buffer = " " * max_characters_per_line
+        for idx, word in enumerate(line_words):
+            text, curr_box = line_words[idx]
+            x2, y2, w2, h2 = curr_box
+            grid_space = x_hist[x2]
+            line_buffer = line_buffer[:grid_space] + text + line_buffer[grid_space:]
+
+        buffer.append((line_num, line_buffer.rstrip()))
+        indent = len(line_buffer) - len(line_buffer.lstrip())
+        if indent < min_indent:
+            min_indent = indent
+
+    # Remove max leading whitespace for all lines.
+    if min_indent > 0:
+        buffer = [(n, line[min_indent:]) for n, line in buffer]
+    buffer = "\n".join([f"{n} | {line}" for n, line in buffer])
+
+    return f"{prompt}\n{md_wrap(buffer)}"
 
 
-def append_text(prompt, text="", **kwargs) -> str:
-    return f"{prompt}\n{text}"
+def text_append(prompt, append_text="", **kwargs) -> str:
+    if not append_text:
+        return prompt
+    return f"{prompt}\n{append_text}"
 
 
 def md_wrap(preformatted_text, format_type: str = None):
@@ -70,7 +100,7 @@ def parse_markdown_json(markdown_json_str: str):
     if match:
         json_content = match.group(1)
     else:
-        logger.warning("JSON not surrounded by Markdown formatting")
+        logger.debug("JSON not surrounded by Markdown formatting")
         json_content = markdown_json_str
 
     try:
@@ -90,7 +120,7 @@ def parse_json_output(json_output: str):
 PROMPT_STRATEGIES = {
     "prompt_identity": identity,
     "append_ocr_lines": append_ocr_lines,
-    "append_chained_output": append_text,
+    "append_chained_output": text_append,
 }
 
 CONVERSION_STRATEGIES = {
@@ -104,15 +134,21 @@ class LLMOutputModifier(BaseModel):
     substitute: str | None
 
 
+class PageFilter(BaseModel):
+    task: str
+    pattern: dict | str
+
+
 class LLMTask(BaseModel):
     name: str
     prompt: str
     prompt_mod_strategy: Optional[str] = "prompt_identity"
     guided_json_schema: Optional[str] = None
-    chained_tasks: Optional[List[str]] = None
+    chained_tasks: Optional[List[str]] = []
     output_type: Optional[str] = "text"
     store_results: Optional[bool] = True
     output_mod: Optional[LLMOutputModifier] = None
+    page_filter: Optional[PageFilter] = None
 
 
 class LLMConfig(BaseModel):
@@ -205,3 +241,22 @@ def modify_outputs(
         (modify_task(task_output, pattern, substitute), error_data)
         for task_output, error_data in task_outputs
     ]
+
+
+def filter_pages(pattern: Any, page_output: dict[int, Any], page_subset=None):
+    if isinstance(pattern, dict):
+        matching_pages = set()
+        pages = page_subset or page_output.keys()
+        for page_num, (page_output, error) in page_output.items():
+            if page_num not in pages:
+                continue
+            if not isinstance(page_output, dict):
+                continue
+            if all(page_output.get(k) == v for k, v in pattern.items()):
+                matching_pages.add(page_num)
+        return sorted(matching_pages)
+    # TODO: if needed
+    # elif isinstance(pattern, str):
+    #     pass
+
+    return sorted(page_output.keys())

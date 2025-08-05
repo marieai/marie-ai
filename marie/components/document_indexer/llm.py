@@ -1,4 +1,5 @@
 import os
+from collections import defaultdict
 from typing import Any, List, Optional, Tuple, Union
 
 import torch
@@ -9,6 +10,8 @@ from marie.components.document_indexer.base import BaseDocumentIndexer
 from marie.components.document_indexer.llm_task import (
     PROMPT_STRATEGIES,
     LLMConfig,
+    LLMTask,
+    filter_pages,
     initialize_tasks,
     md_wrap,
     modify_outputs,
@@ -111,7 +114,8 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
         if len(documents) == 0:
             return documents
 
-        task_outputs = {}
+        doc_map = {i: doc for i, doc in enumerate(documents)}
+        task_outputs = defaultdict(dict)  # {"task_name": {0: "page_output", ...}, ...}
         # Execute tasks sequentially based on the order defined in config
         task_request = kwargs.get("tasks")
         tasks = (
@@ -121,14 +125,26 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
         )
         for task in tasks:
             task_name = task.name
+            filtered_pages_idx = sorted(doc_map.keys())
 
-            chained_inputs = []
+            chained_inputs = {}
+            for chained_task_name in task.chained_tasks:
+                chained_task = self.task_map[chained_task_name]
+                prior_outputs = task_outputs.get(chained_task_name, {})
+                for page_idx, (page_output, error) in prior_outputs.items():
+                    if page_idx not in chained_inputs:
+                        chained_inputs[page_idx] = ""
+                    chained_inputs[page_idx] += "\n" + md_wrap(
+                        page_output, chained_task.output_type
+                    )
+
             if task.chained_tasks:
-                for chained_task_name in task.chained_tasks:
-                    chained_task = self.task_map[chained_task_name]
-                    chained_input = task_outputs.get(chained_task_name, "")
-                    chained_input = md_wrap(chained_input, chained_task.output_type)
-                    chained_inputs.append(chained_input)
+                filtered_pages_idx = sorted(chained_inputs.keys())
+            if task.page_filter:
+                pf = task.page_filter
+                filtered_pages_idx = filter_pages(
+                    pf.pattern, task_outputs[pf.task], page_subset=filtered_pages_idx
+                )
 
             prompt_strategy_name = task.prompt_mod_strategy
             prompt_strategy_fn = PROMPT_STRATEGIES[prompt_strategy_name]
@@ -139,17 +155,22 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
                     task.prompt,
                     document=doc,
                     words=words[i],
+                    boxes=boxes[i],
                     lines=lines[i],
-                    append_text="\n".join(chained_inputs),
+                    append_text=chained_inputs.get(i, None),
                     **kwargs,
                 )
                 for i, doc in enumerate(documents)
+                if i in filtered_pages_idx
             ]
-
-            frames = frames_from_docs(documents)
+            docs = DocList([documents[i] for i in filtered_pages_idx])
+            frames = frames_from_docs(docs)
             frames = convert_frames(frames, img_format="pil")
             batch = list(list(mm_prompt) for mm_prompt in zip(frames, prompts))
 
+            if len(batch) == 0:
+                self.logger.warning(f"No pages to process for task {task_name}")
+                continue
             # TODO: Add support for system prompts
             self.logger.info(
                 f"Running '{task_name}' with strategy '{prompt_strategy_name}'"
@@ -158,7 +179,10 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
                 batch, guided_json=task.guided_json_schema
             )
             parsed_output = parse_task_output(model_output, task.output_type)
-            task_outputs[task_name] = modify_outputs(parsed_output, task.output_mod)
+            mod_output = modify_outputs(parsed_output, task.output_mod)
+            task_outputs[task_name] = {
+                i: page_output for i, page_output in zip(filtered_pages_idx, mod_output)
+            }
 
         for document in documents:
             document.tags[DOC_KEY_INDEXER] = dict()
@@ -166,8 +190,8 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
         for task_name, model_output in task_outputs.items():
             if not self.task_map[task_name].store_results:
                 continue
-            for document, prediction in zip(documents, model_output):
-                document.tags[DOC_KEY_INDEXER][task_name] = prediction
+            for i, prediction in model_output.items():
+                documents[i].tags[DOC_KEY_INDEXER][task_name] = prediction
 
         return documents
 
@@ -205,7 +229,7 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
 
         return data
 
-    def resolve_task_graph(self, task_requests):
+    def resolve_task_graph(self, task_requests) -> List[LLMTask]:
 
         requested_tasks = []
         for task_name in task_requests:
@@ -213,13 +237,13 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
                 raise ValueError(
                     f"Undefined task requested {task_name}. Available tasks: {list(self.task_map.keys())}"
                 )
-            requested_tasks.append(self.task_map[task_name])
-
-        chained_tasks = []
-        for task in requested_tasks:
+            task = self.task_map[task_name]
             if task.chained_tasks:
-                chained_tasks.extend(
-                    [self.task_map[task_name] for task_name in task.chained_tasks]
+                chained_tasks = self.resolve_task_graph(task.chained_tasks)
+                requested_tasks.extend(
+                    [ct for ct in chained_tasks if ct not in requested_tasks]
                 )
+            if task not in requested_tasks:
+                requested_tasks.append(task)
 
-        return chained_tasks + requested_tasks
+        return requested_tasks
