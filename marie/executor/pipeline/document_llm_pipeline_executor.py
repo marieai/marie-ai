@@ -83,7 +83,16 @@ class DocumentLLMPipelineExecutor(PipelineExecutor):
                 runtime_conf = feature
         self.logger.debug(f"Resolved Runtime Config: {runtime_conf}")
 
-        frames = self.get_frames_from_docs(docs, runtime_conf.get("page_limit"))
+        pages = payload.get("pages", None)
+        if isinstance(pages, str):
+            pages = sorted({int(n) for n in pages.split(",")})
+        elif isinstance(pages, list):
+            pages = sorted({int(n) for n in pages})
+        elif pages is not None:
+            self.logger.warning(f"Unexpected pages attr {pages}, ignoring")
+            pages = None
+
+        frames = self.get_frames_from_docs(docs, pages)
         root_asset_dir = create_working_dir(frames)
         try:
             metadata = self.pipeline.execute_frames_pipeline(
@@ -108,7 +117,7 @@ class DocumentLLMPipelineExecutor(PipelineExecutor):
             response = {
                 "status": "success",
                 "runtime_info": self.runtime_info,
-                "metadata": metadata,
+                # "metadata": metadata,
             }
             converted = safely_encoded(lambda x: x)(response)
             return converted

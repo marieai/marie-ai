@@ -154,12 +154,12 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
 
         return job_id, ref_id, ref_type, queue_id, payload
 
-    def get_frames_from_docs(self, docs: DocList[AssetKeyDoc], page_limit=None):
+    def get_frames_from_docs(self, docs: DocList[AssetKeyDoc], pages: List[int] = None):
         """
         Load and preprocess frames from a single document asset.
 
         :param docs: DocList containing exactly one AssetKeyDoc.
-        :param page_limit: The maximum number of frames to load. (None = no limit)
+        :param pages: A list of pages. (None = no limit)
         :raises ValueError: If no or multiple documents are provided.
         :return: List of image frames (e.g., numpy arrays), and the local asset path
         """
@@ -170,8 +170,8 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
 
         doc: AssetKeyDoc = docs[0]
         self.logger.debug(f"Document asset key: {doc.asset_key}")
-        # limited_pages = self.get_limit_pages(page_limit, len(doc.pages))
-        docs = docs_from_asset(doc.asset_key, doc.pages)
+        pages = doc.pages if pages is None else pages
+        docs = docs_from_asset(doc.asset_key, pages)
         frames = frames_from_docs(docs)
 
         return frames
