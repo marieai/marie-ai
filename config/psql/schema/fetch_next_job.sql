@@ -12,9 +12,9 @@ BEGIN
         FROM marie_scheduler.job j
         JOIN marie_scheduler.dag d ON d.id = j.dag_id
         WHERE j.name = job_name
-          AND j.state < 'active'
+          AND j.state IN ('created', 'retry')  -- Only consider jobs that can run
           AND j.start_after < now()
-          AND d.state != 'completed'
+          AND d.state NOT IN ('completed', 'failed', 'cancelled')  -- Exclude problematic DAGs
     ),
     unblocked_jobs AS (
         SELECT j.*
@@ -22,16 +22,23 @@ BEGIN
         WHERE NOT EXISTS (
             SELECT 1
             FROM marie_scheduler.job_dependencies dep
-            JOIN marie_scheduler.job d2
-              ON d2.id = dep.depends_on_id
+            JOIN marie_scheduler.job d2 ON d2.id = dep.depends_on_id
             WHERE dep.job_id = j.id
-              AND d2.state <> 'completed'
+              AND d2.state NOT IN ('completed')  -- Dependencies must be completed
+        )
+        -- Exclude jobs from DAGs with any failed dependencies
+        AND NOT EXISTS (
+            SELECT 1
+            FROM marie_scheduler.job_dependencies dep
+            JOIN marie_scheduler.job d2 ON d2.id = dep.depends_on_id
+            WHERE dep.job_id = j.id
+              AND d2.state = 'failed'
         )
     )
     SELECT *
     FROM unblocked_jobs
-    ORDER BY job_level DESC, priority DESC
-    LIMIT batch_size;
+    ;
+    --ORDER BY job_level ASC, priority DESC
+    --LIMIT batch_size;
 END;
 $$;
-

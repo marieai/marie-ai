@@ -11,7 +11,6 @@ from grpc.aio import AioRpcError
 from marie.constants import DEPLOYMENT_STATUS_PREFIX
 from marie.job.common import ActorHandle, JobInfo, JobInfoStorageClient, JobStatus
 from marie.job.event_publisher import EventPublisher
-from marie.job.job_callback_executor import job_callback_executor
 from marie.job.job_distributor import JobDistributor
 from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
@@ -226,10 +225,7 @@ class JobSupervisor:
             task.add_done_callback(lambda t: self._active_tasks.discard(t))
         self.logger.info(f"Job submitted in the background : {self._job_id}")
 
-    def send_callback(self, requests, request_info):
-        job_callback_executor.submit(self._send_callback_sync, requests, request_info)
-
-    def _send_callback_sync(
+    def send_callback(
         self, requests: Union[List[DataRequest] | DataRequest], request_info: Dict
     ):
         """

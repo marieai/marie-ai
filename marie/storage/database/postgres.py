@@ -79,7 +79,7 @@ class PostgresqlMixin:
         if self.connection:
             self._close_connection(self.connection)
 
-    def _close_connection(self, connection):
+    def _close_connectionXXX(self, connection):
         """Return connection to pool """
         try:
             # restore it to the pool
@@ -92,6 +92,35 @@ class PostgresqlMixin:
             except:
                 self.logger.warning(f"Error closing connection: {e}")
                 pass  # Connection might already be closed
+
+    def _close_connection(self, connection):
+        """
+        Return connection to pool, ensuring it's in a clean state.
+        This acts as a safety net against connection leaks from unterminated transactions.
+        """
+        if not connection:
+            return
+        try:
+            # If the connection is in a transaction, roll it back.
+            tx_status = connection.get_transaction_status()
+            if tx_status != psycopg2.extensions.TRANSACTION_STATUS_IDLE:
+                self.logger.warning(
+                    f"Returning connection to pool in non-idle state (status: {tx_status}). Forcing rollback."
+                )
+                raise
+                connection.rollback()
+
+            # Return the (now clean) connection to the pool.
+            self.postgreSQL_pool.putconn(connection)
+        except Exception as e:
+            self.logger.warning(f"Error returning connection to pool: {e}")
+            try:
+                # As a last resort, try to close the connection directly.
+                connection.close()
+            except Exception as close_exc:
+                self.logger.error(f"Failed to close broken connection: {close_exc}")
+                pass  # The connection is likely already dead.
+
 
     def _close_cursor(self, cursor):
         """Close cursor gracefully."""
@@ -168,7 +197,6 @@ class PostgresqlMixin:
         Use table if exists or create one if it doesn't.
         """
         with self:
-
             if reset_table_callback:
                 self.logger.info(f"Resetting table : {self.table}")
                 reset_table_callback()
@@ -188,6 +216,7 @@ class PostgresqlMixin:
         if create_table_callback:
             create_table_callback(self.table)
 
+
     def diagnose_pool(self):
         """Debug connection pool status with transaction state details."""
         # Transaction status mapping from psycopg2
@@ -206,14 +235,14 @@ class PostgresqlMixin:
 
             # Check available connections
             print("\nAvailable connections:")
-            for i, conn in enumerate(pool._pool):
+            for i, conn in enumerate(list(pool._pool)):
                 status_code = getattr(conn, 'status', 4)
                 status_name = TRANSACTION_STATUS_NAMES.get(status_code, f"UNKNOWN({status_code})")
                 print(f"  Connection {i}: {status_name} (code: {status_code})")
 
             # Check used connections
             print("\nUsed connections:")
-            for key, conn in pool._used.items():
+            for key, conn in list(pool._used.items()):
                 status_code = getattr(conn, 'status', 4)
                 status_name = TRANSACTION_STATUS_NAMES.get(status_code, f"UNKNOWN({status_code})")
                 print(f"  Connection {key}: {status_name} (code: {status_code})")

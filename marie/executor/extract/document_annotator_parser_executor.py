@@ -68,7 +68,7 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
 
         if False:
             print('===================== SLEEPING =====================')
-            time.sleep(2)
+            time.sleep(0)
             return
 
         self._setup_request(docs, parameters, *args, **kwargs)

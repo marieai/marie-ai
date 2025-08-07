@@ -133,12 +133,12 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             # if random.random() < 0.2:  # 20% chance to simulate async cancellation
             #     raise asyncio.CancelledError("Simulated async task cancellation")
 
-            sec = random.randint(15, 30)
-            # sec = 2
-            time.sleep(sec)  # this will trigger
+            sec = random.randint(1, 2)
+            # sec = 0
+            # time.sleep(sec)  # this will trigger
             for i in range(sec):
                 # await asyncio.sleep(1)
-                # time.sleep(1)
+                time.sleep(1)
                 self.logger.info(f"Sleeping... {i + 1}/{sec} seconds elapsed")
 
             return {'status': 'success', 'message': 'Documents annotated successfully'}

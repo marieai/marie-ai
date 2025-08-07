@@ -62,9 +62,6 @@ class EventPublisher:
         :param event_type: A string or list of strings representing event types.
         :param subscriber: A callable (sync or async) that accepts (event_type, message).
         """
-
-        print("Subscribing to event type:", event_type)
-
         if isinstance(event_type, str):
             event_type = [event_type]
         for et in event_type:

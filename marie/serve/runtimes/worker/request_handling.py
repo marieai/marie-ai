@@ -29,7 +29,7 @@ from grpc_health.v1.health_pb2 import HealthCheckResponse
 from marie._docarray import DocumentArray, docarray_v2
 from marie.constants import DEPLOYMENT_STATUS_PREFIX, __default_endpoint__
 from marie.excepts import BadConfigSource, RuntimeTerminated
-from marie.helper import get_full_version, get_internal_ip
+from marie.helper import get_full_version, get_internal_ip, get_or_reuse_loop
 from marie.importer import ImportExtensions
 from marie.job.common import JobInfoStorageClient, JobStatus
 from marie.proto import jina_pb2
@@ -99,6 +99,7 @@ class WorkerRequestHandler:
         self.args = args
         self.logger = logger
         self._is_closed = False
+        self._loop = get_or_reuse_loop()
 
         runtime_name = kwargs.get("runtime_name", None)
         node_info['deployment_name'] = deployment_name
@@ -816,7 +817,7 @@ class WorkerRequestHandler:
 
             client_disconnected = False
 
-            async def executor_completion_callback(
+            async def executor_completion_callbackXX(
                 job_id: str,
                 requests: List["DataRequest"],
                 return_data: Any,
@@ -847,6 +848,53 @@ class WorkerRequestHandler:
                     await self._record_successful_job(
                         job_id, requests, additional_metadata
                     )
+
+            async def executor_completion_callback(
+                job_id: str,
+                requests: List["DataRequest"],
+                return_data: Any,
+                raised_exception: Exception,
+            ):
+                """
+                Async callback that safely schedules the status recording on the main event loop.
+                """
+                self.logger.debug(
+                    f"executor_completion_callback executing for job: {job_id}"
+                )
+                additional_metadata = {"client_disconnected": client_disconnected}
+                coro_to_run = None
+
+                if raised_exception:
+                    val = "".join(
+                        traceback.format_exception(
+                            raised_exception, limit=None, chain=True
+                        )
+                    )
+                    self.logger.error(
+                        f"{raised_exception!r} during executor handling\n{val}"
+                    )
+                    coro_to_run = self._record_failed_job(
+                        job_id, requests, raised_exception, additional_metadata
+                    )
+                else:
+                    coro_to_run = self._record_successful_job(
+                        job_id, requests, additional_metadata
+                    )
+
+                # Schedule the coroutine on the main loop and wait for the result.
+                if coro_to_run:
+                    future = asyncio.run_coroutine_threadsafe(coro_to_run, self._loop)
+                    try:
+                        # Blocking here is acceptable as it's the final step
+                        future.result(
+                            timeout=5
+                        )  # wait for the coroutine to finish, it should not take long
+                    except Exception as e:
+                        print(e)
+                        self.logger.error(
+                            f"Error running completion callback in main loop for job {job_id}: {e}"
+                            f"\n{traceback.format_exc()}"
+                        )
 
             try:
                 # we adding a callback to track when the executor have finished as the client disconnect will trigger

@@ -239,6 +239,7 @@ executors:
          py_modules:
            - marie.executor.text
      timeout_ready: 3000000
+
      replicas: 1
 #     replicas: ${{ CONTEXT.gpu_device_count }}
 
