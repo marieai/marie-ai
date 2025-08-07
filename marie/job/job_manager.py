@@ -1,13 +1,11 @@
 import asyncio
 import os
 import time
-import traceback
 from typing import Any, Dict, Iterator, Optional
 
 from uuid_extensions import uuid7str
 
 from marie._core.utils import run_background_task
-from marie.helper import get_or_reuse_loop
 from marie.job.common import ActorHandle, JobInfo, JobInfoStorageClient, JobStatus
 from marie.job.event_publisher import EventPublisher
 from marie.job.job_distributor import JobDistributor

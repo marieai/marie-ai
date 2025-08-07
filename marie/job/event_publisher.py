@@ -86,28 +86,46 @@ class EventPublisher:
         :param event_type: The type of event being published.
         :param message: The message payload to deliver.
         """
+        print('Publishing event type : ', event_type, self._queue.qsize())
         await self._queue.put((event_type, message))
 
     async def _dispatcher(self):
         """
         Dispatcher consumes events in strict FIFO order
-        and processes subscribers synchronously to guarantee ordering.
+        but processes subscribers concurrently to avoid blocking.
         """
         while not self._stopped.is_set():
             try:
                 event_type, message = await self._queue.get()
+                print('Received event type : ', event_type, self._queue.qsize())
                 if event_type in self._subscribers:
+                    # Process all subscribers for this event concurrently
+                    subscriber_tasks = []
                     for subscriber in list(self._subscribers[event_type]):
                         try:
                             if inspect.iscoroutinefunction(subscriber):
-                                await subscriber(event_type, message)
-                            else:
-                                # Sync function: run in thread but wait for completion
-                                await asyncio.get_running_loop().run_in_executor(
-                                    None, subscriber, event_type, message
+                                task = asyncio.create_task(
+                                    subscriber(event_type, message)
                                 )
+                            else:
+                                # Sync function: run in thread
+                                task = asyncio.create_task(
+                                    asyncio.get_running_loop().run_in_executor(
+                                        None, subscriber, event_type, message
+                                    )
+                                )
+                            subscriber_tasks.append(task)
                         except Exception as e:
-                            print(f"Subscriber error: {e}")
+                            print(f"Subscriber creation error: {e}")
+
+                    # Wait for all subscribers to complete before processing next event
+                    if subscriber_tasks:
+                        try:
+                            await asyncio.gather(
+                                *subscriber_tasks, return_exceptions=True
+                            )
+                        except Exception as e:
+                            print(f"Subscriber execution error: {e}")
             except asyncio.CancelledError:
                 break
 

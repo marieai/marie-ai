@@ -817,7 +817,7 @@ class WorkerRequestHandler:
 
             client_disconnected = False
 
-            async def executor_completion_callbackXX(
+            async def executor_completion_callback(
                 job_id: str,
                 requests: List["DataRequest"],
                 return_data: Any,
@@ -849,7 +849,7 @@ class WorkerRequestHandler:
                         job_id, requests, additional_metadata
                     )
 
-            async def executor_completion_callback(
+            async def executor_completion_callback_ASYNC(
                 job_id: str,
                 requests: List["DataRequest"],
                 return_data: Any,

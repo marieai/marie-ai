@@ -481,6 +481,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         # self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         self._poll_task = asyncio.create_task(self._poll())
+
         self._worker_tasks = [
             asyncio.create_task(self._process_submission_queue(worker_id))
             for worker_id in range(self.max_workers)
@@ -851,13 +852,25 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     node = self.get_node_from_dag(work_info.id, dag)
 
                     if self._is_noop_query_definition(node):
+                        print('_is_noop_query_definition : ', work_info.job_level)
+                        start_t = time.time()
+                        sorted_nodes = topological_sort(dag)
+                        job_levels = compute_job_levels(sorted_nodes, dag)
+                        max_level = max(job_levels.values())
+                        end_t = time.time()
+                        # print(' TIME : ', end_t - start_t)
+                        print(
+                            f"Job levels: {job_levels}, Current level: {work_info.job_level}, Max level: {max_level}"
+                        )
                         now = datetime.now()
-
                         await self.put_status(
                             work_info.id, WorkState.COMPLETED, now, now
                         )
                         await self.complete(work_info.id, work_info, {}, force=True)
-                        await self.resolve_dag_status(work_info.id, work_info)
+                        if (
+                            max_level == work_info.job_level
+                        ):  # There is no need to resolve DAG if we are in NOOP and not at the END
+                            await self.resolve_dag_status(work_info.id, work_info)
                         await self.notify_event()
 
                         continue
