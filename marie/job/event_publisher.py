@@ -63,8 +63,6 @@ class EventPublisher:
         :param subscriber: A callable (sync or async) that accepts (event_type, message).
         """
 
-        print("Subscribing to event type:", event_type)
-
         if isinstance(event_type, str):
             event_type = [event_type]
         for et in event_type:
@@ -86,7 +84,7 @@ class EventPublisher:
         :param event_type: The type of event being published.
         :param message: The message payload to deliver.
         """
-        print('Publishing event type : ', event_type, self._queue.qsize())
+        # print('Publishing event type : ', event_type, self._queue.qsize())
         await self._queue.put((event_type, message))
 
     async def _dispatcher(self):
@@ -97,7 +95,7 @@ class EventPublisher:
         while not self._stopped.is_set():
             try:
                 event_type, message = await self._queue.get()
-                print('Received event type : ', event_type, self._queue.qsize())
+                # print('Received event type : ', event_type, self._queue.qsize())
                 if event_type in self._subscribers:
                     # Process all subscribers for this event concurrently
                     subscriber_tasks = []

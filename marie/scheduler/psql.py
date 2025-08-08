@@ -11,8 +11,7 @@ from asyncio import Queue
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from pprint import pprint
-from typing import Any, Awaitable, Callable, Coroutine, Dict, NamedTuple, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, NamedTuple, Tuple, Union
 
 import psycopg2
 
@@ -43,12 +42,11 @@ from marie.query_planner.planner import (
     plan_to_yaml,
     query_planner,
     topological_sort,
-    visualize_query_plan_graph,
 )
 from marie.scheduler.fixtures import *
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
 from marie.scheduler.job_scheduler import JobScheduler
-from marie.scheduler.models import ExistingWorkPolicy, WorkInfo
+from marie.scheduler.models import ExistingWorkPolicy, HeartbeatConfig, WorkInfo
 from marie.scheduler.plans import (
     cancel_jobs,
     complete_jobs,
@@ -82,8 +80,8 @@ from marie.storage.database.postgres import PostgresqlMixin
 INIT_POLL_PERIOD = 2.250  # 250ms
 SHORT_POLL_INTERVAL = 1.0  # seconds, when slots exist but no work
 
-MIN_POLL_PERIOD = 0.5
-MAX_POLL_PERIOD = 16
+MIN_POLL_PERIOD = 0.250
+MAX_POLL_PERIOD = 8
 
 MONITORING_POLL_PERIOD = 5.0  # 5s
 SYNC_POLL_PERIOD = 5.0  # 5s
@@ -156,6 +154,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if job_manager is None:
             raise BadConfigSource("job_manager argument is required for JobScheduler")
 
+        self.validate_config(config)
         self._fetch_event = asyncio.Event()
         self._fetch_counter = 0
         self._debounced_notify = False
@@ -213,8 +212,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
         cache_ttl_seconds = int(dag_config.get("cache_ttl_seconds", 5))
 
+        heartbeat_config_dict = config.get("heartbeat", {})
+        self.heartbeat_config = HeartbeatConfig.from_dict(heartbeat_config_dict)
+        self.logger.info(f"Heartbeat configuration: {self.heartbeat_config}")
+
         self.max_concurrent_dags = max_concurrent_dags
         self._start_time = datetime.now(timezone.utc)
+
+    def validate_config(self, config: Dict[str, Any]):
+        # TODO :Implement full validation of required fields
+        required_keys = ["queue_names"]
+        for key in required_keys:
+            if key not in config:
+                raise BadConfigSource(f"Missing required config: {key}")
 
     async def handle_job_event(self, event_type: str, message: Any):
         """
@@ -479,7 +489,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         # self.monitoring_task = asyncio.create_task(self._monitor())
         self.monitoring_task = None
 
-        # self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        self._heartbeat_task = asyncio.create_task(
+            self._heartbeat_loop(self.heartbeat_config)
+        )
         self._poll_task = asyncio.create_task(self._poll())
 
         self._worker_tasks = [
@@ -506,12 +518,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.error(f"Error in count method: {e}")
             return {}
 
-    from collections import deque
-
-    async def _heartbeat_loop(
-        self, interval: float = 5.0, window_minutes: int = 10, trend_points: int = 12
-    ):
+    async def _heartbeat_loop(self, config: HeartbeatConfig) -> None:
         """Periodic heartbeat with throughput, rolling averages, and trend analysis (global + per queue)."""
+
+        self.logger.info(
+            f"Heartbeat loop started: interval={config.interval}s, "
+            f"window={config.window_minutes}m, recent={config.recent_window_minutes}m"
+        )
 
         _seen_executors = set()
         _max_seen_executors = {}
@@ -521,11 +534,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         last_completed_dags = {}
         history = deque()  # (timestamp, jobs_per_queue, dags_per_queue)
 
-        rolling_job_rates = deque(maxlen=trend_points)
-        rolling_dag_rates = deque(maxlen=trend_points)
+        rolling_job_rates = deque(maxlen=config.trend_points)
+        rolling_dag_rates = deque(maxlen=config.trend_points)
 
-        rolling_job_rates_per_queue = defaultdict(lambda: deque(maxlen=trend_points))
-        rolling_dag_rates_per_queue = defaultdict(lambda: deque(maxlen=trend_points))
+        rolling_job_rates_per_queue = defaultdict(
+            lambda: deque(maxlen=config.trend_points)
+        )
+        rolling_dag_rates_per_queue = defaultdict(
+            lambda: deque(maxlen=config.trend_points)
+        )
 
         def _get_completed_per_queue(states: dict, key: str = "completed") -> dict:
             if not states or "queues" not in states:
@@ -535,7 +552,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         def _calc_throughput(curr: dict, prev: dict, minutes: float) -> dict:
             return {
                 qname: (
-                    (curr[qname] - prev.get(qname, 0)) / minutes if minutes > 0 else 0.0
+                    max(0.0, (curr[qname] - prev.get(qname, 0)) / minutes)
+                    if minutes > 0
+                    else 0.0
                 )
                 for qname in curr
             }
@@ -545,8 +564,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         def _trend(values: deque) -> str:
             """Return colored trend arrow (⬆️, ⬇️, ➡️)."""
-            if len(values) < 2:
-                return f"{YELLOW}➡️{RESET}"
+            if not config.enable_trend_arrows or len(values) < 2:
+                return ""
             first, last = values[0], values[-1]
             if last > first * 1.05:
                 return f"{GREEN}⬆️{RESET}"
@@ -554,18 +573,23 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 return f"{RED}⬇️{RESET}"
             return f"{YELLOW}➡️{RESET}"
 
+        retry_count = 0
+
         while self.running:
             try:
                 unix_now = time.time()
-
                 queue_size = self._event_queue.qsize()
-                slot_info = available_slots_by_executor(ClusterState.deployments)
                 active_dags = list(self.active_dags.keys())
-                _seen_executors.update(slot_info.keys())
+                slot_info = None
 
-                for executor, count in slot_info.items():
-                    current_max = _max_seen_executors.get(executor, 0)
-                    _max_seen_executors[executor] = max(current_max, count)
+                # Executor stats collection (configurable)
+                if config.enable_executor_stats:
+                    slot_info = available_slots_by_executor(ClusterState.deployments)
+                    _seen_executors.update(slot_info.keys())
+
+                    for executor, count in slot_info.items():
+                        current_max = _max_seen_executors.get(executor, 0)
+                        _max_seen_executors[executor] = max(current_max, count)
 
                 dag_states = await self._safe_count_states(self.count_dag_states)
                 job_states = await self._safe_count_states(self.count_job_states)
@@ -580,8 +604,52 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 total_completed_jobs = sum(current_completed_jobs.values())
                 total_completed_dags = sum(current_completed_dags.values())
 
-                # --- Instant throughput ---
-                if last_heartbeat_time is not None:
+                history.append(
+                    (
+                        unix_now,
+                        current_completed_jobs.copy(),
+                        current_completed_dags.copy(),
+                    )
+                )
+
+                # Clean up old history (beyond rolling window)
+                cutoff = unix_now - config.window_minutes * 60
+                while history and history[0][0] < cutoff:
+                    history.popleft()
+
+                # --- Recent Throughput ---
+                recent_window_seconds = config.recent_window_minutes * 60.0
+                recent_cutoff = unix_now - recent_window_seconds
+
+                recent_history = [
+                    entry for entry in history if entry[0] >= recent_cutoff
+                ]
+
+                if len(recent_history) >= 2:
+                    # Use oldest and newest entries from recent window
+                    t0, jobs0, dags0 = recent_history[0]
+                    t1, jobs1, dags1 = recent_history[-1]
+                    time_diff_minutes = (t1 - t0) / 60.0
+
+                    if time_diff_minutes > 0:
+                        jobs_per_queue_instant = _calc_throughput(
+                            jobs1, jobs0, time_diff_minutes
+                        )
+                        dags_per_queue_instant = _calc_throughput(
+                            dags1, dags0, time_diff_minutes
+                        )
+                        jobs_per_min_global_instant = sum(
+                            jobs_per_queue_instant.values()
+                        )
+                        dags_per_min_global_instant = sum(
+                            dags_per_queue_instant.values()
+                        )
+                    else:
+                        jobs_per_queue_instant = {}
+                        dags_per_queue_instant = {}
+                        jobs_per_min_global_instant = dags_per_min_global_instant = 0.0
+                elif last_heartbeat_time is not None:
+                    # Fallback to heartbeat-based calculation if insufficient recent history
                     time_diff_minutes = (unix_now - last_heartbeat_time) / 60.0
                     jobs_per_queue_instant = _calc_throughput(
                         current_completed_jobs, last_completed_jobs, time_diff_minutes
@@ -596,41 +664,93 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     dags_per_queue_instant = {}
                     jobs_per_min_global_instant = dags_per_min_global_instant = 0.0
 
-                # --- Rolling throughput ---
-                history.append(
-                    (
-                        unix_now,
-                        current_completed_jobs.copy(),
-                        current_completed_dags.copy(),
-                    )
-                )
-                cutoff = unix_now - window_minutes * 60
-                while history and history[0][0] < cutoff:
-                    history.popleft()
+                # --- Rolling throughput (full window) ---
+                jobs_per_min_global_window = 0.0
+                dags_per_min_global_window = 0.0
+                jobs_per_queue_window = defaultdict(float)
+                dags_per_queue_window = defaultdict(float)
+                window_suffix = " (insufficient data)"
 
                 if len(history) >= 2:
-                    t0, jobs0, dags0 = history[0]
-                    t1, jobs1, dags1 = history[-1]
-                    minutes = (t1 - t0) / 60.0
+                    # Time-weighted rolling average calculation.
+                    # This is more robust against bursty traffic than a simple start/end point calculation.
+                    total_job_rate_x_time = 0.0
+                    total_dag_rate_x_time = 0.0
+                    total_time_diff = 0.0
 
-                    jobs_diff = _calc_diff(jobs1, jobs0)
-                    dags_diff = _calc_diff(dags1, dags0)
+                    per_queue_job_rate_x_time = defaultdict(float)
+                    per_queue_dag_rate_x_time = defaultdict(float)
 
-                    jobs_per_queue_window = {
-                        q: diff / minutes for q, diff in jobs_diff.items()
-                    }
-                    dags_per_queue_window = {
-                        q: diff / minutes for q, diff in dags_diff.items()
-                    }
+                    for i in range(1, len(history)):
+                        t_prev, jobs_prev, dags_prev = history[i - 1]
+                        t_curr, jobs_curr, dags_curr = history[i]
 
-                    jobs_per_min_global_window = sum(jobs_per_queue_window.values())
-                    dags_per_min_global_window = sum(dags_per_queue_window.values())
+                        interval_minutes = (t_curr - t_prev) / 60.0
+                        if interval_minutes <= 0:
+                            continue
+
+                        total_time_diff += interval_minutes
+
+                        # Calculate global rate for this interval
+                        interval_jobs_completed = sum(jobs_curr.values()) - sum(
+                            jobs_prev.values()
+                        )
+                        interval_dags_completed = sum(dags_curr.values()) - sum(
+                            dags_prev.values()
+                        )
+
+                        interval_job_rate = (
+                            max(0, interval_jobs_completed) / interval_minutes
+                        )
+                        interval_dag_rate = (
+                            max(0, interval_dags_completed) / interval_minutes
+                        )
+
+                        total_job_rate_x_time += interval_job_rate * interval_minutes
+                        total_dag_rate_x_time += interval_dag_rate * interval_minutes
+
+                        # Calculate per-queue rate for this interval
+                        all_queues = set(jobs_curr.keys()) | set(jobs_prev.keys())
+                        for q in all_queues:
+                            q_jobs_completed = jobs_curr.get(q, 0) - jobs_prev.get(q, 0)
+                            q_dags_completed = dags_curr.get(q, 0) - dags_prev.get(q, 0)
+                            q_job_rate = max(0, q_jobs_completed) / interval_minutes
+                            q_dag_rate = max(0, q_dags_completed) / interval_minutes
+                            per_queue_job_rate_x_time[q] += (
+                                q_job_rate * interval_minutes
+                            )
+                            per_queue_dag_rate_x_time[q] += (
+                                q_dag_rate * interval_minutes
+                            )
+
+                    if total_time_diff > 0:
+                        jobs_per_min_global_window = (
+                            total_job_rate_x_time / total_time_diff
+                        )
+                        dags_per_min_global_window = (
+                            total_dag_rate_x_time / total_time_diff
+                        )
+                        for q in per_queue_job_rate_x_time:
+                            jobs_per_queue_window[q] = (
+                                per_queue_job_rate_x_time[q] / total_time_diff
+                            )
+                        for q in per_queue_dag_rate_x_time:
+                            dags_per_queue_window[q] = (
+                                per_queue_dag_rate_x_time[q] / total_time_diff
+                            )
+
+                    actual_window_minutes = (history[-1][0] - history[0][0]) / 60.0
+                    if actual_window_minutes < config.window_minutes * 0.9:
+                        window_suffix = f" ({actual_window_minutes:.1f}m data)"
+                    else:
+                        window_suffix = ""
                 else:
-                    jobs_per_queue_window = {}
-                    dags_per_queue_window = {}
-                    jobs_per_min_global_window = dags_per_min_global_window = 0.0
+                    # Fallback for rolling if not enough history
+                    jobs_per_queue_window = jobs_per_queue_instant.copy()
+                    dags_per_queue_window = dags_per_queue_instant.copy()
+                    jobs_per_min_global_window = jobs_per_min_global_instant
+                    dags_per_min_global_window = dags_per_min_global_instant
 
-                # Update rolling trends
                 rolling_job_rates.append(jobs_per_min_global_window)
                 rolling_dag_rates.append(dags_per_min_global_window)
 
@@ -642,38 +762,39 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         dags_per_queue_window.get(q, 0.0)
                     )
 
-                # Snapshot update
+                # Snapshot
                 last_heartbeat_time = unix_now
                 last_completed_jobs = current_completed_jobs
                 last_completed_dags = current_completed_dags
 
-                # --- Logging ---
+                # --- Logging with configuration ---
                 self.logger.info("🔄  Scheduler Heartbeat")
-                self.logger.info(f"  🧭  Mode              : {self.scheduler_mode}")
-                self.logger.info(f"  📦  Queue Size        : {queue_size}")
-                self.logger.info(
-                    f"  👀  Visible Executors : {len(_seen_executors)} (max: {_max_seen_executors})"
-                )
-                self.logger.info(f"  ⚙️   Available Slots ")
-                print_slots_table(slot_info, _max_seen_executors)
-                self.logger.info(f"  🧠  Active DAGs        : {len(active_dags)}")
-
+                self.logger.info(f"  📦  Queue Size       : {queue_size}")
+                self.logger.info(f"  🧠  Active DAGs      : {len(active_dags)}")
                 # Global throughput + trend
+                self.logger.info(f"  📈  Throughput: ")
+
                 self.logger.info(
-                    f"  📈  Instant Throughput : {jobs_per_min_global_instant:.2f} jobs/min, "
+                    f"  • recent ({config.recent_window_minutes}m): {jobs_per_min_global_instant:.2f} jobs/min, "
                     f"{dags_per_min_global_instant:.2f} dags/min"
                 )
+
+                trend_job = _trend(rolling_job_rates)
+                trend_dag = _trend(rolling_dag_rates)
+
                 self.logger.info(
-                    f"  📈  Rolling Throughput (last {window_minutes}m): "
-                    f"{jobs_per_min_global_window:.2f} jobs/min {_trend(rolling_job_rates)}, "
-                    f"{dags_per_min_global_window:.2f} dags/min {_trend(rolling_dag_rates)}"
+                    f"  • rolling (last {config.window_minutes}m{window_suffix}): "
+                    f"{jobs_per_min_global_window:.2f} jobs/min {trend_job}, "
+                    f"{dags_per_min_global_window:.2f} dags/min {trend_dag}"
                 )
                 self.logger.info(
                     f"  ✅  Totals            : {total_completed_jobs} jobs, {total_completed_dags} dags"
                 )
 
-                # Per-queue throughput + trend
-                if jobs_per_queue_instant or dags_per_queue_instant:
+                # Per-queue throughput + trend (configurable)
+                if config.enable_per_queue_stats and (
+                    jobs_per_queue_instant or dags_per_queue_instant
+                ):
                     self.logger.info("  📊 Per-Queue Throughput:")
                     for qname in sorted(
                         set(current_completed_jobs) | set(current_completed_dags)
@@ -690,15 +811,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         dtrend = _trend(rolling_dag_rates_per_queue[qname])
 
                         self.logger.info(
-                            f"   • {qname:<12} | Jobs: {jpm_i:.2f}/min (inst), {jpm_w:.2f}/min (avg) {jtrend} "
-                            f"Total: {jtot}"
+                            f"   • {qname:<12} | Jobs: {jpm_i:.2f}/min ({config.recent_window_minutes}m), "
+                            f"{jpm_w:.2f}/min ({config.window_minutes}m{window_suffix}) {jtrend}"
                         )
                         self.logger.info(
-                            f"     {'':<12} | DAGs: {dpm_i:.2f}/min (inst), {dpm_w:.2f}/min (avg) {dtrend} "
-                            f"Total: {dtot}"
+                            f"     {'':<12} | DAGs: {dpm_i:.2f}/min ({config.recent_window_minutes}m), "
+                            f"{dpm_w:.2f}/min ({config.window_minutes}m{window_suffix}) {dtrend}"
+                        )
+                        self.logger.info(
+                            f"     {'':<12} | Totals: {jtot} jobs, {dtot} dags"
                         )
 
-                if active_dags:
+                if config.log_active_dags and active_dags:
                     shown = ', '.join(active_dags[:5])
                     suffix = '...' if len(active_dags) > 5 else ''
                     self.logger.debug(f"     DAG IDs          : [{shown}{suffix}]")
@@ -706,17 +830,35 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 print_dag_state_summary(dag_states)
                 print_job_state_summary(job_states)
 
+                if config.enable_executor_stats:
+                    print_slots_table(slot_info, _max_seen_executors)
+
                 (
                     await self.diagnose_pool()
                     if asyncio.iscoroutinefunction(self.diagnose_pool)
                     else self.diagnose_pool()
                 )
-                await asyncio.sleep(interval)
+
+                await asyncio.sleep(config.interval)
+                retry_count = 0
 
             except Exception as e:
-                self.logger.error(f"Heartbeat loop error: {e}")
-                traceback.print_exc()
-                await asyncio.sleep(5)
+                retry_count += 1
+                self.logger.error(
+                    f"Heartbeat loop error (attempt {retry_count}/{config.max_retries}): {e}"
+                )
+
+                if retry_count >= config.max_retries:
+                    self.logger.critical(
+                        f"Heartbeat loop failed {config.max_retries} times, stopping"
+                    )
+                    break
+
+                backoff_time = config.error_backoff * (
+                    2 ** (retry_count - 1)
+                ) + random.uniform(0, 1)
+                self.logger.warning(f"Retrying heartbeat in {backoff_time:.2f}s...")
+                await asyncio.sleep(backoff_time)
 
     async def _poll(self):
         """
@@ -852,16 +994,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     node = self.get_node_from_dag(work_info.id, dag)
 
                     if self._is_noop_query_definition(node):
-                        print('_is_noop_query_definition : ', work_info.job_level)
                         start_t = time.time()
                         sorted_nodes = topological_sort(dag)
                         job_levels = compute_job_levels(sorted_nodes, dag)
                         max_level = max(job_levels.values())
-                        end_t = time.time()
-                        # print(' TIME : ', end_t - start_t)
-                        print(
-                            f"Job levels: {job_levels}, Current level: {work_info.job_level}, Max level: {max_level}"
-                        )
+
                         now = datetime.now()
                         await self.put_status(
                             work_info.id, WorkState.COMPLETED, now, now
@@ -891,7 +1028,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     else:
                         self.logger.error(f"Failed to enqueue job: {work_info.id}")
 
-                self.logger.info(f"Remaining slots: {slots_by_executor}")
+                self.logger.debug(f"Remaining slots: {slots_by_executor}")
                 # acknowledgments, we are waiting for the jobs to be scheduled on the executor and get response via ETCD
                 if scheduled_any:
                     try:

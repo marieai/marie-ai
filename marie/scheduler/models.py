@@ -1,3 +1,4 @@
+from dataclasses import dataclass, fields
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -87,3 +88,54 @@ DEFAULT_RETRY_POLICY = RetryPolicy(
     retry_delay=RetryPolicy.DEFAULT_USER_RETRY_DELAY,
     retry_backoff=RetryPolicy.DEFAULT_RETRY_BACKOFF,
 )
+
+
+@dataclass
+class HeartbeatConfig:
+    """Configuration for heartbeat monitoring and throughput calculations."""
+
+    interval: float = 5.0  # Heartbeat loop interval in seconds
+    window_minutes: int = 10  # Rolling throughput window in minutes
+    trend_points: int = 12  # Number of data points for trend calculation
+    recent_window_minutes: int = 1  # Recent throughput window in minutes
+    max_retries: int = 3  # Max retries for heartbeat operations
+    error_backoff: float = 5.0  # Base backoff time in seconds after errors
+    enable_trend_arrows: bool = True  # Show trend arrows in logs
+    enable_per_queue_stats: bool = True  # Show detailed per-queue statistics
+    enable_executor_stats: bool = True  # Show executor slot information
+    log_active_dags: bool = False  # Log active DAG IDs in debug mode
+
+    @classmethod
+    def from_dict(cls, config_dict: Dict[str, Any]) -> 'HeartbeatConfig':
+        """Create HeartbeatConfig from dictionary with validation."""
+        try:
+            # Get field names from the dataclass
+            valid_fields = {field.name for field in fields(cls)}
+            filtered_config = {
+                k: v for k, v in config_dict.items() if k in valid_fields
+            }
+
+            instance = cls(**filtered_config)
+            instance.validate()
+            return instance
+        except TypeError as e:
+            raise ValueError(f"Invalid configuration for HeartbeatConfig: {e}")
+
+    def validate(self) -> None:
+        """Validate configuration values."""
+        if self.interval <= 0:
+            raise ValueError("interval must be positive")
+        if self.window_minutes <= 0:
+            raise ValueError("window_minutes must be positive")
+        if self.recent_window_minutes <= 0:
+            raise ValueError("recent_window_minutes must be positive")
+        if self.recent_window_minutes > self.window_minutes:
+            raise ValueError(
+                "recent_window_minutes cannot be larger than window_minutes"
+            )
+        if self.trend_points < 2:
+            raise ValueError("trend_points must be at least 2")
+        if self.max_retries < 1:
+            raise ValueError("max_retries must be at least 1")
+        if self.error_backoff < 0:
+            raise ValueError("error_backoff must be non-negative")

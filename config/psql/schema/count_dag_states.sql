@@ -1,24 +1,21 @@
 CREATE OR REPLACE FUNCTION marie_scheduler.count_dag_states()
-    returns TABLE(name text, state text, size bigint)
-    stable
-    language sql
-as
-$$
-    WITH dag_queue_mapping AS (
-        SELECT DISTINCT
-            d.id as dag_id,
-            d.state as dag_state,
-            j.name as queue_name
-        FROM marie_scheduler.dag d
-        JOIN marie_scheduler.job j ON d.id = j.dag_id
+RETURNS TABLE(name text, state text, size bigint)
+STABLE PARALLEL SAFE LANGUAGE sql AS $$
+    WITH j_uniq AS (
+      SELECT DISTINCT ON (dag_id, name) dag_id, name
+      FROM marie_scheduler.job
+      ORDER BY dag_id, name
     )
-    SELECT
-        queue_name as name,
-        dag_state as state,
-        count(*) as size
-    FROM dag_queue_mapping
-    GROUP BY queue_name, dag_state
-    ORDER BY queue_name, dag_state;
+    SELECT j.name, d.state, COUNT(*)::bigint
+    FROM j_uniq j
+    JOIN LATERAL (
+      SELECT state FROM marie_scheduler.dag WHERE id = j.dag_id
+    ) d ON true
+    GROUP BY j.name, d.state;
 $$;
 
 alter function marie_scheduler.count_dag_states() owner to postgres;
+
+-- NEED TO ADD THIS TO OUR CONFIG
+-- SET enable_partitionwise_aggregate = on;
+-- SET enable_partitionwise_join = on;

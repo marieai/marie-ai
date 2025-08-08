@@ -41,4 +41,5 @@ CREATE INDEX idx_dep_depends_on_id ON marie_scheduler.job_dependencies (depends_
 CREATE INDEX idx_dep_job_id_dep_on_id ON marie_scheduler.job_dependencies (job_id, depends_on_id);
 CREATE INDEX idx_dep_depends_on_id_state ON marie_scheduler.job_dependencies (depends_on_id) INCLUDE (job_id);
 
-
+-- used by count_dag_states
+CREATE INDEX  IF NOT EXISTS job_dag_id_name_idx ON marie_scheduler.job (dag_id, name);
