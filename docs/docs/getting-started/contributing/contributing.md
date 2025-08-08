@@ -151,9 +151,12 @@ docker compose  --env-file ./config/.env -f ./Dockerfiles/docker-compose.s3.yml 
 Via the `memray` command, you can profile the memory usage of the server :
 
 **Script based profiling:**
-
+REMEMBER TO SET ` PYTHONMALLOC=malloc `
 ```shell
 MARIE_DEFAULT_MOUNT=/mnt/data/marie-ai memray run --live ./marie/__main__.py server --start --uses /mnt/data/marie-ai/config/service/marie.yml
+
+ PYTHONMALLOC=malloc  PYTHONUNBUFFERED=1;COLUMNS=180;CUDA_VISIBLE_DEVICES=0;GRPC_VERBOSITY=debug;JINA_MP_START_METHOD=spawn;MARIE_CACHE_LOCK_TIMEOUT=10;MARIE_DEBUG=0;MARIE_DEBUG_PORT=5678;MARIE_DEFAULT_MOUNT=/mnt/data/marie-ai;OPENAI_API_KEY=EMPTY;OPENAI_API_BASE=http://0.0.0.0:4000 memray run --live ./marie/__main__.py gateway --uses /mnt/data/marie-ai/config/service/marie-gateway-4.0.0.yml --protocols HTTP GRPC --ports 51000 52000 --extra-search-paths /mnt/data/marie-ai/config/extra_py_modules
+ PYTHONMALLOC=malloc  PYTHONUNBUFFERED=1;COLUMNS=180;CUDA_VISIBLE_DEVICES=0;GRPC_VERBOSITY=debug;JINA_MP_START_METHOD=spawn;MARIE_CACHE_LOCK_TIMEOUT=10;MARIE_DEBUG=0;MARIE_DEBUG_PORT=5678;MARIE_DEFAULT_MOUNT=/mnt/data/marie-ai;OPENAI_API_KEY=EMPTY;OPENAI_API_BASE=http://0.0.0.0:4000 memray run --follow-fork  -o ~/tmp/memray/marie.bin ./marie/__main__.py gateway --uses /mnt/data/marie-ai/config/service/marie-gateway-4.0.0.yml --protocols HTTP GRPC --ports 51000 52000 --extra-search-paths /mnt/data/marie-ai/config/extra_py_modules
 ```
 
 **Module based profiling:**
