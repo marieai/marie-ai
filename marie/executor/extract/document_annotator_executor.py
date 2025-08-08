@@ -1,7 +1,7 @@
 import os
 import random
 import time
-from typing import Optional, Type, Union
+from typing import Optional, Union
 
 import torch
 from docarray import DocList
@@ -9,14 +9,11 @@ from omegaconf import OmegaConf
 
 from marie.api.docs import AssetKeyDoc
 from marie.constants import __config_dir__
-from marie.executor.extract.util import prepare_asset_directory
+from marie.executor.extract.util import layout_config, prepare_asset_directory
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
-from marie.extract.annotators.faiss_hybrid_annotator import FaissHybridAnnotator
-from marie.extract.annotators.llm_annotator import LLMAnnotator
-from marie.extract.annotators.llm_table_annotator import LLMTableAnnotator
+from marie.extract.annotators.types import AnnotatorClassType
 from marie.extract.readers.meta_reader.meta_reader import MetaReader
-from marie.extract.results.result_parser import load_layout_config
 from marie.extract.structures import UnstructuredDocument
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.mdc import MDC
@@ -110,9 +107,7 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         self,
         docs: DocList[AssetKeyDoc],
         parameters: dict,
-        annotator_class: Type[
-            Union[LLMAnnotator, LLMTableAnnotator, FaissHybridAnnotator]
-        ],
+        annotator_class: AnnotatorClassType,
         *args,
         **kwargs,
     ):
@@ -138,12 +133,12 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             # if random.random() < 0.2:  # 20% chance to simulate async cancellation
             #     raise asyncio.CancelledError("Simulated async task cancellation")
 
-            sec = random.randint(15, 30)
-            # sec = 2
-            time.sleep(sec)  # this will trigger
+            sec = random.randint(1, 2)
+            # sec = 0
+            # time.sleep(sec)  # this will trigger
             for i in range(sec):
                 # await asyncio.sleep(1)
-                # time.sleep(1)
+                time.sleep(1)
                 self.logger.info(f"Sleeping... {i + 1}/{sec} seconds elapsed")
 
             return {'status': 'success', 'message': 'Documents annotated successfully'}
@@ -174,7 +169,7 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             self.logger.info(f"Extracted op_key: {op_key}")
             self.logger.info(f"Extracted op_layout: {op_layout}")
 
-            cfg = self.layout_config(self.root_config_dir, op_layout)
+            cfg = layout_config(self.root_config_dir, op_layout)
 
             annotator_conf = None
             for annotator in cfg.annotators:
@@ -223,7 +218,6 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                 },
             )
 
-            self.logger.info(f"Annotator : {annotator}")
             await annotator.aannotate(doc, frames)
             del annotator
 
@@ -246,17 +240,3 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         finally:
             torch_gc()
             MDC.remove("request_id")
-
-    def layout_config(self, root_config_dir: str, layout_id: str) -> OmegaConf:
-        base_dir = os.path.expanduser(os.path.join(root_config_dir, "base"))
-        layout_dir = os.path.expanduser(
-            os.path.join(root_config_dir, f"TID-{layout_id}/annotator")
-        )
-
-        self.logger.info(f"Layout ID : {layout_id}")
-        self.logger.info(f"Base dir : {base_dir}")
-        self.logger.info(f"Layout dir : {layout_dir}")
-
-        cfg = load_layout_config(base_dir, layout_dir)
-        self.logger.debug(f"Layout config : {cfg}")
-        return cfg

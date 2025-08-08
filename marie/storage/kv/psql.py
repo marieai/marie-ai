@@ -1,8 +1,10 @@
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
+import asyncio
 
 import psycopg2
 from uuid_extensions import uuid7str
-
+from marie.helper import get_or_reuse_loop
 from marie.logging_core.logger import MarieLogger
 from marie.storage.database.postgres import PostgresqlMixin
 from marie.storage.kv.storage_client import StorageArea
@@ -19,6 +21,14 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         super().__init__()
         self.logger = MarieLogger(self.__class__.__name__)
         self.running = False
+        self.max_workers = 1
+        self._loop = get_or_reuse_loop()
+        self._db_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="kv-db-executor"
+        )
+        self.logger.info(
+            f"Using ThreadPoolExecutor for database operations with : {self.max_workers} workers."
+        )
         self._setup_storage(
             config,
             create_table_callback=self.create_table_callback,
@@ -93,20 +103,25 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         if namespace is None:
             namespace = b"DEFAULT"
 
-        cursor = None
-        conn = None
-        try:
-            conn = self._get_connection()
-            query = f"SELECT key, value FROM {self.table} WHERE key = '{key.decode()}'  AND namespace = '{namespace.decode()}' AND is_deleted = FALSE"
-            cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True, connection=conn)
-            result = cursor.fetchone()
+        def _get_blocking():
+            cursor = None
+            conn = None
+            try:
+                conn = self._get_connection()
+                query = f"SELECT key, value FROM {self.table} WHERE key = '{key.decode()}'  AND namespace = '{namespace.decode()}' AND is_deleted = FALSE"
+                cursor = self._execute_sql_gracefully(
+                    query, data=(), return_cursor=True, connection=conn
+                )
+                result = cursor.fetchone()
 
-            if result and (result[0] is not None):
-                return result[1]
-            return None
-        finally:
-            self._close_cursor(cursor)
-            self._close_connection(conn)
+                if result and (result[0] is not None):
+                    return result[1]
+                return None
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, _get_blocking)
 
     async def internal_kv_multi_get(
         self,
@@ -132,33 +147,38 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         if namespace is None:
             namespace = b"DEFAULT"
 
-        uid = uuid7str()
-        shard = 0
+        def _put_blocking():
+            uid = uuid7str()
+            shard = 0
 
-        insert_q = f"""
-            INSERT INTO {self.table} (id, namespace, key, value, shard, created_at, updated_at) 
-            VALUES ('{uid}', '{namespace.decode()}', '{key.decode()}', '{value.decode()}', {shard},current_timestamp,current_timestamp )
-        """
+            insert_q = f"""
+                INSERT INTO {self.table} (id, namespace, key, value, shard, created_at, updated_at)
+                VALUES ('{uid}', '{namespace.decode()}', '{key.decode()}', '{value.decode()}', {shard},current_timestamp,current_timestamp )
+            """
 
-        upsert_q = f"""
-            ON CONFLICT (key, namespace) 
-            DO 
-            UPDATE SET value = '{value.decode()}', updated_at = current_timestamp
-        """
+            upsert_q = f"""
+                ON CONFLICT (key, namespace)
+                DO
+                UPDATE SET value = '{value.decode()}', updated_at = current_timestamp
+            """
 
-        cursor = None
-        conn = None
-        try:
-            conn = self._get_connection()
-            query = insert_q + upsert_q if overwrite else insert_q
-            cursor = self._execute_sql_gracefully(query, return_cursor=True, connection=conn)
+            cursor = None
+            conn = None
+            try:
+                conn = self._get_connection()
+                query = insert_q + upsert_q if overwrite else insert_q
+                cursor = self._execute_sql_gracefully(
+                    query, return_cursor=True, connection=conn
+                )
 
-            if cursor is None:
-                return 0
-            return cursor.rowcount
-        finally:
-            self._close_cursor(cursor)
-            self._close_connection(conn)
+                if cursor is None:
+                    return 0
+                return cursor.rowcount
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, _put_blocking)
 
     async def internal_kv_del(
         self,
@@ -174,20 +194,25 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         if del_by_prefix:
             raise NotImplementedError
         else:
-            query = f"DELETE FROM {self.table} WHERE key = '{key.decode()}' AND namespace = '{namespace.decode()}'"
-            cursor = None
-            conn = None
 
-            try:
-                conn = self._get_connection()
-                cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True, connection=conn)
-                if cursor is not None:
-                    return 1
-            finally:
-                self._close_cursor(cursor)
-                self._close_connection(conn)
+            def _del_blocking():
+                query = f"DELETE FROM {self.table} WHERE key = '{key.decode()}' AND namespace = '{namespace.decode()}'"
+                cursor = None
+                conn = None
 
-        return 0
+                try:
+                    conn = self._get_connection()
+                    cursor = self._execute_sql_gracefully(
+                        query, data=(), return_cursor=True, connection=conn
+                    )
+                    if cursor is not None:
+                        return 1
+                finally:
+                    self._close_cursor(cursor)
+                    self._close_connection(conn)
+                return 0
+
+            return await self._loop.run_in_executor(self._db_executor, _del_blocking)
 
     async def internal_kv_exists(
         self, key: bytes, namespace: Optional[bytes], timeout: Optional[float] = None
@@ -199,32 +224,44 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
     ) -> List[bytes | str]:
         if namespace is None:
             namespace = b"DEFAULT"
-        result = []
 
-        cursor = None
-        conn = None
-        try:
-            conn = self._get_connection()
-            query = f"SELECT key  FROM {self.table} WHERE  namespace = '{namespace.decode()}' AND is_deleted = FALSE"
-            cursor = self._execute_sql_gracefully(query, data=(), return_cursor=True, connection=conn)
+        def _keys_blocking():
+            result = []
+            cursor = None
+            conn = None
+            try:
+                conn = self._get_connection()
+                query = f"SELECT key  FROM {self.table} WHERE  namespace = '{namespace.decode()}' AND is_deleted = FALSE"
+                cursor = self._execute_sql_gracefully(
+                    query, data=(), return_cursor=True, connection=conn
+                )
 
-            for record in cursor:
-                result.append(record[0])
-        except (Exception, psycopg2.Error) as error:
-            self.logger.error(f"Error executing sql statement: {error}")
-        finally:
-            self._close_cursor(cursor)
-            self._close_connection(conn)
-        return result
+                for record in cursor:
+                    result.append(record[0])
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error executing sql statement: {error}")
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+            return result
+
+        return await self._loop.run_in_executor(self._db_executor, _keys_blocking)
 
     def internal_kv_reset(self) -> None:
         self.logger.info(f"internal_kv_reset : {self.table}")
         conn = None
         try:
             conn = self._get_connection()
-            self._execute_sql_gracefully(f"DROP TABLE IF EXISTS {self.table}", connection=conn)
-            self._execute_sql_gracefully(f"DROP TABLE IF EXISTS {self.table}_history", connection=conn)
-            self._execute_sql_gracefully(f"DROP FUNCTION IF EXISTS log_changes_{self.table} CASCADE", connection=conn)
+            self._execute_sql_gracefully(
+                f"DROP TABLE IF EXISTS {self.table}", connection=conn
+            )
+            self._execute_sql_gracefully(
+                f"DROP TABLE IF EXISTS {self.table}_history", connection=conn
+            )
+            self._execute_sql_gracefully(
+                f"DROP FUNCTION IF EXISTS log_changes_{self.table} CASCADE",
+                connection=conn,
+            )
         finally:
             self._close_connection(conn)
 

@@ -1,7 +1,6 @@
 import asyncio
 import os
 import time
-import traceback
 from typing import Any, Dict, Iterator, Optional
 
 from uuid_extensions import uuid7str
@@ -91,6 +90,7 @@ class JobManager:
         self._etcd_client = etcd_client
         self._job_info_client = JobInfoStorageClientProxy(self.event_publisher, storage)
         self.monitored_jobs = set()
+        self._active_supervisors: dict[str, JobSupervisor] = {}
 
         try:
             self.event_logger = get_event_logger()
@@ -111,10 +111,12 @@ class JobManager:
         # THIS IS CAUSING SLOW STARTUP, DISABLED FOR NOW
         # SELECT key, value FROM kv_store_worker WHERE key = 'marie_internal/job_info_0685b232-8b4b-7ab6-8000-dfdc7df44311'  AND namespace = 'job' AND is_deleted = FALSE
         try:
-            all_jobs = await self._job_info_client.get_all_jobs()
-            for job_id, job_info in all_jobs.items():
-                if not job_info.status.is_terminal():
-                    run_background_task(self._monitor_job(job_id))
+            if False:
+                self.logger.warning("Recovering running jobs. DISABLED")
+                all_jobs = await self._job_info_client.get_all_jobs()
+                for job_id, job_info in all_jobs.items():
+                    if not job_info.status.is_terminal():
+                        run_background_task(self._monitor_job(job_id))
         finally:
             # This event is awaited in `submit_job` to avoid race conditions between
             # recovery and new job submission, so it must always get set even if there
@@ -161,6 +163,12 @@ class JobManager:
         while is_alive:
             try:
                 job_status = await self._job_info_client.get_status(job_id)
+                if job_status is None:
+                    self.logger.warning(
+                        f"Job {job_id} does not exist in the job info client."
+                    )
+                    is_alive = False
+                    break
                 self.logger.debug(f"Monitored job status: {job_id} : {job_status}")
 
                 if job_status.is_terminal():
@@ -389,6 +397,8 @@ class JobManager:
                 event_publisher=self.event_publisher,
                 etcd_client=self._etcd_client,
             )
+
+            # self._active_supervisors[submission_id] = supervisor
             await supervisor.run(_start_signal_actor=_start_signal_actor)
 
             # Monitor the job in the background so we can detect errors without
@@ -396,6 +406,9 @@ class JobManager:
             run_background_task(
                 self._monitor_job(submission_id, job_supervisor=supervisor)
             )
+            # coro = self._monitor_job(submission_id, job_supervisor=supervisor)
+            # task = get_or_reuse_loop().create_task(coro)
+
             self.logger.info(f"Started job with submission_id: {submission_id}")
         except Exception as e:
             tb_str = get_exception_traceback()

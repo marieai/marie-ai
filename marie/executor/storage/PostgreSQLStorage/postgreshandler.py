@@ -152,7 +152,8 @@ class PostgreSQLHandler:
             CREATE EXTENSION IF NOT EXISTS vector;
             
             CREATE TABLE IF NOT EXISTS {self.table} (
-                doc_id VARCHAR PRIMARY KEY,
+                event_id SERIAL PRIMARY KEY,
+                doc_id VARCHAR NOT NULL,
                 ref_id VARCHAR(64) not null,
                 ref_type VARCHAR(64) not null,
                 store_mode VARCHAR(32) not null,
@@ -211,60 +212,64 @@ class PostgreSQLHandler:
         :param kwargs: other keyword arguments
         :return record: List of Document's id added
         """
-
         if "ref_id" not in kwargs or "ref_type" not in kwargs:
             raise ValueError("ref_id and ref_type must be provided in kwargs.")
 
         ref_id = kwargs.pop("ref_id")
         ref_type = kwargs.pop("ref_type")
 
-        return
         with self:
             cursor = self.connection.cursor()
             try:
+                query_obj = [
+                    (
+                        doc.id,
+                        ref_id,
+                        ref_type,
+                        store_mode,
+                        to_json(doc.tags) if doc.tags is not None else None,
+                        # doc.embedding.astype(self.dump_dtype).tobytes()
+                        (
+                            doc.embedding
+                            if store_mode == "embedding" and doc.embedding is not None
+                            else None
+                        ),
+                        (
+                            doc.blob
+                            if store_mode == "blob" and doc.blob is not None
+                            else None
+                        ),
+                        (
+                            to_json(doc.content)
+                            if store_mode == "content" and doc.content is not None
+                            else None
+                        ),
+                        None,
+                        # TODO : Need to make serialization much faster than what JSON serializer can provider
+                        # doc_without_embedding(doc),
+                        self._get_next_shard(doc.id),
+                    )
+                    for doc in docs
+                ]
                 psycopg2.extras.execute_batch(
                     cursor,
                     f"INSERT INTO {self.table} (doc_id, ref_id, ref_type, store_mode,tags, embedding, blob, "
                     " content, doc, shard, created_at, updated_at) VALUES (%s, %s, %s, %s, %s,"
                     " %s, %s, %s, %s,%s, current_timestamp, current_timestamp)",
-                    [
-                        (
-                            doc.id,
-                            ref_id,
-                            ref_type,
-                            store_mode,
-                            to_json(doc.tags) if doc.tags is not None else None,
-                            # doc.embedding.astype(self.dump_dtype).tobytes()
-                            (
-                                doc.embedding
-                                if store_mode == "embedding"
-                                and doc.embedding is not None
-                                else None
-                            ),
-                            (
-                                doc.blob
-                                if store_mode == "blob" and doc.blob is not None
-                                else None
-                            ),
-                            (
-                                to_json(doc.content)
-                                if store_mode == "content" and doc.content is not None
-                                else None
-                            ),
-                            None,
-                            # TODO : Need to make serialization much faster than what JSON serializer can provider
-                            # doc_without_embedding(doc),
-                            self._get_next_shard(doc.id),
-                        )
-                        for doc in docs
-                    ],
+                    query_obj,
                 )
+                self.connection.commit()
             except psycopg2.errors.UniqueViolation as e:
                 self.logger.warning(
                     f"Document already exists in PSQL database. {e}. Skipping entire transaction..."
                 )
                 self.connection.rollback()
-            self.connection.commit()
+            except Exception as e:
+                self.logger.error(
+                    f"Error while inserting documents into PSQL database: {e}"
+                )
+                self.connection.rollback()
+                raise e
 
     def update(self, docs: DocumentArray, *args, **kwargs):
         """Updated documents from the database.

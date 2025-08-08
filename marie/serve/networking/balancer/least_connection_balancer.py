@@ -1,3 +1,4 @@
+import asyncio
 from collections import defaultdict
 
 from marie.excepts import EstablishGrpcConnectionError
@@ -22,53 +23,55 @@ class LeastConnectionsLoadBalancer(LoadBalancer):
         )  # Tracks how many times each connection is selected
 
     async def _get_next_connection(self, num_retries=3):
-        # Find the connection with the least active connections
-        min_active_connections = int(1e9)
-        for connection in self._connections:
-            if self.active_counter[connection.address] < min_active_connections:
-                min_active_connections = self.active_counter[connection.address]
-
-        # get all connections with the least active connections
-        min_use_connections = []
-        for connection in self._connections:
-            if self.active_counter[connection.address] == min_active_connections:
-                min_use_connections.append(connection)
-
-        if len(min_use_connections) == 1:
-            self._rr_counter = 0
-
-        # Round robin between the connections with the least active connections
-        try:
-            connection = None
-            for i in range(len(min_use_connections)):
-                internal_rr_counter = (self._rr_counter + i) % len(min_use_connections)
-                connection = min_use_connections[internal_rr_counter]
-                # connection is None if it is currently being reset. In that case, try different connection
-                if connection is not None:
-                    break
-            all_connections_unavailable = connection is None and num_retries <= 0
-            if all_connections_unavailable:
-                if num_retries <= 0:
-                    raise EstablishGrpcConnectionError(
-                        f"Error while resetting connections {self._connections} for {self._deployment_name}. Connections cannot be used."
-                    )
-            elif connection is None:
-                # give control back to async event loop so connection resetting can be completed; then retry
-                self._logger.info(
-                    f" No valid connection found for {self._deployment_name}, give chance for potential resetting of connection"
+        with self._lock:  # lock to ensure thread safety
+            connections = list(self._connections)
+            if not connections:
+                raise EstablishGrpcConnectionError(
+                    f"No connections available for {self._deployment_name}"
                 )
-                return await self._get_next_connection(num_retries=num_retries - 1)
-        except IndexError:
-            # This can happen as a race condition while _removing_ connections
-            self._rr_counter = 0
-            connection = min_use_connections[self._rr_counter]
-        self._rr_counter = (self._rr_counter + 1) % len(min_use_connections)
 
-        # Update selection stats
-        if connection:
-            self.selection_counter[connection.address] += 1
-        self.print_selection_stats()
-        return connection
+            # Find min active count
+            min_active = min(self.active_counter.get(c.address, 0) for c in connections)
+            min_use_connections = [
+                c
+                for c in connections
+                if self.active_counter.get(c.address, 0) == min_active
+            ]
+
+            if not min_use_connections:
+                raise EstablishGrpcConnectionError(
+                    f"No usable connections for {self._deployment_name}"
+                )
+
+            if len(min_use_connections) == 1:
+                self._rr_counter = 0
+
+            try:
+                index = self._rr_counter % len(min_use_connections)
+                connection = min_use_connections[index]
+
+                if connection is None:
+                    if num_retries <= 0:
+                        raise EstablishGrpcConnectionError(
+                            f"All connections unavailable for {self._deployment_name}"
+                        )
+                    self._logger.info(
+                        f"Retrying connection selection for {self._deployment_name}"
+                    )
+                    await asyncio.sleep(0)  # yield to loop
+                    return await self._get_next_connection(num_retries - 1)
+
+            except IndexError:
+                self._rr_counter = 0
+                connection = min_use_connections[0]
+
+            # advance counter safely
+            self._rr_counter = (self._rr_counter + 1) % len(min_use_connections)
+
+            if connection:
+                self.selection_counter[connection.address] += 1
+            self.print_selection_stats()
+            return connection
 
     def print_selection_stats(self):
         self._logger.debug(f"Connection selection stats for {self._deployment_name}:")

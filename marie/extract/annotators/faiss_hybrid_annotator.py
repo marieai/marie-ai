@@ -47,6 +47,7 @@ class FaissHybridAnnotator(DocumentAnnotator):
         working_dir: str,
         annotator_conf: dict[str, Any],
         layout_conf: dict[str, Any],
+        **kwargs: Any,
     ):
         super().__init__()
         self.working_dir = working_dir
@@ -208,7 +209,7 @@ class FaissHybridAnnotator(DocumentAnnotator):
         """
         Try Fuzzy match first -> Embedding match -> Fallback to Memory if enabled.
         """
-        # Step 1: Try Fuzzy First
+        #  Try Fuzzy First
         fuzzy_label, fuzzy_score = self.fuzzy_match(text)
         if fuzzy_label and fuzzy_score >= self.fuzzy_threshold:
             return (
@@ -218,7 +219,7 @@ class FaissHybridAnnotator(DocumentAnnotator):
                 [{"label": fuzzy_label, "final_score": fuzzy_score}],
             )
 
-        # Step 2: Then try Embedding
+        # Try Embedding
         faiss_scores, faiss_indices = self.index.search(
             np.expand_dims(emb, axis=0), top_k
         )
@@ -259,7 +260,7 @@ class FaissHybridAnnotator(DocumentAnnotator):
                     candidates,
                 )
 
-        # Step 3: Finally fallback to Memory
+        # Try Memory Fallback
         if self.memory_enabled and text in self.field_memory:
             # Pretend it's a 100% confident memory recall
             return text, 1.0, "memory-fallback", [{"label": text, "final_score": 1.0}]

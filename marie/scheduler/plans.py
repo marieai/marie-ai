@@ -172,21 +172,18 @@ def insert_version(schema: str, version: str) -> str:
     return query
 
 
-def count_states(schema: str):
+def count_job_states(schema: str):
     """
     Count the number of jobs in each state.
+    """
+    return f"SELECT * FROM {schema}.count_job_states()"
 
-    Example usage:
-    schema = 'public'
-    print(count_states(schema))
-    :param schema:
-    :return:
+
+def count_dag_states(schema: str):
     """
-    return f"""
-    SELECT name, state, count(*) size
-    FROM {schema}.job
-    GROUP BY ROLLUP(name), ROLLUP(state)
+    Count the number of dags in each state.
     """
+    return f"SELECT * FROM {schema}.count_dag_states()"
 
 
 def cancel_jobs(schema: str, name: str, ids: list):
@@ -229,14 +226,12 @@ def fetch_next_job(schema: str):
         batch_size: int = 1,
         include_metadata: bool = False,
         priority: bool = True,
-        mark_as_active: bool = False,
     ) -> str:
         """
         Constructs a SQL query that calls the stored function to fetch the next job(s),
         using the standardized DAG-aware dependency logic and state transitions.
         """
-        # Use schema-qualified function call
-        function_call = f"{schema}.fetch_next_job('{name}', {batch_size}, {'TRUE' if mark_as_active else 'FALSE'})"
+        function_call = f"{schema}.fetch_next_job('{name}', {batch_size})"
 
         # Select only relevant columns if include_metadata is False
         if include_metadata:

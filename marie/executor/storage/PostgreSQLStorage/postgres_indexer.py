@@ -3,13 +3,10 @@ from typing import Dict
 import numpy as np
 from docarray import DocList
 
-from marie import DocumentArray, Executor
 from marie.api.docs import StorageDoc
 from marie.logging_core.logger import MarieLogger
 
 from .postgreshandler import PostgreSQLHandler
-
-# https://github.com/jina-ai/executor-hnsw-postgres/blob/main/executor/postgres_indexer.py
 
 
 class PostgreSQLStorage:
@@ -23,8 +20,8 @@ class PostgreSQLStorage:
         password: str = "123456",
         database: str = "postgres",
         table: str = "default_table",
-        min_connections = 1,
-        max_connections = 5,
+        min_connections=1,
+        max_connections=5,
         traversal_paths: str = "@r",
         return_embeddings: bool = True,
         dry_run: bool = False,
@@ -103,7 +100,6 @@ class PostgreSQLStorage:
         """
         if docs is None:
             return
-
         self.handler.add(
             docs,
             store_mode,

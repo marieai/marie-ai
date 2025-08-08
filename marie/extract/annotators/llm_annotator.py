@@ -1,6 +1,6 @@
 import os
 import os.path
-from typing import List
+from typing import Any, List
 
 from marie.constants import __config_dir__
 from marie.extract.annotators.base import AnnotatorCapabilities, DocumentAnnotator
@@ -29,8 +29,9 @@ class LLMAnnotator(DocumentAnnotator):
     def __init__(
         self,
         working_dir: str,
-        annotator_conf: dict[str, any],
-        layout_conf: dict[str, any],
+        annotator_conf: dict[str, Any],
+        layout_conf: dict[str, Any],
+        **kwargs,
     ):
         """
         Initialize the annotator with a specific value type to extract.
@@ -81,6 +82,7 @@ class LLMAnnotator(DocumentAnnotator):
             os.path.join(working_dir, "agent-output", self.name)
         )
         self.frames_dir = os.path.join(working_dir, "frames")
+        self.logger.info(f'Annotator output dir : {self.output_dir}')
 
         if self.model_name is None:
             raise ValueError("Model name must be provided in the configuration.")
@@ -91,19 +93,22 @@ class LLMAnnotator(DocumentAnnotator):
                 "Either prompt_path or system_prompt_text must be provided."
             )
 
+        prompt_dir = kwargs.get("prompt_dir")
         safe_prompt_path = sanitize_path(self.prompt_path) if self.prompt_path else None
-        full_prompt_path = (
-            os.path.join(
+
+        if prompt_dir and safe_prompt_path:
+            full_prompt_path = os.path.join(prompt_dir, safe_prompt_path)
+        elif safe_prompt_path:
+            full_prompt_path = os.path.join(
                 __config_dir__,
                 "extract",
                 f"TID-{self.layout_id}/annotator",
                 safe_prompt_path,
             )
-            if safe_prompt_path
-            else None
-        )
-        self.prompt_text = self.load_prompt(full_prompt_path)
+        else:
+            full_prompt_path = None
 
+        self.prompt_text = self.load_prompt(full_prompt_path)
         self.engine = route_llm_engine(self.model_name, self.multimodal)
 
     @property

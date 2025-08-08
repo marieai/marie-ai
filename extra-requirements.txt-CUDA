@@ -182,3 +182,5 @@ dataclasses_json:              standard,core
 faiss-gpu-cu12:                standard,core
 sentence-transformers==4.1.0:  standard,core
 watchdog:                      standard,core
+
+qwen-vl-utils:                 standard,core

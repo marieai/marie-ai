@@ -382,10 +382,34 @@ def docs_from_asset(
 
 
 def frames_from_file(img_path: StrOrBytesPath) -> List[np.ndarray]:
-    """Create Numpy frame array from image"""
+    """Create Numpy frame array from image file or directory of image files."""
     img_path = os.path.expanduser(img_path)
     if not os.path.exists(img_path):
         raise FileNotFoundError(f"File not found : {img_path}")
+
+    if os.path.isdir(img_path):
+        frames = []
+        image_files_to_sort = []
+        for file_name in os.listdir(img_path):
+            name, ext = os.path.splitext(file_name)
+            if ext.lower() in [".png", ".tiff", ".tif"] and name.isdigit():
+                image_files_to_sort.append((int(name), file_name))
+
+        # Sort files based on the integer value of the name
+        image_files_to_sort.sort(key=lambda x: x[0])
+
+        if not image_files_to_sort:
+            raise Exception(
+                f"No valid images (e.g., 1.png, 2.tiff) found in directory: {img_path}"
+            )
+
+        for _, file_name in image_files_to_sort:
+            full_path = os.path.join(img_path, file_name)
+            loaded, image_frames = load_image(full_path)
+            if loaded:
+                frames.extend(image_frames)
+        return frames
+
     loaded, frames = load_image(img_path)
     if not loaded:
         raise Exception(f"Unable to load image : {img_path}")

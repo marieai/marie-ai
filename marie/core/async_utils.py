@@ -4,9 +4,8 @@ import asyncio
 from itertools import zip_longest
 from typing import Any, Coroutine, Iterable, List, Optional, TypeVar
 
-import marie.core.instrumentation as instrument
-
-dispatcher = instrument.get_dispatcher(__name__)
+# import marie.core.instrumentation as instrument
+# dispatcher = instrument.get_dispatcher(__name__)
 
 
 def asyncio_module(show_progress: bool = False) -> Any:
@@ -112,7 +111,7 @@ DEFAULT_NUM_WORKERS = 4
 T = TypeVar("T")
 
 
-@dispatcher.span
+# @dispatcher.span
 async def run_jobs(
     jobs: List[Coroutine[Any, Any, T]],
     show_progress: bool = False,
@@ -133,7 +132,7 @@ async def run_jobs(
     """
     semaphore = asyncio.Semaphore(workers)
 
-    @dispatcher.span
+    # @dispatcher.span
     async def worker(job: Coroutine) -> Any:
         async with semaphore:
             return await job

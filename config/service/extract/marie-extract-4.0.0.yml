@@ -185,8 +185,8 @@ prefetch: 4
 executors:
    - name: extract_executor
      uses:
-       jtype: TextExtractionExecutor
-#       jtype: TextExtractionExecutorMock
+#       jtype: TextExtractionExecutor
+       jtype: TextExtractionExecutorMock
        with:
          storage:
            # postgresql configuration. Will be used only if value of backend is "psql"
@@ -239,6 +239,7 @@ executors:
          py_modules:
            - marie.executor.text
      timeout_ready: 3000000
+
      replicas: 1
 #     replicas: ${{ CONTEXT.gpu_device_count }}
 

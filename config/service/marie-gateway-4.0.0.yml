@@ -80,6 +80,17 @@ with:
       max_concurrent_dags: 16     # Maximum number of concurrent DAGs (resource ceiling)
       cache_ttl_seconds: 10       # Cache TTL for capacity calculations
 
+    # Heartbeat & Monitoring Configuration
+    heartbeat:
+      interval: 5.0               # Heartbeat loop interval in seconds
+      window_minutes: 10          # Rolling throughput window in minutes
+      trend_points: 12            # Number of data points for trend calculation
+      recent_window_minutes: 1    # Recent throughput window in minutes (replaces heartbeat-based instant)
+      max_retries: 3              # Max retries for heartbeat operations
+      error_backoff: 5.0          # Backoff time in seconds after errors
+      enable_trend_arrows: true   # Show trend arrows in logs
+      enable_per_queue_stats: true # Show detailed per-queue statistics
+
     # Planners have to be available in the python path.
     # When running in a container, the planners should be available in the container's python path.
     query_planners:

@@ -1,4 +1,5 @@
 import os
+import sys
 import threading
 import time
 import warnings
@@ -482,8 +483,10 @@ class TextExtractionExecutorMock(MarieExecutor):
         # for doc in docs:
         #     doc.text += " First Exec"
         sec = 3600
-        sec = 5
-        # sec = random.randint(1, 5)
+        sec = random.randint(1, 5)
+        if False:
+            # sys.exit()
+            raise RuntimeError("Mock error for testing purposes")
 
         print(f"Sleeping for {sec} seconds : ", time.time())
         time.sleep(sec)

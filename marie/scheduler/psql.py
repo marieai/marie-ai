@@ -2,18 +2,18 @@ import asyncio
 import contextlib
 import copy
 import itertools
+import json
 import random
 import time
 import traceback
 import uuid
 from asyncio import Queue
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, NamedTuple, Tuple
+from typing import Any, Awaitable, Callable, Dict, NamedTuple, Tuple, Union
 
 import psycopg2
-from rich.console import Console
-from rich.table import Table
 
 from marie.constants import (
     __default_extract_dir__,
@@ -46,12 +46,13 @@ from marie.query_planner.planner import (
 from marie.scheduler.fixtures import *
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
 from marie.scheduler.job_scheduler import JobScheduler
-from marie.scheduler.models import ExistingWorkPolicy, WorkInfo
+from marie.scheduler.models import ExistingWorkPolicy, HeartbeatConfig, WorkInfo
 from marie.scheduler.plans import (
     cancel_jobs,
     complete_jobs,
     complete_jobs_by_id,
-    count_states,
+    count_dag_states,
+    count_job_states,
     create_queue,
     fail_jobs_by_id,
     fetch_next_job,
@@ -66,17 +67,21 @@ from marie.scheduler.plans import (
     try_set_monitor_time,
     version_table_exists,
 )
+from marie.scheduler.printers import (
+    print_dag_state_summary,
+    print_job_state_summary,
+    print_slots_table,
+)
 from marie.scheduler.state import WorkState
 from marie.scheduler.util import available_slots_by_executor
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.storage.database.postgres import PostgresqlMixin
 
 INIT_POLL_PERIOD = 2.250  # 250ms
-
 SHORT_POLL_INTERVAL = 1.0  # seconds, when slots exist but no work
 
-MIN_POLL_PERIOD = 0.5
-MAX_POLL_PERIOD = 16
+MIN_POLL_PERIOD = 0.250
+MAX_POLL_PERIOD = 8
 
 MONITORING_POLL_PERIOD = 5.0  # 5s
 SYNC_POLL_PERIOD = 5.0  # 5s
@@ -84,6 +89,12 @@ SYNC_POLL_PERIOD = 5.0  # 5s
 DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
 COMPLETION_JOB_PREFIX = f"__state__{WorkState.COMPLETED.value}__"
+
+# ANSI colors
+GREEN = "\033[92m"
+RED = "\033[91m"
+YELLOW = "\033[93m"
+RESET = "\033[0m"
 
 
 def convert_job_status_to_work_state(job_status: JobStatus) -> WorkState:
@@ -107,87 +118,17 @@ def convert_job_status_to_work_state(job_status: JobStatus) -> WorkState:
 
 
 def adjust_backoff(wait_time: float, idle_streak: int, scheduled: bool) -> float:
+    """
+    Adjusts the backoff time for a polling mechanism based on the provided wait time,
+    the number of consecutive idle streaks, and whether the task is scheduled. The
+    resulting wait time ensures it stays within predefined minimum and maximum periods.
+    In cases where the task is scheduled, the wait time is reduced. For non-scheduled
+    tasks, it considers random jitter and adjusts based on idle streaks.
+    """
     if scheduled:
         return max(wait_time * 0.5, MIN_POLL_PERIOD)
     jitter = random.uniform(0.9, 1.1)
     return min(wait_time * (1.5 + 0.1 * idle_streak), MAX_POLL_PERIOD) * jitter
-
-
-def print_state_summary(job_states_data: Dict[str, Any]):
-    try:
-        console = Console()
-        table = Table(
-            title="📊 Consolidated Job States for All Queues",
-            border_style="green",
-            title_style="bold white on blue",
-            header_style="bold yellow",
-            show_lines=True,  # Adds separating lines between rows for better readability
-        )
-
-        table.add_column("Queue", justify="left", style="cyan", no_wrap=False, width=16)
-        metrics = [
-            "created",
-            "retry",
-            "active",
-            "completed",
-            "expired",
-            "cancelled",
-            "failed",
-            "all",
-        ]
-        for metric in metrics:
-            table.add_column(
-                metric.capitalize(),
-                justify="center",
-                style="magenta",
-                no_wrap=False,
-                width=16,
-            )
-
-        if job_states_data.get("queues"):
-            for queue_name, queue_data in job_states_data["queues"].items():
-                row_values = [queue_name.capitalize()]
-                for metric in metrics:
-                    row_values.append(str(queue_data.get(metric, 0)))
-                table.add_row(*row_values)
-
-            summary_values = {metric: 0 for metric in metrics}
-            for queue_data in job_states_data["queues"].values():
-                for metric, value in queue_data.items():
-                    if metric in summary_values:
-                        summary_values[metric] += value
-
-            table.add_row(
-                "Summary",
-                *[str(summary_values[metric]) for metric in metrics],
-                style="bold green",
-            )
-        else:
-            table.add_row("No Data", *["0" for _ in metrics], style="bold red")
-
-        console.print(table)
-    except Exception as e:
-        logger.error(f"Error printing state summary: {e}")
-        logger.error(traceback.format_exc())
-
-
-def print_slots_table(slots: dict[str, int]) -> None:
-    console = Console()
-    table = Table(
-        title="⚙️  Available Slots",
-        border_style="green",
-        title_style="bold white on blue",
-        header_style="bold yellow",
-        show_lines=True,
-    )
-    table.add_column("Slot Type", justify="left", style="cyan", no_wrap=False)
-    table.add_column("Count", justify="center", style="magenta", no_wrap=False)
-
-    slots_s = dict(sorted(slots.items()))
-    for slot_type, count in slots_s.items():
-        table.add_row(slot_type, str(count))
-
-    console.print(table)
 
 
 # FIXME : Today we are tracking at the executor level, however that might not be the best
@@ -213,19 +154,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if job_manager is None:
             raise BadConfigSource("job_manager argument is required for JobScheduler")
 
+        self.validate_config(config)
         self._fetch_event = asyncio.Event()
         self._fetch_counter = 0
         self._debounced_notify = False
 
         self.known_queues = set(config.get("queue_names", []))
         self.running = False
-        self.task = None
+        self._poll_task = None
         self._producer_task = None
         self._consumer_task = None
         self._heartbeat_task = None
         self.sync_task = None
         self.monitoring_task = None
-        self._worker_task = None
+        self._worker_tasks = None
         self._sync_dag_task = None
         self._submission_count = 0
         self._pending_requests = {}  # Track pending requests by ID
@@ -242,12 +184,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             contextlib.AsyncExitStack() if lock_free else asyncio.Lock()
         )  # Lock to prevent concurrent access to the database
 
-        max_workers = config.get("max_workers", 1)
+        self.max_workers = config.get("max_workers", 5)
         self._db_executor = ThreadPoolExecutor(
-            max_workers=max_workers, thread_name_prefix="sync-db-executor"
+            max_workers=self.max_workers, thread_name_prefix="db-executor"
         )
         self.logger.info(
-            f"Using ThreadPoolExecutor for database operations with : {max_workers} workers."
+            f"Using ThreadPoolExecutor for database operations with : {self.max_workers} workers."
         )
         if self.known_queues is None or len(self.known_queues) == 0:
             raise BadConfigSource("Queue names are required for JobScheduler")
@@ -259,7 +201,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._setup_event_subscriptions()
         self._setup_storage(config, connection_only=True)
 
-        # self.execution_planner = SJFSExecutionPlanner()
         self.execution_planner = GlobalPriorityExecutionPlanner()
         register_all_known_planners(
             QueryPlannersConf.from_dict(config.get("query_planners", {}))
@@ -271,21 +212,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
         cache_ttl_seconds = int(dag_config.get("cache_ttl_seconds", 5))
 
-        # TODO : Implement DagConcurrencyManager properly
+        heartbeat_config_dict = config.get("heartbeat", {})
+        self.heartbeat_config = HeartbeatConfig.from_dict(heartbeat_config_dict)
+        self.logger.info(f"Heartbeat configuration: {self.heartbeat_config}")
+
         self.max_concurrent_dags = max_concurrent_dags
-        # self.dag_concurrency_manager = DagConcurrencyManager(
-        #     self,
-        #     strategy=dag_strategy,
-        #     min_concurrent_dags=min_concurrent_dags,
-        #     max_concurrent_dags=max_concurrent_dags,
-        #     cache_ttl_seconds=cache_ttl_seconds,
-        # )
-        #
-        # count = self.dag_concurrency_manager.calculate_max_concurrent_dags()
-        # print(f'dag_config : ', dag_config)
-        # print(f'count  = {count}')
-        # print(self.dag_concurrency_manager.get_configuration_summary())
         self._start_time = datetime.now(timezone.utc)
+
+    def validate_config(self, config: Dict[str, Any]):
+        # TODO :Implement full validation of required fields
+        required_keys = ["queue_names"]
+        for key in required_keys:
+            if key not in config:
+                raise BadConfigSource(f"Missing required config: {key}")
 
     async def handle_job_event(self, event_type: str, message: Any):
         """
@@ -304,11 +243,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             try:
                 job_id = message.get("job_id")
                 status = JobStatus(event_type)
-                work_item: WorkInfo = await self.get_job(job_id)
-
+                work_item: WorkInfo = await self._loop.run_in_executor(
+                    self._db_executor, self.get_job, job_id
+                )
                 if work_item is None:
                     self.logger.error(f"WorkItem not found: {job_id}")
                     return
+
                 work_state = convert_job_status_to_work_state(status)
                 now = datetime.now()
 
@@ -372,101 +313,51 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             create_dag_table_history(schema),
             create_dag_history_trigger_function(schema),
             # create_dag_resolve_state_function(schema),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "create_indexes.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "job_dependencies.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "resolve_dag_state.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "fetch_next_job.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "refresh_job_priority.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "delete_dag_and_jobs.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "delete_dags_and_jobs.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "delete_failed_dags_and_jobs.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "delete_orphaned_jobs.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(
-                    __default_schema_dir__, "jobs_with_unmet_dependencies.sql"
-                ),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "notify_dag_state_change.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "purge_non_started_work.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "ready_jobs_view.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "refresh_dag_durations.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "refresh_job_durations.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "reset_active_dags_and_jobs.sql"),
-            ),
-            create_sql_from_file(
-                schema, os.path.join(__default_schema_dir__, "reset_all.sql")
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(
-                    __default_schema_dir__, "reset_completed_dags_and_jobs.sql"
-                ),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "reset_failed_dags_and_jobs.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "suspend_non_started_work.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "unsuspend_work.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(__default_schema_dir__, "sync_job_dependencies.sql"),
-            ),
-            create_sql_from_file(
-                schema, os.path.join(__default_psql_dir__, "cron_job_init.sql")
-            ),
         ]
+
+        # SQL files to be loaded
+        sql_files = [
+            "job_dependencies.sql",
+            "fetch_next_job.sql",
+            "create_indexes.sql",
+            "create_constraints.sql",
+            "resolve_dag_state.sql",
+            "count_job_states.sql",
+            "count_dag_states.sql",
+            "refresh_job_priority.sql",
+            "delete_dags_and_jobs.sql",
+            "delete_failed_dags_and_jobs.sql",
+            "delete_orphaned_jobs.sql",
+            "jobs_with_unmet_dependencies.sql",
+            "notify_dag_state_change.sql",
+            "purge_non_started_work.sql",
+            "ready_jobs_view.sql",
+            "refresh_dag_durations.sql",
+            "refresh_job_durations.sql",
+            "reset_active_dags_and_jobs.sql",
+            "reset_all.sql",
+            "reset_completed_dags_and_jobs.sql",
+            "suspend_non_started_work.sql",
+            "unsuspend_work.sql",
+            "sync_job_dependencies.sql",
+        ]
+
+        commands.extend(
+            [
+                create_sql_from_file(
+                    schema, os.path.join(__default_schema_dir__, fname)
+                )
+                for fname in sql_files
+            ]
+        )
+
+        commands.extend(
+            [
+                create_sql_from_file(
+                    schema, os.path.join(__default_psql_dir__, "cron_job_init.sql")
+                )
+            ]
+        )
 
         query = ";\n".join(commands)
 
@@ -492,17 +383,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         except Exception as e:
             self.logger.error(f"Failed to write query to file: {e}")
 
-        with self:
-            try:
-                self._execute_sql_gracefully(locked_query)
-            except (Exception, psycopg2.Error) as error:
-                if isinstance(error, psycopg2.errors.DuplicateTable):
-                    self.logger.warning("Tables already exist, skipping creation.")
-                else:
-                    self.logger.error(f"Error creating tables: {error}")
-                    raise RuntimeFailToStart(
-                        f"Failed to create tables in schema '{schema}': {error}"
-                    )
+        conn = None
+        try:
+            conn = self._get_connection()
+            self._execute_sql_gracefully(locked_query, connection=conn)
+        except (Exception, psycopg2.Error) as error:
+            if isinstance(error, psycopg2.errors.DuplicateTable):
+                self.logger.warning("Tables already exist, skipping creation.")
+            else:
+                self.logger.error(f"Error creating tables: {error}")
+                raise RuntimeFailToStart(
+                    f"Failed to create tables in schema '{schema}': {error}"
+                )
+        finally:
+            self._close_connection(conn)
 
     async def wipe(self) -> None:
         """Clears the schedule storage."""
@@ -510,29 +404,42 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         query = f"""
            TRUNCATE {schema}.job, {schema}.archive
            """
-        with self:
-            self._execute_sql_gracefully(query)
+        self.logger.info(f"Wiping all data in schema '{schema}'")
+        conn = None
+        try:
+            conn = self._get_connection()
+            self._execute_sql_gracefully(query, connection=conn)
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error wiping tables: {error}")
+            raise RuntimeFailToStart(
+                f"Failed to wipe tables in schema '{schema}': {error}"
+            )
+        finally:
+            self._close_connection(conn)
 
     async def is_installed(self) -> bool:
         """check if the tables are installed"""
         schema = DEFAULT_SCHEMA
-        with self:
-            cursor = None
-            try:
-                cursor = self._execute_sql_gracefully(
-                    version_table_exists(schema), return_cursor=True
-                )
-                if cursor and cursor.rowcount > 0:
-                    result = cursor.fetchone()
-                    if result and result[0] is not None:
-                        return True
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error checking tables: {error}")
-                raise RuntimeFailToStart(
-                    f"Unable to check installation in schema '{schema}': {error}"
-                )
-            finally:
-                self._close_cursor(cursor)
+        cursor = None
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = self._execute_sql_gracefully(
+                version_table_exists(schema), return_cursor=True, connection=conn
+            )
+
+            if cursor and cursor.rowcount > 0:
+                result = cursor.fetchone()
+                if result and result[0] is not None:
+                    return True
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error checking tables: {error}")
+            raise RuntimeFailToStart(
+                f"Unable to check installation in schema '{schema}': {error}"
+            )
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
 
     async def create_queue(self, queue_name: str) -> None:
         """Setup the queue for the scheduler."""
@@ -557,7 +464,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 )
             finally:
                 self._close_cursor(cursor)
-            return set()
+        return set()  # Return an empty set if no queues are defined
 
     async def start(self) -> None:
         """
@@ -580,61 +487,391 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.running = True
         # self.sync_task = asyncio.create_task(self._sync())
         # self.monitoring_task = asyncio.create_task(self._monitor())
+        self.monitoring_task = None
 
         self._heartbeat_task = asyncio.create_task(
-            self._heartbeat_loop()
-        )  # THIS SHOULD BE IN OWN EVENT LOOP
+            self._heartbeat_loop(self.heartbeat_config)
+        )
+        self._poll_task = asyncio.create_task(self._poll())
 
-        if self.scheduler_mode == "parallelXXX":
-            self._producer_task = asyncio.create_task(self._producer_loop())
-            self._consumer_task = asyncio.create_task(self._consumer_loop())
-            pass
-        else:
-            self.task = asyncio.create_task(self._poll())
+        self._worker_tasks = [
+            asyncio.create_task(self._process_submission_queue(worker_id))
+            for worker_id in range(self.max_workers)
+        ]
 
-        self._worker_task = asyncio.create_task(self._process_submission_queue())
         # self._sync_dag_task = asyncio.create_task(self._sync_dag())
-
         await self.notify_event()
 
-    async def _heartbeat_loop(self, interval: float = 5.0):
-        """Periodic heartbeat logger showing scheduler state."""
+    async def _safe_count_states(
+        self,
+        count_method: Union[
+            Callable[[], Dict[str, Any]], Callable[[], Awaitable[Dict[str, Any]]]
+        ],
+    ) -> Dict[str, Any]:
+        """Safely call count methods with proper async handling."""
+        try:
+            if asyncio.iscoroutinefunction(count_method):
+                return await count_method()
+            else:
+                return await self._loop.run_in_executor(self._db_executor, count_method)
+        except Exception as e:
+            self.logger.error(f"Error in count method: {e}")
+            return {}
+
+    async def _heartbeat_loop(self, config: HeartbeatConfig) -> None:
+        """Periodic heartbeat with throughput, rolling averages, and trend analysis (global + per queue)."""
+
+        self.logger.info(
+            f"Heartbeat loop started: interval={config.interval}s, "
+            f"window={config.window_minutes}m, recent={config.recent_window_minutes}m"
+        )
+
+        _seen_executors = set()
+        _max_seen_executors = {}
+
+        last_heartbeat_time = None
+        last_completed_jobs = {}
+        last_completed_dags = {}
+        history = deque()  # (timestamp, jobs_per_queue, dags_per_queue)
+
+        rolling_job_rates = deque(maxlen=config.trend_points)
+        rolling_dag_rates = deque(maxlen=config.trend_points)
+
+        rolling_job_rates_per_queue = defaultdict(
+            lambda: deque(maxlen=config.trend_points)
+        )
+        rolling_dag_rates_per_queue = defaultdict(
+            lambda: deque(maxlen=config.trend_points)
+        )
+
+        def _get_completed_per_queue(states: dict, key: str = "completed") -> dict:
+            if not states or "queues" not in states:
+                return {}
+            return {qname: q.get(key, 0) for qname, q in states["queues"].items()}
+
+        def _calc_throughput(curr: dict, prev: dict, minutes: float) -> dict:
+            return {
+                qname: (
+                    max(0.0, (curr[qname] - prev.get(qname, 0)) / minutes)
+                    if minutes > 0
+                    else 0.0
+                )
+                for qname in curr
+            }
+
+        def _calc_diff(curr: dict, prev: dict) -> dict:
+            return {qname: curr[qname] - prev.get(qname, 0) for qname in curr}
+
+        def _trend(values: deque) -> str:
+            """Return colored trend arrow (⬆️, ⬇️, ➡️)."""
+            if not config.enable_trend_arrows or len(values) < 2:
+                return ""
+            first, last = values[0], values[-1]
+            if last > first * 1.05:
+                return f"{GREEN}⬆️{RESET}"
+            elif last < first * 0.95:
+                return f"{RED}⬇️{RESET}"
+            return f"{YELLOW}➡️{RESET}"
+
+        retry_count = 0
+
         while self.running:
             try:
+                unix_now = time.time()
                 queue_size = self._event_queue.qsize()
-                slot_info = available_slots_by_executor(ClusterState.deployments)
                 active_dags = list(self.active_dags.keys())
+                slot_info = None
 
+                # Executor stats collection (configurable)
+                if config.enable_executor_stats:
+                    slot_info = available_slots_by_executor(ClusterState.deployments)
+                    _seen_executors.update(slot_info.keys())
+
+                    for executor, count in slot_info.items():
+                        current_max = _max_seen_executors.get(executor, 0)
+                        _max_seen_executors[executor] = max(current_max, count)
+
+                dag_states = await self._safe_count_states(self.count_dag_states)
+                job_states = await self._safe_count_states(self.count_job_states)
+
+                current_completed_jobs = _get_completed_per_queue(
+                    job_states, "completed"
+                )
+                current_completed_dags = _get_completed_per_queue(
+                    dag_states, "completed"
+                )
+
+                total_completed_jobs = sum(current_completed_jobs.values())
+                total_completed_dags = sum(current_completed_dags.values())
+
+                history.append(
+                    (
+                        unix_now,
+                        current_completed_jobs.copy(),
+                        current_completed_dags.copy(),
+                    )
+                )
+
+                # Clean up old history (beyond rolling window)
+                cutoff = unix_now - config.window_minutes * 60
+                while history and history[0][0] < cutoff:
+                    history.popleft()
+
+                # --- Recent Throughput ---
+                recent_window_seconds = config.recent_window_minutes * 60.0
+                recent_cutoff = unix_now - recent_window_seconds
+
+                recent_history = [
+                    entry for entry in history if entry[0] >= recent_cutoff
+                ]
+
+                if len(recent_history) >= 2:
+                    # Use oldest and newest entries from recent window
+                    t0, jobs0, dags0 = recent_history[0]
+                    t1, jobs1, dags1 = recent_history[-1]
+                    time_diff_minutes = (t1 - t0) / 60.0
+
+                    if time_diff_minutes > 0:
+                        jobs_per_queue_instant = _calc_throughput(
+                            jobs1, jobs0, time_diff_minutes
+                        )
+                        dags_per_queue_instant = _calc_throughput(
+                            dags1, dags0, time_diff_minutes
+                        )
+                        jobs_per_min_global_instant = sum(
+                            jobs_per_queue_instant.values()
+                        )
+                        dags_per_min_global_instant = sum(
+                            dags_per_queue_instant.values()
+                        )
+                    else:
+                        jobs_per_queue_instant = {}
+                        dags_per_queue_instant = {}
+                        jobs_per_min_global_instant = dags_per_min_global_instant = 0.0
+                elif last_heartbeat_time is not None:
+                    # Fallback to heartbeat-based calculation if insufficient recent history
+                    time_diff_minutes = (unix_now - last_heartbeat_time) / 60.0
+                    jobs_per_queue_instant = _calc_throughput(
+                        current_completed_jobs, last_completed_jobs, time_diff_minutes
+                    )
+                    dags_per_queue_instant = _calc_throughput(
+                        current_completed_dags, last_completed_dags, time_diff_minutes
+                    )
+                    jobs_per_min_global_instant = sum(jobs_per_queue_instant.values())
+                    dags_per_min_global_instant = sum(dags_per_queue_instant.values())
+                else:
+                    jobs_per_queue_instant = {}
+                    dags_per_queue_instant = {}
+                    jobs_per_min_global_instant = dags_per_min_global_instant = 0.0
+
+                # --- Rolling throughput (full window) ---
+                jobs_per_min_global_window = 0.0
+                dags_per_min_global_window = 0.0
+                jobs_per_queue_window = defaultdict(float)
+                dags_per_queue_window = defaultdict(float)
+                window_suffix = " (insufficient data)"
+
+                if len(history) >= 2:
+                    # Time-weighted rolling average calculation.
+                    # This is more robust against bursty traffic than a simple start/end point calculation.
+                    total_job_rate_x_time = 0.0
+                    total_dag_rate_x_time = 0.0
+                    total_time_diff = 0.0
+
+                    per_queue_job_rate_x_time = defaultdict(float)
+                    per_queue_dag_rate_x_time = defaultdict(float)
+
+                    for i in range(1, len(history)):
+                        t_prev, jobs_prev, dags_prev = history[i - 1]
+                        t_curr, jobs_curr, dags_curr = history[i]
+
+                        interval_minutes = (t_curr - t_prev) / 60.0
+                        if interval_minutes <= 0:
+                            continue
+
+                        total_time_diff += interval_minutes
+
+                        # Calculate global rate for this interval
+                        interval_jobs_completed = sum(jobs_curr.values()) - sum(
+                            jobs_prev.values()
+                        )
+                        interval_dags_completed = sum(dags_curr.values()) - sum(
+                            dags_prev.values()
+                        )
+
+                        interval_job_rate = (
+                            max(0, interval_jobs_completed) / interval_minutes
+                        )
+                        interval_dag_rate = (
+                            max(0, interval_dags_completed) / interval_minutes
+                        )
+
+                        total_job_rate_x_time += interval_job_rate * interval_minutes
+                        total_dag_rate_x_time += interval_dag_rate * interval_minutes
+
+                        # Calculate per-queue rate for this interval
+                        all_queues = set(jobs_curr.keys()) | set(jobs_prev.keys())
+                        for q in all_queues:
+                            q_jobs_completed = jobs_curr.get(q, 0) - jobs_prev.get(q, 0)
+                            q_dags_completed = dags_curr.get(q, 0) - dags_prev.get(q, 0)
+                            q_job_rate = max(0, q_jobs_completed) / interval_minutes
+                            q_dag_rate = max(0, q_dags_completed) / interval_minutes
+                            per_queue_job_rate_x_time[q] += (
+                                q_job_rate * interval_minutes
+                            )
+                            per_queue_dag_rate_x_time[q] += (
+                                q_dag_rate * interval_minutes
+                            )
+
+                    if total_time_diff > 0:
+                        jobs_per_min_global_window = (
+                            total_job_rate_x_time / total_time_diff
+                        )
+                        dags_per_min_global_window = (
+                            total_dag_rate_x_time / total_time_diff
+                        )
+                        for q in per_queue_job_rate_x_time:
+                            jobs_per_queue_window[q] = (
+                                per_queue_job_rate_x_time[q] / total_time_diff
+                            )
+                        for q in per_queue_dag_rate_x_time:
+                            dags_per_queue_window[q] = (
+                                per_queue_dag_rate_x_time[q] / total_time_diff
+                            )
+
+                    actual_window_minutes = (history[-1][0] - history[0][0]) / 60.0
+                    if actual_window_minutes < config.window_minutes * 0.9:
+                        window_suffix = f" ({actual_window_minutes:.1f}m data)"
+                    else:
+                        window_suffix = ""
+                else:
+                    # Fallback for rolling if not enough history
+                    jobs_per_queue_window = jobs_per_queue_instant.copy()
+                    dags_per_queue_window = dags_per_queue_instant.copy()
+                    jobs_per_min_global_window = jobs_per_min_global_instant
+                    dags_per_min_global_window = dags_per_min_global_instant
+
+                rolling_job_rates.append(jobs_per_min_global_window)
+                rolling_dag_rates.append(dags_per_min_global_window)
+
+                for q in set(current_completed_jobs) | set(current_completed_dags):
+                    rolling_job_rates_per_queue[q].append(
+                        jobs_per_queue_window.get(q, 0.0)
+                    )
+                    rolling_dag_rates_per_queue[q].append(
+                        dags_per_queue_window.get(q, 0.0)
+                    )
+
+                # Snapshot
+                last_heartbeat_time = unix_now
+                last_completed_jobs = current_completed_jobs
+                last_completed_dags = current_completed_dags
+
+                # --- Logging with configuration ---
                 self.logger.info("🔄  Scheduler Heartbeat")
-                self.logger.info(f"  🧭  Mode              : {self.scheduler_mode}")
-                self.logger.info(f"  📦  Queue Size        : {queue_size}")
-                self.logger.info(f"  ⚙️   Available Slots ")
-                print_slots_table(slot_info)
-                self.logger.info(f"  🧠  Active DAGs        : {len(active_dags)}")
+                self.logger.info(f"  📦  Queue Size       : {queue_size}")
+                self.logger.info(f"  🧠  Active DAGs      : {len(active_dags)}")
+                # Global throughput + trend
+                self.logger.info(f"  📈  Throughput: ")
 
-                if active_dags:
+                self.logger.info(
+                    f"  • recent ({config.recent_window_minutes}m): {jobs_per_min_global_instant:.2f} jobs/min, "
+                    f"{dags_per_min_global_instant:.2f} dags/min"
+                )
+
+                trend_job = _trend(rolling_job_rates)
+                trend_dag = _trend(rolling_dag_rates)
+
+                self.logger.info(
+                    f"  • rolling (last {config.window_minutes}m{window_suffix}): "
+                    f"{jobs_per_min_global_window:.2f} jobs/min {trend_job}, "
+                    f"{dags_per_min_global_window:.2f} dags/min {trend_dag}"
+                )
+                self.logger.info(
+                    f"  ✅  Totals            : {total_completed_jobs} jobs, {total_completed_dags} dags"
+                )
+
+                # Per-queue throughput + trend (configurable)
+                if config.enable_per_queue_stats and (
+                    jobs_per_queue_instant or dags_per_queue_instant
+                ):
+                    self.logger.info("  📊 Per-Queue Throughput:")
+                    for qname in sorted(
+                        set(current_completed_jobs) | set(current_completed_dags)
+                    ):
+                        jpm_i = jobs_per_queue_instant.get(qname, 0.0)
+                        dpm_i = dags_per_queue_instant.get(qname, 0.0)
+                        jpm_w = jobs_per_queue_window.get(qname, 0.0)
+                        dpm_w = dags_per_queue_window.get(qname, 0.0)
+
+                        jtot = current_completed_jobs.get(qname, 0)
+                        dtot = current_completed_dags.get(qname, 0)
+
+                        jtrend = _trend(rolling_job_rates_per_queue[qname])
+                        dtrend = _trend(rolling_dag_rates_per_queue[qname])
+
+                        self.logger.info(
+                            f"   • {qname:<12} | Jobs: {jpm_i:.2f}/min ({config.recent_window_minutes}m), "
+                            f"{jpm_w:.2f}/min ({config.window_minutes}m{window_suffix}) {jtrend}"
+                        )
+                        self.logger.info(
+                            f"     {'':<12} | DAGs: {dpm_i:.2f}/min ({config.recent_window_minutes}m), "
+                            f"{dpm_w:.2f}/min ({config.window_minutes}m{window_suffix}) {dtrend}"
+                        )
+                        self.logger.info(
+                            f"     {'':<12} | Totals: {jtot} jobs, {dtot} dags"
+                        )
+
+                if config.log_active_dags and active_dags:
                     shown = ', '.join(active_dags[:5])
                     suffix = '...' if len(active_dags) > 5 else ''
                     self.logger.debug(f"     DAG IDs          : [{shown}{suffix}]")
 
-                states = self.count_states()
-                print_state_summary(states)
-                self.diagnose_pool()
+                print_dag_state_summary(dag_states)
+                print_job_state_summary(job_states)
 
-                # print_dag_concurrency_status_compact(self.dag_concurrency_manager.get_configuration_summary())
+                if config.enable_executor_stats:
+                    print_slots_table(slot_info, _max_seen_executors)
 
-                await asyncio.sleep(interval)
+                (
+                    await self.diagnose_pool()
+                    if asyncio.iscoroutinefunction(self.diagnose_pool)
+                    else self.diagnose_pool()
+                )
+
+                await asyncio.sleep(config.interval)
+                retry_count = 0
+
             except Exception as e:
-                self.logger.error(f"❌ Heartbeat loop error: {e}")
-                await asyncio.sleep(5)
+                retry_count += 1
+                self.logger.error(
+                    f"Heartbeat loop error (attempt {retry_count}/{config.max_retries}): {e}"
+                )
 
-    async def _producer_loop(self):
-        raise NotImplementedError("Producer loop is not implemented yet.")
+                if retry_count >= config.max_retries:
+                    self.logger.critical(
+                        f"Heartbeat loop failed {config.max_retries} times, stopping"
+                    )
+                    break
 
-    async def _consumer_loop(self):
-        raise NotImplementedError("Consumer loop is not implemented yet.")
+                backoff_time = config.error_backoff * (
+                    2 ** (retry_count - 1)
+                ) + random.uniform(0, 1)
+                self.logger.warning(f"Retrying heartbeat in {backoff_time:.2f}s...")
+                await asyncio.sleep(backoff_time)
 
     async def _poll(self):
+        """
+        Handles the job scheduling polling process for the database in serial mode.
+
+        This coroutine function is responsible for managing
+        ecutors. It includes mechanisms for
+        handling job dependencies, activation and cleanup of DAGs (Directed Acyclic Graphs),
+        and backoff strategies for managing idle periods or situations with no executor slots
+        available.
+
+        :return: None
+        """
         self.logger.info("Starting database job scheduler (serial mode)")
         wait_time = INIT_POLL_PERIOD
         batch_size = 25000
@@ -643,18 +880,21 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         last_deployments_timestamp = ClusterState.deployments_last_updated
         slots_by_executor = available_slots_by_executor(ClusterState.deployments).copy()
-        recently_activated_dags = set()
+        recently_activated_dags = deque()
         ACTIVATION_TIMEOUT = 60  # Seconds to consider DAG recently activated
 
         def cleanup_recently_activated_dags():
-            """Removes DAGs that were activated too long ago from the set"""
+            """Removes DAGs that were activated too long ago from the deque"""
             current_time = time.time()
-            for dag_id, ts in list(recently_activated_dags):
-                if current_time - ts > ACTIVATION_TIMEOUT:
-                    recently_activated_dags.remove((dag_id, ts))
+            while (
+                recently_activated_dags
+                and recently_activated_dags[0][1] < current_time - ACTIVATION_TIMEOUT
+            ):
+                recently_activated_dags.popleft()
 
         dag_id = None  # this is the last dag_id that was processed
         max_concurrent_dags = self.max_concurrent_dags
+        self.logger.info(f"Max concurrent DAGs set to: {max_concurrent_dags}")
 
         while self.running:
             try:
@@ -669,20 +909,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     pass
 
                 # FIXME : this is a hack
-                # refresh slots
-                if ClusterState.deployments_last_updated != last_deployments_timestamp:
-                    last_deployments_timestamp = ClusterState.deployments_last_updated
-                    slots_by_executor = available_slots_by_executor(
-                        ClusterState.deployments
-                    ).copy()
-                    self.logger.debug(
-                        "Detected deployment update — refreshing slot state"
-                    )
+                slots_by_executor = available_slots_by_executor(
+                    ClusterState.deployments
+                ).copy()
 
                 # back off if no slots
-                self.logger.debug(f"Available slots: {slots_by_executor}")
+                self.logger.info(f"Available slots: {slots_by_executor}")
                 if not any(slots_by_executor.values()):
-                    self.logger.debug("No available executor slots. Backing off.")
+                    self.logger.warning("No available executor slots. Backing off.")
                     idle_streak += 1
                     wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
                     continue
@@ -719,6 +953,16 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
                     continue
 
+                # Count jobs per executor
+                jobs_by_executor = defaultdict(int)
+                for entrypoint, _ in flat_jobs:
+                    executor = entrypoint.split("://")[0]
+                    jobs_by_executor[executor] += 1
+
+                self.logger.info(f"Jobs candidates per executor: {jobs_by_executor}")
+                for executor, count in jobs_by_executor.items():
+                    self.logger.info(f"  {executor}: {count} jobs")
+
                 await self.debug_work_plans(flat_jobs, records_by_queue)
 
                 for entrypoint, work_info in flat_jobs:
@@ -736,8 +980,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         )
                         continue
 
-                    dag = self.get_dag_by_id(dag_id)
-
+                    dag = await self.get_dag_by_id(dag_id)
                     if dag is None:
                         self._remove_dag_from_memory(dag_id, "DAG not found: {dag_id}")
                         raise ValueError(f"DAG not found: {dag_id}")
@@ -745,19 +988,26 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     if dag_id not in self.active_dags:
                         await self.mark_as_active_dag(work_info)
                         self.active_dags[dag_id] = dag
-                        recently_activated_dags.add((dag_id, time.time()))
+                        recently_activated_dags.append((dag_id, time.time()))
                         self.logger.debug(f"DAG activated: {dag_id}")
 
                     node = self.get_node_from_dag(work_info.id, dag)
 
                     if self._is_noop_query_definition(node):
-                        now = datetime.now()
+                        start_t = time.time()
+                        sorted_nodes = topological_sort(dag)
+                        job_levels = compute_job_levels(sorted_nodes, dag)
+                        max_level = max(job_levels.values())
 
+                        now = datetime.now()
                         await self.put_status(
                             work_info.id, WorkState.COMPLETED, now, now
                         )
                         await self.complete(work_info.id, work_info, {}, force=True)
-                        await self.resolve_dag_status(work_info.id, work_info)
+                        if (
+                            max_level == work_info.job_level
+                        ):  # There is no need to resolve DAG if we are in NOOP and not at the END
+                            await self.resolve_dag_status(work_info.id, work_info)
                         await self.notify_event()
 
                         continue
@@ -778,6 +1028,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     else:
                         self.logger.error(f"Failed to enqueue job: {work_info.id}")
 
+                self.logger.debug(f"Remaining slots: {slots_by_executor}")
                 # acknowledgments, we are waiting for the jobs to be scheduled on the executor and get response via ETCD
                 if scheduled_any:
                     try:
@@ -832,11 +1083,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         debug_file_path = f"/tmp/marie/plans/flat_jobs_plan_debug_{timestamp}.txt"
         try:
             with open(debug_file_path, 'w') as debug_file:
-                for queue_name, records in records_by_queue.items():
-                    debug_file.write(f"Queue: {queue_name}\n")
-                    for record in records:
-                        debug_file.write(f"  Records:  {record},\n")
+                debug_file.write("Nodes:\n")
+                debug_file.write(json.dumps(ClusterState.deployments, indent=4))
+
                 debug_file.write("\n\n")
+                debug_file.write("Slots:\n")
+
+                debug_file.write(json.dumps(self.get_available_slots(), indent=4))
+                debug_file.write("\n\n")
+
                 debug_file.write("Jobs Plan:\n")
                 for entrypoint, work_info in flat_jobs:
                     debug_file.write(
@@ -846,6 +1101,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         f"Job Level: {work_info.job_level}, "
                         f"DAG ID: {work_info.dag_id}\n"
                     )
+                if False:
+                    debug_file.write("\n\n")
+                    debug_file.write(f"Queues:\n")
+                    for queue_name, records in records_by_queue.items():
+                        debug_file.write(f"Queue: {queue_name}\n")
+                        for record in records:
+                            debug_file.write(f"  Records:  {record},\n")
+                    debug_file.write("\n\n")
             self.logger.debug(
                 f"Flat jobs plan written to {debug_file_path} for analysis."
             )
@@ -859,16 +1122,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.running = False
 
         tasks = [self.monitoring_task]
-        if self.scheduler_mode == "parallel":
-            tasks = tasks + [self._producer_task, self._consumer_task]
-        else:
-            tasks = tasks + [self.task]
+        tasks = tasks + [self._producer_task]
 
         if self._heartbeat_task:
             tasks.append(self._heartbeat_task)
 
-        if self._worker_task:
-            tasks.append(self._worker_task)
+        if self._worker_tasks:
+            for task in self._worker_tasks:
+                tasks.append(task)
 
         if self.sync_task:
             tasks.append(self.sync_task)
@@ -960,17 +1221,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         # Add queue status information
         try:
-            queue_status = self.get_queue_status()
-            debug_data["queue_status"] = queue_status
+            debug_data["queue_status"] = self.get_queue_status()
         except Exception as e:
             debug_data["queue_status_error"] = str(e)
 
-        # Add job state counts if available
         try:
-            state_counts = self.count_states()
-            debug_data["job_state_counts"] = state_counts
+            debug_data["job_state_counts"] = self.count_job_states()
         except Exception as e:
             debug_data["job_state_counts_error"] = str(e)
+
+        try:
+            debug_data["dag_state_counts"] = self.count_dag_states()
+        except Exception as e:
+            debug_data["dag_state_counts_error"] = str(e)
 
         return debug_data
 
@@ -1015,81 +1278,92 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         records_by_queue = {}
         # FIXME : Change how we check for known queues
         if not self.known_queues:
-            self.logger.info("No known queues, skipping fetching jobs.")
+            self.logger.warning("No known queues, skipping fetching jobs.")
             return records_by_queue
 
-        async with self._lock:
-            with self:
+        conn = None
+        cursor = None
+
+        try:
+            conn = self._get_connection()
+            fetch_query_def = fetch_next_job(DEFAULT_SCHEMA)
+            for queue in self.known_queues:
+                cursor = None
                 try:
-                    fetch_query_def = fetch_next_job(DEFAULT_SCHEMA)
-                    for queue in self.known_queues:
-                        query = fetch_query_def(
-                            name=queue,
-                            batch_size=limit,
-                            include_metadata=False,
-                            priority=True,
-                            mark_as_active=False,
+                    query = fetch_query_def(
+                        name=queue,
+                        batch_size=limit,
+                        include_metadata=False,
+                        priority=True,
+                    )
+                    # we can't use named cursors as it will throw an error
+                    cursor = conn.cursor()
+                    cursor.itersize = limit
+                    cursor.execute(f"{query}")
+                    records = [record for record in cursor]
+                    if records:
+                        records_by_queue[queue] = records
+                        self.logger.debug(
+                            f"Fetched jobs from queue: {queue} > {len(records)}"
                         )
-                        # we can't use named cursors as it will throw an error
-                        cursor = self.connection.cursor()
-                        cursor.itersize = limit
-                        cursor.execute(f"{query}")
-                        records = [record for record in cursor]
-                        if records:
-                            records_by_queue[queue] = records
-                            self.logger.debug(
-                                f"Fetched jobs from queue: {queue} > {len(records)}"
-                            )
-                        else:
-                            self.logger.debug(f"No jobs found in queue: {queue}")
-
-                    return records_by_queue
-                except (Exception, psycopg2.Error) as error:
-                    self.logger.error(f"Error fetching next job: {error}")
-                    self.connection.rollback()
+                    else:
+                        self.logger.debug(f"No jobs found in queue: {queue}")
                 finally:
-                    self.connection.commit()
+                    self._close_cursor(cursor)
 
-    async def get_job(self, job_id: str) -> Optional[WorkInfo]:
+            conn.commit()
+            return records_by_queue
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error fetching next job: {error}")
+            conn.rollback()
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
+        return {}
+
+    def get_job(self, job_id: str) -> Optional[WorkInfo]:
         """
         Get a job by its ID.
         :param job_id:
         """
         schema = DEFAULT_SCHEMA
         table = DEFAULT_JOB_TABLE
-
-        with self:
-            try:
-                cursor = self.connection.cursor()
-                cursor.execute(
-                    f"""
-                    SELECT
-                          id,
-                          name,
-                          priority,
-                          state,
-                          retry_limit,
-                          start_after,
-                          expire_in,
-                          data,
-                          retry_delay,
-                          retry_backoff,
-                          keep_until,
-                          dag_id,
-                          job_level
-                    FROM {schema}.{table}
-                    WHERE id = '{job_id}'
-                    """
-                )
-                record = cursor.fetchone()
-                if record:
-                    return self.record_to_work_info(record)
-                return None
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error importing snapshot: {error}")
-                self.connection.rollback()
-            finally:
-                self.connection.commit()
+        cursor = None
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT
+                      id,
+                      name,
+                      priority,
+                      state,
+                      retry_limit,
+                      start_after,
+                      expire_in,
+                      data,
+                      retry_delay,
+                      retry_backoff,
+                      keep_until,
+                      dag_id,
+                      job_level
+                FROM {schema}.{table}
+                WHERE id = '{job_id}'
+                """
+            )
+            record = cursor.fetchone()
+            conn.commit()
+            if record:
+                return self.record_to_work_info(record)
+            return None
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error getting job: {error}")
+            conn.rollback()
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
 
     async def get_job_for_policy(self, work_info: WorkInfo) -> Optional[WorkInfo]:
         """
@@ -1100,40 +1374,44 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         table = DEFAULT_JOB_TABLE
         ref_type = work_info.data.get("metadata", {}).get("ref_type", "")
         ref_id = work_info.data.get("metadata", {}).get("ref_id", "")
+        cursor = None
+        conn = None
 
-        with self:
-            try:
-                cursor = self.connection.cursor()
-                cursor.execute(
-                    f"""
-                        SELECT
-                        id,
-                        name,
-                        priority,
-                        state,
-                        retry_limit,
-                        start_after,
-                        expire_in,
-                        data,
-                        retry_delay,
-                        retry_backoff,
-                        keep_until,
-                        dag_id,
-                        job_level
-                    FROM {schema}.{table}
-                    WHERE data->'metadata'->>'ref_type' = '{ref_type}'
-                    AND data->'metadata'->>'ref_id' = '{ref_id}'
-                    """
-                )
-                record = cursor.fetchone()
-                if record:
-                    return self.record_to_work_info(record)
-                return None
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error getting job: {error}")
-                self.connection.rollback()
-            finally:
-                self.connection.commit()
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                    SELECT
+                    id,
+                    name,
+                    priority,
+                    state,
+                    retry_limit,
+                    start_after,
+                    expire_in,
+                    data,
+                    retry_delay,
+                    retry_backoff,
+                    keep_until,
+                    dag_id,
+                    job_level
+                FROM {schema}.{table}
+                WHERE data->'metadata'->>'ref_type' = '{ref_type}'
+                AND data->'metadata'->>'ref_id' = '{ref_id}'
+                """
+            )
+            record = cursor.fetchone()
+            conn.commit()
+            if record:
+                return self.record_to_work_info(record)
+            return None
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error getting job: {error}")
+            conn.rollback()
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
 
     async def list_jobs(
         self, state: Optional[str | list[str]] = None, batch_size: int = 0
@@ -1141,6 +1419,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         work_items = {}
         schema = DEFAULT_SCHEMA
         table = DEFAULT_JOB_TABLE
+        cursor = None
+        conn = None
 
         if state is not None:
             if isinstance(state, str):
@@ -1154,25 +1434,27 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         else:
             states = "','".join(WorkState.__members__.keys()).lower()
 
-        with self:
-            try:
-                cursor = self.connection.cursor("doc_iterator")
-                cursor.itersize = 10000
-                cursor.execute(
-                    f"""
-                    SELECT id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until,dag_id,job_level
-                    FROM {schema}.{table} 
-                    WHERE state IN ('{states}')
-                    {f"LIMIT {batch_size}" if batch_size > 0 else ""}
-                    """
-                )
-                for record in cursor:
-                    work_items[record[0]] = self.record_to_work_info(record)
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error listing jobs: {error}")
-                self.connection.rollback()
-            finally:
-                self.connection.commit()
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor("doc_iterator")
+            cursor.itersize = 10000
+            cursor.execute(
+                f"""
+                SELECT id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until,dag_id,job_level
+                FROM {schema}.{table} 
+                WHERE state IN ('{states}')
+                {f"LIMIT {batch_size}" if batch_size > 0 else ""}
+                """
+            )
+            for record in cursor:
+                work_items[record[0]] = self.record_to_work_info(record)
+            conn.commit()
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error listing jobs: {error}")
+            conn.rollback()
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
         return work_items
 
     async def submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> str:
@@ -1233,15 +1515,16 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"(interval: {refresh_interval})"
             )
 
-    async def _process_submission_queue(self):
+    async def _process_submission_queue(self, worker_id: int) -> None:
         """Background worker that processes queued job submissions"""
-        self.logger.info("Background job submission worker started")
+        self.logger.info(f"Background job submission worker started # {worker_id}")
 
-        while True:
+        while self.running:
             request = None
             try:
                 request = await self._request_queue.get()
                 try:
+
                     result = await self.__submit_job(
                         request.work_info, request.overwrite
                     )
@@ -1250,8 +1533,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                     if not request.result_future.done():
                         request.result_future.set_result(result)
+
+                    queue_size = self._request_queue.qsize()
                     self.logger.debug(
-                        f"Successfully processed job: {request.work_info.id}"
+                        f"Successfully processed job: {request.work_info.id} (queue size: {queue_size})"
                     )
 
                 except ValueError as e:
@@ -1281,11 +1566,27 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     def get_queue_status(self) -> dict:
         """Get current status of the submission queue"""
+        active_workers = 0
+        total_workers = len(self._worker_tasks) if self._worker_tasks else 0
+
+        if self._worker_tasks:
+            active_workers = sum(
+                1 for task in self._worker_tasks if task and not task.done()
+            )
+
         return {
             "queue_size": self._request_queue.qsize(),
             "pending_requests": len(self._pending_requests),
             "total_submissions": self._submission_count,
-            "worker_running": self._worker_task and not self._worker_task.done(),
+            "workers": {
+                "total": total_workers,
+                "active": active_workers,
+                "utilization": (
+                    f"{(active_workers / total_workers) * 100:.1f}%"
+                    if total_workers > 0
+                    else "0%"
+                ),
+            },
         }
 
     def _create_dag_and_jobs_sync(
@@ -1304,6 +1605,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         query_plan_dag, topological_sorted_nodes = query_plan_work_items(work_info)
         connection = None
         cursor = None
+        new_key_added = False
 
         # important that we use new connection for each job submission
         try:
@@ -1332,16 +1634,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     connection=connection,
                     return_cursor=True,
                 )
-                new_dag_key = cursor is not None and cursor.rowcount > 0
+                job_inserted = cursor is not None and cursor.rowcount > 0
                 if i == 0:
-                    new_key_added = new_dag_key
+                    new_key_added = job_inserted
 
                 self._close_cursor(cursor)
 
+            connection.commit()
             return new_key_added, new_dag_key
 
         except (Exception, psycopg2.Error) as error:
             self.logger.error(f"Error creating job: {error}")
+            if connection:
+                connection.rollback()
             raise ValueError(
                 f"Job creation for submission_id {submission_id} failed. "
                 f"Please check the logs for more information. {error}"
@@ -1385,7 +1690,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def _refresh_job_priorities(self):
         """Execute the job priority refresh SQL function"""
         try:
-            print(f'Refreshing job priorities...  : {self._submission_count}')
+            self.logger.info(
+                f'Refreshing job priorities...  : {self._submission_count}'
+            )
             #   SELECT marie_scheduler.refresh_job_priority();
         except Exception as e:
             self.logger.error(f"Failed to refresh job priorities: {e}")
@@ -1402,16 +1709,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def _mark_active(self, label: str, query: str) -> bool:
         self.logger.debug(f"Marking {label} as active")
-        with self:
+
+        def db_call() -> bool:
             cursor = None
+            conn = None
             try:
-                cursor = self._execute_sql_gracefully(query, return_cursor=True)
+                conn = self._get_connection()
+                cursor = self._execute_sql_gracefully(
+                    query, return_cursor=True, connection=conn
+                )
                 return result[0] if cursor and (result := cursor.fetchone()) else False
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error updating {label}: {error}")
                 return False
             finally:
                 self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
 
     async def is_valid_submission(
         self, work_info: WorkInfo, policy: ExistingWorkPolicy
@@ -1434,7 +1749,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             if policy == ExistingWorkPolicy.REJECT_ALL:
                 return False
 
-            existing_job = await self.get_job_for_policy(work_info)
+            existing_job = await self._loop.run_in_executor(
+                self._db_executor, self.get_job_for_policy, work_info
+            )
 
             if policy == ExistingWorkPolicy.REJECT_DUPLICATE:
                 return existing_job is None
@@ -1471,14 +1788,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param job_id: The ID of the job.
         :param work_item: The work item to cancel.
         """
-        with self:
-            try:
-                self.logger.info(f"Cancelling job: {job_id}")
-                self._execute_sql_gracefully(
-                    cancel_jobs(DEFAULT_SCHEMA, work_item.name, [job_id])
-                )
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error handling job event: {error}")
+        conn = None
+        try:
+            conn = self._get_connection()
+            self.logger.info(f"Cancelling job: {job_id}")
+            self._execute_sql_gracefully(
+                cancel_jobs(DEFAULT_SCHEMA, work_item.name, [job_id]), connection=conn
+            )
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error handling job event: {error}")
+        finally:
+            self._close_connection(conn)
 
     async def resume_job(self, job_id: str) -> None:
         """
@@ -1486,14 +1806,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param job_id:
         """
         name = "extract"  # TODO this is a placeholder
-        with self:
-            try:
-                self.logger.info(f"Resuming job: {job_id}")
-                self._execute_sql_gracefully(
-                    resume_jobs(DEFAULT_SCHEMA, name, [job_id])
-                )
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error handling job event: {error}")
+        conn = None
+        try:
+            self.logger.info(f"Resuming job: {job_id}")
+            conn = self._get_connection()
+            self._execute_sql_gracefully(
+                resume_jobs(DEFAULT_SCHEMA, name, [job_id]), connection=conn
+            )
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error handling job event: {error}")
+        finally:
+            self._close_connection(conn)
 
     async def put_status(
         self,
@@ -1509,30 +1832,37 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param started_on: Optional start time of the job.
         :param completed_on: Optional completion time of the job.
         """
-        schema = DEFAULT_SCHEMA
-        table = "job"
 
-        update_fields = [f"state = '{status.value}'"]
-        if started_on:
-            update_fields.append(
-                f"started_on = '{to_timestamp_with_tz(started_on)}'::timestamp with time zone "
-            )
-        if completed_on:
-            update_fields.append(
-                f"completed_on = '{to_timestamp_with_tz(completed_on)}'::timestamp with time zone "
-            )
+        def db_call():
+            schema = DEFAULT_SCHEMA
+            table = "job"
 
-        update_query = f"""
-        UPDATE {schema}.{table}
-        SET {', '.join(update_fields)}
-        WHERE id = '{job_id}'
-        """
+            update_fields = [f"state = '{status.value}'"]
+            if started_on:
+                update_fields.append(
+                    f"started_on = '{to_timestamp_with_tz(started_on)}'::timestamp with time zone "
+                )
+            if completed_on:
+                update_fields.append(
+                    f"completed_on = '{to_timestamp_with_tz(completed_on)}'::timestamp with time zone "
+                )
 
-        with self:
+            update_query = f"""
+            UPDATE {schema}.{table}
+            SET {', '.join(update_fields)}
+            WHERE id = '{job_id}'
+            """
+
+            conn = None
             try:
-                self._execute_sql_gracefully(update_query)
+                conn = self._get_connection()
+                self._execute_sql_gracefully(update_query, connection=conn)
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error handling job event: {error}")
+            finally:
+                self._close_connection(conn)
+
+        await self._loop.run_in_executor(self._db_executor, db_call)
 
     async def maintenance(self):
         """
@@ -1541,10 +1871,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return: None
         """
         try:
-            with self:
-                await self.expire()
-                await self.archive()
-                await self.purge()
+            await self.expire()
+            await self.archive()
+            await self.purge()
         except Exception as e:
             self.logger.error(f"Error in maintenance: {e}")
 
@@ -1569,26 +1898,27 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.handle_job_event,
         )
 
-    def count_states(self) -> Dict[str, Dict[str, int]]:
-        """
-        Fetch and count job states from the database.
+    def _count_states_generic(
+        self, query_func, schema: str = None
+    ) -> Dict[str, Dict[str, int]]:
+        if schema is None:
+            schema = DEFAULT_SCHEMA
 
-        :return: A dictionary with queue names as keys and state counts as values.
-        """
         state_count_default = {key.lower(): 0 for key in WorkState.__members__.keys()}
         counts = []
         cursor = None
-
-        with self:
-            try:
-                cursor = self._execute_sql_gracefully(
-                    count_states(DEFAULT_SCHEMA), return_cursor=True
-                )
-                counts = cursor.fetchall()
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error handling job event: {error}")
-            finally:
-                self._close_cursor(cursor)
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = self._execute_sql_gracefully(
+                query_func(schema), return_cursor=True, connection=conn
+            )
+            counts = cursor.fetchall()
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error handling state count: {error}")
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
 
         states = {"queues": {}}
         for item in counts:
@@ -1596,10 +1926,27 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             if name:
                 if name not in states["queues"]:
                     states["queues"][name] = state_count_default.copy()
-            queue = states["queues"].get(name, states)
-            queue[state or "all"] = int(size)
+                queue = states["queues"][name]
+                queue[state or "all"] = int(size)
+
+        # Calculate the 'all' column as the sum of all state columns for each queue
+        for queue in states["queues"].values():
+            # Exclude the 'all' key itself from the sum
+            queue["all"] = sum(v for k, v in queue.items() if k != "all")
 
         return states
+
+    def count_job_states(self) -> Dict[str, Dict[str, int]]:
+        """
+        Fetch and count job states from the database.
+        """
+        return self._count_states_generic(count_job_states)
+
+    def count_dag_states(self) -> Dict[str, Dict[str, int]]:
+        """
+        Fetch and count dag states from the database.
+        """
+        return self._count_states_generic(count_dag_states)
 
     def record_to_work_info(self, record: Any) -> WorkInfo:
         """
@@ -1669,68 +2016,75 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         # self.logger.info(f"Job completed : {job_id}, {work_item}")
         self.logger.info(f"Job completed : {job_id}")
 
-        def complete_jobs_wrapper(
-            schema: str, name: str, ids: list, output: dict, _force: bool
-        ):
-            if _force:
-                return complete_jobs_by_id(schema, name, ids, output)
-            else:
-                return complete_jobs(schema, name, ids, output)
+        def db_call():
+            def complete_jobs_wrapper(
+                schema: str, name: str, ids: list, output: dict, _force: bool
+            ):
+                if _force:
+                    return complete_jobs_by_id(schema, name, ids, output)
+                else:
+                    return complete_jobs(schema, name, ids, output)
 
-        conn = None
-        cursor = None
-        try:
-            conn = self._get_connection()
-            cursor = self._execute_sql_gracefully(
-                complete_jobs_wrapper(
-                    DEFAULT_SCHEMA,
-                    work_item.name,
-                    [job_id],
-                    {"on_complete": "done", **(output_metadata or {})},
-                    force,
-                ),
-                return_cursor=True,
-                connection=conn,
-            )
-            counts = cursor.fetchone()[0]
-            if counts > 0:
-                self.logger.debug(f"Completed job: {job_id} : {counts}")
-            else:
-                self.logger.error(f"Error completing job: {job_id}")
-        except (Exception, psycopg2.Error) as error:
-            self.logger.error(f"Error completing job: {error}")
-        finally:
-            self._close_cursor(cursor)
-            self._close_connection(conn)
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                cursor = self._execute_sql_gracefully(
+                    complete_jobs_wrapper(
+                        DEFAULT_SCHEMA,
+                        work_item.name,
+                        [job_id],
+                        {"on_complete": "done", **(output_metadata or {})},
+                        force,
+                    ),
+                    return_cursor=True,
+                    connection=conn,
+                )
+                counts = cursor.fetchone()[0]
+                if counts > 0:
+                    self.logger.debug(f"Completed job: {job_id} : {counts}")
+                else:
+                    self.logger.error(f"Error completing job: {job_id}")
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error completing job: {error}")
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        await self._loop.run_in_executor(self._db_executor, db_call)
 
     async def fail(
         self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
     ):
         self.logger.info(f"Job failed : {job_id}")
-        cursor = None
-        conn = None
-        try:
-            conn = self._get_connection()
-            cursor = self._execute_sql_gracefully(
-                fail_jobs_by_id(
-                    DEFAULT_SCHEMA,
-                    work_item.name,
-                    [job_id],
-                    {"on_complete": "failed", **(output_metadata or {})},
-                ),
-                return_cursor=True,
-                connection=conn,
-            )
-            counts = cursor.fetchone()[0]
-            if counts > 0:
-                self.logger.info(f"Completed failed job: {job_id}")
-            else:
-                self.logger.error(f"Error completing failed job: {job_id}")
-        except (Exception, psycopg2.Error) as error:
-            self.logger.error(f"Error completing failed job: {error}")
-        finally:
-            self._close_cursor(cursor)
-            self._close_connection(conn)
+
+        def db_call():
+            cursor = None
+            conn = None
+            try:
+                conn = self._get_connection()
+                cursor = self._execute_sql_gracefully(
+                    fail_jobs_by_id(
+                        DEFAULT_SCHEMA,
+                        work_item.name,
+                        [job_id],
+                        {"on_complete": "failed", **(output_metadata or {})},
+                    ),
+                    return_cursor=True,
+                    connection=conn,
+                )
+                counts = cursor.fetchone()[0]
+                if counts > 0:
+                    self.logger.info(f"Completed failed job: {job_id}")
+                else:
+                    self.logger.error(f"Error completing failed job: {job_id}")
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error completing failed job: {error}")
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        await self._loop.run_in_executor(self._db_executor, db_call)
 
     async def _sync(self):
         """
@@ -1896,74 +2250,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         else:
             self.logger.debug(f"DAG {dag_id} not in active_dags ({reason})")
 
-    def _blocking_sync_dag_events(self):
-        self.logger.info("Starting BLOCKING-DAG synchronization")
-        import json
-        import select
-
-        conn = None
-        cur = None
-        try:
-            conn = self._get_connection()
-            conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
-            cur = conn.cursor()
-            cur.execute("LISTEN dag_state_changed;")
-            self._close_cursor(cur)
-
-            self.logger.info("Listening for DAG changes...")
-
-            while self.running:
-                self.logger.info(
-                    "Waiting for notifications on 'dag_state_changed' channel..."
-                )
-                if select.select([conn], [], [], 5) == ([], [], []):
-                    continue  # Timeout, no notifications
-                conn.poll()
-                while conn.notifies:
-                    notify = conn.notifies.pop(0)
-                    self.logger.info(
-                        f"Received NOTIFY: {notify.channel} - {notify.payload}"
-                    )
-
-                    try:
-                        payload_data = json.loads(notify.payload)
-                        operation = payload_data.get('operation')
-                        dag_id = payload_data.get('dag_id')
-
-                        if operation == 'DELETE':
-                            # Handle DAG deletion
-                            if dag_id in self.active_dags:
-                                del self.active_dags[dag_id]
-                                self.logger.warning(
-                                    f"Removed deleted DAG {dag_id} from active_dags"
-                                )
-                        elif operation == 'UPDATE':
-                            if True:
-                                continue  # Skip updates for now
-
-                            old_state = payload_data.get('old_state')
-                            new_state = payload_data.get('new_state')
-                            self.logger.info(
-                                f"DAG {dag_id} state changed: {old_state} -> {new_state}"
-                            )
-                            # Remove from active_dags if no longer active
-                            if new_state != 'active' and dag_id in self.active_dags:
-                                del self.active_dags[dag_id]
-                                self.logger.warning(
-                                    f"Removed DAG {dag_id} from active_dags (state: {new_state})"
-                                )
-
-                    except json.JSONDecodeError as e:
-                        self.logger.error(f"Error parsing notification payload: {e}")
-                    except Exception as e:
-                        self.logger.error(f"Error handling notification: {e}")
-
-        except Exception as e:
-            self.logger.error(f"Error in listener: {e}")
-        finally:
-            self._close_cursor(cur)
-            self._close_connection(conn)
-
     async def notify_event(self) -> bool:
         if self._debounced_notify:
             return False
@@ -1974,6 +2260,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             pass
         return True
 
+    def _resolve_dag_status_sync(self, dag_id: str) -> Optional[str]:
+        """Synchronous helper to resolve DAG status in the database."""
+        conn = None
+        cursor = None
+        try:
+            conn = self._get_connection()
+            resolve_query = (
+                f"SELECT {DEFAULT_SCHEMA}.resolve_dag_state('{dag_id}'::uuid);"
+            )
+            cursor = self._execute_sql_gracefully(
+                resolve_query, return_cursor=True, connection=conn
+            )
+            dag_state = result[0] if cursor and (result := cursor.fetchone()) else None
+            return dag_state
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
+
     async def resolve_dag_status(
         self,
         job_id: str,
@@ -1981,23 +2285,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         started_on: Optional[datetime] = None,
         completed_on: Optional[datetime] = None,
     ) -> bool:
+        """
+        Resolves the status of a directed acyclic graph (DAG). This method checks
+        if the DAG has completed execution by querying its current state and handles
+        the corresponding logic for the DAG lifecycle, including sending notification
+        about the completion or failure of the DAG.
+        """
         self.logger.debug(f"🔍 Resolving DAG status: {work_info.dag_id}")
 
-        cursor = None
-        conn = None
-
         try:
-            conn = self._get_connection()
-            resolve_query = f"SELECT {DEFAULT_SCHEMA}.resolve_dag_state('{work_info.dag_id}'::uuid);"
-            cursor = self._execute_sql_gracefully(
-                resolve_query, return_cursor=True, connection=conn
+            dag_state = await self._loop.run_in_executor(
+                self._db_executor, self._resolve_dag_status_sync, work_info.dag_id
             )
-            dag_state = result[0] if cursor and (result := cursor.fetchone()) else None
-            self._close_cursor(cursor)
-            self._close_connection(conn)
 
             self.logger.debug(f"Resolved DAG state: {dag_state}")
-
             if dag_state not in ("completed", "failed"):
                 self.logger.debug(f"DAG is still in progress: {work_info.dag_id}")
                 return False
@@ -2039,11 +2340,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             return True
         except (Exception, psycopg2.Error) as error:
             self.logger.error(f"Error resolving DAG status: {error}")
-            self._close_cursor(cursor)
-            self._close_connection(conn)
             raise error
 
-    def get_dag_by_id(self, dag_id: str) -> QueryPlan | None:
+    async def get_dag_by_id(self, dag_id: str) -> QueryPlan | None:
         """
         Retrieves a DAG by its ID, using in-memory cache if available.
         Falls back to loading from db if missing.
@@ -2052,11 +2351,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if dag_id in self.active_dags:
             return self.active_dags[dag_id]
 
-        try:
+        def db_call() -> QueryPlan | None:
             cursor = None
-            with self:
+            conn = None
+            try:
+                conn = self._get_connection()
                 cursor = self._execute_sql_gracefully(
-                    load_dag(DEFAULT_SCHEMA, dag_id), return_cursor=True
+                    load_dag(DEFAULT_SCHEMA, dag_id),
+                    return_cursor=True,
+                    connection=conn,
                 )
                 result = cursor.fetchone()
                 if result and result[0]:
@@ -2067,11 +2370,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 else:
                     self.logger.warning(f"DAG not found in DB: {dag_id}")
                     return None
-        except Exception as e:
-            self.logger.error(f"❌ Error loading DAG {dag_id}: {e}")
-            return None
-        finally:
-            self._close_cursor(cursor)
+            except Exception as e:
+                self.logger.error(f"❌ Error loading DAG {dag_id}: {e}")
+                return None
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
 
     def _is_noop_query_definition(self, node: QueryDefinition) -> bool:
         """
@@ -2144,6 +2450,21 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
 
 def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo]]:
+    """
+    Generates a query plan and associated work items by processing the provided
+    work information object. The method builds a directed acyclic graph (DAG) of
+    work items and computes hierarchical job levels for its tasks.
+
+    :param work_info: An object encapsulating details about the work items,
+                      including metadata and configuration needed to plan the
+                      execution.
+
+    :return: A tuple consisting of:
+             - A `QueryPlan` object representing the plan generated by the
+               query planner.
+             - A list of `WorkInfo` objects, each representing an individual
+               task/node in the execution plan's DAG.
+    """
     # from metadata or fallback to name They can be this same
     query_planner_name = work_info.data.get("metadata", {}).get(
         "planner", work_info.name
@@ -2195,6 +2516,3 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
         dag_nodes.append(wi)
 
     return plan, dag_nodes
-
-
-# https://ocw.mit.edu/courses/6-042j-mathematics-for-computer-science-spring-2015/mit6_042js15_session17.pdf

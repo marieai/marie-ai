@@ -11,6 +11,7 @@ from grpc.aio import AioRpcError
 from marie.constants import DEPLOYMENT_STATUS_PREFIX
 from marie.job.common import ActorHandle, JobInfo, JobInfoStorageClient, JobStatus
 from marie.job.event_publisher import EventPublisher
+from marie.job.job_callback_executor import job_callback_executor
 from marie.job.job_distributor import JobDistributor
 from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
@@ -139,60 +140,6 @@ class JobSupervisor:
                 self.logger.error(msg)
                 raise RuntimeError(msg)
 
-    async def pingX(self):
-        """Used to check the health of the executor/deployment."""
-        request_info = self.request_info
-        if request_info is None:
-            return True
-
-        request_id = request_info["request_id"]
-        address = request_info["address"]
-        deployment_name = request_info["deployment"]
-
-        self.logger.debug(
-            f"Sending ping to {address} for request {request_id} on deployment {deployment_name}"
-        )
-
-        async with get_grpc_channel(address=address, asyncio=True) as channel:
-            connection_stub = _ConnectionStubs(
-                address=address,
-                channel=channel,
-                deployment_name=deployment_name,
-                metrics=_NetworkingMetrics(
-                    sending_requests_time_metrics=None,
-                    received_response_bytes=None,
-                    send_requests_bytes_metrics=None,
-                ),
-                histograms=_NetworkingHistograms(),
-            )
-
-            doc = TextDoc(text=f"ping : {deployment_name}@_jina_dry_run_")
-            request = DataRequest()
-            request.document_array_cls = DocList[BaseDoc]()
-            request.header.exec_endpoint = "_jina_dry_run_"
-            request.header.target_executor = deployment_name
-            request.parameters = {
-                "job_id": self._job_id,
-            }
-            request.data.docs = DocList([doc])
-
-            try:
-                response, _ = await connection_stub.send_requests(
-                    requests=[request], metadata={}, compression=False
-                )
-                self.logger.debug(f"DryRun - Response: {response}")
-                if response.status.code == jina_pb2.StatusProto.SUCCESS:
-                    return True
-                else:
-                    raise RuntimeError(
-                        f"Endpoint '_jina_dry_run_' failed with status code {response.status.code}"
-                    )
-            except Exception as e:
-                self.logger.error(f"Error during ping to {self.request_info} : {e}")
-                raise RuntimeError(
-                    f"Error during ping to {str(self.request_info)} : {e}"
-                )
-
     async def run(
         self,
         # Signal actor used in testing to capture PENDING -> RUNNING cases
@@ -279,7 +226,10 @@ class JobSupervisor:
             task.add_done_callback(lambda t: self._active_tasks.discard(t))
         self.logger.info(f"Job submitted in the background : {self._job_id}")
 
-    def send_callback(
+    def send_callback(self, requests, request_info):
+        job_callback_executor.submit(self._send_callback_sync, requests, request_info)
+
+    def _send_callback_sync(
         self, requests: Union[List[DataRequest] | DataRequest], request_info: Dict
     ):
         """
@@ -367,6 +317,9 @@ class JobSupervisor:
             # or while the job was marked from the EXECUTOR worker node as "STOPPED", "SUCCEEDED", "FAILED".
 
             current_status = await self._job_info_client.get_status(self._job_id)
+            if current_status is None:
+                self.logger.warning(f"Job {self._job_id} status not found.")
+                return
 
             if response.status.code == jina_pb2.StatusProto.SUCCESS:
                 if current_status.is_terminal():
@@ -429,210 +382,4 @@ class JobSupervisor:
             )
 
             # Raising here ensures the task failure is visible to debuggers, but you can suppress this in production.
-            raise
-
-    async def _submit_job_in_backgroundV1(self):
-        try:
-            start_time = time.monotonic()
-            curr_info: JobInfo = await self._submission_queue.get()
-            self.logger.info(f"Submitting job in the background : {self._job_id}")
-            response = await self._job_distributor.send(
-                submission_id=self._job_id,
-                job_info=curr_info,
-                send_callback=self.send_callback,
-            )
-            print(f'response : {response}')
-            self.logger.info(f"Job submitted successfully : {self._job_id}")
-            mid_time = time.monotonic()
-            print(f"Submission took {mid_time - start_time:.2f} seconds")
-
-            # printing the whole response will trigger a bug in rich.print with stackoverflow
-            # format the response
-            if True:
-                print("Response type: ", type(response))
-                print("Response data: ", response.data)
-                print("Response data: ", response.parameters)
-                print("Response docs: ", response.data.docs)
-                print("Response status: ", response.status)
-
-            # This monitoring strategy allows us to have Floating Executors that can be used to run jobs outside of the main
-            # deployment. This is useful for running jobs that are not part of the main deployment, but are still part of the
-            # same deployment workflow.
-            # Example would be calling a custom API that we don't control.
-
-            # If the job is already in a terminal state, then we don't need to update it. This can happen if the
-            # job was cancelled while the job was being submitted.
-            # or while the job was marked from the EXECUTOR worker node as "STOPPED", "SUCCEEDED", "FAILED".
-
-            job_status = await self._job_info_client.get_status(self._job_id)
-            if response.status.code == jina_pb2.StatusProto.SUCCESS:
-                if job_status.is_terminal():
-                    self.logger.debug(
-                        f"Job {self._job_id} is already in terminal state {job_status}."
-                    )
-                    # triggers the event to update the WorkStatus
-                    await self._event_publisher.publish(
-                        job_status,
-                        {
-                            "job_id": self._job_id,
-                            "status": job_status,
-                            "message": f"Job {self._job_id} is already in terminal state {job_status}.",
-                            "jobinfo_replace_kwargs": False,
-                        },
-                    )
-                else:
-                    await self._job_info_client.put_status(
-                        self._job_id, JobStatus.SUCCEEDED
-                    )
-            else:
-                # FIXME : Need to store the exception in the job info
-                e: jina_pb2.StatusProto.ExceptionProto = response.status.exception
-                if job_status.is_terminal():
-                    self.logger.warning(
-                        f"Job {self._job_id} is already in terminal state {job_status}."
-                    )
-                    # triggers the event to update the WorkStatus
-                    await self._event_publisher.publish(
-                        job_status,
-                        {
-                            "job_id": self._job_id,
-                            "status": job_status,
-                            "message": f"Job {self._job_id} is already in terminal state {job_status}.",
-                            "jobinfo_replace_kwargs": False,
-                        },
-                    )
-                else:
-                    name = str(e.name)
-                    # stack = to_json(e.stacks)
-                    await self._job_info_client.put_status(
-                        self._job_id, JobStatus.FAILED, message=f"{name}"
-                    )
-
-            end_time = time.monotonic()
-        except Exception as e:
-            import json
-
-            error_message = (
-                json.dumps({"error": str(e)})
-                if isinstance(e, Exception)
-                else json.dumps({"error": str(e.__class__)})
-            )
-
-            #  FIXME  : Need to store the exception in the message similar to the error_response in marie_gateway
-            from marie.excepts import InternalNetworkError
-
-            name = 'Internal server error - job supervisor'
-            if isinstance(e, InternalNetworkError):
-                name = "Communication error with deployment"
-
-            await self._job_info_client.put_status(
-                self._job_id, JobStatus.FAILED, message=f"{name}"
-            )
-
-            # we should not rethrow the exception here as it will not be caught by the caller
-            # good during debugging but not in production
-            raise e
-
-    async def _submit_job_in_backgroundXXXX(self, curr_info: JobInfo):
-        try:
-            start_time = time.monotonic()
-            self.logger.info(f"Submitting job in the background : {self._job_id}")
-
-            last_response = None
-            stream_error = None
-            async for resp, err in self._job_distributor.send_stream(
-                submission_id=self._job_id,
-                job_info=curr_info,
-                send_callback=self.send_callback,
-            ):
-                now = time.monotonic()
-                self.logger.debug(
-                    f"[{self._job_id}] chunk after {now - start_time:.3f}s: resp={resp}, err={err}"
-                )
-
-                if err:
-                    self.logger.error(f"[{self._job_id}] executor error: {err}")
-                    stream_error = err
-                    # stop on first executor error
-                    break
-
-                last_response = resp
-
-            mid_time = time.monotonic()
-            print(f"Streaming took {mid_time - start_time:.2f} seconds")
-
-            # Determine final job outcome
-            # If we never got a response, treat as failure
-            if stream_error or last_response is None:
-                # mark FAILED
-                await self._job_info_client.put_status(
-                    self._job_id,
-                    JobStatus.FAILED,
-                    message=str(stream_error or "No response received from executors"),
-                )
-                return
-
-            # Otherwise inspect the final DataRequest for overall success
-            final_status = last_response.status
-            job_status = await self._job_info_client.get_status(self._job_id)
-
-            if final_status.code == jina_pb2.StatusProto.SUCCESS:
-                if job_status.is_terminal():
-                    self.logger.debug(
-                        f"Job {self._job_id} already terminal: {job_status}"
-                    )
-                    await self._event_publisher.publish(
-                        job_status,
-                        {
-                            "job_id": self._job_id,
-                            "status": job_status,
-                            "message": f"Job {self._job_id} already in terminal state {job_status}.",
-                            "jobinfo_replace_kwargs": False,
-                        },
-                    )
-                else:
-                    await self._job_info_client.put_status(
-                        self._job_id, JobStatus.SUCCEEDED
-                    )
-            else:
-                # final_status is ERROR
-                exc = final_status.exception
-                err_name = str(exc.name)
-                if job_status.is_terminal():
-                    self.logger.warning(
-                        f"Job {self._job_id} already terminal: {job_status}"
-                    )
-                    await self._event_publisher.publish(
-                        job_status,
-                        {
-                            "job_id": self._job_id,
-                            "status": job_status,
-                            "message": f"Job {self._job_id} already in terminal state {job_status}.",
-                            "jobinfo_replace_kwargs": False,
-                        },
-                    )
-                else:
-                    await self._job_info_client.put_status(
-                        self._job_id, JobStatus.FAILED, message=err_name
-                    )
-
-            end_time = time.monotonic()
-            print(f"Full background process took {end_time - mid_time:.2f} seconds")
-
-        except Exception as e:
-            import json
-
-            msg = json.dumps({"error": str(e)})
-            from marie.excepts import InternalNetworkError
-
-            name = (
-                "Communication error with deployment"
-                if isinstance(e, InternalNetworkError)
-                else "Internal server error - job supervisor"
-            )
-
-            await self._job_info_client.put_status(
-                self._job_id, JobStatus.FAILED, message=name
-            )
-            # rethrow if you want to see it in logs; otherwise you can drop this
             raise

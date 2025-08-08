@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 from typing import Callable, Dict, List, TypeVar, Union
 
@@ -6,47 +7,60 @@ T = TypeVar("T")
 
 class EventPublisher:
     """
-    Publisher
+    EventPublisher with async event queue (global ordering)
 
-    This class represents a publisher that allows subscribers to subscribe to specific event types and receive messages when those events are published.
+    - Events are published into a FIFO queue.
+    - A single dispatcher consumes the queue in strict order.
+    - Each event is delivered to all subscribers before the next event is processed.
+    - Guarantees global ordering across *all* events and subscribers.
 
     Example Usage:
-        publisher = Publisher()
+        async def async_subscriber(event_type, message):
+            await asyncio.sleep(1)
+            print("Async subscriber:", event_type, message)
 
-        def subscriber1(event_type, message):
-            print("Subscriber 1:", event_type, message)
+        def sync_subscriber(event_type, message):
+            print("Sync subscriber:", event_type, message)
 
-        def subscriber2(event_type, message):
-            print("Subscriber 2:", event_type, message)
+        async def main():
+            publisher = EventPublisher()
+            publisher.subscribe("event_type1", async_subscriber)
+            publisher.subscribe("event_type1", sync_subscriber)
 
-        publisher.subscribe("event_type1", subscriber1)
-        publisher.subscribe("event_type2", subscriber2)
+            publisher.start()
 
-        publisher.publish("event_type1", "Message 1")  # Output: Subscriber 1: event_type1 Message 1
-        publisher.publish("event_type2", "Message 2")  # Output: Subscriber 2: event_type2 Message 2
+            await publisher.publish("event_type1", "Message 1")
+            await publisher.publish("event_type1", "Message 2")
 
-        publisher.unsubscribe("event_type1", subscriber1)
-        publisher.publish("event_type1", "Message 3")  # No output
+            await asyncio.sleep(3)  # allow events to process
+            await publisher.stop()
+
+        asyncio.run(main())
 
     Notes:
-        - The publish method is asynchronous, allowing for non-blocking message publishing in asynchronous contexts.
-        - Subscribers can be any callable function that accepts two arguments: event_type and message. This allows for flexible handling of messages by subscribers.
-        - Subscribers can subscribe to multiple event types by calling the subscribe method multiple times with different event types.
+        - Global FIFO ordering is guaranteed (no parallel dispatch).
+        - Subscribers may be sync or async functions.
+        - Sync subscribers run in a background thread pool but are awaited in order.
+        - A slow subscriber delays all subsequent events.
+        - Start the dispatcher via `start()` and stop it via `stop()`.
 
     """
 
     def __init__(self):
         self._subscribers: Dict[str, List[Callable[[str, T], None]]] = {}
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._dispatcher_task: asyncio.Task | None = None
+        self._stopped = asyncio.Event()
+        self.start()
 
     def subscribe(
         self, event_type: Union[str, List[str]], subscriber: Callable[[str, T], None]
     ):
         """
-        Subscribes a subscriber function to a specific event type. The subscriber should be a callable function that accepts a single string argument representing the message.
+        Subscribe a callable to one or more event types.
 
-        :param event_type: A string representing the type of event to subscribe to.
-        :param subscriber: A callable function that takes a string parameter and does not return anything.
-        :return: None
+        :param event_type: A string or list of strings representing event types.
+        :param subscriber: A callable (sync or async) that accepts (event_type, message).
         """
 
         if isinstance(event_type, str):
@@ -56,14 +70,7 @@ class EventPublisher:
 
     def unsubscribe(self, event_type: str, subscriber: Callable[[str, T], None]):
         """
-
-        Unsubscribe method removes a subscriber from the event_type's subscriber list.
-
-        :param event_type: The type of event to unsubscribe from.
-        :type event_type: str
-        :param subscriber: The subscriber function to be removed.
-        :type subscriber: Callable[[str], None]
-        :return: None
+        Unsubscribe a subscriber from a specific event type.
         """
         if event_type in self._subscribers:
             self._subscribers[event_type].remove(subscriber)
@@ -72,14 +79,70 @@ class EventPublisher:
 
     async def publish(self, event_type: str, message: T):
         """
-        Publishes a message associated with a specific event type to all subscribers of that event type.
-        :param event_type: The type of event to be published.
-        :param message: The message associated with the event.
-        :return: None
+        Enqueue a message for dispatching (non-blocking).
+
+        :param event_type: The type of event being published.
+        :param message: The message payload to deliver.
         """
-        if event_type in self._subscribers:
-            for subscriber in self._subscribers[event_type]:
-                if inspect.iscoroutinefunction(subscriber):
-                    await subscriber(event_type, message)
-                else:
-                    subscriber(event_type, message)
+        # print('Publishing event type : ', event_type, self._queue.qsize())
+        await self._queue.put((event_type, message))
+
+    async def _dispatcher(self):
+        """
+        Dispatcher consumes events in strict FIFO order
+        but processes subscribers concurrently to avoid blocking.
+        """
+        while not self._stopped.is_set():
+            try:
+                event_type, message = await self._queue.get()
+                # print('Received event type : ', event_type, self._queue.qsize())
+                if event_type in self._subscribers:
+                    # Process all subscribers for this event concurrently
+                    subscriber_tasks = []
+                    for subscriber in list(self._subscribers[event_type]):
+                        try:
+                            if inspect.iscoroutinefunction(subscriber):
+                                task = asyncio.create_task(
+                                    subscriber(event_type, message)
+                                )
+                            else:
+                                # Sync function: run in thread
+                                task = asyncio.create_task(
+                                    asyncio.get_running_loop().run_in_executor(
+                                        None, subscriber, event_type, message
+                                    )
+                                )
+                            subscriber_tasks.append(task)
+                        except Exception as e:
+                            print(f"Subscriber creation error: {e}")
+
+                    # Wait for all subscribers to complete before processing next event
+                    if subscriber_tasks:
+                        try:
+                            await asyncio.gather(
+                                *subscriber_tasks, return_exceptions=True
+                            )
+                        except Exception as e:
+                            print(f"Subscriber execution error: {e}")
+            except asyncio.CancelledError:
+                break
+
+    def start(self):
+        """
+        Start the dispatcher loop (must be called inside an event loop).
+        """
+        if self._dispatcher_task is None:
+            self._dispatcher_task = asyncio.create_task(self._dispatcher())
+
+    async def stop(self):
+        """
+        Stop the dispatcher gracefully.
+        """
+        self._stopped.set()
+        if self._dispatcher_task:
+            self._dispatcher_task.cancel()
+            try:
+                await self._dispatcher_task
+            except asyncio.CancelledError:
+                pass
+            self._dispatcher_task = None

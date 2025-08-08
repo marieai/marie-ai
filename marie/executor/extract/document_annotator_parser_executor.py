@@ -8,7 +8,7 @@ from docarray import DocList
 from marie import requests
 from marie.api.docs import AssetKeyDoc
 from marie.executor.extract import DocumentAnnotatorExecutor
-from marie.executor.extract.util import prepare_asset_directory
+from marie.executor.extract.util import layout_config, prepare_asset_directory
 from marie.extract.results.base import initialize_parsers_from_config
 from marie.extract.results.registry import component_registry
 from marie.extract.results.result_parser import parse_results
@@ -68,7 +68,7 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
 
         if False:
             print('===================== SLEEPING =====================')
-            time.sleep(2)
+            time.sleep(0)
             return
 
         self._setup_request(docs, parameters, *args, **kwargs)
@@ -88,7 +88,7 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
         self.logger.info(f"Extracted op_key: {op_key}")
         self.logger.info(f"Extracted op_layout: {op_layout}")
 
-        conf = self.layout_config(self.root_config_dir, op_layout)
+        conf = layout_config(self.root_config_dir, op_layout)
 
         # load documents from specified document asset key
         doc: AssetKeyDoc = docs[0]

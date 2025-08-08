@@ -1,5 +1,5 @@
 import abc
-import asyncio
+import threading
 from enum import Enum
 from typing import Optional, Sequence, Union
 
@@ -51,27 +51,25 @@ class LoadBalancer(abc.ABC):
         self.active_counter = {}
         self.debug_loging_enabled = False
         self.tracing_interceptors = tracing_interceptors or []
+        self._lock = threading.Lock()  # sync loc
         self._logger.info(f"LoadBalancer: for {self._deployment_name} initialized.")
-        self._lock = asyncio.Lock()
 
     async def get_next_connection(self, num_retries=3):
         """
         Returns the next connection to be used based on the load balancing algorithm.
         :param num_retries:  Number of times to retry if the connection is not available.
         """
+        connection = await self._get_next_connection(num_retries=num_retries)
 
-        async with self._lock:
-            connection = await self._get_next_connection(num_retries=num_retries)
+        if connection is None:
+            raise EstablishGrpcConnectionError(
+                f"Error while acquiring connection {self._deployment_name}. Connection cannot be used."
+            )
 
-            if connection is None:
-                raise EstablishGrpcConnectionError(
-                    f"Error while acquiring connection {self._deployment_name}. Connection cannot be used."
-                )
+        for interceptor in self.tracing_interceptors:
+            interceptor.on_connection_acquired(connection)
 
-            for interceptor in self.tracing_interceptors:
-                interceptor.on_connection_acquired(connection)
-
-            return connection
+        return connection
 
     @abc.abstractmethod
     async def _get_next_connection(self, num_retries=3):
@@ -86,10 +84,11 @@ class LoadBalancer(abc.ABC):
         Rebalance the connections.
         :param connections: List of connections to be used for load balancing.
         """
-        self._connections = connections
-        for connection in self._connections:
-            if connection.address not in self.active_counter:
-                self.active_counter[connection.address] = 0
+        with self._lock:
+            self._connections = list(connections)
+            for connection in self._connections:
+                if connection.address not in self.active_counter:
+                    self.active_counter[connection.address] = 0
 
         if self.debug_loging_enabled:
             self._logger.debug(
@@ -141,33 +140,37 @@ class LoadBalancer(abc.ABC):
         Increment connection with address as in use
         :param address: Address of the connection
         """
-        self._logger.debug(f"Incrementing usage for address : {address}")
-        self.active_counter[address] = self.active_counter.get(address, 0) + 1
-        self._logger.debug(f"incr_usage: self.active_counter: {self.active_counter}")
-
-        return self.active_counter[address]
+        with self._lock:
+            self._logger.debug(f"Incrementing usage for address : {address}")
+            self.active_counter[address] = self.active_counter.get(address, 0) + 1
+            self._logger.debug(f"incr_usage: {self.active_counter}")
+            return self.active_counter[address]
 
     def decr_usage(self, address: str) -> int:
         """
         Decrement connection with address as not in use
         :param address: Address of the connection
         """
-        self._logger.debug(f"Decrementing usage for address: {address}")
-        self.active_counter[address] = max(0, self.active_counter.get(address, 0) - 1)
-
-        self._logger.debug(f"decr_usage: self.active_counter: {self.active_counter}")
-        return self.active_counter[address]
+        with self._lock:
+            self._logger.debug(f"Decrementing usage for address: {address}")
+            self.active_counter[address] = max(
+                0, self.active_counter.get(address, 0) - 1
+            )
+            self._logger.debug(f"decr_usage: {self.active_counter}")
+            return self.active_counter[address]
 
     def get_active_count(self, address: str) -> int:
         """Get the number of active requests for a given address"""
-        return self.active_counter.get(address, 0)
+        with self._lock:
+            return self.active_counter.get(address, 0)
 
     def get_active_counter(self) -> dict:
         """
         Get the active counter for all the connections
         :return:
         """
-        return self.active_counter
+        with self._lock:
+            return dict(self.active_counter)
 
     def connection_count(self) -> int:
         """
