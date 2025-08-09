@@ -9,6 +9,7 @@ from omegaconf import OmegaConf
 
 from marie.api.docs import AssetKeyDoc
 from marie.constants import __config_dir__
+from marie.excepts import RuntimeTerminated
 from marie.executor.extract.util import layout_config, prepare_asset_directory
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
@@ -228,6 +229,18 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             }
             return response
         except BaseException as error:
+            # If GPU failure is detected, escalate to RuntimeTerminated so the worker can restart
+            try:
+                if hasattr(self, "_is_gpu_failure") and self._is_gpu_failure(error):
+                    self._raise_runtime_terminated(
+                        "GPU failure during annotation", error
+                    )
+            except RuntimeTerminated:
+                # Re-raise to let the Runtime handle termination
+                raise
+            except Exception:
+                pass
+
             self.logger.error(f"Extract error : {error}", exc_info=True)
             msg = "inference exception"
             if self.show_error:

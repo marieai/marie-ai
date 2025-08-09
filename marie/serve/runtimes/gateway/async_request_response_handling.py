@@ -201,11 +201,11 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
                 responding_tasks.append(future)
 
             return (
-                asyncio.ensure_future(
+                asyncio.create_task(
                     _process_results_at_end_gateway(responding_tasks, request_graph)
                 ),
                 (
-                    asyncio.ensure_future(asyncio.gather(*floating_tasks))
+                    asyncio.create_task(asyncio.gather(*floating_tasks))
                     if len(floating_tasks) > 0
                     else None
                 ),

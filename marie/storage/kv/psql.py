@@ -22,7 +22,6 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         self.logger = MarieLogger(self.__class__.__name__)
         self.running = False
         self.max_workers = 1
-        self._loop = get_or_reuse_loop()
         self._db_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="kv-db-executor"
         )
@@ -121,7 +120,8 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
                 self._close_cursor(cursor)
                 self._close_connection(conn)
 
-        return await self._loop.run_in_executor(self._db_executor, _get_blocking)
+        loop = get_or_reuse_loop()
+        return await loop.run_in_executor(self._db_executor, _get_blocking)
 
     async def internal_kv_multi_get(
         self,
@@ -178,7 +178,8 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
                 self._close_cursor(cursor)
                 self._close_connection(conn)
 
-        return await self._loop.run_in_executor(self._db_executor, _put_blocking)
+        loop = get_or_reuse_loop()
+        return await loop.run_in_executor(self._db_executor, _put_blocking)
 
     async def internal_kv_del(
         self,
@@ -211,8 +212,8 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
                     self._close_cursor(cursor)
                     self._close_connection(conn)
                 return 0
-
-            return await self._loop.run_in_executor(self._db_executor, _del_blocking)
+            loop = get_or_reuse_loop()
+            return await loop.run_in_executor(self._db_executor, _del_blocking)
 
     async def internal_kv_exists(
         self, key: bytes, namespace: Optional[bytes], timeout: Optional[float] = None
@@ -245,7 +246,8 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
                 self._close_connection(conn)
             return result
 
-        return await self._loop.run_in_executor(self._db_executor, _keys_blocking)
+        loop = get_or_reuse_loop()
+        return await loop.run_in_executor(self._db_executor, _keys_blocking)
 
     def internal_kv_reset(self) -> None:
         self.logger.info(f"internal_kv_reset : {self.table}")

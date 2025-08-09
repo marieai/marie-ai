@@ -176,6 +176,7 @@ class MarieLogger:
         self.critical = self.logger.critical
         self.error = self.logger.error
         self.info = self.logger.info
+        self.exception = self.logger.exception
         self._is_closed = False
         self.debug_enabled = self.logger.isEnabledFor(logging.DEBUG)
 

@@ -5,6 +5,7 @@ from docarray import DocList
 from docarray.documents import TextDoc
 
 from marie import Executor, requests
+from marie.excepts import RuntimeTerminated
 from marie.logging_core.logger import MarieLogger
 from marie.serve.executors import __dry_run_endpoint__
 from marie.utils.server_runtime import setup_storage, setup_toast_events
@@ -24,6 +25,19 @@ class MarieExecutor(Executor):
     default endpoints for execution and dry runs. It supports toast notifications,
     storage configuration and GPU monitoring capabilities.
     """
+
+    GPU_ERROR_KEYWORDS = (
+        "CUDA error",
+        "CUDA out of memory",
+        "device-side assert",
+        "illegal memory access",
+        "CUBLAS_STATUS_ALLOC_FAILED",
+        "CUBLAS_STATUS_EXECUTION_FAILED",
+        "cudnn",
+        "NVML",
+        "device lost",
+        "HIP error",
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -45,6 +59,30 @@ class MarieExecutor(Executor):
         """
         setup_toast_events(config.get("toast", {}))
         setup_storage(config.get("storage", {}))
+
+    @staticmethod
+    def _is_gpu_failure(exc: BaseException) -> bool:
+        try:
+            msg = str(exc)
+        except Exception:
+            msg = exc.__class__.__name__
+        msg_lower = msg.lower()
+        for kw in MarieExecutor.GPU_ERROR_KEYWORDS:
+            if kw.lower() in msg_lower:
+                return True
+        # torch-specific classes without relying on import
+        names = {exc.__class__.__name__, getattr(exc.__class__, "__qualname__", "")}
+        if any(n in {"CudaError", "CUDARuntimeError"} for n in names):
+            return True
+        return False
+
+    def _raise_runtime_terminated(self, reason: str, exc: BaseException | None = None):
+        # Central place to log and raise RuntimeTerminated so Runtimes can exit & restart the worker
+        if exc:
+            self.logger.error(f"GPU failure detected: {reason} | {exc}", exc_info=True)
+        else:
+            self.logger.error(f"GPU failure detected: {reason}")
+        raise RuntimeTerminated
 
     # @requests(on=__default_endpoint__)
     async def default_endpoint(
@@ -113,6 +151,15 @@ class MarieExecutor(Executor):
                 self.logger.error(f"Error in DryRun: {error}")
                 has_error = True
                 message = str(error)
+                # if GPU related error, escalate to RuntimeTerminated so the worker is restarted
+                try:
+                    if self._is_gpu_failure(error):
+                        self._raise_runtime_terminated(
+                            "dry-run GPU probe failure", error
+                        )
+                except Exception:
+                    pass
 
         if has_error:
-            raise RuntimeError(f"Error in DryRun : {message}")
+            # Fallback: terminate runtime on any dry-run error to be conservative in deployment
+            self._raise_runtime_terminated(f"Error in DryRun : {message}")
