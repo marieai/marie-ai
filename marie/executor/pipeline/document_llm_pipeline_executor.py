@@ -3,7 +3,12 @@ from typing import List, Optional
 from docarray import DocList
 
 from marie import requests, safely_encoded
-from marie.api import AssetKeyDoc, value_from_payload_or_args
+from marie.api import (
+    AssetKeyDoc,
+    get_frames_from_docs,
+    parse_parameters,
+    value_from_payload_or_args,
+)
 from marie.boxes import PSMode
 from marie.executor.pipeline.document_pipeline_executor import (
     PipelineExecutor,
@@ -16,6 +21,7 @@ from marie.ocr import CoordinateFormat
 from marie.pipe.llm_pipeline import LLMPipeline
 
 
+# TODO: refactor and aggregate into functional packages
 class DocumentLLMPipelineExecutor(PipelineExecutor):
     """Executor for pipeline document proccessing"""
 
@@ -47,9 +53,7 @@ class DocumentLLMPipelineExecutor(PipelineExecutor):
         return self.run_llm_pipeline(docs, parameters)
 
     def run_llm_pipeline(self, docs: DocList[AssetKeyDoc], parameters: dict):
-        job_id, ref_id, ref_type, queue_id, payload = self.extract_base_parameters(
-            parameters
-        )
+        job_id, ref_id, ref_type, queue_id, payload = parse_parameters(parameters)
 
         # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
         pms_mode = PSMode.from_value(
@@ -83,7 +87,7 @@ class DocumentLLMPipelineExecutor(PipelineExecutor):
                 runtime_conf = feature
         self.logger.debug(f"Resolved Runtime Config: {runtime_conf}")
 
-        pages = payload.get("pages", None)
+        pages = runtime_conf.get("pages", None)
         if isinstance(pages, str):
             pages = sorted({int(n) for n in pages.split(",")})
         elif isinstance(pages, list):
@@ -92,7 +96,7 @@ class DocumentLLMPipelineExecutor(PipelineExecutor):
             self.logger.warning(f"Unexpected pages attr {pages}, ignoring")
             pages = None
 
-        frames = self.get_frames_from_docs(docs, pages)
+        frames = get_frames_from_docs(docs, pages)
         root_asset_dir = create_working_dir(frames)
         try:
             metadata = self.pipeline.execute_frames_pipeline(

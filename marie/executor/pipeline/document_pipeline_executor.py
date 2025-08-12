@@ -1,28 +1,23 @@
 import os
-import shutil
 import warnings
-from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 
 import torch
 from docarray import DocList
 
 from marie import requests
+from marie.api import get_frames_from_docs, parse_parameters
 from marie.api.docs import AssetKeyDoc
-from marie.common.file_io import get_cache_dir
+from marie.executor.extract.util import create_working_dir
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
 from marie.logging_core.logger import MarieLogger
-from marie.logging_core.mdc import MDC
 from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import initialize_device_settings, setup_torch_optimizations
 from marie.pipe.components import s3_asset_path, store_assets, update_existing_meta
 from marie.storage import StorageManager
-from marie.utils.docs import docs_from_asset, frames_from_docs
-from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.network import get_ip_address
-from marie.utils.utils import ensure_exists
 
 
 class PipelineExecutor(MarieExecutor, StorageMixin):
@@ -114,68 +109,6 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
         connected = StorageManager.ensure_connection("s3://", silence_exceptions=False)
         logger.warning(f"S3 connection status : {connected}")
 
-    def extract_base_parameters(
-        self, parameters: dict
-    ) -> tuple[str, str, str, str, dict]:
-        """
-        Extract common parameters and payload for pipeline execution.
-
-        :param parameters: Dictionary of request parameters.
-        :returns: Tuple containing:
-            - job_id (str): Unique identifier for the job.
-            - ref_id (str): Reference identifier for the document.
-            - ref_type (str): Type/category of the document (defaults to "not_defined").
-            - queue_id (str): Queue identifier (defaults to "0000-0000-0000-0000").
-            - payload (dict): The extracted payload dictionary.
-        :rtype: tuple[str, str, str, str, dict]
-        :raises ValueError: If `job_id`, `ref_id`, or `payload` is missing.
-        """
-        if parameters is None or "job_id" not in parameters:
-            self.logger.error(f"Job ID is not present in parameters")
-            raise ValueError("Job ID is not present in parameters")
-
-        job_id = parameters.get("job_id", "0000-0000-0000-0000")
-        MDC.put("request_id", job_id)
-
-        self.logger.info("Parsing Parameters")
-        for key, value in parameters.items():
-            self.logger.info("The value of {} is {}".format(key, value))
-
-        ref_id = parameters.get("ref_id")
-        if ref_id is None:
-            raise ValueError("ref_id is not present in parameters")
-        ref_type = parameters.get("ref_type", "not_defined")
-        queue_id: str = parameters.get("queue_id", "0000-0000-0000-0000")
-
-        payload = parameters.get("payload")
-        if payload is None:
-            self.logger.error("Empty Payload")
-            raise ValueError("Empty Payload")
-
-        return job_id, ref_id, ref_type, queue_id, payload
-
-    def get_frames_from_docs(self, docs: DocList[AssetKeyDoc], pages: List[int] = None):
-        """
-        Load and preprocess frames from a single document asset.
-
-        :param docs: DocList containing exactly one AssetKeyDoc.
-        :param pages: A list of pages. (None = no limit)
-        :raises ValueError: If no or multiple documents are provided.
-        :return: List of image frames (e.g., numpy arrays), and the local asset path
-        """
-        if len(docs) == 0:
-            raise ValueError("Expected single document. No documents found")
-        if len(docs) > 1:
-            raise ValueError("Expected single document. Multiple documents found.")
-
-        doc: AssetKeyDoc = docs[0]
-        self.logger.debug(f"Document asset key: {doc.asset_key}")
-        pages = doc.pages if pages is None else pages
-        docs = docs_from_asset(doc.asset_key, pages)
-        frames = frames_from_docs(docs)
-
-        return frames
-
     @requests(on="/merge/metadata")
     def merge_metadata(
         self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
@@ -188,8 +121,8 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
         :returns: Dictionary with merge status, runtime_info, and stored assets.
         :raises ConnectionError: If unable to fetch existing assets.
         """
-        job_id, ref_id, ref_type, _, payload = self.extract_base_parameters(parameters)
-        frames = self.get_frames_from_docs(docs)
+        job_id, ref_id, ref_type, _, payload = parse_parameters(parameters)
+        frames = get_frames_from_docs(docs)
         root_asset_dir = create_working_dir(frames)
 
         features = payload.get("features", [])
@@ -289,19 +222,3 @@ def fetch_assets(
             except Exception as e:
                 logger.error(f"Error fetching assets from {dir_to_fetch} : {e}")
     return s3_root_path
-
-
-def create_working_dir(frames: List, backup: bool = False) -> str:
-    frame_checksum = hash_frames_fast(frames=frames)
-    generators_dir = os.path.join(get_cache_dir(), "generators")
-    os.makedirs(generators_dir, exist_ok=True)
-
-    # create backup name by appending a timestamp
-    if backup:
-        if os.path.exists(os.path.join(generators_dir, frame_checksum)):
-            ts = datetime.now().strftime("%Y%m%d%H%M%S")
-            shutil.move(
-                os.path.join(generators_dir, frame_checksum),
-                os.path.join(generators_dir, f"{frame_checksum}-{ts}"),
-            )
-    return ensure_exists(os.path.join(generators_dir, frame_checksum))
