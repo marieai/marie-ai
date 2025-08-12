@@ -1,5 +1,4 @@
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -8,7 +7,6 @@ import psutil
 from flask import jsonify, url_for
 from flask_restful import Resource, reqparse, request
 
-from marie.api import extract_payload
 from marie.logging_core.logger import MarieLogger
 from marie.utils.network import get_ip_address
 

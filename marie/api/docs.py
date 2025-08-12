@@ -1,4 +1,3 @@
-from enum import Enum, auto
 from typing import Any, List, Optional
 
 from docarray import BaseDoc

@@ -10,11 +10,7 @@ from fastapi import HTTPException, Request
 
 from marie import Client, Flow
 from marie._core.utils import run_background_task
-from marie.api import (
-    extract_payload_to_uri,
-    parse_payload_to_docs,
-    value_from_payload_or_args,
-)
+from marie.api import parse_payload_to_docs, value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc
 from marie.job.job_manager import generate_job_id
 from marie.logging_core.mdc import MDC
