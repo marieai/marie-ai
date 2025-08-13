@@ -66,7 +66,7 @@ class JobSupervisor:
             # No target configured, assume healthy
             return True
         # FIXME : this is a hack to skip the health check due to overhead and killing GRPC
-        if True:
+        if False:
             self.logger.debug('Skipping health-check ping')
             return True
 
