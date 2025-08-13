@@ -1,4 +1,5 @@
 import abc
+import asyncio
 from typing import Any, AsyncIterator, Awaitable, Callable, List, Optional, Tuple, Union
 
 from marie.excepts import ExecutorError
@@ -49,6 +50,25 @@ class JobDistributor(abc.ABC):
         :param submission_id: The submission id of the job.
         :param job_info: The job info to publish.
         :param send_callback:  The callback after the job is submitted over the network.
+        :return:
+        """
+        ...
+
+    @abc.abstractmethod
+    async def send_nowait(
+        self,
+        submission_id: str,
+        job_info: JobInfo,
+        send_callback: SendCb,
+        *,
+        wait_for_ack: float = 0.0,  # seconds to optionally wait for early ACK
+    ) -> asyncio.Task:  # Task that resolves to the final DataRequest
+        """
+        Publish a job to the underlying executor without waiting for the result.
+        :param submission_id:
+        :param job_info:
+        :param send_callback:
+        :param wait_for_ack:
         :return:
         """
         ...

@@ -6,6 +6,7 @@ import psycopg2.extras
 from psycopg2 import pool  # noqa: F401
 
 from marie.excepts import BadConfigSource
+import traceback
 
 
 class PostgresqlMixin:
@@ -107,7 +108,9 @@ class PostgresqlMixin:
                 self.logger.warning(
                     f"Returning connection to pool in non-idle state (status: {tx_status}). Forcing rollback."
                 )
-                raise
+                # Log the stack trace to identify the calling code
+                stack_trace = "".join(traceback.format_stack())
+                self.logger.warning(f"Call stack leading to uncommitted transaction:\n{stack_trace}")
                 connection.rollback()
 
             # Return the (now clean) connection to the pool.

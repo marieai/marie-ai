@@ -7,38 +7,30 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     RETURN QUERY
-    WITH candidate_jobs AS (
-        SELECT j.*
-        FROM marie_scheduler.job j
-        JOIN marie_scheduler.dag d ON d.id = j.dag_id
-        WHERE j.name = job_name
-          AND j.state IN ('created', 'retry')  -- Only consider jobs that can run
-          AND j.start_after < now()
-          AND d.state NOT IN ('completed', 'failed', 'cancelled')  -- Exclude problematic DAGs
-    ),
-    unblocked_jobs AS (
-        SELECT j.*
-        FROM candidate_jobs j
-        WHERE NOT EXISTS (
-            SELECT 1
-            FROM marie_scheduler.job_dependencies dep
-            JOIN marie_scheduler.job d2 ON d2.id = dep.depends_on_id
-            WHERE dep.job_id = j.id
-              AND d2.state NOT IN ('completed')  -- Dependencies must be completed
-        )
-        -- Exclude jobs from DAGs with any failed dependencies
+    WITH candidate AS MATERIALIZED (
+      SELECT j.id, j.job_level, j.priority
+      FROM marie_scheduler.job j
+      JOIN marie_scheduler.dag d ON d.id = j.dag_id
+      WHERE j.name=job_name
+        AND j.state IN ('created','retry')
+        AND d.state NOT IN ('completed','failed','cancelled')
         AND NOT EXISTS (
-            SELECT 1
-            FROM marie_scheduler.job_dependencies dep
-            JOIN marie_scheduler.job d2 ON d2.id = dep.depends_on_id
-            WHERE dep.job_id = j.id
-              AND d2.state = 'failed'
+          SELECT 1
+          FROM marie_scheduler.job_dependencies dep
+          JOIN marie_scheduler.job dj ON dj.id = dep.depends_on_id
+          WHERE dep.job_id = j.id
+            AND dj.state <> 'completed'
         )
+      ORDER BY j.job_level ASC, j.priority DESC
+      LIMIT 5000
     )
-    SELECT *
-    FROM unblocked_jobs
+    SELECT jx.*
+    FROM candidate c
+    JOIN LATERAL (
+      SELECT j.* FROM marie_scheduler.job j
+      WHERE j.id = c.id                -- 1-row index lookup
+    ) jx ON true
     ;
-    --ORDER BY job_level ASC, priority DESC
     --LIMIT batch_size;
 END;
 $$;

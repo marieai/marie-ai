@@ -72,4 +72,4 @@ class JobCallbackExecutor:
         self.logger.info("JobCallbackExecutor thread terminated.")
 
 
-job_callback_executor = JobCallbackExecutor()
+job_callback_executor = JobCallbackExecutor(max_queue_size=0)

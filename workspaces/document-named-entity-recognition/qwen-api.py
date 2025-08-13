@@ -19,8 +19,8 @@ base_url = os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:8000/v1")
 base_url = os.getenv("OPENAI_BASE_URL", "http://184.105.87.211:8000/v1")
 base_url = os.getenv("OPENAI_BASE_URL", "http://209.51.170.37:8000/v1")
 
-base_url = 'http://209.51.170.37:8000/v1'  # DEEPSEEK
-# base_url='http://184.105.87.211:8000/v1' # QWEN VL
+# base_url = 'http://209.51.170.37:8000/v1'  # DEEPSEEK
+base_url = 'http://172.83.15.139:8000/v1'  # QWEN VL
 
 print(f"API Key: {api_key}")
 print(f"Base URL: {base_url}")
@@ -342,9 +342,9 @@ def qwen_inference(media_input, text_input=None):
 
 css = """
   #output {
-    height: 500px; 
-    overflow: auto; 
-    border: 1px solid #ccc; 
+    height: 500px;
+    overflow: auto;
+    border: 1px solid #ccc;
   }
 """
 
@@ -369,7 +369,7 @@ with gr.Blocks(css=css) as demo:
 
         submit_btn.click(qwen_inference, [input_media, text_input], [output_text])
 
-demo.launch(debug=True)
+demo.launch(debug=True, share=True)
 
 # https://github.com/QwenLM/Qwen2.5-VL/issues/721
 # https://github.com/QwenLM/Qwen2.5-VL/blob/main/cookbooks/spatial_understanding.ipynb

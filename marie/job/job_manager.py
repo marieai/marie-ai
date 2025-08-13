@@ -90,7 +90,7 @@ class JobManager:
         self._etcd_client = etcd_client
         self._job_info_client = JobInfoStorageClientProxy(self.event_publisher, storage)
         self.monitored_jobs = set()
-        self._active_supervisors: dict[str, JobSupervisor] = {}
+        self._active_tasks = set()
 
         try:
             self.event_logger = get_event_logger()
@@ -305,9 +305,7 @@ class JobManager:
 
                 # Log events
                 if self.event_logger:
-                    event_log = (
-                        f"Completed a ray job {job_id} with a status {job_status}."
-                    )
+                    event_log = f"Completed a job {job_id} with a status {job_status}."
                     if job_error_message:
                         event_log += f" {job_error_message}"
                         self.event_logger.error(event_log, submission_id=job_id)
@@ -335,6 +333,7 @@ class JobManager:
         metadata: Optional[Dict[str, Any]] = None,
         runtime_env: Optional[Dict[str, Any]] = None,
         _start_signal_actor: Optional[ActorHandle] = None,
+        confirmation_event: Optional[asyncio.Event] = None,
     ) -> str:
         """
         Job execution happens asynchronously.
@@ -396,19 +395,36 @@ class JobManager:
                 job_distributor=self._job_distributor,
                 event_publisher=self.event_publisher,
                 etcd_client=self._etcd_client,
+                confirmation_event=confirmation_event,
             )
 
-            # self._active_supervisors[submission_id] = supervisor
-            await supervisor.run(_start_signal_actor=_start_signal_actor)
+            # BLOCKING (old way)
+            # await supervisor.run(_start_signal_actor=_start_signal_actor)
+
+            # non-blocking
+            task = asyncio.create_task(
+                supervisor.run(_start_signal_actor=_start_signal_actor)
+            )
+            task.set_name(f"supervisor:{submission_id}")
+
+            # track & surface exceptions so they don’t get swallowed
+            self._active_tasks.add(task)
+
+            def _done(t: asyncio.Task) -> None:
+                self._active_tasks.discard(t)
+                exc = t.exception()
+                if exc:
+                    self.logger.exception(
+                        "Supervisor task crashed for %s", submission_id, exc_info=exc
+                    )
+
+            task.add_done_callback(_done)
 
             # Monitor the job in the background so we can detect errors without
             # requiring a client to poll.
             run_background_task(
                 self._monitor_job(submission_id, job_supervisor=supervisor)
             )
-            # coro = self._monitor_job(submission_id, job_supervisor=supervisor)
-            # task = get_or_reuse_loop().create_task(coro)
-
             self.logger.info(f"Started job with submission_id: {submission_id}")
         except Exception as e:
             tb_str = get_exception_traceback()

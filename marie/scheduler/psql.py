@@ -169,6 +169,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.monitoring_task = None
         self._worker_tasks = None
         self._sync_dag_task = None
+        self._cluster_state_monitor_task = None
         self._submission_count = 0
         self._pending_requests = {}  # Track pending requests by ID
         self._request_queue = Queue()  # Buffer up to 1000 requests
@@ -493,6 +494,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self._heartbeat_loop(self.heartbeat_config)
         )
         self._poll_task = asyncio.create_task(self._poll())
+        self._cluster_state_monitor_task = asyncio.create_task(
+            self.__monitor_deployment_updates()
+        )
 
         self._worker_tasks = [
             asyncio.create_task(self._process_submission_queue(worker_id))
@@ -914,7 +918,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 ).copy()
 
                 # back off if no slots
-                self.logger.info(f"Available slots: {slots_by_executor}")
+                self.logger.info(
+                    f"Available slots ({len(self.active_dags)}/{max_concurrent_dags}) : {slots_by_executor}"
+                )
                 if not any(slots_by_executor.values()):
                     self.logger.warning("No available executor slots. Backing off.")
                     idle_streak += 1
@@ -964,6 +970,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.info(f"  {executor}: {count} jobs")
 
                 await self.debug_work_plans(flat_jobs, records_by_queue)
+
+                jobs_scheduled_this_cycle = defaultdict(int)
+                enqueue_tasks = []
 
                 for entrypoint, work_info in flat_jobs:
                     executor = entrypoint.split("://")[0]
@@ -1018,28 +1027,71 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         )
                         continue
 
-                    await self.mark_as_active(work_info)
-                    enqueue_id = await self.enqueue(work_info)
+                    # Reserve a slot and create a task for this job
+                    slots_by_executor[executor] -= 1
 
-                    if enqueue_id:
-                        slots_by_executor[executor] -= 1
-                        self.logger.info(f"Job scheduled: {enqueue_id} on {executor}")
-                        scheduled_any = True
-                    else:
-                        self.logger.error(f"Failed to enqueue job: {work_info.id}")
+                    async def __schedule_job(wi: WorkInfo):
+                        return await self.enqueue(wi)
+
+                    task = asyncio.create_task(__schedule_job(work_info))
+                    enqueue_tasks.append(
+                        {'task': task, 'work_info': work_info, 'executor': executor}
+                    )
+
+                #  enqueue tasks in parallel and process the results
+                scheduled_any = False
+                if enqueue_tasks:
+                    task_list = [t['task'] for t in enqueue_tasks]
+                    results = await asyncio.gather(*task_list, return_exceptions=True)
+
+                    for i, result in enumerate(results):
+                        work_info = enqueue_tasks[i]['work_info']
+                        executor = enqueue_tasks[i]['executor']
+
+                        if isinstance(result, Exception):
+                            self.logger.error(
+                                f"Failed to schedule job {work_info.id}: {result}"
+                            )
+                        elif result:  # result is the enqueue_id
+                            jobs_scheduled_this_cycle[executor] += 1
+                            self.logger.info(f"Job scheduled: {result} on {executor}")
+                            scheduled_any = True
+                        else:
+                            self.logger.error(f"Failed to enqueue job: {work_info.id}")
+
+                if jobs_scheduled_this_cycle or len(flat_jobs) > 0:
+                    self.logger.info("Scheduling summary for this cycle:")
+                    all_executors = sorted(list(jobs_by_executor.keys()))
+
+                    for executor in all_executors:
+                        candidates = jobs_by_executor.get(executor, 0)
+                        scheduled = jobs_scheduled_this_cycle.get(executor, 0)
+                        remaining = candidates - scheduled
+                        self.logger.info(
+                            f"  - {executor}: {scheduled} scheduled / {candidates} candidates ({remaining} remaining)"
+                        )
+
+                    total_scheduled = sum(jobs_scheduled_this_cycle.values())
+                    remaining_candidates = len(flat_jobs) - total_scheduled
+                    self.logger.info(
+                        f"Total scheduled: {total_scheduled}. Total unscheduled candidates: {remaining_candidates}."
+                    )
 
                 self.logger.debug(f"Remaining slots: {slots_by_executor}")
                 # acknowledgments, we are waiting for the jobs to be scheduled on the executor and get response via ETCD
                 if scheduled_any:
-                    try:
-                        await asyncio.wait_for(
-                            ClusterState.scheduled_event.wait(), timeout=2
-                        )  # THIS SHOULD BE SAME AS ETCD lease time
-                    except asyncio.TimeoutError:
-                        self.logger.warning("Timeout waiting for schedule confirmation")
-                    finally:
-                        ClusterState.scheduled_event.clear()
-                        await self.notify_event()
+                    await self.notify_event()
+
+                # if scheduled_any:
+                #     try:
+                #         await asyncio.wait_for(
+                #             ClusterState.scheduled_event.wait(), timeout=1
+                #         )  # THIS SHOULD BE SAME AS ETCD lease time
+                #     except asyncio.TimeoutError:
+                #         self.logger.warning("Timeout waiting for schedule confirmation")
+                #     finally:
+                #         ClusterState.scheduled_event.clear()
+                #         await self.notify_event()
 
                 idle_streak = 0 if scheduled_any else idle_streak + 1
                 wait_time = adjust_backoff(wait_time, idle_streak, scheduled_any)
@@ -1126,6 +1178,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         if self._heartbeat_task:
             tasks.append(self._heartbeat_task)
+
+        if self._cluster_state_monitor_task:
+            tasks.append(self._cluster_state_monitor_task)
 
         if self._worker_tasks:
             for task in self._worker_tasks:
@@ -1245,6 +1300,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return: The ID of the work item if successfully enqueued, None otherwise.
         """
         self.logger.debug(f"Enqueuing work item : {work_info.id}")
+        await self.mark_as_active(work_info)
+        confirmation_event = asyncio.Event()
+
         submission_id = work_info.id
         entrypoint = work_info.data.get("metadata", {}).get("on")
         if not entrypoint:
@@ -1257,10 +1315,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 entrypoint=entrypoint,
                 submission_id=submission_id,
                 metadata=work_info.data,
+                confirmation_event=confirmation_event,
             )
+            await asyncio.wait_for(confirmation_event.wait(), timeout=2)
         except ValueError as e:
-            self.logger.error(f"Error submitting job: {e}")
+            self.logger.error(f"Error during job submission: {e}")
             return None
+        except asyncio.TimeoutError:
+            self.logger.error(
+                f"Timeout waiting for job submission confirmation for {submission_id}"
+            )
+            # TODO :  add logic to revert the 'ACTIVE' status
+            return None
+        except Exception as e:
+            self.logger.error(
+                f"An unexpected error occurred during enqueue for {submission_id}: {e}"
+            )
+            return None
+
         return returned_id
 
     async def get_work_items_by_queue(
@@ -2436,7 +2508,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 "success": True,
                 "cleared_count": cleared_count,
                 "cleared_dags": cleared_dags,
-                "message": f"Successfully reset active DAGs, cleared {cleared_count} DAGs",
+                "message": f"Successfully recheduling summary for this cyset active DAGs, cleared {cleared_count} DAGs",
             }
         except Exception as e:
             error_msg = f"Failed to reset active DAGs: {str(e)}"
@@ -2447,6 +2519,28 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 "cleared_count": 0,
                 "cleared_dags": [],
             }
+
+    async def __monitor_deployment_updates(self):
+        """
+        Reactively monitors the ClusterState update event and wakes up the
+        _poll loop whenever a deployment's state changes.
+        """
+        self.logger.info("Starting deployment update monitor.")
+        while self.running:
+            try:
+                await ClusterState.deployment_update_event.wait()
+                self.logger.debug(
+                    "Deployment update event received, notifying scheduler."
+                )
+                await self.notify_event()
+            except asyncio.CancelledError:
+                self.logger.warning("Deployment update monitor task cancelled.")
+                break
+            except Exception as e:
+                self.logger.error(
+                    f"Error in deployment update monitor: {e}", exc_info=True
+                )
+                await asyncio.sleep(5)
 
 
 def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo]]:
