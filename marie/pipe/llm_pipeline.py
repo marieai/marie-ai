@@ -90,8 +90,11 @@ class LLMPipeline(BasePipeline):
         self.device = resolved_devices[0]
         # self.has_cuda = True if self.device.type.startswith("cuda") else False
 
-        self.ocr_engines = get_known_ocr_engines(self.device.type, "default")
-        # self.ocr_engines = {"default": None}
+        if self.default_pipeline_config.get("ocr", {}).get("enabled", True):
+            self.ocr_engines = get_known_ocr_engines(self.device.type, "default")
+        else:
+            self.logger.warning("Disabling OCR capabilities as configured.")
+            self.ocr_engines = {"default": None}
 
         (
             self.pipeline_name,
