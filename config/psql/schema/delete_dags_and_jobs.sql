@@ -1,4 +1,3 @@
-
 --- Function to delete failed DAGS and their associated jobs
 -- Usage:
 -- Single DAG ID
@@ -14,18 +13,66 @@
 -- );
 
 
-CREATE OR REPLACE FUNCTION marie_scheduler.delete_dags_and_jobs(p_dag_ids uuid[]) RETURNS void
-LANGUAGE plpgsql AS
-$$
-DECLARE
-    dag_count int;
-BEGIN
-    DELETE FROM marie_scheduler.dag
-    WHERE id = ANY(p_dag_ids);
-    GET DIAGNOSTICS dag_count = ROW_COUNT;
+ CREATE OR replace FUNCTION marie_scheduler.delete_dags_and_jobs( p_dag_ids UUID[] ) returns void LANGUAGE plpgsql
+AS
+  $$
+  DECLARE
+    v_jobs_deleted bigint := 0;
+    v_dags_deleted bigint := 0;
+    v_batch        bigint;
+    v_batch_rows   INTEGER := 20000;
+  BEGIN
+    IF p_dag_ids IS NULL
+      OR
+      array_length(p_dag_ids,1) IS NULL THEN
+      RAISE notice 'No DAG ids provided';
+      RETURN;
+    END IF;
+    -- Stage IDs for better plans than ANY($1)
+    CREATE temp TABLE _del_dag_ids(id uuid PRIMARY KEY) ON COMMIT DROP;
+    INSERT INTO _del_dag_ids
+                (
+                            id
+                )
+    SELECT DISTINCT unnest(p_dag_ids);
 
-    RAISE NOTICE 'Deleted % DAGs (and associated jobs and dependencies via CASCADE)', dag_count;
-END;
-$$;
+    -- 1) Delete JOBS referencing those DAGs, in batches
+    LOOP
+      WITH dels AS
+      (
+             SELECT j.id
+             FROM   marie_scheduler.job j
+             join   _del_dag_ids d
+             ON     j.dag_id = d.id limit v_batch_rows )
+      DELETE
+      FROM   marie_scheduler.job j
+      USING  dels d
+      WHERE  j.id = d.id;
 
-ALTER FUNCTION marie_scheduler.delete_dags_and_jobs(uuid[]) OWNER TO postgres;
+      GET diagnostics v_batch = row_count;
+      v_jobs_deleted := v_jobs_deleted + v_batch;
+      EXIT
+    WHEN v_batch = 0;
+    END LOOP;
+    -- 2) Delete the DAGs themselves, in batches
+    LOOP
+      WITH dels AS
+      (
+             SELECT d.id
+             FROM   marie_scheduler.dag d
+             join   _del_dag_ids x
+             ON     d.id = x.id limit v_batch_rows )
+      DELETE
+      FROM   marie_scheduler.dag d
+      USING  dels z
+      WHERE  d.id = z.id;
+
+      GET diagnostics v_batch = row_count;
+      v_dags_deleted := v_dags_deleted + v_batch;
+      EXIT
+    WHEN v_batch = 0;
+    END LOOP;
+    RAISE notice 'Deleted % jobs and % DAGs', v_jobs_deleted, v_dags_deleted;
+  END;
+  $$;
+  ALTER FUNCTION marie_scheduler.delete_dags_and_jobs(uuid[]) owner TO postgres;

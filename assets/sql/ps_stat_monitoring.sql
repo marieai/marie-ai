@@ -2,8 +2,15 @@
 -- PostgreSQL Performance Monitoring Queries using pg_stat_statements
 -- ==============================================================================
 
+
+SHOW shared_preload_libraries;
+
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+
 -- 1. TOP SLOW QUERIES BY AVERAGE EXECUTION TIME
 -- Identifies queries with the highest average execution time
+
 SELECT
     query,
     calls,
@@ -168,8 +175,6 @@ SELECT
     count(*) as statements_tracked,
     (SELECT setting::int FROM pg_settings WHERE name = 'pg_stat_statements.max') as max_statements
 FROM pg_stat_statements;
-
-
 
 
 

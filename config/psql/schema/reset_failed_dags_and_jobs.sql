@@ -12,7 +12,7 @@ BEGIN
         state        = 'created',
         started_on   = NULL,
         completed_on = NULL
-    WHERE state = 'failed';
+    WHERE state  IN ('failed', 'retry');
     GET DIAGNOSTICS dag_count = ROW_COUNT;
 
     -- Reset failed jobs
@@ -21,7 +21,7 @@ BEGIN
         state        = 'created',
         started_on   = NULL,
         completed_on = NULL
-    WHERE state = 'failed';
+    WHERE state  IN ('failed', 'retry');
     GET DIAGNOSTICS job_count = ROW_COUNT;
 
     RAISE NOTICE 'Reset % failed DAG(s) and % failed job(s) to created.', dag_count, job_count;

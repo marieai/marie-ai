@@ -13,6 +13,7 @@ class _ClusterState:
     _deployments_last_updated: Optional[float] = -1
 
     scheduled_event = asyncio.Event()  # Notification event for job scheduling
+    deployment_update_event = asyncio.Event()  # Event to signal deployment updates
 
     @property
     def deployments(self) -> Dict[str, Any]:
@@ -25,6 +26,8 @@ class _ClusterState:
     def deployments(self, value: Dict[str, Any]) -> None:
         self._deployments = value
         self._deployments_last_updated = time.time()
+        self.deployment_update_event.set()  # Set the event to signal an update
+        self.deployment_update_event.clear()  # Immediately clear it to act as a pulse
 
     @property
     def deployment_nodes(self) -> Dict[str, Any]:

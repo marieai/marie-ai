@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 import time
 from functools import wraps
@@ -31,6 +32,7 @@ class GatewayJobDistributor(JobDistributor):
         self.logger = logger or MarieLogger(self.__class__.__name__)
         self.streamer = gateway_streamer
         self.deployment_nodes = deployment_nodes or {}
+        self._inflight: Dict[str, asyncio.Task] = {}
 
     def _validate_preconditions(
         self, submission_id: str, job_info: JobInfo, send_callback: Optional[SendCb]
@@ -199,6 +201,63 @@ class GatewayJobDistributor(JobDistributor):
                 )
 
             raise err
+
+    async def send_nowait(
+        self,
+        submission_id: str,
+        job_info: JobInfo,
+        send_callback: SendCb,
+        *,
+        wait_for_ack: float = 0.0,  # seconds to optionally wait for early ACK
+    ) -> asyncio.Task:  # Task that resolves to the final DataRequest
+        """
+        Fire-and-forget submit. Runs the existing `send()` (blocking path)
+        in the background and returns an asyncio.Task you can await/cancel later.
+        If `wait_for_ack` > 0, we wait up to that many seconds for the callback
+        to run (serves as an early ACK).
+        """
+
+        async def _run():
+            # Use the original blocking `send()` (returns final DataRequest)
+            return await self.send(
+                submission_id=submission_id,
+                job_info=job_info,
+                send_callback=send_callback,
+            )
+
+        task = asyncio.create_task(_run(), name=f"job:{submission_id}")
+        self._inflight[submission_id] = task
+
+        def _done(t: asyncio.Task):
+            self._inflight.pop(submission_id, None)
+            exc = t.exception()
+            if exc:
+                self.logger.error("Job task crashed for %s: %s", submission_id, exc)
+
+        task.add_done_callback(_done)
+
+        # if ack:
+        #     try:
+        #         await asyncio.wait_for(ack.wait(), timeout=wait_for_ack)
+        #     except asyncio.TimeoutError:
+        #         self.logger.warning("[%s] No ACK within %.2fs (continuing)", submission_id, wait_for_ack)
+
+        return task
+
+    async def wait_for_result(
+        self, submission_id: str, *, timeout: Optional[float] = None
+    ) -> DataRequest:
+        task = self._inflight.get(submission_id)
+        if not task:
+            raise RuntimeError(f"No inflight job for {submission_id}")
+        return await asyncio.wait_for(task, timeout=timeout)
+
+    def cancel_job(self, submission_id: str) -> bool:
+        t = self._inflight.get(submission_id)
+        if not t:
+            return False
+        t.cancel()
+        return True
 
     async def close(self):
         self.logger.debug("Closing GatewayJobDistributor")

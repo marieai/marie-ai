@@ -22,3 +22,12 @@ SELECT cron.schedule(
     '*/1 * * * *',  -- adjust to */0.5 with external loop if sub-minute needed
     $$SELECT marie_scheduler.refresh_job_priority();$$
 );
+
+
+-- =========================================================
+--  Maintenance Jobs
+-- =========================================================
+
+-- SELECT cron.schedule('0 3 * * *', $$SELECT marie_scheduler.daily_maintenance();$$);
+-- SELECT cron.schedule('*/10 * * * *', $$VACUUM (ANALYZE, VERBOSE) job;$$);
+-- SELECT cron.schedule('15 */1 * * *', $$SELECT marie_scheduler.reindex_hot_indexes();$$);
