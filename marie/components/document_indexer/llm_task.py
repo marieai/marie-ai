@@ -244,6 +244,26 @@ def modify_outputs(
 
 
 def filter_pages(pattern: Any, page_output: dict[int, Any], page_subset=None):
+    """
+    Filters pages that match a given pattern from a provided page output dictionary.
+
+    This function processes a given pattern and filters the pages from a page output dictionary.
+    It checks the presence of the pattern in the content of the page's dictionary output and
+    returns a sorted list of matching page numbers. A subset of pages to filter can optionally
+    be provided.
+
+    Arguments:
+        pattern: Any
+            The pattern to match against the page output. Currently, must be a dictionary.
+        page_output: dict[int, Any]
+            A dictionary where keys are page numbers and values are tuples of page-specific
+            data and an error indicator.
+        page_subset: Optional[Iterable[int]]
+            An optional subset of page numbers to filter from. If None, all pages are considered.
+
+    Returns:
+        list[int]: A sorted list of page numbers that match the given pattern.
+    """
     if isinstance(pattern, dict):
         matching_pages = set()
         pages = page_subset or page_output.keys()
