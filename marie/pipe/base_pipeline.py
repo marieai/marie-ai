@@ -1,6 +1,7 @@
+import os
 from abc import ABC
 from collections import defaultdict
-from typing import List
+from typing import Any, List
 
 from docarray import DocList
 
@@ -14,9 +15,11 @@ from marie.pipe import (
     PipelineComponent,
     PipelineContext,
 )
-from marie.pipe.components import load_pipeline
+from marie.pipe.components import load_pipeline, split_filename
 from marie.pipe.voting import ClassificationResult, get_voting_strategy
 from marie.utils.docs import docs_from_image
+from marie.utils.json import store_json_object
+from marie.utils.utils import ensure_exists
 
 
 class BasePipeline(ABC):
@@ -30,7 +33,9 @@ class BasePipeline(ABC):
         self.logger = MarieLogger(context=self.__class__.__name__)
 
     def reload_pipeline(
-        self, pipeline_name, pipelines_config
+        self,
+        pipeline_name,
+        pipelines_config,
     ) -> tuple[str, dict, dict]:
         with TimeContext(f"### Reloading pipeline : {pipeline_name}", self.logger):
             try:
@@ -77,30 +82,24 @@ class BasePipeline(ABC):
 
         if "classifications" not in metadata:
             metadata["classifications"] = []
-        if "indexers" not in metadata:
+        if page_indexer_enabled and "indexers" not in metadata:
             metadata["indexers"] = []
 
         for group, classifier_group in classifier_groups.items():
             self.logger.info(f"Processing classifier: {pipeline_name}/{group}")
-            (document_classifiers, sub_classifiers) = self.build_classifier_component(
+            classifier_component, sub_classifiers = self.build_classifier_component(
                 classifier_group, group
             )
-            processing_pipeline = [
-                ClassifierPipelineComponent(
-                    name="classifier_pipeline",
-                    document_classifiers=document_classifiers,
-                )
-            ]
+            processing_pipeline = [classifier_component]
 
-            if page_indexer_enabled:
-                if group in indexer_groups:
-                    document_indexers = indexer_groups[group]["indexer"]
-                    processing_pipeline.append(
-                        NamedEntityPipelineComponent(
-                            name="ner_pipeline_component",
-                            document_indexers=document_indexers,
-                        )
+            if page_indexer_enabled and group in indexer_groups:
+                document_indexers = indexer_groups[group]["indexer"]
+                processing_pipeline.append(
+                    NamedEntityPipelineComponent(
+                        name="ner_pipeline_component",
+                        document_indexers=document_indexers,
                     )
+                )
 
             results = self.execute_pipeline(
                 processing_pipeline,
@@ -119,12 +118,13 @@ class BasePipeline(ABC):
                 }
             )
 
-            metadata["indexers"].append(
-                {
-                    "group": group,
-                    "indexer": results["indexer"] if "indexer" in results else {},
-                }
-            )
+            if page_indexer_enabled:
+                metadata["indexers"].append(
+                    {
+                        "group": group,
+                        "indexer": results["indexer"] if "indexer" in results else {},
+                    }
+                )
 
     @staticmethod
     def build_classifier_component(
@@ -148,12 +148,12 @@ class BasePipeline(ABC):
     def execute_pipeline(
         self,
         processing_pipeline: List[PipelineComponent],
-        sub_classifiers: dict[str, any],
+        sub_classifiers: dict[str, Any],
         frames: List,
         ocr_results: dict,
         pipeline_id: str = "default_pipeline",
         include_ocr_lines: bool = False,
-    ) -> dict[str, any]:
+    ) -> dict[str, Any]:
         """Execute processing pipeline"""
 
         words = []
@@ -218,7 +218,7 @@ class BasePipeline(ABC):
     def run_sub_classifier_pipeline(
         self,
         page_classifier_meta,
-        sub_classifiers: dict[str, any],
+        sub_classifiers: dict[str, Any],
         words: List,
         boxes: List,
         documents: DocList,
@@ -318,7 +318,7 @@ class BasePipeline(ABC):
         return results
 
     def group_results_by_page(
-        self, group_key: str, page_meta: List[dict[str, any]]
+        self, group_key: str, page_meta: List[dict[str, Any]]
     ) -> dict:
         """Group the results by page"""
         group_by_page = defaultdict(list)
@@ -330,3 +330,43 @@ class BasePipeline(ABC):
                 group_by_page[page].append(detail)
 
         return group_by_page
+
+    def store_metadata(
+        self,
+        ref_id: str,
+        ref_type: str,
+        root_asset_dir: str,
+        metadata: dict[str, Any],
+        infix: str = "meta",
+        pipeline_name: str = None,
+    ) -> None:
+        """
+        Stores metadata for an asset by saving it as a JSON file. This includes both a main metadata
+        file and, optionally, a pipeline version-specific metadata file if a pipeline name is provided.
+
+        Parameters:
+            ref_id (str): Identifier for the asset.
+            ref_type (str): Type of the asset being referenced.
+            root_asset_dir (str): Directory where the asset metadata will be stored.
+            metadata (dict[str, Any]): Dictionary containing the metadata to be stored.
+            infix (str, optional): String to append to the generated metadata filename. Defaults to "meta".
+            pipeline_name (str, optional): Name of the pipeline version for storing specific metadata. Defaults to None.
+
+        Returns:
+            None
+        """
+        filename, _, _ = split_filename(ref_id)
+        meta_filename = f"{filename}.{infix}.json"
+        # Save pipeline checkpoint
+        if pipeline_name is not None:
+            pipeline_meta_path = os.path.join(root_asset_dir, pipeline_name)
+            self.logger.info(
+                f"Storing pipeline versioned metadata : {pipeline_meta_path}"
+            )
+            ensure_exists(pipeline_meta_path)
+            store_json_object(metadata, os.path.join(pipeline_meta_path, meta_filename))
+
+        # Main save to meta file
+        meta_path = os.path.join(root_asset_dir, meta_filename)
+        self.logger.info(f"Storing metadata : {meta_path}")
+        store_json_object(metadata, meta_path)

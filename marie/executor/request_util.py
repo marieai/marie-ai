@@ -39,7 +39,7 @@ def parse_parameters(parameters: dict, strict: bool = True) -> tuple:
     ref_id = parameters.get("ref_id")
     if ref_id is None and strict:
         raise ValueError("ref_id is not present in parameters")
-    ref_type = parameters.get("ref_type", "not_defined")
+    ref_type = parameters.get("ref_type", "extract")
     queue_id: str = parameters.get("queue_id", "0000-0000-0000-0000")
 
     payload = parameters.get("payload")

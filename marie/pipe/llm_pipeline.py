@@ -1,11 +1,12 @@
 import os
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import numpy as np
 from black.trans import defaultdict
 from PIL import Image
 
 from marie.boxes import PSMode
+from marie.common.file_io import get_cache_dir
 from marie.excepts import BadConfigSource
 from marie.logging_core.profile import TimeContext
 from marie.models.utils import initialize_device_settings
@@ -17,13 +18,10 @@ from marie.pipe.components import (
     load_pipeline,
     ocr_frames,
     restore_assets,
-    split_filename,
     store_assets,
-    update_existing_meta,
 )
 from marie.pipe.llm_indexer import LLMIndexerPipelineComponent
 from marie.utils.image_utils import hash_frames_fast
-from marie.utils.json import load_json_file, store_json_object
 from marie.utils.utils import ensure_exists
 
 
@@ -56,7 +54,7 @@ class LLMPipeline(BasePipeline):
 
     def __init__(
         self,
-        pipelines_config: List[dict[str, any]] = None,
+        pipelines_config: List[dict[str, Any]] = None,
         device: Optional[str] = "cuda",
         silence_exceptions: bool = False,
         **kwargs,
@@ -132,8 +130,6 @@ class LLMPipeline(BasePipeline):
             for group, indexer in self.indexer_groups.items():
                 self.logger.info(f"Loaded indexers : {group}, {len(indexer)}")
 
-        # TODO: use runtime config to modify pipline features at runtime
-
         metadata = {
             "ref_id": ref_id,
             "ref_type": ref_type,
@@ -155,29 +151,39 @@ class LLMPipeline(BasePipeline):
         with TimeContext(f"### {self.pipeline_name} LLMPipeline info") as tc:
             self.execute_llm_pipeline(frames, metadata, ocr_results, runtime_conf)
             metadata[f"delta_time_{self.pipeline_name}"] = tc.now()
-        self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
+        self.store_metadata(
+            ref_id, ref_type, root_asset_dir, metadata, pipeline_name=self.pipeline_name
+        )
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
         del metadata["ocr"]
 
         return metadata
 
     def execute_llm_pipeline(self, frames, metadata, ocr_results, runtime_conf: dict):
-        if self.classifier_groups:
-            if "classifications" not in metadata:
-                metadata["classifications"] = []
+        """
+        Executes the LLM pipeline for processing frames and OCR results while updating the metadata with indexing results.
+
+        Parameters:
+            frames: List
+                A collection of data frames to be processed through the pipeline.
+            metadata: dict
+                Dictionary containing metadata information for the pipeline. It will be updated with indexing results.
+            ocr_results: List
+                Results from OCR processing required for indexing and further tasks.
+            runtime_conf: dict
+                Runtime configuration used to customize the pipeline execution, including task-specific settings.
+
+        Returns:
+            None
+
+        Raises:
+            Any exceptions raised internally during pipeline execution will propagate.
+        """
         if self.indexer_groups:
             if "indexers" not in metadata:
                 metadata["indexes"] = []
 
         processing_group_pipeline = defaultdict(list)
-        grouped_sub_classifiers = defaultdict(dict)
-
-        for group, classifier_group in self.classifier_groups.items():
-            classifier_component, sub_classifiers = self.build_classifier_component(
-                classifier_group, group
-            )
-            processing_group_pipeline[group].append(classifier_component)
-            grouped_sub_classifiers[group] = sub_classifiers
 
         llm_task_config = runtime_conf.get("llm_tasks", {})
         for group, indexer_group in self.indexer_groups.items():
@@ -199,10 +205,9 @@ class LLMPipeline(BasePipeline):
             )
 
         for group, processing_pipeline in processing_group_pipeline.items():
-            sub_classifiers = grouped_sub_classifiers[group]
             results = self.execute_pipeline(
                 processing_pipeline,
-                sub_classifiers,
+                {},  # sub_classifiers,
                 frames,
                 ocr_results,
                 "indexing_pipeline",
@@ -217,50 +222,6 @@ class LLMPipeline(BasePipeline):
                             "index": index,
                         }
                     )
-            if "classifiers" in results:
-                metadata["classifications"].append(
-                    {
-                        "group": group,
-                        "classification": results["classifiers"],
-                    }
-                )
-
-    def store_metadata(
-        self,
-        ref_id: str,
-        ref_type: str,
-        root_asset_dir: str,
-        metadata: dict[str, any],
-        infix: str = "meta",
-    ) -> None:
-        """
-        Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
-        :param ref_id: reference id of the document
-        :param ref_type: reference type of the document
-        :param root_asset_dir: root asset directory
-        :param metadata: metadata to store
-        :param infix: infix to use for the metadata file, default is "meta" e.g. {ref_id}.meta.json
-        :return: None
-        """
-        filename, _, _ = split_filename(ref_id)
-        meta_filename = f"{filename}.{infix}.json"
-        # Save pipeline checkpoint
-        pipeline_meta_path = os.path.join(root_asset_dir, self.pipeline_name)
-        ensure_exists(pipeline_meta_path)
-        store_json_object(metadata, os.path.join(pipeline_meta_path, meta_filename))
-
-        # Main save to meta file
-        meta_path = os.path.join(root_asset_dir, meta_filename)
-        if os.path.exists(meta_path):
-            self.logger.debug(f"Loading existing meta data : {meta_path}")
-            existing_meta = load_json_file(meta_path, True)
-            self.logger.debug(f"Updating existing meta data : {meta_path}")
-            metadata = update_existing_meta(existing_meta, metadata)
-        else:
-            self.logger.warning(f"No previous meta found : {meta_path}")
-
-        self.logger.info(f"Storing metadata : {meta_path}")
-        store_json_object(metadata, meta_path)
 
     def execute(
         self,
@@ -272,8 +233,8 @@ class LLMPipeline(BasePipeline):
         regions: List = None,
         queue_id: str = None,
         job_id: str = None,
-        runtime_conf: Optional[dict[str, any]] = None,
-    ) -> dict[str, any]:
+        runtime_conf: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """
         Execute the pipeline for the document with the given frames.If regions are specified,
         then only the specified regions will be extracted from the document with the rest of the steps being skipped.
@@ -308,7 +269,9 @@ class LLMPipeline(BasePipeline):
 
         # create local asset directory
         frame_checksum = hash_frames_fast(frames=frames)
-        root_asset_dir = ensure_exists(os.path.join("/tmp/generators", frame_checksum))
+        cache_dir = get_cache_dir()
+        generators_dir = os.path.join(cache_dir, "generators")
+        root_asset_dir = ensure_exists(os.path.join(generators_dir, frame_checksum))
         self.logger.info(f"Root asset dir {ref_id}, {ref_type} : {root_asset_dir}")
 
         if runtime_conf is None:
