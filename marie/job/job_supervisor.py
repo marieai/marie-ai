@@ -257,7 +257,6 @@ class JobSupervisor:
 
         # Signal immediately to avoid blocking the callback thread
         try:
-            ClusterState.scheduled_event.set()
             if self.confirmation_event:
                 self.confirmation_event.set()
         except Exception as e:
