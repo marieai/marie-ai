@@ -109,7 +109,7 @@ class MarieServerGateway(CompositeServer):
         self.deployment_nodes = {}
         self.deployments = {}
         self._deployments_lock = asyncio.Lock()
-        self.event_queue = asyncio.Queue()
+        self.event_queue = asyncio.Queue(maxsize=512)
         self.ready_event = asyncio.Event()
 
         self.args = {**vars(self.runtime_args), **kwargs}
@@ -921,6 +921,7 @@ class MarieServerGateway(CompositeServer):
 
         error_counter = 0
         gateway_changed = False
+        debounce_s = 0.05  # small debounce to coalesce bursts
 
         while True:
             service, event = await self.event_queue.get()
@@ -944,15 +945,19 @@ class MarieServerGateway(CompositeServer):
                         await self.gateway_server_offline(service, ev_value)
                     else:
                         raise TypeError(f"Not recognized event type : {ev_type}")
-                    error_counter = 0  # reset error counter on successful processing
+
+                error_counter = 0  # reset error counter on successful processing
 
                 # if there are no more events, update the gateway streamer to reflect the changes
                 if self.event_queue.qsize() == 0 and gateway_changed:
-                    ClusterState.deployment_nodes = self.deployment_nodes
-                    await self.update_gateway_streamer()
-                    gateway_changed = False
-                    # set the ready event to indicate that we are ready to have scheduler
-                    self.ready_event.set()
+                    # debounce to allow closely arriving events to batch
+                    await asyncio.sleep(debounce_s)
+                    if self.event_queue.qsize() == 0:
+                        ClusterState.deployment_nodes = self.deployment_nodes
+                        await self.update_gateway_streamer()
+                        gateway_changed = False
+                        # set the ready event to indicate that we are ready to have scheduler
+                        self.ready_event.set()
             except Exception as ex:
                 self.logger.error(f"Error processing event: {ex}")
                 error_counter += 1

@@ -9,17 +9,18 @@ from docarray.documents import TextDoc
 from grpc.aio import AioRpcError
 
 from marie.constants import DEPLOYMENT_STATUS_PREFIX
+from marie.helper import get_or_reuse_loop
 from marie.job.common import ActorHandle, JobInfo, JobInfoStorageClient, JobStatus
 from marie.job.event_publisher import EventPublisher
 from marie.job.job_callback_executor import job_callback_executor
 from marie.job.job_distributor import JobDistributor
+from marie.job.lease_cache import LeaseCache
 from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.discovery.etcd_client import EtcdClient
 from marie.serve.networking import _NetworkingHistograms, _NetworkingMetrics
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
-from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.types_core.request.data import DataRequest
 
 
@@ -49,9 +50,11 @@ class JobSupervisor:
         self._job_distributor = job_distributor
         self._event_publisher = event_publisher
         self._etcd_client = etcd_client
+        self._lease_cache = LeaseCache(etcd_client, ttl=5, margin=1.0)
         self.request_info = None
         self.confirmation_event = confirmation_event  # we need to make sure that this is per job confirmation event
         self._active_tasks = set()
+        self._loop = get_or_reuse_loop()
 
     async def ping(self) -> bool:
         """
@@ -66,7 +69,7 @@ class JobSupervisor:
             # No target configured, assume healthy
             return True
         # FIXME : this is a hack to skip the health check due to overhead and killing GRPC
-        if False:
+        if True:
             self.logger.debug('Skipping health-check ping')
             return True
 
@@ -154,6 +157,9 @@ class JobSupervisor:
             variables.
         3) Handle concurrent events of driver execution and
         """
+        # Capture the main event loop so callbacks from worker threads
+        # self._loop = asyncio.get_running_loop()
+
         curr_info = await self._job_info_client.get_info(self._job_id)
         if curr_info is None:
             raise RuntimeError(f"Status could not be retrieved for job {self._job_id}.")
@@ -226,6 +232,24 @@ class JobSupervisor:
 
         self.logger.info(f"Job submitted in the background : {self._job_id}")
 
+    def _signal_confirmation_threadsafe(self) -> None:
+        """
+        Signal the asyncio.Event from any thread safely and as early as possible.
+        """
+        if not self.confirmation_event:
+            return
+        loop = self._loop
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(self.confirmation_event.set)
+        else:
+            self.logger.warning(
+                "No running event loop found, signaling confirmation directly."
+            )
+            try:
+                self.confirmation_event.set()
+            except Exception as e:
+                self.logger.warning(f"Failed to signal confirmation (no loop): {e}")
+
     def send_callback(self, requests, request_info):
         job_callback_executor.submit(self._send_callback_sync, requests, request_info)
 
@@ -255,16 +279,14 @@ class JobSupervisor:
         deployment_name = request_info["deployment"]
         self.logger.info(f"Sent request to {address} on deployment {deployment_name}")
 
-        # Signal immediately to avoid blocking the callback thread
+        # Signal immediately
         try:
-            if self.confirmation_event:
-                self.confirmation_event.set()
+            self._signal_confirmation_threadsafe()
         except Exception as e:
             self.logger.warning(f"Failed to signal confirmation for {request_id}: {e}")
 
         t_signal = time.monotonic()
-
-        # Do etcd update best-effort AFTER signaling (still on the callback thread)
+        # Do etcd update
         try:
             from grpc_health.v1.health_pb2 import HealthCheckResponse
 
@@ -272,9 +294,16 @@ class JobSupervisor:
             status_str = HealthCheckResponse.ServingStatus.Name(status)
             key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
 
+            # lease_time = 5
+            # t0 = time.monotonic()
+            # lease = self._etcd_client.lease(lease_time)
+            # t1 = time.monotonic()
+            # self._etcd_client.put(key, status_str, lease=lease)
+            # t2 = time.monotonic()
+
             lease_time = 5
             t0 = time.monotonic()
-            lease = self._etcd_client.lease(lease_time)
+            lease = self._lease_cache.get_or_refresh(key, ttl=lease_time)  # type: ignore[assignment]
             t1 = time.monotonic()
             self._etcd_client.put(key, status_str, lease=lease)
             t2 = time.monotonic()
