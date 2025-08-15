@@ -82,7 +82,7 @@ SELECT
   format(
     'CREATE INDEX CONCURRENTLY IF NOT EXISTS %I ON %I.%I (id) WHERE state <> ''completed'';',
     left(c.relname, 35) || '_id_not_completed_' || substr(md5(c.oid::text), 1, 8),
-    n.nspname,``
+    n.nspname,
     c.relname
   ) AS ddl
 FROM pg_inherits i
@@ -95,8 +95,6 @@ ORDER BY c.relname;
 
 
 
-
-
 -- Analyze to update stats
 ANALYZE marie_scheduler.job;
 ANALYZE marie_scheduler.job_dependencies;
@@ -104,7 +102,6 @@ ANALYZE marie_scheduler.dag;
 
 -- For hot job partitions you can also VACUUM to improve the visibility map:
 VACUUM (ANALYZE) marie_scheduler.job_part_YYYYMM;
-
 
 
 -- Per job partition (repeat on each child)

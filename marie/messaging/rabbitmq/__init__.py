@@ -1,1 +1,1 @@
-from marie.messaging.rabbitmq.client import BlockingPikaClient
+from marie.messaging.rabbitmq.client import AsyncPikaClient, BlockingPikaClient

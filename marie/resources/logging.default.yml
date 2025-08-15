@@ -1,27 +1,30 @@
-handlers:  # enabled handlers, order does not matter
+handlers:
 #  - StreamHandler
 #  - FileHandler
   - RichHandler
-level: INFO  # set verbose level
+level: INFO
 configs:
   FileHandler:
-    format: '%(asctime)s:{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
-#    output: 'marie.log'
+    # Example if you enable it:
+    format: '%(asctime)s:{app:>15}@%(process)2d[%(levelname).1s]:%(name)s[%(context)s]:%(message)s'
     output: '/var/log/marie/marie-{uptime}.log'
     formatter: JsonFormatter
+
   StreamHandler:
-#    format: '{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
-    format: '%(asctime)s, %(levelname)-8s [%(filename)s:%(module)s:%(funcName)s:%(lineno)d] %(message)s'
+    format: '%(asctime)s %(levelname)-8s %(name)s[%(context)s] %(filename)s:%(funcName)s:%(lineno)d - %(message)s'
     formatter: PlainFormatter
+
   SysLogHandler:
-    ident: # this will be prepend to all messages
-    format: '{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
-    host: # when not given then record it locally, /dev/log on linux /var/run/syslog on mac
-    port: # when not given then record it locally,  /dev/log on linux /var/run/syslog on mac
+    ident:
+    format: '{app:>15}@%(process)2d[%(levelname).1s]:%(name)s[%(context)s]:%(message)s'
+    host:
+    port:
     formatter: PlainFormatter
+
   RichHandler:
-    format: '%(asctime)s:%(request_id)-11s : {name}@%(process)2d %(message)s'
+    # Use the per-record logger name and your context tag
+    format: '%(asctime)s:%(request_id)-11s : %(name)s[%(context)s]@%(process)2d %(message)s'
     markup: false
     rich_tracebacks: false
     show_path: false
-    log_time_format: '[%x %X]'    
+    log_time_format: '[%x %X]'

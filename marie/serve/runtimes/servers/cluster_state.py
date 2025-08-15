@@ -12,7 +12,6 @@ class _ClusterState:
     _deployment_nodes: Optional[Dict[str, Any]] = None
     _deployments_last_updated: Optional[float] = -1
 
-    scheduled_event = asyncio.Event()  # Notification event for job scheduling
     deployment_update_event = asyncio.Event()  # Event to signal deployment updates
 
     @property

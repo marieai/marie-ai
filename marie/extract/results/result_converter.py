@@ -51,11 +51,16 @@ def build_template(config: OmegaConf) -> Template:
     layer_1 = Layer()
     layer_1.layer_name = layer_name
 
+    # TODO: Externalize this mapping
     if layout_id == "1000985":
         layer_1.start_selector_sets = build_selector_sets(
             ["PATIENT NAME", "CLAIM ID", "MEMBER ID", "PATIENT ACCOUNT", "MEMBER"]
         )
-    elif layout_id == "121880":
+    elif layout_id == "121880":  # ORIGINAL 117183
+        layer_1.start_selector_sets = build_selector_sets(
+            ["PATIENT NAME", "CLAIM NUMBER", "PATIENT ACCOUNT", "CHECK NUMBER"]
+        )
+    elif layout_id == "103932":  # ORIGINAL 103932 -> 122169
         layer_1.start_selector_sets = build_selector_sets(
             ["PATIENT NAME", "CLAIM NUMBER", "PATIENT ACCOUNT", "CHECK NUMBER"]
         )
