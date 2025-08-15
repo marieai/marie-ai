@@ -187,7 +187,16 @@ executors:
      uses:
 #       jtype: TextExtractionExecutor
        jtype: TextExtractionExecutorMock
+       exit_on_exceptions:
+         - CUDARuntimeTerminated
        with:
+         health:
+           gpu_monitor_enabled: true
+           interval_s: 30
+           consecutive_failures: 3
+           fail_fast_on_error: true
+           torch_check_enabled: true
+           torch_check_every: 3
          storage:
            # postgresql configuration. Will be used only if value of backend is "psql"
            psql:
