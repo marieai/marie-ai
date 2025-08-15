@@ -103,6 +103,17 @@ def s3_asset_path(
     return ret_path
 
 
+def is_component_enabled(conf: Any, default: bool) -> bool:
+    if conf is None:
+        return default
+
+    # List of items ─ enable if ANY is enabled.
+    if isinstance(conf, list):
+        return any(item.get("enabled", True) for item in conf)
+
+    return conf.get("enabled", default)
+
+
 def setup_overlay(
     pipeline_config: Optional[dict] = None,
     key: str = "page_overlay",
