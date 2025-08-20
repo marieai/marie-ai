@@ -9,6 +9,7 @@ from marie.components.document_indexer.base import BaseDocumentIndexer
 from marie.components.document_indexer.llm_task import (
     PROMPT_STRATEGIES,
     LLMConfig,
+    LLMTask,
     initialize_tasks,
     md_wrap,
     modify_outputs,
@@ -205,7 +206,7 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
 
         return data
 
-    def resolve_task_graph(self, task_requests):
+    def resolve_task_graph(self, task_requests) -> List[LLMTask]:
 
         requested_tasks = []
         for task_name in task_requests:
@@ -213,13 +214,13 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
                 raise ValueError(
                     f"Undefined task requested {task_name}. Available tasks: {list(self.task_map.keys())}"
                 )
-            requested_tasks.append(self.task_map[task_name])
-
-        chained_tasks = []
-        for task in requested_tasks:
+            task = self.task_map[task_name]
             if task.chained_tasks:
-                chained_tasks.extend(
-                    [self.task_map[task_name] for task_name in task.chained_tasks]
+                chained_tasks = self.resolve_task_graph(task.chained_tasks)
+                requested_tasks.extend(
+                    [ct for ct in chained_tasks if ct not in requested_tasks]
                 )
+            if task not in requested_tasks:
+                requested_tasks.append(task)
 
-        return chained_tasks + requested_tasks
+        return requested_tasks
