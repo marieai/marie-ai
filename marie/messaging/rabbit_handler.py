@@ -1,4 +1,3 @@
-# python
 import asyncio
 from typing import Any, List
 
@@ -21,13 +20,32 @@ class RabbitMQToastHandler(ToastHandler):
         self.logger = MarieLogger(context=self.__class__.__name__)
         self._client: AsyncPikaClient | None = None
         self._client_ready = asyncio.Lock()  # serialize first-time init
+
+        q_cfg = (self.config or {}).get("queue", {})
+        self._queue_maxsize: int = int(q_cfg.get("maxsize", 2048))
+        self._drop_if_full: bool = bool(q_cfg.get("drop_if_full", False))
+        self._enqueue_timeout_s: float = float(
+            q_cfg.get("enqueue_timeout_s", 0.0)
+        )  # 0 => no wait
+        self._queue: asyncio.Queue[EventMessage] = asyncio.Queue(
+            maxsize=self._queue_maxsize
+        )
+        self._shutdown_event = asyncio.Event()
+        self._worker_task: asyncio.Task | None = None
+
+        # NEW: retry/backoff knobs for worker
+        r_cfg = (self.config or {}).get("retry", {})
+        self._backoff_base_s: float = float(r_cfg.get("backoff_base_s", 0.5))
+        self._backoff_max_s: float = float(r_cfg.get("backoff_max_s", 10.0))
+
         self.logger.info("RabbitMQ Toast Handler started.")
-        # Warm-up connection in background (doesn't block constructor)
+        # Warm-up connection in background
         try:
             loop = asyncio.get_running_loop()
             loop.create_task(self._warmup())
+            self._worker_task = loop.create_task(self._worker())
         except RuntimeError:
-            # No running loop yet; warm-up will happen on first use
+            # No running loop yet; worker will start on first use via notify()
             pass
 
     async def _warmup(self) -> None:
@@ -85,26 +103,22 @@ class RabbitMQToastHandler(ToastHandler):
         silence_exceptions: bool = False,
         **kwargs: Any,
     ) -> None:
+        """
+        Single publish action (no retries here). The worker ensures ordering and retries.
+        """
         try:
-            self.logger.info(f"Sending notification to RabbitMQ : {notification.event}")
             if notification.api_key is None:
                 raise ValueError(
                     f"'api_key' not present in notification : {notification}"
                 )
-
-            # Removed duplicate connectivity check here; notify() does the fail-fast gate.
 
             api_key = notification.api_key
             exchange = f"{api_key}.events"
             queue = f"{api_key}.all-events"
             routing_key = notification.event if notification.event else "*"
 
-            self.logger.info(
-                f"exchange: {exchange}, queue: {queue}, routing_key: {routing_key}"
-            )
-
             client = await self._get_client()
-
+            # ensure topology once per stream; harmless if idempotent
             await client.ensure_topology(
                 exchange=exchange,
                 queue=queue,
@@ -116,25 +130,120 @@ class RabbitMQToastHandler(ToastHandler):
             await client.publish_message(
                 exchange=exchange, routing_key=routing_key, message=notification
             )
-
         except Exception as e:
             if silence_exceptions:
                 self.logger.warning(
-                    "Toast enabled but config not setup correctly", exc_info=1
+                    f"RabbitMQ publish failed (silenced): {e}", exc_info=1
                 )
             else:
                 raise BadConfigSource(
                     "Toast enabled but config not setup correctly"
                 ) from e
 
+    async def _worker(self) -> None:
+        """
+        Single consumer that preserves ordering by:
+        - Getting one item at a time
+        - Retrying the same item on failure with backoff
+        - Only then moving to the next item
+        """
+        self.logger.info("RabbitMQToastHandler worker started.")
+        backoff = self._backoff_base_s
+        while not self._shutdown_event.is_set():
+            try:
+                notification = await self._queue.get()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.error(f"Worker queue error: {e}", exc_info=1)
+                await asyncio.sleep(0.5)
+                continue
+
+            # retry loop for the current item
+            while not self._shutdown_event.is_set():
+                try:
+                    # Ensure connection before trying to publish
+                    ok = await self.verify_connection()
+                    if not ok:
+                        raise RuntimeError("RabbitMQ not connected")
+
+                    # publish (no reordering: we retry this item until success or shutdown)
+                    await self.__notify_task(notification, silence_exceptions=False)
+                    # success => reset backoff and go to next message
+                    backoff = self._backoff_base_s
+                    break
+                except Exception as e:
+                    self.logger.warning(
+                        f"Publish failed; will retry after {backoff:.2f}s. Error: {e}"
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(
+                        self._backoff_max_s, backoff * 2 or self._backoff_base_s
+                    )
+
+            self._queue.task_done()
+
+        self.logger.info("RabbitMQToastHandler worker stopped.")
+
     async def notify(self, notification: EventMessage, **kwargs: Any) -> bool:
+        """
+        Enqueue the notification for ordered delivery.
+        - Preserves ordering via single worker.
+        - Applies backpressure according to queue settings.
+        """
         if not self.config or not self.config.get("enabled"):
             return False
 
-        # Single fail-fast connectivity check
-        if not await self.verify_connection():
-            self.logger.warning("Skipping notification: RabbitMQ not connected.")
+        # Start worker if we were constructed before loop was running
+        if self._worker_task is None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._warmup())
+                self._worker_task = loop.create_task(self._worker())
+            except RuntimeError:
+                self.logger.warning("notify() called without a running loop.")
+                raise
+
+        try:
+            # apply backpressure policy
+            if self._drop_if_full and self._queue.full():
+                self.logger.warning(
+                    "Toast queue full; dropping message due to drop_if_full=True."
+                )
+                return False
+
+            if self._enqueue_timeout_s and self._enqueue_timeout_s > 0:
+                await asyncio.wait_for(
+                    self._queue.put(notification), timeout=self._enqueue_timeout_s
+                )
+            else:
+                await self._queue.put(notification)
+
+            return True
+        except asyncio.TimeoutError:
+            self.logger.warning("Toast enqueue timed out; message dropped.")
+            return False
+        except Exception as e:
+            self.logger.error(f"Failed to enqueue toast notification: {e}", exc_info=1)
             return False
 
-        await self.__notify_task(notification, True, **kwargs)
-        return True
+    async def close(self, drain: bool = True, timeout: float = 5.0) -> None:
+        """
+        Graceful shutdown:
+        - Optionally drain the queue
+        - Stop the worker
+        """
+        if drain:
+            try:
+                await asyncio.wait_for(self._queue.join(), timeout=timeout)
+            except asyncio.TimeoutError:
+                self.logger.warning("Timeout waiting for queue to drain.")
+
+        self._shutdown_event.set()
+        if self._worker_task:
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+            self._worker_task = None

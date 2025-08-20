@@ -60,6 +60,25 @@ if TYPE_CHECKING:  # pragma: no cover
     from marie.types_core.request import Request
 
 
+def _is_missing_lease_error(exc: Exception) -> bool:
+    """
+    Return True if 'exc' indicates that the etcd lease is missing/expired (NOT_FOUND or equivalent).
+    Safe even if grpc is not installed.
+    """
+    try:
+        import grpc
+
+        if isinstance(exc, grpc.RpcError):
+            code = exc.code()
+            msg = str(exc)
+            return (code == grpc.StatusCode.NOT_FOUND) or (
+                "lease not found" in msg.lower()
+            )
+    except Exception:
+        pass
+    return "requested lease not found" in str(exc).lower()
+
+
 # GB:MOD
 class WorkerRequestHandler:
     """Object to encapsulate the code related to handle the data requests passing to executor and its returned values"""
@@ -194,21 +213,31 @@ class WorkerRequestHandler:
 
         # discovery
         args_dict = {k: v for k, v in vars(self.args).items() if v is not None}
+        print('etcdargs_dict : ', args_dict)
         etcd_args = convert_to_etcd_args(args_dict)
 
         etcd_config = EtcdConfig.from_dict(etcd_args)
         self._lease_time = etcd_config.lease_sec
         self._heartbeat_time = etcd_config.heartbeat_sec
+
+        self._lease_time = 30  # default lease time
+        self._heartbeat_time = 10  # default heartbeat time
+
         self._heartbeat_thread = None
         self._lease = None
 
         self._etcd_client = get_etcd_client(etcd_args)
         self._lease = self._etcd_client.lease(self._lease_time)
+        self._lease_reacquire_lock = threading.Lock()
+
         self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
-        self._set_deployment_status(
-            health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
-        )
+
+        self._set_deployment_status(self._worker_state)
         self.setup_heartbeat()
+
+        self._last_logged_status = None
+        self._last_status_log_ts = 0.0
+        self._status_log_interval = 60.0  # seconds
 
     def _http_fastapi_default_app(self, **kwargs):
         from marie.serve.runtimes.worker.http_fastapi_app import (  # For Gateway, it works as for head
@@ -1532,9 +1561,17 @@ class WorkerRequestHandler:
         if self.is_dry_run(requests):
             return
 
-        self._set_deployment_status(
-            health_pb2.HealthCheckResponse.ServingStatus.SERVICE_UNKNOWN
-        )
+        self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.UNKNOWN
+        try:
+            await asyncio.to_thread(
+                self._set_deployment_status,
+                self._worker_state,
+            )
+        except Exception as set_status_exc:
+            self.logger.error(
+                f"Failed to set UNKNOWN during _record_failed_job: {set_status_exc}"
+            )
+
         if job_id is not None and self._job_info_client is not None:
             try:
                 # Extract the traceback information from the exception
@@ -1587,10 +1624,20 @@ class WorkerRequestHandler:
         if self.is_dry_run(requests):
             return
 
-        self.logger.debug(f"Record job started: {job_id}")
-        self._set_deployment_status(
-            health_pb2.HealthCheckResponse.ServingStatus.SERVING
-        )
+        self.logger.info(f"Record job started: {job_id}")
+        self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.SERVING
+        # self._set_deployment_status(self._worker_state)
+
+        try:
+            await asyncio.to_thread(
+                self._set_deployment_status,
+                self._worker_state,
+            )
+        except Exception as set_status_exc:
+            self.logger.error(
+                f"Failed to set SERVING during _record_started_job: {set_status_exc}"
+            )
+
         if job_id is not None and self._job_info_client is not None:
             try:
                 await self._job_info_client.put_status(
@@ -1616,10 +1663,21 @@ class WorkerRequestHandler:
         if self.is_dry_run(requests):
             return
 
-        self.logger.debug(f"Record job success: {job_id}")
-        self._set_deployment_status(
-            health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
-        )
+        self.logger.info(f"Record job success: {job_id}")
+
+        self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
+        # self._set_deployment_status(self._worker_state)
+
+        try:
+            await asyncio.to_thread(
+                self._set_deployment_status,
+                self._worker_state,
+            )
+        except Exception as set_status_exc:
+            self.logger.error(
+                f"Failed to set NOT_SERVING during _record_successful_job: {set_status_exc}"
+            )
+
         if job_id is not None and self._job_info_client is not None:
             try:
                 request_attributes = self._request_attributes(requests)
@@ -1656,26 +1714,69 @@ class WorkerRequestHandler:
     ):
         """
         Set the status of a deployment address in etcd. This will refresh lease for the deployment address.
-        :param status: Status of the worker
+        :param status: Status of the worker, this
         """
-        self.logger.debug(f"Setting deployment status: {status}")
+        # self.logger.info(f"Setting deployment status: {health_pb2.HealthCheckResponse.ServingStatus.Name(status)}")
+        now = time.time()
+        if self._last_logged_status != status:
+            self.logger.info(
+                f"Setting deployment status: {health_pb2.HealthCheckResponse.ServingStatus.Name(status)}"
+            )
+            self._last_logged_status = status
+            self._last_status_log_ts = now
+        elif (now - self._last_status_log_ts) >= self._status_log_interval:
+            self.logger.debug(
+                f"Reaffirming deployment status: {health_pb2.HealthCheckResponse.ServingStatus.Name(status)}"
+            )
+            self._last_status_log_ts = now
+        else:
+            # Too soon to log again; keep silent
+            pass
 
-        self._worker_state = status
+        if status != self._worker_state:
+            self.logger.info(
+                f"Updating deployment status from {self._worker_state} to {status}"
+            )
+
         node_info = self.node_info
         deployment_name = node_info['deployment_name']
         address = f"{node_info['host']}:{node_info['port']}"
 
-        status_str = HealthCheckResponse.ServingStatus.Name(status)
+        status_str = health_pb2.HealthCheckResponse.ServingStatus.Name(status)
         key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
+        # Eagerly update local desired state so heartbeat publishes the intended value
+        self._worker_state = status
 
         try:
-            self.logger.debug(
-                f"Updating lease key: {key} - state: {status_str} - lease time: {self._lease_time}"
-            )
-            self._etcd_client.put(key, status_str, lease=self._lease)
-        except Exception as e:
-            self.logger.error(f"Failed to update deployment status in etcd: {e}")
-            raise
+            self._etcd_put_with_lease(key, status_str, reason="_set_deployment_status")
+        except Exception as exc:
+            self.logger.error(f"Failed to set deploymente status in etcd: {exc}")
+
+    def _etcd_put_with_lease(self, key: str, value: str, *, reason: str) -> None:
+        """
+        Put a key/value in etcd using the current lease with a single retry after lease reacquire.
+        Simple and explicit:
+          - Ensure lease exists.
+          - Try once.
+          - If missing/expired lease, reacquire and retry once.
+        """
+        if self._lease is None:
+            self.logger.warning("No lease present; reacquiring (reason=%s).", reason)
+            self.reacquire_lease(reason=f"{reason}_missing_lease")
+
+        try:
+            self._etcd_client.put(key, value, lease=self._lease)
+        except Exception as exc:
+            if _is_missing_lease_error(exc):
+                self.logger.warning(
+                    "Lease missing/expired during put; reacquiring (reason=%s). Error: %s",
+                    reason,
+                    exc,
+                )
+                self.reacquire_lease(reason=f"{reason}_not_found")
+                self._etcd_client.put(key, value, lease=self._lease)
+            else:
+                raise
 
     def heartbeat(self):
         """Service heartbeat. Refresh the lease and handle TTL expiration."""
@@ -1684,47 +1785,110 @@ class WorkerRequestHandler:
             return
 
         self.logger.debug(
-            f"Heartbeat: {self._worker_state} - TTL: {self._lease.remaining_ttl}"
+            f"Heartbeat: {self._worker_state} - TTL: {getattr(self._lease, 'remaining_ttl', 'unknown')}"
         )
         try:
             self.logger.debug(
-                f"Refreshing lease: TTL before refresh = {self._lease.remaining_ttl}"
+                f"Refreshing lease: TTL before refresh = {getattr(self._lease, 'remaining_ttl', 'unknown')}"
             )
-            ret = self._lease.refresh()[0]
+            resp = self._lease.refresh()
 
-            if ret.TTL == 0:
-                self.logger.warning(
-                    f"Lease expired (TTL=0), attempting to recover lease."
-                )
-                self._set_deployment_status(self._worker_state)
-                self.reacquire_lease()  # Attempt to recover
-            else:
-                # Refresh successful — reflect current status in etcd
-                self._set_deployment_status(self._worker_state)
-        except Exception as e:
-            if "etcdserver: requested lease not found" in str(e):
-                self.logger.warning(
-                    "Lease not found on etcd server, attempting to reacquire."
-                )
-                self.reacquire_lease()
-            else:
-                self.logger.error("Unexpected error during heartbeat.")
-                raise
+            # Derive TTL safely for different client shapes
+            ttl = None
+            try:
+                ttl_attr = getattr(resp, "TTL", None)
+                if ttl_attr is not None:
+                    ttl = ttl_attr
+                elif isinstance(resp, (list, tuple)) and resp:
+                    ttl = getattr(resp[0], "TTL", None)
+            except Exception:
+                ttl = None
 
-    def reacquire_lease(self):
-        """
-        Attempt to reacquire a lease and rebind the service key.
-        """
-        try:
-            self.logger.info("Attempting to reacquire etcd lease...")
-            self._lease = self._etcd_client.lease(self._lease_time)
-            self._set_deployment_status(
-                health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
+            lease_ttl = (
+                ttl if ttl is not None else getattr(self._lease, "remaining_ttl", None)
             )
-            self.logger.info(f"Reacquired lease ID: {self._lease.id}")
-        except Exception as e:
-            self.logger.error(f"Failed to reacquire lease: {e}")
-            raise
+
+            if lease_ttl == 0:
+                self.logger.warning("Lease expired (TTL=0), attempting to reacquire.")
+                self.reacquire_lease(reason="heartbeat_ttl0")
+                # Rebind current state under the new lease
+                self._set_deployment_status(self._worker_state)
+            else:
+                # Refresh successful — reaffirm current status
+                self._set_deployment_status(self._worker_state)
+        except Exception as exc:
+            if _is_missing_lease_error(exc):
+                self.logger.warning(
+                    "Detected missing lease during heartbeat; reacquiring. Error: %s",
+                    exc,
+                )
+                self.reacquire_lease(reason="heartbeat_not_found")
+                # Rebind after reacquire
+                try:
+                    self._set_deployment_status(self._worker_state)
+                except Exception as bind_exc:
+                    self.logger.error(
+                        "Failed to rebind deployment status after lease reacquire: %s",
+                        bind_exc,
+                    )
+            else:
+                self.logger.warning("Heartbeat error (non-fatal): %s", exc)
+
+    def reacquire_lease(self, reason: str = "reacquire_lease") -> bool:
+        """
+        Try to reacquire an etcd lease and immediately rebind current status.
+
+        Returns True on success, False on failure (and leaves self._lease = None).
+        """
+        import random
+        import time
+
+        max_attempts = 3
+        base_backoff = 0.5
+        max_backoff = 5.0
+
+        last_exc = None
+        attempt = 0
+
+        while attempt < max_attempts:
+            attempt += 1
+            with self._lease_reacquire_lock:
+                self.logger.info(
+                    "Reacquiring etcd lease (reason=%s, attempt=%d/%d)",
+                    reason,
+                    attempt,
+                    max_attempts,
+                )
+                try:
+                    self._lease = self._etcd_client.lease(self._lease_time)
+                    self.logger.info(
+                        "Reacquired lease id=%s", getattr(self._lease, "id", "unknown")
+                    )
+                    return True
+                except Exception as exc:
+                    last_exc = exc
+
+            if attempt < max_attempts:
+                sleep_s = min(max_backoff, base_backoff * (2 ** (attempt - 1)))
+                sleep_s *= random.uniform(0.8, 1.2)
+                self.logger.warning(
+                    "Lease reacquire failed (attempt %d/%d, reason=%s): %s. Retrying in %.2fs",
+                    attempt,
+                    max_attempts,
+                    reason,
+                    last_exc,
+                    sleep_s,
+                )
+                time.sleep(sleep_s)
+
+        self.logger.error(
+            "Lease reacquire failed after %d attempts (reason=%s): %s",
+            max_attempts,
+            reason,
+            last_exc,
+        )
+        self._lease = None
+        return False
 
     def setup_heartbeat(self):
         """
@@ -1732,6 +1896,14 @@ class WorkerRequestHandler:
         :return: None
         """
         self.logger.info("Calling heartbeat setup")
+
+        # Base heartbeat as a fraction of TTL Here: 25%.
+        base_heartbeat = max(1.0, 0.25 * self._lease_time)  # guard a minimum
+
+        def next_heartbeat_delay(base=base_heartbeat, jitter_fraction=0.15):
+            # jitter_fraction in [0.10, 0.20]
+            j = random.uniform(-jitter_fraction, jitter_fraction)
+            return max(1.0, base * (1.0 + j))
 
         if self._lease and self._heartbeat_thread and self._heartbeat_thread.is_alive():
             raise RuntimeError(
@@ -1816,7 +1988,8 @@ class WorkerRequestHandler:
                     time.sleep(backoff_time)
                     continue
 
-                time.sleep(self._heartbeat_time)
+                # time.sleep(self._heartbeat_time)
+                time.sleep(next_heartbeat_delay())
 
         self._heartbeat_thread = threading.Thread(target=_heartbeat_setup, daemon=True)
         self._heartbeat_thread.start()

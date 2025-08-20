@@ -14,7 +14,8 @@ from marie.job.common import ActorHandle, JobInfo, JobInfoStorageClient, JobStat
 from marie.job.event_publisher import EventPublisher
 from marie.job.job_callback_executor import job_callback_executor
 from marie.job.job_distributor import JobDistributor
-from marie.job.lease_cache import LeaseCache
+
+# from marie.job.lease_cache import LeaseCache
 from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.discovery.etcd_client import EtcdClient
@@ -50,7 +51,7 @@ class JobSupervisor:
         self._job_distributor = job_distributor
         self._event_publisher = event_publisher
         self._etcd_client = etcd_client
-        self._lease_cache = LeaseCache(etcd_client, ttl=5, margin=1.0)
+        # self._lease_cache = LeaseCache(etcd_client, ttl=5, margin=1.0)
         self.request_info = None
         self.confirmation_event = confirmation_event  # we need to make sure that this is per job confirmation event
         self._active_tasks = set()
@@ -226,9 +227,10 @@ class JobSupervisor:
                             message="Job submission timed out.",
                         )
         else:
-            task = asyncio.create_task(self._submit_job_in_background(curr_info))
-            self._active_tasks.add(task)
-            task.add_done_callback(lambda t: self._active_tasks.discard(t))
+            await self._submit_job_in_background(curr_info)
+            # task = asyncio.create_task(self._submit_job_in_background(curr_info))
+            # self._active_tasks.add(task)
+            # task.add_done_callback(lambda t: self._active_tasks.discard(t))
 
         self.logger.info(f"Job submitted in the background : {self._job_id}")
 
@@ -294,19 +296,19 @@ class JobSupervisor:
             status_str = HealthCheckResponse.ServingStatus.Name(status)
             key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
 
-            # lease_time = 5
-            # t0 = time.monotonic()
-            # lease = self._etcd_client.lease(lease_time)
-            # t1 = time.monotonic()
-            # self._etcd_client.put(key, status_str, lease=lease)
-            # t2 = time.monotonic()
-
             lease_time = 5
             t0 = time.monotonic()
-            lease = self._lease_cache.get_or_refresh(key, ttl=lease_time)  # type: ignore[assignment]
+            lease = self._etcd_client.lease(lease_time)
             t1 = time.monotonic()
             self._etcd_client.put(key, status_str, lease=lease)
             t2 = time.monotonic()
+
+            # lease_time = 5
+            # t0 = time.monotonic()
+            # lease = self._lease_cache.get_or_refresh(key, ttl=lease_time)  # type: ignore[assignment]
+            # t1 = time.monotonic()
+            # self._etcd_client.put(key, status_str, lease=lease)
+            # t2 = time.monotonic()
 
             self.logger.info(
                 "Etcd update for %s: lease=%.3fs put=%.3fs total=%.3fs",
@@ -333,21 +335,14 @@ class JobSupervisor:
             self.logger.debug(
                 "Starting background submission for job: %s", self._job_id
             )
+
             # Submit using the non-blocking wrapper, but DO NOT await the result here.
             send_task = await self._job_distributor.send_nowait(
                 submission_id=self._job_id,
                 job_info=job_info,
-                send_callback=self.send_callback,  # unchanged semantics
+                send_callback=self.send_callback,
                 wait_for_ack=0.0,  # no extra wait here
             )
-
-            if self.confirmation_event is not None:
-                try:
-                    await asyncio.wait_for(self.confirmation_event.wait(), timeout=3.0)
-                except asyncio.TimeoutError:
-                    self.logger.warning(
-                        "No ACK within 3s for job %s (continuing)", self._job_id
-                    )
 
             self.logger.info(
                 "Job enqueued in %.2fs for job %s",

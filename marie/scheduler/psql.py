@@ -1057,7 +1057,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             self.logger.info(f"Job scheduled: {result} on {executor}")
                             scheduled_any = True
                         else:
-                            self.logger.error(f"Failed to enqueue job: {work_info.id}")
+                            self.logger.error(
+                                f"Failed to enqueue job: {work_info.id} on {executor} - no result returned"
+                            )
 
                 if jobs_scheduled_this_cycle or len(flat_jobs) > 0:
                     self.logger.info("Scheduling summary for this cycle:")
@@ -1317,7 +1319,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 metadata=work_info.data,
                 confirmation_event=confirmation_event,
             )
-            await asyncio.wait_for(confirmation_event.wait(), timeout=2)
+            await asyncio.wait_for(confirmation_event.wait(), timeout=5)
         except ValueError as e:
             self.logger.error(f"Error during job submission: {e}")
             return None
