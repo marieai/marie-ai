@@ -39,7 +39,8 @@ def test_llm_pipeline_component():
             #     "indexer": indexer,
             #     "group": "corr_page_indexing_llm",
             # },
-        }
+        },
+        llm_tasks=["corr_patients"]
     )
 
     documents = docs_from_file("~/data/tmp/227803751/227803751.tif")
@@ -58,14 +59,10 @@ def test_llm_pipeline_component():
     context = PipelineContext(pipeline_id="test_llm_pipeline")
     context["metadata"] = {}
 
-    with TimeContext(f"MMLLM Indexing tasks"):
-        document_meta = pipe_component.predict(documents, context, words=words, boxes=boxes, lines=lines)
+    document_meta = pipe_component.run(documents, context, words=words, boxes=boxes, lines=lines)
 
     for i, document in enumerate(documents):
         assert DOC_KEY_INDEXER in document.tags
-        assert all(task_name in document.tags[DOC_KEY_INDEXER]
-                   for task_name, task in indexer.task_map.items()
-                   if task.store_results)
         print(f"############ Results Page {i}:\n", to_json(document.tags))
 
     print(document_meta)

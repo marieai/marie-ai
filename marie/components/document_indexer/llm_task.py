@@ -104,15 +104,21 @@ class LLMOutputModifier(BaseModel):
     substitute: str | None
 
 
+class PageFilter(BaseModel):
+    task: str
+    pattern: dict | str
+
+
 class LLMTask(BaseModel):
     name: str
     prompt: str
     prompt_mod_strategy: Optional[str] = "prompt_identity"
     guided_json_schema: Optional[str] = None
-    chained_tasks: Optional[List[str]] = None
+    chained_tasks: Optional[List[str]] = []
     output_type: Optional[str] = "text"
     store_results: Optional[bool] = True
     output_mod: Optional[LLMOutputModifier] = None
+    page_filter: Optional[PageFilter] = None
 
 
 class LLMConfig(BaseModel):
@@ -205,3 +211,42 @@ def modify_outputs(
         (modify_task(task_output, pattern, substitute), error_data)
         for task_output, error_data in task_outputs
     ]
+
+
+def filter_pages(pattern: Any, page_output: dict[int, Any], page_subset=None):
+    """
+    Filters pages that match a given pattern from a provided page output dictionary.
+
+    This function processes a given pattern and filters the pages from a page output dictionary.
+    It checks the presence of the pattern in the content of the page's dictionary output and
+    returns a sorted list of matching page numbers. A subset of pages to filter can optionally
+    be provided.
+
+    Arguments:
+        pattern: Any
+            The pattern to match against the page output. Currently, must be a dictionary.
+        page_output: dict[int, Any]
+            A dictionary where keys are page numbers and values are tuples of page-specific
+            data and an error indicator.
+        page_subset: Optional[Iterable[int]]
+            An optional subset of page numbers to filter from. If None, all pages are considered.
+
+    Returns:
+        list[int]: A sorted list of page numbers that match the given pattern.
+    """
+    if isinstance(pattern, dict):
+        matching_pages = set()
+        pages = page_subset or page_output.keys()
+        for page_num, (page_output, error) in page_output.items():
+            if page_num not in pages:
+                continue
+            if not isinstance(page_output, dict):
+                continue
+            if all(page_output.get(k) == v for k, v in pattern.items()):
+                matching_pages.add(page_num)
+        return sorted(matching_pages)
+    # TODO: if needed
+    # elif isinstance(pattern, str):
+    #     pass
+
+    return sorted(page_output.keys())
