@@ -492,6 +492,39 @@ def store_assets(
         logger.error(f"Error storing assets : {e}")
 
 
+def asset_exists(
+    ref_id: str,
+    ref_type: str,
+    s3_file_path: str = "meta.json",
+) -> str or None:
+    """
+    Checks if an asset exists in the specified S3 location.
+
+    This function verifies the existence of an asset on an S3 bucket using the
+    provided reference ID, reference type, and a file path. It ensures the S3
+    connection is established and checks for the existence of the specified file.
+
+    Parameters:
+        ref_id (str): The reference ID for the asset.
+        ref_type (str): The type of the asset reference.
+        s3_file_path (str): The relative path to the file in the S3 bucket.
+            Defaults to "meta.json".
+
+    Returns:
+        str or None: A valid URI as a string if the asset exists; None otherwise.
+    """
+
+    s3_root_path = s3_asset_path(ref_id, ref_type)
+    connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
+    if not connected:
+        logger.error(f"Error restoring assets : Could not connect to S3")
+        return None
+
+    uri = f"{s3_root_path}/{s3_file_path}"
+    logger.info(f"Checking if assets exist at {uri}")
+    return StorageManager.exists(uri)
+
+
 def download_asset(
     ref_id: str,
     ref_type: str,

@@ -1,8 +1,10 @@
+import os
 from typing import Optional, Union
 
 import torch
 
 from marie import requests
+from marie.constants import __config_dir__
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
 from marie.logging_core.logger import MarieLogger
@@ -23,6 +25,7 @@ class DocumentExtractExecutor(MarieExecutor, StorageMixin):
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
+        kwargs['storage'] = storage
         super().__init__(**kwargs)
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
@@ -68,6 +71,9 @@ class DocumentExtractExecutor(MarieExecutor, StorageMixin):
         if storage is not None and "psql" in storage:
             sconf = storage["psql"]
             self.setup_storage(sconf.get("enabled", False), sconf)
+
+        self.root_config_dir = os.path.join(__config_dir__, "extract")
+        self.logger.info(f"root_config_dir: {self.root_config_dir}")
 
     @requests(on="/default")
     def default(self, parameters, **kwargs):
