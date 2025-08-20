@@ -16,11 +16,8 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import initialize_device_settings, setup_torch_optimizations
 from marie.pipe.components import s3_asset_path, store_assets, update_existing_meta
 from marie.storage import StorageManager
-from marie.utils.docs import docs_from_asset, frames_from_docs
-from marie.utils.image_utils import ensure_max_page_size, hash_frames_fast
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.network import get_ip_address
-from marie.utils.utils import ensure_exists
 
 
 class PipelineExecutor(MarieExecutor, StorageMixin):
@@ -124,16 +121,9 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
         :returns: Dictionary with merge status, runtime_info, and stored assets.
         :raises ConnectionError: If unable to fetch existing assets.
         """
-        job_id, ref_id, ref_type, _, payload = self.extract_base_parameters(parameters)
-        frames = self.get_frames_from_docs(docs)
-
-        # create local asset directory
-        frame_checksum = hash_frames_fast(frames=frames)
-        root_asset_dir = ensure_exists(
-            os.path.join("/tmp/generators", frame_checksum, job_id)
-        )
         job_id, ref_id, ref_type, _, payload = parse_parameters(parameters)
         frames = get_frames_from_docs(docs)
+        root_asset_dir = create_working_dir(frames)
 
         features = payload.get("features", [])
         meta_folders = [
