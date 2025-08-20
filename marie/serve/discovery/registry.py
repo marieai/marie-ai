@@ -79,62 +79,85 @@ class EtcdServiceRegistry(ServiceRegistry):
         logger.info("Etcd connected - re-registering all services")
 
         with self._lock:
-            # Clear all stale leases first
-            old_leases = dict(self._leases)
+            old_leases = dict(self._leases)  # snapshot
             self._leases.clear()
 
             services_to_reregister = []
             for service_addr, service_names in self._services.items():
                 old_lease = old_leases.get(service_addr)
-                if old_lease and service_names:
-                    # Use the TTL from the old lease, but we'll create a fresh one
+                ttl = None
+                if old_lease is not None:
+                    try:
+                        ttl = old_lease.remaining_ttl
+                    except AttributeError:
+                        try:
+                            ttl = old_lease.ttl
+                        except AttributeError:
+                            ttl = None
+                if not ttl:
+                    ttl = 5  # sensible fallback
+                if service_names:
                     services_to_reregister.append(
-                        (list(service_names), service_addr, old_lease.ttl)
+                        (list(service_names), service_addr, ttl)
                     )
 
         for service_names, service_addr, ttl in services_to_reregister:
             try:
-                # This will create a fresh lease via get_lease()
                 self.register(service_names, service_addr, ttl)
                 logger.info(f"Re-registered services {service_names} at {service_addr}")
             except Exception as e:
                 logger.error(
-                    f"Failed to re-register services {service_names} at {service_addr}: {e}"
+                    f"Failed to re-register services {service_names} at {service_addr}: {e}",
+                    exc_info=True,
                 )
 
     def _on_etcd_disconnected(self, event):
-        """Handle etcd disconnection."""
         logger.warning("Etcd disconnected - service registrations may be invalid")
 
     def _on_etcd_reconnecting(self, event):
-        """Handle etcd reconnection attempt."""
         logger.info("Etcd reconnecting...")
 
     def _on_etcd_failed(self, event):
-        """Handle etcd connection failure."""
-        logger.error(f"Etcd connection failed: {event.error}")
+        try:
+            err = event.error
+        except Exception:
+            err = "unknown"
+        logger.error(f"Etcd connection failed: {err}")
+
+    def _lease_ttl(self, lease, default=None) -> int:
+        """Return TTL from lease or default (no hasattr/getattr)."""
+        if lease is None:
+            return default
+        try:
+            return lease.remaining_ttl
+        except AttributeError:
+            pass
+        try:
+            return lease.ttl
+        except AttributeError:
+            pass
+        return default
 
     def get_lease(self, service_addr, service_ttl):
-        """Get a service lease from etcd.
-
-        :param service_addr: service address.
-        :param service_ttl: service lease ttl(seconds).
-        """
-
+        """Get or (re)create a service lease from etcd."""
         with self._lock:
             lease = self._leases.get(service_addr)
 
-            try:
-                if lease and lease.remaining_ttl > 0:
-                    return lease
-            except Exception:
-                # Lease is invalid/stale, remove it
-                if service_addr in self._leases:
-                    del self._leases[service_addr]
-                lease = None
+            if lease is not None:
+                try:
+                    ttl = self._lease_ttl(lease)
+                    if ttl and ttl > 0:
+                        return lease
+                except Exception:
+                    # bad lease; drop it
+                    try:
+                        del self._leases[service_addr]
+                    except Exception:
+                        pass
+                    lease = None
 
-            lease_id = abs(hash(service_addr)) % (2**31)
-            lease = self._etcd_client.lease(service_ttl, lease_id)
+            # Let etcd assign lease id to avoid collisions
+            lease = self._etcd_client.lease(service_ttl)
             self._leases[service_addr] = lease
             return lease
 
@@ -145,16 +168,8 @@ class EtcdServiceRegistry(ServiceRegistry):
         service_ttl: int,
         addr_cls=None,
         metadata=None,
-    ) -> int:
-        """Register services with the same address.
-
-        :param service_names: A collection of service name.
-        :param service_addr: server address.
-        :param service_ttl: service ttl(seconds).
-        :param addr_cls: format class of service address.
-        :param metadata: extra meta data for JsonAddress.
-        rtype `etcd3.lease.Lease`
-        """
+    ):
+        """Register services with the same address. Returns the lease object."""
         with self._lock:
             if isinstance(service_names, str):
                 service_names = [service_names]
@@ -164,11 +179,15 @@ class EtcdServiceRegistry(ServiceRegistry):
             for service_name in service_names:
                 key = form_service_key(service_name, service_addr)
                 resolved = self._etcd_client.get(key)
-
                 if resolved:
-                    logger.warning(
+                    logger.info(
                         f"Service already registered : {service_name}@{service_addr}"
                     )
+                    # still ensure we track it locally
+                    try:
+                        self._services[service_addr].add(service_name)
+                    except KeyError:
+                        self._services[service_addr] = {service_name}
                     continue
 
                 if addr_cls == JsonAddress:
@@ -178,27 +197,29 @@ class EtcdServiceRegistry(ServiceRegistry):
 
                 addr_val = addr_obj.add_value()
                 put_key, _ = self._etcd_client.put(key, addr_val, lease=lease)
-                logger.warning(
+                logger.info(
                     f"Registering service : {service_name}@{service_addr} : {put_key}"
                 )
+
                 try:
                     self._services[service_addr].add(service_name)
                 except KeyError:
                     self._services[service_addr] = {service_name}
+
         return lease
 
     def heartbeat(self, service_addr=None, service_ttl=5):
         """Service heartbeat with connection state awareness."""
         logger.debug(f"Heartbeat service_addr : {service_addr}")
 
-        current_state = self._etcd_client.get_connection_state()
-        if current_state in [
+        state = self._etcd_client.get_connection_state()
+        if state in (
             ConnectionState.DISCONNECTED,
             ConnectionState.RECONNECTING,
             ConnectionState.FAILED,
-        ]:
+        ):
             logger.debug(
-                f"Skipping heartbeat - connection state: {current_state.name if current_state else 'Unknown'}"
+                f"Skipping heartbeat - connection state: {state.name if state else 'Unknown'}"
             )
             return
 
@@ -218,42 +239,71 @@ class EtcdServiceRegistry(ServiceRegistry):
             if not registered:
                 continue
             try:
-                logger.debug(
-                    f"Refreshing lease for: {svc_addr}, TTL: {lease.remaining_ttl}"
-                )
-                ret = lease.refresh()[0]
+                ttl_before = self._lease_ttl(lease)
+                logger.debug(f"Refreshing lease for: {svc_addr}, TTL: {ttl_before}")
 
-                if ret.TTL == 0:
+                refresh_result = lease.refresh()
+                # Normalize return (could be (resp,) or object)
+                try:
+                    resp = refresh_result[0]
+                except (TypeError, IndexError):
+                    resp = refresh_result
+
+                ttl = None
+                try:
+                    ttl = resp.TTL
+                except AttributeError:
+                    try:
+                        ttl = resp.ttl
+                    except AttributeError:
+                        ttl = None
+
+                if ttl is not None and int(ttl) == 0:
                     logger.warning(
                         f"Lease expired (TTL=0) for {svc_addr}, re-registering services"
                     )
-                    self.register(list(registered), svc_addr, lease.ttl)
+                    fallback_ttl = self._lease_ttl(lease, service_ttl) or service_ttl
+                    self.register(list(registered), svc_addr, fallback_ttl)
 
             except Exception as e:
-                logger.error(f"Error during heartbeat for {svc_addr}: {e}")
+                logger.error(
+                    f"Error during heartbeat for {svc_addr}: {e}", exc_info=True
+                )
 
     def unregister(self, service_names, service_addr, addr_cls=None):
-        """Unregister services with the same address.
-
-        :param service_names: A collection of service name.
-        :param service_addr: server address.
-        :param addr_cls: format class of service address.
-        """
-
+        """Unregister services with the same address."""
         addr_cls = addr_cls or PlainAddress
-        etcd_delete = True
-        if addr_cls != PlainAddress:
-            etcd_delete = False
+        etcd_delete = addr_cls == PlainAddress
 
-        registered_services = self._services.get(service_addr, {})
-        for service_name in service_names:
-            logger.info(f"Unregistering service : {service_name}@{service_addr}")
-            key = form_service_key(service_name, service_addr)
-            if etcd_delete:
-                self._etcd_client.delete(key)
+        with self._lock:
+            registered_services = self._services.get(service_addr, set())
+
+            for service_name in service_names:
+                logger.info(f"Unregistering service : {service_name}@{service_addr}")
+                key = form_service_key(service_name, service_addr)
+                try:
+                    if etcd_delete:
+                        self._etcd_client.delete(key)
+                    else:
+                        # For JsonAddress etc: write a delete marker/value at the same key
+                        if addr_cls == PlainAddress:
+                            raise ValueError(
+                                'addr_cls must be JsonAddress not PlainAddress'
+                            )
+
+                        value = addr_cls(service_addr).delete_value()
+                        self._etcd_client.put(key, value)
+                except Exception as e:
+                    logger.error(
+                        f"Error unregistering {service_name}@{service_addr}: {e}",
+                        exc_info=True,
+                    )
+                registered_services.discard(service_name)
+
+            if registered_services:
+                self._services[service_addr] = registered_services
             else:
-                self._etcd_client.put(addr_cls(service_addr).delete_value())
-            registered_services.discard(service_name)
+                self._services.pop(service_addr, None)
 
     def setup_heartbeat_async(self):
         """
@@ -341,7 +391,7 @@ class EtcdServiceRegistry(ServiceRegistry):
     def shutdown(self):
         self._shutdown_event.set()
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            logger.debug("Waiting for listen thread to stop...")
+            logger.debug("Waiting for heartbeat thread to stop...")
             self._heartbeat_thread.join(timeout=self._heartbeat_time + 1)
             if self._heartbeat_thread.is_alive():
-                logger.warning("Listen thread did not stop gracefully")
+                logger.warning("Heartbeat thread did not stop gracefully")

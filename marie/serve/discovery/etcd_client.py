@@ -11,7 +11,6 @@ import etcd3
 import grpc
 from etcd3 import MultiEndpointEtcd3Client
 from etcd3.client import Etcd3Client
-from grpc._channel import _Rendezvous
 
 from marie.excepts import RuntimeFailToStart
 from marie.logging_core.predefined import default_logger as logger
@@ -106,7 +105,7 @@ class EtcdClient(object):
         self._state_lock = threading.RLock()
         self._active_watches: Set[int] = set()
 
-        self.event_queue = queue.Queue()
+        self.event_queue = queue.Queue(maxsize=10000)
         self._processor_thread = None
         self._processor_running = False
         self.state_tracker = StateTracker(ttl=60)  # 60 seconds TTL for state tracking
@@ -130,6 +129,8 @@ class EtcdClient(object):
         self._reconnect_attempts: int = 0
         self._max_reconnect_attempts: int = 10
         self._shutting_down = False
+        self._reconnect_timer = None
+        self._monitor_stop = threading.Event()
 
         self._start_event_processor()
 
@@ -213,9 +214,11 @@ class EtcdClient(object):
         )
 
         # this will prevent the asyncio loop from being blocked
-        timer = threading.Timer(delay, self._do_reconnection_attempt)
-        timer.daemon = True
-        timer.start()
+        if self._reconnect_timer and self._reconnect_timer.is_alive():
+            return  # already scheduled
+        self._reconnect_timer = threading.Timer(delay, self._do_reconnection_attempt)
+        self._reconnect_timer.daemon = True
+        self._reconnect_timer.start()
 
     def _do_reconnection_attempt(self):
         """Execute reconnection attempt"""
@@ -259,44 +262,64 @@ class EtcdClient(object):
         self._connection_monitor_thread.start()
 
     def _monitor_connection_health(self):
-        """Monitor connection health and update state accordingly"""
+        """Monitor connection health and update state with hysteresis and event-based waits."""
         logger.info("Started etcd connection monitor")
         self._monitor_ready.set()
 
         check_interval = 5.0
-        failure_threshold = 15.0
+        failure_threshold = 15.0  # seconds since last success before we *consider* down
 
-        while self._connection_monitor_running:
+        # Hysteresis counters
+        consecutive_failures = 0
+        consecutive_successes = 0
+
+        # Monotonic baseline (avoid wall-clock jumps)
+        last_ok_monotonic = time.monotonic()
+
+        while self._connection_monitor_running and not self._monitor_stop.is_set():
             try:
-                current_time = time.time()
-                time_since_last_success = current_time - self._last_successful_operation
+                now_mono = time.monotonic()
 
-                if time_since_last_success > failure_threshold:
-                    current_state = self.get_connection_state()
-                    if current_state == ConnectionState.CONNECTED:
+                # If it's been a while since last success, consider flipping to DISCONNECTED
+                if (now_mono - last_ok_monotonic) > failure_threshold:
+                    if (
+                        self.get_connection_state() == ConnectionState.CONNECTED
+                        and consecutive_failures >= 1
+                    ):
+                        # Require at least 2 consecutive failures before declaring down
                         self._set_connection_state(ConnectionState.DISCONNECTED)
 
                 try:
                     self.get("__health_check__")
-                    self._last_successful_operation = current_time
 
-                    current_state = self.get_connection_state()
-                    if current_state in [
-                        ConnectionState.DISCONNECTED,
-                        ConnectionState.FAILED,
-                    ]:
+                    consecutive_successes += 1
+                    consecutive_failures = 0
+                    last_ok_monotonic = now_mono
+                    # Keep the old wall-clock field updated for external observers
+                    self._last_successful_operation = time.time()
+
+                    cur = self.get_connection_state()
+                    if (
+                        cur in (ConnectionState.DISCONNECTED, ConnectionState.FAILED)
+                        and consecutive_successes >= 2
+                    ):
                         self._set_connection_state(ConnectionState.CONNECTED)
 
                 except Exception as e:
-                    current_state = self.get_connection_state()
-                    if current_state == ConnectionState.CONNECTED:
+                    consecutive_failures += 1
+                    consecutive_successes = 0
+
+                    cur = self.get_connection_state()
+                    # Only flip to DISCONNECTED from CONNECTED after 2 consecutive failures
+                    if cur == ConnectionState.CONNECTED and consecutive_failures >= 2:
                         self._set_connection_state(ConnectionState.DISCONNECTED, e)
 
-                time.sleep(check_interval)
+                # Cooperative wait so close() can stop us immediately
+                self._monitor_stop.wait(check_interval)
 
             except Exception as e:
-                logger.error(f"Error in connection health monitor: {e}")
-                time.sleep(check_interval)
+                logger.error("Error in connection health monitor", exc_info=True)
+                self._monitor_stop.wait(check_interval)
 
     def _normalize_endpoints(self, endpoints, etcd_host, etcd_port):
         """Normalize various input formats to a list of (host, port) tuples."""
@@ -417,7 +440,7 @@ class EtcdClient(object):
 
                 return etcd3.client(**client_kwargs)
         except Exception as e:
-            logger.error(f"Failed to create etcd client: {e}")
+            logger.error("Failed to create etcd client", exc_info=True)
             raise
 
     def _mangle_key(self, key: str) -> bytes:
@@ -450,7 +473,7 @@ class EtcdClient(object):
             try:
                 ret = getattr(client, method)(*args, **kwargs)
                 return ret
-            except _Rendezvous as e:
+            except grpc.RpcError as e:
                 if e.code() in self._suffer_status_code:
                     times += 1
                     if not self._is_multi_endpoint:
@@ -482,9 +505,14 @@ class EtcdClient(object):
         def _watch_callback(response):
             try:
                 if isinstance(response, grpc.RpcError):
-                    if response.code() == grpc.StatusCode.UNAVAILABLE or (
-                        response.code() == grpc.StatusCode.UNKNOWN
-                        and "invalid auth token" not in response.details()
+                    code = response.code()
+                    if (
+                        code == grpc.StatusCode.UNAVAILABLE
+                        or code == grpc.StatusCode.INTERNAL
+                        or (
+                            code == grpc.StatusCode.UNKNOWN
+                            and "invalid auth token" not in response.details()
+                        )
                     ):
                         logger.error(f"Watch connection error detected: {response}")
                         self._set_connection_state(
@@ -544,7 +572,16 @@ class EtcdClient(object):
                                     'event': event,
                                     'callback': event_callback,
                                 }
-                                self.event_queue.put(event_data)
+
+                                try:
+                                    self.event_queue.put_nowait(event_data)
+                                except queue.Full:
+                                    logger.warning("Event queue full; dropping oldest")
+                                    try:
+                                        self.event_queue.get_nowait()
+                                    except queue.Empty:
+                                        pass
+                                    self.event_queue.put_nowait(event_data)
                             else:
                                 event_callback(self._demangle_key(ev.key), event)
 
@@ -725,6 +762,7 @@ class EtcdClient(object):
             return {
                 "active_watches": len(self._active_watches),
                 "watch_ids": list(self._active_watches),
+                "event_queue_size": self.event_queue.qsize(),
             }
 
     @reconn_reauth_adaptor
@@ -875,11 +913,14 @@ class EtcdClient(object):
         mangled_key_prefix = self._mangle_key(f"{_slash(scope_prefix)}{key_prefix}")
         return self.client.delete_prefix(mangled_key_prefix)
 
-    @reconn_reauth_adaptor
     def replace(self, key: str, initial_val: str, new_val: str):
         scope_prefix = ""
-        mangled_key = self._mangle_key(f"{_slash(scope_prefix)}{key}")
-        return self.client.replace(mangled_key, initial_val, new_val)
+        mangled_key = self._mangle_key(f"{_slash('')}{key}")
+        return self.client.replace(
+            mangled_key,
+            str(initial_val).encode(self.encoding),
+            str(new_val).encode(self.encoding),
+        )
 
     @reconn_reauth_adaptor
     def reconnect(self):
@@ -896,7 +937,7 @@ class EtcdClient(object):
                 except:
                     pass
 
-            if self._is_multi_endpoint:
+            if not self._is_multi_endpoint:
                 self._client_idx = 0
 
             connected = (
@@ -946,9 +987,14 @@ class EtcdClient(object):
                     logger.info(
                         f'Connected to etcd using single-endpoint client: {host}:{port}'
                     )
-                    self._cluster = [
-                        member._etcd_client for member in self.client.members
-                    ]
+                    self._cluster = (
+                        [self.client]
+                        if self._is_multi_endpoint
+                        else [m._etcd_client for m in self.client.members]
+                    )
+                    if not self._cluster:
+                        # Fallback to the client itself for calls/retries
+                        self._cluster = [self.client]
 
                 self._set_connection_state(ConnectionState.CONNECTED)
                 self._last_successful_operation = time.time()
@@ -1009,6 +1055,7 @@ class EtcdClient(object):
                 self._connection_monitor_running = False
                 self._processor_ready.clear()
                 self._monitor_ready.clear()
+                self._monitor_stop.set()
 
                 total_handlers = sum(
                     len(handlers)
@@ -1019,6 +1066,9 @@ class EtcdClient(object):
 
                 for state in list(self._connection_event_handlers.keys()):
                     self._connection_event_handlers[state].clear()
+
+            if self._reconnect_timer and self._reconnect_timer.is_alive():
+                self._reconnect_timer.cancel()
 
             for thread in [self._processor_thread, self._connection_monitor_thread]:
                 if thread and thread.is_alive():
