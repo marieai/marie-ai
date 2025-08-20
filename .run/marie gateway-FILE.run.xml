@@ -5,10 +5,12 @@
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
     <envs>
+      <env name="COLUMNS" value="220" />
       <env name="PYTHONUNBUFFERED" value="1" />
       <env name="COLUMNS" value="180" />
       <env name="GRPC_TRACE" value="ALL" />
       <env name="GRPC_VERBOSITY" value="DEBUG" />
+      <env name="MARIE_DEBUG_QUERY_PLAN" value="1" />
       <env name="MARIE_DEBUG_QUERY_PLANNER" value="TRUE" />
       <env name="MARIE_DEFAULT_MOUNT" value="/mnt/data/marie-ai" />
       <env name="MARIE_DEBUG_QUERY_PLAN" value="1" />
