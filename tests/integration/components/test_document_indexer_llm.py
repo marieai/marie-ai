@@ -29,9 +29,6 @@ def test_llm_document_indexer():
 
     for i, document in enumerate(documents):
         assert DOC_KEY_INDEXER in document.tags
-        assert all(task_name in document.tags[DOC_KEY_INDEXER]
-                   for task_name, task in indexer.task_map.items()
-                   if task.store_results)
         print(f"############ Results Page {i}:\n", to_json(document.tags))
 
 

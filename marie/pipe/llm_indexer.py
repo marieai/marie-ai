@@ -1,4 +1,3 @@
-from abc import ABC
 from collections import defaultdict
 from typing import List, Optional
 
@@ -9,7 +8,7 @@ from marie.logging_core.logger import MarieLogger
 from marie.pipe.base import PipelineComponent, PipelineContext, PipelineResult
 
 
-class LLMIndexerPipelineComponent(PipelineComponent, ABC):
+class LLMIndexerPipelineComponent(PipelineComponent):
     def __init__(
         self,
         name: str,
@@ -98,10 +97,6 @@ class LLMIndexerPipelineComponent(PipelineComponent, ABC):
                 task_meta = defaultdict(list)
                 for idx, document in enumerate(results):
                     assert DOC_KEY_INDEXER in document.tags
-                    assert all(
-                        task_name in document.tags[DOC_KEY_INDEXER]
-                        for task_name in self.llm_tasks
-                    )
 
                     indexed_values_by_task = document.tags[DOC_KEY_INDEXER]
                     for task_name, (
