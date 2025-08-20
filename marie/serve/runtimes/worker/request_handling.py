@@ -213,7 +213,6 @@ class WorkerRequestHandler:
 
         # discovery
         args_dict = {k: v for k, v in vars(self.args).items() if v is not None}
-        print('etcdargs_dict : ', args_dict)
         etcd_args = convert_to_etcd_args(args_dict)
 
         etcd_config = EtcdConfig.from_dict(etcd_args)
@@ -232,12 +231,12 @@ class WorkerRequestHandler:
 
         self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
 
-        self._set_deployment_status(self._worker_state)
-        self.setup_heartbeat()
-
         self._last_logged_status = None
         self._last_status_log_ts = 0.0
         self._status_log_interval = 60.0  # seconds
+
+        self._set_deployment_status(self._worker_state)
+        self.setup_heartbeat()
 
     def _http_fastapi_default_app(self, **kwargs):
         from marie.serve.runtimes.worker.http_fastapi_app import (  # For Gateway, it works as for head
