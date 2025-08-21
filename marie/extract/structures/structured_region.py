@@ -59,6 +59,7 @@ class RowRole(str, Enum):
     HEADER = "header"
     SUBHEADER = "subheader"
     BODY = "body"
+    SECTION = "section"
     FOOTER = "footer"
     TOTALS = "totals"
     SPACER = "spacer"
@@ -77,11 +78,6 @@ class TableRow(BaseModel):
     tags: Dict[str, str] = Field(default_factory=dict)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
-
-
-# ===================================================================
-#                            BLOCKS
-# ===================================================================
 
 
 class BlockBase(BaseModel):
@@ -165,11 +161,6 @@ class TableSeries(BlockBase):
 Block = Union[KVList, FreeText, TableBlock, TableSeries]
 
 
-# ===================================================================
-#                           SECTIONS & REGION
-# ===================================================================
-
-
 class SectionRole(str, Enum):
     CONTEXT_ABOVE = "context_above"
     MAIN = "main"
@@ -240,13 +231,22 @@ class StructuredRegion(BaseModel):
             for s in span.spanned_pages
         ]
 
-    # ---- Convenience helpers ----
     def sections_flat(self) -> List[Section]:
         ordered = sorted(self.parts, key=lambda p: p.span.page)
         out: List[Section] = []
         for p in ordered:
             out.extend(p.sections)
         return out
+
+    def find_section(self, name: str) -> Optional[Section]:
+        """
+        Return the first section whose title matches `name` (case-insensitive).
+        """
+        target = (name or "").strip().upper()
+        for s in self.sections_flat():
+            if (s.title or "").strip().upper() == target:
+                return s
+        return None
 
     def table_series(self) -> List[TableSeries]:
         out: List[TableSeries] = []
@@ -296,8 +296,10 @@ def row_intersects_span(row: TableRow, s: Span) -> bool:
     """
     Intersection predicate between a row and a single-page span.
     Uses row.source_line_ids (page-scoped) when available.
-    If your rows carry bounding boxes instead, replace this with a bbox check.
     """
+    # Ensure we only consider rows from the same page as the span
+    if row.source_page is not None and row.source_page != s.page:
+        return False
     if row.source_line_ids is None:
         return False
     return any(span_contains_line_id(s, lid) for lid in row.source_line_ids)
@@ -427,5 +429,25 @@ def build_structured_region(
     Build a multi-page StructuredRegion out of a PageSpan and a set of Sections.
     Sections with their own span are distributed to overlapping pages. Others fall back to the first page.
     """
+
+    # Validate no untitled sections
+    untitled = [sec for sec in sections if not (sec.title or "").strip()]
+    if untitled:
+        raise ValueError("Untitled sections are not allowed")
+
+    # Validate there are no duplicate sections by case-insensitive title
+    seen: dict[str, int] = {}
+    duplicates: List[str] = []
+    for sec in sections:
+        key = (sec.title or "").strip().upper()
+        if key in seen:
+            if key not in duplicates:
+                duplicates.append(key)
+        else:
+            seen[key] = 1
+    if duplicates:
+        dup_list = ", ".join(duplicates)
+        raise ValueError(f"Duplicate section titles not allowed: {dup_list}")
+
     parts = distribute_sections_into_parts(region_span, sections)
     return StructuredRegion(region_id=region_id, span=region_span, parts=parts)
