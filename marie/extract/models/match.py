@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from marie.extract.models.base import Location, Page, PageDetails, Rectangle
 from marie.extract.models.definition import Layer, RowExtractionStrategy
+from marie.extract.models.span import Span
 from marie.extract.structures.line_with_meta import LineWithMeta
 
 # Covnerted from pydantic to dataclass as it is not used for serialization or validation
@@ -66,14 +67,6 @@ class TypedScanResult(ScanResult):
             TypedScanResult(location_type=location_type, **vars(candidate))
             for candidate in candidates
         ]
-
-
-@dataclass
-class Span:
-    page: int = 0
-    y: int = 0
-    h: int = 0
-    msg: Optional[str] = None
 
 
 @dataclass

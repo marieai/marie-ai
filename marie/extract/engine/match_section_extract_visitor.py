@@ -11,8 +11,8 @@ from marie.extract.models.match import (
     MatchFieldRow,
     MatchSection,
     MatchSectionType,
-    Span,
 )
+from marie.extract.models.span import Span
 from marie.extract.structures.concrete_annotations import TypedAnnotation
 from marie.extract.structures.line_with_meta import LineWithMeta
 from marie.extract.structures.table import Table

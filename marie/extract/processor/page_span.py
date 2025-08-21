@@ -1,11 +1,9 @@
-from typing import List, Optional
-
-from pydantic import BaseModel, Field
-from sympy.assumptions.satask import satask
+from typing import List
 
 from marie.extract.models.base import Location
 from marie.extract.models.definition import ExecutionContext
-from marie.extract.models.match import MatchSection, ScanResult, Span
+from marie.extract.models.match import MatchSection, ScanResult
+from marie.extract.models.span import Span
 
 
 class PageSpan:
