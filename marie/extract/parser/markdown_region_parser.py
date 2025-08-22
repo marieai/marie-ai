@@ -84,9 +84,7 @@ class MarkdownRegionParser:
         """
         Parse markdown into a single-page StructuredRegion. All table rows live on the given page.
         """
-        # Use a duplicate-preserving section parser and validate titles
-        sections_seq = self._iter_sections(md)
-        self._validate_sections(sections_seq)
+        sections_seq = self._parse_and_validate_sections(md)
 
         # Build blocks per section
         sections: List[Section] = []
@@ -142,9 +140,7 @@ class MarkdownRegionParser:
         The rows are split via row_split_policy. If no table in a section or no split policy,
         table falls back to single page (p1_page).
         """
-        # Use a duplicate-preserving section parser and validate titles
-        sections_seq = self._iter_sections(md)
-        self._validate_sections(sections_seq)
+        sections_seq = self._parse_and_validate_sections(md)
 
         sections: List[Section] = []
 
@@ -191,7 +187,21 @@ class MarkdownRegionParser:
             region_id=region_id, region_span=region_span, sections=sections
         )
 
-    # ---------------------------- Helpers ----------------------------
+    def _parse_and_validate_sections(self, md: str) -> List[Tuple[str, str]]:
+        """
+        Common entry to parse sections and enforce validation rules eagerly:
+        - No '##' headings without a title
+        - No duplicate titles (case-insensitive)
+        """
+        import re
+
+        # Fast guard: explicit untitled heading lines like '##' or '##   '
+        if re.search(r"(?m)^##\s*$", md or ""):
+            raise ValueError("Untitled sections are not allowed")
+
+        sections_seq = self._iter_sections(md)
+        self._validate_sections(sections_seq)
+        return sections_seq
 
     def _role_for(self, title_uc: str) -> SectionRole:
         # Use provided mapping; default MAIN
@@ -212,7 +222,7 @@ class MarkdownRegionParser:
         """
         import re
 
-        text = md.strip()
+        text = (md or "").strip()
         if not text:
             return []
         headings = list(re.finditer(r"(?m)^##\s*(.*)$", text))
@@ -232,10 +242,12 @@ class MarkdownRegionParser:
         - No untitled sections (empty or whitespace titles)
         - No duplicate section titles (case-insensitive)
         """
-        untitled = [t for t, _ in sections if not t.strip()]
+        # Untitled check
+        untitled = [t for t, _ in sections if not (t or "").strip()]
         if untitled:
             raise ValueError("Untitled sections are not allowed")
 
+        # Duplicate check
         seen: set[str] = set()
         dups: List[str] = []
         for t, _ in sections:

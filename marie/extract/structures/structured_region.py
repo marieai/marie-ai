@@ -10,10 +10,6 @@ from marie.extract.processor.page_span import PageSpan
 from marie.extract.structures.cell_with_meta import CellWithMeta
 from marie.extract.structures.table import Table
 
-# ===================================================================
-#                           PRIMITIVES
-# ===================================================================
-
 
 class ValueType(str, Enum):
     STRING = "string"

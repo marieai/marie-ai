@@ -108,7 +108,6 @@ def build_multi_page_region_from_markdown(
 def test_single_page_region(md_single):
     region = build_single_page_region_from_markdown(md_single, page=3, page_y=120, page_h=40)
 
-    print('region', region)
     # Region span
     assert region.span is not None
     pages = pagespan_pages(region.span)
