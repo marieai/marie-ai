@@ -330,7 +330,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             "delete_failed_dags_and_jobs.sql",
             "delete_orphaned_jobs.sql",
             "jobs_with_unmet_dependencies.sql",
-            "notify_dag_state_change.sql",
+            # "notify_dag_state_change.sql", NOT USING CURRENTLY
             "purge_non_started_work.sql",
             "ready_jobs_view.sql",
             "refresh_dag_durations.sql",
