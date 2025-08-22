@@ -106,12 +106,12 @@ Use this setup for testing or development:
 3. Launch the container:
 
    ```bash
-   docker-compose -f docker-compose.etcd.yml up -d
+   docker compose -f docker-compose.etcd.yml up -d
    ```
 4. Verify health:
 
    ```bash
-   docker-compose exec etcd-single etcdctl \
+   docker compose exec etcd-single etcdctl \
      --endpoints=https://127.0.0.1:2379 \
      --cacert=/etc/etcd/certs/ca.pem \
      --cert=/etc/etcd/certs/server.pem \

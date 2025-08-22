@@ -43,6 +43,7 @@ from marie.query_planner.planner import (
     query_planner,
     topological_sort,
 )
+from marie.scheduler.dag_topology_cache import DagTopologyCache
 from marie.scheduler.fixtures import *
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
 from marie.scheduler.job_scheduler import JobScheduler
@@ -212,6 +213,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         min_concurrent_dags = int(dag_config.get("min_concurrent_dags", 1))
         max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
         cache_ttl_seconds = int(dag_config.get("cache_ttl_seconds", 5))
+        dag_cache_size = int(
+            dag_config.get("dag_cache_size", 5000)
+        )  # 5000 entries as this is what our fetch_next_job uses
+        self._topology_cache = DagTopologyCache(maxsize=dag_cache_size)
 
         heartbeat_config_dict = config.get("heartbeat", {})
         self.heartbeat_config = HeartbeatConfig.from_dict(heartbeat_config_dict)
@@ -1004,14 +1009,21 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                     if self._is_noop_query_definition(node):
                         start_t = time.time()
-                        sorted_nodes = topological_sort(dag)
-                        job_levels = compute_job_levels(sorted_nodes, dag)
+                        # expensive operations
+                        # sorted_nodes = topological_sort(dag)
+                        # job_levels = compute_job_levels(sorted_nodes, dag)
+                        sorted_nodes, job_levels = (
+                            self._topology_cache.get_sorted_nodes_and_levels(
+                                dag, dag_id
+                            )
+                        )
                         max_level = max(job_levels.values())
 
                         now = datetime.now()
-                        await self.put_status(
-                            work_info.id, WorkState.COMPLETED, now, now
-                        )
+                        # there is no need to put_status as the complete call will do it
+                        # await self.put_status(
+                        #     work_info.id, WorkState.COMPLETED, now, now
+                        # )
                         await self.complete(work_info.id, work_info, {}, force=True)
                         if (
                             max_level == work_info.job_level
@@ -1057,7 +1069,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             self.logger.info(f"Job scheduled: {result} on {executor}")
                             scheduled_any = True
                         else:
-                            self.logger.error(f"Failed to enqueue job: {work_info.id}")
+                            self.logger.error(
+                                f"Failed to enqueue job: {work_info.id} on {executor} - no result returned"
+                            )
 
                 if jobs_scheduled_this_cycle or len(flat_jobs) > 0:
                     self.logger.info("Scheduling summary for this cycle:")
@@ -1317,7 +1331,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 metadata=work_info.data,
                 confirmation_event=confirmation_event,
             )
-            await asyncio.wait_for(confirmation_event.wait(), timeout=2)
+            await asyncio.wait_for(confirmation_event.wait(), timeout=5)
         except ValueError as e:
             self.logger.error(f"Error during job submission: {e}")
             return None

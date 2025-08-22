@@ -156,3 +156,4 @@ scikit-image:                  standard,core
 filetype:                      standard,core
 dataclasses_json:              standard,core
 watchdog:                      standard,core
+cachetools==5.5.0:             standard,core
