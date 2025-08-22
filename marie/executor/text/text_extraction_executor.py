@@ -1,6 +1,4 @@
 import os
-import sys
-import threading
 import time
 import warnings
 from typing import Any, Optional, Union
@@ -9,9 +7,14 @@ import numpy as np
 import torch
 from docarray import DocList
 
-from marie import Executor, monitor, requests, safely_encoded
-from marie.api import value_from_payload_or_args
-from marie.api.docs import AssetKeyDoc, OutputDoc, StorageDoc
+from marie import Executor, requests, safely_encoded
+from marie.api import (
+    get_frames_from_docs,
+    get_payload_features,
+    parse_parameters,
+    value_from_payload_or_args,
+)
+from marie.api.docs import AssetKeyDoc, StorageDoc
 from marie.boxes import PSMode
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
@@ -27,7 +30,7 @@ from marie.ocr import CoordinateFormat
 from marie.pipe import ExtractPipeline
 from marie.storage import StorageManager
 from marie.utils.docs import docs_from_asset, frames_from_docs
-from marie.utils.image_utils import ensure_max_page_size, hash_frames_fast
+from marie.utils.image_utils import hash_frames_fast
 from marie.utils.network import get_ip_address
 from marie.utils.types import strtobool
 
@@ -44,8 +47,8 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
         name: str = "",
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
-        storage: dict[str, any] = None,
-        pipeline: dict[str, any] = None,
+        storage: dict[str, Any] = None,
+        pipeline: dict[str, Any] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
@@ -137,101 +140,62 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
     # @safely_encoded # BREAKS WITH docarray 0.39 as it turns this into a LegacyDocument which is not supported
     def extract(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
 
-        print('TEXT-EXTRACT')
-        print(parameters)
-        print(docs)
+        job_id, ref_id, ref_type, queue_id, payload = parse_parameters(parameters)
+        frames = get_frames_from_docs(docs)
+        ref_id = hash_frames_fast(frames) if ref_id is None else ref_id
+        ref_type = "extract" if ref_type is None else ref_type
 
-        if len(docs) == 0:
-            return {"error": "empty payload"}
-        if len(docs) > 1:
-            return {"error": "expected single document"}
-
-        # load documents from specified document asset key
-        doc = docs[0]
-        docs = docs_from_asset(doc.asset_key, doc.pages)
-
-        src_frames = frames_from_docs(docs)
-        changed, frames = ensure_max_page_size(src_frames)
-        if changed:
-            self.logger.warning(f"Page size of frames was changed ")
-            for i, (s, f) in enumerate(zip(src_frames, frames)):
-                self.logger.warning(f"Frame[{i}] changed : {s.shape} -> {f.shape}")
-
-        if parameters is None or "job_id" not in parameters:
-            self.logger.warning(f"Job ID is not present in parameters")
-            raise ValueError("Job ID is not present in parameters")
-
-        job_id = parameters.get("job_id")
         MDC.put("request_id", job_id)
 
         self.logger.info("Starting OCR request")
         for key, value in parameters.items():
             self.logger.info("The value of {} is {}".format(key, value))
 
-        queue_id: str = parameters.get("queue_id", "0000-0000-0000-0000")
+        # https://github.com/marieai/marie-ai/issues/51
+        regions = payload.get("regions", [])
+        for region in regions:
+            region["id"] = f'{int(region["id"])}'
+            region["x"] = int(region["x"])
+            region["y"] = int(region["y"])
+            region["w"] = int(region["w"])
+            region["h"] = int(region["h"])
+            region["pageIndex"] = int(region["pageIndex"])
+
+        # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
+        coordinate_format = CoordinateFormat.from_value(
+            value_from_payload_or_args(payload, "format", default="xywh")
+        )
+        pms_mode = PSMode.from_value(
+            value_from_payload_or_args(payload, "mode", default="")
+        )
+
+        include_ocr = value_from_payload_or_args(payload, "return_ocr", default=False)
+
+        self.logger.debug(
+            "ref_id, ref_type frames , regions , pms_mode, coordinate_format,"
+            f" checksum: {ref_id}, {ref_type},  {len(frames)}, {len(regions)}, {pms_mode},"
+            f" {coordinate_format}"
+        )
+
+        runtime_conf = {}
+        pipeline_features = get_payload_features(payload, f_type="pipeline")
+        if len(pipeline_features) == 1:
+            runtime_conf = pipeline_features[0]
+        else:
+            filtered_features = [
+                f
+                for f in pipeline_features
+                if f.get("name") == self.pipeline.pipeline_name
+            ]
+            if len(pipeline_features) == 1:
+                runtime_conf = filtered_features[0]
+            elif len(filtered_features) > 1:
+                self.logger.error(
+                    f"Unable to distinguish Runtime Config : {filtered_features}"
+                )
+                raise ValueError(f"Cannot Resolve Pipeline Runtime Config")
 
         try:
-            if "payload" not in parameters or parameters["payload"] is None:
-                return {"error": "empty payload"}
-            else:
-                payload = parameters["payload"]
-
-            # https://github.com/marieai/marie-ai/issues/51
-            regions = payload["regions"] if "regions" in payload else []
-            for region in regions:
-                region["id"] = f'{int(region["id"])}'
-                region["x"] = int(region["x"])
-                region["y"] = int(region["y"])
-                region["w"] = int(region["w"])
-                region["h"] = int(region["h"])
-                region["pageIndex"] = int(region["pageIndex"])
-
-            # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
-            coordinate_format = CoordinateFormat.from_value(
-                value_from_payload_or_args(payload, "format", default="xywh")
-            )
-            pms_mode = PSMode.from_value(
-                value_from_payload_or_args(payload, "mode", default="")
-            )
-
-            # output_format = OutputFormat.from_value(
-            #     value_from_payload_or_args(payload, "output", default="json")
-            # )
-
-            if parameters:
-                for key, value in parameters.items():
-                    self.logger.debug("The p-value of {} is {}".format(key, value))
-
-                ref_id = parameters.get("ref_id")
-                ref_type = parameters.get("ref_type")
-                job_id = parameters.get("job_id", "0000-0000-0000-0000")
-            else:
-                self.logger.warning(
-                    f"REF_ID and REF_TYPE are not present in parameters"
-                )
-                ref_id = hash_frames_fast(frames)
-                ref_type = "extract"
-                job_id = "0000-0000-0000-0000"
-
-            self.logger.debug(
-                "ref_id, ref_type frames , regions , pms_mode, coordinate_format,"
-                f" checksum: {ref_id}, {ref_type},  {len(frames)}, {len(regions)}, {pms_mode},"
-                f" {coordinate_format}"
-            )
-            payload_kwargs = {}
-            if "args" in payload:
-                payload_kwargs["args"] = payload["args"]
-
-            runtime_conf = {}
-            if "features" in payload:
-                for feature in payload["features"]:
-                    if "type" in feature and feature["type"] == "pipeline":
-                        runtime_conf = feature
-
-            include_ocr = value_from_payload_or_args(
-                payload, "return_ocr", default=False
-            )
-
             metadata = self.pipeline.execute(
                 ref_id=ref_id,
                 ref_type=ref_type,
@@ -268,7 +232,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
             response = {
                 "status": "succeeded",
                 "runtime_info": self.runtime_info,
-                "metadata": metadata,
+                # "metadata": metadata,
             }
             converted = safely_encoded(lambda x: x)(response)
             return converted
@@ -402,67 +366,28 @@ class TextExtractionExecutorMock(MarieExecutor):
     @requests(on="/document/extractXXXX")
     # @safely_encoded # BREAKS WITH docarray 0.39
     def extract(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
-        print("TEXT-EXTRACT")
-        print(parameters)
-        print(docs)
+        self.logger.info("TEXT-EXTRACT")
 
-        logger.info(kwargs)
-        logger.info(parameters)
+        self.logger.info(docs)
+        try:
+            frames = get_frames_from_docs(docs)
+        except Exception as e:
+            self.logger.error(f"Error in get_frames_from_docs : {e}")
+            return {"error": str(e)}
 
-        if len(docs) == 0:
-            return {"error": "empty payload"}
-        if len(docs) > 1:
-            return {"error": "expected single document"}
+        self.logger.info(f"Doc Ids: {list(doc.id for doc in docs)}")
+        self.logger.info(f"Frame Count: {len(frames)}")
 
-        doc = docs[0]
-        # load documents from specified document asset key
-        docs = docs_from_asset(doc.asset_key, doc.pages)
-
-        for doc in docs:
-            print(doc.id)
-
-        frames = frames_from_docs(docs)
-        frame_len = len(frames)
-
-        print(f"{frame_len=}")
-        # this value will be stuffed in the  resp.parameters["__results__"] as we are using raw Responses
-
-        return DocList[AssetKeyDoc]()
-        #
-        # return DocList[OutputDoc](
-        #     [
-        #         OutputDoc(
-        #             jobid="ABCDEF",
-        #             status="OK",
-        #         )
-        #     ]
-        # )
-
-        if "payload" not in parameters or parameters["payload"] is None:
-            return {"error": "empty payload"}
-        else:
-            payload = parameters["payload"]
-
-        # https://github.com/marieai/marie-ai/issues/51
-
-        regions = payload["regions"] if "regions" in payload else []
-        for region in regions:
-            region["id"] = int(region["id"])
-            region["pageIndex"] = int(region["pageIndex"])
-
-        np_arr = np.array([1, 2, 3])
-
-        out = [
-            {"sample": 112, "complex": ["a", "b"]},
-            {"sample": 112, "complex": ["a", "b"], "np_arr": np_arr},
-        ]
+        self.logger.info(parameters)
+        job_id, ref_id, ref_type, _, payload = parse_parameters(
+            parameters, strict=False
+        )
+        self.logger.info(
+            f"job_id, ref_id, ref_type, payload: {job_id}, {ref_id}, {ref_type}, {payload}"
+        )
 
         time.sleep(1)
-        # invoke the safely_encoded decorator as a function
-        meta = get_ip_address()
-        #  DocList / Dict / `None`
-        converted = safely_encoded(lambda x: x)(self.runtime_info)
-        return converted
+        return safely_encoded(lambda x: x)(self.runtime_info)
 
     @requests(on="/document/extract")
     async def func_extract(
@@ -474,7 +399,7 @@ class TextExtractionExecutorMock(MarieExecutor):
     ):
         if parameters is None:
             parameters = {}
-        print(f"func called : {len(docs)}, {parameters}")
+        self.logger.info(f"func called : {len(docs)}, {parameters}")
         # randomly throw an error to test the error handling
         import random
 
@@ -488,10 +413,10 @@ class TextExtractionExecutorMock(MarieExecutor):
             # sys.exit()
             raise RuntimeError("Mock error for testing purposes")
 
-        print(f"Sleeping for {sec} seconds : ", time.time())
+        self.logger.info(f"Sleeping for {sec} seconds : ", time.time())
         time.sleep(sec)
 
-        print(f"Sleeping for {sec} seconds - done : ", time.time())
+        self.logger.info(f"Sleeping for {sec} seconds - done : ", time.time())
         return {
             "parameters": parameters,
             "data": "Data reply",
