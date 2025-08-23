@@ -1560,7 +1560,11 @@ class WorkerRequestHandler:
         if self.is_dry_run(requests):
             return
 
-        self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.UNKNOWN
+        # TODO :
+        #   We will need to set to the UNKNOWN state from the JobSupervisor after the node failed N attempts
+        #   or the health check failed N times.
+
+        self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
         try:
             await asyncio.to_thread(
                 self._set_deployment_status,
@@ -1625,7 +1629,6 @@ class WorkerRequestHandler:
 
         self.logger.info(f"Record job started: {job_id}")
         self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.SERVING
-        # self._set_deployment_status(self._worker_state)
 
         try:
             await asyncio.to_thread(
@@ -1663,9 +1666,7 @@ class WorkerRequestHandler:
             return
 
         self.logger.info(f"Record job success: {job_id}")
-
         self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
-        # self._set_deployment_status(self._worker_state)
 
         try:
             await asyncio.to_thread(

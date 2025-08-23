@@ -1,5 +1,5 @@
 import os
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import numpy as np
 from black.trans import defaultdict
@@ -90,8 +90,11 @@ class LLMPipeline(BasePipeline):
         self.device = resolved_devices[0]
         # self.has_cuda = True if self.device.type.startswith("cuda") else False
 
-        self.ocr_engines = get_known_ocr_engines(self.device.type, "default")
-        # self.ocr_engines = {"default": None}
+        if self.default_pipeline_config.get("ocr", {}).get("enabled", True):
+            self.ocr_engines = get_known_ocr_engines(self.device.type, "default")
+        else:
+            self.logger.warning("Disabling OCR capabilities as configured.")
+            self.ocr_engines = {"default": None}
 
         (
             self.pipeline_name,
@@ -106,8 +109,8 @@ class LLMPipeline(BasePipeline):
         frames: List[np.ndarray],
         root_asset_dir: str,
         job_id: str,
-        runtime_conf: Optional[dict[str, any]] = None,
-    ) -> dict[str, any]:
+        runtime_conf: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         if ref_type is None or ref_id is None:
             raise ValueError("Invalid reference type or id")
 
@@ -142,8 +145,13 @@ class LLMPipeline(BasePipeline):
             "pages": f"{len(frames)}",
         }
 
+        # Fetch OCR if present
         restore_assets(
-            ref_id, ref_type, root_asset_dir, full_restore=True, overwrite=True
+            ref_id,
+            ref_type,
+            root_asset_dir,
+            overwrite=True,
+            dirs_to_restore=["results"],
         )
         burst_frames(ref_id, frames, root_asset_dir)
 

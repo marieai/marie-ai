@@ -1,7 +1,7 @@
 import os
 from collections import defaultdict
 from functools import partial
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import numpy as np
 import torch
@@ -103,6 +103,17 @@ def s3_asset_path(
     return ret_path
 
 
+def is_component_enabled(conf: Any, default: bool) -> bool:
+    if conf is None:
+        return default
+
+    # List of items ─ enable if ANY is enabled.
+    if isinstance(conf, list):
+        return any(item.get("enabled", True) for item in conf)
+
+    return conf.get("enabled", default)
+
+
 def setup_overlay(
     pipeline_config: Optional[dict] = None,
     key: str = "page_overlay",
@@ -152,7 +163,7 @@ def setup_classifiers(
     key: str = "page_classifier",
     device: str = "cuda",
     ocr_engine: Optional[OcrEngine] = None,
-) -> dict[str, any]:
+) -> dict[str, Any]:
     """
     Setup the document classifiers (Document Classification) for the pipeline
     :param pipeline_config: pipeline configuration
@@ -236,7 +247,7 @@ def setup_indexers(
     key: str = "page_indexer",
     device: str = "cuda",
     ocr_engine: Optional[OcrEngine] = None,
-) -> dict[str, any]:
+) -> dict[str, Any]:
     """
     Setup the document indexers(Named Entity Recognition) for the pipeline
     :param pipeline_config: pipeline configuration
@@ -392,18 +403,29 @@ def restore_assets(
     root_asset_dir: str,
     full_restore=False,
     overwrite=False,
+    dirs_to_restore: list = ("clean", "results", "pdf"),
 ) -> str or None:
     """
-    Restore assets from primary storage (S3) into root asset directory. This restores
-    the assets from the last run of the extract pipeline.
+    Restores specified assets from a remote S3 location to a local directory.
+
+    This function connects to an S3 storage system and optionally restores either
+    a full set of assets or specific directories (e.g., "clean", "results", "pdf")
+    from the remote path to a target local directory. In full restore mode, all assets
+    are restored, while in partial mode, only selected directories are restored.
 
     :param ref_id: document reference id (e.g. filename)
     :param ref_type: document reference type(e.g. document, page, process)
     :param root_asset_dir: root asset directory
-    :param full_restore: if True, restore all assets, otherwise only restore subset of assets (clean, results, pdf)
-    that are required for the extract pipeline.
-    :param overwrite: if True, overwrite existing assets in root asset directory
-    :return:
+    :param full_restore: bool, default=False
+        Whether to perform a full restore of all assets or restore only specific
+        directories provided in `dirs_to_restore`.
+    :param overwrite: bool, default=False
+        Indicates whether to overwrite existing files in the local directory.
+    :param dirs_to_restore: list, default=("clean", "results", "pdf")
+        A list of directory names to restore in partial restore mode.
+
+    :return: The remote S3 path that was used for the restoration if successful.
+        Returns None if the operation fails due to connectivity issues or errors.
     """
     s3_root_path = s3_asset_path(ref_id, ref_type)
     connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
@@ -424,7 +446,6 @@ def restore_assets(
         except Exception as e:
             logger.error(f"Error restoring assets : {e}")
     else:
-        dirs_to_restore = ["clean", "results", "pdf"]
         for dir_to_restore in dirs_to_restore:
             try:
                 StorageManager.copy_remote(
@@ -469,6 +490,39 @@ def store_assets(
         return StorageManager.list(s3_asset_base, return_full_path=True)
     except Exception as e:
         logger.error(f"Error storing assets : {e}")
+
+
+def asset_exists(
+    ref_id: str,
+    ref_type: str,
+    s3_file_path: str = "meta.json",
+) -> str or None:
+    """
+    Checks if an asset exists in the specified S3 location.
+
+    This function verifies the existence of an asset on an S3 bucket using the
+    provided reference ID, reference type, and a file path. It ensures the S3
+    connection is established and checks for the existence of the specified file.
+
+    Parameters:
+        ref_id (str): The reference ID for the asset.
+        ref_type (str): The type of the asset reference.
+        s3_file_path (str): The relative path to the file in the S3 bucket.
+            Defaults to "meta.json".
+
+    Returns:
+        str or None: A valid URI as a string if the asset exists; None otherwise.
+    """
+
+    s3_root_path = s3_asset_path(ref_id, ref_type)
+    connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
+    if not connected:
+        logger.error(f"Error restoring assets : Could not connect to S3")
+        return None
+
+    uri = f"{s3_root_path}/{s3_file_path}"
+    logger.info(f"Checking if assets exist at {uri}")
+    return StorageManager.exists(uri)
 
 
 def download_asset(
@@ -538,7 +592,7 @@ def burst_frames(
 
 
 def ocr_frames(
-    ocr_engines: dict[str, any],
+    ocr_engines: dict[str, Any],
     ref_id: str,
     frames: Union[List[np.ndarray], List[Image.Image]],
     root_asset_dir: str,
@@ -546,7 +600,7 @@ def ocr_frames(
     ps_mode: PSMode = PSMode.SPARSE,
     coord_format: CoordinateFormat = CoordinateFormat.XYWH,
     regions: [] = None,
-    runtime_conf: Optional[dict[str, any]] = None,
+    runtime_conf: Optional[dict[str, Any]] = None,
     engine_name: str = "default",
 ) -> dict:
     """
@@ -666,8 +720,8 @@ def setup_llm_tasks(pipeline_config, document_indexers):
 
 
 def load_pipeline(
-    pipeline_config: dict[str, any], ocr_engine: Optional[OcrEngine] = None
-) -> tuple[str, dict[str, any], dict[str, any]]:
+    pipeline_config: dict[str, Any], ocr_engine: Optional[OcrEngine] = None
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
     # TODO : Need to refactor this (use the caller to get the device and then fallback to the pipeline config)
     # sometimes we have CUDA/GPU support but want to only use CPU
     use_cuda = torch.cuda.is_available()
