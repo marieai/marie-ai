@@ -1,14 +1,12 @@
+import atexit
 import copy
 import logging
 import logging.handlers
 import os
 import platform
-import queue
 import sys
-import threading
 from collections import OrderedDict
-from logging.handlers import QueueListener
-from typing import Mapping, NamedTuple, Optional
+from typing import Iterable, Mapping, NamedTuple, Optional
 
 from rich.logging import LogRender as _LogRender
 from rich.logging import RichHandler as _RichHandler
@@ -286,7 +284,7 @@ class MarieLogger:
         self.close()
 
     def close(self):
-        """Close all the handlers and stop queue listener if used."""
+        """Close all handlers attached to this logger."""
         if self._is_closed:
             return
 
@@ -418,6 +416,57 @@ class MarieLogger:
         else:
             for h in target_handlers:
                 self.logger.addHandler(h)
+
+
+_shutdown_handler_called = False
+
+
+def _flush_all_handlers(handlers: Iterable[logging.Handler]) -> None:
+    for h in list(handlers):
+        try:
+            h.flush()
+        except Exception:
+            pass
+
+
+def _flush_every_logger() -> None:
+    # flush handlers of all known loggers (incl. root)
+    root = logging.getLogger()
+    _flush_all_handlers(root.handlers)
+    for name, lg in logging.Logger.manager.loggerDict.items():
+        if isinstance(lg, logging.Logger):
+            _flush_all_handlers(lg.handlers)
+
+
+_shutdown_handler_called = False
+
+
+def _shutdown_handler():
+    global _shutdown_handler_called
+    if _shutdown_handler_called:
+        return
+    _shutdown_handler_called = True
+
+    # 1) Stop the bus FIRST (drains queue and flushes sinks in caller)
+    try:
+        GLOBAL_LOG_BUS.stop(timeout=1.0)  # short join; final-drain happens inside
+    except Exception:
+        pass
+
+    # 2) Flush any remaining direct handlers BEFORE logging.shutdown()
+    try:
+        _flush_every_logger()
+    except Exception:
+        pass
+
+    # 3) Finalize stdlib logging exactly once
+    try:
+        logging.shutdown()
+    except Exception:
+        pass
+
+
+atexit.register(_shutdown_handler)
 
 
 class JsonFileHandler(logging.Handler):
