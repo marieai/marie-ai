@@ -413,10 +413,10 @@ class TextExtractionExecutorMock(MarieExecutor):
             # sys.exit()
             raise RuntimeError("Mock error for testing purposes")
 
-        self.logger.info(f"Sleeping for {sec} seconds : ", time.time())
+        self.logger.info(f"Sleeping for {sec} seconds : {time.time()}")
         time.sleep(sec)
 
-        self.logger.info(f"Sleeping for {sec} seconds - done : ", time.time())
+        self.logger.info(f"Sleeping for {sec} seconds - done : {time.time()}")
         return {
             "parameters": parameters,
             "data": "Data reply",

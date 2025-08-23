@@ -270,7 +270,7 @@ async def main():
     ]
     request_kwargs["headers"] = headers
 
-    for i in range(0, 1):
+    for i in range(0, 100):
         print(f"Sending request : {i}")
         start = time.perf_counter()
         async for resp in client.post(
