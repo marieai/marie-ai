@@ -5,8 +5,8 @@ from typing import Callable, Dict, Iterable, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
-from marie.extract.models.match import Span
-from marie.extract.processor.page_span import PageSpan
+from marie.extract.models.page_span import PageSpan
+from marie.extract.models.span import Span
 from marie.extract.structures.cell_with_meta import CellWithMeta
 from marie.extract.structures.table import Table
 
@@ -260,11 +260,6 @@ class StructuredRegion(BaseModel):
                         )
                     )
         return out
-
-
-# ===================================================================
-#                    SPAN / PAGESPAN DECOMPOSITION UTILS
-# ===================================================================
 
 
 def normalize_pagespan(pagespan: PageSpan) -> List[Span]:

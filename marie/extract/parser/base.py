@@ -1,5 +1,9 @@
 import re
 
+import markdown
+from bs4 import BeautifulSoup
+from markdown.extensions.tables import TableExtension
+
 from marie.extract.structures.cell_with_meta import CellWithMeta
 from marie.extract.structures.line_with_meta import LineWithMeta
 from marie.extract.structures.structured_region import KeyValue, ValueType
@@ -34,20 +38,38 @@ def parse_bullets_to_kvlist(section_text: str):
 
 
 def parse_markdown_table(section_text: str):
-    lines = [
-        ln.strip() for ln in section_text.splitlines() if ln.strip().startswith("|")
-    ]
-    if len(lines) < 2:
+    """
+    Parses a Markdown table into headers and rows.
+
+    This function takes a Markdown-encoded text containing a table, parses it, and extracts
+    the headers and rows in a structured format. The Markdown text is converted to HTML first,
+    and then the function identifies and extracts table data using BeautifulSoup.
+
+    :param section_text: A string containing the Markdown-formatted text to parse.
+    :returns: A tuple containing two lists - the first list is the headers of the table,
+        and the second list contains the rows of the table.
+    """
+    html_output = markdown.markdown(section_text, extensions=[TableExtension()])
+    soup = BeautifulSoup(html_output, "html.parser")
+    tables = soup.find_all("table")
+    if not tables:
         return [], []
-    headers = [h.strip() for h in lines[0].strip("|").split("|")]
-    sep = lines[1]
-    if not re.search(r"\|\s*-+", sep):
-        data_lines = lines[1:]
-    else:
-        data_lines = lines[2:]
-    rows = []
-    for dl in data_lines:
-        rows.append([v.strip() for v in dl.strip("|").split("|")])
+
+    table = tables[0]
+    table_data = []
+    rows = table.find_all("tr")
+
+    for row in rows:
+        cols = row.find_all(["th", "td"])
+        cols_text = [col.get_text(strip=True) for col in cols]
+        table_data.append(cols_text)
+
+    if not table_data:
+        return [], []
+
+    headers = table_data[0]
+    rows = table_data[1:]
+
     return headers, rows
 
 

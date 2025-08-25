@@ -4,7 +4,7 @@ import re
 from collections import OrderedDict
 from functools import lru_cache
 from itertools import cycle
-from typing import Callable, List, Type, Union
+from typing import Callable, List, Optional, Type, Union
 
 import cv2
 import numpy as np
@@ -25,15 +25,14 @@ from marie.extract.results.result_validator import (
     validate_document,
     validate_parser_output,
 )
+from marie.extract.results.table_parsers import _parse_table_mrp, _parse_table_plain
 from marie.extract.results.util import generate_distinct_colors
 from marie.extract.results.validation_report import generate_validation_report
 from marie.extract.schema import ExtractionResult, Segment, TableExtractionResult
 from marie.extract.structures import SerializationManager, UnstructuredDocument
-from marie.extract.structures.cell_with_meta import CellWithMeta
 from marie.extract.structures.concrete_annotations import TypedAnnotation
 from marie.extract.structures.line_with_meta import LineWithMeta
-from marie.extract.structures.table import Table
-from marie.extract.structures.table_metadata import TableMetadata
+from marie.extract.structures.structured_region import StructuredRegion
 from marie.logging_core.predefined import default_logger as logger
 from marie.utils.docs import frames_from_file
 from marie.utils.json import load_json_file
@@ -137,9 +136,9 @@ def render_document_markdown(
     for page_id in range(doc.page_count):
         markdown_output.append(f"## Page {page_id + 1}\n")
         lines = doc.lines_for_page(page_id)
-        tables = doc.tables_for_page(page_id)
+        regions = doc.regions_for_page(page_id)
 
-        markdown_output.append(f"### Tables found : {len(tables)}\n")
+        markdown_output.append(f"### Regions found : {len(regions)}\n")
 
         if not lines:
             markdown_output.append("_No content on this page._\n")
@@ -487,6 +486,7 @@ def process_extractions_table(
     page_id: int,
     annotation_type: str,
     grounding_keys: list[str],
+    **kwargs,
 ) -> None:
     """
     Processes and annotates extractions for a specific page and annotation type.
@@ -499,16 +499,20 @@ def process_extractions_table(
         annotation_type (str): Type of annotation ("CLAIM", "REMARKS", etc.).
         grounding_keys (list[str]): List of valid keys to process.
     """
-    print(f"Detailed extraction result for page {page_id}")
+    logger.info(f"Detailed extraction result for page {page_id}")
+
     lines_for_page: list[LineWithMeta] = sorted(
         doc.lines_for_page(page_id), key=lambda ln: ln.metadata.line_id
     )
     extractions = result.extractions
+    table_segment_meta = {}
     table_start_lines = []
     fill_missing_row_gaps = True
 
-    for k, segment in enumerate(extractions):
-        print(f'Table segment page {page_id}, table # {k}')
+    # Step 1 - Create annotations
+
+    for segment_index, segment in enumerate(extractions):
+        logger.info(f'Table segment page {page_id}, table seg # {segment_index}')
         header_rows = segment.header_rows
         rows = segment.rows
 
@@ -519,6 +523,8 @@ def process_extractions_table(
         # Root label is TABLE_START and then TABLE_END
         # Insert TABLE_START annotation at the very beginning of the table
         first_row_number = 0
+        table_start_line = None
+        table_end_line = None
 
         if header_rows:  # If there is at least one header_row
             first_row_number = int(header_rows[0].line_number)
@@ -536,11 +542,10 @@ def process_extractions_table(
                 _annotate_segment(annotation_type, table_start_line, segment_start)
 
         for key, rows in mapping.items():
-
             missing_line_segments = []
             if fill_missing_row_gaps and key == "TABLE_ROWS" and rows:
                 logging.warning(
-                    f"Inserting gap segment on page_id {page_id}, table # {k} ..."
+                    f"Inserting gap segment on page_id {page_id}, table # {segment_index} ..."
                 )
                 all_row_lines = sorted(int(row.line_number) for row in rows)
                 full_range = range(all_row_lines[0], all_row_lines[-1] + 1)
@@ -606,114 +611,67 @@ def process_extractions_table(
                 )
                 _annotate_segment(annotation_type, table_end_line, segment_end)
 
-    print('' + '-' * 50)
-    print(f"Total number of table segments: {len(extractions)}")
+        table_segment_meta[segment_index] = {
+            "start": table_start_line,
+            "end": table_end_line,
+        }
+
+    logger.info('' + '-' * 50)
+    logger.info(f"Total number of table segments: {len(extractions)}")
+
+    # Step 2 - process extractions
+
     extracted_tables_src_dir = os.path.join(
         working_dir, "agent-output", "table-extract"
     )
 
-    for k, segment in enumerate(extractions):
-        print(f'Table segment page {page_id}, table # {k}')
-        file_page_id = page_id + 1
+    for segment_index, segment in enumerate(extractions):
+        logger.info(f'Table segment page {page_id}, table seg # {segment_index}')
+        file_page_id = page_id + 1  # files are named with 1 - based indexes
+
         # Check if Markdown file of the format PAGENUM_SEGMENT.png.md exists
-        file_name = f"{file_page_id}_{k}.png.md"
+        file_name = f"{file_page_id}_{segment_index}.png.md"
         file_name = os.path.join(extracted_tables_src_dir, file_name)
 
         if os.path.exists(file_name):
-            print(f"Markdown file `{file_name}` exists, loading it.")
-            with open(file_name, "r") as md_file:
-                content = md_file.read()
-                print(content)
-            # pip install beautifulsoup4  pip install markdown
-            import markdown
-            from bs4 import BeautifulSoup
-            from markdown.extensions.tables import TableExtension
+            logger.info(f"Markdown file `{file_name}` exists, loading it.")
+        else:
+            logger.info(f"Markdown file `{file_name}` does not exist.")
+            continue
 
-            html_output = markdown.markdown(content, extensions=[TableExtension()])
-            soup = BeautifulSoup(html_output, 'html.parser')
-            tables = soup.find_all('table')
-            parsed_tables = []
+        md_content = None
+        with open(file_name, "r") as md_file:
+            md_content = md_file.read()
 
-            # FIXME : Need to handle multiple tables
-            # Filter to ensure only the first table is processed
-            if tables:
-                if len(tables) > 1:
-                    print(
-                        f"Warning: More than one table found in the Markdown file. Only the first table will be processed."
-                    )
+        try:
+            parsing_method = kwargs.get("parsing_method", "plain")
+            logger.info(f"Table parsing method: {parsing_method}")
+            region: Optional[StructuredRegion] = None
 
-                table = tables[0]  # Select the first table
-                table_data = []
-                rows = table.find_all('tr')  # Find all table rows
-
-                for row in rows:
-                    cols = row.find_all(
-                        ['th', 'td']
-                    )  # Find table headers (<th>) and table data (<td>)
-                    cols_text = [
-                        col.get_text(strip=True) for col in cols
-                    ]  # Extract text while removing extra spaces
-                    table_data.append(cols_text)
-
-                print('parsed_table =>', table_data)
-
-                from prettytable import PrettyTable
-
-                if table_data:
-                    table = PrettyTable()
-                    headers = table_data[0]
-
-                    # Ensure the headers are unique before assigning them to table.field_names
-                    unique_headers = []
-                    seen_headers = set()
-
-                    for header in headers:
-                        if header in seen_headers:
-                            counter = 1
-                            new_header = f"{header}_{counter}"
-                            while new_header in seen_headers:
-                                counter += 1
-                                new_header = f"{header}_{counter}"
-                            unique_headers.append(new_header)
-                            seen_headers.add(new_header)
-                        else:
-                            unique_headers.append(header)
-                            seen_headers.add(header)
-
-                    table.field_names = unique_headers
-
-                    # Add remaining rows as data
-                    for row in table_data[1:]:
-                        table.add_row(row)
-                    print(table)
-
-                    headers = table_data[0]
-                    header_cells = []
-                    table_rows = []
-
-                    for i, header in enumerate(headers):
-                        cell = CellWithMeta(lines=[LineWithMeta(header)])
-                        header_cells.append(cell)
-
-                    table_rows.append(header_cells)
-
-                    for row in table_data[1:]:
-                        cells = []
-                        for i, cell in enumerate(row):
-                            cells.append(CellWithMeta(lines=[LineWithMeta(cell)]))
-                        table_rows.append(cells)
-
-                    start_line = (
-                        table_start_lines[k] if k < len(table_start_lines) else None
-                    )
-                    table_metadata = TableMetadata(
-                        page_id=page_id,
-                        title="extracted",
-                        line=start_line,
-                    )
-
-                    table = Table(cells=table_rows, metadata=table_metadata)
-                    doc.insert_table(table)
+            if parsing_method == "plain":
+                region = _parse_table_plain(
+                    doc,
+                    md_content,
+                    page_id,
+                    segment_index,
+                    table_segment_meta[segment_index],
+                )
+            elif parsing_method == "mrp":
+                region = _parse_table_mrp(
+                    doc,
+                    md_content,
+                    page_id,
+                    segment_index,
+                    table_segment_meta[segment_index],
+                    **kwargs,
+                )
+            if region:
+                doc.insert_region(region)
+        except Exception as e:
+            logger.error(
+                f"Failed to extract table from file: {file_name}", exc_info=True
+            )
+            raise e
         else:
             print(f"Markdown file `{file_name}` does not exist.")
 
@@ -916,9 +874,7 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
         SerializationManager.serialize(doc, os.path.join(output_dir, "document.pkl"))
 
     logging.info("Converting document to structured output")
-    results: SubzeroResult = convert_document_to_structure(
-        doc, conf, os.path.join(output_dir, "structured-output.md")
-    )
+    results: SubzeroResult = convert_document_to_structure(doc, conf, output_dir)
 
     # Validate converter output
     if validation_enabled:

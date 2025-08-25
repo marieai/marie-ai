@@ -2,7 +2,7 @@ import logging
 from typing import List
 
 from marie.extract.engine.base import BaseProcessingVisitor
-from marie.extract.models.definition import ExecutionContext
+from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import (
     MatchField,
     MatchFieldRow,

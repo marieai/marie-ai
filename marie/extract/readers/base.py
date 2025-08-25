@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Set, Union
+from typing import TYPE_CHECKING, Optional, Set, Union
 
-from marie.extract.structures.unstructured_document import UnstructuredDocument
+if TYPE_CHECKING:
+    from marie.extract.structures.unstructured_document import UnstructuredDocument
 
 
 class BaseReader(ABC):
@@ -28,7 +29,7 @@ class BaseReader(ABC):
     @abstractmethod
     def read(
         self, src: Union[str, dict], parameters: Optional[dict] = None
-    ) -> UnstructuredDocument:
+    ) -> "UnstructuredDocument":
         """
         This method reads the document and returns the document's text with metadata.
         :param src: document to read, can be a path to the file or a dictionary with the document's structure

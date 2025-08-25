@@ -1,7 +1,8 @@
 from typing import List, Optional
 
 from marie.extract.continuation.base import ContinuationStrategy
-from marie.extract.models.definition import ExecutionContext, Layer
+from marie.extract.models.definition import Layer
+from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import MatchSection
 
 

@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import numpy as np
 
@@ -20,7 +20,7 @@ class MetaReader(BaseReader):
 
     def read(
         self, src: Union[str, dict], parameters: Optional[dict] = None
-    ) -> UnstructuredDocument:
+    ) -> "UnstructuredDocument":
         parameters = {} if parameters is None else parameters
 
         return None
@@ -88,7 +88,7 @@ class MetaReader(BaseReader):
                 unstructured_lines.append(line_with_meta)
 
         return UnstructuredDocument(
-            lines=unstructured_lines, tables=[], metadata=unstructured_meta
+            lines=unstructured_lines, regions=[], metadata=unstructured_meta
         )
 
     @classmethod

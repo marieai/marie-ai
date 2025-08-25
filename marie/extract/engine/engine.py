@@ -8,7 +8,7 @@ from marie.extract.engine.match_section_extract_visitor import (
 from marie.extract.engine.processing_visitor import ProcessingVisitor
 from marie.extract.engine.rendering_visitor import MatchSectionRenderingVisitor
 from marie.extract.engine.template_validator_visitor import TemplateValidatorVisitor
-from marie.extract.models.definition import ExecutionContext
+from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import SubzeroResult
 
 LOGGER = logging.getLogger(__name__)

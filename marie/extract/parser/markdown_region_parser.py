@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import re
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from marie.extract.models.match import Span
+from marie.extract.models.page_span import PageSpan
 from marie.extract.parser.base import (
     normalize_row_values,
     parse_bullets_to_kvlist,
     parse_markdown_table,
     split_markdown_sections,
 )
-from marie.extract.processor.page_span import PageSpan
 from marie.extract.structures.cell_with_meta import CellWithMeta
 from marie.extract.structures.line_with_meta import LineWithMeta
 from marie.extract.structures.structured_region import (
@@ -193,7 +194,6 @@ class MarkdownRegionParser:
         - No '##' headings without a title
         - No duplicate titles (case-insensitive)
         """
-        import re
 
         # Fast guard: explicit untitled heading lines like '##' or '##   '
         if re.search(r"(?m)^##\s*$", md or ""):

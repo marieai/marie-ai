@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from marie.extract.models.definition import ExecutionContext
+from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import SubzeroResult
 
 

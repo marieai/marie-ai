@@ -3,7 +3,6 @@ import base64
 import io
 import os
 import uuid
-from threading import Thread
 from typing import List
 
 import gradio as gr
@@ -16,11 +15,6 @@ load_dotenv()  # Loads environment variables from a .env
 
 api_key = os.getenv("OPENAI_API_KEY", "EMPTY")
 base_url = os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:8000/v1")
-base_url = os.getenv("OPENAI_BASE_URL", "http://184.105.87.211:8000/v1")
-base_url = os.getenv("OPENAI_BASE_URL", "http://209.51.170.37:8000/v1")
-
-# base_url = 'http://209.51.170.37:8000/v1'  # DEEPSEEK
-base_url = 'http://172.83.15.139:8000/v1'  # QWEN VL
 
 print(f"API Key: {api_key}")
 print(f"Base URL: {base_url}")

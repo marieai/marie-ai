@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import List
+from typing import TYPE_CHECKING, List
 
-from marie.extract.structures.unstructured_document import UnstructuredDocument
+if TYPE_CHECKING:
+    from marie.extract.structures.unstructured_document import UnstructuredDocument
 
 
 class AnnotatorCapabilities(Enum):
@@ -42,13 +43,13 @@ class DocumentAnnotator(ABC):
         return capability in self.capabilities
 
     @abstractmethod
-    def annotate(self, document: UnstructuredDocument, frames: List):
+    def annotate(self, document: "UnstructuredDocument", frames: List):
         """
         Perform annotation operations on the provided document.
         Derived classes must override this method.
         """
 
-    async def aannotate(self, document: UnstructuredDocument, frames: List) -> None:
+    async def aannotate(self, document: "UnstructuredDocument", frames: List) -> None:
         """
         Perform annotation operations on the provided document.
         Derived classes must override this method.
@@ -63,7 +64,7 @@ class DocumentAnnotator(ABC):
         """
         pass
 
-    def validate_document(self, document: UnstructuredDocument):
+    def validate_document(self, document: "UnstructuredDocument"):
         """
         Ensure the input document is valid (non-empty content).
         """

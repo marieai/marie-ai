@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Union
 
 from marie.extract.engine.base import BaseProcessingVisitor
 from marie.extract.engine.transform import transform_field_value
-from marie.extract.models.definition import ExecutionContext
+from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import (
     Field,
     MatchFieldRow,

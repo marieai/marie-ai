@@ -3,7 +3,8 @@ from collections import deque
 from typing import List, Optional
 
 from marie.extract.adaptive_dfa import AdaptiveDFA, State
-from marie.extract.models.definition import ExecutionContext, Layer
+from marie.extract.models.definition import Layer
+from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import (
     LocationType,
     MatchSection,

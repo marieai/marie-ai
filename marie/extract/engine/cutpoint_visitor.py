@@ -1,15 +1,13 @@
-import logging
 from typing import List, Optional
 
 from marie.extract.continuation.default_continuation import DefaultContinuationStrategy
 from marie.extract.cutpoint.cutpoint_matching_engine import CutpointMatchingEngine
 from marie.extract.engine.base import BaseProcessingVisitor
 from marie.extract.engine.candidate_validator import CandidateValidator
-from marie.extract.models.definition import ExecutionContext, Layer, SelectionType
+from marie.extract.models.definition import Layer, SelectionType
+from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import MatchSection, MatchSectionType, SubzeroResult
-from marie.extract.processor.page_span import PageSpan
-
-LOGGER = logging.getLogger(__name__)
+from marie.extract.results.span_util import pagespan_from_start_stop
 
 
 class CutpointProcessingVisitor(BaseProcessingVisitor):
@@ -97,7 +95,7 @@ class CutpointProcessingVisitor(BaseProcessingVisitor):
             return
 
         for section in matched_sections:
-            page_span = PageSpan.create(context, section.start, section.stop)
+            page_span = pagespan_from_start_stop(context, section.start, section.stop)
             section.span = page_span.spanned_pages
 
     def populate_values(

@@ -2,7 +2,8 @@ from abc import ABC, abstractmethod
 from typing import List, Set
 
 from marie.extract.models.base import Blob
-from marie.extract.models.definition import ExecutionContext, FieldMapping, Layer
+from marie.extract.models.definition import FieldMapping, Layer
+from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import MatchFieldRow, MatchSection, Span
 
 
