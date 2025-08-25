@@ -76,7 +76,10 @@ class Layer(BaseModel):
 
     # this is used to store the raw table config
     # TODO : Replace with a proper table config class
-    table_config_raw: Optional[Dict[str, Any]] = None
+    table_config_raw: Optional[Dict[str, Any]] = (
+        None  # DEPRECATED use regions_config_raw
+    )
+    regions_config_raw: Optional[Dict[str, Any]] = None
 
     class Config:
         arbitrary_types_allowed = True

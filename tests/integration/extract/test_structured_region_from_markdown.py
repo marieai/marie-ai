@@ -1,6 +1,7 @@
 # pytest -q tests/test_structured_region_from_markdown.py
 import pytest
 
+from marie.conf.helper import load_yaml
 from marie.extract.parser.markdown_region_parser import MarkdownRegionParser
 from marie.extract.structures.structured_region import (
     KVList,
@@ -11,6 +12,37 @@ from marie.extract.structures.structured_region import (
     pagespan_pages,
     slice_rows_by_pagespan,
 )
+
+
+def _load_parser_from_yaml(path: str, **kwargs) -> MarkdownRegionParser:
+    cfg = load_yaml(path) or {}
+    mp_cfg = (cfg.get("region_parser") or {})
+    return MarkdownRegionParser.from_config(mp_cfg, **kwargs)
+
+
+@pytest.fixture
+def md_parser_cfg():
+    # Inline equivalent of the YAML config:
+    # region_parser:
+    #   sections:
+    #     - title: CLAIM INFORMATION
+    #       role: claim_information
+    #       parse: kv
+    #     - title: SERVICE LINES
+    #       role: service_lines
+    #       parse: table
+    #     - title: TOTALS
+    #       role: totals
+    #       parse: kv
+    return {
+        "region_parser": {
+            "sections": [
+                {"title": "CLAIM INFORMATION", "role": "claim_information", "parse": "kv"},
+                {"title": "SERVICE LINES", "role": "service_lines", "parse": "table"},
+                {"title": "TOTALS", "role": "totals", "parse": "kv"},
+            ]
+        }
+    }
 
 
 @pytest.fixture
@@ -57,16 +89,20 @@ def md_multi():
 """
 
 
-def build_single_page_region_from_markdown(md: str, page=3, page_y=120, page_h=40) -> StructuredRegion:
-    parser = MarkdownRegionParser(
-        section_roles={
-            "CLAIM INFORMATION": SectionRole.CONTEXT_ABOVE,
-            "SERVICE LINES": SectionRole.MAIN,
-            "TOTALS": SectionRole.CONTEXT_BELOW,
-        },
-        table_section_titles=["SERVICE LINES"],
-        kv_section_titles=["CLAIM INFORMATION", "TOTALS"],
-    )
+def build_single_page_region_from_markdown(md: str, page=3, page_y=120, page_h=40, *, cfg: dict | None = None
+                                           ) -> StructuredRegion:
+    # parser = MarkdownRegionParser(
+    #     section_roles={
+    #         "CLAIM INFORMATION": SectionRole.CONTEXT_ABOVE,
+    #         "SERVICE LINES": SectionRole.MAIN,
+    #         "TOTALS": SectionRole.CONTEXT_BELOW,
+    #     },
+    #     table_section_titles=["SERVICE LINES"],
+    #     kv_section_titles=["CLAIM INFORMATION", "TOTALS"],
+    # )
+
+    mp_cfg = (cfg or {}).get("region_parser", {})
+    parser = MarkdownRegionParser.from_config(mp_cfg)
 
     region = parser.build_single_page_region(
         md=md,
@@ -79,23 +115,28 @@ def build_single_page_region_from_markdown(md: str, page=3, page_y=120, page_h=4
 
 
 def build_multi_page_region_from_markdown(
-        md: str, page3_y=80, page3_h=160, page4_y=0, page4_h=120
+        md: str, page3_y=80, page3_h=160, page4_y=0, page4_h=120, *, cfg: dict | None = None
+
 ) -> StructuredRegion:
     def split_policy(rows):
         # Same demo split policy used in tests: roughly half, but at least one on the first page
         split_at = max(1, len(rows) // 2)
         return rows[:split_at], rows[split_at:]
 
-    parser = MarkdownRegionParser(
-        section_roles={
-            "CLAIM INFORMATION": SectionRole.CONTEXT_ABOVE,
-            "SERVICE LINES": SectionRole.MAIN,
-            "TOTALS": SectionRole.CONTEXT_BELOW,
-        },
-        table_section_titles=["SERVICE LINES"],
-        kv_section_titles=["CLAIM INFORMATION", "TOTALS"],
-        row_split_policy=split_policy,
-    )
+    # parser = MarkdownRegionParser(
+    #     section_roles={
+    #         "CLAIM INFORMATION": SectionRole.CONTEXT_ABOVE,
+    #         "SERVICE LINES": SectionRole.MAIN,
+    #         "TOTALS": SectionRole.CONTEXT_BELOW,
+    #     },
+    #     table_section_titles=["SERVICE LINES"],
+    #     kv_section_titles=["CLAIM INFORMATION", "TOTALS"],
+    #     row_split_policy=split_policy,
+    # )
+
+    mp_cfg = (cfg or {}).get("markdown_region_parser", {})
+    parser = MarkdownRegionParser.from_config(mp_cfg, row_split_policy=split_policy)
+
     region = parser.build_multi_page_region(
         md=md,
         region_id="claim_region:p3-4",
@@ -105,8 +146,8 @@ def build_multi_page_region_from_markdown(
     return region
 
 
-def test_single_page_region(md_single):
-    region = build_single_page_region_from_markdown(md_single, page=3, page_y=120, page_h=40)
+def test_single_page_region(md_single, md_parser_cfg):
+    region = build_single_page_region_from_markdown(md_single, page=3, page_y=120, page_h=40, cfg=md_parser_cfg)
 
     # Region span
     assert region.span is not None
@@ -139,7 +180,7 @@ def test_single_page_region(md_single):
     assert "AMOUNT PATIENT OWES PROVIDER" in keys
 
 
-def test_multi_page_region(md_multi):
+def test_multi_page_region(md_multi, md_parser_cfg):
     region = build_multi_page_region_from_markdown(
         md_multi, page3_y=80, page3_h=160, page4_y=0, page4_h=120
     )
@@ -177,7 +218,7 @@ def test_multi_page_region(md_multi):
     assert "TOTALS" in titles
 
 
-def test_duplicate_sections_raise():
+def test_duplicate_sections_raise(md_parser_cfg):
     md_with_dupes = """\
 ## CLAIM INFORMATION
 - PATIENT NAME: STAN SMITH
@@ -190,11 +231,13 @@ def test_duplicate_sections_raise():
 """
     import pytest
     with pytest.raises(ValueError) as ei:
-        _ = build_single_page_region_from_markdown(md_with_dupes, page=1, page_y=10, page_h=20)
+        _ = build_single_page_region_from_markdown(
+            md_with_dupes, page=1, page_y=10, page_h=20, cfg=md_parser_cfg
+        )
     assert "Duplicate section titles not allowed" in str(ei.value)
 
 
-def test_untitled_sections_raise():
+def test_untitled_sections_raise(md_parser_cfg):
     md_with_untitled = """\
 ## 
 - SOME KEY: SOME VALUE
@@ -204,5 +247,7 @@ def test_untitled_sections_raise():
 """
     import pytest
     with pytest.raises(ValueError) as ei:
-        _ = build_single_page_region_from_markdown(md_with_untitled, page=1, page_y=10, page_h=20)
+        _ = build_single_page_region_from_markdown(
+            md_with_untitled, page=1, page_y=10, page_h=20, cfg=md_parser_cfg
+        )
     assert "Untitled sections are not allowed" in str(ei.value)

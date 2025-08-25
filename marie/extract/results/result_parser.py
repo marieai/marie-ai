@@ -486,6 +486,7 @@ def process_extractions_table(
     page_id: int,
     annotation_type: str,
     grounding_keys: list[str],
+    conf: OmegaConf,
     **kwargs,
 ) -> None:
     """
@@ -498,6 +499,7 @@ def process_extractions_table(
         page_id (int): The ID of the page to process.
         annotation_type (str): Type of annotation ("CLAIM", "REMARKS", etc.).
         grounding_keys (list[str]): List of valid keys to process.
+        conf (OmegaConf): Configuration object for additional settings.
     """
     logger.info(f"Detailed extraction result for page {page_id}")
 
@@ -643,8 +645,12 @@ def process_extractions_table(
         with open(file_name, "r") as md_file:
             md_content = md_file.read()
 
+        # TODO : Today we only support layer-main
+        #        Add support for multiple layers
+        layer_config = conf.layers['layer-main']
+
         try:
-            parsing_method = kwargs.get("parsing_method", "plain")
+            parsing_method = kwargs.get("parsing_method", "mrp")
             logger.info(f"Table parsing method: {parsing_method}")
             region: Optional[StructuredRegion] = None
 
@@ -657,13 +663,17 @@ def process_extractions_table(
                     table_segment_meta[segment_index],
                 )
             elif parsing_method == "mrp":
+                mp_cfg = OmegaConf.to_container(
+                    layer_config.get("region_parser") or {}, resolve=True
+                )
+
                 region = _parse_table_mrp(
                     doc,
                     md_content,
                     page_id,
                     segment_index,
                     table_segment_meta[segment_index],
-                    **kwargs,
+                    cfg=mp_cfg,
                 )
             if region:
                 doc.insert_region(region)

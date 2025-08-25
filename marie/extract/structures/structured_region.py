@@ -158,11 +158,15 @@ Block = Union[KVList, FreeText, TableBlock, TableSeries]
 
 
 class SectionRole(str, Enum):
-    CONTEXT_ABOVE = "context_above"
-    MAIN = "main"
-    CONTEXT_BELOW = "context_below"
-    SIDEBAR = "sidebar"
-    UNKNOWN = "unknown"
+    """
+    Layout-only role for pagination/placement logic.
+    """
+
+    CONTEXT_ABOVE = "context_above"  # typically header-ish context
+    MAIN = "main"  # the primary content for the region
+    CONTEXT_BELOW = "context_below"  # typically footer-ish context
+    SIDEBAR = "sidebar"  # aside/auxiliary content
+    UNKNOWN = "unknown"  # fallback
 
 
 class Section(BaseModel):

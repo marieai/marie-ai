@@ -72,7 +72,98 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         assert context.document is not None, "Context must include a document."
 
         self.process_fields(context, parent, section)
-        self.process_tables(context, parent, section)
+        self.process_regions(context, parent, section)
+        # self.process_tables(context, parent, section)
+
+    def process_regions(
+        self, context: ExecutionContext, parent: MatchSection, section: MatchSection
+    ) -> None:
+        """
+        Sister method to `process_tables` that operates on the new `regions` configuration.
+        Currently supports type: table regions and reuses the same extraction flow by
+        building header/footer mappings from the region entry matching the section title.
+        """
+        assert context is not None, "Execution context must not be None."
+        assert section is not None, "Section must not be None."
+        assert parent is not None, "Parent section must not be None."
+        assert (
+            section.owner_layer is not None
+        ), "Section must be associated with a layer."
+        assert context.document is not None, "Context must include a document."
+
+        document = context.document
+        layer = section.owner_layer
+        spans: List[Span] = section.span
+
+        # Regions configuration is expected to be present on the layer (loaded directly from YAML `regions:`)
+        regions_cfg, template_fields_repeating = layer.regions_config_raw
+
+        if not regions_cfg:
+            self.logger.info(
+                "No regions configuration found on layer; skipping process_regions."
+            )
+            return
+
+        # Find the region entry that corresponds to this section (by title)
+        sec_title = (section.label or "").strip().upper()
+        region_entry = None
+        for entry in regions_cfg:
+            title = str(entry.get("title", "")).strip().upper()
+            if title and title == sec_title:
+                region_entry = entry
+                break
+
+        if not region_entry:
+            self.logger.info(
+                f"No matching region entry found for section '{section.label}'."
+            )
+            return
+
+        region_type = (region_entry.get("type") or "").strip().lower()
+        if region_type != "table":
+            # For now, we only have special handling for table regions; KV is handled by process_fields.
+            self.logger.info(
+                f"Region '{section.label}' has type '{region_type}', no table processing required."
+            )
+            return
+
+        table_cfg = region_entry.get("table", {}) or {}
+        body_cfg = table_cfg.get("body", {}) or {}
+        footer_cfg = table_cfg.get("footer", {}) or {}
+
+        # Build field maps from the region's table configuration
+        field_to_header_map: Dict[str, Dict[str, object]] = {}
+        field_to_footer_map: Dict[str, Dict[str, object]] = {}
+
+        columns_cfg = body_cfg.get("columns", {}) or {}
+        for field_name, field_info in columns_cfg.items():
+            field_to_header_map[field_name] = {
+                "selectors": field_info.get("annotation_selectors", []),
+                "primary": field_info.get("primary", False),
+                "level": "SERVICE_LINE",
+            }
+
+        # FIXME/TODO: Support footer config properly
+        footer_columns_cfg = (
+            (footer_cfg.get("columns") or {}) if isinstance(footer_cfg, dict) else {}
+        )
+        for field_name, field_info in footer_columns_cfg.items():
+            field_to_footer_map[field_name] = {
+                "selectors": field_info.get("annotation_selectors", []),
+                "level": "DOCUMENT",
+            }
+
+        # Access field mappings prepared on the layer (used for value transforms)
+        self.logger.info(f"Processing regions (table) for layer: {layer.layer_name}")
+        self.logger.debug(f"field_to_header_map: {field_to_header_map}")
+        self.logger.debug(f"field_to_footer_map: {field_to_footer_map}")
+
+        try:
+            # Collect all tables that fall within the regions spans
+            pass
+        except Exception as e:
+            self.logger.error(f"Error processing regions: {e}")
+            raise e
 
     def process_tables(
         self, context: ExecutionContext, parent: MatchSection, section: MatchSection

@@ -13,6 +13,7 @@ from marie.extract.parser.base import (
 )
 from marie.extract.structures.cell_with_meta import CellWithMeta
 from marie.extract.structures.line_with_meta import LineWithMeta
+from marie.extract.structures.roles import normalize_role
 from marie.extract.structures.structured_region import (
     KeyValue,
     KVList,
@@ -57,7 +58,7 @@ class MarkdownRegionParser:
         include_header_on_start_only: bool = True,
     ):
         """
-        - section_roles: map of section title (case-insensitive) -> SectionRole.
+        - section_roles: map of section title (case-insensitive) -> SectionRole OR free-form string.
                          Titles default to MAIN if unspecified.
         - table_section_titles: which sections to parse as tables (case-insensitive).
         - kv_section_titles: which sections to parse as KV lists (case-insensitive).
@@ -65,13 +66,120 @@ class MarkdownRegionParser:
                             If None, all rows stay on a single page (single-page parsing).
         - include_header_on_start_only: controls header binding propagation across segments.
         """
-        self.section_roles = {k.upper(): v for k, v in (section_roles or {}).items()}
-        self.table_section_titles = {t.upper() for t in (table_section_titles or [])}
-        self.kv_section_titles = {t.upper() for t in (kv_section_titles or [])}
+
+        self.section_roles = {
+            self._norm_title_key(k): v for k, v in (section_roles or {}).items()
+        }
+        self.section_role_hints: Dict[str, str] = getattr(
+            self, "section_role_hints", {}
+        )
+
+        self.table_section_titles = {
+            self._norm_title_key(t) for t in (table_section_titles or [])
+        }
+        self.kv_section_titles = {
+            self._norm_title_key(t) for t in (kv_section_titles or [])
+        }
         self.row_split_policy = row_split_policy
         self.include_header_on_start_only = include_header_on_start_only
 
+    @staticmethod
+    def _norm_title_key(s: str) -> str:
+        """
+        Normalize a section title for case-insensitive, whitespace-insensitive matching.
+        1) strip
+        2) collapse internal whitespace to single spaces
+        3) uppercase
+        """
+        if not isinstance(s, str):
+            return ""
+        import re
+
+        collapsed = re.sub(r"\s+", " ", s.strip())
+        return collapsed.upper()
+
+    @staticmethod
+    def _split_sets_by_parse(
+        sections_cfg: Iterable[Dict[str, object]]
+    ) -> Tuple[Dict[str, object], set[str], set[str]]:
+        """
+        From a list-based 'sections' config, compute:
+          - raw_roles: title -> role (enum/string)
+          - table_titles: set of titles configured as table or both
+          - kv_titles: set of titles configured as kv or both
+        """
+        raw_roles: Dict[str, object] = {}
+        table_titles: set[str] = set()
+        kv_titles: set[str] = set()
+
+        for item in sections_cfg or []:
+            title = str(item.get("title", "")).strip()
+            if not title:
+                continue
+            key = MarkdownRegionParser._norm_title_key(title)
+            role_val = item.get("role")
+            parse = str(item.get("parse", "")).strip().lower()  # kv | table | both
+            raw_roles[key] = role_val
+
+            if parse not in ("kv", "table", "both"):
+                raise ValueError(
+                    f"Invalid parse value '{parse}' for section '{title}'; must be 'kv', 'table', or 'both'"
+                )
+
+            if parse in ("table", "both"):
+                table_titles.add(key)
+            if parse in ("kv", "both"):
+                kv_titles.add(key)
+
+        return raw_roles, table_titles, kv_titles
+
+    @classmethod
+    def from_config(cls, cfg: Dict[str, object], **kwargs) -> "MarkdownRegionParser":
+        """
+        Strict factory that accepts only the new list-based format:
+        cfg must contain:
+          sections: [
+            { title: "...", role: "<enum-or-string>", parse: "kv|table|both" },
+            ...
+          ]
+        """
+        print(cfg)
+        if not isinstance(cfg, dict) or "sections" not in cfg:
+            raise ValueError("region_parser config must define 'sections' list")
+
+        raw_roles_map, table_titles_set, kv_titles_set = cls._split_sets_by_parse(
+            cfg.get("sections") or []
+        )
+        # Normalize roles
+        section_roles: Dict[str, SectionRole] = {}
+        role_hints: Dict[str, str] = {}
+        for key_norm, value in raw_roles_map.items():
+            enum_val, hint = normalize_role(value)
+            section_roles[key_norm] = enum_val
+            if hint:
+                role_hints[key_norm] = hint
+
+        inst = cls(
+            section_roles=section_roles,
+            table_section_titles=list(table_titles_set),
+            kv_section_titles=list(kv_titles_set),
+            **kwargs,
+        )
+        inst.section_role_hints = role_hints
+        return inst
+
     # ---------------------------- Public API ----------------------------
+
+    def summary(self) -> Dict[str, object]:
+        """
+        Return a concise snapshot of the parser's markdown configuration.
+        """
+        return {
+            "section_roles": self.section_roles,
+            "section_role_hints": getattr(self, "section_role_hints", {}),
+            "table_section_titles": sorted(list(self.table_section_titles)),
+            "kv_section_titles": sorted(list(self.kv_section_titles)),
+        }
 
     def build_single_page_region(
         self,
@@ -91,10 +199,13 @@ class MarkdownRegionParser:
         sections: List[Section] = []
         for title_uc, body in sections_seq:
             role = self._role_for(title_uc)
+            role_hint = self._role_hint_for(title_uc)
 
             # KV section (optional)
             kv_sec = self._build_kv_section(title_uc, role, body)
             if kv_sec is not None:
+                if role_hint:
+                    kv_sec.tags["role_hint"] = role_hint
                 sections.append(kv_sec)
 
             # Table section (optional)
@@ -112,6 +223,8 @@ class MarkdownRegionParser:
                     header_on_first_only=True,
                 )
                 if tbl_sec is not None:
+                    if role_hint:
+                        tbl_sec.tags["role_hint"] = role_hint
                     sections.append(tbl_sec)
 
         # Region span (single-page)
@@ -138,8 +251,7 @@ class MarkdownRegionParser:
     ) -> StructuredRegion:
         """
         Parse markdown into a two-page StructuredRegion (generic multi-page demo).
-        The rows are split via row_split_policy. If no table in a section or no split policy,
-        table falls back to single page (p1_page).
+        # ... existing code ...
         """
         sections_seq = self._parse_and_validate_sections(md)
 
@@ -147,10 +259,13 @@ class MarkdownRegionParser:
 
         for title_uc, body in sections_seq:
             role = self._role_for(title_uc)
+            role_hint = self._role_hint_for(title_uc)
 
             # KV section (optional)
             kv_sec = self._build_kv_section(title_uc, role, body)
             if kv_sec is not None:
+                if role_hint:
+                    kv_sec.tags["role_hint"] = role_hint
                 sections.append(kv_sec)
 
             # Table sections
@@ -177,6 +292,8 @@ class MarkdownRegionParser:
                 header_on_first_only=self.include_header_on_start_only,
             )
             if tbl_sec is not None:
+                if role_hint:
+                    tbl_sec.tags["role_hint"] = role_hint
                 sections.append(tbl_sec)
 
         # Region covering both pages
@@ -204,8 +321,13 @@ class MarkdownRegionParser:
         return sections_seq
 
     def _role_for(self, title_uc: str) -> SectionRole:
-        # Use provided mapping; default MAIN
-        return self.section_roles.get(title_uc, SectionRole.MAIN)
+        # Normalize on lookup
+        key = self._norm_title_key(title_uc)
+        return self.section_roles.get(key, SectionRole.MAIN)
+
+    def _role_hint_for(self, title_uc: str) -> Optional[str]:
+        key = self._norm_title_key(title_uc)
+        return self.section_role_hints.get(key)
 
     def _as_title(self, title_uc: str) -> str:
         # Preserve provided uppercase title
@@ -259,11 +381,12 @@ class MarkdownRegionParser:
 
     def _build_kv_section(
         self, title_uc: str, role: SectionRole, body: str
-    ) -> Optional[Section]:
+    ) -> Optional["Section"]:
         """
         Build a KVList Section if bullet kvs exist and allowed by kv_section_titles.
         """
-        if self.kv_section_titles and title_uc not in self.kv_section_titles:
+        key = self._norm_title_key(title_uc)
+        if self.kv_section_titles and key not in self.kv_section_titles:
             return None
         kv_items = parse_bullets_to_kvlist(body)
         if not kv_items:
@@ -288,7 +411,8 @@ class MarkdownRegionParser:
         row_segments is a list of dicts: {"page": int, "y": int, "h": int, "rows": List[List[str]]}
         """
         # Reject if table section filtering is set and this section is not included
-        if self.table_section_titles and title_uc not in self.table_section_titles:
+        key = self._norm_title_key(title_uc)
+        if self.table_section_titles and key not in self.table_section_titles:
             return None
 
         # Build TableRows for segments, header only on first segment

@@ -157,5 +157,5 @@ def update_document_tables(
     Updates the document with extracted remark-related data for the specified page.
     """
     process_extractions_table(
-        working_dir, doc, result, page_id, "TABLE", conf.grounding["table"]
+        working_dir, doc, result, page_id, "TABLE", conf.grounding["table"], conf
     )

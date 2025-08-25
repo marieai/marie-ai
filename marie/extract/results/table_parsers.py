@@ -100,6 +100,7 @@ def _parse_table_mrp(
     page_id: int,
     segment_index: int,
     table_segment_meta: dict,
+    cfg: dict,
     **kwargs,
 ) -> Optional[StructuredRegion]:
     """Parses a markdown file to extract tables using MarkdownRegionParser."""
@@ -107,19 +108,23 @@ def _parse_table_mrp(
     if not md_content.strip():
         return None
 
-    section_roles = kwargs.get("section_roles", {})
-    table_section_titles = kwargs.get("table_section_titles", [])
-    kv_section_titles = kwargs.get("kv_section_titles", [])
+    parser = MarkdownRegionParser.from_config(cfg)
+    logger.info(f"parser => {[parser.summary()]}")
 
-    if not table_section_titles:
-        logger.warning("table_section_titles not provided for 'mrp' parsing method.")
-        return None
-
-    parser = MarkdownRegionParser(
-        section_roles=section_roles,
-        table_section_titles=table_section_titles,
-        kv_section_titles=kv_section_titles,
-    )
+    # Deprecated way to configure the parser
+    # section_roles = kwargs.get("section_roles", {})
+    # table_section_titles = kwargs.get("table_section_titles", [])
+    # kv_section_titles = kwargs.get("kv_section_titles", [])
+    #
+    # if not table_section_titles:
+    #     logger.warning("table_section_titles not provided for 'mrp' parsing method.")
+    #     return None
+    #
+    # parser = MarkdownRegionParser(
+    #     section_roles=section_roles,
+    #     table_section_titles=table_section_titles,
+    #     kv_section_titles=kv_section_titles,
+    # )
 
     # TODO : Implement the multi-page span
     start_line = table_segment_meta["start"]
