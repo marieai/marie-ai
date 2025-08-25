@@ -3,7 +3,8 @@ from collections import defaultdict
 from typing import DefaultDict, Dict, List
 
 from marie.extract.engine.processing_visitor import ProcessingVisitor
-from marie.extract.models.definition import ExecutionContext, Layer
+from marie.extract.models.definition import Layer
+from marie.extract.models.exec_context import ExecutionContext
 
 # from marie.extract.event import LifecycleEvent, LifecycleEventType, LifecycleManager
 from marie.extract.models.match import (

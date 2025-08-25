@@ -1,10 +1,8 @@
 from collections import deque
-from typing import List
 
 from marie.extract.engine.base import BaseProcessingVisitor
-from marie.extract.models.base import Selector
-from marie.extract.models.definition import ExecutionContext, Layer
-from marie.extract.models.match import MatchSection, SubzeroResult
+from marie.extract.models.exec_context import ExecutionContext
+from marie.extract.models.match import MatchSection
 
 
 class MockProcessingVisitor(BaseProcessingVisitor):

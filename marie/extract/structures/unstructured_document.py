@@ -6,6 +6,7 @@ from rtree import index
 
 import marie.check as check
 from marie.extract.structures.line_with_meta import LineWithMeta
+from marie.extract.structures.structured_region import StructuredRegion, pagespan_pages
 from marie.extract.structures.table import Table
 
 
@@ -15,7 +16,10 @@ class UnstructuredDocument:
     """
 
     def __init__(
-        self, lines: List[LineWithMeta], tables: List[Table], metadata: Dict[str, Any]
+        self,
+        lines: List[LineWithMeta],
+        regions: Optional[List[StructuredRegion]],
+        metadata: Dict[str, Any],
     ) -> None:
         self.metadata = metadata
         # this original metadata from source *.meta.json
@@ -26,7 +30,8 @@ class UnstructuredDocument:
             raise ValueError("source_metadata is required in the metadata")
 
         self.lines: List[LineWithMeta] = lines
-        self.tables: List[Table] = tables if tables is not None else []
+        self.regions: List[StructuredRegion] = regions if regions is not None else []
+
         self.rtree_by_page = {}
         self.insert(lines)
         self._lines_by_page = defaultdict(list)
@@ -174,8 +179,21 @@ class UnstructuredDocument:
         :param page_id: The page ID for which to retrieve tables.
         :return: A list of Table objects associated with the specified page ID.
         """
+        raise RuntimeError('Method has been deprecated and is being removed.')
+
+    def regions_for_page(self, page_id: int) -> List[StructuredRegion]:
+        """
+        Retrieve all regions belonging to the specified page_id.
+
+        :param page_id: The page ID for which to retrieve regions.
+        :return: A list of StructuredRegion objects associated with the specified page ID.
+        """
         check.int_param(page_id, "page_id")
-        return [table for table in self.tables if table.metadata.page_id == page_id]
+        return [
+            region
+            for region in self.regions
+            if region.span and page_id in pagespan_pages(region.span)
+        ]
 
     @property
     def page_ids(self) -> List[int]:
@@ -196,3 +214,16 @@ class UnstructuredDocument:
             raise ValueError("The object to insert must be an instance of Table.")
 
         self.tables.append(table)
+
+    def insert_region(self, region: StructuredRegion) -> None:
+        """
+        Insert a new region into the document.
+
+        :param region: StructuredRegion object to be added to the document.
+        """
+        if not isinstance(region, StructuredRegion):
+            raise ValueError(
+                "The object to insert must be an instance of StructuredRegion."
+            )
+
+        self.regions.append(region)

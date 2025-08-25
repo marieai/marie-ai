@@ -1,15 +1,11 @@
-from typing import Dict, List, Tuple
+from pathlib import Path
+from typing import Dict, List, Tuple, Union
 
 from omegaconf import OmegaConf
 
 from marie.extract.engine.engine import DocumentExtractEngine
 from marie.extract.models.base import SelectorSet, TextSelector
-from marie.extract.models.definition import (
-    ExecutionContext,
-    FieldMapping,
-    Layer,
-    Template,
-)
+from marie.extract.models.definition import FieldMapping, Layer, Template
 from marie.extract.schema import ExtractionResult
 from marie.extract.structures import UnstructuredDocument
 from marie.extract.structures.concrete_annotations import TypedAnnotation
@@ -62,7 +58,7 @@ def build_template(config: OmegaConf) -> Template:
         )
     elif layout_id == "103932":  # ORIGINAL 103932 -> 122169
         layer_1.start_selector_sets = build_selector_sets(
-            ["PATIENT NAME", "CLAIM NUMBER", "PATIENT ACCOUNT", "CHECK NUMBER"]
+            ["CLAIM NUMBER", "PATIENT ACCOUNT", "EMPLOYEE", "PROVIDER TAX ID"]
         )
     else:
         raise ValueError(f"Unsupported layout ID: {layout_id}")
@@ -147,20 +143,24 @@ def merge_annotations(doc: UnstructuredDocument) -> None:
 
 
 def convert_document_to_structure(
-    doc: UnstructuredDocument, conf: OmegaConf, output_file: str = "extract_output.sql"
+    doc: UnstructuredDocument, conf: OmegaConf, output_dir: Union[Path, str]
 ) -> ExtractionResult:
     """
     Renders the `UnstructuredDocument` extract basesd on the provided template specification.
 
     Parameters:
         doc (UnstructuredDocument): The document to render.
-        output_file (str): The file path to write the Markdown output into. Defaults to "document.md".
+        output_dir (Union[Path, str]): The directory to write the output to.
 
     Returns:
         None
     """
+    from marie.extract.models.exec_context import ExecutionContext
+
     logger.info("Converting unstructured document to structured document")
     # TODO : Add better error handling and validation
+    output_dir = Path(output_dir)
+    logger.info(f"Writing output to {output_dir}")
 
     unstructured_meta = doc.metadata
     doc_id = unstructured_meta.get("ref_id", "unknown")
@@ -169,7 +169,9 @@ def convert_document_to_structure(
     merge_annotations(doc)
 
     template = build_template(conf)
-    context = ExecutionContext(doc_id=doc_id, template=template, document=doc)
+    context = ExecutionContext(
+        doc_id=doc_id, template=template, document=doc, output_dir=output_dir
+    )
     results = DocumentExtractEngine().match(context)
 
     return results

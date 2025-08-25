@@ -1,11 +1,12 @@
 import os.path
+import time
 import xml.dom.minidom as minidom
 import xml.etree.ElementTree as ET
 from collections import deque
 from xml.etree.ElementTree import tostring
 
 from marie.extract.engine.base import BaseProcessingVisitor
-from marie.extract.models.definition import ExecutionContext
+from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import MatchSection, MatchSectionType, SubzeroResult
 from marie.logging_core.logger import MarieLogger
 
@@ -22,6 +23,7 @@ class MatchSectionRenderingVisitor(BaseProcessingVisitor):
 
     def visit(self, context: ExecutionContext, parent: SubzeroResult) -> None:
         self.logger.info("Processing MatchSectionRenderingVisitor")
+        self.logger.info(f"Rendering to directory {context.output_dir}")
 
         # Create root XML element
         root = ET.Element("GrapnelOutput")
@@ -52,7 +54,10 @@ class MatchSectionRenderingVisitor(BaseProcessingVisitor):
         xml_string = self._pretty_print_xml(root)
 
         # Save the XML output
-        output_path = os.path.expanduser(os.path.join("~/g5", f"{context.doc_id}.xml"))
+        output_path = os.path.expanduser(
+            os.path.join(context.output_dir, f"{context.doc_id}.xml")
+        )
+        # output_path = os.path.expanduser(os.path.join("~/g5", f"{context.doc_id}.xml"))
         with open(output_path, "w", encoding="utf-8") as file:
             file.write(xml_string)
 

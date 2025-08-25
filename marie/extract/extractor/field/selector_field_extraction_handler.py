@@ -2,7 +2,8 @@ import logging
 from typing import List
 
 from marie.extract.extractor.field.base import BaseFieldExtractionHandler
-from marie.extract.models.definition import ExecutionContext, FieldMapping
+from marie.extract.models.definition import FieldMapping
+from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import MatchField, MatchSection
 
 LOGGER = logging.getLogger(__name__)

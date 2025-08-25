@@ -1,18 +1,9 @@
-import logging
-from typing import List, Optional
+from typing import List
 
 from marie.extract.models.base import Rectangle, Selector, TextSelector
-from marie.extract.models.definition import ExecutionContext, Layer, SelectorSet
-from marie.extract.models.match import (
-    MatchSection,
-    ResultType,
-    ScanResult,
-    ScoredMatchResult,
-)
-from marie.extract.processor.page_span import PageSpan
+from marie.extract.models.exec_context import ExecutionContext
+from marie.extract.models.match import MatchSection, ResultType, ScanResult
 from marie.extract.structures.concrete_annotations import TypedAnnotation
-
-LOGGER = logging.getLogger(__name__)
 
 
 class SelectorMatcher:

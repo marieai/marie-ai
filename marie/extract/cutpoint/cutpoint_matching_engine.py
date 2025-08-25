@@ -3,7 +3,8 @@ from collections import defaultdict
 from typing import List, Optional
 
 from marie.extract.models.base import Rectangle, Selector
-from marie.extract.models.definition import ExecutionContext, SelectorSet
+from marie.extract.models.definition import SelectorSet
+from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import (
     MatchSection,
     ResultType,

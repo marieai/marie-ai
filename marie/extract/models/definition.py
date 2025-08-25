@@ -12,8 +12,6 @@ from marie.extract.models.base import (
     SelectionType,
     SelectorSet,
 )
-from marie.extract.readers import MetaReader
-from marie.extract.structures.unstructured_document import UnstructuredDocument
 
 
 class MappingType(str, Enum):
@@ -125,45 +123,3 @@ class WorkUnit(BaseModel):
     template: Optional[Template] = None
     metadata: Optional[List] = None
     frames: Optional[List] = None
-
-
-class ExecutionContext(BaseModel):
-    template: Optional["Template"] = None
-    document: Optional["UnstructuredDocument"] = None
-    pages: List["Page"] = []
-    tree: Optional[Any] = None
-    doc_id: str
-    metadata: Optional[Dict] = None
-
-    class Config:
-        arbitrary_types_allowed = True
-
-    def __str__(self) -> str:
-        return (
-            f"ExecutionContext(doc_id={self.doc_id}, "
-            f"template={self.template}, "
-            f"document={self.document}, "
-            f"metadata_keys={list(self.metadata.keys()) if self.metadata else []})"
-        )
-
-    def get_template(self) -> Template:
-        return self.template
-
-    @classmethod
-    def create(
-        cls, work_unit: WorkUnit, page_numbers: Optional[List[int]] = None
-    ) -> "ExecutionContext":
-        frames = work_unit.frames
-        metadata = work_unit.metadata
-        template = work_unit.template
-
-        if page_numbers:
-            frames = [frame for idx, frame in enumerate(frames) if idx in page_numbers]
-            metadata = [
-                meta for idx, meta in enumerate(metadata) if idx in page_numbers
-            ]
-
-        doc = MetaReader.from_data(frames=frames, ocr_meta=metadata)
-        return ExecutionContext(
-            doc_id=work_unit.doc_id, template=template, document=doc
-        )
