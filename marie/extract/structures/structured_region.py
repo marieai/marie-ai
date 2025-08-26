@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Callable, Dict, Iterable, List, Literal, Optional, Union
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
@@ -216,11 +217,27 @@ class StructuredRegion(BaseModel):
     """
 
     region_id: Optional[str] = None
+    region_key: str = Field(default_factory=lambda: uuid4().hex, repr=False)
+
     span: Optional[PageSpan] = None
     parts: List[RegionPart] = Field(default_factory=list)
     tags: Dict[str, str] = Field(default_factory=dict)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def _key(self) -> str:
+        # Prefer explicit region_id for semantic equality; fall back to internal key
+        # return self.region_id or self.region_key
+        return self.region_key
+
+    def __hash__(self) -> int:
+        # Hash by stable key (works even if other fields mutate)
+        return hash(self._key())
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, StructuredRegion):
+            return NotImplemented
+        return self._key() == other._key()
 
     @field_serializer("span", when_used="json")
     def _ser_pagespan(self, span: Optional[PageSpan], _info):
@@ -239,9 +256,6 @@ class StructuredRegion(BaseModel):
         return out
 
     def find_section(self, name: str) -> Optional[Section]:
-        """
-        Return the first section whose title matches `name` (case-insensitive).
-        """
         target = (name or "").strip().upper()
         for s in self.sections_flat():
             if (s.title or "").strip().upper() == target:

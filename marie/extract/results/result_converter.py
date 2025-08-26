@@ -102,6 +102,7 @@ def build_template(config: OmegaConf) -> Template:
     )  # FIXME :  Total hack to get config to work during testing
 
     layer_1.regions_config_raw = (
+        layer_conf.region_parser,
         layer_conf.regions,
         template_fields_repeating,
     )  # FIXME :  Total hack to get config to work during testing

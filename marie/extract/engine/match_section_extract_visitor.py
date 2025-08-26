@@ -15,6 +15,7 @@ from marie.extract.models.match import (
 from marie.extract.models.span import Span
 from marie.extract.structures.concrete_annotations import TypedAnnotation
 from marie.extract.structures.line_with_meta import LineWithMeta
+from marie.extract.structures.structured_region import TableBlock, TableSeries
 from marie.extract.structures.table import Table
 from marie.logging_core.logger import MarieLogger
 
@@ -83,6 +84,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         Currently supports type: table regions and reuses the same extraction flow by
         building header/footer mappings from the region entry matching the section title.
         """
+        self.logger.info("Processing regions section")
         assert context is not None, "Execution context must not be None."
         assert section is not None, "Section must not be None."
         assert parent is not None, "Parent section must not be None."
@@ -96,74 +98,193 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         spans: List[Span] = section.span
 
         # Regions configuration is expected to be present on the layer (loaded directly from YAML `regions:`)
-        regions_cfg, template_fields_repeating = layer.regions_config_raw
-
-        if not regions_cfg:
-            self.logger.info(
-                "No regions configuration found on layer; skipping process_regions."
-            )
-            return
-
-        # Find the region entry that corresponds to this section (by title)
-        sec_title = (section.label or "").strip().upper()
-        region_entry = None
-        for entry in regions_cfg:
-            title = str(entry.get("title", "")).strip().upper()
-            if title and title == sec_title:
-                region_entry = entry
-                break
-
-        if not region_entry:
-            self.logger.info(
-                f"No matching region entry found for section '{section.label}'."
-            )
-            return
-
-        region_type = (region_entry.get("type") or "").strip().lower()
-        if region_type != "table":
-            # For now, we only have special handling for table regions; KV is handled by process_fields.
-            self.logger.info(
-                f"Region '{section.label}' has type '{region_type}', no table processing required."
-            )
-            return
-
-        table_cfg = region_entry.get("table", {}) or {}
-        body_cfg = table_cfg.get("body", {}) or {}
-        footer_cfg = table_cfg.get("footer", {}) or {}
-
-        # Build field maps from the region's table configuration
-        field_to_header_map: Dict[str, Dict[str, object]] = {}
-        field_to_footer_map: Dict[str, Dict[str, object]] = {}
-
-        columns_cfg = body_cfg.get("columns", {}) or {}
-        for field_name, field_info in columns_cfg.items():
-            field_to_header_map[field_name] = {
-                "selectors": field_info.get("annotation_selectors", []),
-                "primary": field_info.get("primary", False),
-                "level": "SERVICE_LINE",
-            }
-
-        # FIXME/TODO: Support footer config properly
-        footer_columns_cfg = (
-            (footer_cfg.get("columns") or {}) if isinstance(footer_cfg, dict) else {}
+        region_parser_cfg, regions_cfg, template_fields_repeating = (
+            layer.regions_config_raw
         )
-        for field_name, field_info in footer_columns_cfg.items():
-            field_to_footer_map[field_name] = {
-                "selectors": field_info.get("annotation_selectors", []),
-                "level": "DOCUMENT",
+
+        # This is the list of rules that defines how to parse each section role.
+        parser_sections_rules = region_parser_cfg.get("sections", [])
+
+        # Find all `StructuredRegion` objects that are within the scope of the MatchSection's spans.
+        pages_in_section = sorted(list(set(s.page for s in section.span)))
+        if not pages_in_section:
+            self.logger.info("Section has no page spans; skipping region processing.")
+            return
+
+        # Collect all unique StructuredRegions that fall within the section's pages
+        regions_in_scope = set()
+        for page_id in pages_in_section:
+            regions_on_page = document.regions_for_page(page_id)
+            for r in regions_on_page:
+                regions_in_scope.add(r)
+
+        if not regions_in_scope:
+            self.logger.info(
+                f"No structured regions found on pages {pages_in_section} for section '{section.label}'"
+            )
+            return
+
+        # Iterate through all sections of all scoped regions and process them based on their `role_hint` tag.
+        for region in regions_in_scope:
+            for structured_section in region.sections_flat():
+                role_hint = structured_section.tags.get("role_hint")
+                if not role_hint:
+                    continue
+
+                # Find the parsing rule for this section's role hint.
+                section_rule = next(
+                    (
+                        rule
+                        for rule in parser_sections_rules
+                        if rule.get("role") == role_hint
+                    ),
+                    None,
+                )
+
+                if not section_rule:
+                    raise ValueError(
+                        "No rule for this role_hint, so we can't process it."
+                    )
+                    # continue  # No rule for this role_hint, so we can't process it.
+
+                parse_method = section_rule.get("parse")
+                self.logger.info(
+                    f"Found structured section '{structured_section.title}' with role_hint '{role_hint}'. Parsing as '{parse_method}'."
+                )
+
+                # Delegate to the appropriate processor based on the parse method.
+                if parse_method == "table":
+                    self.logger.info(
+                        f"Table processing for region with role_hint '{role_hint}' is not yet implemented."
+                    )
+                    self._process_region_as_table(
+                        regions_cfg,
+                        section,  # The original MatchSection to populate with results
+                        structured_section,
+                        template_fields_repeating,
+                    )
+                elif parse_method == "kv":
+                    self.logger.info(
+                        f"KV processing for region with role_hint '{role_hint}' is not yet implemented."
+                    )
+                else:
+                    self.logger.warning(
+                        f"Unsupported parse method '{parse_method}' for role_hint '{role_hint}'."
+                    )
+
+        #
+        # table_cfg = region_entry.get("table", {}) or {}
+        # body_cfg = table_cfg.get("body", {}) or {}
+        # footer_cfg = table_cfg.get("footer", {}) or {}
+        #
+        # # Build field maps from the region's table configuration
+        # field_to_header_map: Dict[str, Dict[str, object]] = {}
+        # field_to_footer_map: Dict[str, Dict[str, object]] = {}
+        #
+        # columns_cfg = body_cfg.get("columns", {}) or {}
+        # for field_name, field_info in columns_cfg.items():
+        #     field_to_header_map[field_name] = {
+        #         "selectors": field_info.get("annotation_selectors", []),
+        #         "primary": field_info.get("primary", False),
+        #         "level": "SERVICE_LINE",
+        #     }
+        #
+        # # FIXME/TODO: Support footer config properly
+        # footer_columns_cfg = (
+        #     (footer_cfg.get("columns") or {}) if isinstance(footer_cfg, dict) else {}
+        # )
+        # for field_name, field_info in footer_columns_cfg.items():
+        #     field_to_footer_map[field_name] = {
+        #         "selectors": field_info.get("annotation_selectors", []),
+        #         "level": "DOCUMENT",
+        #     }
+        #
+        # # Access field mappings prepared on the layer (used for value transforms)
+        # self.logger.info(f"Processing regions (table) for layer: {layer.layer_name}")
+        # self.logger.debug(f"field_to_header_map: {field_to_header_map}")
+        # self.logger.debug(f"field_to_footer_map: {field_to_footer_map}")
+        #
+        # try:
+        #     # Collect all tables that fall within the regions spans
+        #     pass
+        # except Exception as e:
+        #     self.logger.error(f"Error processing regions: {e}")
+        #     raise e
+
+    def _process_region_as_table(
+        self,
+        regions_cfg: List[Dict],
+        match_section_to_populate: MatchSection,
+        structured_section: Any,
+        template_fields_repeating: Dict,
+    ):
+        """Helper to process a structured section that contains table data."""
+        # Extract all table blocks from the structured section
+        table_blocks: List[TableBlock] = []
+        for block in structured_section.blocks:
+            if isinstance(block, TableBlock):
+                table_blocks.append(block)
+            elif isinstance(block, TableSeries):
+                table_blocks.extend(block.segments)
+
+        if not table_blocks:
+            return
+
+        # Find the extraction configuration from the `regions:` block in the YAML.
+        # This is matched by the title of the structured section.
+        sec_title_upper = (structured_section.title or "").strip().upper()
+        region_entry = next(
+            (
+                entry
+                for entry in regions_cfg
+                if str(entry.get("title", "")).strip().upper() == sec_title_upper
+            ),
+            None,
+        )
+
+        if not region_entry or region_entry.get("type") != "table":
+            self.logger.warning(
+                f"No 'table' region config found for section '{structured_section.title}'. Cannot map columns."
+            )
+            return
+
+        columns_cfg = (
+            region_entry.get("table", {}).get("body", {}).get("columns", {}) or {}
+        )
+        if not columns_cfg:
+            self.logger.warning(
+                f"No 'columns' configured for table region '{structured_section.title}'."
+            )
+            return
+
+        # Normalize header text for matching: collapse whitespace and uppercase
+        def norm_text(s: str) -> str:
+            return re.sub(r"\s+", " ", s.strip()).upper() if isinstance(s, str) else ""
+
+        # Map normalized header text from the config to the field name (config key)
+        header_text_to_field_name = {
+            norm_text(k): k
+            for k in columns_cfg.keys()
+            # norm_text(k.replace("_", " ")): k for k in columns_cfg.keys()
+        }
+
+        # Process each table block found in the region
+        for tbl_idx, table_block in enumerate(table_blocks):
+            if not table_block.header_binding:
+                continue
+
+            # Map the table's column indices to field names using the header text
+            header_map: Dict[int, str] = {
+                col_idx: header_text_to_field_name[norm_text(header_cell.text)]
+                for col_idx, header_cell in enumerate(table_block.header_binding)
+                if norm_text(header_cell.text) in header_text_to_field_name
             }
 
-        # Access field mappings prepared on the layer (used for value transforms)
-        self.logger.info(f"Processing regions (table) for layer: {layer.layer_name}")
-        self.logger.debug(f"field_to_header_map: {field_to_header_map}")
-        self.logger.debug(f"field_to_footer_map: {field_to_footer_map}")
-
-        try:
-            # Collect all tables that fall within the regions spans
-            pass
-        except Exception as e:
-            self.logger.error(f"Error processing regions: {e}")
-            raise e
+            if not header_map:
+                self.logger.warning(
+                    f"Could not map any headers for table in '{structured_section.title}'. Headers: {[h.text for h in table_block.header_binding]}"
+                )
+                continue
 
     def process_tables(
         self, context: ExecutionContext, parent: MatchSection, section: MatchSection
