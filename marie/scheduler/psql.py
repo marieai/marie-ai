@@ -449,27 +449,26 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def create_queue(self, queue_name: str) -> None:
         """Setup the queue for the scheduler."""
-        with self:
-            self._execute_sql_gracefully(create_queue(DEFAULT_SCHEMA, queue_name, {}))
+        self._execute_sql_gracefully(create_queue(DEFAULT_SCHEMA, queue_name, {}))
 
     async def _get_defined_queues(self) -> set[str]:
         """Setup the queue for the scheduler."""
         cursor = None
-        with self:
-            try:
-                cursor = self._execute_sql_gracefully(
-                    f"SELECT name FROM {DEFAULT_SCHEMA}.queue", return_cursor=True
-                )
-                if cursor and cursor.rowcount > 0:
-                    result = cursor.fetchall()
-                    return {name[0] for name in result}
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error getting known queues: {error}")
-                raise RuntimeFailToStart(
-                    f"Unable to find queues in schema '{DEFAULT_SCHEMA}': {error}"
-                )
-            finally:
-                self._close_cursor(cursor)
+        try:
+            cursor = self._execute_sql_gracefully(
+                f"SELECT name FROM {DEFAULT_SCHEMA}.queue", return_cursor=True
+            )
+            if cursor and cursor.rowcount > 0:
+                result = cursor.fetchall()
+                return {name[0] for name in result}
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error getting known queues: {error}")
+            raise RuntimeFailToStart(
+                f"Unable to find queues in schema '{DEFAULT_SCHEMA}': {error}"
+            )
+        finally:
+            self._close_cursor(cursor)
+
         return set()  # Return an empty set if no queues are defined
 
     async def start(self) -> None:

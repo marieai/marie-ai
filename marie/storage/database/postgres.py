@@ -72,66 +72,58 @@ class PostgresqlMixin:
                 f"Cannot connect to postgresql database: {config}, {e}"
             )
 
-    def __enter__(self):
-        self.connection = self._get_connection()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.connection:
-            self._close_connection(self.connection)
-
-    def _close_connectionXXX(self, connection):
-        """Return connection to pool """
-        try:
-            # restore it to the pool
-            if connection:
-                self.postgreSQL_pool.putconn(connection)
-        except Exception as e:
-            self.logger.warning(f"Error returning connection to pool: {e}")
-            try:
-                connection.close()
-            except:
-                self.logger.warning(f"Error closing connection: {e}")
-                pass  # Connection might already be closed
-
-    def _close_connection(self, connection):
-        """
-        Return connection to pool, ensuring it's in a clean state.
-        This acts as a safety net against connection leaks from unterminated transactions.
-        """
-        if not connection:
+    def _close_connection(self, conn):
+        """Close a connection"""
+        if not conn or conn.closed:
+            self.logger.debug(
+                f"Connection is None or already closed, nothing to do, conn: {conn}"
+            )
             return
+
         try:
-            # If the connection is in a transaction, roll it back.
-            tx_status = connection.get_transaction_status()
-            if tx_status != psycopg2.extensions.TRANSACTION_STATUS_IDLE:
-                self.logger.warning(
-                    f"Returning connection to pool in non-idle state (status: {tx_status}). Forcing rollback."
-                )
-                # Log the stack trace to identify the calling code
+            from psycopg2.extensions import STATUS_IN_TRANSACTION
+            from psycopg2.extensions import STATUS_READY
+
+            if conn.status != STATUS_IN_TRANSACTION:
+                if conn.status == STATUS_READY:
+                    self.logger.debug(
+                        "Returning connection to pool in idle state (STATUS_READY)"
+                    )
+                else:
+                    self.logger.warning(
+                        f"Returning connection to pool in non-idle state (status: {conn.status})."
+                    )
+            else:
+                # this is a problem, we have a transaction that is not committed
+                # we should not be in this state, but if we are, we should roll back
                 stack_trace = "".join(traceback.format_stack())
-                self.logger.warning(f"Call stack leading to uncommitted transaction:\n{stack_trace}")
-                connection.rollback()
-
-            # Return the (now clean) connection to the pool.
-            self.postgreSQL_pool.putconn(connection)
-        except Exception as e:
+                self.logger.warning(
+                    f"Returning connection to pool in non-idle state (status: {conn.status}). Forcing rollback."
+                )
+                self.logger.warning(
+                    f"Call stack leading to uncommitted transaction:\n {stack_trace}"
+                )
+                conn.rollback()
+            self.postgreSQL_pool.putconn(conn)
+        except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+            self.logger.warning(
+                f"Handling connection error: {e}. Discarding invalid connection."
+            )
+            if self.postgreSQL_pool and not conn.closed:
+                self.postgreSQL_pool.putconn(conn, close=True)
+        except psycopg2.pool.PoolError as e:
             self.logger.warning(f"Error returning connection to pool: {e}")
-            try:
-                # As a last resort, try to close the connection directly.
-                connection.close()
-            except Exception as close_exc:
-                self.logger.error(f"Failed to close broken connection: {close_exc}")
-                pass  # The connection is likely already dead.
-
+            self.diagnose_pool()
+        except Exception as e:
+            self.logger.error(f"Unexpected error closing connection: {e}")
 
     def _close_cursor(self, cursor):
-        """Close cursor gracefully."""
+        """Close a cursor"""
         try:
-            if cursor:
+            if cursor and not cursor.closed:
                 cursor.close()
         except Exception as e:
-            pass
+            self.logger.warning(f"Failed to close cursor: {e}")
 
     def _get_connection(self):
         """
@@ -325,7 +317,7 @@ class PostgresqlMixin:
             max_retries: int = 3,
             return_cursor: bool = False,
     ) -> psycopg2.extras.DictCursor | list | int | None:
-        conn = connection or self.connection
+        conn = connection or self._get_connection()
 
         for attempt in range(max_retries):
             cursor = None
@@ -365,7 +357,7 @@ class PostgresqlMixin:
                     raise  # Can't retry external connections or last attempt
 
                 self.logger.warning(f"Connection closed, retrying ({attempt + 1}/{max_retries})")
-                conn = self._get_fresh_connection()
+                conn = self._get_connection()
 
             except Exception as error:
                 self.logger.error(f"SQL error: {error}")
@@ -381,8 +373,3 @@ class PostgresqlMixin:
         except psycopg2.InterfaceError:
             pass  # Connection already closed
 
-    def _get_fresh_connection(self):
-        """Get a new connection from pool and update self.connection."""
-        self._close_connection(self.connection)
-        self.connection = self._get_connection()
-        return self.connection
