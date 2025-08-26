@@ -522,9 +522,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             if asyncio.iscoroutinefunction(count_method):
                 return await count_method()
             else:
-                return await self._eloop.run_in_executor(
-                    self._db_executor, count_method
-                )
+                return await self._loop.run_in_executor(self._db_executor, count_method)
         except Exception as e:
             self.logger.error(f"Error in count method: {e}")
             return {}
