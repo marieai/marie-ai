@@ -109,7 +109,7 @@ class PostgresqlMixin:
             self.logger.warning(
                 f"Handling connection error: {e}. Discarding invalid connection."
             )
-            if self.postgreSQL_pool and not conn.closed:
+            if self.postgreSQL_pool:
                 self.postgreSQL_pool.putconn(conn, close=True)
         except psycopg2.pool.PoolError as e:
             self.logger.warning(f"Error returning connection to pool: {e}")
@@ -191,15 +191,14 @@ class PostgresqlMixin:
         """
         Use table if exists or create one if it doesn't.
         """
-        with self:
-            if reset_table_callback:
-                self.logger.info(f"Resetting table : {self.table}")
-                reset_table_callback()
+        if reset_table_callback:
+            self.logger.info(f"Resetting table : {self.table}")
+            reset_table_callback()
 
-            if self._table_exists():
-                self.logger.info(f"Using existing table : {self.table}")
-            else:
-                self._create_table(create_table_callback)
+        if self._table_exists():
+            self.logger.info(f"Using existing table : {self.table}")
+        else:
+            self._create_table(create_table_callback)
 
     def _create_table(self, create_table_callback: Optional[Callable] = None) -> None:
         """
@@ -210,7 +209,6 @@ class PostgresqlMixin:
 
         if create_table_callback:
             create_table_callback(self.table)
-
 
     def diagnose_pool(self):
         """Debug connection pool status with transaction state details."""
@@ -299,7 +297,7 @@ class PostgresqlMixin:
                 "SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name=%s)",
                 (self.table,),
                 return_cursor=True,
-                connection = conn
+                connection=conn
             )
             return cursor.fetchall()[0][0]
         finally:
@@ -317,54 +315,68 @@ class PostgresqlMixin:
             max_retries: int = 3,
             return_cursor: bool = False,
     ) -> psycopg2.extras.DictCursor | list | int | None:
+        # A cursor cannot be returned if this function is responsible for the connection,
+        # as the connection would be closed in the 'finally' block, rendering the cursor useless.
+        if return_cursor and connection is None:
+            raise ValueError(
+                "A connection must be provided when 'return_cursor' is True."
+            )
+
+        owns_connection = connection is None
         conn = connection or self._get_connection()
+        try:
+            for attempt in range(max_retries):
+                cursor = None
+                try:
+                    cursor = conn.cursor(named_cursor_name) if named_cursor_name else conn.cursor()
+                    if named_cursor_name:
+                        cursor.itersize = itersize
 
-        for attempt in range(max_retries):
-            cursor = None
-            try:
-                cursor = conn.cursor(named_cursor_name) if named_cursor_name else conn.cursor()
-                if named_cursor_name:
-                    cursor.itersize = itersize
+                    if data and data != statement:
+                        cursor.execute(statement, data)
+                    else:
+                        cursor.execute(statement)
+                    conn.commit()
 
-                if data and data != statement:
-                    cursor.execute(statement, data)
-                else:
-                    cursor.execute(statement)
-                conn.commit()
+                    if return_cursor:
+                        return cursor
+                    else:
+                        # Get results and close cursor
+                        try:
+                            if cursor.description:
+                                results = cursor.fetchall()
+                            else:
+                                results = cursor.rowcount
+                            return results
+                        finally:
+                            cursor.close()
 
-                if return_cursor:
-                    return cursor
-                else:
-                    # Get results and close cursor
-                    try:
-                        if cursor.description:
-                            results = cursor.fetchall()
-                        else:
-                            results = cursor.rowcount
-                        return results
-                    finally:
-                        cursor.close()
+                except psycopg2.InterfaceError as error:
+                    self._close_cursor(cursor)
 
-            except psycopg2.InterfaceError as error:
-                self._close_cursor(cursor)
+                    if "connection already closed" not in str(error):
+                        self._safe_rollback(conn)
+                        raise
 
-                if "connection already closed" not in str(error):
+                    # We can only retry if we own the connection.
+                    if not owns_connection or attempt >= max_retries - 1:
+                        raise  # Can't retry external connections or on the last attempt.
+
+                    self.logger.warning(f"Connection closed, retrying ({attempt + 1}/{max_retries})")
+                    # discard the broken connection before acquiring a new one.
+                    self._close_connection(conn)
+                    conn = self._get_connection()
+
+                except Exception as error:
+                    self.logger.error(f"SQL error: {error}")
                     self._safe_rollback(conn)
+                    self._close_cursor(cursor)
                     raise
-
-                # Connection closed - try to get new one
-                if connection is not None or attempt == max_retries - 1:
-                    raise  # Can't retry external connections or last attempt
-
-                self.logger.warning(f"Connection closed, retrying ({attempt + 1}/{max_retries})")
-                conn = self._get_connection()
-
-            except Exception as error:
-                self.logger.error(f"SQL error: {error}")
-                self._safe_rollback(conn)
-                self._close_cursor(cursor)
-                raise
-        return None
+            return None
+        finally:
+            # If we acquired the connection, we are responsible for closing it.
+            if owns_connection:
+                self._close_connection(conn)
 
     def _safe_rollback(self, conn):
         """Rollback without raising on closed connections."""
@@ -372,4 +384,3 @@ class PostgresqlMixin:
             conn.rollback()
         except psycopg2.InterfaceError:
             pass  # Connection already closed
-

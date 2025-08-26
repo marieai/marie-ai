@@ -454,9 +454,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def _get_defined_queues(self) -> set[str]:
         """Setup the queue for the scheduler."""
         cursor = None
+        conn = None
         try:
+            conn = self._get_connection()
             cursor = self._execute_sql_gracefully(
-                f"SELECT name FROM {DEFAULT_SCHEMA}.queue", return_cursor=True
+                f"SELECT name FROM {DEFAULT_SCHEMA}.queue",
+                return_cursor=True,
+                connection=conn,
             )
             if cursor and cursor.rowcount > 0:
                 result = cursor.fetchall()
@@ -468,6 +472,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             )
         finally:
             self._close_cursor(cursor)
+            self._close_connection(conn)
 
         return set()  # Return an empty set if no queues are defined
 
