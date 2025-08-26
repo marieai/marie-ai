@@ -217,8 +217,6 @@ build_image() {
     log_info "Contents of build context:"
     ls -la patches/ wheels/ || log_warn "Some directories might be missing"
 
-  #--no-cache \
-
     DOCKER_BUILDKIT=0 docker build . \
         --network=host \
         --cpuset-cpus="0-$CPU_COUNT" \
@@ -227,6 +225,7 @@ build_image() {
         --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
         --build-arg MARIE_VERSION="$VERSION" \
         --build-arg TARGETPLATFORM=linux/amd64 \
+        --no-cache \
         -f "$dockerfile_path" \
         -t "$full_image_name"
 

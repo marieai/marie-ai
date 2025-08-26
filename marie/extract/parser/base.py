@@ -26,14 +26,111 @@ def split_markdown_sections(md: str):
 
 def parse_bullets_to_kvlist(section_text: str):
     kvs = []
-    for m in re.finditer(r"(?m)^\-\s+([^:]+):\s*(.+)$", section_text):
-        kvs.append(
-            KeyValue(
-                key=m.group(1).strip(),
-                value=m.group(2).strip(),
-                value_type=ValueType.UNKNOWN,
+    if not section_text:
+        return kvs
+
+    # First: parse markdown list items and extract key/value
+    try:
+        html = markdown.markdown(section_text)
+        soup = BeautifulSoup(html, "html.parser")
+        items = soup.find_all("li")
+
+        def _clean_key(s: str) -> str:
+            s = (s or "").strip()
+            # Drop a single trailing ':' or em dash '—'
+            if s.endswith(":") or s.endswith("—"):
+                s = s[:-1]
+            return s.strip()
+
+        def _clean_value(s: str) -> str:
+            return (s or "").strip()
+
+        for li in items:
+            key_text = None
+            value_text = None
+
+            # Strategy A: bold/strong key if present
+            strong = li.find(["strong", "b"])
+            if strong:
+                key_text = _clean_key(strong.get_text(" ", strip=True))
+
+                # Collect text after the bold key within the same <li>
+                segs = []
+                saw_key = False
+                for child in li.children:
+                    if getattr(child, "name", None) in ("strong", "b"):
+                        if not saw_key:
+                            saw_key = True
+                        else:
+                            segs.append(child.get_text(" ", strip=True))
+                        continue
+                    if saw_key:
+                        segs.append(
+                            child.get_text(" ", strip=True)
+                            if hasattr(child, "get_text")
+                            else str(child).strip()
+                        )
+
+                value_text = _clean_value(" ".join(filter(None, segs)))
+                # Trim only allowed separators at the start of the value: ':' or em dash '—'
+                value_text = re.sub(r'^\s*[:—]\s*', '', value_text).strip()
+
+            # Strategy B: split the full text by allowed separators only
+            if not key_text or value_text is None or value_text == "":
+                full_text = li.get_text(" ", strip=True)
+
+                # Allowed separators: colon ':' or em dash '—' (U+2014)
+                m = re.match(r"^\s*([^:—]+?)\s*[:—]\s*(.+?)\s*$", full_text)
+                if m:
+                    key_text = _clean_key(m.group(1))
+                    value_text = _clean_value(m.group(2))
+                else:
+                    # Heuristic without explicit separator (e.g., "KEY $-35.00")
+                    m2 = re.match(r"^\s*([A-Z0-9_ ]{2,})\s+(.+?)\s*$", full_text)
+                    if m2:
+                        key_text = _clean_key(m2.group(1))
+                        value_text = _clean_value(m2.group(2))
+
+            if key_text and value_text is not None and key_text.strip():
+                kvs.append(
+                    KeyValue(
+                        key=key_text.strip(),
+                        value=value_text.strip(),
+                        value_type=ValueType.UNKNOWN,
+                    )
+                )
+
+        if kvs:
+            return kvs
+    except Exception:
+        # Fall through to regex fallback
+        pass
+
+    # Final fallback: scan raw text bullets and split using only ':' or em dash '—'
+    for m in re.finditer(r"(?m)^[\-\*\+]\s+(.+)$", section_text):
+        line = m.group(1).strip()
+        # Optional bold markers around the key, with allowed separators only
+        m2 = re.match(r"^(?:\*\*|__)?\s*([^:—]+?)\s*(?:\*\*|__)?\s*[:—]\s*(.+)$", line)
+        if m2:
+            kvs.append(
+                KeyValue(
+                    key=m2.group(1).strip(),
+                    value=m2.group(2).strip(),
+                    value_type=ValueType.UNKNOWN,
+                )
             )
-        )
+            continue
+        # No explicit separator heuristic
+        m3 = re.match(r"^(?:\*\*|__)?\s*([A-Z0-9_ ]{2,})\s*(?:\*\*|__)?\s+(.+)$", line)
+        if m3:
+            kvs.append(
+                KeyValue(
+                    key=m3.group(1).strip(),
+                    value=m3.group(2).strip(),
+                    value_type=ValueType.UNKNOWN,
+                )
+            )
+
     return kvs
 
 

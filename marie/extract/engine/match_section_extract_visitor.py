@@ -3,8 +3,11 @@ import uuid
 from collections import deque
 from typing import Any, Dict, List, Union
 
+from omegaconf import OmegaConf
+
 from marie.extract.engine.base import BaseProcessingVisitor
 from marie.extract.engine.transform import transform_field_value
+from marie.extract.models.definition import FieldMapping
 from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import (
     Field,
@@ -15,7 +18,17 @@ from marie.extract.models.match import (
 from marie.extract.models.span import Span
 from marie.extract.structures.concrete_annotations import TypedAnnotation
 from marie.extract.structures.line_with_meta import LineWithMeta
-from marie.extract.structures.structured_region import TableBlock, TableSeries
+from marie.extract.structures.structured_region import (
+    KVList,
+    RegionPart,
+    RowRole,
+    Section,
+    SectionRole,
+    StructuredRegion,
+    TableBlock,
+    TableRow,
+    TableSeries,
+)
 from marie.extract.structures.table import Table
 from marie.logging_core.logger import MarieLogger
 
@@ -76,6 +89,61 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         self.process_regions(context, parent, section)
         # self.process_tables(context, parent, section)
 
+    def _ci(self, s: str) -> str:
+        return (s or "").casefold()
+
+    def _parse_selector_regex_hint(self, selector: str) -> tuple[str, bool]:
+        """
+        Parses inline regex hints for a selector, returning (clean_selector, is_regex).
+        Accepts:
+          - "re:<pattern>"
+          - "/<pattern>/"  (slashes must be at both ends)
+        """
+        sel = selector or ""
+        if sel.startswith("re:"):
+            return sel[3:], True
+        if len(sel) >= 2 and sel[0] == "/" and sel[-1] == "/":
+            return sel[1:-1], True
+        return sel, False
+
+    def _selector_matches_text(
+        self, selector: str, text: str, use_regex_flag: bool
+    ) -> bool:
+        """
+        Case-insensitive match. If use_regex_flag is True or selector has inline regex hint,
+        match as regex; otherwise do a literal contains with casefold.
+        """
+        import re
+
+        sel, hinted_regex = self._parse_selector_regex_hint(selector)
+        is_regex = use_regex_flag or hinted_regex
+        if is_regex:
+            try:
+                return re.search(sel, text, flags=re.IGNORECASE) is not None
+            except re.error:
+                # Fallback to literal compare/contains if regex is invalid
+                return self._ci(sel) in self._ci(text)
+        return self._ci(sel) in self._ci(text)
+
+    def _collect_selectors_from_cfg(self, cfg: dict) -> tuple[list[str], bool]:
+        """
+        From a column or field config dict, returns (selectors, use_regex_flag).
+        Accepts `annotation_selectors`, `selectors`, or `selector` keys.
+        """
+        selectors = []
+        use_regex_flag = False
+        if isinstance(cfg, dict):
+            if "annotation_selectors" in cfg and isinstance(
+                cfg["annotation_selectors"], list
+            ):
+                selectors = [str(s) for s in cfg["annotation_selectors"] if s]
+            elif "selectors" in cfg and isinstance(cfg["selectors"], list):
+                selectors = [str(s) for s in cfg["selectors"] if s]
+            elif "selector" in cfg and cfg["selector"]:
+                selectors = [str(cfg["selector"])]
+            use_regex_flag = bool(cfg.get("use_regex", False))
+        return selectors, use_regex_flag
+
     def process_regions(
         self, context: ExecutionContext, parent: MatchSection, section: MatchSection
     ) -> None:
@@ -101,28 +169,88 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         region_parser_cfg, regions_cfg, template_fields_repeating = (
             layer.regions_config_raw
         )
+        region_parser_cfg = OmegaConf.to_container(region_parser_cfg, resolve=True)
+        regions_cfg = OmegaConf.to_container(regions_cfg, resolve=True)
+        template_fields_repeating = OmegaConf.to_container(
+            template_fields_repeating, resolve=True
+        )
 
-        # This is the list of rules that defines how to parse each section role.
+        # FIXME :
+        # there is a clusterfuck in the way we handle the config for repeating fields and non-repeating fields;
+        # for non-repeating fields we have field mappings on the layer that contain the field definition and the mapping
+        # and for repeating fields we have the raw config that contains the field definitions only
+        # this are our non-repeating fields that we need to map to KV values if needed
+        field_mappings: List[FieldMapping] = layer.non_repeating_field_mappings
+
         parser_sections_rules = region_parser_cfg.get("sections", [])
-
-        # Find all `StructuredRegion` objects that are within the scope of the MatchSection's spans.
-        pages_in_section = sorted(list(set(s.page for s in section.span)))
-        if not pages_in_section:
-            self.logger.info("Section has no page spans; skipping region processing.")
+        # Collect all regions fully contained by any of the section spans (line-based)
+        regions_in_scope = set()
+        if not spans:
+            self.logger.info("Section has no spans; skipping region processing.")
             return
 
-        # Collect all unique StructuredRegions that fall within the section's pages
-        regions_in_scope = set()
-        for page_id in pages_in_section:
-            regions_on_page = document.regions_for_page(page_id)
-            for r in regions_on_page:
-                regions_in_scope.add(r)
+        for span in spans:
+            page_id = span.page
+            start_line = span.y
+            end_line = start_line + span.h
+
+            regions_by_page = document.regions_for_page(page_id)
+            for region in regions_by_page:
+                try:
+                    # Compute region line range from its parts' spans on this page
+                    mins: List[int] = []
+                    maxs: List[int] = []
+                    for part in region.parts:
+                        ps = part.span
+                        if ps.page != page_id:
+                            continue
+                        mins.append(int(ps.y))
+                        maxs.append(int(ps.y + ps.h))
+
+                    if not mins or not maxs:
+                        self.logger.warning(
+                            f"Region {region} has no parts on page {page_id}; skipping."
+                        )
+                        continue
+
+                    region_start = min(mins)
+                    region_end = max(maxs)
+                    # Fully-contained check
+                    if region_start > start_line and region_end < end_line:
+                        regions_in_scope.add(region)
+                except Exception:
+                    raise
 
         if not regions_in_scope:
-            self.logger.info(
-                f"No structured regions found on pages {pages_in_section} for section '{section.label}'"
+            self.logger.warning(
+                f"No structured regions found within spans for section '{section.label}'"
             )
             return
+
+        # SECOND BASIC METHOD USED FOR TESTING ONLY : Process all regions on the pages covered by the section's spans
+        if False:
+            parser_sections_rules = region_parser_cfg.get("sections", [])
+
+            # Find all `StructuredRegion` objects that are within the scope of the MatchSection's spans.
+            pages_in_section = sorted(list(set(s.page for s in section.span)))
+            if not pages_in_section:
+                self.logger.info(
+                    "Section has no page spans; skipping region processing."
+                )
+                return
+
+            # Collect all unique StructuredRegions that fall within the section's pages
+            regions_in_scope = set()
+            for page_id in pages_in_section:
+                regions_on_page = document.regions_for_page(page_id)
+                for r in regions_on_page:
+                    regions_in_scope.add(r)
+
+            if not regions_in_scope:
+                self.logger.info(
+                    f"No structured regions found on pages {pages_in_section} for section '{section.label}'"
+                )
+                return
 
         # Iterate through all sections of all scoped regions and process them based on their `role_hint` tag.
         for region in regions_in_scope:
@@ -155,7 +283,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 # Delegate to the appropriate processor based on the parse method.
                 if parse_method == "table":
                     self.logger.info(
-                        f"Table processing for region with role_hint '{role_hint}' is not yet implemented."
+                        f"Table processing for region with role_hint '{role_hint}'."
                     )
                     self._process_region_as_table(
                         regions_cfg,
@@ -165,57 +293,177 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     )
                 elif parse_method == "kv":
                     self.logger.info(
-                        f"KV processing for region with role_hint '{role_hint}' is not yet implemented."
+                        f"KV processing for region with role_hint '{role_hint}' ."
                     )
+
+                    self._process_region_as_kv(
+                        regions_cfg,
+                        section,  # The original MatchSection to populate with results
+                        structured_section,
+                        field_mappings,
+                    )
+
                 else:
                     self.logger.warning(
                         f"Unsupported parse method '{parse_method}' for role_hint '{role_hint}'."
                     )
 
-        #
-        # table_cfg = region_entry.get("table", {}) or {}
-        # body_cfg = table_cfg.get("body", {}) or {}
-        # footer_cfg = table_cfg.get("footer", {}) or {}
-        #
-        # # Build field maps from the region's table configuration
-        # field_to_header_map: Dict[str, Dict[str, object]] = {}
-        # field_to_footer_map: Dict[str, Dict[str, object]] = {}
-        #
-        # columns_cfg = body_cfg.get("columns", {}) or {}
-        # for field_name, field_info in columns_cfg.items():
-        #     field_to_header_map[field_name] = {
-        #         "selectors": field_info.get("annotation_selectors", []),
-        #         "primary": field_info.get("primary", False),
-        #         "level": "SERVICE_LINE",
-        #     }
-        #
-        # # FIXME/TODO: Support footer config properly
-        # footer_columns_cfg = (
-        #     (footer_cfg.get("columns") or {}) if isinstance(footer_cfg, dict) else {}
-        # )
-        # for field_name, field_info in footer_columns_cfg.items():
-        #     field_to_footer_map[field_name] = {
-        #         "selectors": field_info.get("annotation_selectors", []),
-        #         "level": "DOCUMENT",
-        #     }
-        #
-        # # Access field mappings prepared on the layer (used for value transforms)
-        # self.logger.info(f"Processing regions (table) for layer: {layer.layer_name}")
-        # self.logger.debug(f"field_to_header_map: {field_to_header_map}")
-        # self.logger.debug(f"field_to_footer_map: {field_to_footer_map}")
-        #
-        # try:
-        #     # Collect all tables that fall within the regions spans
-        #     pass
-        # except Exception as e:
-        #     self.logger.error(f"Error processing regions: {e}")
-        #     raise e
+    def _process_region_as_kv(
+        self,
+        regions_cfg: List[Dict],
+        match_section: MatchSection,
+        structured_section: Section,
+        field_mappings: List[FieldMapping],
+    ) -> None:
+        """
+        Process a structured section configured as key-value (kv).
+
+        Reads `fields` from the region entry:
+            - title: <SECTION TITLE>
+              type: kv
+              role: <role-name>
+              fields:
+                FIELD_NAME_A:
+                  annotation_selectors: [ "LABEL_A", "LABEL_A_ALT" ]
+                FIELD_NAME_B:
+                  annotation_selectors: [ "LABEL_B" ]
+                ...
+
+        Returns:
+            List of created field objects (as produced by create_fields).
+        """
+
+        # 1) Find region entry and validate type
+        sec_title_upper = (structured_section.title or "").strip().upper()
+        region_entry = next(
+            (
+                entry
+                for entry in regions_cfg
+                if str(entry.get("title", "")).strip().upper() == sec_title_upper
+            ),
+            None,
+        )
+        if not region_entry or region_entry.get("type") != "kv":
+            self.logger.warning(
+                f"No 'kv' region config found for section '{structured_section.title}'."
+            )
+            return
+
+        fields_cfg = region_entry.get("fields", {}) or {}
+        if not fields_cfg:
+            self.logger.warning(
+                f"No 'fields' configured for kv region '{structured_section.title}'. Nothing to extract."
+            )
+            return
+
+        # Build field -> (selectors, use_regex_flag) via the same helper used by table code
+        kv_specs: Dict[str, tuple[list[str], bool]] = {}
+        for field_name, field_info in fields_cfg.items():
+            selectors, use_regex_flag = self._collect_selectors_from_cfg(field_info)
+            if selectors:
+                kv_specs[field_name] = (selectors, use_regex_flag)
+
+        if not kv_specs:
+            self.logger.info(
+                f"No valid selectors for kv region '{structured_section.title}'."
+            )
+            return
+
+        # 3) Walk KVList blocks and match selectors against item.key
+        populated_fields: set[str] = set()
+        template_field_mappings = {}
+        extracted_fields = []
+
+        for mapping in field_mappings:
+            field_def = mapping.field_def
+            template_field_mappings[field_def['name']] = field_def
+
+        for block in structured_section.blocks:
+            # Expect KVList-like block: must have `items`
+            try:
+                if not isinstance(block, KVList):
+                    raise TypeError
+                items = block.items
+            except Exception:
+                continue
+            if not items:
+                continue
+
+            # For quick lookups, prepare a list of (key_text, value_text, item)
+            kv_triplets = []
+            for it in items:
+                try:
+                    key_text = it.key or ""
+                except Exception:
+                    key_text = ""
+                try:
+                    value_text = it.value or ""
+                except Exception:
+                    value_text = ""
+                kv_triplets.append((key_text, value_text, it))
+
+            # Attempt to populate each configured field once
+            for field_name, (selectors, use_regex_flag) in kv_specs.items():
+                if field_name in populated_fields:
+                    continue
+
+                matched_value = None
+                matched_item = None
+                matched_selector = None
+
+                # Try selectors against each KV key
+                for sel in selectors:
+                    if matched_value is not None:
+                        break
+                    for key_text, value_text, it in kv_triplets:
+                        if not key_text:
+                            continue
+                        if self._selector_matches_text(sel, key_text, use_regex_flag):
+                            matched_value = value_text
+                            matched_item = it
+                            matched_selector = sel
+                            break
+
+                if matched_value is None:
+                    continue
+
+                value_text = matched_item.value or ""
+                self.logger.info(
+                    f"Extracting KV field `{field_name}` = '{value_text}' via selector '{matched_selector}' (key='{matched_item.key}')"
+                )
+
+                # Resolve field definition (footer-like approach)
+                field_def = template_field_mappings.get(field_name, {}) or {}
+                field_def = dict(field_def)  # shallow copy
+                field_def["name"] = field_name
+                # Optional type override fallback if template missing; many totals are MONEY
+                field_def.setdefault("type", "MONEY")
+
+                transformed_value = transform_field_value(field_def, value_text)
+                print(transformed_value)
+                # this is a dummy line_with_meta; we don't have line-level metadata for KV values
+                faux_line_with_meta = LineWithMeta(
+                    line=value_text,
+                    metadata=None,
+                    annotations=[],
+                )
+
+                created = self.create_fields(
+                    field_def, value_text, transformed_value, faux_line_with_meta
+                )
+                extracted_fields.extend(created)
+
+        # Attach kv fields to the matched section.
+        # TODO: we will change this to a dictionary of field types
+        if match_section.matched_non_repeating_fields is None:
+            match_section.matched_non_repeating_fields = []
+        match_section.matched_non_repeating_fields.extend(extracted_fields)
 
     def _process_region_as_table(
         self,
         regions_cfg: List[Dict],
         match_section_to_populate: MatchSection,
-        structured_section: Any,
+        structured_section: Section,
         template_fields_repeating: Dict,
     ):
         """Helper to process a structured section that contains table data."""
@@ -257,34 +505,231 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             )
             return
 
-        # Normalize header text for matching: collapse whitespace and uppercase
-        def norm_text(s: str) -> str:
-            return re.sub(r"\s+", " ", s.strip()).upper() if isinstance(s, str) else ""
+        # There is only one table config per region name, but each labeled region can have one table block
+        table_config = region_entry.get("table", {})
+        field_to_header_map = {}
+        field_to_footer_map = {}  # FOOTER ARE NOT SUPPORTED YET or MAYBE EVEN EVER
 
-        # Map normalized header text from the config to the field name (config key)
-        header_text_to_field_name = {
-            norm_text(k): k
-            for k in columns_cfg.keys()
-            # norm_text(k.replace("_", " ")): k for k in columns_cfg.keys()
-        }
+        if 'body' in table_config and 'columns' in table_config['body']:
+            for field_name, field_info in table_config['body']['columns'].items():
+                field_to_header_map[field_name] = {
+                    "selectors": field_info.get('annotation_selectors', []),
+                    "primary": field_info.get('primary', False),
+                    "level": region_entry[
+                        'role'
+                    ],  # Default to SERVICE_LINE for table body
+                }
 
-        # Process each table block found in the region
-        for tbl_idx, table_block in enumerate(table_blocks):
-            if not table_block.header_binding:
+        # NOT SUPPORTED YET - PLACEHOLDER
+        # Process footer columns
+        if False:
+            if 'footer' in table_config and 'columns' in table_config['footer']:
+                for field_name, field_info in table_config['footer']['columns'].items():
+                    field_to_footer_map[field_name] = {
+                        "selectors": field_info.get('annotation_selectors', []),
+                        "level": "DOCUMENT",  # Footer values are at document level
+                    }
+
+        # Process each span in the section
+        print('field_to_header_map:', field_to_header_map)
+        print('footer_field_map:', field_to_footer_map)
+
+        # Now process each TableBlock
+        self.logger.info(
+            f"Identified {len(table_blocks)} table block(s) to process in this region"
+        )
+
+        for tb in table_blocks:
+            if not tb.rows:
+                self.logger.warning("TableBlock has no rows; skipping.")
                 continue
 
-            # Map the table's column indices to field names using the header text
-            header_map: Dict[int, str] = {
-                col_idx: header_text_to_field_name[norm_text(header_cell.text)]
-                for col_idx, header_cell in enumerate(table_block.header_binding)
-                if norm_text(header_cell.text) in header_text_to_field_name
-            }
+            # Use RowRole to separate header and body
+            header_row = None
+            body_rows = []
+            for r in tb.rows:
+                if r.role == RowRole.HEADER and header_row is None:
+                    header_row = r
+                elif r.role == RowRole.BODY:
+                    body_rows.append(r)
 
-            if not header_map:
+            if header_row is None:
                 self.logger.warning(
-                    f"Could not map any headers for table in '{structured_section.title}'. Headers: {[h.text for h in table_block.header_binding]}"
+                    "No header row (RowRole.HEADER) found; skipping table block."
                 )
                 continue
+            if not body_rows:
+                self.logger.warning(
+                    "No body rows (RowRole.BODY) found; skipping table block."
+                )
+                continue
+
+            # Derive page id from header row; fallback to first body row
+            page_id = (
+                header_row.source_page
+                if header_row
+                else (body_rows[0].source_page if body_rows else -1)
+            )
+            self.logger.info(f"Processing table block for page: {page_id}")
+
+            # Prefer canonical headers from header_binding; otherwise, fallback to header row cell strings
+            if tb.header_binding and len(tb.header_binding) > 0:
+                header_texts = list(tb.header_binding)
+            else:
+                # Fallback: stringify header cells
+                # header_texts = [str(c) if c is not None else "" for c in header_row.cells]
+                raise NotImplementedError(
+                    "Fallback to header row cell text is not implemented yet."
+                )
+
+            columns_to_process = {}
+            claimed_columns = set()
+
+            for field_name, header_cfg in field_to_header_map.items():
+                selectors, use_regex_flag = self._collect_selectors_from_cfg(header_cfg)
+                if not selectors:
+                    self.logger.warning(
+                        f"No selectors defined for field '{field_name}', skipping header match."
+                    )
+                    continue
+
+                processed_column = -1
+                matched = False
+                for selector in selectors:
+                    for col_index, header_text in enumerate(header_texts):
+                        if col_index in claimed_columns or not header_text:
+                            continue
+                        if self._selector_matches_text(
+                            selector, header_text, use_regex_flag
+                        ):
+                            self.logger.info(
+                                f"Matched header '{selector}' for field '{field_name}' at column {col_index} "
+                                f"(header='{header_text}')"
+                            )
+                            processed_column = col_index
+                            claimed_columns.add(col_index)
+                            matched = True
+                            break
+                    if matched:
+                        break
+
+                if processed_column != -1:
+                    columns_to_process[field_name] = {
+                        "cell_index": processed_column,
+                        "header_config": header_cfg,
+                    }
+                else:
+                    self.logger.debug(
+                        f"No header match found for field '{field_name}'. "
+                        f"Selectors tried: {selectors}. Headers: {header_texts}"
+                    )
+
+            # columns_to_process now maps field_name -> {cell_index, header_cfg}
+            # Next step (not shown here): iterate body_rows and use columns_to_process indices to extract values
+
+            # Sort `columns_to_process` by `cell_index` key
+            columns_to_process = dict(
+                sorted(
+                    columns_to_process.items(),
+                    key=lambda item: item[1]['cell_index'],
+                )
+            )
+
+            self.logger.info(f"Columns to process mapping: {columns_to_process}")
+
+            # Extract rows using the resolved column indices
+            matched_field_rows: List[MatchFieldRow] = self._build_matched_field_rows(
+                body_rows=body_rows,
+                columns_to_process=columns_to_process,
+                page_id=page_id,
+                template_fields_repeating=template_fields_repeating,
+            )
+
+            match_section_to_populate.matched_field_rows = matched_field_rows
+
+    def _build_matched_field_rows(
+        self,
+        body_rows: List[TableRow],
+        columns_to_process: Dict[str, Dict[str, Any]],
+        page_id: int,
+        template_fields_repeating: Dict[str, Any],
+    ) -> List[MatchFieldRow]:
+        """
+        Build MatchFieldRow list by extracting values from body rows using resolved column indices.
+
+        Parameters:
+            body_rows: list of TableRow objects with role BODY
+            columns_to_process: mapping of field name -> { cell_index: int, header_config: dict }
+            page_id: page identifier to propagate to line metadata
+            template_fields_repeating: field configuration template for repeating fields
+
+        Returns:
+            List[MatchFieldRow]
+        """
+        matched_field_rows: List[MatchFieldRow] = []
+
+        if not body_rows or not columns_to_process:
+            return matched_field_rows
+
+        # Stable processing order
+        ordered_fields = [
+            k
+            for k, _ in sorted(
+                columns_to_process.items(),
+                key=lambda item: item[1]["cell_index"],
+            )
+        ]
+
+        for row in body_rows:
+            extracted_cells = []
+            self.logger.info("row : *******************")
+
+            cells = row.cells
+            for field_name in ordered_fields:
+                column_def = columns_to_process[field_name]
+                column_index = int(column_def["cell_index"])
+                header_config = column_def["header_config"]
+
+                if column_index < 0 or column_index >= len(cells):
+                    self.logger.debug(
+                        f"Column index {column_index} out of range for row; skipping field '{field_name}'."
+                    )
+                    continue
+
+                cell = cells[column_index]
+
+                # Prefer the first line text if available: we want the LLM to aggregate the cell lines
+                if cell.lines and len(cell.lines) > 0:
+                    root_line = cell.lines[0]
+                    if root_line.metadata:
+                        root_line.metadata.page_id = page_id  # FIXME: consider removing once not needed downstream
+                    cell_value = root_line.line or ""
+                else:
+                    root_line = None
+                    cell_value = str(cell) if cell is not None else ""
+
+                self.logger.debug(
+                    f"Extracting value for `{field_name}` = '{cell_value}' from column index {column_index}"
+                )
+
+                # Copy field definition to avoid mutating the template
+                field_def = dict(template_fields_repeating.get(field_name, {}) or {})
+                field_def["name"] = field_name
+
+                transformed_value: Union[str, float, dict[str, None]] = (
+                    transform_field_value(field_def, cell_value)
+                )
+                self.logger.debug(f"transformed_value : {transformed_value}")
+
+                fields = self.create_fields(
+                    field_def, cell_value, transformed_value, root_line
+                )
+                extracted_cells.extend(fields)
+
+            matched_field_row: MatchFieldRow = MatchFieldRow(fields=extracted_cells)
+            matched_field_rows.append(matched_field_row)
+
+        return matched_field_rows
 
     def process_tables(
         self, context: ExecutionContext, parent: MatchSection, section: MatchSection
@@ -307,7 +752,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         table_configs, template_fields_repeating = (
             layer.table_config_raw
         )  # TODO: this needs to be converted to a concrete object
-        field_mappings = layer.non_repeating_field_mappings
+        field_mappings: List[FieldMapping] = layer.non_repeating_field_mappings
 
         self.logger.info(f"Processing layer: {layer.layer_name}")
         # Build field to header mapping (instead of header to field)
@@ -541,6 +986,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                             field_def, cell_value, transformed_value, root_line
                         )
                         extracted_cells.extend(fields)
+
                     matched_field_row: MatchFieldRow = MatchFieldRow(
                         fields=extracted_cells
                     )
@@ -705,7 +1151,6 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                                 transformed_value: Union[
                                     str | float | dict[str, None]
                                 ] = transform_field_value(field_def, annotation.value)
-
                                 fields = self.create_fields(
                                     field_def, annotation.value, transformed_value, line
                                 )
