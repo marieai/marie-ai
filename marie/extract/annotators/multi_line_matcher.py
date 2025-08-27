@@ -114,7 +114,7 @@ class MultiLinePatternMatcher:
             )
         except Exception:
             pass
-
+        debug = True
         self.debug = bool(debug)
         self._print = debug_printer if debug_printer else (lambda s: print(s))
         self.debug_max_windows = int(debug_max_windows)
@@ -566,7 +566,7 @@ class MultiLinePatternMatcher:
             for idx, (sc, lbl, s, e, w, txt, d) in enumerate(
                 final_cands[: self.debug_max_windows], 1
             ):
-                prev = txt.replace("\n", " ⏎ ")[:240]
+                prev = txt.replace("\n", " ⏎ ")[:360]
                 self._log(
                     f"[{idx:03d}] {lbl} lines={s + 1}-{e + 1} w={w} final={sc:.3f} "
                     f"| emb_mm={d.get('emb_mm', 0):.3f} (conf={d.get('emb_conf', 0):.2f}) "

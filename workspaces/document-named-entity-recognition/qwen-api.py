@@ -210,7 +210,8 @@ def inference_with_api(
     image_path,
     prompt,
     sys_prompt="You are a helpful assistant.",
-    model_id="Qwen/Qwen2.5-VL-7B-Instruct",
+    # model_id="Qwen/Qwen2.5-VL-7B-Instruct",
+    model_id="qwen_v2_5_vl",
     min_pixels=1280 * 28 * 28,
     max_pixels=2400 * 28 * 28,
 ):
@@ -363,7 +364,7 @@ with gr.Blocks(css=css) as demo:
 
         submit_btn.click(qwen_inference, [input_media, text_input], [output_text])
 
-demo.launch(debug=True, share=True)
+demo.launch(debug=True, share=False)
 
 # https://github.com/QwenLM/Qwen2.5-VL/issues/721
 # https://github.com/QwenLM/Qwen2.5-VL/blob/main/cookbooks/spatial_understanding.ipynb

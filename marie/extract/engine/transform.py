@@ -34,6 +34,7 @@ def as_safe_float(value: str) -> float:
 
 
 def convert_to_decimal_money(field_value: str) -> float:
+    field_value_orig = field_value
     if not field_value or field_value.strip() == "":
         return 0.0  # We should return None here, but for now we are returning 0.0
 
@@ -54,24 +55,39 @@ def convert_to_decimal_money(field_value: str) -> float:
         cleaned = cleaned.replace('.', '', cleaned.count('.') - 1)
 
     try:
-        # result = float(Decimal(cleaned))
         quantized = Decimal(cleaned).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
         result = float(quantized)
     except (ValueError, ArithmeticError):
         # Default return 0.0 in case the input is invalid
         return 0.0
 
-    # Make the number negative if required
     if is_negative:
         result = -result
 
-    # Debug print
-    logger.info(f"Converted Value: {result:10.2f}  |  Original : {field_value.strip()}")
+    logger.info(
+        f"Converted Value: {result:10.2f}  |  Original : {field_value_orig.strip()}"
+    )
     return result
 
 
-def convert_money_format(value: str, field_def: Dict[str, Any]) -> float:
+def convert_money_format(
+    value: str, field_def: Dict[str, Any], default: float = None
+) -> float | None:
+    """
+    Convert money string to float. If the value is invalid, return None.
+    Handles various formats including: $1,234.56, (1,234.56), -1234.56, 1 234,56, etc.
+    0.001 -> 0.00
+    1234 -> 1234.00
+    1234.5 -> 1234.50
+    1234.567 -> 1234.57 (rounded)
+    :param value: Money string value to convert
+    :param field_def: Field definition dictionary
+    :param default: Default value to return if conversion fails
+    :return:
+    """
     if not value:
+        if default is not None:
+            return default
         return None
 
     # Remove dollar sign and commas
@@ -165,6 +181,18 @@ def java_to_python_date_format(java_format: str) -> str:
     return converted
 
 
+DASH_VARIANTS = r"[–—‒−-]"  # en dash, em dash, figure dash, minus sign, hyphen
+
+
+def _normalize_date_range_input(raw: str) -> str:
+    # Collapse all whitespace to single spaces
+    s = re.sub(r"\s+", " ", raw or "").strip()
+    # Normalize any dash variants to a hyphen, preserving optional spaces around it
+    s = re.sub(rf"\s*{DASH_VARIANTS}\s*", " - ", s)
+    # Final collapse just in case we produced double spaces
+    return re.sub(r"\s{2,}", " ", s).strip()
+
+
 def convert_date_format(
     value: str, field_def: Dict[str, Any]
 ) -> Union[str, Dict[str, Union[str, None]], None]:
@@ -180,6 +208,7 @@ def convert_date_format(
     if not value or value == '':
         return {key: None for key in derived_fields.keys()} if derived_fields else None
 
+    value = _normalize_date_range_input(value)
     # Supported input formats in Java format
     # common_formats = [
     #     '%m/%d/%Y',  # MM/DD/YYYY
@@ -366,4 +395,4 @@ if __name__ == "__main__":
     print(result)
     # Output: {'BEGIN_DATE_OF_SERVICE': '2024-02-14', 'END_DATE_OF_SERVICE': '2024-03-01'}
 
-    print(convert_to_decimal_money("0.001"))
+    # print(convert_to_decimal_money("0.001"))

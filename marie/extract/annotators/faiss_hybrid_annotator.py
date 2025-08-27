@@ -57,7 +57,9 @@ class FaissHybridAnnotator(DocumentAnnotator):
         self.annotator_conf = annotator_conf
         self.layout_conf = layout_conf
 
-        print(f"Initializing {self.__class__.__name__} with config: {annotator_conf}")
+        self.logger.info(
+            f"Initializing {self.__class__.__name__} with config: {annotator_conf}"
+        )
 
         self.name = annotator_conf.get('name', "faiss-hybrid-annotator")
         self.model_name = annotator_conf.get(
@@ -189,6 +191,8 @@ class FaissHybridAnnotator(DocumentAnnotator):
             self.logger.debug("annotate(): target_labels=%s", self.target_labels)
 
         for page_id, lines_with_meta in lines_by_page.items():
+            print('***page_id : ', page_id, ' num lines: ', len(lines_with_meta))
+
             extraction_result = self._process_lines(lines_with_meta)
             extract = {
                 "page_id": page_id,

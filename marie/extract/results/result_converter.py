@@ -62,7 +62,7 @@ def build_template(config: OmegaConf) -> Template:
         layer_1.start_selector_sets = build_selector_sets(
             ["PATIENT NAME", "CLAIM NUMBER", "PATIENT ACCOUNT", "CHECK NUMBER"]
         )
-    elif layout_id == "103932":  # ORIGINAL 103932 -> 122169
+    elif layout_id == "122169":  # ORIGINAL 103932 -> 122169
         layer_1.start_selector_sets = build_selector_sets(
             ["CLAIM NUMBER", "PATIENT ACCOUNT", "EMPLOYEE", "PROVIDER TAX ID"]
         )

@@ -171,20 +171,9 @@ def parse_markdown_table(section_text: str):
 
 
 def normalize_row_values(headers, row):
+    """This is a passthrough as the fields are formatted via transformers."""
     out = []
-    money_like = {
-        "BILLED_AMOUNT",
-        "DISCOUNT",
-        "ALLOWED_AMOUNT",
-        "DEDUCTIBLE",
-        "COINSURANCE",
-        "COPAY",
-        "BALANCE_PAYABLE",
-    }
     for h, v in zip(headers, row):
-        if h.upper() in money_like:
-            v = v.strip().replace("$", "")
-            v = f"${float(v):.2f}" if v else ""
         out.append(v)
     if len(out) < len(headers):
         out += [""] * (len(headers) - len(out))
