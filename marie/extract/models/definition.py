@@ -14,6 +14,34 @@ from marie.extract.models.base import (
 )
 
 
+class FieldScope(str, Enum):
+    """
+    Specifies the scope of a field's application within the document structure.
+
+    Attributes:
+        DOCUMENT: The field applies to the entire document.
+        LAYER: The field is confined to a specific layer.
+        REGION: The field is relevant only within a designated region of a layer.
+    """
+
+    DOCUMENT = "DOCUMENT"
+    LAYER = "LAYER"
+    REGION = "REGION"
+
+
+class FieldCardinality(str, Enum):
+    """
+    Defines how many times a field is expected to appear.
+
+    Attributes:
+        SINGLE: The field is expected to appear only once.
+        MULTIPLE: The field can appear multiple times.
+    """
+
+    SINGLE = "SINGLE"
+    MULTIPLE = "MULTIPLE"
+
+
 class MappingType(str, Enum):
     OR = "OR"
     AND = "AND"
@@ -31,6 +59,11 @@ class FieldMapping(BaseModel):
     functions: Optional[List[str]] = None
     ref_field_name: Optional[str] = None
     field_def: Optional[Dict[str, Any]] = None
+
+    scope: FieldScope = FieldScope.LAYER
+    cardinality: FieldCardinality = FieldCardinality.SINGLE
+    role: Optional[str] = None
+    min_confidence: float = 0.7
 
     def __str__(self) -> str:
         return f"{self.name} : {self.search_perimeter}"
@@ -57,9 +90,13 @@ class Layer(BaseModel):
         RowExtractionStrategy.PRIMARY_COLUMN_VARIABLE
     )
     cutpoint_strategy: CutpointStrategy = CutpointStrategy.START_ON_STOP
+
     field_mappings: List[FieldMapping] = []
     non_repeating_field_mappings: List[FieldMapping] = []
     document_level_field_mappings: List[FieldMapping] = []
+
+    # FIXME : this is initial implementationi to replace the mappings above
+    fields: List[FieldMapping] = []
 
     # converted to selector sets
     start_selector_sets: List[SelectorSet] = []

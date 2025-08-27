@@ -7,7 +7,7 @@ from omegaconf import OmegaConf
 
 from marie.extract.engine.base import BaseProcessingVisitor
 from marie.extract.engine.transform import transform_field_value
-from marie.extract.models.definition import FieldMapping
+from marie.extract.models.definition import FieldMapping, FieldScope
 from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import (
     Field,
@@ -176,11 +176,14 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         )
 
         # FIXME :
-        # there is a clusterfuck in the way we handle the config for repeating fields and non-repeating fields;
-        # for non-repeating fields we have field mappings on the layer that contain the field definition and the mapping
-        # and for repeating fields we have the raw config that contains the field definitions only
-        # this are our non-repeating fields that we need to map to KV values if needed
+        #   This is a clusterfuck in the way we handle the config for repeating fields and non-repeating fields;
+        #   for non-repeating fields we have field mappings on the layer that contain the field definition and the mapping
+        #   and for repeating fields we have the raw config that contains the field definitions only
+        #   this are our non-repeating fields that we need to map to KV values if needed
         field_mappings: List[FieldMapping] = layer.non_repeating_field_mappings
+
+        # Unified list of all field mappings for the layer.
+        all_field_mappings: List[FieldMapping] = layer.fields
 
         parser_sections_rules = region_parser_cfg.get("sections", [])
         # Collect all regions fully contained by any of the section spans (line-based)
@@ -301,6 +304,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         section,  # The original MatchSection to populate with results
                         structured_section,
                         field_mappings,
+                        all_field_mappings,
                     )
 
                 else:
@@ -314,6 +318,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         match_section: MatchSection,
         structured_section: Section,
         field_mappings: List[FieldMapping],
+        all_field_mappings: List[FieldMapping],
     ) -> None:
         """
         Process a structured section configured as key-value (kv).
@@ -333,7 +338,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             List of created field objects (as produced by create_fields).
         """
 
-        # 1) Find region entry and validate type
+        #  Find region entry and validate type
         sec_title_upper = (structured_section.title or "").strip().upper()
         region_entry = next(
             (
@@ -356,7 +361,24 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             )
             return
 
-        # Build field -> (selectors, use_regex_flag) via the same helper used by table code
+        # TODO: Initial implementation to use role_hints and Scoped Fields
+        role_hint = structured_section.tags.get("role_hint")
+        # Filter field mappings to only include those relevant for this region's role and scope.
+        field_mappings_filtered = [
+            fm
+            for fm in all_field_mappings
+            if fm.scope == FieldScope.REGION and fm.role == role_hint
+        ]
+
+        if not field_mappings_filtered:
+            self.logger.info(
+                f"No REGION-scoped field mappings with role '{role_hint}' found for section '{structured_section.title}'"
+            )
+
+        if match_section.fields is None:
+            match_section.fields = []
+
+        # Build field -> (selectors, use_regex_flag)
         kv_specs: Dict[str, tuple[list[str], bool]] = {}
         for field_name, field_info in fields_cfg.items():
             selectors, use_regex_flag = self._collect_selectors_from_cfg(field_info)
@@ -369,7 +391,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             )
             return
 
-        # 3) Walk KVList blocks and match selectors against item.key
+        #  Walk KVList blocks and match selectors against item.key
         populated_fields: set[str] = set()
         template_field_mappings = {}
         extracted_fields = []
@@ -407,32 +429,27 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 if field_name in populated_fields:
                     continue
 
-                matched_value = None
-                matched_item = None
-                matched_selector = None
+                match_generator = (
+                    (value_text, it, sel)
+                    for sel in selectors
+                    for key_text, value_text, it in kv_triplets
+                    if key_text
+                    and self._selector_matches_text(sel, key_text, use_regex_flag)
+                )
 
-                # Try selectors against each KV key
-                for sel in selectors:
-                    if matched_value is not None:
-                        break
-                    for key_text, value_text, it in kv_triplets:
-                        if not key_text:
-                            continue
-                        if self._selector_matches_text(sel, key_text, use_regex_flag):
-                            matched_value = value_text
-                            matched_item = it
-                            matched_selector = sel
-                            break
+                first_match = next(match_generator, None)
 
-                if matched_value is None:
+                if not first_match:
                     continue
 
+                matched_value, matched_item, matched_selector = first_match
                 value_text = matched_item.value or ""
+
                 self.logger.info(
                     f"Extracting KV field `{field_name}` = '{value_text}' via selector '{matched_selector}' (key='{matched_item.key}')"
                 )
 
-                # Resolve field definition (footer-like approach)
+                # Resolve field definition
                 field_def = template_field_mappings.get(field_name, {}) or {}
                 field_def = dict(field_def)  # shallow copy
                 field_def["name"] = field_name
@@ -440,7 +457,6 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 field_def.setdefault("type", "MONEY")
 
                 transformed_value = transform_field_value(field_def, value_text)
-                print(transformed_value)
                 # this is a dummy line_with_meta; we don't have line-level metadata for KV values
                 faux_line_with_meta = LineWithMeta(
                     line=value_text,
@@ -474,6 +490,8 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 table_blocks.append(block)
             elif isinstance(block, TableSeries):
                 table_blocks.extend(block.segments)
+            else:
+                raise TypeError
 
         if not table_blocks:
             return
@@ -531,8 +549,8 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     }
 
         # Process each span in the section
-        print('field_to_header_map:', field_to_header_map)
-        print('footer_field_map:', field_to_footer_map)
+        self.logger.info(f'field_to_header_map: {field_to_header_map}')
+        self.logger.info(f'field_to_footer_map: {field_to_footer_map}')
 
         # Now process each TableBlock
         self.logger.info(
@@ -1097,9 +1115,16 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         layer = section.owner_layer
         field_mappings = layer.non_repeating_field_mappings
         spans: List[Span] = section.span
-
-        self.logger.info(f"Processing layer: {layer.layer_name}")
         extracted_fields = []
+        self.logger.info(f"Processing layer: {layer.layer_name}")
+
+        # Filter for fields that are defined at the LAYER scope.
+        field_mappings_filtered = [
+            fm for fm in layer.fields if fm.scope == FieldScope.LAYER
+        ]
+
+        if not field_mappings_filtered:
+            self.logger.info("No layer-level fields to process.")
 
         for span in spans:
             self.logger.info(f"Processing span: {span}")
@@ -1151,6 +1176,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                                 transformed_value: Union[
                                     str | float | dict[str, None]
                                 ] = transform_field_value(field_def, annotation.value)
+
                                 fields = self.create_fields(
                                     field_def, annotation.value, transformed_value, line
                                 )

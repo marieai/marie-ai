@@ -141,6 +141,10 @@ class MatchSection:
     matched_non_repeating_fields: Optional[List["Field"]] = None
     matched_field_rows: Optional[List["MatchFieldRow"]] = None
 
+    # Unifying matched fields
+    fields: List[Field] = field(default_factory=list)
+    field_rows: List[MatchFieldRow] = field(default_factory=list)
+
     def set_pages(self, pages: List[Page]) -> None:
         self.pages = pages
 

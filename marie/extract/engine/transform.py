@@ -19,7 +19,6 @@ def convert_name_format(value: str, field_def: Dict[str, Any]) -> dict[str, None
     from nameparser import HumanName
 
     name = HumanName(full_name, string_format=string_format)
-
     parsed_name = {"first": name.first, "middle": name.middle, "last": name.last}
 
     return parsed_name
@@ -67,7 +66,7 @@ def convert_to_decimal_money(field_value: str) -> float:
         result = -result
 
     # Debug print
-    print(f"Converted Value: {result:10.2f}  |  Original Input: {field_value.strip()}")
+    logger.info(f"Converted Value: {result:10.2f}  |  Original : {field_value.strip()}")
     return result
 
 

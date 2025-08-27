@@ -5,7 +5,13 @@ from omegaconf import OmegaConf
 
 from marie.extract.engine.engine import DocumentExtractEngine
 from marie.extract.models.base import SelectorSet, TextSelector
-from marie.extract.models.definition import FieldMapping, Layer, Template
+from marie.extract.models.definition import (
+    FieldCardinality,
+    FieldMapping,
+    FieldScope,
+    Layer,
+    Template,
+)
 from marie.extract.schema import ExtractionResult
 from marie.extract.structures import UnstructuredDocument
 from marie.extract.structures.concrete_annotations import TypedAnnotation
@@ -71,6 +77,9 @@ def build_template(config: OmegaConf) -> Template:
     template_fields_repeating = config.fields.repeating
     template_fields_non_repeating = config.fields.non_repeating
 
+    # Process all field definitions into a unified list
+    all_fields: List[FieldMapping] = []
+
     # Non-repeating fields
     for key, field in layer_conf.non_repeating_fields.items():
         if key not in template_fields_non_repeating:
@@ -88,9 +97,12 @@ def build_template(config: OmegaConf) -> Template:
                 0
             ],  # There should be only one selector set
             field_def=field_def,
+            scope=FieldScope.LAYER,
+            cardinality=FieldCardinality.SINGLE,
         )
-
+        all_fields.append(field_mapping)
         layer_1.non_repeating_field_mappings.append(field_mapping)
+    layer_1.fields = all_fields
 
     # Repeating fields - these are fields that can appear multiple times in the document typically in a table
 
