@@ -288,35 +288,35 @@ class ExtractPipeline(BasePipeline):
         self.logger.info(f"Executing pipeline runtime_conf : {runtime_conf}")
 
         # Default to defaults set in the default pipeline config
-        page_classifier_enabled = runtime_conf.get("page_classifier", {}).get(
-            "enabled",
-            is_component_enabled(
-                self.default_pipeline_config.get("page_classifier"), True
-            ),
+        page_classifier_enabled = is_component_enabled(
+            "page_classifier",
+            pipeline_config=self.default_pipeline_config,
+            runtime_config=runtime_conf,
+            default=True,
         )
-        page_indexer_enabled = runtime_conf.get("page_indexer", {}).get(
-            "enabled",
-            is_component_enabled(
-                self.default_pipeline_config.get("page_indexer"), True
-            ),
+        page_indexer_enabled = is_component_enabled(
+            "page_indexer",
+            pipeline_config=self.default_pipeline_config,
+            runtime_config=runtime_conf,
+            default=True,
         )
-        page_cleaner_enabled = runtime_conf.get("page_cleaner", {}).get(
-            "enabled",
-            is_component_enabled(
-                self.default_pipeline_config.get("page_cleaner"), False
-            ),
-        )  # default to False, client should enable
-        page_boundary_enabled = runtime_conf.get("page_boundary", {}).get(
-            "enabled",
-            is_component_enabled(
-                self.default_pipeline_config.get("page_boundary"), True
-            ),
+        page_cleaner_enabled = is_component_enabled(
+            "page_cleaner",
+            pipeline_config=self.default_pipeline_config,
+            runtime_config=runtime_conf,
+            default=False,  # default to False, client should enable
         )
-        template_matching_enabled = runtime_conf.get("template_matching", {}).get(
-            "enabled",
-            is_component_enabled(
-                self.default_pipeline_config.get("template_matching"), True
-            ),
+        page_boundary_enabled = is_component_enabled(
+            "page_boundary",
+            pipeline_config=self.default_pipeline_config,
+            runtime_config=runtime_conf,
+            default=True,
+        )
+        template_matching_enabled = is_component_enabled(
+            "template_matching",
+            pipeline_config=self.default_pipeline_config,
+            runtime_config=runtime_conf,
+            default=True,
         )
 
         self.logger.info(f"Feature : classifier enabled : {page_classifier_enabled}")
@@ -404,16 +404,6 @@ class ExtractPipeline(BasePipeline):
         store_assets(ref_id, ref_type, root_asset_dir)
 
         return metadata
-
-    def store_metadata(
-        self, ref_id: str, ref_type: str, root_asset_dir: str, metadata: dict[str, Any]
-    ) -> None:
-        """
-        Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
-        """
-        filename, prefix, suffix = split_filename(ref_id)
-        metadata_path = os.path.join(root_asset_dir, f"{filename}.meta.json")
-        store_json_object(metadata, metadata_path)
 
     def execute_regions_pipeline(
         self,

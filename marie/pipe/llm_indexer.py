@@ -1,4 +1,3 @@
-from abc import ABC
 from collections import defaultdict
 from typing import List, Optional
 
@@ -9,7 +8,7 @@ from marie.logging_core.logger import MarieLogger
 from marie.pipe.base import PipelineComponent, PipelineContext, PipelineResult
 
 
-class LLMIndexerPipelineComponent(PipelineComponent, ABC):
+class LLMIndexerPipelineComponent(PipelineComponent):
     def __init__(
         self,
         name: str,

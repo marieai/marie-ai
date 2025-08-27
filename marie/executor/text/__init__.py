@@ -1,2 +1,1 @@
-from .ocr_executor import OCRExecutor
 from .text_extraction_executor import TextExtractionExecutor, TextExtractionExecutorMock
