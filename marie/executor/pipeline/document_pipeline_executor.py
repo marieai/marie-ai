@@ -6,11 +6,11 @@ import torch
 from docarray import DocList
 
 from marie import requests
-from marie.api import get_frames_from_docs, parse_parameters
 from marie.api.docs import AssetKeyDoc
 from marie.executor.extract.util import create_working_dir
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
+from marie.executor.util import get_frames_from_docs, parse_parameters
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import initialize_device_settings, setup_torch_optimizations

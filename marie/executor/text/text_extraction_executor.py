@@ -8,16 +8,16 @@ import torch
 from docarray import DocList
 
 from marie import Executor, requests, safely_encoded
-from marie.api import (
-    get_frames_from_docs,
-    get_payload_features,
-    parse_parameters,
-    value_from_payload_or_args,
-)
+from marie.api import value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc, StorageDoc
 from marie.boxes import PSMode
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
+from marie.executor.util import (
+    get_frames_from_docs,
+    get_payload_features,
+    parse_parameters,
+)
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.mdc import MDC
 from marie.logging_core.predefined import default_logger as logger

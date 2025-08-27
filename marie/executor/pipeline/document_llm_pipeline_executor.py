@@ -3,17 +3,13 @@ from typing import List, Optional
 from docarray import DocList
 
 from marie import requests, safely_encoded
-from marie.api import (
-    AssetKeyDoc,
-    get_frames_from_docs,
-    parse_parameters,
-    value_from_payload_or_args,
-)
+from marie.api import AssetKeyDoc, value_from_payload_or_args
 from marie.boxes import PSMode
 from marie.executor.pipeline.document_pipeline_executor import (
     PipelineExecutor,
     create_working_dir,
 )
+from marie.executor.util import get_frames_from_docs, parse_parameters
 from marie.logging_core.mdc import MDC
 from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import torch_gc
