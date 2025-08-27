@@ -198,9 +198,9 @@ class PostgresqlMixin:
         if self._table_exists():
             self.logger.info(f"Using existing table : {self.table}")
         else:
-            self._create_table(create_table_callback)
+            self._create_table_with_callback(create_table_callback)
 
-    def _create_table(self, create_table_callback: Optional[Callable] = None) -> None:
+    def _create_table_with_callback(self, create_table_callback: Optional[Callable] = None) -> None:
         """
         Create table if it doesn't exist.
         @param create_table_callback:
