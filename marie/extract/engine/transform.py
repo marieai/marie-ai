@@ -1,4 +1,6 @@
+import importlib
 import re
+import sys
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional, Union
@@ -7,7 +9,6 @@ from marie.logging_core.predefined import default_logger as logger
 
 
 def convert_name_format(value: str, field_def: Dict[str, Any]) -> dict[str, None] | str:
-    # pip install nameparser
     if not value:
         return {"first_name": None, "middle_name": None, "last_name": None}
 
@@ -114,6 +115,31 @@ def transform_field_value(
             f"Field name is required in field definition. Field definition: {field_def}"
         )
 
+    field_name = field_def.get('name', None)
+    if field_name is None:
+        raise ValueError(
+            f"Field name is required in field definition. Field definition: {field_def}"
+        )
+
+    # Check for a custom transformer function
+    if "transform" in field_def:
+        custom_transformer_path = field_def["transform"]
+        try:
+            module_name, func_name = custom_transformer_path.rsplit(".", 1)
+            module = importlib.import_module(module_name)
+            transformer_func = getattr(module, func_name)
+            return transformer_func(value, field_def)
+        except (ImportError, AttributeError, ValueError) as e:
+            logger.error(
+                f"Could not resolve or use transform function '{custom_transformer_path}': {e}"
+            )
+            return value
+        except Exception as e:
+            logger.error(
+                f"Error during custom transformation of field '{field_name}' with '{custom_transformer_path}': {e}"
+            )
+            return value
+
     transformers = {
         'MONEY': lambda v: convert_money_format(v, field_def) if v else None,
         'DATE': lambda v: convert_date_format(v, field_def) if v else None,
@@ -128,7 +154,7 @@ def transform_field_value(
         try:
             return transformer(value)
         except Exception as e:
-            print(f"Error transforming {field_name} ({field_type}): {e}")
+            logger.error(f"Error transforming {field_name} ({field_type}): {e}")
             return value
 
     return value

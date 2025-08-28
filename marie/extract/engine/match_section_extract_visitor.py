@@ -737,7 +737,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 transformed_value: Union[str, float, dict[str, None]] = (
                     transform_field_value(field_def, cell_value)
                 )
-                self.logger.debug(f"transformed_value : {transformed_value}")
+                self.logger.info(f"transformed_value : {transformed_value}")
 
                 fields = self.create_fields(
                     field_def, cell_value, transformed_value, root_line
