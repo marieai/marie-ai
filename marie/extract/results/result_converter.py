@@ -133,8 +133,9 @@ def merge_annotations(doc: UnstructuredDocument) -> None:
     Args:
         doc: the UnstructuredDocument whose line.annotations will be deduped.
     """
+    # FIXME : this needs to be configurable
     # Lower number == higher priority
-    # this needs to be configurable in the future
+
     TYPE_PRIORITY: Dict[str, int] = {"CLAIM": 1, "ANNOTATION": 2}
 
     for line in doc.lines:
