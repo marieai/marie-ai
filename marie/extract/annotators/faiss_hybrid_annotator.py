@@ -613,13 +613,13 @@ class FaissHybridAnnotator(DocumentAnnotator):
         tokens = text.split()
         l = len(tokens)
         if l <= self.dynamic_ngram_thresholds['short']:
-            return [2]
+            return [2, 1]
         elif l <= self.dynamic_ngram_thresholds['medium']:
-            return [3, 2]
+            return [3, 2, 1]
         elif l <= self.dynamic_ngram_thresholds['long']:
-            return [4, 3, 2]
+            return [4, 3, 2, 1]
         else:
-            return [5, 4, 3, 2]
+            return [5, 4, 3, 2, 1]
 
     def _build_field_result(
         self, label, value, idx, score, strategy, source_line, ngram_size
