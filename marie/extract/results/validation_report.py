@@ -1,6 +1,10 @@
 import os
 
-from marie.extract.results.base_validator import ValidationSummary
+from marie.extract.validator.base import (
+    ValidationContext,
+    ValidationResult,
+    ValidationSummary,
+)
 from marie.logging_core.predefined import default_logger as logger
 
 

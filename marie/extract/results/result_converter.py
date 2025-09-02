@@ -1,8 +1,9 @@
 from pathlib import Path
-from typing import Dict, List, Tuple, Union
+from typing import List, Union
 
 from omegaconf import OmegaConf
 
+from marie.excepts import BadConfigSource
 from marie.extract.engine.engine import DocumentExtractEngine
 from marie.extract.models.base import SelectorSet, TextSelector
 from marie.extract.models.definition import (
@@ -12,9 +13,11 @@ from marie.extract.models.definition import (
     Layer,
     Template,
 )
+from marie.extract.models.exec_context import ExecutionContext
+from marie.extract.registry import component_registry
+from marie.extract.results.annotation_merger import AnnotationMerger
 from marie.extract.schema import ExtractionResult
 from marie.extract.structures import UnstructuredDocument
-from marie.extract.structures.concrete_annotations import TypedAnnotation
 from marie.logging_core.predefined import default_logger as logger
 
 
@@ -123,74 +126,69 @@ def build_template(config: OmegaConf) -> Template:
     return template
 
 
-def merge_annotations(doc: UnstructuredDocument) -> None:
-    """
-    Merges duplicate annotations on each line of the document.
-
-    If the same (name, value) appears more than once (possibly under different
-    annotation_type), only one will be kept—chosen by priority.
-
-    Args:
-        doc: the UnstructuredDocument whose line.annotations will be deduped.
-    """
-    # FIXME : this needs to be configurable
-    # Lower number == higher priority
-
-    TYPE_PRIORITY: Dict[str, int] = {"CLAIM": 1, "ANNOTATION": 2}
-
-    for line in doc.lines:
-        anns = line.annotations or []
-        if len(anns) <= 1:
-            continue
-
-        unique: Dict[Tuple[str, str], TypedAnnotation] = {}
-        for ann in anns:
-            key = (ann.name, ann.value)
-            if key not in unique:
-                unique[key] = ann
-            else:
-                # decide which one to keep based on TYPE_PRIORITY
-                existing = unique[key]
-                # default low priority if missing
-                pr_existing = TYPE_PRIORITY.get(existing.annotation_type, 99)
-                pr_new = TYPE_PRIORITY.get(ann.annotation_type, 99)
-                if pr_new < pr_existing:
-                    unique[key] = ann
-
-        # overwrite with the deduped list, preserving priority-chosen annotations
-        line.annotations = list(unique.values())
-
-
 def convert_document_to_structure(
     doc: UnstructuredDocument, conf: OmegaConf, output_dir: Union[Path, str]
 ) -> ExtractionResult:
     """
-    Renders the `UnstructuredDocument` extract basesd on the provided template specification.
+    Converts an `UnstructuredDocument` into a structured format using the provided template configuration.
 
-    Parameters:
-        doc (UnstructuredDocument): The document to render.
-        output_dir (Union[Path, str]): The directory to write the output to.
+    Args:
+        doc (UnstructuredDocument): The document to be processed.
+        conf (OmegaConf): Configuration specifying template and extraction parameters.
+        output_dir (Union[Path, str]): Directory for output artifacts.
 
     Returns:
-        None
+        ExtractionResult: The result of the extraction process.
+
+    Raises:
+        ValueError: If required configuration parameters are missing or invalid.
+        Exception: For unexpected errors during processing.
     """
-    from marie.extract.models.exec_context import ExecutionContext
+    logger.info("Starting conversion of unstructured document to structured format.")
 
-    logger.info("Converting unstructured document to structured document")
-    # TODO : Add better error handling and validation
+    layout_id = str(conf.layout_id)
+    if not layout_id:
+        logger.error("Missing layout_id in configuration.")
+        raise ValueError("layout_id is required in configuration.")
+
+    logger.info(f"Retrieving template builder for layout ID: {layout_id}")
+    builder_fn = component_registry.get_template_builder(layout_id)
+    if builder_fn is None:
+        logger.error(f"No template builder registered for layout_id={layout_id}")
+        raise ValueError(f"No template builder registered for layout_id={layout_id}")
+
+    try:
+        template: Template = builder_fn(conf)
+    except Exception as e:
+        logger.exception(f"Failed to build template for layout_id={layout_id}: {e}")
+        raise BadConfigSource(
+            f"Failed to build template for layout_id={layout_id}"
+        ) from e
+
     output_dir = Path(output_dir)
-    logger.info(f"Writing output to {output_dir}")
+    logger.info(f"Output directory set to: {output_dir}")
 
-    unstructured_meta = doc.metadata
-    doc_id = unstructured_meta.get("ref_id", "unknown")
+    doc_id = doc.metadata.get("ref_id", "unknown")
+    logger.info(f"Processing document with ID: {doc_id}")
 
-    logger.info(f"Document ID: {doc_id}")
-    merge_annotations(doc)
+    try:
+        annotation_merger = AnnotationMerger(
+            OmegaConf.to_container(conf.annotation_config.type_priority)
+        )
+        annotation_merger.merge(doc)
+    except Exception as e:
+        logger.exception(f"Annotation merging failed for document {doc_id}: {e}")
+        raise
 
-    template = build_template(conf)
     context = ExecutionContext(
         doc_id=doc_id, template=template, document=doc, output_dir=output_dir
     )
-    results = DocumentExtractEngine().match(context)
 
+    try:
+        results = DocumentExtractEngine().match(context)
+    except Exception as e:
+        logger.exception(f"Document extraction failed for document {doc_id}: {e}")
+        raise
+
+    logger.info(f"Document {doc_id} successfully converted to structured format.")
     return results

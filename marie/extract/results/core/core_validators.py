@@ -3,14 +3,14 @@ import os
 
 from omegaconf import OmegaConf
 
-from marie.extract.results.base_validator import (
+from marie.extract.registry import register_validator
+from marie.extract.structures import UnstructuredDocument
+from marie.extract.validator.base import (
     BaseValidator,
     ValidationContext,
     ValidationResult,
     ValidationStage,
 )
-from marie.extract.results.registry import register_validator
-from marie.extract.structures import UnstructuredDocument
 
 
 @register_validator("noop")

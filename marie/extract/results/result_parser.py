@@ -17,9 +17,8 @@ from marie.constants import __model_path__
 from marie.executor.ner.utils import draw_box, get_font, visualize_icr
 from marie.extract.models.match import SubzeroResult
 from marie.extract.readers.meta_reader.meta_reader import MetaReader
+from marie.extract.registry import component_registry
 from marie.extract.results.base import _annotate_segment, extract_page_id, locate_line
-from marie.extract.results.base_validator import ValidationContext, ValidationSummary
-from marie.extract.results.registry import component_registry
 from marie.extract.results.result_converter import convert_document_to_structure
 from marie.extract.results.result_validator import (
     validate_document,
@@ -33,6 +32,7 @@ from marie.extract.structures import SerializationManager, UnstructuredDocument
 from marie.extract.structures.concrete_annotations import TypedAnnotation
 from marie.extract.structures.line_with_meta import LineWithMeta
 from marie.extract.structures.structured_region import StructuredRegion
+from marie.extract.validator.base import ValidationContext, ValidationSummary
 from marie.logging_core.predefined import default_logger as logger
 from marie.utils.docs import frames_from_file
 from marie.utils.json import load_json_file
@@ -806,7 +806,7 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
         parser_fn = component_registry.get_parser(target)
 
         if not parser_fn:
-            logging.warning(f"No parser registered for '{target}'")
+            logging.error(f"No parser registered for '{target}'")
             raise ValueError(f"Parser '{target}' not found in registry")
 
         try:

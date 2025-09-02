@@ -9,8 +9,8 @@ from marie import requests
 from marie.api.docs import AssetKeyDoc
 from marie.executor.extract import DocumentAnnotatorExecutor
 from marie.executor.extract.util import layout_config, prepare_asset_directory
-from marie.extract.results.base import initialize_parsers_from_config
-from marie.extract.results.registry import component_registry
+from marie.extract.registry import component_registry
+from marie.extract.registry.loader import initialize_components_from_config
 from marie.extract.results.result_parser import parse_results
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
@@ -37,7 +37,7 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
             getattr(self.metas, "name", self.__class__.__name__)
         ).logger
 
-        result = initialize_parsers_from_config(parsers)
+        result = initialize_components_from_config(parsers)
 
         logger.info(f"Loaded modules: {result['loaded']}")
         logger.info(f"Failed modules: {result['failed']}")

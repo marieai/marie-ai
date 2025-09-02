@@ -1,33 +1,11 @@
 import logging
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Optional
 
 from marie import check
-from marie.extract.results.registry import component_registry
 from marie.extract.schema import Segment
 from marie.extract.structures.concrete_annotations import TypedAnnotation
 from marie.extract.structures.line_with_meta import LineWithMeta
-
-
-def initialize_parsers_from_config(config: Union[Dict[str, Any], List[str]]):
-    """
-    Initialize parsers from configuration.
-
-    Args:
-        config: Either a dict with configuration or a list of module names
-
-    Returns:
-        Dict with loading results
-    """
-    if isinstance(config, list):
-        config = {'external_parser_modules': config}
-
-    return component_registry.initialize_from_config(config)
-
-
-def load_external_parsers(module_names: List[str]):
-    """Load external parser modules by name"""
-    return component_registry.initialize_external_components(module_names)
 
 
 def locate_line(
