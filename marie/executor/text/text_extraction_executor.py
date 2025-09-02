@@ -13,7 +13,7 @@ from marie.api.docs import AssetKeyDoc, StorageDoc
 from marie.boxes import PSMode
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
-from marie.executor.util import (
+from marie.executor.request_util import (
     get_frames_from_docs,
     get_payload_features,
     parse_parameters,
@@ -232,7 +232,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
             response = {
                 "status": "succeeded",
                 "runtime_info": self.runtime_info,
-                # "metadata": metadata,
+                "metadata": metadata,
             }
             converted = safely_encoded(lambda x: x)(response)
             return converted

@@ -7,8 +7,8 @@ from docarray import DocList
 
 from marie import requests
 from marie.api.docs import AssetKeyDoc
+from marie.executor.asset_util import layout_config, prepare_asset_directory
 from marie.executor.extract import DocumentAnnotatorExecutor
-from marie.executor.extract.util import layout_config, prepare_asset_directory
 from marie.extract.results.base import initialize_parsers_from_config
 from marie.extract.results.registry import component_registry
 from marie.extract.results.result_parser import parse_results

@@ -10,7 +10,7 @@ from omegaconf import OmegaConf
 from marie.api.docs import AssetKeyDoc
 from marie.constants import __config_dir__
 from marie.excepts import RuntimeTerminated
-from marie.executor.extract.util import layout_config, prepare_asset_directory
+from marie.executor.asset_util import layout_config, prepare_asset_directory
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
 from marie.extract.annotators.types import AnnotatorClassType

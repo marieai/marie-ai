@@ -1,7 +1,7 @@
 import os
 from typing import Any, List
 
-from marie.executor.extract.util import setup_table_directories
+from marie.executor.asset_util import setup_table_directories
 from marie.extract.annotators.base import AnnotatorCapabilities
 from marie.extract.annotators.llm_annotator import LLMAnnotator
 from marie.extract.annotators.util import (

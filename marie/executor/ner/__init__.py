@@ -1,1 +1,1 @@
-from .ner_extraction_executor import NerExtractionExecutor
+from marie.executor.ner.ner_extraction_executor import NerExtractionExecutor

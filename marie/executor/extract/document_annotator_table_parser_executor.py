@@ -7,12 +7,12 @@ from omegaconf import OmegaConf
 
 from marie import requests
 from marie.api.docs import AssetKeyDoc
-from marie.executor.extract import DocumentAnnotatorExecutor
-from marie.executor.extract.util import (
+from marie.executor.asset_util import (
     layout_config,
     prepare_asset_directory,
     setup_table_directories,
 )
+from marie.executor.extract import DocumentAnnotatorExecutor
 from marie.extract.readers.meta_reader.meta_reader import MetaReader
 from marie.extract.results.core_parsers import parse_tables
 from marie.extract.results.result_parser import extract_tables, highlight_tables

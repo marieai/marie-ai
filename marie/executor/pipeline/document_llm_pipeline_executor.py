@@ -1,15 +1,13 @@
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from docarray import DocList
 
 from marie import requests, safely_encoded
 from marie.api import AssetKeyDoc, value_from_payload_or_args
 from marie.boxes import PSMode
-from marie.executor.pipeline.document_pipeline_executor import (
-    PipelineExecutor,
-    create_working_dir,
-)
-from marie.executor.util import get_frames_from_docs, parse_parameters
+from marie.executor.asset_util import create_working_dir
+from marie.executor.pipeline.document_pipeline_executor import PipelineExecutor
+from marie.executor.request_util import get_frames_from_docs, parse_parameters
 from marie.logging_core.mdc import MDC
 from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import torch_gc
@@ -26,8 +24,9 @@ class DocumentLLMPipelineExecutor(PipelineExecutor):
         name: str = "",
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
-        storage: dict[str, any] = None,
-        pipelines: List[dict[str, any]] = None,
+        storage: dict[str, Any] = None,
+        pipelines: List[dict[str, Any]] = None,
+        *args,
         **kwargs,
     ):
         super().__init__(name, device, num_worker_preprocess, storage, **kwargs)
