@@ -1,13 +1,13 @@
 import time
 from typing import Any, List
 
-from marie.extract.results.base_validator import (
+from marie.extract.registry import component_registry
+from marie.extract.structures import UnstructuredDocument
+from marie.extract.validator.base import (
     ValidationContext,
     ValidationResult,
     ValidationSummary,
 )
-from marie.extract.results.registry import component_registry
-from marie.extract.structures import UnstructuredDocument
 from marie.logging_core.predefined import default_logger as logger
 
 

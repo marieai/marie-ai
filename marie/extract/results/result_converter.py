@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict, List, Tuple, Union
+from typing import List, Union
 
 from omegaconf import OmegaConf
 
@@ -12,9 +12,11 @@ from marie.extract.models.definition import (
     Layer,
     Template,
 )
+from marie.extract.models.exec_context import ExecutionContext
+from marie.extract.registry import component_registry
+from marie.extract.results.annotation_merger import AnnotationMerger
 from marie.extract.schema import ExtractionResult
 from marie.extract.structures import UnstructuredDocument
-from marie.extract.structures.concrete_annotations import TypedAnnotation
 from marie.logging_core.predefined import default_logger as logger
 
 
@@ -123,43 +125,6 @@ def build_template(config: OmegaConf) -> Template:
     return template
 
 
-def merge_annotations(doc: UnstructuredDocument) -> None:
-    """
-    Merges duplicate annotations on each line of the document.
-
-    If the same (name, value) appears more than once (possibly under different
-    annotation_type), only one will be kept—chosen by priority.
-
-    Args:
-        doc: the UnstructuredDocument whose line.annotations will be deduped.
-    """
-    # Lower number == higher priority
-    # this needs to be configurable in the future
-    TYPE_PRIORITY: Dict[str, int] = {"CLAIM": 1, "ANNOTATION": 2}
-
-    for line in doc.lines:
-        anns = line.annotations or []
-        if len(anns) <= 1:
-            continue
-
-        unique: Dict[Tuple[str, str], TypedAnnotation] = {}
-        for ann in anns:
-            key = (ann.name, ann.value)
-            if key not in unique:
-                unique[key] = ann
-            else:
-                # decide which one to keep based on TYPE_PRIORITY
-                existing = unique[key]
-                # default low priority if missing
-                pr_existing = TYPE_PRIORITY.get(existing.annotation_type, 99)
-                pr_new = TYPE_PRIORITY.get(ann.annotation_type, 99)
-                if pr_new < pr_existing:
-                    unique[key] = ann
-
-        # overwrite with the deduped list, preserving priority-chosen annotations
-        line.annotations = list(unique.values())
-
-
 def convert_document_to_structure(
     doc: UnstructuredDocument, conf: OmegaConf, output_dir: Union[Path, str]
 ) -> ExtractionResult:
@@ -173,9 +138,19 @@ def convert_document_to_structure(
     Returns:
         None
     """
-    from marie.extract.models.exec_context import ExecutionContext
 
     logger.info("Converting unstructured document to structured document")
+
+    layout_id = str(conf.layout_id)
+    if not layout_id:
+        raise ValueError("layout_id is required in config")
+
+    logger.info(f"Building template for layout ID: {layout_id}")
+    builder_fn = component_registry.get_template_builder(layout_id)
+    if builder_fn is None:
+        raise ValueError(f"No template builder registered for layout_id={layout_id}")
+    template: Template = builder_fn(conf)
+
     # TODO : Add better error handling and validation
     output_dir = Path(output_dir)
     logger.info(f"Writing output to {output_dir}")
@@ -184,7 +159,10 @@ def convert_document_to_structure(
     doc_id = unstructured_meta.get("ref_id", "unknown")
 
     logger.info(f"Document ID: {doc_id}")
-    merge_annotations(doc)
+    annotation_merger = AnnotationMerger(
+        OmegaConf.to_container(conf.annotation_config.type_priority)
+    )
+    annotation_merger.merge(doc)
 
     template = build_template(conf)
     context = ExecutionContext(

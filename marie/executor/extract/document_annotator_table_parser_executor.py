@@ -14,7 +14,7 @@ from marie.executor.extract.util import (
     setup_table_directories,
 )
 from marie.extract.readers.meta_reader.meta_reader import MetaReader
-from marie.extract.results.core_parsers import parse_tables
+from marie.extract.results.core.core_parsers import parse_tables
 from marie.extract.results.result_parser import extract_tables, highlight_tables
 from marie.extract.structures import UnstructuredDocument
 from marie.logging_core.logger import MarieLogger

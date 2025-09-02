@@ -3,8 +3,8 @@ import os
 
 from omegaconf import OmegaConf
 
+from marie.extract.registry import register_parser
 from marie.extract.results.base import _annotate_segment, locate_line
-from marie.extract.results.registry import register_parser
 from marie.extract.results.result_parser import (
     parse_files,
     process_extractions,
