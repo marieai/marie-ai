@@ -2,7 +2,8 @@
 import importlib
 
 import pydantic
-from burr.core import serde
+
+from marie.getx.core import serde
 
 
 @serde.serialize.register(pydantic.BaseModel)

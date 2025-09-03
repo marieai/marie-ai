@@ -3,7 +3,7 @@
 # it based on class type.
 import pickle
 
-from burr.core import serde
+from marie.getx.core import serde
 
 
 def register_type_to_pickle(cls):
