@@ -2,7 +2,7 @@ import asyncio
 from typing import Any, Iterable, MutableMapping, Optional, OrderedDict
 
 from marie.excepts import BadConfigSource
-from marie.helper import add_sync_version, get_or_reuse_loop
+from marie.logging_core.predefined import default_logger as logger
 from marie.messaging.events import EventMessage
 from marie.messaging.toast_handler import ToastHandler
 
@@ -22,17 +22,23 @@ class Toast:
     _NOTIFICATION_HANDLERS: MutableMapping[str, ToastHandler] = OrderedDict()  # type: ignore
     __NATIVE_NOTIFICATION_HANDLER = None
 
+    # soft limits so a burst of events doesn't explode the runtime
+    _MAX_CONCURRENT = 16
+    _HANDLER_TIMEOUT_SECS = 5
+
     @staticmethod
     def __get_event_handlers(event: str) -> Iterable[ToastHandler]:
-        _iterables = [Toast.__NATIVE_NOTIFICATION_HANDLER]
-
+        _iterables = (
+            [Toast.__NATIVE_NOTIFICATION_HANDLER]
+            if Toast.__NATIVE_NOTIFICATION_HANDLER
+            else []
+        )
         for p in Toast._NOTIFICATION_HANDLERS.keys():
+            # exact “*” or prefix match like "RUN_" to catch RUN_START, RUN_SUCCESS, etc.
             if p == "*" or event.startswith(p):
                 _iterables.extend(Toast._NOTIFICATION_HANDLERS[p])  # type: ignore
-
-        # sort by priority
+        # sort by priority (lower runs first)
         _iterables.sort(key=lambda x: x.priority, reverse=False)
-
         return _iterables
 
     def __init__(self, **kwargs):
@@ -49,17 +55,44 @@ class Toast:
         if notification.api_key is None:
             raise ValueError(f"'api_key' not present in notification : {notification}")
 
+        # # Create tasks for each handler.
         # tasks = [
-        #     asyncio.ensure_future(handler.notify(notification, **kwargs))
+        #     asyncio.create_task(handler.notify(notification, **kwargs))
         #     for handler in Toast.__get_event_handlers(event)
         # ]
-        # # await asyncio.gather(*tasks)
 
-        # Create tasks for each handler.
-        tasks = [
-            asyncio.create_task(handler.notify(notification, **kwargs))
-            for handler in Toast.__get_event_handlers(event)
-        ]
+        handlers = list(Toast.__get_event_handlers(event))
+        if not handlers:
+            return []
+
+        sem = asyncio.Semaphore(Toast._MAX_CONCURRENT)
+
+        async def _run_handler(h: ToastHandler):
+            try:
+                async with sem:
+                    # enforce per-handler timeout so one bad sink doesn’t block the fan-out
+                    return await asyncio.wait_for(
+                        h.notify(notification, **kwargs),
+                        timeout=Toast._HANDLER_TIMEOUT_SECS,
+                    )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Toast handler %s timed out for event=%s jobid=%s",
+                    h.__class__.__name__,
+                    event,
+                    notification.jobid,
+                )
+                return False
+            except Exception:  # noqa
+                logger.exception(
+                    "Toast handler %s crashed for event=%s jobid=%s",
+                    h.__class__.__name__,
+                    event,
+                    notification.jobid,
+                )
+                return False
+
+        tasks = [asyncio.create_task(_run_handler(h)) for h in handlers]
 
     @staticmethod
     def notify_sync(event: str, notification: EventMessage, **kwargs: Any):
@@ -69,9 +102,8 @@ class Toast:
         :param notification:
         :param kwargs:
         """
-        get_or_reuse_loop().run_until_complete(
-            Toast.notify(event, notification, **kwargs)
-        )
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(Toast.notify(event, notification, **kwargs))
 
     @staticmethod
     def register(handler: ToastHandler, native: Optional[bool] = False) -> None:

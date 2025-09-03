@@ -262,6 +262,12 @@ def parse_files(
             continue
 
 
+def _normalize_key(label: Optional[str]) -> Optional[str]:
+    if not label:
+        return None
+    return re.sub(r"\s+", "_", label.strip().upper())
+
+
 def process_extractions(
     working_dir: str,
     doc: UnstructuredDocument,
@@ -269,6 +275,7 @@ def process_extractions(
     page_id: int,
     annotation_type: str,
     grounding_keys: list[str],
+    add_container: bool = True,
 ) -> None:
     """
     Processes and annotates extractions for a specific page and annotation type.
@@ -280,6 +287,102 @@ def process_extractions(
         page_id (int): The ID of the page to process.
         annotation_type (str): Type of annotation ("CLAIM", "REMARKS", etc.).
         grounding_keys (list[str]): List of valid keys to process.
+        add_container (bool): Whether to add a container region for the annotations. Defaults to False.
+
+    If add_container=True:
+      - Emit {ANNOTATIONTYPE}_START before the first annotated segment.
+      - Emit {ANNOTATIONTYPE}_END after the last annotated segment.
+    """
+    lines_for_page: list[LineWithMeta] = sorted(
+        doc.lines_for_page(page_id), key=lambda ln: ln.metadata.line_id
+    )
+    logger.info(f"lines => {len(lines_for_page)} >")
+    logger.info(f"Detailed extraction result for page {page_id}")
+
+    first_emitted = False
+    last_meta_line: LineWithMeta | None = None
+    last_row_number: int | None = None
+
+    extractions = correct_row_numbers(result.extractions)
+
+    for segment in extractions:
+        row_number = int(segment.line_number)
+        segment.label = segment.label.upper() if segment.label else None
+        key, value, reason = segment.label, segment.value, segment.reasoning
+
+        # Normalize spaces into underscores
+        key = re.sub(r"\s+", "_", key) if key else None
+        if key not in grounding_keys:
+            logging.warning(
+                f"Not a grounded Key: {key}, Grounded Value: {value}, reason:\n{reason}"
+            )
+            continue
+
+        if "ERROR" == key:
+            logging.warning(f"Invalid key: {key} > {value}")
+            continue
+
+        meta_line = locate_line(lines_for_page, row_number)
+        if meta_line is None:
+            logging.warning(
+                f"No line found for page {page_id} and row number {row_number}"
+            )
+            continue
+
+        # Emit START once, right before annotating the first valid segment
+        if add_container and not first_emitted:
+            segment_start = Segment(
+                line_number=row_number,
+                label=f"{annotation_type}_START",
+                value=f"{annotation_type.title()} Start Annotation",
+                label_found_at=f"Start at {row_number}",
+                reasoning=f"Automatically inserted {annotation_type.lower()} start",
+            )
+            _annotate_segment(annotation_type, meta_line, segment_start)
+            first_emitted = True
+
+        logger.info(f"   --> Line : {meta_line}")
+        _annotate_segment(annotation_type, meta_line, segment)
+
+        last_meta_line = meta_line
+        last_row_number = row_number
+
+    if (
+        add_container
+        and first_emitted
+        and last_meta_line is not None
+        and last_row_number is not None
+    ):
+        segment_end = Segment(
+            line_number=last_row_number,
+            label=f"{annotation_type}_END",
+            value=f"{annotation_type.title()} End Annotation",
+            label_found_at=f"End at {last_row_number}",
+            reasoning=f"Automatically inserted {annotation_type.lower()} end",
+        )
+        _annotate_segment(annotation_type, last_meta_line, segment_end)
+
+
+def process_extractionsXxx(
+    working_dir: str,
+    doc: UnstructuredDocument,
+    result: ExtractionResult,
+    page_id: int,
+    annotation_type: str,
+    grounding_keys: list[str],
+    add_container: bool = False,
+) -> None:
+    """
+    Processes and annotates extractions for a specific page and annotation type.
+
+    Args:
+        working_dir (str): The working directory.
+        doc (UnstructuredDocument): The document being updated.
+        result (ExtractionResult): The extraction result containing segments.
+        page_id (int): The ID of the page to process.
+        annotation_type (str): Type of annotation ("CLAIM", "REMARKS", etc.).
+        grounding_keys (list[str]): List of valid keys to process.
+        add_container (bool): Whether to add a container region for the annotations. Defaults to False.
     """
     lines_for_page: list[LineWithMeta] = sorted(
         doc.lines_for_page(page_id), key=lambda ln: ln.metadata.line_id

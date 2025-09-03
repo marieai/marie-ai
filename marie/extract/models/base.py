@@ -35,6 +35,7 @@ class CutpointStrategy(str, Enum):
     STOP_ON_PAGE_BREAK = ("STOP_ON_PAGE_BREAK", "Description for STOP_ON_PAGE_BREAK")
     DYNAMIC = ("DYNAMIC", "Description for DYNAMIC")
     PATTERN_DEFINITION = ("PATTERN_DEFINITION", "Description for PATTERN_DEFINITION")
+    ANNOTATION = ("ANNOTATION", "Select all annotations of a given type")
 
     def __new__(cls, value, description):
         obj = str.__new__(cls, value)

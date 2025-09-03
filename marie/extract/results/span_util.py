@@ -112,8 +112,10 @@ def pagespan_from_start_stop(
         span = Span(page=i, h=page_h, msg=msg)
         if i == sp:
             span.y = start_y
-            if sp == stop.page:
-                span.h = stop_y - start_y
+            if (
+                sp == stop.page
+            ):  # when the start and stop points are the same, the height of the span should be 1
+                span.h = stop_y - start_y + 1
             else:
                 span.h = page_h - start_y
         elif i == ep:

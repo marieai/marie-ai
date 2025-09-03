@@ -4,9 +4,15 @@ from marie.extract.continuation.default_continuation import DefaultContinuationS
 from marie.extract.cutpoint.cutpoint_matching_engine import CutpointMatchingEngine
 from marie.extract.engine.base import BaseProcessingVisitor
 from marie.extract.engine.candidate_validator import CandidateValidator
+from marie.extract.models.base import CutpointStrategy
 from marie.extract.models.definition import Layer, SelectionType
 from marie.extract.models.exec_context import ExecutionContext
-from marie.extract.models.match import MatchSection, MatchSectionType, SubzeroResult
+from marie.extract.models.match import (
+    MatchSection,
+    MatchSectionType,
+    ScanResult,
+    SubzeroResult,
+)
 from marie.extract.results.span_util import pagespan_from_start_stop
 
 
@@ -40,22 +46,43 @@ class CutpointProcessingVisitor(BaseProcessingVisitor):
         assert layer is not None
         assert parent is not None
 
-        start_selectors = layer.start_selector_sets
-        stop_selectors = layer.stop_selector_sets
+        matched_sections: List[MatchSection]
+        cutpoint_strategy = layer.cutpoint_strategy
 
-        start_selector_hits = []
-        stop_selector_hits = []
+        if cutpoint_strategy == CutpointStrategy.ANNOTATION:
+            selectors = layer.start_selector_sets
+            selector_hits = []
+            # Use the matcher to find candidates (annotations)
+            candidates = self.matcher.find_cutpoints(
+                context, selectors, parent, selector_hits, cutpoint_strategy
+            )
+            if not candidates:
+                matched_sections = []
+            else:
+                matched_sections = []
+                # we expect pairs of [start, stop] candidates from find_cutpoints
+                for i in range(0, len(candidates), 2):
+                    start_cand = candidates[i]
+                    stop_cand = candidates[i + 1]
+                    section = MatchSection(start=start_cand, stop=stop_cand)
+                    matched_sections.append(section)
+        else:
+            start_selectors = layer.start_selector_sets
+            stop_selectors = layer.stop_selector_sets
 
-        start_candidates = self.matcher.find_cutpoints(
-            context, start_selectors, parent, start_selector_hits
-        )
-        stop_candidates = self.matcher.find_cutpoints(
-            context, stop_selectors, parent, stop_selector_hits
-        )
+            start_selector_hits = []
+            stop_selector_hits = []
 
-        matched_sections = self.candidate_validator.fix_mismatched_sections(
-            context, start_candidates, stop_candidates, parent, layer
-        )
+            start_candidates = self.matcher.find_cutpoints(
+                context, start_selectors, parent, start_selector_hits, cutpoint_strategy
+            )
+            stop_candidates = self.matcher.find_cutpoints(
+                context, stop_selectors, parent, stop_selector_hits, cutpoint_strategy
+            )
+
+            matched_sections = self.candidate_validator.fix_mismatched_sections(
+                context, start_candidates, stop_candidates, parent, layer
+            )
 
         self.populate_values(layer, matched_sections)
         self.prepare_initial_page_spans(context, matched_sections)

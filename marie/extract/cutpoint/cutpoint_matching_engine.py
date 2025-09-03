@@ -2,7 +2,7 @@ from abc import ABC
 from collections import defaultdict
 from typing import List, Optional
 
-from marie.extract.models.base import Rectangle, Selector
+from marie.extract.models.base import CutpointStrategy, Rectangle, Selector
 from marie.extract.models.definition import SelectorSet
 from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import (
@@ -26,8 +26,9 @@ class CutpointMatchingEngine:
         selector_sets: List[SelectorSet],
         parent: MatchSection,
         selector_hits: Optional[List[ScanResult]] = None,
+        cutpoint_strategy: Optional[CutpointStrategy] = None,
     ) -> List[ScanResult]:
-
+        # if cutpoint_strategy == CutpointStrategy.ANNOTATION:
         print("\n===== Start of Cutpoint Matching =====")
         print("Selector Sets:", selector_sets)
         print("Parent:", parent)
@@ -73,22 +74,47 @@ class CutpointMatchingEngine:
                 print(cutpoints_by_page)
 
                 for smr in cutpoints_by_page:
-                    # TODO : implement findCutpointYOffset
-                    sr: ScanResult = smr.items[
-                        0
-                    ]  # items are already sorted so we pick the first one as the start
-                    assert sr.line is not None
-                    assert sr.line.metadata is not None
+                    if not smr.items:
+                        continue
 
-                    cutpoint = ScanResult()
-                    cutpoint.line = sr.line
-                    cutpoint.page = cutpoint.line.metadata.page_id
-                    cutpoint.type = ResultType.CUTPOINT
-                    cutpoint.area = (
-                        Rectangle.create_empty()
-                    )  # TODO : implement findCutpointArea, this could be derived from lines
+                    if cutpoint_strategy == CutpointStrategy.ANNOTATION:
+                        # smr.items are sorted, find min and max
+                        start_sr = smr.items[0]
+                        stop_sr = smr.items[-1]
 
-                    cutpoints.append(cutpoint)
+                        # Create cutpoint for start
+                        cutpoint_start = ScanResult()
+                        cutpoint_start.line = start_sr.line
+                        cutpoint_start.page = start_sr.line.metadata.page_id
+                        cutpoint_start.type = ResultType.CUTPOINT
+                        cutpoint_start.area = Rectangle.create_empty()
+                        cutpoints.append(cutpoint_start)
+
+                        # Create cutpoint for stop
+                        cutpoint_stop = ScanResult()
+                        cutpoint_stop.line = stop_sr.line
+                        cutpoint_stop.page = stop_sr.line.metadata.page_id
+                        cutpoint_stop.type = ResultType.CUTPOINT
+                        cutpoint_stop.area = Rectangle.create_empty()
+                        cutpoints.append(cutpoint_stop)
+                    else:
+                        # TODO : implement findCutpointYOffset
+                        sr: ScanResult = smr.items[
+                            0
+                        ]  # items are already sorted so we pick the first one as the start
+                        assert sr.line is not None
+                        assert sr.line.metadata is not None
+
+                        cutpoint = ScanResult()
+                        cutpoint.line = sr.line
+                        cutpoint.page = cutpoint.line.metadata.page_id
+                        cutpoint.type = ResultType.CUTPOINT
+                        cutpoint.area = (
+                            Rectangle.create_empty()
+                        )  # TODO : implement findCutpointArea, this could be derived from lines
+
+                        cutpoints.append(cutpoint)
+
             print("----------------------------")
         print("Cutpoints found:", len(cutpoints))
         print("===== End of Cutpoint Matching =====\n")
