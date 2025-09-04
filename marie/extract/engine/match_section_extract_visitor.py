@@ -113,7 +113,6 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         Case-insensitive match. If use_regex_flag is True or selector has inline regex hint,
         match as regex; otherwise do a literal contains with casefold.
         """
-        import re
 
         sel, hinted_regex = self._parse_selector_regex_hint(selector)
         is_regex = use_regex_flag or hinted_regex

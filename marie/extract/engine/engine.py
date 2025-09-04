@@ -5,6 +5,9 @@ from marie.extract.engine.cutpoint_visitor import CutpointProcessingVisitor
 from marie.extract.engine.match_section_extract_visitor import (
     MatchSectionExtractionProcessingVisitor,
 )
+from marie.extract.engine.match_section_region_processor_visitor import (
+    MatchSectionRegionProcessorVisitor,
+)
 from marie.extract.engine.processing_visitor import ProcessingVisitor
 from marie.extract.engine.rendering_visitor import MatchSectionRenderingVisitor
 from marie.extract.engine.template_validator_visitor import TemplateValidatorVisitor
@@ -27,8 +30,10 @@ class DocumentExtractEngine:
         Initializes the bootstrap process for the engine.
         """
         # Order of these visitors is important
+        # TODO : This should be configurable so the client can add change/visitors
         self.visitors.append(TemplateValidatorVisitor(True))
         self.visitors.append(CutpointProcessingVisitor())
+        self.visitors.append(MatchSectionRegionProcessorVisitor(True))
         self.visitors.append(MatchSectionExtractionProcessingVisitor(True))
         self.visitors.append(MatchSectionRenderingVisitor(True))
         # self.visitors.append(PrintVisitor(True))
