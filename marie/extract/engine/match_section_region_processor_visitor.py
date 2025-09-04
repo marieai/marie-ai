@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 
 from omegaconf import OmegaConf
 
+from marie.excepts import BadConfigSource
 from marie.extract.engine.base import BaseProcessingVisitor
 from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import MatchSection, MatchSectionType
@@ -20,6 +21,7 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
     def __init__(self, enabled: bool):
         super().__init__(enabled)
         self.logger = MarieLogger(context=self.__class__.__name__)
+        self._role_to_processor = {}
 
     def visit(self, context: ExecutionContext, parent: MatchSection) -> None:
         self.logger.info("----------------------------------------")
@@ -57,8 +59,6 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
         assert context.document is not None, "Context must include a document."
 
         print('PROCESSING MATCH SECTION REGION PARSER')
-
-        # Check if this section should be processed by section processor
         if not self._should_process_section(section):
             return
 
@@ -67,9 +67,8 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
         if layer_config is None:
             return
 
-        # Process regions using appropriate processors
-        self._process_sections_with_processors(context, parent, layer_config)
-
+        self._build_role_processor_mapping(layer_config['region_parser_config'])
+        self._process_sections_with_processors(context, parent, section, layer_config)
         # self.process_regions(context, parent, section)
 
     def process_regions(
@@ -148,8 +147,6 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
         Args:
             parser_config: Parser configuration containing processor definitions
         """
-        self._role_to_processor = {}
-
         processors_config = parser_config.get('processors', {})
         for processor_name, processor_config in processors_config.items():
             role = processor_config.get('role')
@@ -159,7 +156,11 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
         self.logger.info(f"Built role-to-processor mapping: {self._role_to_processor}")
 
     def _process_sections_with_processors(
-        self, context: ExecutionContext, parent: MatchSection, layer_config: Dict
+        self,
+        context: ExecutionContext,
+        parent: MatchSection,
+        section: MatchSection,
+        layer_config: Dict,
     ) -> None:
         """
         Process regions using registered processors based on roles.
@@ -177,29 +178,30 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
         # Group regions by processor based on their roles
         regions_by_processor = self._group_regions_by_processor(regions_config)
 
-        # Process each processor group
         for processor_name, processor_regions in regions_by_processor.items():
-            # Get processor from registry
             processor_function = component_registry.get_region_processor(processor_name)
             if processor_function is None:
                 self.logger.error(
                     f"Region processor '{processor_name}' not found in registry"
                 )
-                continue
+                raise BadConfigSource(
+                    f"Region processor '{processor_name}' not found in registry"
+                )
 
             try:
                 # Call the registered processor
-                processor_parsed_regions = processor_function(
+                # FIXME: region_parser_config and regions_config need to be corrected, as the semantics are wrong
+                processor_parsed_region = processor_function(
                     context=context,
-                    parent_section=parent,
+                    parent=parent,
+                    section=section,
                     region_parser_config=region_parser_config,
                     regions_config=processor_regions,
-                    template_fields=layer_config['template_fields'],
                 )
 
-                parsed_regions.extend(processor_parsed_regions)
+                parsed_regions.extend(processor_parsed_region)
                 self.logger.info(
-                    f"Processor '{processor_name}' parsed {len(processor_parsed_regions)} regions"
+                    f"Processor parsed '{processor_name}' > {processor_parsed_region} regions"
                 )
 
             except Exception as e:
@@ -209,7 +211,7 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
                 raise
 
         # Process the results and create regions
-        self._create_regions_from_results(context, parent, parsed_regions)
+        # self._create_regions_from_results(context, parent, parsed_regions)
 
     def _group_regions_by_processor(
         self, regions_config: List[Dict]
@@ -226,7 +228,6 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
         regions_by_processor = {}
 
         for region_config in regions_config:
-            # Get the role from the region config
             role = region_config.get('role')
             if not role:
                 self.logger.warning(
@@ -235,6 +236,7 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
                 continue
 
             # Map role to processor name
+            print('_role_to_processor = ', role)
             processor_name = self._role_to_processor.get(role)
             if processor_name is None:
                 self.logger.warning(f"No processor found for role '{role}'")
