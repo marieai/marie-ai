@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Dict, List, Optional
 
 from marie.extract.models.base import Location
 from marie.extract.models.exec_context import ExecutionContext
@@ -6,6 +6,24 @@ from marie.extract.models.match import MatchSection, ScanResult, Span
 from marie.extract.models.page_span import PageSpan
 from marie.extract.structures import UnstructuredDocument
 from marie.extract.structures.line_with_meta import LineWithMeta
+
+
+def pluck_lines_by_span(
+    document: UnstructuredDocument, span: Span
+) -> List[LineWithMeta]:
+    """
+    Given a document and a span, returns the lines from the document
+    that fall within the span.
+    """
+    assert document is not None
+    assert span is not None
+
+    page_id = span.page
+    lines = document.lines_for_page(page_id)
+    start_line = span.start_line_id
+    end_line = span.end_line_id
+
+    return [line for line in lines if start_line <= line.metadata.line_id < end_line]
 
 
 def create_page_span_from_lines(
@@ -150,3 +168,39 @@ def pagespan_from_start_stop(
         )
 
     return page_span
+
+
+def create_aggregate_span(spans: List[Span]) -> PageSpan:
+    """
+    Create an aggregate span that covers all input spans.
+
+    Args:
+        spans: List of spans to aggregate
+
+    Returns:
+        PageSpan: Combined span covering all input spans
+    """
+    aggregate_span = PageSpan()
+    for span in spans:
+        aggregate_span.add(span)
+    return aggregate_span
+
+
+def build_line_to_page_mapping(spans: List[Span]) -> Dict[int, int]:
+    """
+    Build a mapping from line numbers to page numbers for efficient lookup.
+
+    Args:
+        spans: List of spans to process
+
+    Returns:
+        Dict mapping line numbers to page numbers
+    """
+    if spans is None:
+        return {}
+
+    line_to_page_map = {}
+    for span in spans:
+        for line_num in range(span.y, span.y + span.h):
+            line_to_page_map[line_num] = span.page
+    return line_to_page_map

@@ -220,10 +220,20 @@ class UnstructuredDocument:
         Insert a new region into the document.
 
         :param region: StructuredRegion object to be added to the document.
+                      The region must have 'source' and 'source_layer' tags set
+                      for proper traceability.
+        :raises ValueError: If region is not a StructuredRegion instance or if
+                           required traceability tags are missing.
         """
         if not isinstance(region, StructuredRegion):
             raise ValueError(
                 "The object to insert must be an instance of StructuredRegion."
+            )
+
+        # Validate that required tags are present for traceability
+        if "source" not in region.tags:
+            raise ValueError(
+                f"Region {region.region_id or 'unknown'} is missing required 'source' tag for traceability"
             )
 
         self.regions.append(region)

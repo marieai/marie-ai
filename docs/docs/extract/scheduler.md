@@ -1,4 +1,3 @@
-
 # Marie Scheduler: Execution and Scheduling Behavior
 
 ## Overview

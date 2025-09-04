@@ -202,8 +202,6 @@ def java_to_python_date_format(java_format: str) -> str:
             i += 1
 
     converted = ''.join(result)
-    print('java_format ', java_format)
-    print('result ', result)
     return converted
 
 

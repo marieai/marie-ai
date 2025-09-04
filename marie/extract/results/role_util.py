@@ -1,4 +1,3 @@
-# Python
 from typing import Optional, Tuple
 
 from marie.extract.structures.structured_region import SectionRole

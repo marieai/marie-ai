@@ -779,6 +779,11 @@ def process_extractions_table(
                     cfg=mp_cfg,
                 )
             if region:
+                #  source tracking
+                region.tags.update(
+                    {"source": 'result-parser', "processor_generated": False}
+                )
+
                 doc.insert_region(region)
         except Exception as e:
             logger.error(

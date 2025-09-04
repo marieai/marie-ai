@@ -11,9 +11,9 @@ from marie.extract.parser.base import (
     parse_markdown_table,
     split_markdown_sections,
 )
+from marie.extract.results.role_util import normalize_role
 from marie.extract.structures.cell_with_meta import CellWithMeta
 from marie.extract.structures.line_with_meta import LineWithMeta
-from marie.extract.structures.roles import normalize_role
 from marie.extract.structures.structured_region import (
     KeyValue,
     KVList,
@@ -167,8 +167,6 @@ class MarkdownRegionParser:
         )
         inst.section_role_hints = role_hints
         return inst
-
-    # ---------------------------- Public API ----------------------------
 
     def summary(self) -> Dict[str, object]:
         """

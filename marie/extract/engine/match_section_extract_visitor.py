@@ -16,6 +16,7 @@ from marie.extract.models.match import (
     MatchSectionType,
 )
 from marie.extract.models.span import Span
+from marie.extract.results.span_util import pluck_lines_by_span
 from marie.extract.structures.concrete_annotations import TypedAnnotation
 from marie.extract.structures.line_with_meta import LineWithMeta
 from marie.extract.structures.structured_region import (
@@ -259,6 +260,9 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             for structured_section in region.sections_flat():
                 role_hint = structured_section.tags.get("role_hint")
                 if not role_hint:
+                    self.logger.warning(
+                        f'Role hint for section {structured_section.title} not found.'
+                    )
                     continue
 
                 # Find the parsing rule for this section's role hint.
@@ -273,7 +277,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
                 if not section_rule:
                     raise ValueError(
-                        "No rule for this role_hint, so we can't process it."
+                        f"No rule for  role_hint `{role_hint}` so we can't process it."
                     )
                     # continue  # No rule for this role_hint, so we can't process it.
 
@@ -1127,15 +1131,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
         for span in spans:
             self.logger.info(f"Processing span: {span}")
-            page_id = span.page
-            lines = document.lines_for_page(page_id)
-            # Determine line range based on span location
-            start_line = span.y
-            end_line = start_line + span.h
-
-            plucked_lines = [
-                line for line in lines if start_line <= line.metadata.line_id < end_line
-            ]
+            plucked_lines = pluck_lines_by_span(document, span)
 
             for line in plucked_lines:
                 annotations = line.annotations

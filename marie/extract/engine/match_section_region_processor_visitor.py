@@ -1,13 +1,16 @@
 from collections import deque
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from omegaconf import OmegaConf
 
+from marie.excepts import BadConfigSource, ProcessingError
 from marie.extract.engine.base import BaseProcessingVisitor
 from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import MatchSection, MatchSectionType
 from marie.extract.models.span import Span
 from marie.extract.registry import component_registry
+from marie.extract.structures import UnstructuredDocument
+from marie.extract.structures.structured_region import StructuredRegion
 from marie.logging_core.logger import MarieLogger
 
 
@@ -17,9 +20,11 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
     Each processor can specialize in handling specific region types (remarks, codes, notes, etc.).
     """
 
-    def __init__(self, enabled: bool):
+    def __init__(self, enabled: bool, fail_fast: bool = True):
         super().__init__(enabled)
         self.logger = MarieLogger(context=self.__class__.__name__)
+        self._role_to_processor = {}
+        self.fail_fast = fail_fast
 
     def visit(self, context: ExecutionContext, parent: MatchSection) -> None:
         self.logger.info("----------------------------------------")
@@ -56,9 +61,6 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
         ), "Section must be associated with a layer."
         assert context.document is not None, "Context must include a document."
 
-        print('PROCESSING MATCH SECTION REGION PARSER')
-
-        # Check if this section should be processed by section processor
         if not self._should_process_section(section):
             return
 
@@ -67,9 +69,8 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
         if layer_config is None:
             return
 
-        # Process regions using appropriate processors
-        self._process_sections_with_processors(context, parent, layer_config)
-
+        self._build_role_processor_mapping(layer_config['region_parser_config'])
+        self._process_sections_with_processors(context, parent, section, layer_config)
         # self.process_regions(context, parent, section)
 
     def process_regions(
@@ -95,9 +96,6 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
 
         region_parser_cfg = OmegaConf.to_container(region_parser_cfg, resolve=True)
         regions_cfg = OmegaConf.to_container(regions_cfg, resolve=True)
-
-        print('region_parser_cfg = ', region_parser_cfg)
-        print('regions_cfg = ', regions_cfg)
 
     def _should_process_section(self, section: MatchSection) -> bool:
         """
@@ -148,8 +146,6 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
         Args:
             parser_config: Parser configuration containing processor definitions
         """
-        self._role_to_processor = {}
-
         processors_config = parser_config.get('processors', {})
         for processor_name, processor_config in processors_config.items():
             role = processor_config.get('role')
@@ -159,57 +155,143 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
         self.logger.info(f"Built role-to-processor mapping: {self._role_to_processor}")
 
     def _process_sections_with_processors(
-        self, context: ExecutionContext, parent: MatchSection, layer_config: Dict
+        self,
+        context: ExecutionContext,
+        parent: MatchSection,
+        section: MatchSection,
+        layer_config: Dict,
     ) -> None:
         """
-        Process regions using registered processors based on roles.
+        Execute registered processors to parse regions based on their configured roles.
+
+        This method orchestrates the processing pipeline by:
+        1. Grouping regions by their assigned processors
+        2. Executing each processor with its designated regions
+        3. Collecting and validating the results
+        4. Integrating parsed regions into the document structure
 
         Args:
-            context: Execution context
-            parent: Parent match section
+            context: Execution context containing document and processing state
+            parent: Parent match section being processed
             layer_config: Layer configuration containing region parser settings
+
+        Raises:
+            BadConfigSource: When a required processor is not found in the registry
+            ProcessingError: When processor execution fails (in fail_fast mode or after all processors if fail_fast=False)
         """
+
         region_parser_config = layer_config['region_parser_config']
         regions_config = layer_config['regions_config']
 
-        parsed_regions = []
+        if not regions_config:
+            self.logger.debug("No regions configured for processing")
+            return
 
-        # Group regions by processor based on their roles
         regions_by_processor = self._group_regions_by_processor(regions_config)
 
-        # Process each processor group
+        if not regions_by_processor:
+            self.logger.warning("No processor mappings found for configured regions")
+            return
+
+        processed_results: List[StructuredRegion] = []
+        processing_errors = []
+        processing_stats = {
+            "successful": 0,
+            "failed": 0,
+            "total": len(regions_by_processor),
+        }
+
         for processor_name, processor_regions in regions_by_processor.items():
-            # Get processor from registry
             processor_function = component_registry.get_region_processor(processor_name)
             if processor_function is None:
-                self.logger.error(
+                raise BadConfigSource(
                     f"Region processor '{processor_name}' not found in registry"
                 )
-                continue
 
             try:
-                # Call the registered processor
-                processor_parsed_regions = processor_function(
+                # Execute processor with standardized parameters
+                # FIXME: region_parser_config and regions_config need to be corrected, as the semantics are wrong
+                processor_result = processor_function(
                     context=context,
-                    parent_section=parent,
+                    parent=parent,
+                    section=section,
                     region_parser_config=region_parser_config,
                     regions_config=processor_regions,
-                    template_fields=layer_config['template_fields'],
                 )
 
-                parsed_regions.extend(processor_parsed_regions)
+                # Validate processor output
+                self._validate_processor_result(processor_result, processor_name)
+
+                processed_results.append(processor_result)
+                processing_stats["successful"] += 1
+
                 self.logger.info(
-                    f"Processor '{processor_name}' parsed {len(processor_parsed_regions)} regions"
+                    f"Processor parsed '{processor_name}' > {processor_result} regions"
                 )
 
             except Exception as e:
-                self.logger.error(
-                    f"Error executing processor '{processor_name}': {str(e)}"
-                )
-                raise
+                processing_stats["failed"] += 1
+                error_msg = f"Failed to execute processor '{processor_name}': {str(e)}"
+                self.logger.error(error_msg, exc_info=True)
 
-        # Process the results and create regions
-        self._create_regions_from_results(context, parent, parsed_regions)
+                if self.fail_fast:
+                    # Re-raise with context for proper error handling upstream
+                    raise ProcessingError(error_msg) from e
+                else:
+                    processing_errors.append((processor_name, str(e)))
+
+        if not self.fail_fast and processing_errors:
+            error_summary = "; ".join(
+                [f"{name}: {error}" for name, error in processing_errors]
+            )
+            raise ProcessingError(f"Multiple processors failed: {error_summary}")
+
+        self._integrate_processed_regions(context, processed_results)
+        self.logger.info(
+            f"Region processing completed: {processing_stats['successful']}/{processing_stats['total']} processors successful"
+        )
+
+    def _validate_processor_result(self, result: Any, processor_name: str) -> None:
+        """
+        Validate processor output conforms to expected structure.
+
+        Args:
+            result: Output from processor execution
+            processor_name: Name of processor for error reporting
+
+        Raises:
+            ProcessingError: When result validation fails
+        """
+        ...
+
+    def _integrate_processed_regions(
+        self, context: ExecutionContext, processed_results: List[StructuredRegion]
+    ) -> None:
+        """
+        Integrate processed regions into the document structure.
+
+        Args:
+            context: Execution context containing the document
+            processed_results: List of processed region data
+        """
+        if not processed_results:
+            self.logger.debug("No processed regions to integrate")
+            return
+
+        document: UnstructuredDocument = context.document
+        integration_count = 0
+
+        for region in processed_results:
+            try:
+                document.insert_region(region)
+                integration_count += 1
+            except Exception as e:
+                self.logger.error(f"Failed to integrate region '{region}': {str(e)}")
+                # Continue processing other regions rather than failing completely
+                continue
+        self.logger.info(
+            f"Successfully integrated {integration_count} regions into document"
+        )
 
     def _group_regions_by_processor(
         self, regions_config: List[Dict]
@@ -226,7 +308,6 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
         regions_by_processor = {}
 
         for region_config in regions_config:
-            # Get the role from the region config
             role = region_config.get('role')
             if not role:
                 self.logger.warning(
@@ -234,7 +315,6 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
                 )
                 continue
 
-            # Map role to processor name
             processor_name = self._role_to_processor.get(role)
             if processor_name is None:
                 self.logger.warning(f"No processor found for role '{role}'")
