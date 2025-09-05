@@ -275,11 +275,19 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     None,
                 )
 
+                # Not every role_hint needs to have a rule; some may be informational only or processed differently aka(like lookup tables)
+                # if the section is intereset then it needs to have a rule to be processed even if it is a no-op rule
+
                 if not section_rule:
-                    raise ValueError(
-                        f"No rule for  role_hint `{role_hint}` so we can't process it."
+                    # USED FOR DEBUG ONLY
+                    if False:
+                        raise ValueError(
+                            f"No rule for role_hint `{role_hint}` so we can't process it."
+                        )
+                    self.logger.warning(
+                        f"No rule for role_hint `{role_hint}` so we can't process it."
                     )
-                    # continue  # No rule for this role_hint, so we can't process it.
+                    continue  # No rule for this role_hint, so we can't process it.
 
                 parse_method = section_rule.get("parse")
                 self.logger.info(

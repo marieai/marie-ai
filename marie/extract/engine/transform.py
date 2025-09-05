@@ -65,7 +65,7 @@ def convert_to_decimal_money(field_value: str) -> float:
     if is_negative:
         result = -result
 
-    logger.info(
+    logger.debug(
         f"Converted Value: {result:10.2f}  |  Original : {field_value_orig.strip()}"
     )
     return result
