@@ -45,7 +45,7 @@ class ComponentRegistry:
                 if name in self._parsers:
                     logger.warning(f"Parser '{name}' already registered; overwriting.")
                 self._parsers[name] = coerce_parser_fn(obj)  # type: ignore[arg-type]
-            logger.debug(f"Registered parser: {name} ({type(obj).__name__})")
+            logger.info(f"Registered parser: {name} ({type(obj).__name__})")
             return obj
 
         return decorator
@@ -57,7 +57,7 @@ class ComponentRegistry:
                     logger.warning(f"Template builder '{name}' already registered.")
                     raise BadConfigSource(f"Template builder {name} already registered")
                 self._template_builders[name] = coerce_builder_fn(obj)  # type: ignore[arg-type]
-            logger.debug(f"Registered template_builder: {name} ({type(obj).__name__})")
+            logger.info(f"Registered template_builder: {name} ({type(obj).__name__})")
             return obj
 
         return decorator
@@ -71,7 +71,7 @@ class ComponentRegistry:
                     )
                     raise BadConfigSource(f"Validator '{name}' already registered")
                 self._validators[name] = coerce_validator_instance(obj, name)
-            logger.debug(f"Registered validator: {name} ({type(obj).__name__})")
+            logger.info(f"Registered validator: {name} ({type(obj).__name__})")
             return obj
 
         return decorator

@@ -237,3 +237,66 @@ class UnstructuredDocument:
             )
 
         self.regions.append(region)
+
+    def regions_by_role(
+        self,
+        region_role: str | List[str],
+        page_id: Optional[int] = None,
+        case_insensitive: bool = True,
+    ) -> List[StructuredRegion]:
+        """
+        Retrieve all regions that contain at least one section whose tags['role_hint']
+        matches the given role (or any of the given roles).
+
+        Args:
+            region_role: A single role or list of roles to match against section tags['role_hint'].
+            page_id: If provided, restrict results to regions present on this page.
+            case_insensitive: If True, perform case-insensitive comparisons.
+
+        Returns:
+            List[StructuredRegion]: Regions that include at least one section whose role_hint matches.
+        """
+        # Normalize target roles
+        targets = (
+            {region_role} if isinstance(region_role, str) else set(region_role or [])
+        )
+        targets = {
+            str(t).strip() for t in targets if t is not None and str(t).strip() != ""
+        }
+        if not targets:
+            return []
+        if case_insensitive:
+            targets = {t.lower() for t in targets}
+
+        def _on_page(r: StructuredRegion) -> bool:
+            if page_id is None:
+                return True
+            if r.span is not None:
+                return page_id in pagespan_pages(r.span)
+            # Fallback: check parts if region span not present
+            try:
+                parts = r.parts or []
+                for part in parts:
+                    ps = part.span
+                    if ps is not None and ps.page == page_id:
+                        return True
+            except Exception:
+                pass
+            return False
+
+        def _has_role_hint_match(r: StructuredRegion) -> bool:
+            try:
+                sections = r.sections_flat()
+                for sec in sections:
+                    tags = sec.tags or {}
+                    rh = tags.get("role_hint")
+                    if not rh:
+                        continue
+                    cmp_val = rh.lower() if case_insensitive else rh
+                    if cmp_val in targets:
+                        return True
+            except Exception:
+                return False
+            return False
+
+        return [r for r in self.regions if _on_page(r) and _has_role_hint_match(r)]

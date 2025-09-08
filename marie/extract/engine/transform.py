@@ -1,11 +1,14 @@
 import importlib
 import re
-import sys
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, TypeAlias, Union
 
+from marie.extract.structures import UnstructuredDocument
 from marie.logging_core.predefined import default_logger as logger
+
+TransformMapping: TypeAlias = Dict[str, Union[str, None]]
+TransformReturnType: TypeAlias = Union[TransformMapping, List[TransformMapping]]
 
 
 def convert_name_format(value: str, field_def: Dict[str, Any]) -> dict[str, None] | str:
@@ -101,8 +104,8 @@ def convert_money_format(
 
 
 def transform_field_value(
-    field_def: Dict[str, Any], value: str
-) -> str | float | dict[str, None]:
+    field_def: Dict[str, Any], value: str, document: UnstructuredDocument | None = None
+) -> TransformReturnType:
     """Transform field value based on field type."""
     if not value:
         return value
@@ -128,7 +131,7 @@ def transform_field_value(
             module_name, func_name = custom_transformer_path.rsplit(".", 1)
             module = importlib.import_module(module_name)
             transformer_func = getattr(module, func_name)
-            return transformer_func(value, field_def)
+            return transformer_func(value, field_def, document=document)
         except (ImportError, AttributeError, ValueError) as e:
             logger.error(
                 f"Could not resolve or use transform function '{custom_transformer_path}': {e}"

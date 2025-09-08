@@ -1,12 +1,12 @@
 import re
 import uuid
 from collections import deque
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from omegaconf import OmegaConf
 
 from marie.extract.engine.base import BaseProcessingVisitor
-from marie.extract.engine.transform import transform_field_value
+from marie.extract.engine.transform import TransformReturnType, transform_field_value
 from marie.extract.models.definition import FieldMapping, FieldScope
 from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import (
@@ -17,15 +17,13 @@ from marie.extract.models.match import (
 )
 from marie.extract.models.span import Span
 from marie.extract.results.span_util import pluck_lines_by_span
+from marie.extract.structures import UnstructuredDocument
 from marie.extract.structures.concrete_annotations import TypedAnnotation
 from marie.extract.structures.line_with_meta import LineWithMeta
 from marie.extract.structures.structured_region import (
     KVList,
-    RegionPart,
     RowRole,
     Section,
-    SectionRole,
-    StructuredRegion,
     TableBlock,
     TableRow,
     TableSeries,
@@ -282,12 +280,12 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     # USED FOR DEBUG ONLY
                     if False:
                         raise ValueError(
-                            f"No rule for role_hint `{role_hint}` so we can't process it."
+                            f"No rule for role_hint `{role_hint}` so we can't process it on layer `{layer.layer_name}`."
                         )
                     self.logger.warning(
-                        f"No rule for role_hint `{role_hint}` so we can't process it."
+                        f"No rule for role_hint `{role_hint}` so we can't process it on layer `{layer.layer_name}`."
                     )
-                    continue  # No rule for this role_hint, so we can't process it.
+                    continue
 
                 parse_method = section_rule.get("parse")
                 self.logger.info(
@@ -300,6 +298,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         f"Table processing for region with role_hint '{role_hint}'."
                     )
                     self._process_region_as_table(
+                        document,
                         regions_cfg,
                         section,  # The original MatchSection to populate with results
                         structured_section,
@@ -475,10 +474,10 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     annotations=[],
                 )
 
-                created = self.create_fields(
+                created_fields = self.create_fields(
                     field_def, value_text, transformed_value, faux_line_with_meta
                 )
-                extracted_fields.extend(created)
+                extracted_fields.extend(created_fields)
 
         # Attach kv fields to the matched section.
         # TODO: we will change this to a dictionary of field types
@@ -488,6 +487,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
     def _process_region_as_table(
         self,
+        document: UnstructuredDocument,
         regions_cfg: List[Dict],
         match_section_to_populate: MatchSection,
         structured_section: Section,
@@ -668,6 +668,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
             # Extract rows using the resolved column indices
             matched_field_rows: List[MatchFieldRow] = self._build_matched_field_rows(
+                document=document,
                 body_rows=body_rows,
                 columns_to_process=columns_to_process,
                 page_id=page_id,
@@ -678,6 +679,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
     def _build_matched_field_rows(
         self,
+        document: UnstructuredDocument,
         body_rows: List[TableRow],
         columns_to_process: Dict[str, Dict[str, Any]],
         page_id: int,
@@ -745,14 +747,15 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 field_def = dict(template_fields_repeating.get(field_name, {}) or {})
                 field_def["name"] = field_name
 
-                transformed_value: Union[str, float, dict[str, None]] = (
-                    transform_field_value(field_def, cell_value)
+                transformed_value: TransformReturnType = transform_field_value(
+                    field_def, cell_value, document
                 )
-                self.logger.info(f"transformed_value : {transformed_value}")
+                self.logger.info(f"transformed_value XXX : {transformed_value}")
 
                 fields = self.create_fields(
                     field_def, cell_value, transformed_value, root_line
                 )
+                self.logger.info(f"transformed_value fields : {len(fields)}  {fields}")
                 extracted_cells.extend(fields)
 
             matched_field_row: MatchFieldRow = MatchFieldRow(fields=extracted_cells)
@@ -1196,7 +1199,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         self,
         field_def: dict[str, Any],
         value: str,
-        transformed_value: Union[str | float | dict[str, None]],
+        transformed_value: TransformReturnType,
         line: LineWithMeta,
     ) -> List[Field]:
 
@@ -1207,58 +1210,55 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             if field_def.get("derived_fields", None)
             else None
         )
-        # FIXME : This is a hack
-        if derived_fields and not isinstance(transformed_value, Dict):
-            transformed_value = {
-                key: None for key in derived_fields.keys()
-            }  # THIS IS JUST TO GET SOME DATA LOADED
-            # raise ValueError(f'We have derived config, but transformed_value is not a dict : {transformed_value}')
 
-        composite_field = False
-        reference_uuid = None
-        fields = []
-        src_value = transformed_value
+        fields: List[Field] = []
 
-        if derived_fields:
-            composite_field = True
-            src_value = value
-            reference_uuid = uuid.uuid4()  # annotation.reference_uuid
+        def _build_group(mapping: Optional[Dict[str, Any]]) -> None:
+            # If we have derived fields, we create a composite parent field and link children via reference_uuid
+            composite_field = derived_fields is not None
+            reference_uuid = uuid.uuid4() if composite_field else None
 
-        field = Field(
-            field_name=field_name,
-            field_type=field_def.get("type"),
-            is_required=False,
-            value=stringify(src_value),
-            value_original=stringify(value),
-            composite_field=composite_field,
-            x=0,
-            y=0,
-            width=0,
-            height=0,
-            date_format=field_def.get("date_format"),
-            name_format=field_def.get("name_format"),
-            column_name=field_def.get("column_name"),
-            page=page_id,
-            xdpi=300,
-            ydpi=300,
-            confidence=1,
-            scrubbed=True,  # field_def.get("scrubbed", False),
-            uuid=reference_uuid,  # annotation.uuid,
-            reference_uuid=None,  # annotation.reference_uuid,
-            layer_name="main-layer",
-        )
-        fields.append(field)
+            # For composite parents, keep original "value" as the parent value (as before).
+            # Otherwise, use transformed_value (or mapping if provided, though mapping is only for derived children).
+            parent_src_value = value if composite_field else transformed_value
 
-        if derived_fields:
-            for derived_key, derived_value in derived_fields.items():
-                map_value = transformed_value.get(derived_key, None)
-                derived_field = {}
-                date_format = None
-                name_format = None
+            parent_field = Field(
+                field_name=field_name,
+                field_type=field_def.get("type"),
+                is_required=False,
+                value=stringify(parent_src_value),
+                value_original=stringify(value),
+                composite_field=composite_field,
+                x=0,
+                y=0,
+                width=0,
+                height=0,
+                date_format=field_def.get("date_format"),
+                name_format=field_def.get("name_format"),
+                column_name=field_def.get("column_name"),
+                page=page_id,
+                xdpi=300,
+                ydpi=300,
+                confidence=1,
+                scrubbed=True,
+                uuid=reference_uuid,
+                reference_uuid=None,
+                layer_name="main-layer",
+            )
+            fields.append(parent_field)
 
-                field = Field(
-                    field_name=derived_value,
-                    field_type=derived_field.get("type"),
+            if not composite_field:
+                return
+
+            # Create derived child fields linked to the parent
+            for derived_key, derived_value_name in derived_fields.items():
+                map_value = None
+                if isinstance(mapping, dict):
+                    map_value = mapping.get(derived_key, None)
+
+                child_field = Field(
+                    field_name=derived_value_name,
+                    field_type=None,
                     is_required=False,
                     value=stringify(map_value),
                     value_original=None,
@@ -1267,9 +1267,9 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     y=0,
                     width=0,
                     height=0,
-                    date_format=date_format,
-                    name_format=name_format,
-                    column_name=derived_value,
+                    date_format=None,
+                    name_format=None,
+                    column_name=derived_value_name,
                     page=page_id,
                     xdpi=300,
                     ydpi=300,
@@ -1279,6 +1279,21 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     reference_uuid=reference_uuid,
                     layer_name="main-layer",
                 )
-                fields.append(field)
+                fields.append(child_field)
+
+        # Handle TransformReturnType which can be Dict[str, str|None] or List[Dict[str, str|None]]
+        if derived_fields:
+            if isinstance(transformed_value, list):
+                # Build a composite parent + children group for each mapping
+                for mapping in transformed_value:
+                    _build_group(mapping if isinstance(mapping, dict) else None)
+            elif isinstance(transformed_value, dict):
+                _build_group(transformed_value)
+            else:
+                # Fallback: still create a parent + children with None values
+                _build_group(None)
+        else:
+            # No derived fields: create a single non-composite field using transformed_value
+            _build_group(None)
 
         return fields
