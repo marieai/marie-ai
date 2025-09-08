@@ -30,6 +30,7 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import mark_as_complete
 from marie.query_planner.base import (
     NoopQueryDefinition,
+    PlannerProbe,
     Query,
     QueryDefinition,
     QueryPlan,
@@ -1013,7 +1014,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     # Job level 0 is the entrypoint of a new DAG
                     if work_info.job_level == 0:
                         precheck: ValidationResult = (
-                            await self._dag_activation_precheck(work_info)
+                            await self._dag_activation_precheck(dag, work_info)
                         )
                         if precheck.status == ValidationStatus.FAILURE:
                             self.logger.error(
@@ -2595,7 +2596,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 )
                 await asyncio.sleep(5)
 
-    async def _dag_activation_precheck(self, work_info: WorkInfo) -> ValidationResult:
+    async def _dag_activation_precheck(
+        self, dag: QueryPlan, work_info: WorkInfo
+    ) -> ValidationResult:
         if (
             os.environ.get("MARIE_DISABLE_DAG_ACTIVATION_PRECHECK", "false").lower()
             == "true"
@@ -2616,10 +2619,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.logger.debug(f"Starting {planner_name} DAG probe dag_id: {dag_id}")
         try:
             if asyncio.iscoroutinefunction(probe_fn):
-                return await probe_fn(dag_id, work_info.data)
+                return await probe_fn(dag, work_info.data)
             else:
                 return await self._loop.run_in_executor(
-                    self._probe_executor, probe_fn, dag_id, work_info.data
+                    self._probe_executor, probe_fn, dag, work_info.data
                 )
         except Exception as e:
             self.logger.error(f"Error in probe method: {e}")
