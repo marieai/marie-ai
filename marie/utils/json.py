@@ -17,7 +17,7 @@ class EnhancedJSONEncoder(NumpyEncoder):
         return super().default(o)
 
 
-def store_json_object(results, json_path) -> None:
+def store_json_object(results, json_path, pretty = False) -> None:
     """Store JSON object"""
     with open(os.path.expanduser(json_path), "w") as json_file:
         json.dump(
@@ -26,7 +26,7 @@ def store_json_object(results, json_path) -> None:
             sort_keys=False,
             separators=(",", ": "),
             ensure_ascii=True,
-            indent=2,
+            indent=2 if pretty else None,
             cls=EnhancedJSONEncoder,
         )
 
