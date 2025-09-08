@@ -1,5 +1,7 @@
 import base64
 import io
+import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Union
 
 import cv2
@@ -23,7 +25,7 @@ from marie.utils.resize_image import resize_image
 from marie.utils.utils import ensure_exists
 
 
-def convert_template_selectors(
+def convert_template_selectorsV1(
     selectors: List[TemplateSelector],
     window_size: Union[List[int], tuple[int, int]],
 ):
@@ -79,12 +81,81 @@ def convert_template_selectors(
             == len(template_labels)
             == len(template_texts)
         )
-
+        # Converting 351 selector(s)
         ensure_exists("/tmp/dim/template")
         for template_frame in template_frames:
             cv2.imwrite(
                 f"/tmp/dim/template/template_frame_SELECTOR_{i}.png", template_frame
             )
+
+    return template_frames, template_bboxes, template_labels, template_texts
+
+
+def convert_template_selectors(
+    selectors: List[TemplateSelector],
+    window_size: Union[List[int], tuple[int, int]],
+):
+    """
+    Convert TemplateSelector to Template Matching Selectors
+    :param selectors:
+    :param window_size:
+    :return:
+    """
+
+    print(f"Converting {len(selectors)} selector(s)")
+
+    def process_selector(args):
+        i, selector = args
+        buf = io.BytesIO(base64.b64decode(selector.frame))
+        image = Image.open(buf)
+        image = image.convert("RGB")
+        frame = np.array(image)
+        frame = frame[:, :, ::-1].copy()
+
+        boxes_xywh = [
+            selector.bbox
+        ]  # currently only one bbox is supported per selector
+        label = selector.label
+        text = selector.text
+
+        if selector.create_window:
+            frame, coord = resize_image(
+                frame,
+                window_size,
+                keep_max_size=True,
+            )
+            boxes_xywh = [coord]
+
+        (
+            sel_template_frames,
+            sel_template_bboxes,
+        ) = BaseTemplateMatcher.extract_windows(
+            frame, boxes_xywh, window_size, allow_padding=True
+        )
+
+        if False:
+            ensure_exists("/tmp/dim/template")
+            for template_frame in sel_template_frames:
+                cv2.imwrite(
+                    f"/tmp/dim/template/template_frame_SELECTOR_{i}.png", template_frame
+                )
+        return sel_template_frames, sel_template_bboxes, label, text
+
+    template_frames = []
+    template_bboxes = []
+    template_labels = []
+    template_texts = []
+
+    cpu_count = os.cpu_count() or 1
+    max_workers = max(1, cpu_count // 4)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = executor.map(process_selector, enumerate(selectors))
+        for sel_template_frames, sel_template_bboxes, label, text in results:
+            template_frames.extend(sel_template_frames)
+            template_bboxes.extend(sel_template_bboxes)
+            template_labels.append(label)
+            template_texts.append(text)
 
     return template_frames, template_bboxes, template_labels, template_texts
 

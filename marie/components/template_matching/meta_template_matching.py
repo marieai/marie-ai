@@ -1,4 +1,6 @@
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Union
 
 import cv2
@@ -70,6 +72,7 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         self.batch_size = batch_size
         self.labels = labels
         self.progress_bar = False
+        self.lock = threading.Lock()
 
         resolved_devices, _ = initialize_device_settings(
             devices=devices, use_cuda=use_gpu, multi_gpu=False
@@ -146,68 +149,81 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
                 temp_y : temp_y + temp_h, temp_x : temp_x + temp_w
             ]
 
-            cv2.imwrite(f"/tmp/dim/meta_{idx}_fragment.png", fragment)
+            # cv2.imwrite(f"/tmp/dim/meta_{idx}_fragment.png", fragment)
 
             ngram = len(template_text.split(" "))
             ngrams = [ngram - 1, ngram, ngram + 1]
             ngrams = [n for n in ngrams if 0 < n <= len(page_words)]
 
-            candidates = []
-            for ngram in ngrams:
-                for i in range(len(page_words) - ngram + 1):
-                    ngram_words = page_words[i : i + ngram]
-                    ngram_boxes = page_boxes[i : i + ngram]
+            ngram = len(template_text.split(" "))
+            ngrams = [ngram - 1, ngram, ngram + 1]
+            ngrams = [n for n in ngrams if 0 < n <= len(page_words)]
 
-                    # # each ngram word should be at least 3 characters
-                    # if any(len(w) < min_word_length for w in ngram_words):
-                    #     self.logger.debug(
-                    #         f"Skipping ngram {ngram_words} as it is too short : {min_word_length}"
-                    #     )
-                    #     continue
-                    # TODO add check for distance between words in ngram
+            def process_ngram_i(params):
+                _ngram, i = params
+                ngram_words = page_words[i : i + _ngram]
+                ngram_boxes = page_boxes[i : i + _ngram]
 
-                    if word_lines:
-                        ngram_lines = word_lines[i : i + ngram]
-                        if len(set(ngram_lines)) > 1:
-                            self.logger.debug(
-                                f"Skipping ngram {ngram_words} as it is not in the same line"
-                            )
-                            continue
+                # # each ngram word should be at least 3 characters
+                # if any(len(w) < min_word_length for w in ngram_words):
+                #     self.logger.debug(
+                #         f"Skipping ngram {ngram_words} as it is too short : {min_word_length}"
+                #     )
+                #     continue
+                # TODO add check for distance between words in ngram
 
-                    key = "_".join(ngram_words)
-                    box = merge_bboxes_as_block(ngram_boxes)
-                    x, y, w, h = box
-                    ngram_snippet = frame[y : y + h, x : x + w :]
-
-                    ngram_words = " ".join(ngram_words).strip().upper()
-                    template_text = template_text.strip().upper()
-                    sim_val = round(
-                        self.score(ngram_words, template_text, ngram_snippet, fragment),
-                        3,
-                    )
-
-                    if ngram_words == template_text or sim_val > score_threshold:
-                        candidates.append(
-                            {
-                                "ngram": ngram,
-                                "words": ngram_words,
-                                "similarity": sim_val,
-                                "candidate": TemplateMatchResult(
-                                    bbox=box,
-                                    label=template_label,
-                                    score=sim_val,
-                                    similarity=sim_val,
-                                ),
-                            }
+                if word_lines:
+                    ngram_lines = word_lines[i : i + _ngram]
+                    if len(set(ngram_lines)) > 1:
+                        self.logger.debug(
+                            f"Skipping ngram {ngram_words} as it is not in the same line"
                         )
+                        return None
 
-                        if self.enable_visualization:
-                            ensure_exists(f"/tmp/fragments/meta/{key}")
-                            cv2.imwrite(
-                                f"/tmp/fragments/meta/{k}_{round(sim_val, 3)}.png",
-                                ngram_snippet,
-                            )
-                        k += 1
+                key = "_".join(ngram_words)
+                box = merge_bboxes_as_block(ngram_boxes)
+                x, y, w, h = box
+                ngram_snippet = frame[y : y + h, x : x + w :]
+
+                ngram_words_str = " ".join(ngram_words).strip().upper()
+                template_text_str = template_text.strip().upper()
+                sim_val = round(
+                    self.score(
+                        ngram_words_str, template_text_str, ngram_snippet, fragment
+                    ),
+                    3,
+                )
+
+                if ngram_words_str == template_text_str or sim_val > score_threshold:
+                    candidate = {
+                        "ngram": _ngram,
+                        "words": ngram_words_str,
+                        "similarity": sim_val,
+                        "candidate": TemplateMatchResult(
+                            bbox=box,
+                            label=template_label,
+                            score=sim_val,
+                            similarity=sim_val,
+                        ),
+                    }
+
+                    if self.enable_visualization:
+                        candidate["vis_data"] = (ngram_snippet, sim_val, key)
+                    return candidate
+                return None
+
+            tasks = []
+            for ngram_size in ngrams:
+                for i in range(len(page_words) - ngram_size + 1):
+                    tasks.append((ngram_size, i))
+
+            candidates = []
+            cpu_count = os.cpu_count() or 1
+            max_workers = max(1, cpu_count // 4)
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                results = executor.map(process_ngram_i, tasks)
+                candidates = [r for r in results if r]
 
             if candidates:
                 sorted_candidates = sorted(
@@ -236,35 +252,37 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         return predictions
 
     def get_embedding(self, text):
-        if text not in self.embedding_cache:
-            max_length = 1024
-            if len(text) > max_length:
-                text = text[:max_length]
-            self.embedding_cache[text] = self.embeddings_processor.get_embeddings(
-                [text], truncation=True, max_length=max_length
-            ).embeddings[0]
-        return self.embedding_cache[text]
+        with self.lock:
+            if text not in self.embedding_cache:
+                max_length = 1024
+                if len(text) > max_length:
+                    text = text[:max_length]
+                self.embedding_cache[text] = self.embeddings_processor.get_embeddings(
+                    [text], truncation=True, max_length=max_length
+                ).embeddings[0]
+            return self.embedding_cache[text]
 
     def get_embedding_image(
         self, image: np.ndarray, words: list, boxes: list
     ) -> np.ndarray:
         key = image.tobytes()
-        if key in self.cached_embeddings_clips:
-            return self.cached_embeddings_clips[key]
+        with self.lock:
+            if key in self.cached_embeddings_clips:
+                return self.cached_embeddings_clips[key]
 
-        # This is a pre-processing step to get the embeddings for the words and boxes in the image
-        # this is critical for the similarity calculation that we resize with PADDING and not just scaling
-        # image = resize_image(image, (224, 224))[0]
-        if image.shape[0] != 224 or image.shape[1] != 224:
-            raise ValueError("Image must be 224x224")
+            # This is a pre-processing step to get the embeddings for the words and boxes in the image
+            # this is critical for the similarity calculation that we resize with PADDING and not just scaling
+            # image = resize_image(image, (224, 224))[0]
+            if image.shape[0] != 224 or image.shape[1] != 224:
+                raise ValueError("Image must be 224x224")
 
-        image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        embedding = self.embeddings_processor_clip.get_embeddings(
-            texts=words, boxes=boxes, image=image
-        )
+            image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+            embedding = self.embeddings_processor_clip.get_embeddings(
+                texts=words, boxes=boxes, image=image
+            )
 
-        self.cached_embeddings_clips[key] = embedding.embeddings
-        return embedding.embeddings
+            self.cached_embeddings_clips[key] = embedding.embeddings
+            return embedding.embeddings
 
     def score(
         self,
