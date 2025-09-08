@@ -62,6 +62,7 @@ class QueryPlanRegistry:
     """Registry for query planner functions with wheel support."""
 
     _plans: Dict[str, Callable] = {}
+    _probes: Dict[str, Callable] = {}
     _external_modules_loaded: bool = False
 
     # Wheel management components (class-level)
@@ -124,6 +125,39 @@ class QueryPlanRegistry:
         return decorator
 
     @classmethod
+    def register_probe(cls, name: str, function: Callable = None):
+        """
+        Register a query plan probe function.
+
+        This probe is associated by name with a query planner and is called by
+        the scheduler as a pre-condition gate before starting a DAG.
+
+        :param name: The name to register the probe under (should match a planner name).
+        :param function: Optional. The function to register directly.
+        """
+        logger.info(f"Registering query plan probe: {name}")
+
+        def decorator(func: Callable) -> Callable:
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                return func(*args, **kwargs)
+
+            probe_name = name or func.__name__
+
+            if probe_name in cls._probes:
+                raise ValueError(
+                    f"Query plan probe '{probe_name}' is already registered"
+                )
+
+            cls._probes[probe_name] = wrapper
+            return wrapper
+
+        if function is not None:
+            return decorator(function)
+
+        return decorator
+
+    @classmethod
     def register_from_module(cls, planner_module: str) -> bool:
         """
         Registers a planner from the specified module.
@@ -162,6 +196,7 @@ class QueryPlanRegistry:
             'loaded': [],
             'failed': [],
             'total_planners': len(cls._plans),
+            'total_probes': len(cls._probes),
             'wheel_results': {},
         }
 
@@ -208,6 +243,7 @@ class QueryPlanRegistry:
         result['loaded'] = loaded_modules
         result['failed'].extend(failed_modules)
         result['total_planners'] = len(cls._plans)
+        result['total_probes'] = len(cls._probes)
 
         cls._external_modules_loaded = True
 
@@ -246,9 +282,24 @@ class QueryPlanRegistry:
             ) from e
 
     @classmethod
+    def get_probe(cls, planner_name: str) -> Optional[Callable]:
+        """
+        Get a query plan probe by its associated planner name.
+
+        :param planner_name: The name of the query planner.
+        :return: The probe callable if registered, otherwise None.
+        """
+        return cls._probes.get(planner_name)
+
+    @classmethod
     def list_planners(cls) -> list[str]:
         """Return a list of all registered planner names."""
         return list(cls._plans.keys())
+
+    @classmethod
+    def list_probes(cls) -> list[str]:
+        """Return a list of all registered probe names."""
+        return list(cls._probes.keys())
 
     @classmethod
     def get_planner_info(cls) -> Dict[str, Any]:
@@ -257,10 +308,13 @@ class QueryPlanRegistry:
 
         installed_wheels = cls._wheel_manager.get_installed_wheels()
         planners = cls.list_planners()
+        probes = cls.list_probes()
 
         info = {
             'total_planners': len(planners),
             'planner_names': planners,
+            'total_probes': len(probes),
+            'probe_names': probes,
             'external_loaded': cls._external_modules_loaded,
             'installed_wheels': {
                 name: {
@@ -317,6 +371,42 @@ def register_query_plan(name: str = None):
     :return: Decorator function
     """
     return QueryPlanRegistry.register(name)
+
+
+def register_plan_probe(name: str = None):
+    """
+    Decorator to register a query plan probe function.
+
+    This probe is executed by the scheduler *before* a DAG is set to running.
+    If the probe fails, the DAG is marked as 'failed' with the reason.
+
+    Usage:
+        @register_plan_probe("my_query_plan")
+        def my_plan_probe(dag_id: str, dag_meta: Dict[str, Any]) -> ValidationResult:
+            if not dag_meta.get('asset_key'):
+                return ValidationFailure(reason="Missing asset_key")
+            return ValidationSuccess()
+
+    :param name: The name of the query plan this probe is associated with.
+    :return: Decorator function
+    """
+    return QueryPlanRegistry.register_probe(name)
+
+
+class ValidationStatus(enum.Enum):
+    """Status of a probe's validation check."""
+
+    SUCCESS = "success"
+    FAILURE = "failure"
+
+
+@dataclass
+class ValidationResult:
+    """Result of a probe's validation check."""
+
+    status: ValidationStatus
+    reason: Optional[str] = None
+    details: Dict[str, Any] = field(default_factory=dict)
 
 
 class QueryTypeRegistry:

@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable, Dict, NamedTuple, Tuple, Union
 
 import psycopg2
 
+from marie import safely_encoded
 from marie.constants import (
     __default_extract_dir__,
     __default_psql_dir__,
@@ -32,6 +33,9 @@ from marie.query_planner.base import (
     Query,
     QueryDefinition,
     QueryPlan,
+    QueryPlanRegistry,
+    ValidationResult,
+    ValidationStatus,
 )
 from marie.query_planner.builtin import register_all_known_planners
 from marie.query_planner.mapper import JobMetadata, has_mapper_config
@@ -189,6 +193,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.max_workers = config.get("max_workers", 5)
         self._db_executor = ThreadPoolExecutor(
             max_workers=self.max_workers, thread_name_prefix="db-executor"
+        )
+        self._probe_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="probe-executor"
         )
         self.logger.info(
             f"Using ThreadPoolExecutor for database operations with : {self.max_workers} workers."
@@ -1000,8 +1007,31 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                     dag = await self.get_dag_by_id(dag_id)
                     if dag is None:
-                        self._remove_dag_from_memory(dag_id, "DAG not found: {dag_id}")
+                        self._remove_dag_from_memory(dag_id, f"dag not found: {dag_id}")
                         raise ValueError(f"DAG not found: {dag_id}")
+
+                    # Job level 0 is the entrypoint of a new DAG
+                    if work_info.job_level == 0:
+                        precheck: ValidationResult = (
+                            await self._dag_activation_precheck(work_info)
+                        )
+                        if precheck.status == ValidationStatus.FAILURE:
+                            self.logger.error(
+                                f"DAG {dag_id} failed activation precheck: {precheck.reason}"
+                            )
+                            await self.fail(
+                                work_info.id,
+                                work_info,
+                                output_metadata={
+                                    "reason": precheck.reason,
+                                    **precheck.details,
+                                },
+                                skip_retry=True,
+                            )
+
+                            await self.resolve_dag_status(dag_id, work_info)
+                            self._remove_dag_from_memory(dag_id, f"probe failure")
+                            continue
 
                     if dag_id not in self.active_dags:
                         await self.mark_as_active_dag(work_info)
@@ -2144,7 +2174,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         await self._loop.run_in_executor(self._db_executor, db_call)
 
     async def fail(
-        self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
+        self,
+        job_id: str,
+        work_item: WorkInfo,
+        output_metadata: dict = None,
+        skip_retry: bool = False,
     ):
         self.logger.info(f"Job failed : {job_id}")
 
@@ -2159,6 +2193,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         work_item.name,
                         [job_id],
                         {"on_complete": "failed", **(output_metadata or {})},
+                        skip_retry=skip_retry,
                     ),
                     return_cursor=True,
                     connection=conn,
@@ -2559,6 +2594,41 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     f"Error in deployment update monitor: {e}", exc_info=True
                 )
                 await asyncio.sleep(5)
+
+    async def _dag_activation_precheck(self, work_info: WorkInfo) -> ValidationResult:
+        if (
+            os.environ.get("MARIE_DISABLE_DAG_ACTIVATION_PRECHECK", "false").lower()
+            == "true"
+        ):
+            return ValidationResult(status=ValidationStatus.SUCCESS, reason="disabled")
+
+        dag_id = work_info.dag_id
+        # from metadata or fallback to name They can be this same
+        planner_name = work_info.data.get("metadata", {}).get("planner", work_info.name)
+        probe_fn = QueryPlanRegistry.get_probe(planner_name)
+
+        if not probe_fn:
+            logger.warning(f"No Probe registered for planner '{planner_name}'")
+            return ValidationResult(
+                status=ValidationStatus.SUCCESS, reason="No Probe registered"
+            )
+
+        self.logger.debug(f"Starting {planner_name} DAG probe dag_id: {dag_id}")
+        try:
+            if asyncio.iscoroutinefunction(probe_fn):
+                return await probe_fn(dag_id, work_info.data)
+            else:
+                return await self._loop.run_in_executor(
+                    self._probe_executor, probe_fn, dag_id, work_info.data
+                )
+        except Exception as e:
+            self.logger.error(f"Error in probe method: {e}")
+            error_details = safely_encoded(lambda x: x)({"error": str(e)})
+            return ValidationResult(
+                status=ValidationStatus.SUCCESS,
+                reason="Error in probe method",
+                details=error_details,
+            )
 
 
 def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo]]:
