@@ -129,6 +129,7 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         word_lines = word_lines
         k = 0
         min_word_length = 3
+        self.logger.info(f"Predicting template similarity")
 
         for idx, (template_text, template_label) in enumerate(
             zip(template_texts, template_labels)
@@ -219,7 +220,9 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
 
             candidates = []
             cpu_count = os.cpu_count() or 1
-            max_workers = max(1, cpu_count // 4)
+            max_workers = max(
+                1, cpu_count * 2 // 3
+            )  # Use two-thirds of available CPU cores
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 results = executor.map(process_ngram_i, tasks)
@@ -249,6 +252,7 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
                     else:
                         predictions.append(candidate)
 
+        self.logger.info(f"Finished template similarity")
         return predictions
 
     def get_embedding(self, text):
@@ -323,5 +327,5 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         cos_sim_val = cos_sim_val.cpu().numpy()[0]
         total_sim = (sim_val + cos_sim_val + embedding_sim) / 3
         sout = f"similarity : {sim_val:<10} - {cos_sim_val:<10} > {embedding_sim:<10} ---- {total_sim:<10} --- {ngram_words}"
-        self.logger.info(sout)
+        self.logger.debug(sout)
         return total_sim
