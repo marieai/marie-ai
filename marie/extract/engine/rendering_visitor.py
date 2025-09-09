@@ -3,11 +3,14 @@ import time
 import xml.dom.minidom as minidom
 import xml.etree.ElementTree as ET
 from collections import deque
+from typing import Optional
 from xml.etree.ElementTree import tostring
 
 from marie.extract.engine.base import BaseProcessingVisitor
 from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import MatchSection, MatchSectionType, SubzeroResult
+from marie.extract.results.annotation_highlighter import AnnotationHighlighter
+from marie.extract.structures import UnstructuredDocument
 from marie.logging_core.logger import MarieLogger
 
 
@@ -25,6 +28,7 @@ class MatchSectionRenderingVisitor(BaseProcessingVisitor):
         self.logger.info("Processing MatchSectionRenderingVisitor")
         self.logger.info(f"Rendering to directory {context.output_dir}")
 
+        # highlight_tables(context.document, context.frames, "/tmp/g5")
         # Create root XML element
         root = ET.Element("GrapnelOutput")
         # Add metadata elements
@@ -192,3 +196,38 @@ class MatchSectionRenderingVisitor(BaseProcessingVisitor):
         dom = minidom.parseString(rough_string)
         return dom.toprettyxml(indent="    ")
         # return rough_string
+
+
+def highlight_tables(doc: UnstructuredDocument, frames: list, output_dir: str):
+
+    def tables_only(ann, _line) -> bool:
+        try:
+            return ann.annotation_type == "TABLE"
+        except AttributeError:
+            return False
+
+    table_colors = {
+        "TABLE_START": (0, 200, 0, 96),
+        "TABLE_END": (200, 0, 0, 96),
+    }
+
+    def label_for(ann, _line) -> Optional[str]:
+        try:
+            if ann.name:
+                return str(ann.name)
+        except AttributeError:
+            pass
+        return None
+
+    highlighter = AnnotationHighlighter(
+        color_by="name",
+        colors=table_colors,
+        default_color=(255, 165, 0, 80),
+        label_fn=label_for,
+        filter_fn=tables_only,
+        use_annotation_bboxes=True,
+        font_size=14,
+        output_name_fn=lambda page_id: f"{page_id + 1}-tables.png",
+    )
+
+    highlighter.highlight_document(doc, frames, output_dir)

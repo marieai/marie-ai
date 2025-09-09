@@ -1256,6 +1256,12 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 if isinstance(mapping, dict):
                     map_value = mapping.get(derived_key, None)
 
+                # derived fields can be None if the parsing did not find a value for it
+                # we are skipping those fields
+                if map_value is None:
+                    self.logger.warning(f"Derived key '{derived_key}' has no value")
+                    continue
+
                 child_field = Field(
                     field_name=derived_value_name,
                     field_type=None,

@@ -101,7 +101,7 @@ class QueryPlanRegistry:
         :return: Decorator function if no function is provided; otherwise, None.
         """
 
-        logger.info(f"Registering query planner function : {name}")
+        logger.info(f"Registering query planner function : {name} from {function}")
 
         def decorator(func: Callable) -> Callable:
             @wraps(func)

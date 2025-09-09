@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, TypeAlias, Union
 from marie.extract.structures import UnstructuredDocument
 from marie.logging_core.predefined import default_logger as logger
 
-TransformMapping: TypeAlias = Dict[str, Union[str, None]]
+TransformMapping: TypeAlias = Dict[str, Union[str, float, None]]
 TransformReturnType: TypeAlias = Union[TransformMapping, List[TransformMapping]]
 
 
