@@ -207,7 +207,7 @@ def match_templates(
             results_dict[key] = []
         results_dict[key].append(result)
 
-    store_json_object(ocr_results, "/tmp/dim/metadata-raw.json")
+    # store_json_object(ocr_results, "/tmp/dim/metadata-raw.json")
 
     print("Results:")
     print(results)
@@ -216,6 +216,6 @@ def match_templates(
         "ocr_results": ocr_results,
         "template_matching": results_dict,
     }
-    store_json_object(metadata, "/tmp/dim/metadata.json")
+    # store_json_object(metadata, "/tmp/dim/metadata.json")
 
     return results_dict
