@@ -1,87 +1,94 @@
 CREATE OR REPLACE FUNCTION marie_scheduler.fetch_next_job(
-    job_name             text,
-    batch_size           integer DEFAULT 5000,
-    max_concurrent_dags  integer DEFAULT NULL  -- NULL => no gating
+    job_name   text,
+    batch_size integer DEFAULT 250,
+    w_running  numeric DEFAULT 0.70,
+    overfetch  integer DEFAULT 6
 )
-    RETURNS SETOF marie_scheduler.job
-    LANGUAGE sql
-    STABLE
-    PARALLEL SAFE
-    SET work_mem = '256MB'
-    SET max_parallel_workers_per_gather = '4'
-    SET enable_partitionwise_join = 'on'
-    AS $$
-    WITH active_dags AS MATERIALIZED (
-      SELECT id
-      FROM marie_scheduler.dag
-      WHERE state NOT IN ('completed','failed','cancelled')
-    ),
-    running_dags AS MATERIALIZED (
-      SELECT DISTINCT j.dag_id
-      FROM marie_scheduler.job j
-      WHERE j.state = 'active'
-        AND j.dag_id IN (SELECT id FROM active_dags)
-    ),
-    -- Count how many DAGs are currently "running" (have active jobs)
-    running_count AS (
-      SELECT COUNT(*)::int AS n FROM running_dags
-    ),
-    -- How many non-running active DAGs exist?
-    non_running_active AS (
-      SELECT COUNT(*)::int AS m
-      FROM active_dags a
-      WHERE a.id NOT IN (SELECT dag_id FROM running_dags)
-    ),
-    -- Compute slots if gating is enabled; if max_concurrent_dags is NULL, treat as "infinite"
-    allowed_new AS (
-      SELECT CASE
-               WHEN fetch_next_job.max_concurrent_dags IS NULL THEN
-                 -- effectively allow all remaining active DAGs
-                 (SELECT m FROM non_running_active)
-               ELSE
-                 GREATEST(fetch_next_job.max_concurrent_dags - (SELECT n FROM running_count), 0)
-             END::int AS slots
-    ),
-    /* Ready = created/retry AND no open deps, only on active DAGs */
-    ready AS MATERIALIZED (
-      SELECT j.id, j.dag_id, j.job_level, j.priority
-      FROM marie_scheduler.job j
-      WHERE j.name = fetch_next_job.job_name
-        AND j.state IN ('created','retry')
-        AND j.dag_id IN (SELECT id FROM active_dags)
-        AND NOT EXISTS (
-          SELECT 1
-          FROM marie_scheduler.job_dependencies dep
-          JOIN marie_scheduler.job dj ON dj.id = dep.depends_on_id
-          WHERE dep.job_id = j.id
-            AND dj.state <> 'completed'
-        )
-    ),
-    /* Admit up to `slots` NEW DAGs by best ready root (job_level = 0) */
-    new_dag_ids AS MATERIALIZED (
-      SELECT r.dag_id
-      FROM ready r
-      WHERE r.job_level = 0
-        AND r.dag_id NOT IN (SELECT dag_id FROM running_dags)
-      GROUP BY r.dag_id
-      ORDER BY MAX(r.priority) DESC
-      LIMIT (SELECT slots FROM allowed_new)
-    ),
-    /* All ready jobs from already-running DAGs + all ready jobs from newly admitted DAGs */
-    pick AS (
-      SELECT id, dag_id, job_level, priority
-      FROM ready
-      WHERE dag_id IN (SELECT dag_id FROM running_dags)
-      UNION ALL
-      SELECT id, dag_id, job_level, priority
-      FROM ready
-      WHERE dag_id IN (SELECT dag_id FROM new_dag_ids)
-    )
-    SELECT j.*
-    FROM pick p
-    JOIN marie_scheduler.job j ON j.id = p.id
-    ORDER BY
-      p.job_level  ASC,
-      p.priority   DESC
-    LIMIT fetch_next_job.batch_size;
+RETURNS SETOF marie_scheduler.job
+LANGUAGE sql
+STABLE
+PARALLEL SAFE
+SET work_mem = '256MB'
+SET max_parallel_workers_per_gather = '4'
+SET enable_partitionwise_join = 'on'
+AS $$
+WITH caps AS (
+  SELECT
+    GREATEST(1, batch_size)::int AS batch_sz,
+    CEIL(GREATEST(1, batch_size) * w_running)::int AS cap_running
+),
+active_dags AS MATERIALIZED (
+  SELECT id FROM marie_scheduler.dag WHERE state = 'active'
+),
+new_dags AS MATERIALIZED (
+  SELECT id FROM marie_scheduler.dag WHERE state = 'created'
+),
+-- 1) PRE-SELECTION (split lanes before LIMIT)
+ordered_running_jobs AS MATERIALIZED (
+  SELECT j.id, j.dag_id, j.job_level, j.priority
+  FROM marie_scheduler.job j
+  JOIN active_dags ad ON ad.id = j.dag_id
+  WHERE j.name = job_name
+    AND j.state IN ('created','retry')
+  ORDER BY j.job_level ASC, j.priority DESC
+  LIMIT GREATEST(1000, (SELECT cap_running FROM caps) * GREATEST(1, overfetch))
+),
+ordered_new_jobs AS MATERIALIZED (
+  SELECT j.id, j.dag_id, j.job_level, j.priority
+  FROM marie_scheduler.job j
+  JOIN new_dags nd ON nd.id = j.dag_id
+  WHERE j.name = job_name
+    AND j.state IN ('created','retry')
+  ORDER BY j.job_level ASC, j.priority DESC
+  LIMIT GREATEST(1000,
+         ((SELECT batch_sz FROM caps) - (SELECT cap_running FROM caps))
+         * GREATEST(1, overfetch))
+),
+ordered_jobs AS MATERIALIZED (
+  SELECT * FROM ordered_running_jobs
+  UNION ALL
+  SELECT * FROM ordered_new_jobs
+),
+-- 2) Dependency prune
+dep_for_active AS (
+  SELECT dep.job_id, dep.depends_on_id
+  FROM marie_scheduler.job_dependencies dep
+  JOIN ordered_jobs oj ON oj.id = dep.job_id
+),
+open_deps_subset AS (
+  SELECT dfa.job_id
+  FROM dep_for_active dfa
+  JOIN marie_scheduler.job dj ON dj.id = dfa.depends_on_id
+  WHERE dj.state <> 'completed'
+  GROUP BY dfa.job_id
+),
+candidate AS MATERIALIZED (
+  SELECT oj.id, oj.dag_id, oj.job_level, oj.priority
+  FROM ordered_jobs oj
+  LEFT JOIN open_deps_subset od ON od.job_id = oj.id
+  WHERE od.job_id IS NULL
+),
+-- 3) Final pick with class caps
+pick_running AS MATERIALIZED (
+  SELECT *
+  FROM candidate c
+  WHERE EXISTS (SELECT 1 FROM active_dags ad WHERE ad.id = c.dag_id)
+  ORDER BY job_level ASC, priority DESC
+  LIMIT (SELECT cap_running FROM caps)
+),
+pick_new AS MATERIALIZED (
+  SELECT *
+  FROM candidate c
+  WHERE EXISTS (SELECT 1 FROM new_dags nd WHERE nd.id = c.dag_id)
+  ORDER BY job_level ASC, priority DESC
+  LIMIT GREATEST(0, (SELECT batch_sz FROM caps) - (SELECT COUNT(*) FROM pick_running))
+),
+chosen AS (
+  SELECT id FROM pick_running
+  UNION ALL
+  SELECT id FROM pick_new
+)
+SELECT j.*
+FROM chosen c
+JOIN marie_scheduler.job j ON j.id = c.id;
 $$;

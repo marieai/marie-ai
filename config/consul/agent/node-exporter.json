@@ -1,0 +1,16 @@
+{
+ "Service": {
+  "Address": "10.0.0.1",
+  "ID": "PS001_NodeExporter",
+  "Name": "node-exporter",
+  "Port": 9100,
+  "Tags": [
+   "_app=marie-ai",
+   "_service=node-exporter",
+   "_hostname=ps-001",
+   "_environment=dev",
+   "_cluster=monitor-cls1",
+   "_team=backend"
+  ]
+ }
+}
