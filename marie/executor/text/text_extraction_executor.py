@@ -10,7 +10,11 @@ from marie import Executor, requests, safely_encoded
 from marie.api.docs import AssetKeyDoc
 from marie.executor.maire_pipeline_executor import PipelineExecutor
 from marie.executor.marie_executor import MarieExecutor
-from marie.executor.request_util import get_frames_from_docs, parse_parameters
+from marie.executor.request_util import (
+    get_frames_from_docs,
+    get_payload_features,
+    parse_parameters,
+)
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import setup_torch_optimizations
@@ -60,8 +64,24 @@ class TextExtractionExecutor(PipelineExecutor):
         Raises:
             Any exception encountered during pipeline execution will propagate.
         """
-        self.parse_params_and_execute(
-            docs, parameters, self.pipeline, default_ref_type="extract"
+        job_id, ref_id, ref_type, queue_id, payload = parse_parameters(parameters)
+        ref_type = "extract" if ref_type is None else ref_type
+
+        # Determine OCR force regeneration from request features
+        features = get_payload_features(payload, f_type="extract", name="ocr")
+        force_ocr = any(feature.get("force", False) for feature in features)
+        if force_ocr:
+            self.logger.info(f"OCR force regeneration requested for {job_id}")
+
+        return self.execute_pipeline(
+            docs,
+            self.pipeline,
+            job_id,
+            ref_id,
+            payload,
+            ref_type,
+            queue_id,
+            force_ocr=force_ocr,
         )
 
     @requests(on="/document/extract/status")
