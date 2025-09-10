@@ -20,10 +20,9 @@ from marie.components.template_matching import (
     MetaTemplateMatcher,
     VQNNFTemplateMatcher,
 )
-from marie.constants import __config_dir__, __model_path__
+from marie.constants import __model_path__
 from marie.excepts import BadConfigSource
 from marie.logging_core.predefined import default_logger as logger
-from marie.logging_core.profile import TimeContext
 from marie.ocr import CoordinateFormat, OcrEngine
 from marie.overlay.overlay import NoopOverlayProcessor, OverlayProcessor
 from marie.storage import StorageManager

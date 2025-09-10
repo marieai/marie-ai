@@ -268,6 +268,7 @@ class ExtractPipeline(BasePipeline):
         root_asset_dir: str,
         job_id: str,
         runtime_conf: Optional[dict[str, Any]] = None,
+        force_ocr: bool = False,
     ) -> dict[str, Any]:
         """
         Execute the pipeline for the document with the given frames.
@@ -277,6 +278,7 @@ class ExtractPipeline(BasePipeline):
         :param root_asset_dir: root asset directory to store the results
         :param job_id: job id to associate with the document
         :param runtime_conf: runtime configuration for the pipeline (e.g. which steps to execute) default is None.
+        :param force_ocr: force OCR even if the OCR results are already present
         :return: metadata for the document (e.g. OCR results, classification results, etc)
         """
         if ref_type is None or ref_id is None:
@@ -368,6 +370,7 @@ class ExtractPipeline(BasePipeline):
             ref_id,
             clean_frames,
             root_asset_dir,
+            force=force_ocr,
             engine_name=self.engine_name,
         )
 
@@ -464,6 +467,7 @@ class ExtractPipeline(BasePipeline):
         queue_id: str = None,
         job_id: str = None,
         runtime_conf: Optional[dict[str, Any]] = None,
+        force_ocr: bool = False,
     ) -> dict[str, Any]:
         """
         Execute the pipeline for the document with the given frames.If regions are specified,
@@ -487,6 +491,7 @@ class ExtractPipeline(BasePipeline):
         :param queue_id:  queue id to associate with the document
         :param job_id: job id to associate with the document
         :param runtime_conf: runtime configuration for the pipeline (e.g. which steps to execute) default is None.
+        :param force_ocr: force OCR even if the OCR results are already present
         :return:  metadata for the document (e.g. OCR results, classification results, etc)
         """
 
@@ -533,7 +538,13 @@ class ExtractPipeline(BasePipeline):
                 )
             else:
                 return self.execute_frames_pipeline(
-                    ref_id, ref_type, frames, root_asset_dir, job_id, runtime_conf
+                    ref_id,
+                    ref_type,
+                    frames,
+                    root_asset_dir,
+                    job_id,
+                    runtime_conf,
+                    force_ocr=force_ocr,
                 )
         except Exception as e:
             self.logger.error(f"Error executing pipeline : {e}")
