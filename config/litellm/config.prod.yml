@@ -1,0 +1,103 @@
+# This is a configuration file for the Litellm library.
+# https://docs.litellm.ai/docs/proxy/configs
+#`openai/` prefix tells litellm it's openai compatible
+
+model_list:
+#  - model_name: deepseek_r1_32
+#    litellm_params:
+#      model: openai/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+#      api_key: EMPTY
+#      multimodal: false
+#      use_cache: false
+#      api_base: http://209.51.170.37:8000/v1
+#
+
+
+  # - model_name: qwen_v2_5_vl
+  #   litellm_params:
+  #     model: openai/Qwen/Qwen2.5-VL-72B-Instruct
+  #     api_key: EMPTY
+  #     multimodal: true
+  #     use_cache: false
+  #     api_base: http://184.105.87.211:8000/v1
+
+  # SET 1
+  - model_name: deepseek_r1_32
+    litellm_params:
+      model: openai/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+      api_key: EMPTY
+      multimodal: false
+      use_cache: false
+      api_base: http://172.83.14.64:8000/v1
+#      timeout: 600
+
+  # - model_name: deepseek_r1_32
+  #   litellm_params:
+  #     model: openai/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+  #     api_key: EMPTY
+  #     multimodal: false
+  #     use_cache: false
+  #     api_base: http://184.105.217.176:8000/v1
+
+#  - model_name: deepseek_r1_32
+#    litellm_params:
+#      model: openai/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+#      api_key: EMPTY
+#      multimodal: false
+#      use_cache: false
+#      api_base: http://184.105.215.182:8000/v1
+
+
+  - model_name: qwen_v2_5_vl
+
+    litellm_params:
+      model: openai/Qwen/Qwen2.5-VL-72B-Instruct
+      api_key: EMPTY
+      multimodal: true
+      use_cache: false
+      api_base: http://184.105.87.63:8000/v1
+#      timeout: 600
+
+#      api_base: http://172.83.15.139:8000/v1
+
+  # - model_name: qwen_v2_5_vl
+  #   litellm_params:
+  #     model: openai/Qwen/Qwen2.5-VL-72B-Instruct
+  #     api_key: EMPTY
+  #     multimodal: true
+  #     use_cache: false
+  #     api_base: http://184.105.87.63:8000/v1
+
+# Best practices for production
+# Documentation: https://docs.litellm.ai/docs/proxy/prod
+
+router_settings:
+  routing_strategy: least-busy # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
+
+
+
+general_settings:
+  # Reliability
+  max_retries: 4
+  timeout: 900
+  error_backoff: 0.5
+
+  # Logging
+  log_verbose: true
+  log_debug: false
+
+  # Connection pooling
+  connection_pool_size: 1000
+  max_connections: 2000
+  keepalive_expiry: 60
+
+  # Request management
+  max_queued_requests: 20000
+
+  # Batching for GPU utilization
+  batch_enabled: true
+  batch_max_size: 16       # increase if your GPU can handle more
+  batch_wait_time: 0.005   # wait up to 5ms to form batch
+
+  # Metrics
+  enable_metrics: true

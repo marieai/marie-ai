@@ -3,7 +3,6 @@ import base64
 import io
 import os
 import uuid
-from threading import Thread
 from typing import List
 
 import gradio as gr
@@ -16,11 +15,6 @@ load_dotenv()  # Loads environment variables from a .env
 
 api_key = os.getenv("OPENAI_API_KEY", "EMPTY")
 base_url = os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:8000/v1")
-base_url = os.getenv("OPENAI_BASE_URL", "http://184.105.87.211:8000/v1")
-base_url = os.getenv("OPENAI_BASE_URL", "http://209.51.170.37:8000/v1")
-
-# base_url = 'http://209.51.170.37:8000/v1'  # DEEPSEEK
-base_url = 'http://172.83.15.139:8000/v1'  # QWEN VL
 
 print(f"API Key: {api_key}")
 print(f"Base URL: {base_url}")
@@ -216,7 +210,8 @@ def inference_with_api(
     image_path,
     prompt,
     sys_prompt="You are a helpful assistant.",
-    model_id="Qwen/Qwen2.5-VL-7B-Instruct",
+    # model_id="Qwen/Qwen2.5-VL-7B-Instruct",
+    model_id="qwen_v2_5_vl",
     min_pixels=1280 * 28 * 28,
     max_pixels=2400 * 28 * 28,
 ):
@@ -369,7 +364,7 @@ with gr.Blocks(css=css) as demo:
 
         submit_btn.click(qwen_inference, [input_media, text_input], [output_text])
 
-demo.launch(debug=True, share=True)
+demo.launch(debug=True, share=False)
 
 # https://github.com/QwenLM/Qwen2.5-VL/issues/721
 # https://github.com/QwenLM/Qwen2.5-VL/blob/main/cookbooks/spatial_understanding.ipynb
