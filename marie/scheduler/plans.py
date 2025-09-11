@@ -333,10 +333,12 @@ def complete_jobs_by_id(schema: str, name: str, ids: list, output: dict):
     return query
 
 
-def fail_jobs_by_id(schema: str, name: str, ids: list, output: dict):
+def fail_jobs_by_id(
+    schema: str, name: str, ids: list, output: dict, skip_retry: bool = False
+):
     ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
     where = f"name = '{name}' AND id IN (SELECT UNNEST({ids_string}::uuid[])) AND state < '{WorkState.COMPLETED.value}'"
-    return fail_jobs(schema, where, output)
+    return fail_jobs(schema, where, output, skip_retry=skip_retry)
 
 
 def fail_jobs_by_timeout(schema: str):
@@ -346,14 +348,20 @@ def fail_jobs_by_timeout(schema: str):
     )
 
 
-def fail_jobs(schema: str, where: str, output: dict):
+def fail_jobs(schema: str, where: str, output: dict, skip_retry: bool = False):
+    update_state = (
+        f"'{WorkState.FAILED.value}'::{schema}.job_state"
+        if skip_retry
+        else f"""CASE
+          WHEN retry_count < retry_limit THEN '{WorkState.RETRY.value}'::{schema}.job_state
+          ELSE '{WorkState.FAILED.value}'::{schema}.job_state
+          END"""
+    )
+
     query = f"""
     WITH results AS (
       UPDATE {schema}.job SET
-        state = CASE
-          WHEN retry_count < retry_limit THEN '{WorkState.RETRY.value}'::{schema}.job_state
-          ELSE '{WorkState.FAILED.value}'::{schema}.job_state
-          END,
+        state = {update_state},
         completed_on = CASE
           WHEN retry_count < retry_limit THEN NULL
           ELSE now()

@@ -1,9 +1,20 @@
 import enum
 import importlib
+import inspect
 import warnings
 from dataclasses import dataclass, field
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Type,
+    TypeVar,
+    runtime_checkable,
+)
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -58,10 +69,58 @@ class QueryPlanRegistryWheelCallback:
         logger.error(f"Wheel installation failed for {wheel_path}: {error}")
 
 
+class ValidationStatus(enum.Enum):
+    """Status of a probe's validation check."""
+
+    SUCCESS = "success"
+    FAILURE = "failure"
+
+
+@dataclass
+class ValidationResult:
+    """Result of a probe's validation check."""
+
+    status: ValidationStatus
+    reason: Optional[str] = None
+    details: Dict[str, Any] = field(default_factory=dict)
+
+
+@runtime_checkable
+class PlannerProbeProto(Protocol):
+    """
+    Protocol for a DAG activation probe.
+
+    A probe is a callable that performs a pre-condition check before a DAG
+    is activated and its jobs are scheduled. It should be registered with
+    `@register_plan_probe`.
+    """
+
+    def validate(self, dag: 'QueryPlan', data: Dict[str, Any]) -> ValidationResult:
+        """
+        Executes the validation logic.
+
+        :param dag: The QueryPlan object for the DAG being activated.
+        :param data: The initial data payload associated with the DAG's root job.
+        :return: A ValidationResult indicating success or failure.
+        """
+        ...
+
+
+PlannerProbeFn = Callable[['QueryPlan', Dict[str, Any]], ValidationResult]
+
+PlannerProbe = TypeVar(
+    "PlannerProbe",
+    Callable[['QueryPlan', Dict[str, Any]], ValidationResult],
+    PlannerProbeProto,
+    Type[PlannerProbeProto],
+)
+
+
 class QueryPlanRegistry:
     """Registry for query planner functions with wheel support."""
 
     _plans: Dict[str, Callable] = {}
+    _probes: Dict[str, Callable] = {}
     _external_modules_loaded: bool = False
 
     # Wheel management components (class-level)
@@ -124,6 +183,31 @@ class QueryPlanRegistry:
         return decorator
 
     @classmethod
+    def register_probe(cls, name: str, probe: PlannerProbe = None):
+        """
+        Register a query plan probe.
+
+        The probe can be a function, a class type that implements the PlannerProbeProto
+        protocol, or an instance of such a class. This probe is called by the
+        scheduler as a pre-condition gate before starting a DAG.
+
+        :param name: The name to register the probe under (should match a planner name).
+        :param probe: The probe implementation to register.
+        """
+        logger.info(f"Registering query plan probe: {name}")
+
+        def decorator(p: PlannerProbe) -> PlannerProbe:
+            if name in cls._probes:
+                raise ValueError(f"Query plan probe '{name}' is already registered")
+            cls._probes[name] = p
+            return p
+
+        if probe is not None:
+            return decorator(probe)
+
+        return decorator
+
+    @classmethod
     def register_from_module(cls, planner_module: str) -> bool:
         """
         Registers a planner from the specified module.
@@ -162,6 +246,7 @@ class QueryPlanRegistry:
             'loaded': [],
             'failed': [],
             'total_planners': len(cls._plans),
+            'total_probes': len(cls._probes),
             'wheel_results': {},
         }
 
@@ -208,6 +293,7 @@ class QueryPlanRegistry:
         result['loaded'] = loaded_modules
         result['failed'].extend(failed_modules)
         result['total_planners'] = len(cls._plans)
+        result['total_probes'] = len(cls._probes)
 
         cls._external_modules_loaded = True
 
@@ -246,9 +332,50 @@ class QueryPlanRegistry:
             ) from e
 
     @classmethod
+    def get_probe(cls, planner_name: str) -> Optional[Callable[..., ValidationResult]]:
+        """
+        Get a callable query plan probe by its associated planner name.
+
+        This method acts as a factory. It normalizes the registered probe
+        (whether it's a function, class, or instance) into a consistent
+        callable that the scheduler can execute.
+
+        :param planner_name: The name of the query planner.
+        :return: A callable that accepts (dag, data) and returns a ValidationResult, or None if not found.
+        """
+        registered_probe = cls._probes.get(planner_name)
+
+        if registered_probe is None:
+            return None
+
+        # Case 1: The probe is an instance of a class implementing the protocol.
+        if isinstance(registered_probe, PlannerProbeProto):
+            return registered_probe.validate
+
+        # Case 2: The probe is a class type. Instantiate it and return its validate method.
+        if inspect.isclass(registered_probe) and issubclass(
+            registered_probe, PlannerProbeProto
+        ):
+            instance = registered_probe()
+            return instance.validate
+
+        # Case 3: The probe is a simple callable/function.
+        if callable(registered_probe):
+            return registered_probe
+
+        raise ValueError(
+            f"Invalid probe type for planner '{planner_name}': {type(registered_probe)}"
+        )
+
+    @classmethod
     def list_planners(cls) -> list[str]:
         """Return a list of all registered planner names."""
         return list(cls._plans.keys())
+
+    @classmethod
+    def list_probes(cls) -> list[str]:
+        """Return a list of all registered probe names."""
+        return list(cls._probes.keys())
 
     @classmethod
     def get_planner_info(cls) -> Dict[str, Any]:
@@ -257,10 +384,13 @@ class QueryPlanRegistry:
 
         installed_wheels = cls._wheel_manager.get_installed_wheels()
         planners = cls.list_planners()
+        probes = cls.list_probes()
 
         info = {
             'total_planners': len(planners),
             'planner_names': planners,
+            'total_probes': len(probes),
+            'probe_names': probes,
             'external_loaded': cls._external_modules_loaded,
             'installed_wheels': {
                 name: {
@@ -317,6 +447,62 @@ def register_query_plan(name: str = None):
     :return: Decorator function
     """
     return QueryPlanRegistry.register(name)
+
+
+def register_plan_probe(name: str = None):
+    """
+    Decorator to register a query plan probe function or class.
+
+    This probe is executed by the scheduler *before* a DAG is set to running.
+    If the probe fails, the DAG is marked as 'failed' with the reason.
+
+    Usage on a class:
+        @register_plan_probe("my_query_plan")
+        class MyPlanProbe:
+            def validate(self, dag: QueryPlan, data: Dict[str, Any]) -> ValidationResult:
+                # ... implementation ...
+
+    Usage on a function:
+        @register_plan_probe("my_query_plan")
+        def my_plan_probe(dag: QueryPlan, data: Dict[str, Any]) -> ValidationResult:
+            # ... implementation ...
+
+    :param name: The name of the query plan this probe is associated with.
+    :return: Decorator function
+    """
+
+    def decorator(probe_or_func: PlannerProbe) -> PlannerProbe:
+        # Validate the signature ONLY if it's a standalone function.
+        if inspect.isfunction(probe_or_func):
+            sig = inspect.signature(probe_or_func)
+            params = list(sig.parameters.values())
+
+            # Filter for required positional parameters (kind = POSITIONAL_OR_KEYWORD).
+            required_params = [
+                p for p in params if p.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+            ]
+
+            # The function must have exactly two required positional parameters.
+            if len(required_params) != 2:
+                raise TypeError(
+                    f"Probe function '{probe_or_func.__name__}' has an invalid number of required positional parameters. "
+                    f"Expected 2 (dag, data), but found {len(required_params)} in signature {sig}."
+                )
+
+            # The parameters must be named 'dag' and 'data' in that order.
+            if required_params[0].name != 'dag' or required_params[1].name != 'data':
+                raise TypeError(
+                    f"Probe function '{probe_or_func.__name__}' has invalid parameter names. "
+                    f"Expected 'dag' and 'data', but found '{required_params[0].name}' and '{required_params[1].name}' "
+                    f"in signature {sig}."
+                )
+
+        # If validation passes (or it's a class), proceed with registration.
+        target_name = name or getattr(probe_or_func, '__name__')
+        QueryPlanRegistry.register_probe(target_name, probe_or_func)
+        return probe_or_func
+
+    return decorator
 
 
 class QueryTypeRegistry:
