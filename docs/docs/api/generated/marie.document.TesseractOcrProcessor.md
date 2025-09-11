@@ -4,7 +4,7 @@
 
 A processor which uses tesseract OCR to process
 
-#### \_\_init_\_(work_dir: str = '/tmp/icr', models_dir: str = '/mnt/marie/model_zoo/tessdata', cuda: bool = True, \*\*kwargs)
+#### \_\_init_\_(work_dir: str = '/tmp/icr', models_dir: str = '/mnt/marie/model_zoo/tessdata', cuda: bool = True, \*\*kwargs) → None
 
 ### Methods
 

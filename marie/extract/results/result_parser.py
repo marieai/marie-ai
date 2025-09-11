@@ -363,67 +363,6 @@ def process_extractions(
         _annotate_segment(annotation_type, last_meta_line, segment_end)
 
 
-def process_extractionsXxx(
-    working_dir: str,
-    doc: UnstructuredDocument,
-    result: ExtractionResult,
-    page_id: int,
-    annotation_type: str,
-    grounding_keys: list[str],
-    add_container: bool = False,
-) -> None:
-    """
-    Processes and annotates extractions for a specific page and annotation type.
-
-    Args:
-        working_dir (str): The working directory.
-        doc (UnstructuredDocument): The document being updated.
-        result (ExtractionResult): The extraction result containing segments.
-        page_id (int): The ID of the page to process.
-        annotation_type (str): Type of annotation ("CLAIM", "REMARKS", etc.).
-        grounding_keys (list[str]): List of valid keys to process.
-        add_container (bool): Whether to add a container region for the annotations. Defaults to False.
-    """
-    lines_for_page: list[LineWithMeta] = sorted(
-        doc.lines_for_page(page_id), key=lambda ln: ln.metadata.line_id
-    )
-    logger.info(f"lines => {len(lines_for_page)} >")
-    logger.info(f"Detailed extraction result for page {page_id}")
-
-    extractions = correct_row_numbers(result.extractions)
-    for segment in extractions:
-        row_number = int(segment.line_number)
-        segment.label = segment.label.upper() if segment.label else None
-        key, value, reason = segment.label, segment.value, segment.reasoning
-
-        # Keys can come in few formats
-        # - PATIENT NAME
-        # - PATIENT    NAME
-        # - PATIENT_NAME
-        # for that we will normalize spaces into underscores (_)
-
-        key = re.sub(r"\s+", "_", key) if key else None
-        if key not in grounding_keys:
-            logging.warning(
-                f"Not a grounded Key: {key}, Grounded Value: {value}, reason:\n{reason}"
-            )
-            continue
-
-        if "ERROR" == key:
-            logging.warning(f"Invalid key: {key} > {value}")
-            continue
-
-        meta_line = locate_line(lines_for_page, row_number)
-        if meta_line is None:
-            logging.warning(
-                f"No line found for page {page_id} and row number {row_number}"
-            )
-            continue
-
-        logger.info(f"   --> Line : {meta_line}")
-        _annotate_segment(annotation_type, meta_line, segment)
-
-
 def extract_tables(
     doc: UnstructuredDocument, frames: list, metadata: dict[str, any], output_dir: str
 ):

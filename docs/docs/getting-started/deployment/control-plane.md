@@ -103,7 +103,7 @@ docker compose -f docker-compose.yml -f docker-compose.storage.yml \
 ```
 
 ## Kubernetes 
-[Translate a Docker Compose File to Kubernetes Resources](https://kubernetes.io/docs/tasks/configure-pod-container/translate-compose-kubernetes/)[s3-marie](../../../../../../../../../mnt/s3-marie)
+[Translate a Docker Compose File to Kubernetes Resources](https://kubernetes.io/docs/tasks/configure-pod-container/translate-compose-kubernetes/)
 
 
 ## Services

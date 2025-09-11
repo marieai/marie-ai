@@ -1,0 +1,8 @@
+{
+  "label": "Extract/Annotators",
+  "position": 2,
+  "link": {
+    "type": "generated-index",
+    "description": "Document Annotators",
+  }
+}

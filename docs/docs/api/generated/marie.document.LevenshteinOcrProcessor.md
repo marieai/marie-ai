@@ -2,7 +2,7 @@
 
 ### *class* marie.document.LevenshteinOcrProcessor(work_dir: str = '/tmp/icr', models_dir: str = '/mnt/marie/model_zoo/levocr', cuda: bool = True)
 
-#### \_\_init_\_(work_dir: str = '/tmp/icr', models_dir: str = '/mnt/marie/model_zoo/levocr', cuda: bool = True)
+#### \_\_init_\_(work_dir: str = '/tmp/icr', models_dir: str = '/mnt/marie/model_zoo/levocr', cuda: bool = True) → None
 
 ### Methods
 

@@ -1,6 +1,6 @@
 # marie.boxes.PSMode
 
-### *class* marie.boxes.PSMode(value)
+### *class* marie.boxes.PSMode(\*values)
 
 Page Segmentation Modes
 
@@ -10,7 +10,7 @@ Page Segmentation Modes
 * RAW_LINE =  Raw line. Treat the image as a single text line, NO bounding box detection performed.
 * MULTI_LINE = Multiline. Treat the image as multiple text lines, NO bounding box detection performed.
 
-#### \_\_init_\_()
+#### \_\_init_\_(\*args, \*\*kwds)
 
 ### Methods
 
