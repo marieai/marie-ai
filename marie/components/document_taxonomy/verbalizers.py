@@ -295,7 +295,6 @@ def verbalizers_SPATIAL_FORMAT(metadata, min_spacing=2, target_columns=160):
 
     if len(normalized_boxes) == 0:
         logger.warning("No normalized boxes found in metadata.")
-        print('metadata', metadata)
         return []
 
     all_word_positions = []  # Stores [(line_index, grid_index, word)]
