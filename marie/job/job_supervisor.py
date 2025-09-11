@@ -393,6 +393,10 @@ class JobSupervisor:
                         # Failure path
                         exception_proto = response.status.exception
                         error_name = str(exception_proto.name)
+                        self.logger.error(
+                            f"Job {self._job_id} failed but already marked terminal: {current_status}. error_name = {error_name} \n{exception_proto}"
+                        )
+
                         if current_status.is_terminal():
                             await self._event_publisher.publish(
                                 current_status,

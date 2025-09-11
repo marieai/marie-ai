@@ -41,10 +41,13 @@ def register_all_known_planners(query_planners_conf: QueryPlannersConf):
     # Initialize from configuration with wheel support
     result = QueryPlanRegistry.initialize_from_config(query_planners_conf)
 
-    # Log results
     logger.info(f"Planner initialization results:")
     logger.info(f"  Loaded modules: {result['loaded']}")
-    logger.info(f"  Failed modules: {result['failed']}")
+    if result["failed"]:
+        logger.error(f"  Failed modules: {result['failed']}")
+        raise ModuleNotFoundError(f"Failed to load modules: {result['failed']}")
+    else:
+        logger.info(f"  Failed modules: {result['failed']}")
     logger.info(f"  Wheel results: {result['wheel_results']}")
     logger.info(f"  Total planners: {result['total_planners']}")
 

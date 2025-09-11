@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING, List
 
 from marie.excepts import FlowBuildLevelError
 
-# noinspection PyUnreachableCode
 if TYPE_CHECKING:  # pragma: no cover
     from marie.enums import FlowBuildLevel
     from marie.orchestrate.flow.base import Flow

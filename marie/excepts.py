@@ -221,6 +221,21 @@ class RepetitionError(Exception):
         super().__init__(message)
 
 
+class ProcessingError(Exception):
+    """
+    Raised when there is a problem processing extraction
+    """
+
+    def __init__(self, message: str = ""):
+        super().__init__(message)
+
+
+class CUDARuntimeTerminated(RuntimeTerminated):
+    """
+    Raised when a CUDA error has occurred.
+    """
+
+
 def raise_exception(
     e,
     suppress_errors: bool,
