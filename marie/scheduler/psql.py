@@ -335,7 +335,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             "delete_failed_dags_and_jobs.sql",
             "delete_orphaned_jobs.sql",
             "jobs_with_unmet_dependencies.sql",
-            "notify_dag_state_change.sql",
+            # "notify_dag_state_change.sql", NOT USING CURRENTLY
             "purge_non_started_work.sql",
             "ready_jobs_view.sql",
             "refresh_dag_durations.sql",
@@ -449,27 +449,31 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def create_queue(self, queue_name: str) -> None:
         """Setup the queue for the scheduler."""
-        with self:
-            self._execute_sql_gracefully(create_queue(DEFAULT_SCHEMA, queue_name, {}))
+        self._execute_sql_gracefully(create_queue(DEFAULT_SCHEMA, queue_name, {}))
 
     async def _get_defined_queues(self) -> set[str]:
         """Setup the queue for the scheduler."""
         cursor = None
-        with self:
-            try:
-                cursor = self._execute_sql_gracefully(
-                    f"SELECT name FROM {DEFAULT_SCHEMA}.queue", return_cursor=True
-                )
-                if cursor and cursor.rowcount > 0:
-                    result = cursor.fetchall()
-                    return {name[0] for name in result}
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error getting known queues: {error}")
-                raise RuntimeFailToStart(
-                    f"Unable to find queues in schema '{DEFAULT_SCHEMA}': {error}"
-                )
-            finally:
-                self._close_cursor(cursor)
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = self._execute_sql_gracefully(
+                f"SELECT name FROM {DEFAULT_SCHEMA}.queue",
+                return_cursor=True,
+                connection=conn,
+            )
+            if cursor and cursor.rowcount > 0:
+                result = cursor.fetchall()
+                return {name[0] for name in result}
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error getting known queues: {error}")
+            raise RuntimeFailToStart(
+                f"Unable to find queues in schema '{DEFAULT_SCHEMA}': {error}"
+            )
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
+
         return set()  # Return an empty set if no queues are defined
 
     async def start(self) -> None:
