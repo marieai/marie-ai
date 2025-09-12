@@ -140,6 +140,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.distributed_scheduler = config.get("distributed_scheduler", False)
 
         self._event_queue = Queue()
+
+        existing_work_policy = config.get("existing_work_policy")
+        try:
+            self.default_existing_work_policy = (
+                ExistingWorkPolicy[existing_work_policy.upper()]
+                if existing_work_policy is not None
+                else ExistingWorkPolicy.REJECT_DUPLICATE
+            )
+        except KeyError:
+            raise BadConfigSource(
+                f"Argument {existing_work_policy!r} is invalid for existing_work_policy. "
+                f"Must be one of {', '.join(ExistingWorkPolicy.__members__)}."
+            )
+
         self._status_update_lock = AsyncJobLock()
         self._dag_resolution_lock = AsyncJobLock()
         self._terminal_dag_states: dict[str, str] = {}
@@ -2182,7 +2196,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         return work_item
 
-    async def get_job_for_policy(self, work_info: WorkInfo) -> Optional[WorkInfo]:
+    async def get_jobs_for_policy(self, work_info: WorkInfo) -> List[WorkInfo]:
         """
         Find a job by its name and data (used for policy checks).
         :param work_info: WorkInfo containing metadata with ref_type and ref_id
@@ -2192,6 +2206,42 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         ref_id = work_info.data.get("metadata", {}).get("ref_id", "")
 
         return await self.repository.get_job_by_policy(ref_type, ref_id)
+        # todo
+        # results = []
+        # try:
+        #     conn = self._get_connection()
+        #     cursor = conn.cursor()
+        #     cursor.execute(
+        #         f"""
+        #             SELECT
+        #             id,
+        #             name,
+        #             priority,
+        #             state,
+        #             retry_limit,
+        #             start_after,
+        #             expire_in,
+        #             data,
+        #             retry_delay,
+        #             retry_backoff,
+        #             keep_until,
+        #             dag_id,
+        #             job_level
+        #         FROM {schema}.{table}
+        #         WHERE data->'metadata'->>'ref_type' = '{ref_type}'
+        #         AND data->'metadata'->>'ref_id' = '{ref_id}'
+        #         """
+        #     )
+        #     for record in cursor:
+        #         results.append(self.record_to_work_info(record))
+        #     conn.commit()
+        # except (Exception, psycopg2.Error) as error:
+        #     self.logger.error(f"Error getting job: {error}")
+        #     conn.rollback()
+        # finally:
+        #     self._close_cursor(cursor)
+        #     self._close_connection(conn)
+        # return results
 
     async def list_jobs(
         self, state: Optional[str | list[str]] = None, batch_size: int = 0
@@ -2406,7 +2456,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         submission_id = work_info.id
         submission_policy = ExistingWorkPolicy.create(
-            work_info.policy, default_policy=ExistingWorkPolicy.REJECT_DUPLICATE
+            work_info.policy, default_policy=self.default_existing_work_policy
         )
 
         is_valid = await self.is_valid_submission(work_info, submission_policy)
@@ -2584,17 +2634,35 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             if policy == ExistingWorkPolicy.REJECT_ALL:
                 return False
 
-            existing_job = await self._loop.run_in_executor(
-                self._db_executor, self.get_job_for_policy, work_info
+            existing_jobs = await self._loop.run_in_executor(
+                self._db_executor, self.get_jobs_for_policy, work_info
             )
 
             if policy == ExistingWorkPolicy.REJECT_DUPLICATE:
-                return existing_job is None
+                return len(existing_jobs) == 0
 
             if policy == ExistingWorkPolicy.REPLACE:
-                return not existing_job or (
-                    existing_job.state is not None and existing_job.state.is_terminal()
-                )
+                if len(existing_jobs) == 0:
+                    return True
+
+                distinct_dag_ids = {
+                    job.dag_id for job in existing_jobs if job.dag_id is not None
+                }
+                for dag_id in distinct_dag_ids:
+                    dag_state = self._resolve_dag_status_sync(dag_id)
+                    if dag_state not in ("completed", "failed"):
+                        self.logger.warning(
+                            f"Removing DAG to due to 'replace' policy: {dag_id}, state: {dag_state}"
+                        )
+                        self._remove_dag_from_memory(
+                            dag_id, "Existing Work Policy: 'replace'"
+                        )
+                        is_deleted = await self.delete_dag(dag_id)
+                        if not is_deleted:
+                            self.logger.warning(f"Failed to delete DAG: {dag_id}")
+                            return False
+
+                return True
 
             raise ValueError(f"Unsupported policy: {policy}")
 
@@ -2604,6 +2672,28 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"with policy '{policy}': {str(e)}"
             )
             return False
+
+    async def delete_dag(self, dag_id: str) -> bool:
+        self.logger.info(f"Deleting dag_id : {dag_id}")
+
+        # todo
+        def db_call():
+            cursor = None
+            conn = None
+            try:
+                conn = self._get_connection()
+                self._execute_sql_gracefully(
+                    delete_dags_and_jobs(DEFAULT_SCHEMA, [dag_id]), connection=conn
+                )
+                return True
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error completing failed job: {error}")
+                return False
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
 
     def stop_job(self, job_id: str) -> bool:
         """Request a job to exit, fire and forget.
