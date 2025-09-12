@@ -11,8 +11,9 @@ class GlobalPriorityExecutionPlanner:
       2) higher user priority
       3) more free slots
       4) existing DAGs over new DAGs
-      5) shorter est. runtimes
-      6) burst boost for recently activated DAGs
+      5) FIFO within same DAG
+      6) shorter est. runtimes
+      7) burst boost for recently activated DAGs
 
       # https://www.mdpi.com/2079-9292/10/16/1874
       # https://openreview.net/forum?id=km4omm25me
@@ -26,10 +27,11 @@ class GlobalPriorityExecutionPlanner:
         active_dags: set[str],
         recently_activated_dags: set[str] = set(),
     ) -> Sequence[FlatJob]:
-        annotated: list[Tuple[str, Any, int, int, int, bool, float, bool]] = []
+        annotated: list[Tuple[str, Any, int, int, int, bool, str, float, bool]] = []
         for endpoint, wi in jobs:
             level = wi.job_level
             priority = wi.priority
+            dag_id = wi.dag_id
             executor = endpoint.split("://", 1)[0]
             free_slots = slots.get(executor, 0)
             is_new = wi.dag_id not in active_dags
@@ -40,7 +42,17 @@ class GlobalPriorityExecutionPlanner:
             burst_boost = wi.dag_id in recently_activated_dags
 
             annotated.append(
-                (endpoint, wi, level, priority, free_slots, is_new, rt, burst_boost)
+                (
+                    endpoint,
+                    wi,
+                    level,
+                    priority,
+                    free_slots,
+                    is_new,
+                    dag_id,
+                    rt,
+                    burst_boost,
+                )
             )
 
         # sort by:
@@ -48,6 +60,8 @@ class GlobalPriorityExecutionPlanner:
         #  - priority descending
         #  - free_slots descending
         #  - existing-DAG (False) before new-DAG (True)
+        #  - dag_id (to ensure stable sort, i.e. FIFO within same dag)
+        #  - dag insertion order, oldest first
         #  - runtime ascending
         annotated.sort(
             key=lambda t: (
@@ -55,8 +69,9 @@ class GlobalPriorityExecutionPlanner:
                 -t[3],  # priority
                 -t[4],  # free_slots
                 t[5],  # is_new (False < True)
-                t[6],  # est. runtime
-                not t[7],  # burst_boost: True < False
+                t[6],  # dag insertion order
+                t[7],  # est. runtime
+                not t[8],  # burst_boost: True < False
             )
         )
 
