@@ -14,12 +14,12 @@ repos:
       - id: detect-secrets
         args: ['--baseline', '.secrets.baseline']
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: no-commit-to-branch
         args: [--branch, main, --branch, master]
   - repo: https://github.com/pycqa/flake8
-    rev: "5.0.4"
+    rev: "7.3.0"
     hooks:
     -   id: flake8
         exclude: ^(.git|__pycache__|hubble/resources/|marie/serve/consensus|marie/storage|marie/core|tests|marie/models|marie/utils/patches.py|marie/boxes/dit|marie/models/unilm|.git|__pycache__|old|build|dist|tests|marie/resources/|marie/resources/|marie/proto/docarray_v1|marie/proto/docarray_v2)
@@ -48,7 +48,7 @@ repos:
   #       - --select=D101,D102,D103
   - repo: https://github.com/psf/black
 #    rev: 22.3.0
-    rev: 24.3.0
+    rev: 25.1.0
     hooks:
     - id: black
       types: [python]
@@ -57,14 +57,14 @@ repos:
         - -S
 
   - repo: https://github.com/asottile/blacken-docs
-    rev: v1.12.1
+    rev: 1.20.0
     hooks:
     -   id: blacken-docs
         exclude: ^(marie/storage|marie/core|marie/models|marie/boxes/dit|marie/helloworld/|marie/proto/pb/jina_pb2.py|marie/proto/pb/jina_pb2_grpc.py|marie/proto/pb2/jina_pb2.py|marie/proto/pb2/jina_pb2_grpc.py|docs/|marie/resources/|marie/proto/docarray_v1|marie/proto/docarray_v2)
         args:
           - -S
   - repo: https://github.com/pycqa/isort
-    rev: 5.12.0
+    rev: 6.0.1
     hooks:
       - id: isort
         exclude: ^(marie/storage|marie/core|marie/models|marie/boxes/dit|marie/helloworld/|marie/proto/pb/jina_pb2.py|marie/proto/pb/jina_pb2_grpc.py|marie/proto/pb2/jina_pb2.py|marie/proto/pb2/jina_pb2_grpc.py|docs/|marie/resources/|marie/proto/docarray_v1|marie/proto/docarray_v2)

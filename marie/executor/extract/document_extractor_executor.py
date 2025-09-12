@@ -23,6 +23,7 @@ class DocumentExtractExecutor(MarieExecutor, StorageMixin):
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
+        kwargs['storage'] = storage
         super().__init__(**kwargs)
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)

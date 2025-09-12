@@ -5,7 +5,6 @@ from docarray import DocList
 
 from marie import requests
 from marie.api.docs import AssetKeyDoc
-from marie.constants import __config_dir__
 from marie.executor.extract import DocumentAnnotatorExecutor
 from marie.extract.annotators.llm_annotator import LLMAnnotator
 from marie.logging_core.logger import MarieLogger

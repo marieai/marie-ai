@@ -2,8 +2,7 @@ import hashlib
 import imghdr
 import io
 import os
-from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 import cv2
 import numpy as np
@@ -277,9 +276,17 @@ def parse_payload_to_docs_sync(
             key = "uri"
         del payload[key]
 
-    doc_id = value_from_payload_or_args(payload, "doc_id", default="")
-    doc_type = value_from_payload_or_args(payload, "doc_type", default="")
+    ref_id = value_from_payload_or_args(
+        payload,
+        "ref_id",
+        default=value_from_payload_or_args(payload, "doc_id", default=""),
+    )
+    ref_type = value_from_payload_or_args(
+        payload,
+        "ref_type",
+        default=value_from_payload_or_args(payload, "doc_type", default=""),
+    )
     asset_doc = AssetKeyDoc(asset_key=asset_uri, pages=pages)
-    parameters = {"queue_id": queue_id, "ref_id": doc_id, "ref_type": doc_type}
+    parameters = {"queue_id": queue_id, "ref_id": ref_id, "ref_type": ref_type}
 
     return parameters, asset_doc
