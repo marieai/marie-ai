@@ -6,7 +6,7 @@ set -e
 CPU_COUNT=$(grep -c ^processor /proc/cpuinfo)
 CPU_COUNT=$((CPU_COUNT-1))
 
-readonly DEFAULT_VERSION="4.0.10"
+readonly DEFAULT_VERSION="4.0.11"
 readonly VERSION="${MARIE_VERSION:-$DEFAULT_VERSION}"
 
 declare -A PROFILES=(

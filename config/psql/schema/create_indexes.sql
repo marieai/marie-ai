@@ -79,21 +79,21 @@ CREATE INDEX IF NOT EXISTS dag_id_state_not_bad_idx
 ON marie_scheduler.dag (id, state)
 WHERE state NOT IN ('completed','failed','cancelled');
 
-CREATE INDEX  IF NOT EXISTS dag_ok_idx
+CREATE INDeX  IF NOT EXISTS dag_ok_idx
 ON marie_scheduler.dag (id)
 WHERE state NOT IN ('completed','failed','cancelled');
 
 
 CREATE INDEX IF NOT EXISTS job_id_failed_idx ON marie_scheduler.job (id) WHERE state = 'failed';
 
-WE NEED TO DO THIS PER PARTITION:
--- Speeds the initial candidate scan; covers (id, dag_id) so no heap.
-CREATE INDEX IF NOT EXISTS j5294dca0cf67eba9f6066f08560c47b010e0dce4a3ef60ff128d306e_ready_cover_idx
-ON marie_scheduler.j5294dca0cf67eba9f6066f08560c47b010e0dce4a3ef60ff128d306e -- for each partition
-(name, start_after, id, dag_id)
-INCLUDE (state)
-WHERE state IN ('created','retry');
-
+-- -- WE NEED TO DO THIS PER PARTITION:
+-- -- Speeds the initial candidate scan; covers (id, dag_id) so no heap.
+-- CREATE INDEX IF NOT EXISTS j5294dca0cf67eba9f6066f08560c47b010e0dce4a3ef60ff128d306e_ready_cover_idx
+-- ON marie_scheduler.j5294dca0cf67eba9f6066f08560c47b010e0dce4a3ef60ff128d306e -- for each partition
+-- (name, start_after, id, dag_id)
+-- INCLUDE (state)
+-- WHERE state IN ('created','retry');
+--
 
 
 

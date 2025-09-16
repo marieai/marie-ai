@@ -957,7 +957,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     flat_jobs,
                     slots_by_executor,
                     self.active_dags,
-                    recently_activated_dag_ids,
+                    # recently_activated_dag_ids,
                 )
                 scheduled_any = False
 
@@ -1022,7 +1022,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             )
                         )
                         max_level = max(job_levels.values())
-
                         now = datetime.now()
                         # there is no need to put_status as the complete call will do it
                         # await self.put_status(
@@ -1318,7 +1317,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return: The ID of the work item if successfully enqueued, None otherwise.
         """
         self.logger.debug(f"Enqueuing work item : {work_info.id}")
-        await self.mark_as_active(work_info)
         confirmation_event = asyncio.Event()
 
         submission_id = work_info.id
@@ -1326,8 +1324,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not entrypoint:
             raise ValueError("The entrypoint 'on' is not defined in metadata")
 
-        # FIXME : This is a hack to allow the job to be re-submitted after a failure
         await self.job_manager.job_info_client().delete_info(submission_id)
+
         try:
             returned_id = await self.job_manager.submit_job(
                 entrypoint=entrypoint,
@@ -1335,23 +1333,27 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 metadata=work_info.data,
                 confirmation_event=confirmation_event,
             )
-            await asyncio.wait_for(confirmation_event.wait(), timeout=5)
-        except ValueError as e:
-            self.logger.error(f"Error during job submission: {e}")
-            return None
+            # wait for runner ack (keep this short—matches your lease)
+            await asyncio.wait_for(confirmation_event.wait(), timeout=2)
+
+            ok = await self.mark_as_active(work_info)
+            if not ok:
+                self.logger.error(f"Failed to mark ACTIVE in DB: {submission_id}")
+                return None
+
+            return returned_id
+
         except asyncio.TimeoutError:
             self.logger.error(
-                f"Timeout waiting for job submission confirmation for {submission_id}"
+                f"Timeout waiting for submit confirmation: {submission_id}"
             )
-            # TODO :  add logic to revert the 'ACTIVE' status
+            # ensure job is visible again
+            await self.put_status(submission_id, WorkState.RETRY)
             return None
         except Exception as e:
-            self.logger.error(
-                f"An unexpected error occurred during enqueue for {submission_id}: {e}"
-            )
+            self.logger.error(f"Enqueue unexpected error for {submission_id}: {e}")
+            await self.put_status(submission_id, WorkState.RETRY)
             return None
-
-        return returned_id
 
     async def get_work_items_by_queue(
         self,

@@ -1,78 +1,72 @@
-from typing import Any, Sequence, Tuple
+from math import inf
+from typing import Any, Dict, List, Sequence, Tuple
 
 from marie.scheduler.execution_planner import FlatJob
 
 
 class GlobalPriorityExecutionPlanner:
     """
-    Dynamic “global ready queue” scheduler with est.‐runtime as final tie-breaker.
-    Prioritizes:
-      1) deepest-level first (critical-path)
+    Global ready-queue scheduler.
+    Priority (within each runnable/blocked partition):
+      1) deepest level first (critical path)
       2) higher user priority
-      3) more free slots
+      3) more free slots (still useful inside the runnable set)
       4) existing DAGs over new DAGs
-      5) FIFO within same DAG
-      6) shorter est. runtimes
-      7) burst boost for recently activated DAGs
+      5) shorter estimated runtimes
+      6) FIFO (original input order) as the final tiebreaker
 
-      # https://www.mdpi.com/2079-9292/10/16/1874
-      # https://openreview.net/forum?id=km4omm25me
-      # https://ocw.mit.edu/courses/6-042j-mathematics-for-computer-science-spring-2015/mit6_042js15_session17.pdf
+    Notes:
+      - We hard-gate jobs whose executor has no free slots so they don't block runnable work.
+      - No getattr; direct field access only.
+      - 'burst' logic removed.
     """
 
     def plan(
         self,
         jobs: Sequence[FlatJob],
-        slots: dict[str, int],
+        slots: Dict[str, int],
         active_dags: set[str],
-        recently_activated_dags: set[str] = set(),
     ) -> Sequence[FlatJob]:
-        annotated: list[Tuple[str, Any, int, int, int, bool, str, float, bool]] = []
-        for endpoint, wi in jobs:
+        # (endpoint, wi, level, priority, free_slots, is_new, dag_id, est_runtime, fifo_idx)
+        runnable: List[Tuple[str, FlatJob, int, int, int, bool, str, float, int]] = []
+        blocked: List[Tuple[str, FlatJob, int, int, int, bool, str, float, int]] = []
+
+        for idx, (endpoint, wi) in enumerate(jobs):
+            executor = endpoint.split("://", 1)[0]
+            free_slots = int(slots.get(executor, 0))
+
             level = wi.job_level
             priority = wi.priority
             dag_id = wi.dag_id
-            executor = endpoint.split("://", 1)[0]
-            free_slots = slots.get(executor, 0)
-            is_new = wi.dag_id not in active_dags
+            is_new = dag_id not in active_dags
 
-            # extract estimated runtime (default to inf if missing)
-            est = wi.data.get("metadata", {}).get("estimated_runtime")
-            rt = float(est) if est is not None else float("inf")
-            burst_boost = wi.dag_id in recently_activated_dags
+            meta = {}
+            if wi.data is not None and isinstance(wi.data, dict):
+                meta = wi.data.get("metadata", {}) or {}
+            est = meta.get("estimated_runtime", None)
+            rt = float(est) if est is not None else inf
 
-            annotated.append(
-                (
-                    endpoint,
-                    wi,
-                    level,
-                    priority,
-                    free_slots,
-                    is_new,
-                    dag_id,
-                    rt,
-                    burst_boost,
-                )
-            )
+            item = (endpoint, wi, level, priority, free_slots, is_new, dag_id, rt, idx)
+            (runnable if free_slots > 0 else blocked).append(item)
 
-        # sort by:
-        #  - level descending
-        #  - priority descending
-        #  - free_slots descending
-        #  - existing-DAG (False) before new-DAG (True)
-        #  - dag_id (to ensure stable sort, i.e. FIFO within same dag)
-        #  - dag insertion order, oldest first
-        #  - runtime ascending
-        annotated.sort(
-            key=lambda t: (
-                -t[2],  # level
-                -t[3],  # priority
-                -t[4],  # free_slots
+        def sort_key(t):
+            # Within partition (runnable first), prefer:
+            # - deeper level, higher priority
+            # - more free slots as a tie-breaker
+            # - existing DAGs before new DAGs
+            # - shorter runtimes
+            # - FIFO by original order
+            return (
+                -t[2],  # level desc
+                -t[3],  # priority desc
+                -t[4],  # free_slots desc
                 t[5],  # is_new (False < True)
-                t[6],  # dag insertion order
-                t[7],  # est. runtime
-                not t[8],  # burst_boost: True < False
+                t[7],  # est_runtime asc
+                t[8],  # fifo_idx asc
             )
-        )
 
-        return [(endpoint, wi) for endpoint, wi, *_ in annotated]
+        runnable.sort(key=sort_key)
+        blocked.sort(key=sort_key)
+
+        ordered = runnable + blocked
+        return [(endpoint, wi) for endpoint, wi, *_ in ordered]
