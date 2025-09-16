@@ -1,7 +1,7 @@
-CREATE OR REPLACE FUNCTION marie_scheduler.fetch_next_job(
+CREATE OR REPLACE FUNCTION fetch_next_job(
     job_name   text,
-    batch_size integer DEFAULT 1,
-    w_running  numeric DEFAULT 0.70        -- fraction of batch reserved for running DAGs
+    batch_size integer DEFAULT 250,
+    w_hot      numeric DEFAULT 0.70
 )
 RETURNS SETOF marie_scheduler.job
 LANGUAGE sql
@@ -11,78 +11,107 @@ SET work_mem = '256MB'
 SET max_parallel_workers_per_gather = '4'
 SET enable_partitionwise_join = 'on'
 AS $$
-WITH ordered_jobs AS MATERIALIZED (
-  SELECT id, dag_id, job_level, priority
-  FROM marie_scheduler.job
-  WHERE name = job_name
-    AND state IN ('created','retry')
-  ORDER BY job_level ASC, priority DESC
-  LIMIT 12000
+WITH
+eligible AS MATERIALIZED (
+  SELECT
+    j.id, j.dag_id, j.job_level, j.priority, j.created_on,
+    d.state AS dag_state
+  FROM marie_scheduler.job j
+  JOIN marie_scheduler.dag d ON d.id = j.dag_id
+  WHERE d.state IN ('active','created')
+    AND j.name  = fetch_next_job.job_name
+    AND j.state IN ('created','retry')
 ),
-active_jobs AS MATERIALIZED (
-  SELECT oj.*
-  FROM ordered_jobs oj
-  WHERE EXISTS (
+
+candidate AS MATERIALIZED (
+  SELECT e.*
+  FROM eligible e
+  WHERE NOT EXISTS (
     SELECT 1
-    FROM marie_scheduler.dag d
-    WHERE d.id = oj.dag_id
-      AND d.state NOT IN ('completed','failed','cancelled')
+    FROM marie_scheduler.job_dependencies dep
+    LEFT JOIN marie_scheduler.job p
+      ON p.id = dep.depends_on_id
+      AND p.dag_id = e.dag_id
+    WHERE dep.job_id = e.id
+      AND (
+        p.id IS NULL
+        OR p.state <> 'completed'
+      )
   )
 ),
-dep_for_active AS (
-  SELECT dep.job_id, dep.depends_on_id
-  FROM marie_scheduler.job_dependencies dep
-  JOIN active_jobs aj ON aj.id = dep.job_id
-),
-open_deps_subset AS (
-  SELECT dfa.job_id
-  FROM dep_for_active dfa
-  JOIN marie_scheduler.job dj ON dj.id = dfa.depends_on_id
-  WHERE dj.state <> 'completed'
-  GROUP BY dfa.job_id
-),
--- Ready = dependency-free and still active
-candidate AS MATERIALIZED (
-  SELECT aj.id, aj.dag_id, aj.job_level, aj.priority
-  FROM active_jobs aj
-  LEFT JOIN open_deps_subset od ON od.job_id = aj.id
-  WHERE od.job_id IS NULL
-  LIMIT 5000
-),
--- DAGs that already have work "in flight"
-running_dags AS MATERIALIZED (
-  SELECT DISTINCT j.dag_id
-  FROM marie_scheduler.job j
-  WHERE j.state = 'active'
+
+ready AS (
+  SELECT
+    COUNT(*) FILTER (WHERE dag_state = 'active')  AS ready_hot,
+    COUNT(*) FILTER (WHERE dag_state = 'created') AS ready_new
+  FROM candidate
 ),
 caps AS (
   SELECT
-    GREATEST(1, batch_size)::int                    AS batch_sz,
-    CEIL(GREATEST(1, batch_size) * w_running)::int  AS cap_running
+    fetch_next_job.batch_size                                   AS batch_sz,
+    CEIL(fetch_next_job.batch_size * fetch_next_job.w_hot)::int AS hot_cap,
+    r.ready_hot, r.ready_new
+  FROM ready r
 ),
-pick_running AS MATERIALIZED (
-  SELECT *
+alloc AS (
+  SELECT
+    batch_sz,
+    hot_cap,
+    ready_hot, ready_new,
+    LEAST(hot_cap, ready_hot)                              AS hot_take,
+    LEAST(batch_sz - LEAST(hot_cap, ready_hot), ready_new) AS new_take,
+    GREATEST(
+      batch_sz
+      - LEAST(hot_cap, ready_hot)
+      - LEAST(batch_sz - LEAST(hot_cap, ready_hot), ready_new),
+      0
+    ) AS remaining
+  FROM caps
+),
+final_caps AS (
+  SELECT
+    batch_sz,
+    CASE
+      WHEN remaining = 0 THEN hot_take
+      WHEN (ready_hot - hot_take) >= (ready_new - new_take)
+        THEN hot_take + LEAST(remaining, GREATEST(ready_hot - hot_take, 0))
+      ELSE hot_take
+    END AS hot_total,
+    CASE
+      WHEN remaining = 0 THEN new_take
+      WHEN (ready_hot - hot_take) < (ready_new - new_take)
+        THEN new_take + LEAST(remaining, GREATEST(ready_new - new_take, 0))
+      ELSE new_take
+    END AS new_total
+  FROM alloc
+),
+
+pick_hot AS MATERIALIZED (
+  SELECT id, dag_id, job_level, priority, dag_state
   FROM candidate
-  WHERE dag_id IN (SELECT dag_id FROM running_dags)
-  ORDER BY job_level ASC, priority DESC
-  LIMIT (SELECT cap_running FROM caps)
+  WHERE dag_state = 'active'
+  ORDER BY job_level DESC, priority DESC, id
+  LIMIT (SELECT hot_total FROM final_caps)
 ),
 pick_new AS MATERIALIZED (
-  SELECT *
+  SELECT id, dag_id, job_level, priority, dag_state
   FROM candidate
-  WHERE dag_id NOT IN (SELECT dag_id FROM running_dags)
-  ORDER BY job_level ASC, priority DESC
-  LIMIT GREATEST(
-          0,
-          (SELECT batch_sz FROM caps) - (SELECT COUNT(*) FROM pick_running)
-        )
+  WHERE dag_state = 'created'
+  ORDER BY job_level DESC, priority DESC, id
+  LIMIT (SELECT new_total FROM final_caps)
 ),
-chosen AS (
-  SELECT id FROM pick_running
+
+picked AS MATERIALIZED (
+  SELECT * FROM pick_hot
   UNION ALL
-  SELECT id FROM pick_new
+  SELECT * FROM pick_new
+  LIMIT fetch_next_job.batch_size
 )
+
 SELECT j.*
-FROM chosen c
-JOIN marie_scheduler.job j ON j.id = c.id;
+FROM picked p
+JOIN marie_scheduler.job j ON j.id = p.id
+ORDER BY p.job_level DESC, p.priority DESC, j.id;
 $$;
+
+ALTER FUNCTION fetch_next_job(text, integer, numeric) OWNER TO postgres;

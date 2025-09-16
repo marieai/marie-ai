@@ -136,15 +136,15 @@ with:
         - document
 
 
-prefetch: 4
+prefetch: 1
 
 # With how we are going to deploy the application we need to make sure that Executors get the right configuration for Storage and Toast
 # This is because we are launching the process with SPAWN and the configuration is not inherited from the parent process
 
 executors:
-   - name: annotator_executor
+   - name: annotator_parser
      uses:
-       jtype: DocumentAnnotatorExecutor
+       jtype: DocumentAnnotatorParserExecutor
        metas:
          py_modules:
            - marie.executor.extract
@@ -158,6 +158,17 @@ executors:
            s3:
              <<: *s3_conf_shared
              enabled: True
+      
+         parsers:
+           load_core_components: true
+           external_component_modules:
+             - grapnel_g5.parsers.base
+             - grapnel_g5.parsers.override
+             - grapnel_g5.validators.core
+           watch_wheels: True
+           wheel_directories:
+                - /mnt/data/marie-ai/config/wheels
+
      timeout_ready: 3000000
      replicas: 1
   #    : ${{ CONTEXT.gpu_device_count }}

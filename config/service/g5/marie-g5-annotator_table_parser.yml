@@ -136,15 +136,15 @@ with:
         - document
 
 
-prefetch: 4
+prefetch: 1
 
 # With how we are going to deploy the application we need to make sure that Executors get the right configuration for Storage and Toast
 # This is because we are launching the process with SPAWN and the configuration is not inherited from the parent process
 
 executors:
-   - name: annotator_executor
+   - name: annotator_table_parser
      uses:
-       jtype: DocumentAnnotatorExecutor
+       jtype: DocumentAnnotatorTableParserExecutor
        metas:
          py_modules:
            - marie.executor.extract

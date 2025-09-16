@@ -6,12 +6,13 @@ shared_config:
   storage: &storage
     psql: &psql_conf_shared
       provider: postgresql
-      hostname: 127.0.0.1
+      hostname: ${{ ENV.POSTGRES_HOSTNAME }}
       port: 5432
-      username: postgres
-      password: 123456
+      username: ${{ ENV.POSTGRES_USER }}
+      password: ${{ ENV.POSTGRES_PASSWORD }}
       database: postgres
       default_table: shared_docs
+
 
   message: &message
     amazon_mq: &amazon_mq_conf_shared
@@ -97,7 +98,7 @@ with:
 #    - http
 
   discovery: true
-  discovery_host: 127.0.0.1 # SINGLE HOST OR A LIST OF HOSTS
+  discovery_host: 0.0.0.0 # SINGLE HOST OR A LIST OF HOSTS
   discovery_port: 2379
   discovery_watchdog_interval: 5 # DEPRECATED replace by discovery_heartbeat_sec
   discovery_service_name: gateway/marie
@@ -119,7 +120,7 @@ with:
 
   kv_store_kwargs:
     provider: postgresql
-    hostname: 127.0.0.1
+    hostname: 0.0.0.0
     port: 5432
     username: postgres
     password: '123456'
@@ -128,7 +129,11 @@ with:
     max_pool_size: 5
     max_connections: 5
 
+  discovery_kwargs:
+    endpoints: 127.0.0.1:2379,192.168.1.1:2379
 
+
+#  host: 127.0.0.1
   host: 0.0.0.0
 
 # monitoring done by grafana/prometheus has been deprecated in favor of open-telemetry
@@ -185,18 +190,9 @@ prefetch: 4
 executors:
    - name: extract_executor
      uses:
-#       jtype: TextExtractionExecutor
-       jtype: TextExtractionExecutorMock
-       exit_on_exceptions:
-         - CUDARuntimeTerminated
+       jtype: TextExtractionExecutor
+#       jtype: TextExtractionExecutorMock
        with:
-         health:
-           gpu_monitor_enabled: true
-           interval_s: 30
-           consecutive_failures: 3
-           fail_fast_on_error: true
-           torch_check_enabled: true
-           torch_check_every: 3
          storage:
            # postgresql configuration. Will be used only if value of backend is "psql"
            psql:
@@ -243,18 +239,15 @@ executors:
              definitions_path: 'template_matching/definitions' # Path to the definitions relative to model_zoo
              enabled: False
              break_on_match: True
-
+             
        metas:
          py_modules:
            - marie.executor.text
      timeout_ready: 3000000
-
      replicas: 1
 #     replicas: ${{ CONTEXT.gpu_device_count }}
-
      env:
        CUDA_VISIBLE_DEVICES: RR
-
 
 # Authentication and Authorization configuration
 auth:
@@ -268,3 +261,5 @@ auth:
       api_key: mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ
       enabled: True
       roles: [ admin, user ]
+
+
