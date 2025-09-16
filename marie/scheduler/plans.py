@@ -222,10 +222,10 @@ def resume_jobs(schema: str, name: str, ids: list):
 
 def fetch_next_job(schema: str):
     def query(
-            name: str,
-            batch_size: int = 1,
-            include_metadata: bool = False,
-            priority: bool = True,
+        name: str,
+        batch_size: int = 1,
+        include_metadata: bool = False,
+        priority: bool = True,
     ) -> str:
         """
         Constructs a SQL query that calls the stored function to fetch the next job(s),
@@ -249,6 +249,7 @@ def fetch_next_job(schema: str):
 def delete_dags_and_jobs(schema: str, ids: list) -> str:
     ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
     return f"select {schema}.delete_dags_and_jobs({ids_string}::uuid[])"
+
 
 def mark_as_active_jobs(
     schema: str, name: str, ids: list, include_metadata: bool = False
@@ -292,7 +293,7 @@ def mark_as_active_dags(schema: str, ids: list, include_metadata: bool = False):
 
 
 def _complete_jobs_query(
-        schema: str, name: str, ids: list, output: dict, state_condition: str
+    schema: str, name: str, ids: list, output: dict, state_condition: str
 ):
     ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
     return f"""

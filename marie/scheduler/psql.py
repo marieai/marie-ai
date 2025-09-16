@@ -11,7 +11,7 @@ from asyncio import Queue
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Dict, NamedTuple, Tuple, Union, List
+from typing import Any, Awaitable, Callable, Dict, List, NamedTuple, Tuple, Union
 
 import psycopg2
 
@@ -60,6 +60,7 @@ from marie.scheduler.plans import (
     count_dag_states,
     count_job_states,
     create_queue,
+    delete_dags_and_jobs,
     fail_jobs_by_id,
     fetch_next_job,
     insert_dag,
@@ -72,7 +73,6 @@ from marie.scheduler.plans import (
     to_timestamp_with_tz,
     try_set_monitor_time,
     version_table_exists,
-    delete_dags_and_jobs,
 )
 from marie.scheduler.printers import (
     print_dag_state_summary,
@@ -1660,9 +1660,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 request = await self._request_queue.get()
                 try:
 
-                    result = await self.__submit_job(
-                        request.work_info
-                    )
+                    result = await self.__submit_job(request.work_info)
                     self._submission_count += 1
                     await self._handle_priority_refresh()
 
@@ -1796,7 +1794,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return:
         """
         submission_id = work_info.id
-        submission_policy = ExistingWorkPolicy.create(work_info.policy, default_policy=self.default_existing_work_policy)
+        submission_policy = ExistingWorkPolicy.create(
+            work_info.policy, default_policy=self.default_existing_work_policy
+        )
 
         is_valid = await self.is_valid_submission(work_info, submission_policy)
         if not is_valid:
@@ -1892,12 +1892,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if len(existing_jobs) == 0:
                     return True
 
-                distinct_dag_ids = {job.dag_id for job in existing_jobs if job.dag_id is not None}
+                distinct_dag_ids = {
+                    job.dag_id for job in existing_jobs if job.dag_id is not None
+                }
                 for dag_id in distinct_dag_ids:
                     dag_state = self._resolve_dag_status_sync(dag_id)
                     if dag_state not in ("completed", "failed"):
-                        self.logger.warning(f"Removing DAG to due to 'replace' policy: {dag_id}, state: {dag_state}")
-                        self._remove_dag_from_memory(dag_id, "Existing Work Policy: 'replace'")
+                        self.logger.warning(
+                            f"Removing DAG to due to 'replace' policy: {dag_id}, state: {dag_state}"
+                        )
+                        self._remove_dag_from_memory(
+                            dag_id, "Existing Work Policy: 'replace'"
+                        )
                         is_deleted = await self.delete_dag(dag_id)
                         if not is_deleted:
                             self.logger.warning(f"Failed to delete DAG: {dag_id}")
@@ -1923,8 +1929,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             try:
                 conn = self._get_connection()
                 self._execute_sql_gracefully(
-                    delete_dags_and_jobs(DEFAULT_SCHEMA, [dag_id]),
-                    connection=conn
+                    delete_dags_and_jobs(DEFAULT_SCHEMA, [dag_id]), connection=conn
                 )
                 return True
             except (Exception, psycopg2.Error) as error:
