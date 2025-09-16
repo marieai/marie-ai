@@ -446,6 +446,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         finally:
             self._close_cursor(cursor)
             self._close_connection(conn)
+        return False
 
     async def create_queue(self, queue_name: str) -> None:
         """Setup the queue for the scheduler."""
