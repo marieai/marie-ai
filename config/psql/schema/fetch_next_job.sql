@@ -1,4 +1,4 @@
-CREATE OR REPLACE FUNCTION fetch_next_job(
+CREATE OR REPLACE FUNCTION marie_scheduler.fetch_next_job(
     job_name   text,
     batch_size integer DEFAULT 250,
     w_hot      numeric DEFAULT 0.70
