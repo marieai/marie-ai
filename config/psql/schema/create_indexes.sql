@@ -95,5 +95,15 @@ CREATE INDEX IF NOT EXISTS job_id_failed_idx ON marie_scheduler.job (id) WHERE s
 -- WHERE state IN ('created','retry');
 --
 
+-- lease indexes
+CREATE INDEX IF NOT EXISTS job_ready_idx
+  ON marie_scheduler.job (name, state, job_level DESC, priority DESC)
+  WHERE state IN ('created','retry','leased');
 
+CREATE INDEX IF NOT EXISTS job_lease_expired_idx
+  ON marie_scheduler.job (lease_expires_at)
+  WHERE state='leased';
 
+CREATE INDEX IF NOT EXISTS job_run_lease_expired_idx
+  ON marie_scheduler.job (run_lease_expires_at)
+  WHERE state='active';
