@@ -1,16 +1,17 @@
 import asyncio
-import contextlib
 import copy
 import json
 import random
+import socket
 import time
 import traceback
 import uuid
+import uuid as _uuid
 from asyncio import Queue
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Dict, NamedTuple, Optional, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, NamedTuple, Tuple, Union
 
 import psycopg2
 
@@ -56,7 +57,6 @@ from marie.scheduler.plans import (
     count_job_states,
     create_queue,
     fail_jobs_by_id,
-    fetch_next_job,
     insert_dag,
     insert_job,
     insert_version,
@@ -220,6 +220,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.max_concurrent_dags = max_concurrent_dags
         self._start_time = datetime.now(timezone.utc)
         self.mem = MemoryFrontier()
+
+        self.lease_ttl_seconds: int = int(config.get("lease_ttl_seconds", 5))
+        self.run_ttl_seconds: int = int(config.get("run_ttl_seconds", 60))
+        # unique, stable lease owner for this scheduler instance
+        self.lease_owner: str = f"{socket.gethostname()}:{_uuid.uuid4()}"
+        self.logger.info(
+            f"Lease config: lease_ttl_seconds={self.lease_ttl_seconds}, "
+            f"run_ttl_seconds={self.run_ttl_seconds}, owner='{self.lease_owner}'"
+        )
 
     def validate_config(self, config: Dict[str, Any]):
         # TODO :Implement full validation of required fields
@@ -880,8 +889,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         Handles the job scheduling polling process for the database in serial mode.
 
-        This coroutine function is responsible for managing
-        ecutors. It includes mechanisms for
+        This coroutine function is responsible for managing executors. It includes mechanisms for
         handling job dependencies, activation and cleanup of DAGs (Directed Acyclic Graphs),
         and backoff strategies for managing idle periods or situations with no executor slots
         available.
@@ -894,10 +902,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         failures = 0
         idle_streak = 0
 
-        last_deployments_timestamp = ClusterState.deployments_last_updated
-        slots_by_executor = available_slots_by_executor(ClusterState.deployments).copy()
-
-        dag_id = None  # this is the last dag_id that was processed
         max_concurrent_dags = self.max_concurrent_dags
         self.logger.info(f"Max concurrent DAGs set to: {max_concurrent_dags}")
 
@@ -913,29 +917,23 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 except asyncio.TimeoutError:
                     pass
 
-                # FIXME : this is a hack
                 slots_by_executor = available_slots_by_executor(
                     ClusterState.deployments
                 ).copy()
                 pick_slots = slots_by_executor.copy()
 
-                # back off if no slots
-                self.logger.info(
-                    f"Available slots ({len(self.active_dags)}/{max_concurrent_dags}) : {slots_by_executor}"
-                )
                 if not any(slots_by_executor.values()):
                     self.logger.warning("No available executor slots. Backing off.")
                     idle_streak += 1
                     wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
                     continue
 
-                # build candidate list purely from memory
-                candidates = self.mem.pop_ready_batch(pick_slots, max_n=25000)
-                flat_jobs: list[Tuple[str, WorkInfo]] = []
-
+                # Get all ready candidates from memory
+                candidates = self.mem.pop_ready_batch(pick_slots, max_n=batch_size)
                 flat_jobs = self.execution_planner.plan(
                     candidates, pick_slots, self.active_dags
                 )
+
                 scheduled_any = False
                 if not flat_jobs:
                     self.logger.debug(
@@ -944,20 +942,122 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
                     continue
 
-                # Count jobs per executor
+                # ---- Partition jobs into a NOOP hot path and a regular dispatch path ----
+                dag_cache: Dict[str, QueryPlan | None] = {}
+                jobs_to_complete_as_noop: list[WorkInfo] = []
+                jobs_to_dispatch_candidates: list[Tuple[str, WorkInfo]] = []
+
+                async def get_dag_from_cache(dag_id: str) -> QueryPlan | None:
+                    if dag_id not in dag_cache:
+                        dag_cache[dag_id] = await self.get_dag_by_id(dag_id)
+                    return dag_cache[dag_id]
+
+                for entrypoint, work_info in flat_jobs:
+                    dag = await get_dag_from_cache(work_info.dag_id)
+                    if not dag:
+                        self.logger.warning(
+                            f"Could not find DAG {work_info.dag_id} for job {work_info.id}, skipping."
+                        )
+                        continue
+
+                    node = self.get_node_from_dag(work_info.id, dag)
+                    if self._is_noop_query_definition(node):
+                        jobs_to_complete_as_noop.append(work_info)
+                    else:
+                        jobs_to_dispatch_candidates.append((entrypoint, work_info))
+
+                # --- Hot Path: Process NOOP jobs immediately without leasing or activating the DAG ---
+                if jobs_to_complete_as_noop:
+                    self.logger.info(
+                        f"Processing {len(jobs_to_complete_as_noop)} NOOP jobs on a hot path."
+                    )
+                    for wi in jobs_to_complete_as_noop:
+                        await self.complete(wi.id, wi, {}, force=True)
+                        self.mem.on_job_completed(wi.id)
+
+                        dag = await get_dag_from_cache(wi.dag_id)
+                        if dag:
+                            sorted_nodes, job_levels = (
+                                self._topology_cache.get_sorted_nodes_and_levels(
+                                    dag, wi.dag_id
+                                )
+                            )
+                            if job_levels.get(wi.id, -1) == max(job_levels.values()):
+                                await self.resolve_dag_status(wi.id, wi)
+
+                    scheduled_any = True
+                    await self.notify_event()
+
+                # --- Regular Path: Process remaining jobs that require dispatching ---
+                if not jobs_to_dispatch_candidates:
+                    if scheduled_any:
+                        idle_streak = 0
+                        wait_time = adjust_backoff(wait_time, idle_streak, True)
+                    continue
+
                 jobs_by_executor = defaultdict(int)
-                for entrypoint, _ in flat_jobs:
+                for entrypoint, _ in jobs_to_dispatch_candidates:
                     executor = entrypoint.split("://")[0]
                     jobs_by_executor[executor] += 1
 
-                self.logger.info(f"Jobs candidates per executor: {jobs_by_executor}")
+                self.logger.info(f"Jobs candidates for dispatch: {jobs_by_executor}")
                 for executor, count in jobs_by_executor.items():
                     self.logger.info(f"  {executor}: {count} jobs")
+
+                for _, wi in jobs_to_dispatch_candidates:
+                    try:
+                        self.mem.mark_leased(wi.id, ttl_s=self.lease_ttl_seconds)
+                    except Exception as _e:
+                        self.logger.warning(f"Soft-lease failed for {wi.id}: {_e}")
+
+                ids_by_job_name: dict[str, list[str]] = defaultdict(list)
+                for _, wi in jobs_to_dispatch_candidates:
+                    ids_by_job_name[wi.name].append(wi.id)
+
+                leased_ids: set[str] = set()
+                for job_name, ids in ids_by_job_name.items():
+                    try:
+                        got = await self._lease_jobs_db(job_name, ids)
+                        leased_ids.update(got)
+                    except Exception as e:
+                        self.logger.error(
+                            f"DB lease failed for job '{job_name}' ({len(ids)} ids): {e}"
+                        )
+
+                if not leased_ids:
+                    self.logger.debug(
+                        "No dispatchable candidates could be leased in DB; backing off briefly."
+                    )
+                    for _, wi in jobs_to_dispatch_candidates:
+                        try:
+                            self.mem.release_lease_local(wi.id)
+                        except Exception:
+                            pass
+                    await asyncio.sleep(SHORT_POLL_INTERVAL)
+                    continue
+
+                leased_jobs: list[Tuple[str, WorkInfo]] = [
+                    (ep, wi)
+                    for (ep, wi) in jobs_to_dispatch_candidates
+                    if wi.id in leased_ids
+                ]
+                for _, wi in jobs_to_dispatch_candidates:
+                    if wi.id not in leased_ids:
+                        try:
+                            self.mem.release_lease_local(wi.id)
+                        except Exception:
+                            pass
+
+                skipped = len(jobs_to_dispatch_candidates) - len(leased_jobs)
+                if skipped > 0:
+                    self.logger.debug(
+                        f"Skipped {skipped} dispatchable jobs not leased by DB"
+                    )
 
                 jobs_scheduled_this_cycle = defaultdict(int)
                 enqueue_tasks = []
 
-                for entrypoint, work_info in flat_jobs:
+                for entrypoint, work_info in leased_jobs:
                     executor = entrypoint.split("://")[0]
                     dag_id = work_info.dag_id
 
@@ -966,72 +1066,43 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         and len(self.active_dags) >= max_concurrent_dags
                     ):
                         self.logger.debug(
-                            f"Max DAG limit reached "
-                            f"({len(self.active_dags)}/{max_concurrent_dags}). "
-                            f"Skipping DAG {dag_id}"
+                            f"Max DAG limit reached ({len(self.active_dags)}/{max_concurrent_dags}). Skipping DAG {dag_id}"
                         )
+                        try:
+                            await self._release_lease_db([work_info.id])
+                            self.mem.release_lease_local(work_info.id)
+                        except Exception as re:
+                            self.logger.warning(
+                                f"Lease release failed for skipped job {work_info.id}: {re}"
+                            )
                         continue
-
-                    dag = await self.get_dag_by_id(dag_id)
-                    if dag is None:
-                        self._remove_dag_from_memory(dag_id, "DAG not found: {dag_id}")
-                        raise ValueError(f"DAG not found: {dag_id}")
 
                     if dag_id not in self.active_dags:
-                        await self.mark_as_active_dag(work_info)
-                        self.active_dags[dag_id] = dag
-                        self.logger.debug(f"DAG activated: {dag_id}")
-
-                    node = self.get_node_from_dag(work_info.id, dag)
-
-                    if self._is_noop_query_definition(node):
-                        start_t = time.time()
-                        # expensive operations
-                        # sorted_nodes = topological_sort(dag)
-                        # job_levels = compute_job_levels(sorted_nodes, dag)
-                        sorted_nodes, job_levels = (
-                            self._topology_cache.get_sorted_nodes_and_levels(
-                                dag, dag_id
-                            )
-                        )
-                        max_level = max(job_levels.values())
-                        now = datetime.now()
-                        # there is no need to put_status as the complete call will do it
-                        # await self.put_status(
-                        #     work_info.id, WorkState.COMPLETED, now, now
-                        # )
-                        await self.complete(work_info.id, work_info, {}, force=True)
-                        self.mem.on_job_completed(work_info.id)
-
-                        if (
-                            max_level == work_info.job_level
-                        ):  # There is no need to resolve DAG if we are in NOOP and not at the END
-                            await self.resolve_dag_status(work_info.id, work_info)
-                        await self.notify_event()
-
-                        continue
+                        dag = await get_dag_from_cache(work_info.dag_id)
+                        if dag:
+                            await self.mark_as_active_dag(work_info)
+                            self.active_dags[dag_id] = dag
+                            self.logger.debug(f"DAG activated: {dag_id}")
 
                     if slots_by_executor.get(executor, 0) <= 0:
                         self.logger.debug(
                             f"No slots for {executor}, delaying job {work_info.id}"
                         )
+                        try:
+                            await self._release_lease_db([work_info.id])
+                            self.mem.release_lease_local(work_info.id)
+                        except Exception as re:
+                            self.logger.warning(
+                                f"Lease release failed for no-slot job {work_info.id}: {re}"
+                            )
                         continue
 
-                    # Reserve a slot and create a task for this job
                     slots_by_executor[executor] -= 1
-                    # Local lease to avoid rescheduling in the next loop
-                    self.mem.mark_leased(work_info.id, ttl_s=2)
-
-                    async def __schedule_job(wi: WorkInfo):
-                        return await self.enqueue(wi)
-
-                    task = asyncio.create_task(__schedule_job(work_info))
+                    task = asyncio.create_task(self.enqueue(work_info))
                     enqueue_tasks.append(
                         {'task': task, 'work_info': work_info, 'executor': executor}
                     )
 
-                #  enqueue tasks in parallel and process the results
-                scheduled_any = False
                 if enqueue_tasks:
                     task_list = [t['task'] for t in enqueue_tasks]
                     results = await asyncio.gather(*task_list, return_exceptions=True)
@@ -1040,54 +1111,65 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         work_info = enqueue_tasks[i]['work_info']
                         executor = enqueue_tasks[i]['executor']
 
-                        if isinstance(result, Exception) or not result:
+                        if isinstance(result, Exception):
+                            # enqueue() raised → failure
                             self.logger.error(
-                                f"Failed to schedule job {work_info.id}: {result}"
+                                f"Failed to dispatch job {work_info.id}: exception during enqueue()",
+                                exc_info=True,
                             )
-                            # scheduling failed: make job visible again in memory
-                            self.mem.release_lease_local(work_info.id)
-                        elif result:  # result is the enqueue_id
-                            jobs_scheduled_this_cycle[executor] += 1
-                            self.logger.info(f"Job scheduled: {result} on {executor}")
-                            scheduled_any = True
+                            dispatch_successful = False
                         else:
-                            self.logger.error(
-                                f"Failed to enqueue job: {work_info.id} on {executor} - no result returned"
-                            )
+                            # enqueue() returned a bool
+                            dispatch_successful = result
 
-                if jobs_scheduled_this_cycle or len(flat_jobs) > 0:
+                        if not dispatch_successful:
+                            try:
+                                slots_by_executor[executor] += 1
+                                await self._release_lease_db([work_info.id])
+                                self.mem.release_lease_local(work_info.id)
+                            except Exception as re:
+                                self.logger.warning(
+                                    f"Failure recovery release failed for {work_info.id}: {re}"
+                                )
+                        else:
+                            jobs_scheduled_this_cycle[executor] += 1
+                            self.logger.info(
+                                f"Job {work_info.id} dispatched to {executor}, now activating."
+                            )
+                            try:
+                                activated_ids = await self._activate_from_lease_db(
+                                    [work_info.id]
+                                )
+                                if work_info.id not in activated_ids:
+                                    self.logger.error(
+                                        f"Failed to activate job {work_info.id} from lease. Releasing."
+                                    )
+                                    await self._release_lease_db([work_info.id])
+                                    self.mem.release_lease_local(work_info.id)
+                                else:
+                                    scheduled_any = True
+                            except Exception as ae:
+                                self.logger.error(
+                                    f"Activation failed for {work_info.id}: {ae}. Releasing.",
+                                    exc_info=True,
+                                )
+                                await self._release_lease_db([work_info.id])
+                                self.mem.release_lease_local(work_info.id)
+
+                if jobs_scheduled_this_cycle or len(leased_jobs) > 0:
                     self.logger.info("Scheduling summary for this cycle:")
                     all_executors = sorted(list(jobs_by_executor.keys()))
 
                     for executor in all_executors:
                         candidates = jobs_by_executor.get(executor, 0)
                         scheduled = jobs_scheduled_this_cycle.get(executor, 0)
-                        remaining = candidates - scheduled
+                        remaining = max(0, candidates - scheduled)
                         self.logger.info(
                             f"  - {executor}: {scheduled} scheduled / {candidates} candidates ({remaining} remaining)"
                         )
 
-                    total_scheduled = sum(jobs_scheduled_this_cycle.values())
-                    remaining_candidates = len(flat_jobs) - total_scheduled
-                    self.logger.info(
-                        f"Total scheduled: {total_scheduled}. Total unscheduled candidates: {remaining_candidates}."
-                    )
-
-                self.logger.debug(f"Remaining slots: {slots_by_executor}")
-                # acknowledgments, we are waiting for the jobs to be scheduled on the executor and get response via ETCD
                 if scheduled_any:
                     await self.notify_event()
-
-                # if scheduled_any:
-                #     try:
-                #         await asyncio.wait_for(
-                #             ClusterState.scheduled_event.wait(), timeout=1
-                #         )  # THIS SHOULD BE SAME AS ETCD lease time
-                #     except asyncio.TimeoutError:
-                #         self.logger.warning("Timeout waiting for schedule confirmation")
-                #     finally:
-                #         ClusterState.scheduled_event.clear()
-                #         await self.notify_event()
 
                 idle_streak = 0 if scheduled_any else idle_streak + 1
                 wait_time = adjust_backoff(wait_time, idle_streak, scheduled_any)
@@ -1095,14 +1177,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             except Exception as e:
                 self.logger.error("Poll loop exception", exc_info=True)
                 failures += 1
-
-                self._remove_dag_from_memory(dag_id, "poll loop exception ")
-
                 if failures >= 5:
                     self.logger.warning("Too many failures — entering cooldown")
                     await asyncio.sleep(60)
                     failures = 0
-                    # TODO : Fire ENGINE FAILURE NOTIFICATION
 
     async def debug_work_plans(
         self,
@@ -1288,51 +1366,51 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         return debug_data
 
-    async def enqueue(self, work_info: WorkInfo) -> str | None:
+    async def enqueue(self, work_info: WorkInfo) -> bool:
         """
-        Enqueues a work item for processing on the next available executor.
+        Tries to dispatch a work item to an executor and waits for confirmation.
+        This method does NOT change the job state in the database.
 
         :param work_info: The information about the work item to be processed.
-        :return: The ID of the work item if successfully enqueued, None otherwise.
+        :return: True if successfully dispatched and confirmed, False otherwise.
         """
-        self.logger.debug(f"Enqueuing work item : {work_info.id}")
+        self.logger.debug(f"Attempting to dispatch work item: {work_info.id}")
         confirmation_event = asyncio.Event()
-
         submission_id = work_info.id
         entrypoint = work_info.data.get("metadata", {}).get("on")
-        if not entrypoint:
-            raise ValueError("The entrypoint 'on' is not defined in metadata")
 
-        await self.job_manager.job_info_client().delete_info(submission_id)
+        if not entrypoint:
+            self.logger.error(
+                f"The entrypoint 'on' is not defined in metadata for job {submission_id}"
+            )
+            return False
 
         try:
-            returned_id = await self.job_manager.submit_job(
+            await self.job_manager.submit_job(
                 entrypoint=entrypoint,
                 submission_id=submission_id,
                 metadata=work_info.data,
                 confirmation_event=confirmation_event,
             )
-            # wait for runner ack (keep this short—matches your lease)
-            await asyncio.wait_for(confirmation_event.wait(), timeout=2)
 
-            ok = await self.mark_as_active(work_info)
-            if not ok:
-                self.logger.error(f"Failed to mark ACTIVE in DB: {submission_id}")
-                return None
-
-            return returned_id
+            # Wait for the supervisor to confirm it has received the job and is running.
+            # A short timeout is critical, it should be less than the lease TTL.
+            await asyncio.wait_for(
+                confirmation_event.wait(), timeout=self.lease_ttl_seconds - 1
+            )
+            self.logger.info(f"Dispatch confirmed for job: {submission_id}")
+            return True
 
         except asyncio.TimeoutError:
             self.logger.error(
-                f"Timeout waiting for submit confirmation: {submission_id}"
+                f"Timeout waiting for dispatch confirmation for job {submission_id}"
             )
-            # ensure job is visible again
-            await self.put_status(submission_id, WorkState.RETRY)
-            return None
+            return False
         except Exception as e:
-            self.logger.error(f"Enqueue unexpected error for {submission_id}: {e}")
-            await self.put_status(submission_id, WorkState.RETRY)
-            return None
+            self.logger.error(
+                f"Failed to dispatch job {submission_id}: {e}", exc_info=True
+            )
+            return False
 
     async def get_work_items_by_queue(
         self,
@@ -1896,7 +1974,33 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.error(f"Error in maintenance: {e}")
 
     async def expire(self):
-        print("Expiring jobs")
+        """Expire jobs with expired leases."""
+        self.logger.debug("Checking for expired job leases")
+
+        def db_call():
+            """Sync DB call to release expired leases."""
+            conn = None
+            released_count = 0
+            try:
+                conn = self._get_connection()
+                query = "SELECT marie_scheduler.release_expired_leases()"
+                # self._execute_sql_gracefully returns a list for SELECT, e.g. [(5,)]
+                result = self._execute_sql_gracefully(query, connection=conn)
+
+                if result and isinstance(result, list) and len(result) > 0:
+                    count = result[0][0]
+                    if count:
+                        released_count = count
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Failed to expire jobs: {error}", exc_info=True)
+            finally:
+                self._close_connection(conn)
+            return released_count
+
+        released_count = await self._loop.run_in_executor(self._db_executor, db_call)
+        if released_count > 0:
+            self.logger.info(f"Released expired job leases : {released_count}")
+            await self.notify_event()
 
     async def archive(self):
         print("Archiving jobs")
@@ -2465,6 +2569,84 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 "cleared_count": 0,
                 "cleared_dags": [],
             }
+
+    async def _lease_jobs_db(self, job_name: str, ids: list[str]) -> set[str]:
+        """
+        Try to lease the given job ids for this scheduler instance in the DB.
+        Returns the subset of ids that were successfully leased.
+        """
+        if not ids:
+            return set()
+
+        def _lease_sync() -> set[str]:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                # lease ids
+                sql = f"SELECT id FROM {DEFAULT_SCHEMA}.lease_jobs_by_id(%s, %s::uuid[], %s, %s)"
+                params = (job_name, ids, self.lease_owner, self.lease_ttl_seconds)
+                cursor = self._execute_sql_gracefully(
+                    sql, params=params, return_cursor=True, connection=conn
+                )
+                rows = cursor.fetchall() if cursor else []
+                return {row[0] for row in rows}
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, _lease_sync)
+
+    async def _activate_from_lease_db(self, ids: list[str]) -> set[str]:
+        """
+        Promote leased jobs to active/running in DB once dispatch is acknowledged.
+        """
+        if not ids:
+            return set()
+
+        def _activate_sync() -> set[str]:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                sql = f"SELECT id FROM {DEFAULT_SCHEMA}.activate_from_lease(%s::uuid[], %s, %s, %s)"
+                # run_owner and run_ttl_seconds reflect the runtime "active" lease
+                params = (ids, self.lease_owner, self.lease_owner, self.run_ttl_seconds)
+                cursor = self._execute_sql_gracefully(
+                    sql, params=params, return_cursor=True, connection=conn
+                )
+                rows = cursor.fetchall() if cursor else []
+                return {row[0] for row in rows}
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, _activate_sync)
+
+    async def _release_lease_db(self, ids: list[str]) -> set[str]:
+        """
+        Release DB leases for the given job ids if dispatch fails or needs retry.
+        """
+        if not ids:
+            return set()
+
+        def _release_sync() -> set[str]:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                sql = f"SELECT id FROM {DEFAULT_SCHEMA}.release_lease(%s::uuid[], %s)"
+                params = (ids, self.lease_owner)
+                cursor = self._execute_sql_gracefully(
+                    sql, params=params, return_cursor=True, connection=conn
+                )
+                rows = cursor.fetchall() if cursor else []
+                return {row[0] for row in rows}
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, _release_sync)
 
     async def hydrate_from_db(
         self, include_active: bool = False, itersize: int = 5000

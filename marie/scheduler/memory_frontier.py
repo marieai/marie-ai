@@ -57,7 +57,7 @@ class MemoryFrontier:
 
     def on_job_failed(self, job_id: str) -> list[WorkInfo]:
         """Conservative policy: block descendants (don’t enqueue)."""
-        # If you want "fail-fast" across the DAG, you can mark descendants as permanently blocked here.
+        # If we want "fail-fast" across the DAG, we can mark descendants as permanently blocked here.
         return []
 
     def mark_leased(self, job_id: str, ttl_s: int = 5) -> None:
