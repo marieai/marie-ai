@@ -28,7 +28,7 @@ class MemoryFrontier:
         for wi in nodes:
             self.jobs_by_id[wi.id] = wi
             self.dag_nodes[wi.dag_id].add(wi.id)
-            deps = getattr(wi, "dependencies", []) or []
+            deps = wi.dependencies if wi.dependencies else []
             self.unmet_count[wi.id] = len(deps)
             for d in deps:
                 self.dependents[d].append(wi.id)
@@ -78,17 +78,30 @@ class MemoryFrontier:
 
     def _pop_one_for_executor(self, exe: str) -> tuple[str, WorkInfo] | None:
         dq = self.ready_by_executor.get(exe)
-        while dq and dq:
+        if not dq:
+            return None
+
+        # Iterate through the current contents of the deque once (bounded iteration).
+        for _ in range(len(dq)):
             wi = dq.popleft()
-            # Skip if leased and lease not expired
+
+            #  If the job is still soft-leased, put it back at the end of the queue.
             if wi.id in self.leased_until and self.leased_until[wi.id] > time.time():
+                dq.append(wi)
                 continue
-            # Clean stale lease if any
+
+            # If not leased or lease expired:
             self.leased_until.pop(wi.id, None)
+
+            # Check if the job has a valid execution endpoint.
             ep = wi.data.get("metadata", {}).get("on", "")
             if not ep:
-                continue
-            return (ep, wi)
+                # If there's no endpoint, this WorkInfo is malformed or not meant for this kind of executor.
+                # This indicates a data integrity issue. Raising an error highlights this immediately.
+                raise ValueError(f'Job with no defined endpoint : {wi.id}')
+
+            return ep, wi
+
         return None
 
     def pop_ready_batch(
