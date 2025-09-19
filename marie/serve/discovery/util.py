@@ -1,3 +1,4 @@
+import asyncio
 import functools
 import time
 from typing import Callable
@@ -109,6 +110,63 @@ def reconn_reauth_adaptor(meth: Callable):
                     if num_reauth_tries > 0:
                         raise
                     reauthenticate(self.client, self._creds, None)
+                    log.debug("etcd3 reauthenticated due to auth token expiration.")
+                    num_reauth_tries += 1
+                    continue
+                else:
+                    raise
+
+    return wrapped
+
+
+def async_reconn_reauth_adaptor(meth: Callable):
+    """
+    Asynchronous retry and re-authentication for the given async method.
+
+    :param meth: The async method to be wrapped.
+    :return: The wrapped async method.
+    """
+
+    @functools.wraps(meth)
+    async def wrapped(self, *args, **kwargs):
+        num_reauth_tries = 0
+        num_reconn_tries = 0
+
+        while True:
+            try:
+                # Await the async method
+                return await meth(self, *args, **kwargs)
+            except etcd3.exceptions.ConnectionFailedError:
+                if num_reconn_tries >= 20:
+                    log.warning(
+                        "etcd3 connection failed more than %d times. Retrying after 1 sec...",
+                        num_reconn_tries,
+                    )
+                else:
+                    log.debug("etcd3 connection failed. Retrying after 1 sec...")
+
+                # Use non-blocking sleep
+                await asyncio.sleep(1.0)
+                num_reconn_tries += 1
+                continue
+            except grpc.RpcError as e:
+                if (
+                    e.code() == grpc.StatusCode.UNAUTHENTICATED
+                    or (
+                        e.code() == grpc.StatusCode.UNKNOWN
+                        and "invalid auth token" in e.details()
+                    )
+                ) and self._creds:
+                    if num_reauth_tries > 0:
+                        raise
+
+                    # Assuming reauthenticate is synchronous, run it in an executor
+                    # If it can be made async, await it directly.
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(
+                        None, reauthenticate, self.client, self._creds, None
+                    )
+
                     log.debug("etcd3 reauthenticated due to auth token expiration.")
                     num_reauth_tries += 1
                     continue

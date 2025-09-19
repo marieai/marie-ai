@@ -1,8 +1,10 @@
+import asyncio
 import functools
 import queue
 import threading
 import time
 from collections import namedtuple
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple, Union
 from urllib.parse import quote as _quote
@@ -18,6 +20,7 @@ from marie.serve.discovery.base import ConnectionEvent, ConnectionState
 from marie.serve.discovery.state_tracker import StateTracker
 from marie.serve.discovery.util import (
     _slash,
+    async_reconn_reauth_adaptor,
     make_dict_from_pairs,
     parse_netloc,
     reconn_reauth_adaptor,
@@ -151,6 +154,11 @@ class EtcdClient(object):
 
         if not self._monitor_ready.wait(timeout=5.0):
             logger.warning("Connection monitor did not start within timeout")
+
+        max_workers = 4
+        self._etcd_executor = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="etcd-executor"
+        )
 
         self.connect()
 
@@ -844,6 +852,21 @@ class EtcdClient(object):
         val = self.client.put(mangled_key, str(val).encode(self.encoding), lease=lease)
         return mangled_key, val
 
+    @async_reconn_reauth_adaptor
+    async def aput(self, key: str, val: str, lease=None) -> tuple:
+        """
+        Asynchronously puts a single key-value pair to etcd by wrapping the synchronous put method.
+
+        :param key: The key. This must be quoted by the caller as needed.
+        :param val: The value.
+        :param lease: The lease ID.
+        :return: The key and value.
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._etcd_executor, self.put, key, val, lease
+        )
+
     @reconn_reauth_adaptor
     def put_prefix(self, key: str, dict_obj: Mapping[str, str]):
         """
@@ -910,6 +933,14 @@ class EtcdClient(object):
     def lease(self, ttl, lease_id=None):
         """Create a new lease."""
         return self.client.lease(ttl, lease_id=lease_id)
+
+    @async_reconn_reauth_adaptor
+    async def alease(self, ttl, lease_id=None):
+        """Create a new lease."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._etcd_executor, self.lease, ttl, lease_id
+        )
 
     @reconn_reauth_adaptor
     def delete(self, key: str):
