@@ -1,130 +1,379 @@
+import asyncio
+import heapq
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
+from typing import Any, Callable, Iterable, Optional
 
 from marie.query_planner.base import QueryPlan
 from marie.scheduler.models import WorkInfo
 
 
 class MemoryFrontier:
-    def __init__(self):
-        # job graph / indices
+    """
+    In-memory DAG frontier with:
+      - Global ready pool (priority + age fairness) using a min-heap
+      - Atomic peek/take (asyncio.Lock)
+      - Soft-leases to avoid duplicate scheduling within this process
+    """
+
+    def __init__(
+        self, *, higher_priority_wins: bool = True, default_lease_ttl: float = 5.0
+    ):
+        # Job graph / indices
         self.jobs_by_id: dict[str, WorkInfo] = {}
         self.dag_nodes: dict[str, set[str]] = defaultdict(set)
         self.dependents: dict[str, list[str]] = defaultdict(list)  # parent -> children
         self.unmet_count: dict[str, int] = defaultdict(int)
-        # ready queues per executor (protocol before ://)
-        self.ready_by_executor: dict[str, deque[WorkInfo]] = defaultdict(deque)
-        # local soft-leases (seconds since epoch)
+
+        # Ready pool (global), fairness: priority then age (older first)
+        # Heap entries: (priority_key, added_at, seq, job_id)
+        self._ready_heap: list[tuple[int, float, int, str]] = []
+        self._ready_set: set[str] = set()  # fast membership / lazy deletion
+        self._added_at: dict[str, float] = {}  # first time job became ready
+        self._seq = 0  # tie breaker to keep heap stable
+
+        # Soft leases: job_id -> unix expiry seconds
         self.leased_until: dict[str, float] = {}
 
-    @staticmethod
-    def _executor_for(wi: WorkInfo) -> str:
-        ep = wi.data.get("metadata", {}).get("on", "")
-        return ep.split("://", 1)[0] if "://" in ep else ""
+        self.higher_priority_wins = higher_priority_wins
+        self.default_lease_ttl = float(default_lease_ttl)
 
-    def add_dag(self, dag: QueryPlan, nodes: list[WorkInfo]) -> None:
-        # Build edges & unmet dep counts
+        self._lock = asyncio.Lock()
+
+    def _priority_key(self, wi: WorkInfo) -> int:
+        # If higher integer = higher priority, invert for min-heap
+        return -int(wi.priority) if self.higher_priority_wins else int(wi.priority)
+
+    def _push_ready(self, wi: WorkInfo) -> None:
+        if wi.id in self._ready_set:
+            return
+        self._ready_set.add(wi.id)
+        if wi.id not in self._added_at:
+            self._added_at[wi.id] = time.time()
+        self._seq += 1
+        heapq.heappush(
+            self._ready_heap,
+            (self._priority_key(wi), self._added_at[wi.id], self._seq, wi.id),
+        )
+
+    def _remove_from_ready_set(self, job_id: str) -> None:
+        self._ready_set.discard(job_id)
+
+    def _still_ready(self, job_id: str) -> bool:
+        # Ready if: exists, unmet deps == 0, not hard-leased, and in ready_set
+        if job_id not in self.jobs_by_id:
+            return False
+        if self.unmet_count.get(job_id, 1) != 0:
+            return False
+        if job_id not in self._ready_set:
+            return False
+        # if soft-leased and not expired, don't expose it
+        if job_id in self.leased_until and self.leased_until[job_id] > time.time():
+            return False
+        return True
+
+    @staticmethod
+    def _entrypoint(wi: 'WorkInfo') -> str:
+        # Planner can read this if it needs to; we don't filter by executor here.
+        return wi.data.get("metadata", {}).get("on", "")
+
+    def add_dag(self, dag: 'QueryPlan', nodes: list['WorkInfo']) -> None:
+        # Build graph + unmet dependency counts
         id_to_wi = {wi.id: wi for wi in nodes}
         for wi in nodes:
             self.jobs_by_id[wi.id] = wi
             self.dag_nodes[wi.dag_id].add(wi.id)
-            deps = wi.dependencies if wi.dependencies else []
+            deps = wi.dependencies or []
             self.unmet_count[wi.id] = len(deps)
             for d in deps:
                 self.dependents[d].append(wi.id)
 
-        # Seed roots into ready queues
+        # Seed roots into ready heap
         for wi in nodes:
             if self.unmet_count[wi.id] == 0:
-                exe = self._executor_for(wi)
-                if exe:
-                    self.ready_by_executor[exe].append(wi)
+                self._push_ready(wi)
 
-    def on_job_completed(self, job_id: str) -> list[WorkInfo]:
-        """Return newly-ready children to assist tests if needed."""
+    def on_job_completed(self, job_id: str) -> list['WorkInfo']:
+        """Update children; return newly-ready WorkInfos (for tests/metrics)."""
         now_ready = []
         for child_id in self.dependents.get(job_id, []):
             if child_id not in self.jobs_by_id:
                 continue
+            # decrease unmet count
             self.unmet_count[child_id] = max(0, self.unmet_count[child_id] - 1)
-            if self.unmet_count[child_id] == 0 and child_id not in self.leased_until:
+            if self.unmet_count[child_id] == 0:
                 wi = self.jobs_by_id[child_id]
-                exe = self._executor_for(wi)
-                if exe:
-                    self.ready_by_executor[exe].append(wi)
-                    now_ready.append(wi)
+                # if child wasn’t ready before, set added_at now for fair aging
+                if child_id not in self._added_at:
+                    self._added_at[child_id] = time.time()
+                self._push_ready(wi)
+                now_ready.append(wi)
         return now_ready
 
-    def on_job_failed(self, job_id: str) -> list[WorkInfo]:
-        """Conservative policy: block descendants (don’t enqueue)."""
-        # If we want "fail-fast" across the DAG, we can mark descendants as permanently blocked here.
+    def on_job_failed(self, job_id: str) -> list['WorkInfo']:
+        # Conservative: don't enqueue descendants automatically
         return []
 
-    def mark_leased(self, job_id: str, ttl_s: int = 5) -> None:
-        self.leased_until[job_id] = time.time() + ttl_s
+    def mark_leased(self, job_id: str, ttl_s: Optional[float] = None) -> None:
+        ttl = self.default_lease_ttl if ttl_s is None else float(ttl_s)
+        self.leased_until[job_id] = time.time() + ttl
 
     def release_lease_local(self, job_id: str) -> None:
-        # Put the job back to the appropriate ready queue if it still exists
-        if job_id in self.leased_until:
-            del self.leased_until[job_id]
+        # Soft-lease ends; if deps still met, place back (at front by age)
+        self.leased_until.pop(job_id, None)
         wi = self.jobs_by_id.get(job_id)
         if wi is None:
             return
-        # Only requeue if its deps are still satisfied
         if self.unmet_count.get(job_id, 1) == 0:
-            exe = self._executor_for(wi)
-            if exe:
-                self.ready_by_executor[exe].appendleft(wi)  # prioritize requeue
+            # keep original added_at to preserve aging
+            self._push_ready(wi)
 
-    def _pop_one_for_executor(self, exe: str) -> tuple[str, WorkInfo] | None:
-        dq = self.ready_by_executor.get(exe)
-        if not dq:
-            return None
+    async def peek_ready(
+        self,
+        max_n: int,
+        filter_fn: Optional[Callable[['WorkInfo'], bool]] = None,
+    ) -> list['WorkInfo']:
+        """
+        Return up to max_n ready jobs ordered by (priority, age),
+        without mutating state. Optionally filter with a predicate.
+        Atomic wrt concurrent takes via internal lock.
+        """
+        async with self._lock:
+            out: list['WorkInfo'] = []
+            if max_n <= 0:
+                return out
 
-        # Iterate through the current contents of the deque once (bounded iteration).
-        for _ in range(len(dq)):
-            wi = dq.popleft()
-
-            #  If the job is still soft-leased, put it back at the end of the queue.
-            if wi.id in self.leased_until and self.leased_until[wi.id] > time.time():
-                dq.append(wi)
-                continue
-
-            # If not leased or lease expired:
-            self.leased_until.pop(wi.id, None)
-
-            # Check if the job has a valid execution endpoint.
-            ep = wi.data.get("metadata", {}).get("on", "")
-            if not ep:
-                # If there's no endpoint, this WorkInfo is malformed or not meant for this kind of executor.
-                # This indicates a data integrity issue. Raising an error highlights this immediately.
-                raise ValueError(f'Job with no defined endpoint : {wi.id}')
-
-            return ep, wi
-
-        return None
-
-    def pop_ready_batch(
-        self, slots_by_executor: dict[str, int], max_n: int
-    ) -> list[tuple[str, WorkInfo]]:
-        picked: list[tuple[str, WorkInfo]] = []
-        if max_n <= 0:
-            return picked
-
-        # simple round-robin across executors honoring available slots
-        executors = [exe for exe, slots in slots_by_executor.items() if slots > 0]
-        made_progress = True
-        while len(picked) < max_n and executors and made_progress:
-            made_progress = False
-            for exe in list(executors):
-                if slots_by_executor.get(exe, 0) <= 0:
+            # Iterate the heap *without* popping; skip stale entries.
+            seen = 0
+            # To avoid O(n) scans each time, we walk the heap linearly;
+            # with lazy deletion via _ready_set and lease checks.
+            for prio, added, seq, jid in self._ready_heap:
+                if not self._still_ready(jid):
                     continue
-                item = self._pop_one_for_executor(exe)
-                if item is None:
+                wi = self.jobs_by_id[jid]
+                if filter_fn and not filter_fn(wi):
                     continue
-                picked.append(item)
-                slots_by_executor[exe] -= 1
-                made_progress = True
-                if len(picked) >= max_n:
+                out.append(wi)
+                seen += 1
+                if seen >= max_n:
                     break
-        return picked
+            return out
+
+    async def take(
+        self,
+        ids: Iterable[str],
+        *,
+        lease_ttl: Optional[float] = None,
+    ) -> list['WorkInfo']:
+        """
+        Atomically mark the given ids as selected and return the corresponding WorkInfos.
+
+        Behavior:
+          - Only takes items that are *still ready* (deps met, not hard/soft leased, in ready_set).
+          - Removes them from the ready_set so they won't be re-peeked.
+          - Applies a soft lease (TTL) so parallel poll loops don’t double-schedule.
+          - Returns the list of WorkInfos that were actually taken (in the same order as `ids`).
+        """
+        async with self._lock:
+            taken: list['WorkInfo'] = []
+            now = time.time()
+            ttl = self.default_lease_ttl if lease_ttl is None else float(lease_ttl)
+
+            for jid in ids:
+                if not self._still_ready(jid):
+                    continue  # skip stale/non-ready ids safely
+
+                # remove from ready membership so future peeks skip it
+                self._ready_set.discard(jid)
+
+                # apply soft lease
+                self.leased_until[jid] = now + ttl
+
+                wi = self.jobs_by_id.get(jid)
+                if wi is not None:
+                    taken.append(wi)
+
+            return taken
+
+    async def select_ready(
+        self,
+        max_n: int,
+        *,
+        filter_fn: Optional[Callable[['WorkInfo'], bool]] = None,
+        lease_ttl: Optional[float] = None,
+    ) -> list[WorkInfo]:
+        """
+        Atomically peek + take up to max_n items (ordered by priority/age),
+        apply soft leases, and return them.
+        """
+        async with self._lock:
+            # reuse the same logic as peek, but perform the mutation while holding the lock
+            selected: list['WorkInfo'] = []
+            if max_n <= 0:
+                return selected
+
+            # Walk heap without popping; lazy-skip stale entries
+            for prio, added, seq, jid in self._ready_heap:
+                if not self._still_ready(jid):
+                    continue
+                wi = self.jobs_by_id[jid]
+                if filter_fn and not filter_fn(wi):
+                    continue
+                selected.append(wi)
+                if len(selected) >= max_n:
+                    break
+
+            # Mark selected as taken and leased
+            now = time.time()
+            ttl = self.default_lease_ttl if lease_ttl is None else float(lease_ttl)
+            for wi in selected:
+                self._ready_set.discard(wi.id)
+                self.leased_until[wi.id] = now + ttl
+
+            return selected
+
+    async def reap_expired_soft_leases(self) -> int:
+        """Optional: clear expired soft leases; return count re-added to ready."""
+        async with self._lock:
+            now = time.time()
+            reap: list[str] = [
+                jid for jid, until in self.leased_until.items() if until <= now
+            ]
+            for jid in reap:
+                self.leased_until.pop(jid, None)
+                wi = self.jobs_by_id.get(jid)
+                if wi and self.unmet_count.get(jid, 1) == 0:
+                    self._push_ready(wi)
+            return len(reap)
+
+    @staticmethod
+    def _executor_of(wi: 'WorkInfo') -> str:
+        ep = wi.data.get("metadata", {}).get("on", "")
+        if "://" in ep:
+            return ep.split("://", 1)[0]
+        return ""
+
+    def summary(self, detail: bool = False, top_n: int = 5) -> dict[str, Any]:
+        """
+        Lightweight snapshot of the frontier for logs/metrics.
+        Returns a dict; safe to json-serialize.
+        """
+        now = time.time()
+
+        # Totals
+        total_jobs = len(self.jobs_by_id)
+        total_dags = len(self.dag_nodes)
+        total_edges = sum(len(v) for v in self.dependents.values())
+        leased_total = len(self.leased_until)
+
+        # Ready set (filter lazy-deleted / leased)
+        ready_ids = [jid for jid in list(self._ready_set) if self._still_ready(jid)]
+        ready_total = len(ready_ids)
+
+        # Per-executor ready counts
+        ready_by_exec: dict[str, int] = defaultdict(int)
+        for jid in ready_ids:
+            wi = self.jobs_by_id.get(jid)
+            if not wi:
+                continue
+            ready_by_exec[self._executor_of(wi)] += 1
+
+        # Unmet dependency stats
+        unmet_vals = [self.unmet_count.get(jid, 0) for jid in self.jobs_by_id.keys()]
+        unmet_nonzero = [v for v in unmet_vals if v > 0]
+
+        # Ready age stats (seconds)
+        ages = []
+        for jid in ready_ids:
+            at = self._added_at.get(jid)
+            if at is not None:
+                ages.append(max(0.0, now - at))
+        ages.sort()
+
+        def _quantiles(vals: list[float]) -> dict[str, float]:
+            if not vals:
+                return {"p50": 0.0, "p90": 0.0, "max": 0.0}
+
+            def q(p: float) -> float:
+                if len(vals) == 1:
+                    return vals[0]
+                idx = min(len(vals) - 1, max(0, int(round(p * (len(vals) - 1)))))
+                return vals[idx]
+
+            return {"p50": q(0.5), "p90": q(0.9), "max": vals[-1]}
+
+        out: dict[str, Any] = {
+            "totals": {
+                "dags": total_dags,
+                "jobs": total_jobs,
+                "edges": total_edges,
+                "ready": ready_total,
+                "leased": leased_total,
+                "blocked": len(unmet_nonzero),  # jobs with unmet deps > 0
+            },
+            "ready_by_executor": dict(ready_by_exec),
+            "unmet_dependencies": {
+                "count_nonzero": len(unmet_nonzero),
+                "max": max(unmet_nonzero) if unmet_nonzero else 0,
+                "avg": (
+                    (sum(unmet_nonzero) / len(unmet_nonzero)) if unmet_nonzero else 0.0
+                ),
+            },
+            "ready_age_seconds": _quantiles(ages),
+        }
+
+        if detail and ready_total:
+            # Top-N stalest (oldest added_at) per executor
+            per_exec_stale: dict[str, list[dict[str, Any]]] = {}
+            ids_by_exec: dict[str, list[str]] = defaultdict(list)
+            for jid in ready_ids:
+                wi = self.jobs_by_id.get(jid)
+                if not wi:
+                    continue
+                ids_by_exec[self._executor_of(wi)].append(jid)
+
+            for exe, jids in ids_by_exec.items():
+                jids.sort(key=lambda j: self._added_at.get(j, now))  # oldest first
+                chosen = jids[: max(1, top_n)]
+                entries = []
+                for jid in chosen:
+                    wi = self.jobs_by_id.get(jid)
+                    if not wi:
+                        continue
+                    entries.append(
+                        {
+                            "id": wi.id,
+                            "name": wi.name,
+                            "priority": int(wi.priority),
+                            "job_level": getattr(wi, "job_level", None),
+                            "ready_for_s": max(0.0, now - self._added_at.get(jid, now)),
+                        }
+                    )
+                per_exec_stale[exe] = entries
+            out["stalest_ready"] = per_exec_stale
+
+        return out
+
+    def compact_ready_heap(self, max_scan: int = 5000) -> int:
+        """
+        Optional maintenance: remove stale heap entries whose ids
+        are no longer in _ready_set (lazy-deletion compaction).
+        Returns number of entries removed.
+        """
+        removed = 0
+        if not self._ready_heap:
+            return removed
+
+        tmp: list[tuple[int, float, int, str]] = []
+        scans = 0
+        while self._ready_heap and scans < max_scan:
+            scans += 1
+            prio, added, seq, jid = heapq.heappop(self._ready_heap)
+            if jid in self._ready_set:
+                tmp.append((prio, added, seq, jid))
+            else:
+                removed += 1
+        # push back survivors
+        for e in tmp:
+            heapq.heappush(self._ready_heap, e)
+        return removed

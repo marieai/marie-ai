@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import math
 import random
 import socket
 import time
@@ -14,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, NamedTuple, Tuple, Union
 
 import psycopg2
+from psycopg2.extras import register_uuid
 
 from marie.constants import (
     __default_extract_dir__,
@@ -219,7 +221,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self.max_concurrent_dags = max_concurrent_dags
         self._start_time = datetime.now(timezone.utc)
-        self.mem = MemoryFrontier()
+        self.frontier = MemoryFrontier()
 
         self.lease_ttl_seconds: int = int(config.get("lease_ttl_seconds", 5))
         self.run_ttl_seconds: int = int(config.get("run_ttl_seconds", 60))
@@ -267,10 +269,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.logger.debug(f"Job pending : {job_id}")
             elif status == JobStatus.SUCCEEDED:
                 await self.complete(job_id, work_item)
-                self.mem.on_job_completed(job_id)
+                self.frontier.on_job_completed(job_id)
             elif status == JobStatus.FAILED:
                 await self.fail(job_id, work_item)
-                self.mem.on_job_failed(job_id)
+                self.frontier.on_job_failed(job_id)
             elif status == JobStatus.RUNNING:
                 self.logger.debug(f"Job running : {job_id}")
                 await self.put_status(job_id, work_state, now, None)
@@ -887,23 +889,21 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def _poll(self):
         """
-        Handles the job scheduling polling process for the database in serial mode.
-
-        This coroutine function is responsible for managing executors. It includes mechanisms for
-        handling job dependencies, activation and cleanup of DAGs (Directed Acyclic Graphs),
-        and backoff strategies for managing idle periods or situations with no executor slots
-        available.
-
-        :return: None
+        Planner-first loop:
+          1) wait (debounced) for wake/event
+          2) read cluster slots
+          3) peek ready candidates from frontier (executor-agnostic)
+          4) let planner choose a plan
+          5) take the chosen ids from frontier, soft-lease, DB-lease
+          6) NOOPs -> complete locally; normal jobs -> dispatch and activate_from_lease
         """
         self.logger.info("Starting database job scheduler (serial mode)")
         wait_time = INIT_POLL_PERIOD
         batch_size = 25000
         failures = 0
         idle_streak = 0
-
         max_concurrent_dags = self.max_concurrent_dags
-        self.logger.info(f"Max concurrent DAGs set to: {max_concurrent_dags}")
+        lease_ttl = self.lease_ttl_seconds
 
         while self.running:
             try:
@@ -917,181 +917,233 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 except asyncio.TimeoutError:
                     pass
 
+                # current slots (will also be used to enforce per-executor caps DURING dispatch)
                 slots_by_executor = available_slots_by_executor(
                     ClusterState.deployments
                 ).copy()
-                pick_slots = slots_by_executor.copy()
-
                 if not any(slots_by_executor.values()):
                     self.logger.warning("No available executor slots. Backing off.")
                     idle_streak += 1
                     wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
                     continue
 
-                # Get all ready candidates from memory
-                candidates = self.mem.pop_ready_batch(pick_slots, max_n=batch_size)
-                flat_jobs = self.execution_planner.plan(
-                    candidates, pick_slots, self.active_dags
+                # FETCH READY CANDIDATES (executor-agnostic) ----
+                # frontier should not filter by executors; let planner decide
+                candidates_wi: list[WorkInfo] = await self.frontier.peek_ready(
+                    batch_size
                 )
-
-                scheduled_any = False
-                if not flat_jobs:
-                    self.logger.debug(
-                        "Slots available but no ready jobs; sleeping briefly before next poll."
-                    )
+                if not candidates_wi:
+                    self.logger.debug("No ready work in memory; short sleep.")
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
+                    idle_streak += 1
+                    wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
                     continue
 
-                # --- Lease all candidates first, including structural NOOPs ---
-                for _, wi in flat_jobs:
-                    try:
-                        self.mem.mark_leased(wi.id, ttl_s=self.lease_ttl_seconds)
-                    except Exception as _e:
-                        self.logger.warning(f"Soft-lease failed for {wi.id}: {_e}")
+                # Build (entrypoint, wi) tuples for planner input
+                planner_candidates: list[tuple[str, WorkInfo]] = []
+                for wi in candidates_wi:
+                    ep = wi.data.get("metadata", {}).get("on", "")
+                    if not ep:
+                        self.logger.error(f"Job without entrypoint 'on': {wi.id}")
+                        continue
+                    planner_candidates.append((ep, wi))
 
+                #  PLAN ----
+                # Give the planner: candidates + a COPY of slots + active_dags
+                pick_slots = slots_by_executor.copy()
+                planned: list[tuple[str, WorkInfo]] = self.execution_planner.plan(
+                    planner_candidates, pick_slots, self.active_dags
+                )
+                if not planned:
+                    self.logger.debug("Planner returned no picks; short sleep.")
+                    await asyncio.sleep(SHORT_POLL_INTERVAL)
+                    idle_streak += 1
+                    wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
+                    continue
+
+                #  TAKE + SOFT-LEASE ----
+                selected_ids = [wi.id for _, wi in planned]
+                selected_wis = await self.frontier.take(
+                    selected_ids
+                )  # returns List[WorkInfo]
+
+                taken = len(selected_wis)
+                requested = len(selected_ids)
+                if taken != requested:
+                    taken_ids = {wi.id for wi in selected_wis}
+                    missing = list(set(selected_ids) - taken_ids)
+                    self.logger.warning(
+                        f"Not all jobs taken from frontier: taken={taken} / selected={requested}; "
+                        f"missing_ids={missing[:10]}{'...' if len(missing) > 10 else ''}"
+                    )
+
+                # map id -> (entrypoint, wi) for quick lookup
+                planned_by_id = {wi.id: (ep, wi) for ep, wi in planned}
+                for wi in selected_wis:
+                    try:
+                        self.frontier.mark_leased(wi.id, ttl_s=lease_ttl)
+                    except Exception as e:
+                        self.logger.warning(f"Soft-lease failed for {wi.id}: {e}")
+
+                # ---- 4) DB LEASE ----
                 ids_by_job_name: dict[str, list[str]] = defaultdict(list)
-                for _, wi in flat_jobs:
+                for wi in selected_wis:
                     ids_by_job_name[wi.name].append(wi.id)
 
                 leased_ids: set[str] = set()
                 for job_name, ids in ids_by_job_name.items():
                     try:
-                        got = await self._lease_jobs_db(job_name, ids)
+                        got = await self._lease_jobs_db(
+                            job_name, ids
+                        )  # returns subset actually leased
                         leased_ids.update(got)
                     except Exception as e:
                         self.logger.error(
-                            f"DB lease failed for job '{job_name}' ({len(ids)} ids): {e}"
+                            f"DB lease failed for '{job_name}' ({len(ids)} ids): {e}"
                         )
 
                 if not leased_ids:
+                    # put *everything* back
+                    for wi in selected_wis:
+                        self.frontier.release_lease_local(wi.id)
                     self.logger.debug(
                         "No candidates could be leased in DB; backing off."
                     )
-                    for _, wi in flat_jobs:
-                        self.mem.release_lease_local(wi.id)
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
+                    idle_streak += 1
+                    wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
                     continue
 
-                leased_jobs: list[Tuple[str, WorkInfo]] = [
-                    (ep, wi) for (ep, wi) in flat_jobs if wi.id in leased_ids
-                ]
-                for _, wi in flat_jobs:
+                # return non-leased back to frontier immediately
+                for wi in selected_wis:
                     if wi.id not in leased_ids:
-                        self.mem.release_lease_local(wi.id)
+                        self.frontier.release_lease_local(wi.id)
 
-                # --- Process Leased Jobs: Either complete NOOPs locally or dispatch regular jobs ---
+                # only process those that we leased in DB
+                leased_jobs: list[tuple[str, WorkInfo]] = [
+                    planned_by_id[jid] for jid in leased_ids if jid in planned_by_id
+                ]
+
+                #  PROCESS LEASED JOBS ----
+                scheduled_any = False
                 jobs_scheduled_this_cycle = defaultdict(int)
                 enqueue_tasks = []
+                noop_ids_to_release: list[str] = []
 
-                for entrypoint, work_info in leased_jobs:
-                    dag_id = work_info.dag_id
-
-                    # Check for DAG concurrency limits *before* activating
+                for entrypoint, wi in leased_jobs:
+                    dag_id = wi.dag_id
                     if (
                         dag_id not in self.active_dags
                         and len(self.active_dags) >= max_concurrent_dags
                     ):
                         self.logger.debug(
-                            f"Max DAG limit reached. Skipping DAG {dag_id}."
+                            f"Max DAG limit reached ({len(self.active_dags)}/{max_concurrent_dags}). Skipping {wi.id}"
                         )
-                        await self._release_lease_db([work_info.id])
-                        self.mem.release_lease_local(work_info.id)
+                        await self._release_lease_db([wi.id])
+                        self.frontier.release_lease_local(wi.id)
                         continue
 
-                    # Activate the DAG if it's the first job we're processing for it in this cycle
+                    # Ensure DAG cached/active
                     if dag_id not in self.active_dags:
                         dag = await self.get_dag_by_id(dag_id)
-                        if dag:
-                            await self.mark_as_active_dag(work_info)
-                            self.active_dags[dag_id] = dag
-                            self.logger.debug(f"DAG activated: {dag_id}")
-                        else:
+                        if not dag:
                             self.logger.warning(
-                                f"Could not find DAG {dag_id} for job {work_info.id}. Releasing lease."
+                                f"Missing DAG {dag_id} for job {wi.id}; releasing lease."
                             )
-                            await self._release_lease_db([work_info.id])
-                            self.mem.release_lease_local(work_info.id)
+                            await self._release_lease_db([wi.id])
+                            self.frontier.release_lease_local(wi.id)
                             continue
+                        await self.mark_as_active_dag(wi)
+                        self.active_dags[dag_id] = dag
 
-                    node = self.get_node_from_dag(
-                        work_info.id, self.active_dags[dag_id]
+                    # NOOP vs normal
+                    node = self.get_node_from_dag(wi.id, self.active_dags[dag_id])
+                    if self._is_noop_query_definition(node):
+                        # Complete locally while we still hold the DB lease
+                        try:
+                            await self.complete(wi.id, wi, {}, force=True)
+                            # Clear local soft-lease (don't requeue a completed job)
+                            self.frontier.leased_until.pop(wi.id, None)
+                            # Batch for DB lease release after the loop
+                            noop_ids_to_release.append(wi.id)
+
+                            # Advance dependents in the frontier
+                            self.frontier.on_job_completed(wi.id)
+                            scheduled_any = True
+
+                            # Resolve DAG if this was a terminal-level NOOP
+                            try:
+                                sorted_nodes, job_levels = (
+                                    self._topology_cache.get_sorted_nodes_and_levels(
+                                        self.active_dags[dag_id], dag_id
+                                    )
+                                )
+                                if job_levels.get(wi.id, -1) == max(
+                                    job_levels.values()
+                                ):
+                                    await self.resolve_dag_status(wi.id, wi)
+                            except Exception as e:
+                                self.logger.debug(
+                                    f"DAG resolve check failed for NOOP {wi.id}: {e}"
+                                )
+                        except Exception as e:
+                            # If completion failed for any reason, release DB lease & requeue
+                            self.logger.error(f"Completing NOOP {wi.id} failed: {e}")
+                            await self._release_lease_db([wi.id])
+                            self.frontier.release_lease_local(wi.id)
+                        continue
+
+                    # Normal job: check slots then dispatch
+                    exe = entrypoint.split("://", 1)[0]
+                    if slots_by_executor.get(exe, 0) <= 0:
+                        self.logger.debug(f"No slots for {exe}, delaying job {wi.id}")
+                        await self._release_lease_db([wi.id])
+                        self.frontier.release_lease_local(wi.id)
+                        continue
+
+                    # reserve a slot and dispatch
+                    slots_by_executor[exe] -= 1
+                    enqueue_tasks.append(
+                        {
+                            "task": asyncio.create_task(self.enqueue(wi)),
+                            "wi": wi,
+                            "exe": exe,
+                        }
                     )
 
-                    # --- This is the unified execution path ---
-                    if self._is_noop_query_definition(node):
-                        # Execute structural NOOPs locally and immediately
-                        self.logger.info(
-                            f"Completing structural NOOP job locally: {work_info.id}"
-                        )
-                        await self.complete(work_info.id, work_info, {}, force=True)
-                        self.mem.on_job_completed(work_info.id)
-                        scheduled_any = True  # This is progress
-
-                        # Check if this NOOP completes the DAG
-                        dag = await self.get_dag_by_id(dag_id)
-                        if dag:
-                            sorted_nodes, job_levels = (
-                                self._topology_cache.get_sorted_nodes_and_levels(
-                                    dag, dag_id
-                                )
-                            )
-                            if job_levels.get(work_info.id, -1) == max(
-                                job_levels.values()
-                            ):
-                                await self.resolve_dag_status(work_info.id, work_info)
-                        else:
-                            self.logger.warning(
-                                f"Could not find DAG {dag_id} to resolve status for NOOP job {work_info.id}."
-                            )
-                    else:
-                        # This is a regular job that needs to be dispatched
-                        executor = entrypoint.split("://")[0]
-                        if slots_by_executor.get(executor, 0) <= 0:
-                            self.logger.debug(
-                                f"No slots for {executor}, delaying job {work_info.id}"
-                            )
-                            await self._release_lease_db([work_info.id])
-                            self.mem.release_lease_local(work_info.id)
-                            continue
-
-                        slots_by_executor[executor] -= 1
-                        task = asyncio.create_task(self.enqueue(work_info))
-                        enqueue_tasks.append(
-                            {'task': task, 'work_info': work_info, 'executor': executor}
-                        )
-
-                #  Process dispatch results
+                # ---- 6) HANDLE DISPATCH RESULTS ----
                 if enqueue_tasks:
                     results = await asyncio.gather(
-                        *[t['task'] for t in enqueue_tasks], return_exceptions=True
+                        *[t["task"] for t in enqueue_tasks], return_exceptions=True
                     )
                     for i, result in enumerate(results):
-                        work_info = enqueue_tasks[i]['work_info']
-                        executor = enqueue_tasks[i]['executor']
-                        if not isinstance(result, Exception) and result is True:
-                            # Successfully dispatched, now activate in DB
-                            self.logger.info(
-                                f"Job {work_info.id} dispatched to {executor}, activating."
-                            )
-                            activated_ids = await self._activate_from_lease_db(
-                                [work_info.id]
-                            )
-                            if work_info.id in activated_ids:
-                                jobs_scheduled_this_cycle[executor] += 1
-                                scheduled_any = True
-                            else:
-                                self.logger.error(
-                                    f"Failed to activate job {work_info.id}, releasing."
-                                )
-                                await self._release_lease_db([work_info.id])
-                                self.mem.release_lease_local(work_info.id)
+                        wi = enqueue_tasks[i]["wi"]
+                        exe = enqueue_tasks[i]["exe"]
+
+                        if isinstance(result, Exception) or not result:
+                            # dispatch failed → release lease & requeue
+                            self.logger.error(f"Dispatch failed for {wi.id}: {result}")
+                            await self._release_lease_db([wi.id])
+                            self.frontier.release_lease_local(wi.id)
+                            continue
+
+                        # runner accepted → activate from lease
+                        activated = await self._activate_from_lease_db([wi.id])
+                        if wi.id in activated:
+                            jobs_scheduled_this_cycle[exe] += 1
+                            scheduled_any = True
                         else:
-                            # Dispatch failed, release the lease
                             self.logger.error(
-                                f"Failed to dispatch job {work_info.id}: {result}"
+                                f"Failed to activate job {wi.id}; releasing lease."
                             )
-                            await self._release_lease_db([work_info.id])
-                            self.mem.release_lease_local(work_info.id)
+                            await self._release_lease_db([wi.id])
+                            self.frontier.release_lease_local(wi.id)
+
+                # ---- 7) LOG + BACKOFF ----
+                if jobs_scheduled_this_cycle:
+                    self.logger.info("Scheduling summary for this cycle:")
+                    for exe, cnt in sorted(jobs_scheduled_this_cycle.items()):
+                        self.logger.info(f"  - {exe}: {cnt} scheduled")
 
                 if scheduled_any:
                     await self.notify_event()
@@ -1099,6 +1151,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 idle_streak = 0 if scheduled_any else idle_streak + 1
                 wait_time = adjust_backoff(wait_time, idle_streak, scheduled_any)
                 failures = 0
+
             except Exception as e:
                 self.logger.error("Poll loop exception", exc_info=True)
                 failures += 1
@@ -1691,6 +1744,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         # until we upgrade to pycog3 and convert to async we have to run in a thread to prevent blocking of the loop
         def _sync():
+            for dag_work_info in dag_nodes:
+                dag_work_info.dag_id = submission_id
+
             return self._create_dag_and_jobs_sync(
                 work_info, submission_id, plan, dag_nodes
             )
@@ -1704,7 +1760,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 "Please use a different submission_id."
             )
 
-        self.mem.add_dag(plan, dag_nodes)
+        self.frontier.add_dag(plan, dag_nodes)
         await self.notify_event()
         return submission_id
 
@@ -1909,7 +1965,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             try:
                 conn = self._get_connection()
                 query = "SELECT marie_scheduler.release_expired_leases()"
-                # self._execute_sql_gracefully returns a list for SELECT, e.g. [(5,)]
                 result = self._execute_sql_gracefully(query, connection=conn)
 
                 if result and isinstance(result, list) and len(result) > 0:
@@ -2503,19 +2558,35 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not ids:
             return set()
 
+        norm_ids = list({str(i) for i in ids})
+
         def _lease_sync() -> set[str]:
             conn = None
             cursor = None
             try:
                 conn = self._get_connection()
-                # lease ids
-                sql = f"SELECT id FROM {DEFAULT_SCHEMA}.lease_jobs_by_id(%s, %s::uuid[], %s, %s)"
-                params = (job_name, ids, self.lease_owner, self.lease_ttl_seconds)
+                sql = f"""
+                    SELECT unnest({DEFAULT_SCHEMA}.lease_jobs_by_id(
+                        %s::uuid[],          -- _ids
+                        %s::interval,        -- _ttl
+                        %s,                  -- _owner
+                        %s                   -- _name
+                    ))
+                """
+                ttl_interval = f"{int(self.lease_ttl_seconds)} seconds"
+                params = (norm_ids, ttl_interval, self.lease_owner, job_name)
+                print('params', params)
                 cursor = self._execute_sql_gracefully(
-                    sql, params=params, return_cursor=True, connection=conn
+                    sql, data=params, return_cursor=True, connection=conn
                 )
-                rows = cursor.fetchall() if cursor else []
-                return {row[0] for row in rows}
+                if not cursor:
+                    return set()
+                leased: set[str] = set()
+                # tolerate either 1-column or 2-column return from the function
+                for row in cursor.fetchall():
+                    if len(row) >= 1 and row[0] is not None:
+                        leased.add(str(row[0]))
+                return leased
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)
@@ -2524,7 +2595,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def _activate_from_lease_db(self, ids: list[str]) -> set[str]:
         """
-        Promote leased jobs to active/running in DB once dispatch is acknowledged.
+        Promote leased jobs to active in DB once dispatch is acknowledged.
         """
         if not ids:
             return set()
@@ -2534,11 +2605,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             cursor = None
             try:
                 conn = self._get_connection()
-                sql = f"SELECT id FROM {DEFAULT_SCHEMA}.activate_from_lease(%s::uuid[], %s, %s, %s)"
-                # run_owner and run_ttl_seconds reflect the runtime "active" lease
-                params = (ids, self.lease_owner, self.lease_owner, self.run_ttl_seconds)
+                # Function signature: activate_from_lease(_ids uuid[], _run_owner text, _run_ttl interval)
+                sql = (
+                    f"SELECT unnest({DEFAULT_SCHEMA}.activate_from_lease("
+                    f"%s::uuid[], %s, %s::interval)) AS id"
+                )
+                params = (
+                    ids,  # -> %s::uuid[]
+                    self.lease_owner,  # -> _run_owner text
+                    f"{self.run_ttl_seconds} seconds",  # -> _run_ttl interval
+                )
                 cursor = self._execute_sql_gracefully(
-                    sql, params=params, return_cursor=True, connection=conn
+                    sql, data=params, return_cursor=True, connection=conn
                 )
                 rows = cursor.fetchall() if cursor else []
                 return {row[0] for row in rows}
@@ -2560,13 +2638,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             cursor = None
             try:
                 conn = self._get_connection()
-                sql = f"SELECT id FROM {DEFAULT_SCHEMA}.release_lease(%s::uuid[], %s)"
-                params = (ids, self.lease_owner)
+                # Cast to uuid[] and UNNEST the returned uuid[]
+                sql = f"SELECT unnest({DEFAULT_SCHEMA}.release_lease(%s::uuid[])) AS id"
+                params = (ids,)
                 cursor = self._execute_sql_gracefully(
-                    sql, params=params, return_cursor=True, connection=conn
+                    sql, data=params, return_cursor=True, connection=conn
                 )
                 rows = cursor.fetchall() if cursor else []
-                return {row[0] for row in rows}
+                return {str(row[0]) for row in rows}
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)
@@ -2574,119 +2653,237 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         return await self._loop.run_in_executor(self._db_executor, _release_sync)
 
     async def hydrate_from_db(
-        self, include_active: bool = False, itersize: int = 5000
+        self,
+        dag_batch_size: int = 1000,
+        itersize: int = 5000,
+        log_every_seconds: float = 2.0,
     ) -> None:
         """
-        Rebuild MemoryFrontier from DB using a single aggregated query:
-          1) find DAGs that still have unfinished work
-          2) fetch those DAG definitions + ALL jobs for each DAG (any state)
-          3) filter dependencies to exclude parents already terminal
-          4) add pending nodes to self.mem.add_dag(dag, nodes)
+        Rebuild MemoryFrontier from DB in two phases with progress & timing logs:
+          1) Stream DAGs that still have unfinished work (created/retry).
+          2) In batches of DAG IDs, stream their unfinished jobs with already-filtered deps.
+          3) Add once per DAG: self.frontier.add_dag(dag, nodes)
         """
 
-        schema = DEFAULT_SCHEMA
-        unfinished = (
-            "('created','retry','active')" if include_active else "('created','retry')"
-        )
-
-        def _fetch():
+        def _stream_dags():
             conn = self._get_connection()
+            cur = None
             try:
-                # server-side cursor to keep memory bounded when results are huge
-                cur = conn.cursor(name="hydrate_cursor")
+                cur = conn.cursor(name="hydrate_frontier_dags")
                 cur.itersize = itersize
                 cur.execute(
-                    f"""
-                    WITH target_dags AS (
-                      SELECT DISTINCT dag_id
-                      FROM {schema}.job
-                      WHERE state IN {unfinished}
-                    )
-                    SELECT d.id AS dag_id,
-                           d.definition,
-                           json_agg(
-                             json_build_object(
-                               'id', j.id,
-                               'name', j.name,
-                               'priority', j.priority,
-                               'state', j.state,
-                               'retry_limit', j.retry_limit,
-                               'start_after', j.start_after,
-                               'expire_in', j.expire_in,
-                               'data', j.data,
-                               'retry_delay', j.retry_delay,
-                               'retry_backoff', j.retry_backoff,
-                               'keep_until', j.keep_until,
-                               'job_level', j.job_level,
-                               'dependencies', COALESCE(j.dependencies, '[]'::jsonb)
-                             )
-                             ORDER BY j.job_level, j.created_on
-                           ) AS jobs
-                    FROM {schema}.dag d
-                    JOIN target_dags td ON td.dag_id = d.id
-                    JOIN {schema}.job j ON j.dag_id = d.id
-                    GROUP BY d.id, d.definition
-                """
+                    "SELECT dag_id, serialized_dag FROM marie_scheduler.hydrate_frontier_dags()"
+                )
+                for dag_id, serialized_dag in cur:
+                    yield dag_id, serialized_dag
+                if cur and not cur.closed:
+                    self._close_cursor(cur)
+                cur = None  # so we don't try to close again in finally
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                if cur and not cur.closed:
+                    self._close_cursor(cur)
+                self._close_connection(conn)
+
+        t0 = time.monotonic()
+        self.logger.info("Hydrate: phase 1 (DAG discovery) started…")
+
+        dag_rows = await self._loop.run_in_executor(
+            self._db_executor, lambda: list(_stream_dags())
+        )
+        discover_elapsed = time.monotonic() - t0
+        self.logger.info(
+            f"Hydrate: phase 1 complete — discovered {len(dag_rows)} DAG(s) in {discover_elapsed:.2f}s "
+            f"({(len(dag_rows) / discover_elapsed if discover_elapsed > 0 else 0):.1f} DAGs/sec)."
+        )
+
+        # Build map of dag_id -> QueryPlan
+        dags: dict[str, QueryPlan] = {}
+        dag_ids_ordered: list[str] = []
+        parse_skipped = 0
+        for dag_id, dag_def in dag_rows:
+            if not dag_def:
+                parse_skipped += 1
+                self.logger.warning(
+                    f"Hydrate: DAG {dag_id} has no serialized_dag; skipping."
+                )
+                continue
+            try:
+                dags[str(dag_id)] = QueryPlan(**dag_def)
+                dag_ids_ordered.append(str(dag_id))
+            except Exception as e:
+                parse_skipped += 1
+                self.logger.error(f"Hydrate: unable to parse DAG {dag_id}: {e}")
+
+        if not dags:
+            total_elapsed = time.monotonic() - t0
+            self.logger.info(
+                f"Hydrate: no DAGs to hydrate (skipped {parse_skipped}). Done in {total_elapsed:.2f}s."
+            )
+            await self.notify_event()
+            return
+
+        self.logger.info(
+            f"Hydrate: {len(dags)} DAG(s) ready for job loading "
+            f"(skipped {parse_skipped}, total discovered {len(dag_rows)})."
+        )
+
+        def _stream_jobs_for_batch(dag_ids_batch):
+            conn = self._get_connection()
+            cur = None
+            try:
+                dag_ids_text = [
+                    str(x) for x in dag_ids_batch
+                ]  # ensure strings so psycopg2 adapts them cleanly when casting to uuid[]
+                cur = conn.cursor(name="hydrate_frontier_jobs")
+                cur.itersize = itersize
+                cur.execute(
+                    "SELECT dag_id, job FROM marie_scheduler.hydrate_frontier_jobs((%s)::uuid[])",
+                    (dag_ids_text,),
                 )
                 for row in cur:
                     yield row
+                if cur and not cur.closed:
+                    self._close_cursor(cur)
+                cur = None
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
             finally:
+                if cur and not cur.closed:
+                    self._close_cursor(cur)
                 self._close_connection(conn)
 
-        # Pull and hydrate
-        for dag_id, dag_def, jobs_json in await self._loop.run_in_executor(
-            self._db_executor, lambda: list(_fetch())
-        ):
-            try:
-                dag = QueryPlan(
-                    **dag_def
-                )  # you stored plan.model_dump() in `definition`
-            except Exception as e:
-                self.logger.error(f"Unable to parse DAG {dag_id}: {e}")
-                continue
+        def _chunks(seq, n):
+            for i in range(0, len(seq), n):
+                yield seq[i : i + n]
 
-            # Build a quick state map for dependency filtering
-            state_by_job = {str(j["id"]): j["state"] for j in jobs_json}
-            terminal = {
-                WorkState.COMPLETED.value,
-                WorkState.FAILED.value,
-                WorkState.CANCELLED.value,
-            }
+        self.logger.info(
+            f"Hydrate: phase 2 (job loading) — {len(dag_ids_ordered)} DAG(s), "
+            f"batch size {dag_batch_size}, cursor itersize {itersize}."
+        )
 
-            pending_nodes = []
-            for j in jobs_json:
-                # keep only non-terminal jobs in memory frontier
-                if str(j["state"]) in terminal:
+        buckets: dict[str, list[WorkInfo]] = defaultdict(list)
+
+        # Progress counters
+        total_dags = len(dag_ids_ordered)
+        processed_dags = 0
+        processed_jobs = 0
+        last_log_t = time.monotonic()
+        phase2_start = last_log_t
+
+        # For batch-level logging
+        batch_idx = 0
+        for batch in _chunks(dag_ids_ordered, dag_batch_size):
+            batch_idx += 1
+            b_start = time.monotonic()
+
+            rows = await self._loop.run_in_executor(
+                self._db_executor, lambda: list(_stream_jobs_for_batch(batch))
+            )
+
+            for dag_id, j in rows:
+                dag_id = str(dag_id)
+                if dag_id not in dags:
                     continue
+                try:
+                    state_raw = j.get("state")
+                    wi = WorkInfo(
+                        id=str(j["id"]),
+                        name=j["name"],
+                        priority=j["priority"],
+                        state=WorkState(state_raw) if state_raw else None,
+                        retry_limit=j["retry_limit"],
+                        start_after=j["start_after"],
+                        expire_in_seconds=0,  # map INTERVAL to seconds
+                        data=j["data"],
+                        retry_delay=j["retry_delay"],
+                        retry_backoff=j["retry_backoff"],
+                        keep_until=j["keep_until"],
+                        dag_id=dag_id,
+                        job_level=j["job_level"],
+                    )
+                    deps = j.get("dependencies") or []
+                    wi.dependencies = [str(d) for d in deps]
+                    buckets[dag_id].append(wi)
+                    processed_jobs += 1
+                except Exception as e:
+                    self.logger.error(
+                        f"Hydrate: failed to build WorkInfo for DAG {dag_id}: {e}"
+                    )
 
-                # Rebuild WorkInfo
-                wi = WorkInfo(
-                    id=str(j["id"]),
-                    name=j["name"],
-                    priority=j["priority"],
-                    state=WorkState(j["state"]) if j["state"] else None,
-                    retry_limit=j["retry_limit"],
-                    start_after=j["start_after"],
-                    expire_in_seconds=0,  # j['expire_in'] is INTERVAL;
-                    # expire_in_seconds=j["expire_in"].total_seconds() if j["expire_in"] else 0,
-                    data=j["data"],
-                    retry_delay=j["retry_delay"],
-                    retry_backoff=j["retry_backoff"],
-                    keep_until=j["keep_until"],
-                    dag_id=str(dag_id),
-                    job_level=j["job_level"],
+            processed_dags += len(batch)
+            b_elapsed = time.monotonic() - b_start
+            jobs_in_batch = len(rows)
+            job_rate = jobs_in_batch / b_elapsed if b_elapsed > 0 else 0.0
+
+            now = time.monotonic()
+            if (now - last_log_t) >= log_every_seconds:
+                overall_elapsed = now - phase2_start
+                overall_rate = (
+                    processed_jobs / overall_elapsed if overall_elapsed > 0 else 0.0
+                )
+                pct = (processed_dags / total_dags) * 100.0
+                # ETA by DAG batches (rough) — avoids needing total jobs in advance
+                remaining_dags = max(0, total_dags - processed_dags)
+                dags_per_sec = (len(batch) / b_elapsed) if b_elapsed > 0 else 0.0
+                eta_s = (
+                    (remaining_dags / dags_per_sec) if dags_per_sec > 0 else math.inf
                 )
 
-                # Filter dependencies: drop parents already terminal
-                deps = [str(d) for d in (j.get("dependencies") or [])]
-                wi.dependencies = [
-                    d for d in deps if str(state_by_job.get(d)) not in terminal
-                ]
+                self.logger.info(
+                    f"Hydrate: batch {batch_idx} — "
+                    f"{len(batch)} DAG(s) in {b_elapsed:.2f}s, {jobs_in_batch} jobs "
+                    f"({job_rate:.1f} jobs/s). "
+                    f"Progress: {processed_dags}/{total_dags} DAGs ({pct:.1f}%), "
+                    f"{processed_jobs} jobs total, "
+                    f"overall {overall_rate:.1f} jobs/s, "
+                    f"ETA ~ {eta_s:.1f}s."
+                )
+                last_log_t = now
 
-                pending_nodes.append(wi)
+        add_start = time.monotonic()
+        added = 0
+        total_pending_jobs = 0
+        for dag_id, nodes in buckets.items():
+            if not nodes:
+                continue
+            try:
+                self.frontier.add_dag(dags[dag_id], nodes)
+                added += 1
+                total_pending_jobs += len(nodes)
+            except Exception as e:
+                self.logger.error(f"Hydrate: frontier.add_dag failed for {dag_id}: {e}")
+        add_elapsed = time.monotonic() - add_start
 
-            if pending_nodes:
-                self.mem.add_dag(dag, pending_nodes)
+        total_elapsed = time.monotonic() - t0
+        self.logger.info(
+            f"Hydrate: complete — {added} DAG(s) added to frontier, "
+            f"{total_pending_jobs} pending jobs. "
+            f"Add phase {add_elapsed:.2f}s, total elapsed {total_elapsed:.2f}s."
+        )
+
+        snap = self.frontier.summary(detail=True, top_n=3)
+        self.logger.info(
+            "Frontier: dags=%s jobs=%s ready=%s leased=%s age(p50/p90/max)=%.1f/%.1f/%.1f",
+            snap["totals"]["dags"],
+            snap["totals"]["jobs"],
+            snap["totals"]["ready"],
+            snap["totals"]["leased"],
+            snap["ready_age_seconds"]["p50"],
+            snap["ready_age_seconds"]["p90"],
+            snap["ready_age_seconds"]["max"],
+        )
 
         await self.notify_event()
 

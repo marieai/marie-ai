@@ -43,3 +43,13 @@ class WorkState(Enum):
             WorkState.CANCELLED,
             WorkState.FAILED,
         ]
+
+    @staticmethod
+    def terminal_states() -> list['WorkState']:
+        """Return a list of terminal states."""
+        return [
+            WorkState.COMPLETED,
+            WorkState.EXPIRED,
+            WorkState.CANCELLED,
+            WorkState.FAILED,
+        ]

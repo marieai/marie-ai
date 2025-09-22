@@ -30,6 +30,7 @@ def create_job_state_enum(schema: str):
       '{WorkState.EXPIRED.value}',
       '{WorkState.CANCELLED.value}',
       '{WorkState.FAILED.value}'
+      '{WorkState.LEASED.value}'
     )
     """
 
@@ -66,7 +67,12 @@ def create_job_table(schema: str):
       sla_interval interval,
       soft_sla timestamp with time zone,
       hard_sla timestamp with time zone,
-      sla_miss_logged boolean not null default false
+      sla_miss_logged boolean not null default false,
+      lease_owner text,
+      lease_expires_at timestamptz,
+      lease_epoch bigint DEFAULT 0,     -- monotonic per-lease CAS
+      run_owner text,                     -- executor id once ACTIVE
+      run_lease_expires_at timestamptz   -- optional executor heartbeat lease
      -- CONSTRAINT job_pkey PRIMARY KEY (name, id) -- adde via partition
     ) 
     PARTITION BY LIST (name)

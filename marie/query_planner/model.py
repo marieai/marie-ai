@@ -3,6 +3,8 @@ from typing import Any, Dict, List
 
 import yaml
 
+from marie.logging_core.predefined import default_logger as logger
+
 
 @dataclass
 class PlannerConf:
@@ -56,6 +58,9 @@ class QueryPlannersConf:
                 raise ValueError("Missing 'planners' in query_planners")
 
             planners_list = query_planners_data['planners']
+            if planners_list is None:
+                logger.warning("Missing 'planners' in query_planners")
+                planners_list = []
 
             if not isinstance(planners_list, list):
                 raise ValueError("planners must be a list")
@@ -93,6 +98,10 @@ class QueryPlannersConf:
             raise ValueError("Missing 'planners' in data")
 
         planners_list = data['planners']
+
+        if planners_list is None:
+            logger.warning("Missing 'planners' in query_planners")
+            planners_list = []
 
         if not isinstance(planners_list, list):
             raise ValueError("planners must be a list")

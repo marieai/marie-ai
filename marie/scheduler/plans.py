@@ -323,7 +323,12 @@ def complete_jobs_by_id(schema: str, name: str, ids: list, output: dict):
       UPDATE {schema}.job
       SET completed_on = now(),
           state = '{WorkState.COMPLETED.value}',
-          output = {Json(output)}::jsonb
+          output = {Json(output)}::jsonb,
+          -- clear leases / run ownership 
+          lease_owner          = NULL,
+          lease_expires_at     = NULL,
+          run_owner            = NULL,
+          run_lease_expires_at = NULL          
       WHERE name = '{name}'
         AND id IN (SELECT UNNEST({ids_string}::uuid[]))
       RETURNING *
@@ -363,7 +368,12 @@ def fail_jobs(schema: str, where: str, output: dict):
           WHEN NOT retry_backoff THEN now() + retry_delay * interval '1'
           ELSE {schema}.exponential_backoff(retry_delay, retry_count)
           END,
-        output = {Json(output)}::jsonb
+        output = {Json(output)}::jsonb,
+        -- clear leases / run ownership 
+        lease_owner          = NULL,
+        lease_expires_at     = NULL,
+        run_owner            = NULL,
+        run_lease_expires_at = NULL
       WHERE {where}
       RETURNING *
     ), dlq_jobs AS (
