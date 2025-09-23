@@ -21,15 +21,23 @@ class GlobalPriorityExecutionPlanner:
         jobs: Sequence[FlatJob],
         slots: Dict[str, int],
         active_dags: Set[str],
+        *,
+        exclude_blocked: bool = False,
     ) -> Sequence[FlatJob]:
+        """
+        Pure ordering by default (returns all jobs). If exclude_blocked=True,
+        blocked jobs (executors with 0 free slots) are filtered out.
+        Order among returned jobs:
+          runnable(existing) → runnable(new) → blocked (if included)
+          then: level ↓, priority ↓, free_slots ↓, est_runtime ↑, FIFO
+        """
+        # (endpoint, wi, is_blocked, is_new, level, priority, free_slots, est_rt, fifo_idx)
         annotated: List[Tuple[str, Any, bool, bool, int, int, int, float, int]] = []
-        # fields: (endpoint, wi, is_blocked, is_new, level, priority, free_slots, est_rt, fifo_idx)
 
         for idx, (endpoint, wi) in enumerate(jobs):
             executor = endpoint.split("://", 1)[0]
             free = int(slots.get(executor, 0))
 
-            # do NOT drop blocked jobs — just mark them
             is_blocked = free <= 0
             is_new = wi.dag_id not in active_dags
             level = wi.job_level
@@ -47,20 +55,23 @@ class GlobalPriorityExecutionPlanner:
                 (endpoint, wi, is_blocked, is_new, level, priority, free, est_rt, idx)
             )
 
-        # Sort so runnable come first, then your priority stack
+        # Optionally drop blocked jobs
+        if exclude_blocked:
+            annotated = [t for t in annotated if not t[2]]
+
+        # Sort (if exclude_blocked=True, all is_blocked=False so first term is a no-op)
         annotated.sort(
             key=lambda t: (
-                t[2],  # is_blocked: False < True - runnable first
-                t[3],  # is_new: False < True     - existing DAGs first
+                t[2],  # is_blocked: False < True  → runnable first
+                t[3],  # is_new: False < True     → existing DAGs first
                 -t[4],  # level desc
                 -t[5],  # priority desc
-                -t[6],  # free slots desc (tie-breaker within runnable)
+                -t[6],  # free slots desc
                 t[7],  # est runtime asc
                 t[8],  # FIFO
             )
         )
 
-        # Return ALL jobs, just reordered
         return [(t[0], t[1]) for t in annotated]
 
 

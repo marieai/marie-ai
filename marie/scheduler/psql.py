@@ -12,7 +12,7 @@ from asyncio import Queue
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Dict, NamedTuple, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, List, NamedTuple, Tuple, Union
 
 import psycopg2
 from psycopg2.extras import register_uuid
@@ -927,13 +927,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
                     continue
 
-                # FETCH READY CANDIDATES (executor-agnostic) ----
+                # FETCH READY CANDIDATES (executor-agnostic)
                 # frontier should not filter by executors; let planner decide
                 candidates_wi: list[WorkInfo] = await self.frontier.peek_ready(
                     batch_size
                 )
-                if not candidates_wi:
-                    self.logger.debug("No ready work in memory; short sleep.")
+                if not candidates_wi or len(candidates_wi) == 0:
+                    self.logger.warning("No ready work in memory; short sleep.")
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
                     idle_streak += 1
                     wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
@@ -948,11 +948,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         continue
                     planner_candidates.append((ep, wi))
 
-                #  PLAN ----
                 # Give the planner: candidates + a COPY of slots + active_dags
                 pick_slots = slots_by_executor.copy()
                 planned: list[tuple[str, WorkInfo]] = self.execution_planner.plan(
-                    planner_candidates, pick_slots, self.active_dags
+                    planner_candidates,
+                    pick_slots,
+                    self.active_dags,
+                    exclude_blocked=True,
                 )
                 if not planned:
                     self.logger.debug("Planner returned no picks; short sleep.")
@@ -961,11 +963,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
                     continue
 
-                #  TAKE + SOFT-LEASE ----
+                #  TAKE + SOFT-LEASE
                 selected_ids = [wi.id for _, wi in planned]
-                selected_wis = await self.frontier.take(
-                    selected_ids
-                )  # returns List[WorkInfo]
+                selected_wis: List[WorkInfo] = await self.frontier.take(selected_ids)
 
                 taken = len(selected_wis)
                 requested = len(selected_ids)
@@ -993,6 +993,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 leased_ids: set[str] = set()
                 for job_name, ids in ids_by_job_name.items():
                     try:
+                        self.logger.warning(f'_lease_jobs_db = {len(ids)}')
                         got = await self._lease_jobs_db(
                             job_name, ids
                         )  # returns subset actually leased
@@ -2581,7 +2582,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 """
                 ttl_interval = f"{int(self.lease_ttl_seconds)} seconds"
                 params = (norm_ids, ttl_interval, self.lease_owner, job_name)
-                print('params', params)
                 cursor = self._execute_sql_gracefully(
                     sql, data=params, return_cursor=True, connection=conn
                 )
