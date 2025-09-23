@@ -52,12 +52,29 @@ class GlobalPriorityExecutionPlanner:
         annotated.sort(
             key=lambda t: (
                 -t[2],  # level
-                -t[3],  # priority
                 -t[4],  # free_slots
+                -t[3],  # priority
                 t[5],  # is_new (False < True)
                 t[6],  # est. runtime
                 not t[7],  # burst_boost: True < False
             )
         )
+
+        # # sort by:
+        # #  - level descending
+        # #  - priority descending
+        # #  - free_slots descending
+        # #  - existing-DAG (False) before new-DAG (True)
+        # #  - runtime ascending
+        # annotated.sort(
+        #     key=lambda t: (
+        #         -t[2],  # level
+        #         -t[3],  # priority
+        #         -t[4],  # free_slots
+        #         t[5],  # is_new (False < True)
+        #         t[6],  # est. runtime
+        #         not t[7],  # burst_boost: True < False
+        #     )
+        # )
 
         return [(endpoint, wi) for endpoint, wi, *_ in annotated]
