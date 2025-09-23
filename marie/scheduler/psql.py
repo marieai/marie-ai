@@ -1053,6 +1053,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             await self._release_lease_db([wi.id])
                             self.frontier.release_lease_local(wi.id)
                             continue
+
+                        self.logger.warning(
+                            f"Marking active dag : {len(self.active_dags)}"
+                        )
                         await self.mark_as_active_dag(wi)
                         self.active_dags[dag_id] = dag
 
@@ -2233,13 +2237,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                         synchronize = False
                         remaining_time = None
+                        now = datetime.now(tz=timezone.utc)
 
                         if job_info.end_time is not None:
                             timestamp_ms = job_info.end_time  # Unix timestamp in ms
                             end_time = datetime.fromtimestamp(
                                 timestamp_ms / 1000, tz=timezone.utc
                             )
-                            now = datetime.now(tz=timezone.utc)
                             remaining_time = end_time - now
 
                             if end_time < now - timedelta(
@@ -2407,10 +2411,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
             if work_info.dag_id in self.active_dags:
                 del self.active_dags[work_info.dag_id]
-                self.logger.debug(f"Removed DAG from cache: {work_info.dag_id}")
+                self.logger.warning(
+                    f"Removed DAG from cache: {work_info.dag_id}, size = {len(self.active_dags)}"
+                )
 
             self.logger.info(
-                f"Resolved DAG status: {work_info.dag_id}, status={dag_state}"
+                f"Resolved DAG status: {work_info.dag_id}, status={dag_state}, active_dag = {len(self.active_dags)}"
             )
             # notification
             event_name = work_info.data.get("name", work_info.name)
