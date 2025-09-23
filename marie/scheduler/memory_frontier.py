@@ -25,9 +25,10 @@ class MemoryFrontier:
         self.dependents: dict[str, list[str]] = defaultdict(list)  # parent -> children
         self.unmet_count: dict[str, int] = defaultdict(int)
 
-        # Ready pool (global), fairness: priority then age (older first)
-        # Heap entries: (priority_key, added_at, seq, job_id)
-        self._ready_heap: list[tuple[int, float, int, str]] = []
+        # THIS HAS TO BE KEPT IN SYNC WITH THE GlobalPriorityExecutionPlanner
+        # Heap entries: ((-job_level, -priority), added_at, seq, job_id)
+        self._ready_heap: list[tuple[tuple[int, int], float, int, str]] = []
+
         self._ready_set: set[str] = set()  # fast membership / lazy deletion
         self._added_at: dict[str, float] = {}  # first time job became ready
         self._seq = 0  # tie breaker to keep heap stable
@@ -40,9 +41,10 @@ class MemoryFrontier:
 
         self._lock = asyncio.Lock()
 
-    def _priority_key(self, wi: WorkInfo) -> int:
-        # If higher integer = higher priority, invert for min-heap
-        return -int(wi.priority) if self.higher_priority_wins else int(wi.priority)
+    def _priority_key(self, wi: WorkInfo) -> tuple[int, int]:
+        lvl = int(wi.job_level)
+        pri = int(wi.priority)
+        return (-lvl, (-pri if self.higher_priority_wins else pri))
 
     def _push_ready(self, wi: WorkInfo) -> None:
         if wi.id in self._ready_set:
@@ -129,35 +131,25 @@ class MemoryFrontier:
             self._push_ready(wi)
 
     async def peek_ready(
-        self,
-        max_n: int,
-        filter_fn: Optional[Callable[['WorkInfo'], bool]] = None,
+        self, max_n: int, filter_fn: Optional[Callable[['WorkInfo'], bool]] = None
     ) -> list['WorkInfo']:
-        """
-        Return up to max_n ready jobs ordered by (priority, age),
-        without mutating state. Optionally filter with a predicate.
-        Atomic wrt concurrent takes via internal lock.
-        """
+        """Return up to max_n in true heap order without mutating state."""
         async with self._lock:
-            out: list['WorkInfo'] = []
-            if max_n <= 0:
-                return out
+            if max_n <= 0 or not self._ready_heap:
+                return []
 
-            # Iterate the heap *without* popping; skip stale entries.
-            seen = 0
-            # To avoid O(n) scans each time, we walk the heap linearly;
-            # with lazy deletion via _ready_set and lease checks.
-            for prio, added, seq, jid in self._ready_heap:
-                if not self._still_ready(jid):
-                    continue
-                wi = self.jobs_by_id[jid]
-                if filter_fn and not filter_fn(wi):
-                    continue
-                out.append(wi)
-                seen += 1
-                if seen >= max_n:
-                    break
-            return out
+            def eligible_items():
+                for item in self._ready_heap:  # (key, added, seq, jid)
+                    jid = item[3]
+                    if not self._still_ready(jid):
+                        continue
+                    wi = self.jobs_by_id.get(jid)
+                    if wi is None or (filter_fn and not filter_fn(wi)):
+                        continue
+                    yield item
+
+            top = heapq.nsmallest(max_n, eligible_items())  # O(n log k)
+            return [self.jobs_by_id[item[3]] for item in top]
 
     async def take(
         self,
@@ -201,35 +193,34 @@ class MemoryFrontier:
         *,
         filter_fn: Optional[Callable[['WorkInfo'], bool]] = None,
         lease_ttl: Optional[float] = None,
-    ) -> list[WorkInfo]:
-        """
-        Atomically peek + take up to max_n items (ordered by priority/age),
-        apply soft leases, and return them.
-        """
+        scan_budget: int = 4096,  # prevents pathological pops
+    ) -> list['WorkInfo']:
+        """Pop in heap order; skip & restore non-eligible; soft-lease selected."""
         async with self._lock:
-            # reuse the same logic as peek, but perform the mutation while holding the lock
-            selected: list['WorkInfo'] = []
-            if max_n <= 0:
-                return selected
-
-            # Walk heap without popping; lazy-skip stale entries
-            for prio, added, seq, jid in self._ready_heap:
-                if not self._still_ready(jid):
-                    continue
-                wi = self.jobs_by_id[jid]
-                if filter_fn and not filter_fn(wi):
-                    continue
-                selected.append(wi)
-                if len(selected) >= max_n:
-                    break
-
-            # Mark selected as taken and leased
+            if max_n <= 0 or not self._ready_heap:
+                return []
             now = time.time()
             ttl = self.default_lease_ttl if lease_ttl is None else float(lease_ttl)
-            for wi in selected:
-                self._ready_set.discard(wi.id)
-                self.leased_until[wi.id] = now + ttl
-
+            selected: list['WorkInfo'] = []
+            skipped: list[tuple[tuple[int, int], float, int, str]] = []
+            scans = 0
+            while len(selected) < max_n and self._ready_heap and scans < scan_budget:
+                scans += 1
+                item = heapq.heappop(self._ready_heap)
+                jid = item[3]
+                if not self._still_ready(jid):
+                    continue
+                wi = self.jobs_by_id.get(jid)
+                if wi is None or (filter_fn and not filter_fn(wi)):
+                    skipped.append(item)
+                    continue
+                # select
+                selected.append(wi)
+                self._ready_set.discard(jid)
+                self.leased_until[jid] = now + ttl
+            # restore skipped
+            for it in skipped:
+                heapq.heappush(self._ready_heap, it)
             return selected
 
     async def reap_expired_soft_leases(self) -> int:
@@ -356,24 +347,23 @@ class MemoryFrontier:
 
     def compact_ready_heap(self, max_scan: int = 5000) -> int:
         """
-        Optional maintenance: remove stale heap entries whose ids
-        are no longer in _ready_set (lazy-deletion compaction).
+        Remove stale heap entries whose ids are no longer in _ready_set (lazy-deletion compaction).
         Returns number of entries removed.
         """
         removed = 0
         if not self._ready_heap:
             return removed
 
-        tmp: list[tuple[int, float, int, str]] = []
+        tmp: list[tuple[tuple[int, int], float, int, str]] = []
         scans = 0
         while self._ready_heap and scans < max_scan:
             scans += 1
-            prio, added, seq, jid = heapq.heappop(self._ready_heap)
+            key, added, seq, jid = heapq.heappop(self._ready_heap)
             if jid in self._ready_set:
-                tmp.append((prio, added, seq, jid))
+                tmp.append((key, added, seq, jid))
             else:
                 removed += 1
-        # push back survivors
+
         for e in tmp:
             heapq.heappush(self._ready_heap, e)
         return removed

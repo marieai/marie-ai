@@ -16,7 +16,6 @@ SELECT * FROM marie_scheduler.count_dag_states()
 
 
 
-
 select * From  marie_scheduler.clear_all_leases()
 select * From marie_scheduler.hydrate_frontier()
 select * From marie_scheduler.hydrate_frontier_dags()

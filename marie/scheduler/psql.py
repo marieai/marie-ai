@@ -899,11 +899,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         self.logger.info("Starting database job scheduler (serial mode)")
         wait_time = INIT_POLL_PERIOD
-        batch_size = 25000
+        batch_size = 4  # how many to peek from frontier at once
         failures = 0
         idle_streak = 0
         max_concurrent_dags = self.max_concurrent_dags
         lease_ttl = self.lease_ttl_seconds
+        _cycle_idx = 0
 
         while self.running:
             try:
@@ -921,6 +922,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 slots_by_executor = available_slots_by_executor(
                     ClusterState.deployments
                 ).copy()
+
+                def slot_filter(wi: WorkInfo) -> bool:
+                    ep = wi.data.get("metadata", {}).get("on", "")
+                    exe = ep.split("://", 1)[0] if "://" in ep else ep
+                    # allow NOOP/unknown
+                    return (
+                        True
+                        if not exe or exe == "noop"
+                        else (slots_by_executor.get(exe, 0) > 0)
+                    )
+
                 if not any(slots_by_executor.values()):
                     self.logger.warning("No available executor slots. Backing off.")
                     idle_streak += 1
@@ -963,6 +975,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
                     continue
 
+                # planned = planned[:250]  # enforce batch size cap again
                 #  TAKE + SOFT-LEASE
                 selected_ids = [wi.id for _, wi in planned]
                 selected_wis: List[WorkInfo] = await self.frontier.take(selected_ids)
@@ -985,7 +998,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     except Exception as e:
                         self.logger.warning(f"Soft-lease failed for {wi.id}: {e}")
 
-                # ---- 4) DB LEASE ----
+                # DB LEASE
                 ids_by_job_name: dict[str, list[str]] = defaultdict(list)
                 for wi in selected_wis:
                     ids_by_job_name[wi.name].append(wi.id)
@@ -993,10 +1006,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 leased_ids: set[str] = set()
                 for job_name, ids in ids_by_job_name.items():
                     try:
-                        self.logger.warning(f'_lease_jobs_db = {len(ids)}')
-                        got = await self._lease_jobs_db(
-                            job_name, ids
-                        )  # returns subset actually leased
+                        self.logger.warning(f'_lease_jobs_db = {job_name} : {len(ids)}')
+                        got = await self._lease_jobs_db(job_name, ids)
                         leased_ids.update(got)
                     except Exception as e:
                         self.logger.error(
@@ -1152,6 +1163,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                 if scheduled_any:
                     await self.notify_event()
+
+                # maintain frontier heap
+                if (_cycle_idx % 20) == 0:
+                    removed = self.frontier.compact_ready_heap(max_scan=10000)
+                    if removed:
+                        self.logger.info(f"Frontier heap compacted: removed={removed}")
 
                 idle_streak = 0 if scheduled_any else idle_streak + 1
                 wait_time = adjust_backoff(wait_time, idle_streak, scheduled_any)
