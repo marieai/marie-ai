@@ -1,10 +1,70 @@
 from math import inf
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Set, Tuple
 
 from marie.scheduler.execution_planner import FlatJob
 
 
 class GlobalPriorityExecutionPlanner:
+    """
+    Pure ranking (no filtering): returns *all* jobs, ordered so that:
+      1) runnable (executor has free slots) before blocked
+      2) existing DAGs before new DAGs
+      3) deeper level (critical path) first
+      4) higher user priority
+      5) more executor free slots (tie-breaker)
+      6) shorter estimated runtime
+      7) FIFO (original input order)
+    """
+
+    def plan(
+        self,
+        jobs: Sequence[FlatJob],
+        slots: Dict[str, int],
+        active_dags: Set[str],
+    ) -> Sequence[FlatJob]:
+        annotated: List[Tuple[str, Any, bool, bool, int, int, int, float, int]] = []
+        # fields: (endpoint, wi, is_blocked, is_new, level, priority, free_slots, est_rt, fifo_idx)
+
+        for idx, (endpoint, wi) in enumerate(jobs):
+            executor = endpoint.split("://", 1)[0]
+            free = int(slots.get(executor, 0))
+
+            # do NOT drop blocked jobs — just mark them
+            is_blocked = free <= 0
+            is_new = wi.dag_id not in active_dags
+            level = wi.job_level
+            priority = wi.priority
+
+            meta = (
+                wi.data.get("metadata", {})
+                if (wi.data and isinstance(wi.data, dict))
+                else {}
+            )
+            est = meta.get("estimated_runtime")
+            est_rt = float(est) if est is not None else inf
+
+            annotated.append(
+                (endpoint, wi, is_blocked, is_new, level, priority, free, est_rt, idx)
+            )
+
+        # Sort so runnable come first, then your priority stack
+        annotated.sort(
+            key=lambda t: (
+                t[2],  # is_blocked: False < True - runnable first
+                t[3],  # is_new: False < True     - existing DAGs first
+                -t[4],  # level desc
+                -t[5],  # priority desc
+                -t[6],  # free slots desc (tie-breaker within runnable)
+                t[7],  # est runtime asc
+                t[8],  # FIFO
+            )
+        )
+
+        # Return ALL jobs, just reordered
+        return [(t[0], t[1]) for t in annotated]
+
+
+class GlobalPriorityExecutionPlannerXXXX:
     """
     Global ready-queue scheduler.
     Priority (within each runnable/blocked partition):
@@ -21,7 +81,7 @@ class GlobalPriorityExecutionPlanner:
       - 'burst' logic removed.
     """
 
-    def plan(
+    def planXX(
         self,
         jobs: Sequence[FlatJob],
         slots: Dict[str, int],
