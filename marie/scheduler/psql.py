@@ -182,6 +182,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         )  # "serial" or "parallel"
         self.scheduler_mode = "serial"
         self._event_queue = Queue()
+        self._status_update_lock = asyncio.Lock()
 
         self.max_workers = config.get("max_workers", 5)
         self._db_executor = ThreadPoolExecutor(
@@ -210,6 +211,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         min_concurrent_dags = int(dag_config.get("min_concurrent_dags", 1))
         max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
         cache_ttl_seconds = int(dag_config.get("cache_ttl_seconds", 5))
+        cache_ttl_seconds = int(dag_config.get("cache_ttl_seconds", 5))
+
         dag_cache_size = int(
             dag_config.get("dag_cache_size", 5000)
         )  # 5000 entries as this is what our fetch_next_job uses
@@ -223,6 +226,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._start_time = datetime.now(timezone.utc)
         self.frontier = MemoryFrontier()
 
+        self.frontier_batch_size = int(dag_config.get("frontier_batch_size", 1000))
         self.lease_ttl_seconds: int = int(config.get("lease_ttl_seconds", 5))
         self.run_ttl_seconds: int = int(config.get("run_ttl_seconds", 60))
         # unique, stable lease owner for this scheduler instance
@@ -231,6 +235,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             f"Lease config: lease_ttl_seconds={self.lease_ttl_seconds}, "
             f"run_ttl_seconds={self.run_ttl_seconds}, owner='{self.lease_owner}'"
         )
+
+        self._job_cache = {}
+        self._job_cache_max_size = 5000
 
     def validate_config(self, config: Dict[str, Any]):
         # TODO :Implement full validation of required fields
@@ -248,16 +255,16 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
 
         self.logger.info(f"received message: {event_type} > {message}")
+
         if not isinstance(message, dict) or "job_id" not in message:
             self.logger.error(f"Invalid message format: {message}")
             return
 
+        job_id = message.get("job_id")
         try:
-            job_id = message.get("job_id")
             status = JobStatus(event_type)
-            work_item: WorkInfo = await self._loop.run_in_executor(
-                self._db_executor, self.get_job, job_id
-            )
+            work_item: WorkInfo = await self.get_job(job_id)
+
             if work_item is None:
                 self.logger.error(f"WorkItem not found: {job_id}")
                 return
@@ -269,10 +276,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.logger.debug(f"Job pending : {job_id}")
             elif status == JobStatus.SUCCEEDED:
                 await self.complete(job_id, work_item)
-                self.frontier.on_job_completed(job_id)
+                await self.frontier.on_job_completed(job_id)
             elif status == JobStatus.FAILED:
                 await self.fail(job_id, work_item)
-                self.frontier.on_job_failed(job_id)
+                await self.frontier.on_job_failed(job_id)
             elif status == JobStatus.RUNNING:
                 self.logger.debug(f"Job running : {job_id}")
                 await self.put_status(job_id, work_state, now, None)
@@ -889,6 +896,22 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def _poll(self):
         """
+        Handles the polling, scheduling, and execution of jobs in an asynchronous job scheduler
+        until the scheduler is stopped. Coordinates job management by interacting with a frontier
+        (queue system), execution planner, and database for job leasing and dispatch.
+
+        The method:
+        * Periodically polls for ready work from the frontier.
+        * Filters and plans the dispatching of work based on available slots
+          for executors, active DAGs, and job dependencies.
+        * Manages job soft-leases (local and database-level) to ensure claim
+          consistency.
+        * Executes or schedules ready jobs, including handling NOOP jobs that
+          require local processing.
+
+        The method dynamically adjusts its sleep intervals in case of failed
+        or delayed operations, to achieve a backoff mechanism during low activity.
+
         Planner-first loop:
           1) wait (debounced) for wake/event
           2) read cluster slots
@@ -896,14 +919,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
           4) let planner choose a plan
           5) take the chosen ids from frontier, soft-lease, DB-lease
           6) NOOPs -> complete locally; normal jobs -> dispatch and activate_from_lease
+
+        :raises asyncio.TimeoutError: When the operation times out.
+        :raises Exception: If any unexpected error occurs during job scheduling or execution processing.
         """
-        self.logger.info("Starting database job scheduler (serial mode)")
+
+        self.logger.info("Starting job scheduler")
         wait_time = INIT_POLL_PERIOD
-        batch_size = 4  # how many to peek from frontier at once
-        failures = 0
-        idle_streak = 0
+        batch_size = self.frontier_batch_size
         max_concurrent_dags = self.max_concurrent_dags
         lease_ttl = self.lease_ttl_seconds
+
+        failures = 0
+        idle_streak = 0
         _cycle_idx = 0
 
         while self.running:
@@ -942,8 +970,21 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 # FETCH READY CANDIDATES (executor-agnostic)
                 # frontier should not filter by executors; let planner decide
                 candidates_wi: list[WorkInfo] = await self.frontier.peek_ready(
-                    batch_size
+                    batch_size,  # filter_fn=slot_filter
                 )
+
+                # seen = set()
+                # unique_candidates = []
+                # for wi in candidates_wi:
+                #     if wi.id not in seen:
+                #         seen.add(wi.id)
+                #         unique_candidates.append(wi)
+                # dedup_count = len(candidates_wi) - len(unique_candidates)
+                # if dedup_count:
+                #     self.logger.warning(
+                #         f"Frontier returned {dedup_count} duplicate candidates (kept {len(unique_candidates)})")
+                # candidates_wi = unique_candidates
+
                 if not candidates_wi or len(candidates_wi) == 0:
                     self.logger.warning("No ready work in memory; short sleep.")
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
@@ -968,15 +1009,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.active_dags,
                     exclude_blocked=True,
                 )
+
+                await self.debug_candidates_and_plan(candidates_wi, planned, pick_slots)
+
                 if not planned:
-                    self.logger.debug("Planner returned no picks; short sleep.")
+                    self.logger.warning(
+                        "Planner returned no picks; short sleep. planner_candidates = {len(planner_candidates)}"
+                    )
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
                     idle_streak += 1
                     wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
                     continue
 
-                # planned = planned[:250]  # enforce batch size cap again
-                #  TAKE + SOFT-LEASE
+                # TAKE + SOFT-LEASE
                 selected_ids = [wi.id for _, wi in planned]
                 selected_wis: List[WorkInfo] = await self.frontier.take(selected_ids)
 
@@ -992,11 +1037,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                 # map id -> (entrypoint, wi) for quick lookup
                 planned_by_id = {wi.id: (ep, wi) for ep, wi in planned}
-                for wi in selected_wis:
-                    try:
-                        self.frontier.mark_leased(wi.id, ttl_s=lease_ttl)
-                    except Exception as e:
-                        self.logger.warning(f"Soft-lease failed for {wi.id}: {e}")
 
                 # DB LEASE
                 ids_by_job_name: dict[str, list[str]] = defaultdict(list)
@@ -1006,19 +1046,28 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 leased_ids: set[str] = set()
                 for job_name, ids in ids_by_job_name.items():
                     try:
-                        self.logger.warning(f'_lease_jobs_db = {job_name} : {len(ids)}')
+                        self.logger.info(
+                            f'_lease_jobs_db size = {job_name} : {len(ids)}'
+                        )
                         got = await self._lease_jobs_db(job_name, ids)
                         leased_ids.update(got)
+
+                        self.logger.debug(
+                            f'_lease_jobs_db got = {job_name} : {len(got)}'
+                        )
+                        if len(got) < len(ids):
+                            self.logger.warning(
+                                f"DB lease shortfall for '{job_name}': got {len(got)}/{len(ids)}"
+                            )
                     except Exception as e:
                         self.logger.error(
                             f"DB lease failed for '{job_name}' ({len(ids)} ids): {e}"
                         )
-
+                # put *everything* back
                 if not leased_ids:
-                    # put *everything* back
                     for wi in selected_wis:
-                        self.frontier.release_lease_local(wi.id)
-                    self.logger.debug(
+                        await self.frontier.release_lease_local(wi.id)
+                    self.logger.warning(
                         "No candidates could be leased in DB; backing off."
                     )
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
@@ -1029,14 +1078,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 # return non-leased back to frontier immediately
                 for wi in selected_wis:
                     if wi.id not in leased_ids:
-                        self.frontier.release_lease_local(wi.id)
+                        await self.frontier.release_lease_local(wi.id)
 
                 # only process those that we leased in DB
                 leased_jobs: list[tuple[str, WorkInfo]] = [
                     planned_by_id[jid] for jid in leased_ids if jid in planned_by_id
                 ]
 
-                #  PROCESS LEASED JOBS ----
+                #  PROCESS LEASED JOBS
                 scheduled_any = False
                 jobs_scheduled_this_cycle = defaultdict(int)
                 enqueue_tasks = []
@@ -1052,7 +1101,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             f"Max DAG limit reached ({len(self.active_dags)}/{max_concurrent_dags}). Skipping {wi.id}"
                         )
                         await self._release_lease_db([wi.id])
-                        self.frontier.release_lease_local(wi.id)
+                        await self.frontier.release_lease_local(wi.id)
                         continue
 
                     # Ensure DAG cached/active
@@ -1063,7 +1112,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                                 f"Missing DAG {dag_id} for job {wi.id}; releasing lease."
                             )
                             await self._release_lease_db([wi.id])
-                            self.frontier.release_lease_local(wi.id)
+                            await self.frontier.release_lease_local(wi.id)
                             continue
 
                         self.logger.warning(
@@ -1084,7 +1133,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             noop_ids_to_release.append(wi.id)
 
                             # Advance dependents in the frontier
-                            self.frontier.on_job_completed(wi.id)
+                            await self.frontier.on_job_completed(wi.id)
                             scheduled_any = True
 
                             # Resolve DAG if this was a terminal-level NOOP
@@ -1106,7 +1155,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             # If completion failed for any reason, release DB lease & requeue
                             self.logger.error(f"Completing NOOP {wi.id} failed: {e}")
                             await self._release_lease_db([wi.id])
-                            self.frontier.release_lease_local(wi.id)
+                            await self.frontier.release_lease_local(wi.id)
                         continue
 
                     # Normal job: check slots then dispatch
@@ -1114,7 +1163,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     if slots_by_executor.get(exe, 0) <= 0:
                         self.logger.debug(f"No slots for {exe}, delaying job {wi.id}")
                         await self._release_lease_db([wi.id])
-                        self.frontier.release_lease_local(wi.id)
+                        await self.frontier.release_lease_local(wi.id)
                         continue
 
                     # reserve a slot and dispatch
@@ -1127,7 +1176,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         }
                     )
 
-                # ---- 6) HANDLE DISPATCH RESULTS ----
+                # HANDLE DISPATCH RESULTS ----
                 if enqueue_tasks:
                     results = await asyncio.gather(
                         *[t["task"] for t in enqueue_tasks], return_exceptions=True
@@ -1140,7 +1189,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             # dispatch failed → release lease & requeue
                             self.logger.error(f"Dispatch failed for {wi.id}: {result}")
                             await self._release_lease_db([wi.id])
-                            self.frontier.release_lease_local(wi.id)
+                            await self.frontier.release_lease_local(wi.id)
                             continue
 
                         # runner accepted → activate from lease
@@ -1153,9 +1202,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                                 f"Failed to activate job {wi.id}; releasing lease."
                             )
                             await self._release_lease_db([wi.id])
-                            self.frontier.release_lease_local(wi.id)
+                            await self.frontier.release_lease_local(wi.id)
 
-                # ---- 7) LOG + BACKOFF ----
                 if jobs_scheduled_this_cycle:
                     self.logger.info("Scheduling summary for this cycle:")
                     for exe, cnt in sorted(jobs_scheduled_this_cycle.items()):
@@ -1166,9 +1214,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                 # maintain frontier heap
                 if (_cycle_idx % 20) == 0:
-                    removed = self.frontier.compact_ready_heap(max_scan=10000)
+                    removed = await self.frontier.compact_ready_heap(max_scan=10000)
                     if removed:
-                        self.logger.info(f"Frontier heap compacted: removed={removed}")
+                        self.logger.debug(f"Frontier heap compacted: removed={removed}")
 
                 idle_streak = 0 if scheduled_any else idle_streak + 1
                 wait_time = adjust_backoff(wait_time, idle_streak, scheduled_any)
@@ -1181,6 +1229,73 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.warning("Too many failures — entering cooldown")
                     await asyncio.sleep(60)
                     failures = 0
+
+    async def debug_candidates_and_plan(
+        self,
+        candidates_wi: list[WorkInfo],
+        planned: list[Tuple[str, WorkInfo]],
+        pick_slots: dict[str, int],
+    ) -> None:
+        """
+        Debugs and writes candidates and planned jobs to a file if the
+        environment variable `MARIE_DEBUG_QUERY_PLAN` is set.
+
+        :param candidates_wi: A list of work info objects that are candidates for planning.
+        :param planned: A list of tuples containing entrypoint and work info for planned jobs.
+        :param pick_slots: The slots available for planning.
+        """
+
+        if "MARIE_DEBUG_QUERY_PLAN" not in os.environ:
+            pass
+            # return
+
+        os.makedirs("/tmp/marie/plans", exist_ok=True)
+        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+        debug_file_path = f"/tmp/marie/plans/candidates_plan_debug_{timestamp}.txt"
+        try:
+            with open(debug_file_path, 'w') as debug_file:
+                # debug_file.write("Nodes:\n")
+                # debug_file.write(json.dumps(ClusterState.deployments, indent=4))
+
+                debug_file.write("\n\n")
+                debug_file.write("Slots:\n")
+                debug_file.write(json.dumps(pick_slots, indent=4))
+                debug_file.write("\n\n")
+
+                debug_file.write("Memory Frontier State:\n")
+                frontier_summary = self.frontier.summary(detail=True)
+                debug_file.write(json.dumps(frontier_summary, indent=4))
+                debug_file.write("\n\n")
+
+                debug_file.write("Candidate Work Items:\n")
+                for work_info in candidates_wi:
+                    debug_file.write(
+                        f"Work ID: {work_info.id}, "
+                        f"Priority: {work_info.priority}, "
+                        f"Job Level: {work_info.job_level}, "
+                        f"DAG ID: {work_info.dag_id}\n"
+                    )
+
+                debug_file.write("\n\n")
+                debug_file.write("Planned Jobs:\n")
+                for entrypoint, work_info in planned:
+                    debug_file.write(
+                        f"Entrypoint: {entrypoint}, "
+                        f"Work ID: {work_info.id}, "
+                        f"Priority: {work_info.priority}, "
+                        f"Job Level: {work_info.job_level}, "
+                        f"DAG ID: {work_info.dag_id}\n"
+                    )
+                debug_file.write("\n\n")
+            self.logger.debug(
+                f"Candidates and planned jobs written to {debug_file_path} for analysis."
+            )
+        except Exception as debug_error:
+            self.logger.error(
+                f"Failed to write candidates and planned jobs to debug file: {debug_error}"
+            )
 
     async def debug_work_plans(
         self,
@@ -1419,7 +1534,68 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     ) -> dict[str, list[Any]]:
         raise NotImplementedError()
 
-    def get_job(self, job_id: str) -> Optional[WorkInfo]:
+    async def get_job(self, job_id: str) -> Optional[WorkInfo]:
+        """
+        Get a job by its ID from cache or database.
+        :param job_id: The ID of the job to retrieve.
+        """
+        # Fast path, no lock
+        if job_id in self._job_cache:
+            # Move to end to signify it's recently used
+            self._job_cache[job_id] = self._job_cache.pop(job_id)
+            return self._job_cache[job_id]
+
+        def db_call():
+            """Synchronous database call to fetch the job."""
+            schema = DEFAULT_SCHEMA
+            table = DEFAULT_JOB_TABLE
+            cursor = None
+            conn = None
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    SELECT
+                          id, name, priority, state, retry_limit, start_after,
+                          expire_in, data, retry_delay, retry_backoff, keep_until,
+                          dag_id, job_level
+                    FROM {schema}.{table}
+                    WHERE id = %s
+                    """,
+                    (job_id,),
+                )
+                record = cursor.fetchone()
+                conn.commit()
+                if record:
+                    return self.record_to_work_info(record)
+                return None
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error getting job '{job_id}': {error}")
+                if conn:
+                    conn.rollback()
+                return None
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        # Slow path, with lock
+        async with self._status_update_lock:
+            # Double-check cache in case it was populated while waiting for the lock
+            if job_id in self._job_cache:
+                return self._job_cache[job_id]
+
+            work_item = await self._loop.run_in_executor(self._db_executor, db_call)
+
+            # Evict oldest if cache is over size
+            if work_item:
+                self._job_cache[job_id] = work_item
+                if len(self._job_cache) > self._job_cache_max_size:
+                    self._job_cache.pop(next(iter(self._job_cache)))
+
+            return work_item
+
+    def get_jobXXXXX(self, job_id: str) -> Optional[WorkInfo]:
         """
         Get a job by its ID.
         :param job_id:
@@ -1782,7 +1958,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 "Please use a different submission_id."
             )
 
-        self.frontier.add_dag(plan, dag_nodes)
+        await self.frontier.add_dag(plan, dag_nodes)
         await self.notify_event()
         return submission_id
 
@@ -1887,17 +2063,23 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param job_id: The ID of the job.
         :param work_item: The work item to cancel.
         """
-        conn = None
-        try:
-            conn = self._get_connection()
-            self.logger.info(f"Cancelling job: {job_id}")
-            self._execute_sql_gracefully(
-                cancel_jobs(DEFAULT_SCHEMA, work_item.name, [job_id]), connection=conn
-            )
-        except (Exception, psycopg2.Error) as error:
-            self.logger.error(f"Error handling job event: {error}")
-        finally:
-            self._close_connection(conn)
+        self.logger.info(f"Cancelling job: {job_id}")
+
+        def db_call():
+            conn = None
+            try:
+                conn = self._get_connection()
+                self._execute_sql_gracefully(
+                    cancel_jobs(DEFAULT_SCHEMA, work_item.name, [job_id]),
+                    connection=conn,
+                )
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error cancelling job: {error}")
+            finally:
+                self._close_connection(conn)
+
+        async with self._status_update_lock:
+            await self._loop.run_in_executor(self._db_executor, db_call)
 
     async def resume_job(self, job_id: str) -> None:
         """
@@ -1905,17 +2087,22 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param job_id:
         """
         name = "extract"  # TODO this is a placeholder
-        conn = None
-        try:
-            self.logger.info(f"Resuming job: {job_id}")
-            conn = self._get_connection()
-            self._execute_sql_gracefully(
-                resume_jobs(DEFAULT_SCHEMA, name, [job_id]), connection=conn
-            )
-        except (Exception, psycopg2.Error) as error:
-            self.logger.error(f"Error handling job event: {error}")
-        finally:
-            self._close_connection(conn)
+        self.logger.info(f"Resuming job: {job_id}")
+
+        def db_call():
+            conn = None
+            try:
+                conn = self._get_connection()
+                self._execute_sql_gracefully(
+                    resume_jobs(DEFAULT_SCHEMA, name, [job_id]), connection=conn
+                )
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error resuming job: {error}")
+            finally:
+                self._close_connection(conn)
+
+        async with self._status_update_lock:
+            await self._loop.run_in_executor(self._db_executor, db_call)
 
     async def put_status(
         self,
@@ -1961,7 +2148,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             finally:
                 self._close_connection(conn)
 
-        await self._loop.run_in_executor(self._db_executor, db_call)
+        async with self._status_update_lock:
+            await self._loop.run_in_executor(self._db_executor, db_call)
 
     async def maintenance(self):
         """
@@ -2153,14 +2341,26 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             cursor = None
             try:
                 conn = self._get_connection()
+                if False:
+                    sql_probe = """
+                                SELECT id, name, state, lease_owner, completed_on
+                                FROM marie_scheduler.job
+                                WHERE id = ANY (%s::uuid[]);
+                                """
+                    with conn, conn.cursor() as cur:
+                        ids = [job_id]
+                        cur.execute(sql_probe, (ids,))
+                        self.logger.info(f"pre-complete probe rows={cur.fetchall()}")
+
+                query = complete_jobs_wrapper(
+                    DEFAULT_SCHEMA,
+                    work_item.name,
+                    [job_id],
+                    {"on_complete": "done", **(output_metadata or {})},
+                    force,
+                )
                 cursor = self._execute_sql_gracefully(
-                    complete_jobs_wrapper(
-                        DEFAULT_SCHEMA,
-                        work_item.name,
-                        [job_id],
-                        {"on_complete": "done", **(output_metadata or {})},
-                        force,
-                    ),
+                    query,
                     return_cursor=True,
                     connection=conn,
                 )
@@ -2168,14 +2368,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if counts > 0:
                     self.logger.debug(f"Completed job: {job_id} : {counts}")
                 else:
-                    self.logger.error(f"Error completing job: {job_id}")
+                    self.logger.error(
+                        f"Error completing job: {job_id} : {counts} \n {query}"
+                    )
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error completing job: {error}")
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)
 
-        await self._loop.run_in_executor(self._db_executor, db_call)
+        async with self._status_update_lock:
+            await self._loop.run_in_executor(self._db_executor, db_call)
 
     async def fail(
         self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
@@ -2208,7 +2411,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self._close_cursor(cursor)
                 self._close_connection(conn)
 
-        await self._loop.run_in_executor(self._db_executor, db_call)
+        async with self._status_update_lock:
+            await self._loop.run_in_executor(self._db_executor, db_call)
 
     async def _sync(self):
         """
@@ -2418,9 +2622,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.logger.debug(f"🔍 Resolving DAG status: {work_info.dag_id}")
 
         try:
-            dag_state = await self._loop.run_in_executor(
-                self._db_executor, self._resolve_dag_status_sync, work_info.dag_id
-            )
+            async with self._status_update_lock:
+                dag_state = await self._loop.run_in_executor(
+                    self._db_executor, self._resolve_dag_status_sync, work_info.dag_id
+                )
 
             self.logger.debug(f"Resolved DAG state: {dag_state}")
             if dag_state not in ("completed", "failed"):
@@ -2882,7 +3087,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             if not nodes:
                 continue
             try:
-                self.frontier.add_dag(dags[dag_id], nodes)
+                await self.frontier.add_dag(dags[dag_id], nodes)
                 added += 1
                 total_pending_jobs += len(nodes)
             except Exception as e:

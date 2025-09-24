@@ -16,7 +16,6 @@ class WorkState(Enum):
         EXPIRED (str): Represents the state of a work item that has expired and cannot be processed further.
         CANCELLED (str): Represents the state of a work item that has been cancelled.
         FAILED (str): Represents the state of a work item that has failed to complete.
-        LEASED (str): Represents the state of a work item that has been leased for processing.
 
     """
 
@@ -27,7 +26,6 @@ class WorkState(Enum):
     EXPIRED = "expired"
     CANCELLED = "cancelled"
     FAILED = "failed"
-    LEASED = "leased"
 
     def is_terminal(self) -> bool:
         """Return whether or not this status is terminal.

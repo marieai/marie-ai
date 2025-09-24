@@ -14,6 +14,7 @@ from marie.job.common import ActorHandle, JobInfo, JobInfoStorageClient, JobStat
 from marie.job.event_publisher import EventPublisher
 from marie.job.job_callback_executor import job_callback_executor
 from marie.job.job_distributor import JobDistributor
+from marie.job.lease_cache import LeaseCache
 
 # from marie.job.lease_cache import LeaseCache
 from marie.logging_core.logger import MarieLogger
@@ -51,7 +52,7 @@ class JobSupervisor:
         self._job_distributor = job_distributor
         self._event_publisher = event_publisher
         self._etcd_client = etcd_client
-        # self._lease_cache = LeaseCache(etcd_client, ttl=5, margin=1.0)
+        self._lease_cache = LeaseCache(etcd_client, ttl=5, margin=1.0)
         self.request_info = None
         self.confirmation_event = confirmation_event  # we need to make sure that this is per job confirmation event
         self._active_tasks = set()
@@ -289,6 +290,7 @@ class JobSupervisor:
 
         t_signal = time.monotonic()
         # Do etcd update
+        key = "<unknown>"
         try:
             from grpc_health.v1.health_pb2 import HealthCheckResponse
 
@@ -310,22 +312,21 @@ class JobSupervisor:
             # self._etcd_client.put(key, status_str, lease=lease)
             # t2 = time.monotonic()
 
-            self.logger.info(
-                "Etcd update for %s: lease=%.3fs put=%.3fs total=%.3fs",
-                key,
-                t1 - t0,
-                t2 - t1,
-                t2 - t0,
-            )
         except Exception as e:
             self.logger.error(f"Failed to update Etcd for job {self._job_id}: {e}")
+            t0 = t1 = t2 = start  # set timers to start to avoid unbound errors
 
-        total = time.monotonic() - start
+        total_duration = time.monotonic() - start
+        signal_duration = t_signal - start
+
         self.logger.info(
-            "Callback _send_callback_sync executed in %.2fs (signal=%.3fs, post-signal=%.3fs).",
-            total,
-            t_signal - start,
-            total - (t_signal - start),
+            "Callback for %s: cb_total=%.3fs (etcd=%.3fs [lease=%.3fs, put=%.3fs], signal=%.3fs)",
+            key,
+            total_duration,
+            t2 - t0,
+            t1 - t0,
+            t2 - t1,
+            signal_duration,
         )
 
     async def _submit_job_in_background(self, job_info: JobInfo):

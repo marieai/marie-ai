@@ -256,12 +256,12 @@ def test_another_complex_plan(planner_fixture):
        Within each: level ↓, priority ↓, free_slots ↓, est_runtime ↑, FIFO."""
     planner, slots, active_dags = planner_fixture
 
-    jA = create_work_info("jA", "dag_1",     2, 20, endpoint="executor_a://ep")
-    jB = create_work_info("jB", "dag_new_1", 2,  5, endpoint="executor_b://ep")
-    jC = create_work_info("jC", "dag_1",     5, 10, endpoint="executor_a://ep")
-    jD = create_work_info("jD", "dag_3",     2, 10, endpoint="executor_a://ep")  # no boost in new logic
-    jE = create_work_info("jE", "dag_2",     2, 10, endpoint="executor_a://ep", estimated_runtime=10.0)
-    jF = create_work_info("jF", "dag_new_2", 2,  5, endpoint="executor_a://ep")
+    jA = create_work_info("jA", "dag_1", 2, 20, endpoint="executor_a://ep")
+    jB = create_work_info("jB", "dag_new_1", 2, 5, endpoint="executor_b://ep")
+    jC = create_work_info("jC", "dag_1", 5, 10, endpoint="executor_a://ep")
+    jD = create_work_info("jD", "dag_3", 2, 10, endpoint="executor_a://ep")  # no boost in new logic
+    jE = create_work_info("jE", "dag_2", 2, 10, endpoint="executor_a://ep", estimated_runtime=10.0)
+    jF = create_work_info("jF", "dag_new_2", 2, 5, endpoint="executor_a://ep")
 
     jobs = [jA, jB, jC, jD, jE, jF]
     planned_jobs = planner.plan(jobs, slots, active_dags)
@@ -278,13 +278,13 @@ def test_large_complex_plan_top_6(planner_fixture):
     jobs = []
 
     # Top candidates
-    jobs.append(create_work_info("top1_level",   "dag_1", 10,  1))                          # existing, highest level
-    jobs.append(create_work_info("top2_prio",    "dag_1",  9, 100))                         # existing, highest priority
-    jobs.append(create_work_info("top3_slots",   "dag_2",  9,  50, endpoint="executor_b://ep"))  # existing, more slots
-    jobs.append(create_work_info("top4_existing","dag_1",  9,  50, endpoint="executor_a://ep"))  # existing
-    jobs.append(create_work_info("top5_runtime", "dag_2",  9,  50, endpoint="executor_a://ep",
+    jobs.append(create_work_info("top1_level", "dag_1", 10, 1))  # existing, highest level
+    jobs.append(create_work_info("top2_prio", "dag_1", 9, 100))  # existing, highest priority
+    jobs.append(create_work_info("top3_slots", "dag_2", 9, 50, endpoint="executor_b://ep"))  # existing, more slots
+    jobs.append(create_work_info("top4_existing", "dag_1", 9, 50, endpoint="executor_a://ep"))  # existing
+    jobs.append(create_work_info("top5_runtime", "dag_2", 9, 50, endpoint="executor_a://ep",
                                  estimated_runtime=1.0))  # existing, shortest runtime
-    jobs.append(create_work_info("top6_boosted", "dag_3",  9,  50, endpoint="executor_a://ep"))  # NEW DAG (no boost)
+    jobs.append(create_work_info("top6_boosted", "dag_3", 9, 50, endpoint="executor_a://ep"))  # NEW DAG (no boost)
 
     # Fillers
     for i in range(18):
@@ -295,7 +295,7 @@ def test_large_complex_plan_top_6(planner_fixture):
 
     expected_top_6_ids = [
         "top1_level",
-        "top2_prio",     # priority outranks free-slots within same level
+        "top2_prio",  # priority outranks free-slots within same level
         "top3_slots",
         "top5_runtime",  # same prio/level/executor as top4 → shorter runtime first
         "top4_existing",
@@ -324,13 +324,15 @@ def test_edge_case_and_tie_breaking(planner_fixture):
         create_work_info("available_slots_job", "dag_1", 5, 90, endpoint="executor_b://ep"),
 
         # Level 4 ties (same level/priority/executor): runtime asc, then FIFO
-        create_work_info("tie_breaker_runtime_inf",  "dag_2", 4, 50, endpoint="executor_a://ep", estimated_runtime=float('inf')),
-        create_work_info("tie_breaker_runtime_none", "dag_2", 4, 50, endpoint="executor_a://ep", estimated_runtime=None),
-        create_work_info("tie_breaker_shortest_rt",  "dag_2", 4, 50, endpoint="executor_a://ep", estimated_runtime=10.0),
+        create_work_info("tie_breaker_runtime_inf", "dag_2", 4, 50, endpoint="executor_a://ep",
+                         estimated_runtime=float('inf')),
+        create_work_info("tie_breaker_runtime_none", "dag_2", 4, 50, endpoint="executor_a://ep",
+                         estimated_runtime=None),
+        create_work_info("tie_breaker_shortest_rt", "dag_2", 4, 50, endpoint="executor_a://ep", estimated_runtime=10.0),
 
         # Existing vs new at level 3: existing first
-        create_work_info("existing_dag_job",   "dag_1", 3, 50, endpoint="executor_a://ep"),
-        create_work_info("new_boosted_dag_job","dag_3", 3, 50, endpoint="executor_a://ep"),
+        create_work_info("existing_dag_job", "dag_1", 3, 50, endpoint="executor_a://ep"),
+        create_work_info("new_boosted_dag_job", "dag_3", 3, 50, endpoint="executor_a://ep"),
 
         # Identical jobs (level 2, same DAG/priority/runtime/executor): FIFO preserved
         create_work_info("identical_1", "dag_1", 2, 50, endpoint="executor_a://ep"),
@@ -343,17 +345,17 @@ def test_edge_case_and_tie_breaking(planner_fixture):
     # Full expected order:
     expected = [
         # Runnable + existing
-        "available_slots_job",         # level 5, runnable
-        "tie_breaker_shortest_rt",     # level 4, shortest runtime among ties
-        "tie_breaker_runtime_inf",     # level 4, ∞ runtime (ties with None) → FIFO before _none
-        "tie_breaker_runtime_none",    # level 4, treated as ∞
-        "existing_dag_job",            # level 3, existing
-        "identical_1",                 # level 2, existing; FIFO
-        "identical_2",                 # level 2, existing; FIFO
+        "available_slots_job",  # level 5, runnable
+        "tie_breaker_shortest_rt",  # level 4, shortest runtime among ties
+        "tie_breaker_runtime_inf",  # level 4, ∞ runtime (ties with None) → FIFO before _none
+        "tie_breaker_runtime_none",  # level 4, treated as ∞
+        "existing_dag_job",  # level 3, existing
+        "identical_1",  # level 2, existing; FIFO
+        "identical_2",  # level 2, existing; FIFO
         # Runnable + new
-        "new_boosted_dag_job",         # level 3, new → after all existing runnable
+        "new_boosted_dag_job",  # level 3, new → after all existing runnable
         # Blocked (no capacity)
-        "zero_slots_job",              # last
+        "zero_slots_job",  # last
     ]
 
     assert ids == expected
@@ -448,3 +450,24 @@ def test_minimize_dags_with_6_dags_and_tie_breaking(planner_fixture):
 
     assert set(planned_ids[:3]) == active_job_ids
     assert set(planned_ids[3:]) == new_job_ids
+
+
+def test_noop_jobs_are_not_blocked(planner_fixture):
+    """NOOP jobs should never be considered blocked, even with no slots."""
+    planner, slots, active_dags = planner_fixture
+
+    slots.pop("noop", None)
+
+    noop_job = create_work_info("noop_job", "dag_1", 1, 10, endpoint="noop://noop")
+    regular_job_blocked = create_work_info(
+        "blocked_job", "dag_1", 1, 10, endpoint="executor_c://endpoint"
+    )
+
+    slots["executor_c"] = 0
+
+    jobs = [noop_job, regular_job_blocked]
+
+    # With exclude_blocked=True, the noop job should still be planned.
+    planned_jobs = planner.plan(jobs, slots, active_dags, exclude_blocked=True)
+
+    assert len(planned_jobs) == 1

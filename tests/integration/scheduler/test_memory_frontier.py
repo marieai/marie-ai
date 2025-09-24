@@ -1,8 +1,4 @@
 import asyncio
-import os
-import random
-import time
-from dataclasses import dataclass
 from types import SimpleNamespace as NS
 
 import pytest
@@ -37,9 +33,9 @@ def frontier():
     return MemoryFrontier(higher_priority_wins=True, default_lease_ttl=0.25)
 
 
-def add_ready_jobs(frontier: MemoryFrontier, *jobs):
+async def add_ready_jobs(frontier: MemoryFrontier, *jobs):
     # add into a fake "dag" (the function doesn't actually use the dag object)
-    frontier.add_dag(None, list(jobs))
+    await frontier.add_dag(None, list(jobs))
 
 
 @pytest.mark.asyncio
@@ -54,7 +50,7 @@ async def test_ordering_level_priority_age(frontier: MemoryFrontier):
     d = wi_factory("D", job_level=1, priority=1)
 
     # Add roots in an order that makes C older than B
-    add_ready_jobs(frontier, a, c, b, d)
+    await add_ready_jobs(frontier, a, c, b, d)
 
     out = await frontier.peek_ready(4)
     ids = [wi.id for wi in out]
@@ -69,7 +65,7 @@ async def test_ordering_with_priority_tie_break(frontier: MemoryFrontier):
     x1 = wi_factory("X1", job_level=3, priority=1)
     x2 = wi_factory("X2", job_level=3, priority=5)
     x3 = wi_factory("X3", job_level=3, priority=5)
-    add_ready_jobs(frontier, x1, x2, x3)
+    await add_ready_jobs(frontier, x1, x2, x3)
 
     # Make X2 older than X3 to break tie within priority=5
     frontier._added_at["X2"] -= 5.0
@@ -83,13 +79,13 @@ async def test_compact_ready_heap_removes_stale(frontier: MemoryFrontier):
     j1 = wi_factory("S1")
     j2 = wi_factory("S2")
     j3 = wi_factory("S3")
-    add_ready_jobs(frontier, j1, j2, j3)
+    await add_ready_jobs(frontier, j1, j2, j3)
 
     # Simulate staleness: drop S2 from ready_set (e.g., removed/leased elsewhere)
     frontier._remove_from_ready_set("S2")
 
     before = len(frontier._ready_heap)
-    removed = frontier.compact_ready_heap(max_scan=10000)
+    removed = await frontier.compact_ready_heap(max_scan=10000)
     after = len(frontier._ready_heap)
 
     assert removed >= 1
@@ -103,10 +99,10 @@ async def test_compact_ready_heap_removes_stale(frontier: MemoryFrontier):
 async def test_soft_lease_excludes_until_expiry(frontier: MemoryFrontier):
     j1 = wi_factory("L1")
     j2 = wi_factory("L2")
-    add_ready_jobs(frontier, j1, j2)
+    await add_ready_jobs(frontier, j1, j2)
 
     # Soft-lease L1 for ~0.2s
-    frontier.mark_leased("L1", ttl_s=0.2)
+    await frontier.mark_leased("L1", ttl_s=0.2)
 
     # While leased, peek should not return L1
     out1 = await frontier.peek_ready(2)
@@ -128,14 +124,14 @@ async def test_soft_lease_excludes_until_expiry(frontier: MemoryFrontier):
 @pytest.mark.asyncio
 async def test_release_lease_local_preserves_added_at(frontier: MemoryFrontier):
     j = wi_factory("R1")
-    add_ready_jobs(frontier, j)
+    await add_ready_jobs(frontier, j)
 
     # Take it out of ready via soft lease
-    frontier.mark_leased("R1", ttl_s=1.0)
+    await frontier.mark_leased("R1", ttl_s=1.0)
     t_before = frontier._added_at["R1"]
 
     # Release the lease locally (should push back preserving added_at)
-    frontier.release_lease_local("R1")
+    await frontier.release_lease_local("R1")
     assert frontier._added_at["R1"] == pytest.approx(t_before)
 
     # And it should be peekable again
@@ -152,7 +148,7 @@ async def test_select_ready_scan_budget_skips_blocked_heads(frontier: MemoryFron
     # First 5 jobs are for an executor with 0 slots (blocked), last 2 are runnable
     blocked = [wi_factory(f"B{i}", executor="exe://blocked") for i in range(5)]
     runnable = [wi_factory("OK1", executor="exe://ok"), wi_factory("OK2", executor="exe://ok")]
-    add_ready_jobs(frontier, *(blocked + runnable))
+    await add_ready_jobs(frontier, *(blocked + runnable))
 
     # Filter that rejects blocked executor
     def filter_fn(wi):
@@ -166,7 +162,7 @@ async def test_select_ready_scan_budget_skips_blocked_heads(frontier: MemoryFron
     assert [wi.id for wi in picked] == ["OK1", "OK2"]
 
     # The blocked heads must be restored to the heap (still present, not selected)
-    heap_ids = {t[3] for t in frontier._ready_heap}
+    heap_ids = {t[4] for t in frontier._ready_heap}
     for bj in blocked:
         assert bj.id in heap_ids
 
@@ -179,7 +175,7 @@ async def test_take_only_ready_subset_and_order(frontier: MemoryFrontier):
     a = wi_factory("TA")
     b = wi_factory("TB")
     c = wi_factory("TC")
-    add_ready_jobs(frontier, a, b, c)
+    await add_ready_jobs(frontier, a, b, c)
 
     # Make B non-ready by removing from ready_set (simulate race)
     frontier._remove_from_ready_set("TB")

@@ -36,7 +36,13 @@ class GlobalPriorityExecutionPlanner:
 
         for idx, (endpoint, wi) in enumerate(jobs):
             executor = endpoint.split("://", 1)[0]
-            free = int(slots.get(executor, 0))
+            # noop work is never blocked and does not consume a slot.
+            if executor == "noop":
+                free = inf
+                is_blocked = False
+            else:
+                free = int(slots.get(executor, 0))
+                is_blocked = free <= 0
 
             is_blocked = free <= 0
             is_new = wi.dag_id not in active_dags

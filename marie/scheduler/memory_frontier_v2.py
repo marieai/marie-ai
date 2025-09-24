@@ -23,7 +23,6 @@ class MemoryFrontier:
         self.jobs_by_id: dict[str, WorkInfo] = {}
         self.dag_nodes: dict[str, set[str]] = defaultdict(set)
         self.dependents: dict[str, list[str]] = defaultdict(list)  # parent -> children
-        self.parents: dict[str, list[str]] = defaultdict(list)  # child -> parents
         self.unmet_count: dict[str, int] = defaultdict(int)
 
         # THIS HAS TO BE KEPT IN SYNC WITH THE GlobalPriorityExecutionPlanner
@@ -42,7 +41,6 @@ class MemoryFrontier:
         self.default_lease_ttl = float(default_lease_ttl)
 
         self._lock = asyncio.Lock()
-        self._now = time.monotonic
 
     def _priority_key(self, wi: WorkInfo) -> tuple[int, int]:
         lvl = int(wi.job_level)
@@ -55,7 +53,7 @@ class MemoryFrontier:
         v = self._ver[wi.id]
         self._ready_set.add(wi.id)  # idempotent
         if wi.id not in self._added_at:
-            self._added_at[wi.id] = self._now()
+            self._added_at[wi.id] = time.time()
         self._seq += 1
         heapq.heappush(
             self._ready_heap,
@@ -70,7 +68,7 @@ class MemoryFrontier:
         self._ready_set.discard(job_id)
 
     def _still_ready(self, job_id: str) -> bool:
-        # Ready if: exists, unmet deps == 0, not soft-leased, and in ready_set
+        # Ready if: exists, unmet deps == 0, not hard-leased, and in ready_set
         if job_id not in self.jobs_by_id:
             return False
         if self.unmet_count.get(job_id, 1) != 0:
@@ -78,20 +76,14 @@ class MemoryFrontier:
         if job_id not in self._ready_set:
             return False
         # if soft-leased and not expired, don't expose it
-        if job_id in self.leased_until and self.leased_until[job_id] > self._now():
+        if job_id in self.leased_until and self.leased_until[job_id] > time.time():
             return False
         return True
 
     @staticmethod
     def _entrypoint(wi: 'WorkInfo') -> str:
-        md = {}
-        if isinstance(wi.data, dict):
-            md = (
-                wi.data.get("metadata", {})
-                if isinstance(wi.data.get("metadata", {}), dict)
-                else {}
-            )
-        return md.get("on", "")
+        # Planner can read this if it needs to; we don't filter by executor here.
+        return wi.data.get("metadata", {}).get("on", "")
 
     async def add_dag(self, dag: 'QueryPlan', nodes: list['WorkInfo']) -> None:
         """Adds a new DAG to the frontier, building the dependency graph."""
@@ -103,8 +95,7 @@ class MemoryFrontier:
                 deps = wi.dependencies or []
                 self.unmet_count[wi.id] = len(deps)
                 for d in deps:
-                    self.dependents[d].append(wi.id)  # parent -> child
-                    self.parents[wi.id].append(d)  # child  -> parent
+                    self.dependents[d].append(wi.id)
 
             # Seed roots into ready heap
             for wi in nodes:
@@ -145,8 +136,7 @@ class MemoryFrontier:
         """Applies a soft lease to a job to prevent re-scheduling."""
         async with self._lock:
             ttl = self.default_lease_ttl if ttl_s is None else float(ttl_s)
-            now = self._now()
-            self.leased_until[job_id] = now + ttl
+            self.leased_until[job_id] = time.time() + ttl
 
     async def release_lease_local(self, job_id: str) -> None:
         """
@@ -177,11 +167,11 @@ class MemoryFrontier:
                 seen: set[str] = set()
                 for item in self._ready_heap:
                     key, added, seq, ver, jid = item
-                    if not self._entry_is_current(item) or (jid not in self._ready_set):
+                    if not self._entry_is_current(item):
                         stale_seen += 1
-                        continue
+                        continue  # stale heap entry
                     if jid in seen:
-                        continue
+                        continue  # belt & suspenders: avoid dup in same peek
                     if not self._still_ready(jid):
                         continue
                     wi = self.jobs_by_id.get(jid)
@@ -266,9 +256,8 @@ class MemoryFrontier:
                 self._ready_set.discard(jid)
                 self.leased_until[jid] = now + ttl
             for it in skipped:
-                # Only restore if still current AND still logically ready (membership)
-                key, added, seq, ver, jid = it
-                if self._entry_is_current(it) and (jid in self._ready_set):
+                # Only restore if still current; otherwise discard
+                if self._entry_is_current(it):
                     heapq.heappush(self._ready_heap, it)
             return selected
 
