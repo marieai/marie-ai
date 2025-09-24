@@ -2,10 +2,19 @@ import asyncio
 import heapq
 import time
 from collections import defaultdict
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, NamedTuple, Optional
 
 from marie.query_planner.base import QueryPlan
 from marie.scheduler.models import WorkInfo
+
+
+class ReadyEntry(NamedTuple):
+    # Field order defines heap ordering
+    key: tuple[int, int]  # (-job_level, ±priority)
+    added_at: float  # monotonic timestamp when first ready
+    seq: int  # FIFO tie-breaker
+    ver: int  # version to invalidate stale entries
+    jid: str  # job id
 
 
 class MemoryFrontier:
