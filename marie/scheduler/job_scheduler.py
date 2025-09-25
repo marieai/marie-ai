@@ -1,8 +1,16 @@
 import abc
-from typing import Any, Dict, Optional
+import asyncio
+from typing import Any, Dict, NamedTuple, Optional
 
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.state import WorkState
+
+
+class JobSubmissionRequest(NamedTuple):
+    work_info: WorkInfo
+    overwrite: bool
+    request_id: str
+    result_future: asyncio.Future
 
 
 class JobScheduler(abc.ABC):

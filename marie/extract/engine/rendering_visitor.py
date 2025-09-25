@@ -61,7 +61,7 @@ class MatchSectionRenderingVisitor(BaseProcessingVisitor):
         output_path = os.path.expanduser(
             os.path.join(context.output_dir, f"{context.doc_id}.xml")
         )
-        # output_path = os.path.expanduser(os.path.join("~/g5", f"{context.doc_id}.xml"))
+        output_path = os.path.expanduser(os.path.join("~/g5", f"{context.doc_id}.xml"))
         with open(output_path, "w", encoding="utf-8") as file:
             file.write(xml_string)
 

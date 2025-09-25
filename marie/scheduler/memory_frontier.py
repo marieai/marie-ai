@@ -7,6 +7,7 @@ from typing import Any, Callable, Iterable, NamedTuple, Optional
 from marie.logging_core.predefined import default_logger as logger
 from marie.query_planner.base import QueryPlan
 from marie.scheduler.models import WorkInfo
+from marie.scheduler.state import WorkState
 
 
 class ReadyEntry(NamedTuple):
@@ -93,7 +94,7 @@ class MemoryFrontier:
         return True
 
     @staticmethod
-    def _entrypoint(wi: 'WorkInfo') -> str:
+    def _entrypoint(wi: WorkInfo) -> str:
         md = {}
         if isinstance(wi.data, dict):
             md = (
@@ -103,7 +104,7 @@ class MemoryFrontier:
             )
         return md.get("on", "")
 
-    async def add_dag(self, dag: 'QueryPlan', nodes: list['WorkInfo']) -> None:
+    async def add_dag(self, dag: 'QueryPlan', nodes: list[WorkInfo]) -> None:
         """Adds a new DAG to the frontier, building the dependency graph."""
         async with self._lock:
             # Build graph + unmet dependency counts
@@ -121,12 +122,45 @@ class MemoryFrontier:
                 if self.unmet_count[wi.id] == 0:
                     self._push_ready(wi)
 
-    async def on_job_completed(self, job_id: str) -> list['WorkInfo']:
+    async def get_jobs_by_dag_id(self, dag_id: str) -> list[WorkInfo]:
+        """
+        Returns all WorkInfo objects associated with a given DAG ID.
+        """
+        async with self._lock:
+            node_ids = self.dag_nodes.get(dag_id, set())
+            return [
+                self.jobs_by_id[job_id]
+                for job_id in node_ids
+                if job_id in self.jobs_by_id
+            ]
+
+    async def update_job_state(self, job_id: str, state: WorkState) -> bool:
+        """Updates the state of a single job in the frontier."""
+        async with self._lock:
+            if job_id in self.jobs_by_id:
+                self.jobs_by_id[job_id].state = state
+                return True
+            logger.warning(
+                f"Job with id {job_id} not found in memory frontier for state update."
+            )
+            return False
+
+    async def on_job_completed(self, job_id: str) -> list[WorkInfo]:
         """
         Marks a job as complete, decrements the dependency count of its children,
         and moves any newly ready children to the ready heap.
         """
         async with self._lock:
+            # we do this to ensure that the job is marked appropriately when job completes
+            # this will allow us to interrogate the state of the job later
+            # Update the job's state to COMPLETED
+            if job_id in self.jobs_by_id:
+                self.jobs_by_id[job_id].state = WorkState.COMPLETED
+            else:
+                logger.warning(
+                    f"Job with id {job_id} not found in memory frontier for completion."
+                )
+
             now_ready = []
             for child_id in self.dependents.get(job_id, []):
                 if child_id not in self.jobs_by_id:
@@ -142,13 +176,21 @@ class MemoryFrontier:
                     now_ready.append(wi)
             return now_ready
 
-    async def on_job_failed(self, job_id: str) -> list['WorkInfo']:
+    async def on_job_failed(self, job_id: str) -> list[WorkInfo]:
         """
         Handles job failure. Currently, it's conservative and does not automatically
         enqueue descendants.
         """
         async with self._lock:
             # Conservative: don't enqueue descendants automatically
+            # Update the job's state to FAILED
+            if job_id in self.jobs_by_id:
+                self.jobs_by_id[job_id].state = WorkState.FAILED
+            else:
+                logger.warning(
+                    f"Job with id {job_id} not found in memory frontier for failure."
+                )
+
             return []
 
     async def mark_leased(self, job_id: str, ttl_s: Optional[float] = None) -> None:
@@ -173,7 +215,7 @@ class MemoryFrontier:
                 # keep original added_at to preserve aging
                 self._push_ready(wi)
 
-    async def peek_ready(self, max_n: int, filter_fn=None) -> list['WorkInfo']:
+    async def peek_ready(self, max_n: int, filter_fn=None) -> list[WorkInfo]:
         """Return up to max_n in true heap order without mutating state."""
         async with self._lock:
             if max_n <= 0 or not self._ready_heap:
@@ -210,7 +252,7 @@ class MemoryFrontier:
         ids: Iterable[str],
         *,
         lease_ttl: Optional[float] = None,
-    ) -> list['WorkInfo']:
+    ) -> list[WorkInfo]:
         """
         Atomically mark the given ids as selected and return the corresponding WorkInfos.
 
@@ -221,7 +263,7 @@ class MemoryFrontier:
           - Returns the list of WorkInfos that were actually taken (in the same order as `ids`).
         """
         async with self._lock:
-            taken: list['WorkInfo'] = []
+            taken: list[WorkInfo] = []
             now = self._now()  # was time.time()
             ttl = self.default_lease_ttl if lease_ttl is None else float(lease_ttl)
             for jid in ids:
@@ -238,17 +280,17 @@ class MemoryFrontier:
         self,
         max_n: int,
         *,
-        filter_fn: Optional[Callable[['WorkInfo'], bool]] = None,
+        filter_fn: Optional[Callable[[WorkInfo], bool]] = None,
         lease_ttl: Optional[float] = None,
         scan_budget: int = 4096,  # prevents pathological pops
-    ) -> list['WorkInfo']:
+    ) -> list[WorkInfo]:
         """Pop in heap order; skip & restore non-eligible; soft-lease selected."""
         async with self._lock:
             if max_n <= 0 or not self._ready_heap:
                 return []
             now = self._now()  # was time.time()
             ttl = self.default_lease_ttl if lease_ttl is None else float(lease_ttl)
-            selected: list['WorkInfo'] = []
+            selected: list[WorkInfo] = []
             skipped: list[ReadyEntry] = []
             scans = 0
 
@@ -284,7 +326,7 @@ class MemoryFrontier:
             return len(reap)
 
     @staticmethod
-    def _executor_of(wi: 'WorkInfo') -> str:
+    def _executor_of(wi: WorkInfo) -> str:
         ep = wi.data.get("metadata", {}).get("on", "")
         if "://" in ep:
             return ep.split("://", 1)[0]

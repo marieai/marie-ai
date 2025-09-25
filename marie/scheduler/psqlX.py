@@ -1,19 +1,24 @@
 import asyncio
+import copy
+import json
 import math
+import random
 import socket
 import time
 import traceback
 import uuid
 import uuid as _uuid
 from asyncio import Queue
-from collections import defaultdict
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Tuple
+from pprint import pprint
+from typing import Any, Awaitable, Callable, Dict, List, NamedTuple, Tuple, Union
 
 import psycopg2
 
 from marie.constants import (
+    __default_extract_dir__,
     __default_psql_dir__,
     __default_schema_dir__,
 )
@@ -25,27 +30,35 @@ from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import mark_as_complete
 from marie.query_planner.base import (
+    NoopQueryDefinition,
+    Query,
+    QueryDefinition,
     QueryPlan,
 )
 from marie.query_planner.builtin import register_all_known_planners
+from marie.query_planner.mapper import JobMetadata, has_mapper_config
 from marie.query_planner.model import QueryPlannersConf
+from marie.query_planner.planner import (
+    PlannerInfo,
+    compute_job_levels,
+    plan_to_yaml,
+    query_planner,
+    topological_sort,
+)
 from marie.scheduler.dag_topology_cache import DagTopologyCache
 from marie.scheduler.fixtures import *
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
 from marie.scheduler.job_lock import AsyncJobLock
-from marie.scheduler.job_scheduler import JobScheduler, JobSubmissionRequest
+from marie.scheduler.job_scheduler import JobScheduler
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import ExistingWorkPolicy, HeartbeatConfig, WorkInfo
-from marie.scheduler.planner_util import (
-    _is_noop_query_definition,
-    debug_candidates_and_plan,
-    get_node_from_dag,
-    query_plan_work_items,
-)
+from marie.scheduler.planner_util import query_plan_work_items
 from marie.scheduler.plans import (
     cancel_jobs,
     complete_jobs,
     complete_jobs_by_id,
+    count_dag_states,
+    count_job_states,
     create_queue,
     fail_jobs_by_id,
     insert_dag,
@@ -59,14 +72,13 @@ from marie.scheduler.plans import (
     try_set_monitor_time,
     version_table_exists,
 )
-from marie.scheduler.repository import SchedulerRepository
-from marie.scheduler.scheduler_heartbeat import SchedulerHeartbeat
-from marie.scheduler.state import WorkState
-from marie.scheduler.util import (
-    adjust_backoff,
-    available_slots_by_executor,
-    convert_job_status_to_work_state,
+from marie.scheduler.printers import (
+    print_dag_state_summary,
+    print_job_state_summary,
+    print_slots_table,
 )
+from marie.scheduler.state import WorkState
+from marie.scheduler.util import available_slots_by_executor
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.storage.database.postgres import PostgresqlMixin
 
@@ -81,6 +93,47 @@ SYNC_POLL_PERIOD = 5.0  # 5s
 
 DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
+COMPLETION_JOB_PREFIX = f"__state__{WorkState.COMPLETED.value}__"
+
+# ANSI colors
+GREEN = "\033[92m"
+RED = "\033[91m"
+YELLOW = "\033[93m"
+RESET = "\033[0m"
+
+
+def convert_job_status_to_work_state(job_status: JobStatus) -> WorkState:
+    """
+    Convert a JobStatus to a WorkState.
+    :param job_status:
+    :return:
+    """
+    if job_status == JobStatus.PENDING:
+        return WorkState.CREATED
+    elif job_status == JobStatus.RUNNING:
+        return WorkState.ACTIVE
+    elif job_status == JobStatus.SUCCEEDED:
+        return WorkState.COMPLETED
+    elif job_status == JobStatus.FAILED:
+        return WorkState.FAILED
+    elif job_status == JobStatus.STOPPED:
+        return WorkState.CANCELLED
+    else:
+        raise ValueError(f"Unknown JobStatus: {job_status}")
+
+
+def adjust_backoff(wait_time: float, idle_streak: int, scheduled: bool) -> float:
+    """
+    Adjusts the backoff time for a polling mechanism based on the provided wait time,
+    the number of consecutive idle streaks, and whether the task is scheduled. The
+    resulting wait time ensures it stays within predefined minimum and maximum periods.
+    In cases where the task is scheduled, the wait time is reduced. For non-scheduled
+    tasks, it considers random jitter and adjusts based on idle streaks.
+    """
+    if scheduled:
+        return max(wait_time * 0.5, MIN_POLL_PERIOD)
+    jitter = random.uniform(0.9, 1.1)
+    return min(wait_time * (1.5 + 0.1 * idle_streak), MAX_POLL_PERIOD) * jitter
 
 
 # FIXME : Today we are tracking at the executor level, however that might not be the best
@@ -88,8 +141,16 @@ DEFAULT_JOB_TABLE = "job"
 # this will allow us to track the status of the deployment and not just the executor.
 
 
+class JobSubmissionRequest(NamedTuple):
+    work_info: WorkInfo
+    overwrite: bool
+    request_id: str
+    result_future: asyncio.Future
+
+
 class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     _mapper_warnings_shown = set()
+
     """A PostgreSQL-based job scheduler."""
 
     def __init__(self, config: Dict[str, Any], job_manager: JobManager):
@@ -143,7 +204,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._loop = get_or_reuse_loop()
         self._setup_event_subscriptions()
         self._setup_storage(config, connection_only=True)
-        self._db = SchedulerRepository(config)
 
         self.execution_planner = GlobalPriorityExecutionPlanner()
         register_all_known_planners(
@@ -165,9 +225,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         heartbeat_config_dict = config.get("heartbeat", {})
         self.heartbeat_config = HeartbeatConfig.from_dict(heartbeat_config_dict)
         self.logger.info(f"Heartbeat configuration: {self.heartbeat_config}")
-        self.heartbeat = SchedulerHeartbeat(
-            self, self.heartbeat_config, self._db, self.logger
-        )
 
         self.max_concurrent_dags = max_concurrent_dags
         self._start_time = datetime.now(timezone.utc)
@@ -239,7 +296,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.logger.error(f"Unhandled job status: {status}. Marking as FAILED.")
                 await self.fail(job_id, work_item)  # Fail-safe
                 await self.frontier.on_job_failed(job_id)
-
             if status.is_terminal():
                 self.logger.debug(
                     f"Job is in terminal state {status}, job_id: {job_id}"
@@ -475,11 +531,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         # self.monitoring_task = asyncio.create_task(self._monitor())
         self.monitoring_task = None
 
-        # self._heartbeat_task = asyncio.create_task(
-        #     self._heartbeat_loop(self.heartbeat_config)
-        # )
-
-        await self.heartbeat.start()
+        self._heartbeat_task = asyncio.create_task(
+            self._heartbeat_loop(self.heartbeat_config)
+        )
         self._poll_task = asyncio.create_task(self._poll())
         self._cluster_state_monitor_task = asyncio.create_task(
             self.__monitor_deployment_updates()
@@ -492,6 +546,367 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         # self._sync_dag_task = asyncio.create_task(self._sync_dag())
         await self.notify_event()
+
+    async def _safe_count_states(
+        self,
+        count_method: Union[
+            Callable[[], Dict[str, Any]], Callable[[], Awaitable[Dict[str, Any]]]
+        ],
+    ) -> Dict[str, Any]:
+        """Safely call count methods with proper async handling."""
+        try:
+            if asyncio.iscoroutinefunction(count_method):
+                return await count_method()
+            else:
+                return await self._loop.run_in_executor(self._db_executor, count_method)
+        except Exception as e:
+            self.logger.error(f"Error in count method: {e}")
+            return {}
+
+    async def _heartbeat_loop(self, config: HeartbeatConfig) -> None:
+        """Periodic heartbeat with throughput, rolling averages, and trend analysis (global + per queue)."""
+
+        self.logger.info(
+            f"Heartbeat loop started: interval={config.interval}s, "
+            f"window={config.window_minutes}m, recent={config.recent_window_minutes}m"
+        )
+
+        _seen_executors = set()
+        _max_seen_executors = {}
+
+        last_heartbeat_time = None
+        last_completed_jobs = {}
+        last_completed_dags = {}
+        history = deque()  # (timestamp, jobs_per_queue, dags_per_queue)
+
+        rolling_job_rates = deque(maxlen=config.trend_points)
+        rolling_dag_rates = deque(maxlen=config.trend_points)
+
+        rolling_job_rates_per_queue = defaultdict(
+            lambda: deque(maxlen=config.trend_points)
+        )
+        rolling_dag_rates_per_queue = defaultdict(
+            lambda: deque(maxlen=config.trend_points)
+        )
+
+        def _get_completed_per_queue(states: dict, key: str = "completed") -> dict:
+            if not states or "queues" not in states:
+                return {}
+            return {qname: q.get(key, 0) for qname, q in states["queues"].items()}
+
+        def _calc_throughput(curr: dict, prev: dict, minutes: float) -> dict:
+            return {
+                qname: (
+                    max(0.0, (curr[qname] - prev.get(qname, 0)) / minutes)
+                    if minutes > 0
+                    else 0.0
+                )
+                for qname in curr
+            }
+
+        def _calc_diff(curr: dict, prev: dict) -> dict:
+            return {qname: curr[qname] - prev.get(qname, 0) for qname in curr}
+
+        def _trend(values: deque) -> str:
+            """Return colored trend arrow (⬆️, ⬇️, ➡️)."""
+            if not config.enable_trend_arrows or len(values) < 2:
+                return ""
+            first, last = values[0], values[-1]
+            if last > first * 1.05:
+                return f"{GREEN}⬆️{RESET}"
+            elif last < first * 0.95:
+                return f"{RED}⬇️{RESET}"
+            return f"{YELLOW}➡️{RESET}"
+
+        retry_count = 0
+
+        while self.running:
+            try:
+                unix_now = time.time()
+                queue_size = self._event_queue.qsize()
+                active_dags = list(self.active_dags.keys())
+                slot_info = None
+
+                # Executor stats collection (configurable)
+                if config.enable_executor_stats:
+                    slot_info = available_slots_by_executor(ClusterState.deployments)
+                    _seen_executors.update(slot_info.keys())
+
+                    for executor, count in slot_info.items():
+                        current_max = _max_seen_executors.get(executor, 0)
+                        _max_seen_executors[executor] = max(current_max, count)
+
+                dag_states = await self._safe_count_states(self.count_dag_states)
+                job_states = await self._safe_count_states(self.count_job_states)
+
+                current_completed_jobs = _get_completed_per_queue(
+                    job_states, "completed"
+                )
+                current_completed_dags = _get_completed_per_queue(
+                    dag_states, "completed"
+                )
+
+                total_completed_jobs = sum(current_completed_jobs.values())
+                total_completed_dags = sum(current_completed_dags.values())
+
+                history.append(
+                    (
+                        unix_now,
+                        current_completed_jobs.copy(),
+                        current_completed_dags.copy(),
+                    )
+                )
+
+                # Clean up old history (beyond rolling window)
+                cutoff = unix_now - config.window_minutes * 60
+                while history and history[0][0] < cutoff:
+                    history.popleft()
+
+                # --- Recent Throughput ---
+                recent_window_seconds = config.recent_window_minutes * 60.0
+                recent_cutoff = unix_now - recent_window_seconds
+
+                recent_history = [
+                    entry for entry in history if entry[0] >= recent_cutoff
+                ]
+
+                if len(recent_history) >= 2:
+                    # Use oldest and newest entries from recent window
+                    t0, jobs0, dags0 = recent_history[0]
+                    t1, jobs1, dags1 = recent_history[-1]
+                    time_diff_minutes = (t1 - t0) / 60.0
+
+                    if time_diff_minutes > 0:
+                        jobs_per_queue_instant = _calc_throughput(
+                            jobs1, jobs0, time_diff_minutes
+                        )
+                        dags_per_queue_instant = _calc_throughput(
+                            dags1, dags0, time_diff_minutes
+                        )
+                        jobs_per_min_global_instant = sum(
+                            jobs_per_queue_instant.values()
+                        )
+                        dags_per_min_global_instant = sum(
+                            dags_per_queue_instant.values()
+                        )
+                    else:
+                        jobs_per_queue_instant = {}
+                        dags_per_queue_instant = {}
+                        jobs_per_min_global_instant = dags_per_min_global_instant = 0.0
+                elif last_heartbeat_time is not None:
+                    # Fallback to heartbeat-based calculation if insufficient recent history
+                    time_diff_minutes = (unix_now - last_heartbeat_time) / 60.0
+                    jobs_per_queue_instant = _calc_throughput(
+                        current_completed_jobs, last_completed_jobs, time_diff_minutes
+                    )
+                    dags_per_queue_instant = _calc_throughput(
+                        current_completed_dags, last_completed_dags, time_diff_minutes
+                    )
+                    jobs_per_min_global_instant = sum(jobs_per_queue_instant.values())
+                    dags_per_min_global_instant = sum(dags_per_queue_instant.values())
+                else:
+                    jobs_per_queue_instant = {}
+                    dags_per_queue_instant = {}
+                    jobs_per_min_global_instant = dags_per_min_global_instant = 0.0
+
+                # --- Rolling throughput (full window) ---
+                jobs_per_min_global_window = 0.0
+                dags_per_min_global_window = 0.0
+                jobs_per_queue_window = defaultdict(float)
+                dags_per_queue_window = defaultdict(float)
+                window_suffix = " (insufficient data)"
+
+                if len(history) >= 2:
+                    # Time-weighted rolling average calculation.
+                    # This is more robust against bursty traffic than a simple start/end point calculation.
+                    total_job_rate_x_time = 0.0
+                    total_dag_rate_x_time = 0.0
+                    total_time_diff = 0.0
+
+                    per_queue_job_rate_x_time = defaultdict(float)
+                    per_queue_dag_rate_x_time = defaultdict(float)
+
+                    for i in range(1, len(history)):
+                        t_prev, jobs_prev, dags_prev = history[i - 1]
+                        t_curr, jobs_curr, dags_curr = history[i]
+
+                        interval_minutes = (t_curr - t_prev) / 60.0
+                        if interval_minutes <= 0:
+                            continue
+
+                        total_time_diff += interval_minutes
+
+                        # Calculate global rate for this interval
+                        interval_jobs_completed = sum(jobs_curr.values()) - sum(
+                            jobs_prev.values()
+                        )
+                        interval_dags_completed = sum(dags_curr.values()) - sum(
+                            dags_prev.values()
+                        )
+
+                        interval_job_rate = (
+                            max(0, interval_jobs_completed) / interval_minutes
+                        )
+                        interval_dag_rate = (
+                            max(0, interval_dags_completed) / interval_minutes
+                        )
+
+                        total_job_rate_x_time += interval_job_rate * interval_minutes
+                        total_dag_rate_x_time += interval_dag_rate * interval_minutes
+
+                        # Calculate per-queue rate for this interval
+                        all_queues = set(jobs_curr.keys()) | set(jobs_prev.keys())
+                        for q in all_queues:
+                            q_jobs_completed = jobs_curr.get(q, 0) - jobs_prev.get(q, 0)
+                            q_dags_completed = dags_curr.get(q, 0) - dags_prev.get(q, 0)
+                            q_job_rate = max(0, q_jobs_completed) / interval_minutes
+                            q_dag_rate = max(0, q_dags_completed) / interval_minutes
+                            per_queue_job_rate_x_time[q] += (
+                                q_job_rate * interval_minutes
+                            )
+                            per_queue_dag_rate_x_time[q] += (
+                                q_dag_rate * interval_minutes
+                            )
+
+                    if total_time_diff > 0:
+                        jobs_per_min_global_window = (
+                            total_job_rate_x_time / total_time_diff
+                        )
+                        dags_per_min_global_window = (
+                            total_dag_rate_x_time / total_time_diff
+                        )
+                        for q in per_queue_job_rate_x_time:
+                            jobs_per_queue_window[q] = (
+                                per_queue_job_rate_x_time[q] / total_time_diff
+                            )
+                        for q in per_queue_dag_rate_x_time:
+                            dags_per_queue_window[q] = (
+                                per_queue_dag_rate_x_time[q] / total_time_diff
+                            )
+
+                    actual_window_minutes = (history[-1][0] - history[0][0]) / 60.0
+                    if actual_window_minutes < config.window_minutes * 0.9:
+                        window_suffix = f" ({actual_window_minutes:.1f}m data)"
+                    else:
+                        window_suffix = ""
+                else:
+                    # Fallback for rolling if not enough history
+                    jobs_per_queue_window = jobs_per_queue_instant.copy()
+                    dags_per_queue_window = dags_per_queue_instant.copy()
+                    jobs_per_min_global_window = jobs_per_min_global_instant
+                    dags_per_min_global_window = dags_per_min_global_instant
+
+                rolling_job_rates.append(jobs_per_min_global_window)
+                rolling_dag_rates.append(dags_per_min_global_window)
+
+                for q in set(current_completed_jobs) | set(current_completed_dags):
+                    rolling_job_rates_per_queue[q].append(
+                        jobs_per_queue_window.get(q, 0.0)
+                    )
+                    rolling_dag_rates_per_queue[q].append(
+                        dags_per_queue_window.get(q, 0.0)
+                    )
+
+                # Snapshot
+                last_heartbeat_time = unix_now
+                last_completed_jobs = current_completed_jobs
+                last_completed_dags = current_completed_dags
+
+                # --- Logging with configuration ---
+                self.logger.info("🔄  Scheduler Heartbeat")
+                self.logger.info(f"  📦  Queue Size       : {queue_size}")
+                self.logger.info(f"  🧠  Active DAGs      : {len(active_dags)}")
+                # Global throughput + trend
+                self.logger.info(f"  📈  Throughput: ")
+
+                self.logger.info(
+                    f"  • recent ({config.recent_window_minutes}m): {jobs_per_min_global_instant:.2f} jobs/min, "
+                    f"{dags_per_min_global_instant:.2f} dags/min"
+                )
+
+                trend_job = _trend(rolling_job_rates)
+                trend_dag = _trend(rolling_dag_rates)
+
+                self.logger.info(
+                    f"  • rolling (last {config.window_minutes}m{window_suffix}): "
+                    f"{jobs_per_min_global_window:.2f} jobs/min {trend_job}, "
+                    f"{dags_per_min_global_window:.2f} dags/min {trend_dag}"
+                )
+                self.logger.info(
+                    f"  ✅  Totals            : {total_completed_jobs} jobs, {total_completed_dags} dags"
+                )
+
+                # Per-queue throughput + trend (configurable)
+                if config.enable_per_queue_stats and (
+                    jobs_per_queue_instant or dags_per_queue_instant
+                ):
+                    self.logger.info("  📊 Per-Queue Throughput:")
+                    for qname in sorted(
+                        set(current_completed_jobs) | set(current_completed_dags)
+                    ):
+                        jpm_i = jobs_per_queue_instant.get(qname, 0.0)
+                        dpm_i = dags_per_queue_instant.get(qname, 0.0)
+                        jpm_w = jobs_per_queue_window.get(qname, 0.0)
+                        dpm_w = dags_per_queue_window.get(qname, 0.0)
+
+                        jtot = current_completed_jobs.get(qname, 0)
+                        dtot = current_completed_dags.get(qname, 0)
+
+                        jtrend = _trend(rolling_job_rates_per_queue[qname])
+                        dtrend = _trend(rolling_dag_rates_per_queue[qname])
+
+                        self.logger.info(
+                            f"   • {qname:<12} | Jobs: {jpm_i:.2f}/min ({config.recent_window_minutes}m), "
+                            f"{jpm_w:.2f}/min ({config.window_minutes}m{window_suffix}) {jtrend}"
+                        )
+                        self.logger.info(
+                            f"     {'':<12} | DAGs: {dpm_i:.2f}/min ({config.recent_window_minutes}m), "
+                            f"{dpm_w:.2f}/min ({config.window_minutes}m{window_suffix}) {dtrend}"
+                        )
+                        self.logger.info(
+                            f"     {'':<12} | Totals: {jtot} jobs, {dtot} dags"
+                        )
+
+                if config.log_active_dags and active_dags:
+                    shown = ', '.join(active_dags[:5])
+                    suffix = '...' if len(active_dags) > 5 else ''
+                    self.logger.debug(f"     DAG IDs          : [{shown}{suffix}]")
+
+                print_dag_state_summary(dag_states)
+                print_job_state_summary(job_states)
+
+                if config.enable_executor_stats:
+                    print_slots_table(slot_info, _max_seen_executors)
+
+                (
+                    await self.diagnose_pool()
+                    if asyncio.iscoroutinefunction(self.diagnose_pool)
+                    else self.diagnose_pool()
+                )
+
+                # frontier_summary = self.frontier.summary(detail=True)
+                # pprint(frontier_summary)
+
+                await asyncio.sleep(config.interval)
+                retry_count = 0
+
+            except Exception as e:
+                retry_count += 1
+                self.logger.error(
+                    f"Heartbeat loop error (attempt {retry_count}/{config.max_retries}): {e}"
+                )
+
+                if retry_count >= config.max_retries:
+                    self.logger.critical(
+                        f"Heartbeat loop failed {config.max_retries} times, stopping"
+                    )
+                    break
+
+                backoff_time = config.error_backoff * (
+                    2 ** (retry_count - 1)
+                ) + random.uniform(0, 1)
+                self.logger.warning(f"Retrying heartbeat in {backoff_time:.2f}s...")
+                await asyncio.sleep(backoff_time)
 
     async def _poll(self):
         """
@@ -563,12 +978,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if not any(slots_by_executor.values()):
                     self.logger.warning("No available executor slots. Backing off.")
                     idle_streak += 1
-                    wait_time = adjust_backoff(
-                        wait_time,
-                        idle_streak,
-                        scheduled=False,
-                        min_poll_period=MIN_POLL_PERIOD,
-                    )
+                    wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
                     continue
 
                 # FETCH READY CANDIDATES (executor-agnostic)
@@ -581,12 +991,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.warning("No ready work in memory; short sleep.")
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
                     idle_streak += 1
-                    wait_time = adjust_backoff(
-                        wait_time,
-                        idle_streak,
-                        scheduled=False,
-                        min_poll_period=MIN_POLL_PERIOD,
-                    )
+                    wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
                     continue
 
                 # Build (entrypoint, wi) tuples for planner input
@@ -607,21 +1012,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     exclude_blocked=True,
                 )
 
-                await debug_candidates_and_plan(
-                    candidates_wi, planned, pick_slots, self.active_dags, self.frontier
-                )
+                await self.debug_candidates_and_plan(candidates_wi, planned, pick_slots)
+
                 if not planned:
                     self.logger.warning(
                         "Planner returned no picks; short sleep. planner_candidates = {len(planner_candidates)}"
                     )
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
                     idle_streak += 1
-                    wait_time = adjust_backoff(
-                        wait_time,
-                        idle_streak,
-                        scheduled=False,
-                        min_poll_period=MIN_POLL_PERIOD,
-                    )
+                    wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
                     continue
 
                 # TAKE + SOFT-LEASE
@@ -638,9 +1037,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         f"missing_ids={missing[:10]}{'...' if len(missing) > 10 else ''}"
                     )
 
+                # map id -> (entrypoint, wi) for quick lookup
                 planned_by_id = {wi.id: (ep, wi) for ep, wi in planned}
-                ids_by_job_name: dict[str, list[str]] = defaultdict(list)
 
+                ids_by_job_name: dict[str, list[str]] = defaultdict(list)
                 for wi in selected_wis:
                     ids_by_job_name[wi.name].append(wi.id)
 
@@ -672,12 +1072,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
                     idle_streak += 1
-                    wait_time = adjust_backoff(
-                        wait_time,
-                        idle_streak,
-                        scheduled=False,
-                        min_poll_period=MIN_POLL_PERIOD,
-                    )
+                    wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
                     continue
 
                 # return non-leased back to frontier immediately
@@ -694,6 +1089,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 scheduled_any = False
                 jobs_scheduled_this_cycle = defaultdict(int)
                 enqueue_tasks = []
+                noop_ids_to_release: list[str] = []
 
                 for entrypoint, wi in leased_jobs:
                     dag_id = wi.dag_id
@@ -726,25 +1122,37 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         self.active_dags[dag_id] = dag
 
                     # NOOP vs normal
-                    node = get_node_from_dag(wi.id, self.active_dags[dag_id])
-                    if _is_noop_query_definition(node):
+                    node = self.get_node_from_dag(wi.id, self.active_dags[dag_id])
+                    if self._is_noop_query_definition(node):
                         # Complete locally while we still hold the DB lease
                         try:
                             await self.complete(wi.id, wi, {}, force=True)
+                            await self.frontier.update_job_state(
+                                wi.id, WorkState.COMPLETED
+                            )
 
                             # Clear local soft-lease (don't requeue a completed job)
                             self.frontier.leased_until.pop(wi.id, None)
+                            # Batch for DB lease release after the loop
+                            noop_ids_to_release.append(wi.id)
                             await self.frontier.on_job_completed(wi.id)
                             scheduled_any = True
 
-                            sorted_nodes, job_levels = (
-                                self._topology_cache.get_sorted_nodes_and_levels(
-                                    self.active_dags[dag_id], dag_id
+                            # Resolve DAG if this was a terminal-level NOOP
+                            try:
+                                sorted_nodes, job_levels = (
+                                    self._topology_cache.get_sorted_nodes_and_levels(
+                                        self.active_dags[dag_id], dag_id
+                                    )
                                 )
-                            )
-                            if job_levels.get(wi.id, -1) == max(job_levels.values()):
-                                await self.resolve_dag_status(wi.id, wi)
-
+                                if job_levels.get(wi.id, -1) == max(
+                                    job_levels.values()
+                                ):
+                                    await self.resolve_dag_status(wi.id, wi)
+                            except Exception as e:
+                                self.logger.debug(
+                                    f"DAG resolve check failed for NOOP {wi.id}: {e}"
+                                )
                         except Exception as e:
                             self.logger.error(f"Completing NOOP {wi.id} failed: {e}")
                             await self._release_lease_db([wi.id])
@@ -813,12 +1221,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         self.logger.debug(f"Frontier heap compacted: removed={removed}")
 
                 idle_streak = 0 if scheduled_any else idle_streak + 1
-                wait_time = adjust_backoff(
-                    wait_time,
-                    idle_streak,
-                    scheduled_any,
-                    min_poll_period=MIN_POLL_PERIOD,
-                )
+                wait_time = adjust_backoff(wait_time, idle_streak, scheduled_any)
                 failures = 0
 
             except Exception as e:
@@ -833,6 +1236,228 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """Marks a job as active in the database and then enqueues it to a worker."""
         await self.mark_as_active(wi)
         return await self.enqueue(wi)
+
+    async def debug_candidates_and_plan(
+        self,
+        candidates_wi: list[WorkInfo],
+        planned: list[Tuple[str, WorkInfo]],
+        pick_slots: dict[str, int],
+    ) -> None:
+        """
+        Debugs and writes candidates and planned jobs to a file if the
+        environment variable `MARIE_DEBUG_QUERY_PLAN` is set.
+
+        :param candidates_wi: A list of work info objects that are candidates for planning.
+        :param planned: A list of tuples containing entrypoint and work info for planned jobs.
+        :param pick_slots: The slots available for planning.
+        """
+
+        if "MARIE_DEBUG_QUERY_PLAN" not in os.environ:
+            pass
+            # return
+
+        os.makedirs("/tmp/marie/plans", exist_ok=True)
+        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+        debug_file_path = f"/tmp/marie/plans/candidates_plan_debug_{timestamp}.txt"
+
+        def _get_executor_from_work_info(work_info: Optional[WorkInfo]) -> str:
+            """Extracts the executor name from a WorkInfo object."""
+            if not work_info or not work_info.data:
+                return "UNKNOWN"
+            endpoint = work_info.data.get("metadata", {}).get("on", "")
+            if not endpoint:
+                return "UNKNOWN"
+            if "://" in endpoint:
+                return endpoint.split("://", 1)[0]
+            return endpoint
+
+        try:
+            with open(debug_file_path, 'w') as debug_file:
+                # debug_file.write("Nodes:\n")
+                # debug_file.write(json.dumps(ClusterState.deployments, indent=4))
+
+                debug_file.write("\n\n")
+                debug_file.write("Slots:\n")
+                debug_file.write(json.dumps(pick_slots, indent=4))
+                debug_file.write("\n\n")
+
+                debug_file.write("Memory Frontier State:\n")
+                frontier_summary = self.frontier.summary(detail=True)
+                debug_file.write(json.dumps(frontier_summary, indent=4))
+                debug_file.write("\n\n")
+
+                debug_file.write("Candidate Work Items:\n")
+                for work_info in candidates_wi:
+                    debug_file.write(
+                        f"Work ID: {work_info.id}, "
+                        f"Priority: {work_info.priority}, "
+                        f"Job Level: {work_info.job_level}, "
+                        f"DAG ID: {work_info.dag_id}\n"
+                    )
+
+                debug_file.write("\n\n")
+                debug_file.write("Planned Jobs:\n")
+                for entrypoint, work_info in planned:
+                    debug_file.write(
+                        f"Entrypoint: {entrypoint}, "
+                        f"Work ID: {work_info.id}, "
+                        f"Priority: {work_info.priority}, "
+                        f"Job Level: {work_info.job_level}, "
+                        f"DAG ID: {work_info.dag_id}\n"
+                    )
+                debug_file.write("\n\n")
+
+                debug_file.write("Active DAG Completion States:\n")
+                active_dag_ids = sorted(list(self.active_dags.keys()))
+
+                for dag_id in active_dag_ids:
+                    dag_plan = self.active_dags.get(dag_id)
+                    if not dag_plan:
+                        debug_file.write(
+                            f"  DAG ID: {dag_id} - Plan not found in active_dags\n\n"
+                        )
+                        continue
+
+                    try:
+                        sorted_node_ids = topological_sort(dag_plan)
+                        node_map = {node.task_id: node for node in dag_plan.nodes}
+
+                        total_nodes = len(sorted_node_ids)
+                        completed_nodes = 0
+
+                        debug_file.write(f"  DAG ID: {dag_id}\n")
+
+                        # Batch fetch all job info for the DAG for efficiency
+                        # job_infos = await asyncio.gather(
+                        #     *[self.get_job(node_id) for node_id in sorted_node_ids]
+                        # )
+                        # job_info_map = {ji.id: ji for ji in job_infos if ji}
+                        job_info_map = {
+                            j.id: j
+                            for j in await self.frontier.get_jobs_by_dag_id(dag_id)
+                        }
+
+                        level_to_executors = defaultdict(set)
+                        job_states = {}
+                        job_executors = {}
+
+                        for node_id in sorted_node_ids:
+                            job_info = job_info_map.get(node_id)
+                            node_state = "NOT_FOUND"
+                            executor = _get_executor_from_work_info(job_info)
+
+                            if job_info:
+                                if job_info.state:
+                                    node_state = job_info.state.value
+                                    if job_info.state.is_terminal():
+                                        completed_nodes += 1
+                                if job_info.job_level is not None:
+                                    level_to_executors[job_info.job_level].add(executor)
+
+                            job_states[node_id] = node_state
+                            job_executors[node_id] = executor
+
+                        debug_file.write("    Level to Executor Mapping:\n")
+                        for level, executors in sorted(level_to_executors.items()):
+                            debug_file.write(
+                                f"      Level {level}: {', '.join(sorted(list(executors)))}\n"
+                            )
+                        debug_file.write("\n")
+
+                        debug_file.write("    Nodes (topological order):\n")
+
+                        for node_id in sorted_node_ids:
+                            node = node_map.get(node_id)
+                            job_info = job_info_map.get(node_id)
+                            node_name = f" ({node.query_str})" if node else ""
+                            executor_info = job_executors.get(node_id, "UNKNOWN")
+                            level_info = job_info.job_level if job_info else "N/A"
+                            node_state_str = job_states.get(node_id, "NOT_FOUND")
+                            debug_file.write(
+                                f"      - {node_id} {node_state_str:<10} {level_info:<3} {executor_info:<24} {node_name} \n"
+                            )
+
+                        completion_percentage = (
+                            (completed_nodes / total_nodes) * 100
+                            if total_nodes > 0
+                            else 0
+                        )
+                        debug_file.write(
+                            f"    Completion: {completion_percentage:.2f}% ({completed_nodes}/{total_nodes} completed)\n\n"
+                        )
+                    except Exception as e:
+                        debug_file.write(f"    Error processing DAG {dag_id}: {e}\n\n")
+
+            self.logger.debug(
+                f"Candidates and planned jobs written to {debug_file_path} for analysis."
+            )
+        except Exception as debug_error:
+            self.logger.error(
+                f"Failed to write candidates and planned jobs to debug file: {debug_error}"
+            )
+
+    async def debug_work_plans(
+        self,
+        flat_jobs: list[Tuple[str, WorkInfo]],
+        records_by_queue: dict[str, list[Any]],
+    ) -> None:
+        """
+        Debugs and writes work plans involving queues and job details to a file if the
+        environment variable `MARIE_DEBUG_QUERY_PLAN` is set.
+
+        :param flat_jobs: A collection of jobs and their associated work information
+            represented as a list of tuples. Each tuple contains an entry point and
+            its corresponding work details.
+        :param records_by_queue: A dictionary mapping queue names to the list of records
+            associated with each queue.
+        :return: None if the debug operation completes. If the environment variable
+            `MARIE_DEBUG_QUERY_PLAN` is not set, the function immediately returns without
+            performing any operation.
+        """
+
+        if "MARIE_DEBUG_QUERY_PLAN" not in os.environ:
+            return
+
+        os.makedirs("/tmp/marie/plans", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        debug_file_path = f"/tmp/marie/plans/flat_jobs_plan_debug_{timestamp}.txt"
+        try:
+            with open(debug_file_path, 'w') as debug_file:
+                debug_file.write("Nodes:\n")
+                debug_file.write(json.dumps(ClusterState.deployments, indent=4))
+
+                debug_file.write("\n\n")
+                debug_file.write("Slots:\n")
+
+                debug_file.write(json.dumps(self.get_available_slots(), indent=4))
+                debug_file.write("\n\n")
+
+                debug_file.write("Jobs Plan:\n")
+                for entrypoint, work_info in flat_jobs:
+                    debug_file.write(
+                        f"Entrypoint: {entrypoint}, "
+                        f"Work ID: {work_info.id}, "
+                        f"Priority: {work_info.priority}, "
+                        f"Job Level: {work_info.job_level}, "
+                        f"DAG ID: {work_info.dag_id}\n"
+                    )
+                if False:
+                    debug_file.write("\n\n")
+                    debug_file.write(f"Queues:\n")
+                    for queue_name, records in records_by_queue.items():
+                        debug_file.write(f"Queue: {queue_name}\n")
+                        for record in records:
+                            debug_file.write(f"  Records:  {record},\n")
+                    debug_file.write("\n\n")
+            self.logger.debug(
+                f"Flat jobs plan written to {debug_file_path} for analysis."
+            )
+        except Exception as debug_error:
+            self.logger.error(
+                f"Failed to write flat jobs plan to debug file: {debug_error}"
+            )
 
     async def stop(self, timeout: float = 2.0) -> None:
         self.logger.info("Stopping job scheduling agent")
@@ -946,12 +1571,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             debug_data["queue_status_error"] = str(e)
 
         try:
-            debug_data["job_state_counts"] = self._db.count_job_states()
+            debug_data["job_state_counts"] = self.count_job_states()
         except Exception as e:
             debug_data["job_state_counts_error"] = str(e)
 
         try:
-            debug_data["dag_state_counts"] = self._db.count_dag_states()
+            debug_data["dag_state_counts"] = self.count_dag_states()
         except Exception as e:
             debug_data["dag_state_counts_error"] = str(e)
 
@@ -1616,10 +2241,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             await self.notify_event()
 
     async def archive(self):
-        self.logger.info("Archiving jobs")
+        print("Archiving jobs")
 
     async def purge(self):
-        self.logger.info("Purging jobs")
+        print("Purging jobs")
 
     def _setup_event_subscriptions(self):
         self.job_manager.event_publisher.subscribe(
@@ -1632,6 +2257,56 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             ],
             self.handle_job_event,
         )
+
+    def _count_states_generic(
+        self, query_func, schema: str = None
+    ) -> Dict[str, Dict[str, int]]:
+        if schema is None:
+            schema = DEFAULT_SCHEMA
+
+        state_count_default = {key.lower(): 0 for key in WorkState.__members__.keys()}
+        counts = []
+        cursor = None
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = self._execute_sql_gracefully(
+                query_func(schema), return_cursor=True, connection=conn
+            )
+            counts = cursor.fetchall()
+        except (Exception, psycopg2.Error) as error:
+            self.logger.error(f"Error handling state count: {error}")
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
+
+        states = {"queues": {}}
+        for item in counts:
+            name, state, size = item
+            if name:
+                if name not in states["queues"]:
+                    states["queues"][name] = state_count_default.copy()
+                queue = states["queues"][name]
+                queue[state or "all"] = int(size)
+
+        # Calculate the 'all' column as the sum of all state columns for each queue
+        for queue in states["queues"].values():
+            # Exclude the 'all' key itself from the sum
+            queue["all"] = sum(v for k, v in queue.items() if k != "all")
+
+        return states
+
+    def count_job_states(self) -> Dict[str, Dict[str, int]]:
+        """
+        Fetch and count job states from the database.
+        """
+        return self._count_states_generic(count_job_states)
+
+    def count_dag_states(self) -> Dict[str, Dict[str, int]]:
+        """
+        Fetch and count dag states from the database.
+        """
+        return self._count_states_generic(count_dag_states)
 
     def record_to_work_info(self, record: Any) -> WorkInfo:
         """
@@ -1962,6 +2637,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             pass
         return True
 
+    def _resolve_dag_status_sync(self, dag_id: str) -> Optional[str]:
+        """Synchronous helper to resolve DAG status in the database."""
+        conn = None
+        cursor = None
+        try:
+            conn = self._get_connection()
+            resolve_query = (
+                f"SELECT {DEFAULT_SCHEMA}.resolve_dag_state('{dag_id}'::uuid);"
+            )
+            cursor = self._execute_sql_gracefully(
+                resolve_query, return_cursor=True, connection=conn
+            )
+            dag_state = result[0] if cursor and (result := cursor.fetchone()) else None
+            return dag_state
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
+
     async def resolve_dag_status(
         self,
         job_id: str,
@@ -1978,29 +2671,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.logger.debug(f"🔍 Resolving DAG status: {work_info.dag_id}")
 
         try:
-
-            def _sync(dag_id: str) -> Optional[str]:
-                """Synchronous helper to resolve DAG status in the database."""
-                conn = None
-                cursor = None
-                try:
-                    conn = self._get_connection()
-                    resolve_query = (
-                        f"SELECT {DEFAULT_SCHEMA}.resolve_dag_state('{dag_id}'::uuid);"
-                    )
-                    cursor = self._execute_sql_gracefully(
-                        resolve_query, return_cursor=True, connection=conn
-                    )
-                    dag_state = (
-                        result[0] if cursor and (result := cursor.fetchone()) else None
-                    )
-                    return dag_state
-                finally:
-                    self._close_cursor(cursor)
-                    self._close_connection(conn)
-
             dag_state = await self._loop.run_in_executor(
-                self._db_executor, _sync, work_info.dag_id
+                self._db_executor, self._resolve_dag_status_sync, work_info.dag_id
             )
 
             self.logger.debug(f"Resolved DAG state: {dag_state}")
@@ -2033,6 +2705,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
             if status == "OK":
                 fs = await self.frontier.finalize_dag(work_info.dag_id)
+                self.logger.debug(f"Finalized DAG status : {fs}")
 
             await mark_as_complete(
                 api_key=api_key,
@@ -2089,6 +2762,37 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         return await self._loop.run_in_executor(self._db_executor, db_call)
 
+    def _is_noop_query_definition(self, node: QueryDefinition) -> bool:
+        """
+        Checks if the given node is a NoopQueryDefinition node.
+        NoopQueryDefinition is a special type of node that does not perform any operation and are used for
+        aggregation or as placeholders in the query plan.
+        """
+        try:
+            return isinstance(node.definition, NoopQueryDefinition)
+        except ImportError:
+            # If import fails, try to check by class name
+            return node.__class__.__name__ == "NoopQueryDefinition" or (
+                hasattr(node, 'definition')
+                and node.query_definition.__class__.__name__ == "NoopQueryDefinition"
+            )
+
+    def get_node_from_dag(self, work_id: str, dag: QueryPlan) -> Query:
+        """
+        Retrieves a node from the DAG by its ID.
+
+        Args:
+            work_id: The ID of the node to retrieve
+            dag: The DAG to search in
+
+        Returns:
+            The node if found, None otherwise
+        """
+        for node in dag.nodes:
+            if node.task_id == work_id:
+                return node
+        raise ValueError(f"Node with ID {work_id} not found in DAG")
+
     def get_available_slots(self) -> dict[str, int]:
         return available_slots_by_executor(ClusterState.deployments)
 
@@ -2117,7 +2821,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 "success": True,
                 "cleared_count": cleared_count,
                 "cleared_dags": cleared_dags,
-                "message": f"Successfully rescheduling summary for this cycle active DAGs, cleared {cleared_count} DAGs",
+                "message": f"Successfully recheduling summary for this cyset active DAGs, cleared {cleared_count} DAGs",
             }
         except Exception as e:
             error_msg = f"Failed to reset active DAGs: {str(e)}"

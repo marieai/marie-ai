@@ -1,4 +1,44 @@
+import random
 from collections import defaultdict
+
+from marie.job.common import JobStatus
+from marie.scheduler.state import WorkState
+
+
+def convert_job_status_to_work_state(job_status: JobStatus) -> WorkState:
+    """
+    Convert a JobStatus to a WorkState.
+    :param job_status: The JobStatus to convert.
+    :return: The corresponding WorkState.
+    """
+    if job_status == JobStatus.PENDING:
+        return WorkState.CREATED
+    elif job_status == JobStatus.RUNNING:
+        return WorkState.ACTIVE
+    elif job_status == JobStatus.SUCCEEDED:
+        return WorkState.COMPLETED
+    elif job_status == JobStatus.FAILED:
+        return WorkState.FAILED
+    elif job_status == JobStatus.STOPPED:
+        return WorkState.CANCELLED
+    else:
+        raise ValueError(f"Unknown JobStatus: {job_status}")
+
+
+def adjust_backoff(
+    wait_time: float, idle_streak: int, scheduled: bool, min_poll_period: float
+) -> float:
+    """
+    Adjusts the backoff time for a polling mechanism based on the provided wait time,
+    the number of consecutive idle streaks, and whether the task is scheduled. The
+    resulting wait time ensures it stays within predefined minimum and maximum periods.
+    In cases where the task is scheduled, the wait time is reduced. For non-scheduled
+    tasks, it considers random jitter and adjusts based on idle streaks.
+    """
+    if scheduled:
+        return max(wait_time * 0.5, min_poll_period)
+    jitter = random.uniform(0.9, 1.1)
+    return min(wait_time * (1.5 + 0.1 * idle_streak), min_poll_period) * jitter
 
 
 def group_by_executor_and_status(deployments: list) -> dict:
