@@ -289,7 +289,7 @@ class MarieServerGateway(CompositeServer):
                 """
                 self.logger.info(f"Reset active DAGs requested at {datetime.now()}")
                 try:
-                    result = self.job_scheduler.reset_active_dags()
+                    result = await self.job_scheduler.reset_active_dags()
                     if result["success"]:
                         return {"status": "OK", "result": result}
                     else:

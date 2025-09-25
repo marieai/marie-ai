@@ -1,5 +1,6 @@
 import asyncio
 import os
+import random
 import time
 from typing import Any, Dict, Iterator, Optional
 
@@ -162,6 +163,7 @@ class JobManager:
 
         while is_alive:
             try:
+                # TODO : this puts quite a bit of load on the DB maybe we can add LISTEN/NOTIFY or use ETCD Watches
                 job_status = await self._job_info_client.get_status(job_id)
                 if job_status is None:
                     self.logger.warning(
@@ -255,6 +257,8 @@ class JobManager:
 
                 await job_supervisor.ping()
 
+                jitter = random.uniform(0.9, 1.3)
+                wait_time = self.JOB_MONITOR_LOOP_PERIOD_S * jitter
                 await asyncio.sleep(self.JOB_MONITOR_LOOP_PERIOD_S)
             except Exception as e:
                 is_alive = False
@@ -398,9 +402,6 @@ class JobManager:
                 confirmation_event=confirmation_event,
             )
 
-            # BLOCKING (old way)
-            # await supervisor.run(_start_signal_actor=_start_signal_actor)
-
             # non-blocking
             task = asyncio.create_task(
                 supervisor.run(_start_signal_actor=_start_signal_actor)
@@ -422,10 +423,10 @@ class JobManager:
 
             # Monitor the job in the background so we can detect errors without
             # requiring a client to poll.
+            self.logger.info(f"Started job with submission_id: {submission_id}")
             run_background_task(
                 self._monitor_job(submission_id, job_supervisor=supervisor)
             )
-            self.logger.info(f"Started job with submission_id: {submission_id}")
         except Exception as e:
             tb_str = get_exception_traceback()
 

@@ -233,7 +233,7 @@ class JobSupervisor:
             # self._active_tasks.add(task)
             # task.add_done_callback(lambda t: self._active_tasks.discard(t))
 
-        self.logger.info(f"Job submitted in the background : {self._job_id}")
+        self.logger.debug(f"Job submitted in the background : {self._job_id}")
 
     def _signal_confirmation_threadsafe(self) -> None:
         """

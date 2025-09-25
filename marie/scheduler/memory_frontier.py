@@ -4,6 +4,7 @@ import time
 from collections import defaultdict
 from typing import Any, Callable, Iterable, NamedTuple, Optional
 
+from marie.logging_core.predefined import default_logger as logger
 from marie.query_planner.base import QueryPlan
 from marie.scheduler.models import WorkInfo
 
@@ -36,8 +37,7 @@ class MemoryFrontier:
         self.unmet_count: dict[str, int] = defaultdict(int)
 
         # THIS HAS TO BE KEPT IN SYNC WITH THE GlobalPriorityExecutionPlanner
-        # Heap entries: ((-job_level, -priority), added_at, seq, version, job_id)
-        self._ready_heap: list[tuple[tuple[int, int], float, int, int, str]] = []
+        self._ready_heap: list[ReadyEntry] = []
 
         self._ready_set: set[str] = set()  # fast membership / lazy deletion
         self._added_at: dict[str, float] = {}  # first time job became ready
@@ -62,18 +62,19 @@ class MemoryFrontier:
         # Always bump version when (re)adding to ready
         self._ver[wi.id] += 1
         v = self._ver[wi.id]
-        self._ready_set.add(wi.id)  # idempotent
+        self._ready_set.add(wi.id)
         if wi.id not in self._added_at:
-            self._added_at[wi.id] = self._now()
+            self._added_at[wi.id] = self._now()  # was time.time()
         self._seq += 1
         heapq.heappush(
             self._ready_heap,
-            (self._priority_key(wi), self._added_at[wi.id], self._seq, v, wi.id),
+            ReadyEntry(
+                self._priority_key(wi), self._added_at[wi.id], self._seq, v, wi.id
+            ),
         )
 
-    def _entry_is_current(self, entry) -> bool:
-        # entry = (key, added, seq, ver, jid)
-        return self._ver.get(entry[4], 0) == entry[3]
+    def _entry_is_current(self, entry: ReadyEntry) -> bool:
+        return self._ver.get(entry.jid, 0) == entry.ver
 
     def _remove_from_ready_set(self, job_id: str) -> None:
         self._ready_set.discard(job_id)
@@ -136,7 +137,7 @@ class MemoryFrontier:
                     wi = self.jobs_by_id[child_id]
                     # if child wasn’t ready before, set added_at now for fair aging
                     if child_id not in self._added_at:
-                        self._added_at[child_id] = time.time()
+                        self._added_at[child_id] = self._now()
                     self._push_ready(wi)
                     now_ready.append(wi)
             return now_ready
@@ -172,38 +173,37 @@ class MemoryFrontier:
                 # keep original added_at to preserve aging
                 self._push_ready(wi)
 
-    async def peek_ready(
-        self, max_n: int, filter_fn: Optional[Callable[['WorkInfo'], bool]] = None
-    ) -> list['WorkInfo']:
+    async def peek_ready(self, max_n: int, filter_fn=None) -> list['WorkInfo']:
         """Return up to max_n in true heap order without mutating state."""
         async with self._lock:
             if max_n <= 0 or not self._ready_heap:
                 return []
+
             stale_seen = 0
 
             def eligible_items():
                 nonlocal stale_seen
                 seen: set[str] = set()
-                for item in self._ready_heap:
-                    key, added, seq, ver, jid = item
-                    if not self._entry_is_current(item) or (jid not in self._ready_set):
+                for entry in self._ready_heap:
+                    if not self._entry_is_current(entry) or (
+                        entry.jid not in self._ready_set
+                    ):
                         stale_seen += 1
                         continue
-                    if jid in seen:
+                    if entry.jid in seen:
                         continue
-                    if not self._still_ready(jid):
+                    if not self._still_ready(entry.jid):
                         continue
-                    wi = self.jobs_by_id.get(jid)
+                    wi = self.jobs_by_id.get(entry.jid)
                     if wi is None or (filter_fn and not filter_fn(wi)):
                         continue
-                    seen.add(jid)
-                    yield item
+                    seen.add(entry.jid)
+                    yield entry
 
             top = heapq.nsmallest(max_n, eligible_items())
             if stale_seen > 1024:
-                await self.compact_ready_heap(max_scan=stale_seen)
-
-            return [self.jobs_by_id[item[4]] for item in top]
+                await self.compact_ready_heap(max_scan=len(self._ready_heap))
+            return [self.jobs_by_id[e.jid] for e in top]
 
     async def take(
         self,
@@ -222,23 +222,16 @@ class MemoryFrontier:
         """
         async with self._lock:
             taken: list['WorkInfo'] = []
-            now = time.time()
+            now = self._now()  # was time.time()
             ttl = self.default_lease_ttl if lease_ttl is None else float(lease_ttl)
-
             for jid in ids:
                 if not self._still_ready(jid):
-                    continue  # skip stale/non-ready ids safely
-
-                # remove from ready membership so future peeks skip it
+                    continue
                 self._ready_set.discard(jid)
-
-                # apply soft lease
                 self.leased_until[jid] = now + ttl
-
                 wi = self.jobs_by_id.get(jid)
                 if wi is not None:
                     taken.append(wi)
-
             return taken
 
     async def select_ready(
@@ -253,41 +246,36 @@ class MemoryFrontier:
         async with self._lock:
             if max_n <= 0 or not self._ready_heap:
                 return []
-            now = time.time()
+            now = self._now()  # was time.time()
             ttl = self.default_lease_ttl if lease_ttl is None else float(lease_ttl)
             selected: list['WorkInfo'] = []
-            skipped: list[tuple[tuple[int, int], float, int, int, str]] = []
+            skipped: list[ReadyEntry] = []
             scans = 0
 
             while len(selected) < max_n and self._ready_heap and scans < scan_budget:
                 scans += 1
-                item = heapq.heappop(self._ready_heap)  # (key, added, seq, ver, jid)
-                key, added, seq, ver, jid = item
-                if not self._entry_is_current(item):
-                    continue  # drop stale
-                if not self._still_ready(jid):
+                entry = heapq.heappop(self._ready_heap)
+                if not self._entry_is_current(entry):
                     continue
-                wi = self.jobs_by_id.get(jid)
+                if not self._still_ready(entry.jid):
+                    continue
+                wi = self.jobs_by_id.get(entry.jid)
                 if wi is None or (filter_fn and not filter_fn(wi)):
-                    skipped.append(item)
+                    skipped.append(entry)
                     continue
                 selected.append(wi)
-                self._ready_set.discard(jid)
-                self.leased_until[jid] = now + ttl
+                self._ready_set.discard(entry.jid)
+                self.leased_until[entry.jid] = now + ttl
+
             for it in skipped:
-                # Only restore if still current AND still logically ready (membership)
-                key, added, seq, ver, jid = it
-                if self._entry_is_current(it) and (jid in self._ready_set):
+                if self._entry_is_current(it) and (it.jid in self._ready_set):
                     heapq.heappush(self._ready_heap, it)
             return selected
 
     async def reap_expired_soft_leases(self) -> int:
-        """Optional: clear expired soft leases; return count re-added to ready."""
         async with self._lock:
-            now = time.time()
-            reap: list[str] = [
-                jid for jid, until in self.leased_until.items() if until <= now
-            ]
+            now = self._now()  # was time.time()
+            reap = [jid for jid, until in self.leased_until.items() if until <= now]
             for jid in reap:
                 self.leased_until.pop(jid, None)
                 wi = self.jobs_by_id.get(jid)
@@ -307,7 +295,7 @@ class MemoryFrontier:
         Lightweight snapshot of the frontier for logs/metrics.
         Returns a dict; safe to json-serialize.
         """
-        now = time.time()
+        now = self._now()
 
         # Totals
         total_jobs = len(self.jobs_by_id)
@@ -403,22 +391,113 @@ class MemoryFrontier:
 
         return out
 
-    async def compact_ready_heap(self, max_scan: int = 5000) -> int:
+    async def finalize_dag(self, dag_id: str) -> dict[str, int]:
         """
-        Remove stale heap entries whose ids are no longer in _ready_set (lazy-deletion compaction).
-        Returns number of entries removed.
+        Permanently remove all in-memory state for a completed DAG.
+        Safe to call multiple times; no-op if unknown.
+        Returns counts of removed items for metrics.
         """
+
+        async with self._lock:
+            removed_jobs = 0
+            removed_edges = 0
+
+            node_ids = self.dag_nodes.pop(dag_id, None)
+            if not node_ids:
+                return {"removed_jobs": 0, "removed_edges": 0, "heap_compacted": 0}
+
+            # for each job in DAG, remove graph edges and per-job state
+            for jid in list(node_ids):
+                # (a) remove as PARENT -> children
+                children = self.dependents.pop(jid, [])
+                removed_edges += len(children)
+                # Each child had jid as a parent — remove that back-link
+                for ch in children:
+                    if ch in self.parents:
+                        try:
+                            lst = self.parents[ch]
+                            # remove jid if present
+                            idx = lst.index(jid)
+                            lst.pop(idx)
+                            removed_edges += 1
+                            if not lst:
+                                self.parents.pop(ch, None)
+                        except ValueError:
+                            pass
+
+                # (b) remove as CHILD -> parents
+                plist = self.parents.pop(jid, [])
+                for p in plist:
+                    cl = self.dependents.get(p)
+                    if cl:
+                        try:
+                            idx = cl.index(jid)
+                            cl.pop(idx)
+                            removed_edges += 1
+                            if not cl:
+                                # optional: keep empty list or prune
+                                self.dependents.pop(p, None)
+                        except ValueError:
+                            pass
+
+                # (c) purge per-job state
+                self.jobs_by_id.pop(jid, None)
+                self._ready_set.discard(jid)
+                self._added_at.pop(jid, None)
+                self.leased_until.pop(jid, None)
+                self.unmet_count.pop(jid, None)
+                self._ver.pop(jid, None)
+                removed_jobs += 1
+
+            # heap rebuild
+            compacted = await self.compact_ready_heap(full=True)
+
+            return {
+                "removed_jobs": removed_jobs,
+                "removed_edges": removed_edges,
+                "heap_compacted": compacted,
+            }
+
+    async def compact_ready_heap(
+        self, max_scan: int = 5000, *, full: bool = False
+    ) -> int:
+        """
+        Compact the ready heap by removing outdated or unnecessary entries.
+
+        This method ensures the integrity of the ready heap by validating entries
+        against current job IDs and versions. If `full` is set to True, all entries
+        are scanned and only valid ones are retained. Otherwise, the scan is limited
+        by the `max_scan` parameter.
+
+        :param max_scan: The maximum number of entries to scan when `full` is False.
+        :param full: If True, performs a full scan of the heap; otherwise, performs
+            a partial scan limited by `max_scan`.
+        :return: The number of entries removed from the heap.
+        """
+
+        if full:
+            kept: list[ReadyEntry] = []
+            for entry in self._ready_heap:
+                if (entry.jid in self._ready_set) and (
+                    self._ver.get(entry.jid, 0) == entry.ver
+                ):
+                    kept.append(entry)
+
+            removed = len(self._ready_heap) - len(kept)
+            heapq.heapify(kept)
+            self._ready_heap = kept
+            return removed
+
         removed = 0
         if not self._ready_heap:
-            return removed
-        tmp = []
+            return 0
+        tmp: list[ReadyEntry] = []
         scans = 0
         while self._ready_heap and scans < max_scan:
             scans += 1
-            key, added, seq, ver, jid = heapq.heappop(self._ready_heap)
-            # keep only entries whose jid is in ready_set AND whose version matches
-            if (jid in self._ready_set) and (self._ver.get(jid, 0) == ver):
-                tmp.append((key, added, seq, ver, jid))
+            entry = heapq.heappop(self._ready_heap)
+            if (entry.jid in self._ready_set) and self._entry_is_current(entry):
+                tmp.append(entry)
             else:
                 removed += 1
         for e in tmp:
