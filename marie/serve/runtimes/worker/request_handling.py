@@ -32,6 +32,7 @@ from marie.excepts import BadConfigSource, RuntimeTerminated
 from marie.helper import get_full_version, get_internal_ip, get_or_reuse_loop
 from marie.importer import ImportExtensions
 from marie.job.common import JobInfoStorageClient, JobStatus
+from marie.job.lease_cache import LeaseCache
 from marie.proto import jina_pb2
 from marie.serve.discovery.base import ConnectionState
 from marie.serve.discovery.container import EtcdConfig
@@ -40,6 +41,7 @@ from marie.serve.executors import BaseExecutor, __dry_run_endpoint__
 from marie.serve.instrumentation import MetricsTimer
 from marie.serve.networking.utils import host_is_local
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
+from marie.state.state_store import DesiredStore, StatusStore
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
 from marie.utils.network import get_ip_address
@@ -223,11 +225,18 @@ class WorkerRequestHandler:
         self._heartbeat_time = 10  # default heartbeat time
 
         self._heartbeat_thread = None
-        self._lease = None
-
         self._etcd_client = get_etcd_client(etcd_args)
         self._lease = self._etcd_client.lease(self._lease_time)
         self._lease_reacquire_lock = threading.Lock()
+
+        # --- status/desired stores & status lease ---
+        self._prefix = "marie"
+        self._node = self.node_info["host"]  # matches gateway side keying
+        self._deployment = self.node_info["deployment_name"]
+        self._worker_id = f"{self.args.name}@{self._node}"
+
+        # Short TTL for auto-GC of /status; heartbeat will keep it alive while the worker lives
+        self._status_lease_cache = LeaseCache(self._etcd_client, ttl=30, margin=1.0)
 
         self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
 
@@ -237,6 +246,18 @@ class WorkerRequestHandler:
 
         self._set_deployment_status(self._worker_state)
         self.setup_heartbeat()
+
+        self._desired_store = DesiredStore(self._etcd_client, prefix=self._prefix)
+        self._status_store = StatusStore(
+            self._etcd_client,
+            prefix=self._prefix,
+            lease_getter=self._status_lease_getter,  # attach lease on each put
+        )
+
+        # Start a lightweight heartbeat for /status (separate from your etcd lease heartbeat)
+        self._status_hb_interval_s = 10
+        self._status_hb_thread = None
+        self._status_hb_stop = threading.Event()
 
     def _http_fastapi_default_app(self, **kwargs):
         from marie.serve.runtimes.worker.http_fastapi_app import (  # For Gateway, it works as for head
@@ -1713,6 +1734,71 @@ class WorkerRequestHandler:
         self, status: health_pb2.HealthCheckResponse.ServingStatus
     ):
         """
+        Centralized status transition:
+          - Log transition
+          - Update local state
+          - Reflect into /status (worker-owned, via StatusStore)
+          - Start/stop status heartbeat
+        """
+        now = time.time()
+        name = health_pb2.HealthCheckResponse.ServingStatus.Name(status)
+
+        if self._last_logged_status != status:
+            self.logger.info(f"Setting deployment status: {name}")
+            self._last_logged_status = status
+            self._last_status_log_ts = now
+        elif (now - self._last_status_log_ts) >= self._status_log_interval:
+            self.logger.debug(f"Reaffirming deployment status: {name}")
+            self._last_status_log_ts = now
+
+        if status != self._worker_state:
+            self.logger.info(
+                f"Updating deployment status from "
+                f"{health_pb2.HealthCheckResponse.ServingStatus.Name(self._worker_state)} "
+                f"to {name}"
+            )
+
+        # Update local state immediately
+        self._worker_state = status
+
+        # Reflect into the worker-owned /status document
+        try:
+            if status == health_pb2.HealthCheckResponse.ServingStatus.SERVING:
+                # Claim current epoch & mark SERVING, then start heartbeats
+                self._claim_and_mark_serving()
+                self._start_status_heartbeat()
+
+            elif status in (
+                health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING,
+                health_pb2.HealthCheckResponse.ServingStatus.SERVICE_UNKNOWN,
+                health_pb2.HealthCheckResponse.ServingStatus.UNKNOWN,
+            ):
+                # Mark NOT_SERVING (or UNKNOWN/SERVICE_UNKNOWN mapped to NOT_SERVING for terminal)
+                try:
+                    self._status_store.set_not_serving(
+                        self._node, self._deployment, self._worker_id
+                    )
+                except Exception as e:
+                    self.logger.debug(f"set_not_serving error: {e}")
+                finally:
+                    self._stop_status_heartbeat()
+
+            else:
+                # For any other code, try to set it directly (rare)
+                try:
+                    self._status_store.set_status(
+                        self._node, self._deployment, self._worker_id, status
+                    )
+                except Exception as e:
+                    self.logger.debug(f"set_status({name}) error: {e}")
+
+        except Exception as exc:
+            self.logger.error(f"Failed to reflect status '{name}' into /status: {exc}")
+
+    def _set_deployment_status(
+        self, status: health_pb2.HealthCheckResponse.ServingStatus
+    ):
+        """
         Set the status of a deployment address in etcd. This will refresh lease for the deployment address.
         :param status: Status of the worker, this
         """
@@ -1778,124 +1864,29 @@ class WorkerRequestHandler:
             else:
                 raise
 
-    def heartbeat(self):
-        """Service heartbeat. Refresh the lease and handle TTL expiration."""
-        if self._lease is None:
-            self.logger.warning("Lease is None, skipping heartbeat.")
-            return
-
-        self.logger.debug(
-            f"Heartbeat: {self._worker_state} - TTL: {getattr(self._lease, 'remaining_ttl', 'unknown')}"
-        )
-        try:
-            self.logger.debug(
-                f"Refreshing lease: TTL before refresh = {getattr(self._lease, 'remaining_ttl', 'unknown')}"
-            )
-            resp = self._lease.refresh()
-
-            # Derive TTL safely for different client shapes
-            ttl = None
-            try:
-                ttl_attr = getattr(resp, "TTL", None)
-                if ttl_attr is not None:
-                    ttl = ttl_attr
-                elif isinstance(resp, (list, tuple)) and resp:
-                    ttl = getattr(resp[0], "TTL", None)
-            except Exception:
-                ttl = None
-
-            lease_ttl = (
-                ttl if ttl is not None else getattr(self._lease, "remaining_ttl", None)
-            )
-
-            if lease_ttl == 0:
-                self.logger.warning("Lease expired (TTL=0), attempting to reacquire.")
-                self.reacquire_lease(reason="heartbeat_ttl0")
-                # Rebind current state under the new lease
-                self._set_deployment_status(self._worker_state)
-            else:
-                # Refresh successful — reaffirm current status
-                self._set_deployment_status(self._worker_state)
-        except Exception as exc:
-            if _is_missing_lease_error(exc):
-                self.logger.warning(
-                    "Detected missing lease during heartbeat; reacquiring. Error: %s",
-                    exc,
-                )
-                self.reacquire_lease(reason="heartbeat_not_found")
-                # Rebind after reacquire
-                try:
-                    self._set_deployment_status(self._worker_state)
-                except Exception as bind_exc:
-                    self.logger.error(
-                        "Failed to rebind deployment status after lease reacquire: %s",
-                        bind_exc,
-                    )
-            else:
-                self.logger.warning("Heartbeat error (non-fatal): %s", exc)
-
-    def reacquire_lease(self, reason: str = "reacquire_lease") -> bool:
-        """
-        Try to reacquire an etcd lease and immediately rebind current status.
-
-        Returns True on success, False on failure (and leaves self._lease = None).
-        """
-        import random
-        import time
-
-        max_attempts = 3
-        base_backoff = 0.5
-        max_backoff = 5.0
-
-        last_exc = None
-        attempt = 0
-
-        while attempt < max_attempts:
-            attempt += 1
-            with self._lease_reacquire_lock:
-                self.logger.info(
-                    "Reacquiring etcd lease (reason=%s, attempt=%d/%d)",
-                    reason,
-                    attempt,
-                    max_attempts,
-                )
-                try:
-                    self._lease = self._etcd_client.lease(self._lease_time)
-                    self.logger.info(
-                        "Reacquired lease id=%s", getattr(self._lease, "id", "unknown")
-                    )
-                    return True
-                except Exception as exc:
-                    last_exc = exc
-
-            if attempt < max_attempts:
-                sleep_s = min(max_backoff, base_backoff * (2 ** (attempt - 1)))
-                sleep_s *= random.uniform(0.8, 1.2)
-                self.logger.warning(
-                    "Lease reacquire failed (attempt %d/%d, reason=%s): %s. Retrying in %.2fs",
-                    attempt,
-                    max_attempts,
-                    reason,
-                    last_exc,
-                    sleep_s,
-                )
-                time.sleep(sleep_s)
-
-        self.logger.error(
-            "Lease reacquire failed after %d attempts (reason=%s): %s",
-            max_attempts,
-            reason,
-            last_exc,
-        )
-        self._lease = None
-        return False
-
     def setup_heartbeat(self):
         """
         Set up an asynchronous heartbeat process with connection state monitoring.
         :return: None
         """
         self.logger.info("Calling heartbeat setup")
+
+        def _hb():
+            # Only heartbeat while we consider ourselves active
+            while not self._status_hb_stop.is_set():
+                try:
+                    # Only heartbeat if we (think we) are serving
+                    # You already track _worker_state; reuse it
+                    if (
+                        self._worker_state
+                        == health_pb2.HealthCheckResponse.ServingStatus.SERVING
+                    ):
+                        self._status_store.heartbeat(
+                            self._node, self._deployment, self._worker_id
+                        )
+                except Exception as e:
+                    self.logger.debug(f"status heartbeat error (non-fatal): {e}")
+                time.sleep(self._status_hb_interval_s)
 
         # Base heartbeat as a fraction of TTL Here: 25%.
         base_heartbeat = max(1.0, 0.25 * self._lease_time)  # guard a minimum
@@ -1942,7 +1933,7 @@ class WorkerRequestHandler:
                         current_state == ConnectionState.CONNECTED
                         or current_state is None
                     ):
-                        self.heartbeat()
+                        _hb()
                         failures = 0
                     else:
                         # Skip heartbeat but don't treat as failure
@@ -2001,7 +1992,7 @@ class WorkerRequestHandler:
         self.logger.info(f"Event handler - connection state is now: {current_state}")
 
         # we need to reacquire the lease if it was lost
-        self.reacquire_lease()
+        # self.reacquire_lease()
 
     def _on_etcd_disconnected(self, event):
         """Handle etcd connection lost."""
@@ -2022,3 +2013,34 @@ class WorkerRequestHandler:
         )
         current_state = self._etcd_client.get_connection_state()
         self.logger.info(f"Event handler - connection state is now: {current_state}")
+
+    def _status_lease_getter(self):
+        # Cache key can be per (node,deployment)
+        return self._status_lease_cache.get_or_refresh(
+            f"{self._node}/{self._deployment}"
+        )
+
+    def _claim_and_mark_serving(self) -> None:
+        """
+        Claim /status (epoch-fenced) and set SERVING.
+        Safe if already claimed by this worker; no-op if another owner wrote it.
+        """
+        d = self._desired_store.get(self._node, self._deployment)
+        if not d or d.phase != "SCHEDULED":
+            # Nothing scheduled for this node/deployment; don't write status
+            return
+
+        # First claim (sets NOT_SERVING or UNKNOWN by default)
+        claimed = self._status_store.claim(
+            self._node,
+            self._deployment,
+            self._worker_id,
+            d.epoch,
+            initial_status=HealthCheckResponse.ServingStatus.UNKNOWN,
+        )
+        # If claim succeeded (or the current owner is already this worker), move to SERVING
+        st = self._status_store.read(self._node, self._deployment)
+        if claimed or (st and st.owner == self._worker_id and st.epoch == d.epoch):
+            self._status_store.set_serving(
+                self._node, self._deployment, self._worker_id
+            )

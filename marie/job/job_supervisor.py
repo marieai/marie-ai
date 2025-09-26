@@ -7,6 +7,7 @@ import grpc
 from docarray import BaseDoc, DocList
 from docarray.documents import TextDoc
 from grpc.aio import AioRpcError
+from grpc_health.v1.health_pb2 import HealthCheckResponse
 
 from marie.constants import DEPLOYMENT_STATUS_PREFIX
 from marie.helper import get_or_reuse_loop
@@ -23,6 +24,7 @@ from marie.serve.discovery.etcd_client import EtcdClient
 from marie.serve.networking import _NetworkingHistograms, _NetworkingMetrics
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
+from marie.state.state_store import DesiredStore, StatusStore
 from marie.types_core.request.data import DataRequest
 
 
@@ -52,11 +54,15 @@ class JobSupervisor:
         self._job_distributor = job_distributor
         self._event_publisher = event_publisher
         self._etcd_client = etcd_client
-        self._lease_cache = LeaseCache(etcd_client, ttl=5, margin=1.0)
         self.request_info = None
         self.confirmation_event = confirmation_event  # we need to make sure that this is per job confirmation event
         self._active_tasks = set()
         self._loop = get_or_reuse_loop()
+
+        # K8s-style desired/status split
+        self._prefix = "marie"
+        self._desired_store = DesiredStore(self._etcd_client, prefix=self._prefix)
+        self._status_store = StatusStore(self._etcd_client, prefix=self._prefix)
 
     async def ping(self) -> bool:
         """
@@ -256,6 +262,25 @@ class JobSupervisor:
     def send_callback(self, requests, request_info):
         job_callback_executor.submit(self._send_callback_sync, requests, request_info)
 
+    def _await_worker_ack(
+        self, node: str, deployment: str, epoch: int, timeout_s: float = 3.0
+    ) -> bool:
+        """
+        Wait up to timeout_s for the worker to write /status with matching epoch and SERVING.
+        Server remains read-only for /status.
+        """
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            st = self._status_store.read(node, deployment)
+            if (
+                st
+                and st.epoch == epoch
+                and st.status_code == HealthCheckResponse.ServingStatus.SERVING
+            ):
+                return True
+            time.sleep(0.05)
+        return False
+
     def _send_callback_sync(
         self, requests: Union[List[DataRequest] | DataRequest], request_info: Dict
     ):
@@ -289,43 +314,42 @@ class JobSupervisor:
             self.logger.warning(f"Failed to signal confirmation for {request_id}: {e}")
 
         t_signal = time.monotonic()
-        # Do etcd update
-        key = "<unknown>"
+        from grpc_health.v1.health_pb2 import HealthCheckResponse
+
+        status = HealthCheckResponse.ServingStatus.SERVING
+        key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
+
+        t0 = t1 = t2 = start
         try:
-            from grpc_health.v1.health_pb2 import HealthCheckResponse
-
-            status = HealthCheckResponse.ServingStatus.SERVING
-            status_str = HealthCheckResponse.ServingStatus.Name(status)
-            key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
-
-            lease_time = 5
-            t0 = time.monotonic()
-            lease = self._etcd_client.lease(lease_time)
-            t1 = time.monotonic()
-            self._etcd_client.put(key, status_str, lease=lease)
-            t2 = time.monotonic()
-
-            # lease_time = 5
-            # t0 = time.monotonic()
-            # lease = self._lease_cache.get_or_refresh(key, ttl=lease_time)  # type: ignore[assignment]
-            # t1 = time.monotonic()
-            # self._etcd_client.put(key, status_str, lease=lease)
-            # t2 = time.monotonic()
-
+            node = address  # node identifier, must match worker’s usage
+            desired = self._desired_store.get(node, deployment_name)
+            epoch = desired.epoch if desired else None
+            if epoch is None:
+                self.logger.debug(
+                    "No desired doc found for %s/%s; skipping ack wait",
+                    node,
+                    deployment_name,
+                )
+            else:
+                ack = self._await_worker_ack(
+                    node, deployment_name, epoch, timeout_s=3.0
+                )
+                self.logger.info(
+                    "Worker ack (SERVING) for %s/%s epoch=%s: %s",
+                    node,
+                    deployment_name,
+                    epoch,
+                    ack,
+                )
         except Exception as e:
-            self.logger.error(f"Failed to update Etcd for job {self._job_id}: {e}")
-            t0 = t1 = t2 = start  # set timers to start to avoid unbound errors
+            self.logger.debug("Ack wait error (ignored): %s", e)
 
         total_duration = time.monotonic() - start
         signal_duration = t_signal - start
 
         self.logger.info(
-            "Callback for %s: cb_total=%.3fs (etcd=%.3fs [lease=%.3fs, put=%.3fs], signal=%.3fs)",
-            key,
+            "Callback: total=%.3fs, signal=%.3fs (no server-status write)",
             total_duration,
-            t2 - t0,
-            t1 - t0,
-            t2 - t1,
             signal_duration,
         )
 

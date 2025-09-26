@@ -55,13 +55,7 @@ from marie.types_core.request.status import StatusMessage
 from marie.utils.server_runtime import setup_auth, setup_storage, setup_toast_events
 from marie.utils.types import strtobool
 
-
-def create_balancer_interceptor() -> LoadBalancerInterceptor:
-    def notify(event, connection):
-        # print(f"notify: {event}, {connection}")
-        pass
-
-    return GatewayLoadBalancerInterceptor(notifier=notify)
+ROOT = "marie/deployments/"
 
 
 def load_env_file(dotenv_path: Optional[str] = None) -> None:
@@ -69,6 +63,14 @@ def load_env_file(dotenv_path: Optional[str] = None) -> None:
 
     logger.info(f"Loading env file from {dotenv_path}")
     load_dotenv(dotenv_path=dotenv_path, verbose=True)
+
+
+def is_desired_key(key: str) -> bool:
+    return key.startswith(ROOT) and key.endswith("/desired")
+
+
+def is_status_key(key: str) -> bool:
+    return key.startswith(ROOT) and key.endswith("/status")
 
 
 def handle_exception(exc_type, exc_value, exc_traceback):
