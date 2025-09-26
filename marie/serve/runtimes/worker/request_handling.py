@@ -221,12 +221,11 @@ class WorkerRequestHandler:
         self._lease_time = etcd_config.lease_sec
         self._heartbeat_time = etcd_config.heartbeat_sec
 
-        self._lease_time = 30  # default lease time
+        self._lease_time = 15  # default lease time
         self._heartbeat_time = 10  # default heartbeat time
 
         self._heartbeat_thread = None
         self._etcd_client = get_etcd_client(etcd_args)
-        self._lease = self._etcd_client.lease(self._lease_time)
         self._lease_reacquire_lock = threading.Lock()
 
         # --- status/desired stores & status lease ---
@@ -236,8 +235,9 @@ class WorkerRequestHandler:
         self._worker_id = f"{self.args.name}@{self._node}"
 
         # Short TTL for auto-GC of /status; heartbeat will keep it alive while the worker lives
-        self._status_lease_cache = LeaseCache(self._etcd_client, ttl=30, margin=1.0)
-
+        self._status_lease_cache = LeaseCache(
+            self._etcd_client, ttl=self._lease_time, margin=1.0
+        )
         self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
 
         self._last_logged_status = None
@@ -2044,3 +2044,9 @@ class WorkerRequestHandler:
             self._status_store.set_serving(
                 self._node, self._deployment, self._worker_id
             )
+
+    def _stop_status_heartbeat(self):
+        self._status_hb_stop.set()
+        t = self._status_hb_thread
+        if t and t.is_alive():
+            t.join(timeout=2.0)
