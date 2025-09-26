@@ -49,6 +49,7 @@ from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
+from marie.state.state_store import DesiredStore, StatusStore, is_stale
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, Response
 from marie.types_core.request.status import StatusMessage
@@ -56,6 +57,10 @@ from marie.utils.server_runtime import setup_auth, setup_storage, setup_toast_ev
 from marie.utils.types import strtobool
 
 ROOT = "marie/deployments/"
+
+HEARTBEAT_INTERVAL_S = 10  # worker -> status.heartbeat_at
+HEARTBEAT_TIMEOUT_S = 3 * HEARTBEAT_INTERVAL_S  # server considers dead
+RESCHEDULE_BACKOFF_S = 5  # server backoff before bumping epoch again
 
 
 def load_env_file(dotenv_path: Optional[str] = None) -> None:
@@ -113,6 +118,13 @@ class MarieServerGateway(CompositeServer):
         self._deployments_lock = asyncio.Lock()
         self.event_queue = asyncio.Queue(maxsize=512)
         self.ready_event = asyncio.Event()
+
+        self.desired_map: Dict[tuple[str, str], dict] = (
+            {}
+        )  # (node, deployment) -> desired doc
+        self.status_map: Dict[tuple[str, str], dict] = (
+            {}
+        )  # (node, deployment) -> status  doc
 
         self.args = {**vars(self.runtime_args), **kwargs}
         yml_config = self.args.get("uses")
@@ -815,6 +827,7 @@ class MarieServerGateway(CompositeServer):
         run_server_tasks.append(
             asyncio.create_task(self.wait_and_start_scheduler(timeout=5))
         )
+        run_server_tasks.append(asyncio.create_task(self._reconcile_loop()))
 
         await asyncio.gather(*run_server_tasks)
 
@@ -871,11 +884,13 @@ class MarieServerGateway(CompositeServer):
                     listen_timeout=watchdog_interval,
                 )
 
+                # watch services
                 self.resolver.watch_service(
                     service_name, self.handle_discovery_event, notify_on_start=True
                 )
+                # watch node status changes
                 self.resolver.watch_service(
-                    DEPLOYMENT_STATUS_PREFIX,
+                    ROOT,
                     self.handle_discovery_event,
                     notify_on_start=True,
                 )
@@ -936,8 +951,20 @@ class MarieServerGateway(CompositeServer):
                 ev_type = event.event
                 ev_value = event.value
 
-                if ev_key.startswith(DEPLOYMENT_STATUS_PREFIX):
-                    await self.deployment_changed(ev_key, ev_type, ev_value)
+                # Keys are like:
+                # marie/deployments/{node}/{deployment}/desired
+                # marie/deployments/{node}/{deployment}/status
+                # Desired = control-plane intent (scheduler, supervisors)
+                # Status = worker-owned, lease-backed, heartbeat-maintained reality
+
+                if is_desired_key(ev_key):
+                    await self.desired_changed(ev_key, ev_type, ev_value)
+                elif is_status_key(ev_key):
+                    await self.status_changed(ev_key, ev_type, ev_value)
+                elif ev_key.startswith(ROOT):
+                    self.logger.warning(
+                        f"Unhandled event under {ROOT}: key={ev_key}, type={ev_type}"
+                    )
                 else:
                     gateway_changed = True
                     if ev_type == "put":
@@ -1202,45 +1229,69 @@ class MarieServerGateway(CompositeServer):
             self.deployments = new_deployments
             ClusterState.deployments = new_deployments
 
+    def _parse_kv_key(self, key: str) -> tuple[str, str]:
+        # returns (node, deployment)
+        # key prefix guaranteed by is_desired_key/is_status_key
+        parts = key[len(ROOT) :].split("/")
+        # parts = [node, deployment, "desired" | "status"]
+        if len(parts) < 3:
+            raise ValueError(f"Unexpected key format: {key}")
+        node, deployment = parts[0], parts[1]
+        return node, deployment
 
-class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):
-    def __init__(self, notifier: Optional[Callable] = None):
-        super().__init__()
-        self.active_connection = None
-        self.notifier = notifier
+    async def desired_changed(self, ev_key: str, ev_type: str, ev_value: dict):
+        try:
+            node, deployment = self._parse_kv_key(ev_key)
+            key = (node, deployment)
+            if ev_type == "delete":
+                self.desired_map.pop(key, None)
+            else:
+                # value is JSON from DesiredStore (e.g., {"phase":"SCHEDULED","epoch":123,...})
+                self.desired_map[key] = ev_value
+            # You may want to reflect into ClusterState
+            ClusterState.desired = self.desired_map
+        except Exception as e:
+            self.logger.error(f"desired_changed error for {ev_key}: {e}")
 
-    def notify(self, event: str, connection: _ConnectionStubs):
-        """
-        :param event: The event that triggered the notification.
-        :param connection: The connection that initiated the event.
-        :return: None
+    async def status_changed(self, ev_key: str, ev_type: str, ev_value: dict):
+        try:
+            node, deployment = self._parse_kv_key(ev_key)
+            key = (node, deployment)
+            if ev_type == "delete":
+                self.status_map.pop(key, None)
+            else:
+                # value is JSON from StatusStore (e.g., {"owner":"w1@node","epoch":123,"status":"SERVING","ts":...})
+                self.status_map[key] = ev_value
+            # You may want to reflect into ClusterState
+            ClusterState.status = self.status_map
+        except Exception as e:
+            self.logger.error(f"status_changed error for {ev_key}: {e}")
 
-        """
-        if self.notifier:
-            self.notifier(event, connection)
+    async def _reconcile_loop(self):
+        desired_store = DesiredStore(self.etcd_client, prefix="marie")
+        status_store = StatusStore(self.etcd_client, prefix="marie")
 
-    def on_connection_released(self, connection):
-        # print(f"on_connection_released: {connection}")
-        self.active_connection = None
-        self.notify("released", connection)
+        interval = 10  # seconds
+        while True:
+            try:
+                for node, depl in desired_store.list_pairs():
+                    d = desired_store.get(node, depl)
+                    if not d or d.phase != "SCHEDULED":
+                        continue
 
-    def on_connection_failed(self, connection: _ConnectionStubs, exception):
-        # print(f"on_connection_failed: {connection}, {exception}")
-        self.active_connection = None
-        self.notify("failed", connection)
+                    st = status_store.read(node, depl)
+                    if not st:
+                        # Not claimed yet (or cleaned by crash) → fine; scheduler policy decides when to bump
+                        continue
 
-    def on_connection_acquired(self, connection: _ConnectionStubs):
-        # print(f"on_connection_acquired: {connection}")
-        self.active_connection = connection
-        self.notify("acquired", connection)
+                    if st.epoch != d.epoch:
+                        # status from an older epoch → ignore
+                        continue
 
-    def on_connections_updated(self, connections: list[_ConnectionStubs]):
-        # print(f"on_connections_updated: {connections}")
-        self.notify("updated", connections)
-
-    def get_active_connection(self):
-        """
-        Get the active connection.
-        :return:
-        """
-        return self.active_connection
+                    if is_stale(st.heartbeat_at, HEARTBEAT_TIMEOUT_S):
+                        # Worker considered dead,  bump epoch to fence and trigger a new claim
+                        desired_store.bump_epoch(node, depl)
+            except Exception as e:
+                self.logger.error(f"Reconcile loop error: {e}", exc_info=True)
+            finally:
+                await asyncio.sleep(interval)

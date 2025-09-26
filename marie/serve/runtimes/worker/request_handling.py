@@ -238,26 +238,25 @@ class WorkerRequestHandler:
         self._status_lease_cache = LeaseCache(
             self._etcd_client, ttl=self._lease_time, margin=1.0
         )
-        self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
-
-        self._last_logged_status = None
-        self._last_status_log_ts = 0.0
-        self._status_log_interval = 60.0  # seconds
-
-        self._set_deployment_status(self._worker_state)
-        self.setup_heartbeat()
-
         self._desired_store = DesiredStore(self._etcd_client, prefix=self._prefix)
         self._status_store = StatusStore(
             self._etcd_client,
             prefix=self._prefix,
-            lease_getter=self._status_lease_getter,  # attach lease on each put
+            lease_getter=self._status_lease_getter,
         )
+
+        self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
+        self._last_logged_status = None
+        self._last_status_log_ts = 0.0
+        self._status_log_interval = 60.0  # seconds
 
         # Start a lightweight heartbeat for /status (separate from your etcd lease heartbeat)
         self._status_hb_interval_s = 10
         self._status_hb_thread = None
         self._status_hb_stop = threading.Event()
+
+        self._set_deployment_status(self._worker_state)
+        self.setup_heartbeat()
 
     def _http_fastapi_default_app(self, **kwargs):
         from marie.serve.runtimes.worker.http_fastapi_app import (  # For Gateway, it works as for head
@@ -1876,7 +1875,6 @@ class WorkerRequestHandler:
             while not self._status_hb_stop.is_set():
                 try:
                     # Only heartbeat if we (think we) are serving
-                    # You already track _worker_state; reuse it
                     if (
                         self._worker_state
                         == health_pb2.HealthCheckResponse.ServingStatus.SERVING
@@ -1895,11 +1893,6 @@ class WorkerRequestHandler:
             # jitter_fraction in [0.10, 0.20]
             j = random.uniform(-jitter_fraction, jitter_fraction)
             return max(1.0, base * (1.0 + j))
-
-        if self._lease and self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            raise RuntimeError(
-                f"A heartbeat with lease {self._lease} is currently running. Cannot start another."
-            )
 
         self._etcd_client.add_connection_event_handler(
             ConnectionState.CONNECTED, self._on_etcd_connected
