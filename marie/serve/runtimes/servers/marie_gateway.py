@@ -4,7 +4,9 @@ import os
 import sys
 import time
 import traceback
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import Enum
 from typing import Any, AsyncGenerator, AsyncIterator, Callable, Dict, Optional
 from urllib.parse import urlparse
 
@@ -49,7 +51,13 @@ from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
-from marie.state.state_store import DesiredStore, StatusStore, is_stale
+from marie.state.state_store import (
+    DesiredDoc,
+    DesiredStore,
+    StatusDoc,
+    StatusStore,
+    is_stale,
+)
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, Response
 from marie.types_core.request.status import StatusMessage
@@ -63,6 +71,31 @@ HEARTBEAT_TIMEOUT_S = 3 * HEARTBEAT_INTERVAL_S  # server considers dead
 RESCHEDULE_BACKOFF_S = 5  # server backoff before bumping epoch again
 
 
+class EventKind(str, Enum):
+    SERVICE = "SERVICE"
+    DESIRED = "DESIRED"
+    STATUS = "STATUS"
+
+
+@dataclass
+class ServiceEvent:
+    kind: EventKind  # EventKind.SERVICE
+    service: str  # resolver’s service name
+    ev_type: str  # "put" | "delete"
+    value: dict | None
+    key: str  # raw key (so you can log/debug)
+
+
+@dataclass
+class StateEvent:
+    kind: EventKind  # EventKind.DESIRED or EventKind.STATUS
+    node: str
+    deployment: str
+    ev_type: str  # "put" | "delete"
+    value: dict | None
+    key: str  # raw key for debugging
+
+
 def load_env_file(dotenv_path: Optional[str] = None) -> None:
     from dotenv import load_dotenv
 
@@ -70,11 +103,11 @@ def load_env_file(dotenv_path: Optional[str] = None) -> None:
     load_dotenv(dotenv_path=dotenv_path, verbose=True)
 
 
-def is_desired_key(key: str) -> bool:
+def _is_desired_key(key: str) -> bool:
     return key.startswith(ROOT) and key.endswith("/desired")
 
 
-def is_status_key(key: str) -> bool:
+def _is_status_key(key: str) -> bool:
     return key.startswith(ROOT) and key.endswith("/status")
 
 
@@ -119,12 +152,8 @@ class MarieServerGateway(CompositeServer):
         self.event_queue = asyncio.Queue(maxsize=512)
         self.ready_event = asyncio.Event()
 
-        self.desired_map: Dict[tuple[str, str], dict] = (
-            {}
-        )  # (node, deployment) -> desired doc
-        self.status_map: Dict[tuple[str, str], dict] = (
-            {}
-        )  # (node, deployment) -> status  doc
+        self.desired_map: Dict[tuple[str, str], DesiredDoc] = {}
+        self.status_map: Dict[tuple[str, str], StatusDoc] = {}
 
         self.args = {**vars(self.runtime_args), **kwargs}
         yml_config = self.args.get("uses")
@@ -187,6 +216,11 @@ class MarieServerGateway(CompositeServer):
         # we should start job scheduler after the gateway server is started
         storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
         self.etcd_client = get_etcd_client(convert_to_etcd_args(self.args))
+        self.desired_store = DesiredStore(self.etcd_client, prefix="marie")
+        self.status_store = StatusStore(self.etcd_client, prefix="marie")
+
+        self.service_events_queue = asyncio.Queue(maxsize=512)
+        self.state_events_queue = asyncio.Queue(maxsize=2048)  # tends to be chattier
 
         job_manager = JobManager(
             storage=storage,
@@ -206,6 +240,9 @@ class MarieServerGateway(CompositeServer):
 
         # FIXME : The resolver watch_service is not implemented correctly
         self.resolver = None
+
+        self._rebuild_task: asyncio.Task | None = None
+        self._debounce_s = 0.05
 
         def _extend_rest_function(app):
             from fastapi import HTTPException, Request
@@ -886,13 +923,12 @@ class MarieServerGateway(CompositeServer):
 
                 # watch services
                 self.resolver.watch_service(
-                    service_name, self.handle_discovery_event, notify_on_start=True
+                    service_name, self._on_service_event, notify_on_start=True
                 )
+
                 # watch node status changes
                 self.resolver.watch_service(
-                    ROOT,
-                    self.handle_discovery_event,
-                    notify_on_start=True,
+                    ROOT, self._on_state_event, notify_on_start=True
                 )
             except Exception as e:
                 self.logger.error(
@@ -929,73 +965,119 @@ class MarieServerGateway(CompositeServer):
             self.event_queue.put((service, event)), self._loop
         )
 
-    async def process_events(self, max_errors=5) -> None:
-        """
-        Handle a discovery event.
-        :param max_errors: The maximum number of errors to allow before stopping the event processing.
-        :return: None
-        """
+    def _on_service_event(self, service: str, event) -> None:
+        # event has .key .event .value (resolver contract)
+        se = ServiceEvent(
+            kind=EventKind.SERVICE,
+            service=service,
+            ev_type=event.event,
+            value=event.value,
+            key=event.key,
+        )
+        asyncio.run_coroutine_threadsafe(self.service_events_queue.put(se), self._loop)
 
-        error_counter = 0
-        gateway_changed = False
-        debounce_s = 0.05  # small debounce to coalesce bursts
+    def _on_state_event(self, service: str, event) -> None:
+        key = event.key
+        if _is_desired_key(key):
+            kind = EventKind.DESIRED
+        elif _is_status_key(key):
+            kind = EventKind.STATUS
+        else:
+            # Ignore unknown under ROOT (or log)
+            return
 
-        while True:
-            service, event = await self.event_queue.get()
+        try:
+            node, depl = self._parse_kv_key(key)
+        except Exception:
+            # log and drop
+            self.logger.warning(f"Unexpected state key: {key}")
+            return
+
+        se = StateEvent(
+            kind=kind,
+            node=node,
+            deployment=depl,
+            ev_type=event.event,
+            value=event.value,
+            key=key,
+        )
+        asyncio.run_coroutine_threadsafe(self.state_events_queue.put(se), self._loop)
+
+    def _schedule_rebuild(self) -> None:
+        # Cancel any pending rebuild and schedule a fresh one
+        if self._rebuild_task and not self._rebuild_task.done():
+            self._rebuild_task.cancel()
+
+        async def _rebuilder():
             try:
-                self.logger.debug(
-                    f"Queue size after get: {self.event_queue.qsize()} service = {service}, event = {event}"
-                )
-
-                ev_key = event.key
-                ev_type = event.event
-                ev_value = event.value
-
-                # Keys are like:
-                # marie/deployments/{node}/{deployment}/desired
-                # marie/deployments/{node}/{deployment}/status
-                # Desired = control-plane intent (scheduler, supervisors)
-                # Status = worker-owned, lease-backed, heartbeat-maintained reality
-
-                if is_desired_key(ev_key):
-                    await self.desired_changed(ev_key, ev_type, ev_value)
-                elif is_status_key(ev_key):
-                    await self.status_changed(ev_key, ev_type, ev_value)
-                elif ev_key.startswith(ROOT):
-                    self.logger.warning(
-                        f"Unhandled event under {ROOT}: key={ev_key}, type={ev_type}"
-                    )
-                else:
-                    gateway_changed = True
-                    if ev_type == "put":
-                        await self.gateway_server_online(service, ev_value)
-                    elif ev_type == "delete":
-                        self.logger.info(f"Service is unavailable : {service}")
-                        await self.gateway_server_offline(service, ev_value)
-                    else:
-                        raise TypeError(f"Not recognized event type : {ev_type}")
-
-                error_counter = 0  # reset error counter on successful processing
-
-                # if there are no more events, update the gateway streamer to reflect the changes
-                if self.event_queue.qsize() == 0 and gateway_changed:
-                    # debounce to allow closely arriving events to batch
-                    await asyncio.sleep(debounce_s)
-                    if self.event_queue.qsize() == 0:
-                        ClusterState.deployment_nodes = self.deployment_nodes
-                        await self.update_gateway_streamer()
-                        gateway_changed = False
-                        # set the ready event to indicate that we are ready to have scheduler
-                        self.ready_event.set()
+                await asyncio.sleep(self._debounce_s)  # coalesce bursts
+                ClusterState.deployment_nodes = self.deployment_nodes
+                await self.update_gateway_streamer()
+                self.ready_event.set()
+            except asyncio.CancelledError:
+                pass
             except Exception as ex:
-                self.logger.error(f"Error processing event: {ex}")
+                self.logger.error(f"Rebuild error: {ex}", exc_info=True)
+
+        self._rebuild_task = asyncio.create_task(_rebuilder())
+
+    async def process_service_events(self, max_errors=5) -> None:
+        error_counter = 0
+        while True:
+            ev: ServiceEvent = await self.service_events_queue.get()
+            try:
+                if ev.ev_type == "put":
+                    await self.gateway_server_online(ev.service, ev.value)
+                elif ev.ev_type == "delete":
+                    await self.gateway_server_offline(ev.service, ev.value)
+                else:
+                    self.logger.warning(f"Unknown service ev_type: {ev.ev_type}")
+
+                # Always schedule a (debounced) rebuild
+                self._schedule_rebuild()
+
+                error_counter = 0
+            except Exception as ex:
+                self.logger.error(f"Service event error: {ex}", exc_info=True)
                 error_counter += 1
                 if error_counter >= max_errors:
-                    self.logger.error(f"Reached maximum error limit: {max_errors}")
+                    self.logger.error(f"Service loop reached max errors: {max_errors}")
                     break
                 await asyncio.sleep(1)
             finally:
-                self.event_queue.task_done()
+                self.service_events_queue.task_done()
+
+    async def process_state_events(self, max_errors=10) -> None:
+        error_counter = 0
+        while True:
+            ev: StateEvent = await self.state_events_queue.get()
+            try:
+                if ev.kind == EventKind.DESIRED:
+                    if ev.ev_type == "delete":
+                        self.desired_map.pop((ev.node, ev.deployment), None)
+                    else:
+                        self.desired_map[(ev.node, ev.deployment)] = ev.value
+                    ClusterState.desired = self.desired_map
+                elif ev.kind == EventKind.STATUS:
+                    if ev.ev_type == "delete":
+                        self.status_map.pop((ev.node, ev.deployment), None)
+                    else:
+                        self.status_map[(ev.node, ev.deployment)] = ev.value
+                    ClusterState.status = self.status_map
+                else:
+                    self.logger.warning(f"Ignoring unexpected state kind: {ev.kind}")
+                    raise ValueError(f"Unexpected state kind : {ev.kind}")
+
+                error_counter = 0
+            except Exception as ex:
+                self.logger.error(f"State event error: {ex}", exc_info=True)
+                error_counter += 1
+                if error_counter >= max_errors:
+                    self.logger.error(f"State loop reached max errors: {max_errors}")
+                    break
+                await asyncio.sleep(0.5)
+            finally:
+                self.state_events_queue.task_done()
 
     def parse_deployment_details(self, address: str, ev_value: dict) -> dict:
         # get the first executor from ev_value, we might have multiple executors in the future
@@ -1115,8 +1197,6 @@ class MarieServerGateway(CompositeServer):
             )
             for node in nodes:
                 self.logger.debug(f"\tNode : {node}")
-
-        # await self.update_gateway_streamer()
 
     async def update_gateway_streamer(self):
         """Update the gateway streamer with the discovered executors."""
@@ -1268,18 +1348,16 @@ class MarieServerGateway(CompositeServer):
             self.logger.error(f"status_changed error for {ev_key}: {e}")
 
     async def _reconcile_loop(self):
-        desired_store = DesiredStore(self.etcd_client, prefix="marie")
-        status_store = StatusStore(self.etcd_client, prefix="marie")
 
         interval = 10  # seconds
         while True:
             try:
-                for node, depl in desired_store.list_pairs():
-                    d = desired_store.get(node, depl)
+                for node, depl in self.desired_store.list_pairs():
+                    d = self.desired_store.get(node, depl)
                     if not d or d.phase != "SCHEDULED":
                         continue
 
-                    st = status_store.read(node, depl)
+                    st = self.status_store.read(node, depl)
                     if not st:
                         # Not claimed yet (or cleaned by crash) → fine; scheduler policy decides when to bump
                         continue
@@ -1290,7 +1368,7 @@ class MarieServerGateway(CompositeServer):
 
                     if is_stale(st.heartbeat_at, HEARTBEAT_TIMEOUT_S):
                         # Worker considered dead,  bump epoch to fence and trigger a new claim
-                        desired_store.bump_epoch(node, depl)
+                        self.desired_store.bump_epoch(node, depl)
             except Exception as e:
                 self.logger.error(f"Reconcile loop error: {e}", exc_info=True)
             finally:

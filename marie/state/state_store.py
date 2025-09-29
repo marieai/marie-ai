@@ -12,6 +12,19 @@ from grpc_health.v1.health_pb2 import HealthCheckResponse
 # marie/deployments/{node}/{deployment}/status    # worker-only writer
 
 
+def _value_to_json_str(v: Any) -> str:
+    if v is None:
+        return "{}"
+    if isinstance(v, (bytes, bytearray)):
+        return v.decode()
+    if isinstance(v, str):
+        return v
+    # etcd resolver sometimes surfaces parsed dicts; standardize
+    import json
+
+    return json.dumps(v)
+
+
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 

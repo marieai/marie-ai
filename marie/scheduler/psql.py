@@ -456,6 +456,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return: None
         """
         logger.info("Starting job scheduling agent")
+        return
         installed = await self.is_installed()
         logger.info(f"Tables installed: {installed}")
         if not installed:
