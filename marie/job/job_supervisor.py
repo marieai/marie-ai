@@ -286,6 +286,7 @@ class JobSupervisor:
     ):
         """
         Callback when the job is submitted over the network to the executor.
+        MORE CORRECLY: This method is called right before sending the request to the executor before the send medhots.
 
         :param requests: The requests that were sent.
         :param request_info: The request info.
@@ -325,7 +326,7 @@ class JobSupervisor:
             desired = self._desired_store.get(node, deployment_name)
             epoch = desired.epoch if desired else None
             if epoch is None:
-                self.logger.debug(
+                self.logger.warning(
                     "No desired doc found for %s/%s; skipping ack wait",
                     node,
                     deployment_name,
@@ -342,7 +343,7 @@ class JobSupervisor:
                     ack,
                 )
         except Exception as e:
-            self.logger.debug("Ack wait error (ignored): %s", e)
+            self.logger.warning("Ack wait error (ignored): %s", e)
 
         total_duration = time.monotonic() - start
         signal_duration = t_signal - start

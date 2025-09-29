@@ -27,9 +27,9 @@ from grpc_health.v1 import health_pb2
 from grpc_health.v1.health_pb2 import HealthCheckResponse
 
 from marie._docarray import DocumentArray, docarray_v2
-from marie.constants import DEPLOYMENT_STATUS_PREFIX, __default_endpoint__
+from marie.constants import __default_endpoint__
 from marie.excepts import BadConfigSource, RuntimeTerminated
-from marie.helper import get_full_version, get_internal_ip, get_or_reuse_loop
+from marie.helper import get_full_version, get_internal_ip
 from marie.importer import ImportExtensions
 from marie.job.common import JobInfoStorageClient, JobStatus
 from marie.job.lease_cache import LeaseCache
@@ -81,7 +81,14 @@ def _is_missing_lease_error(exc: Exception) -> bool:
     return "requested lease not found" in str(exc).lower()
 
 
+def next_heartbeat_delay(base: float, jitter_fraction=0.15):
+    # jitter_fraction in [0.10, 0.20]
+    j = random.uniform(-jitter_fraction, jitter_fraction)
+    return max(1.0, base * (1.0 + j))
+
+
 # GB:MOD
+# marie/deployments/<host:port>/<deployment>/status
 class WorkerRequestHandler:
     """Object to encapsulate the code related to handle the data requests passing to executor and its returned values"""
 
@@ -230,9 +237,16 @@ class WorkerRequestHandler:
 
         # --- status/desired stores & status lease ---
         self._prefix = "marie"
-        self._node = self.node_info["host"]  # matches gateway side keying
+        _host = self.node_info["host"]
+        _port = self.node_info["port"]
+        self._node = f"{_host}:{_port}"
         self._deployment = self.node_info["deployment_name"]
         self._worker_id = f"{self.args.name}@{self._node}"
+
+        print('self.node_info')
+        print(self.node_info)
+        print('self._worker_id')
+        print(self._worker_id)
 
         # Short TTL for auto-GC of /status; heartbeat will keep it alive while the worker lives
         self._status_lease_cache = LeaseCache(
@@ -251,9 +265,12 @@ class WorkerRequestHandler:
         self._status_log_interval = 60.0  # seconds
 
         # Start a lightweight heartbeat for /status (separate from your etcd lease heartbeat)
-        self._status_hb_interval_s = 10
+        self._base_heartbeat = max(
+            1.0, 0.25 * self._lease_time
+        )  # Base heartbeat as a fraction of TTL Here: 25%.
         self._status_hb_thread = None
         self._status_hb_stop = threading.Event()
+        self._hb_supervisor_stop = threading.Event()
 
         self._set_deployment_status(self._worker_state)
         self.setup_heartbeat()
@@ -1764,8 +1781,12 @@ class WorkerRequestHandler:
         try:
             if status == health_pb2.HealthCheckResponse.ServingStatus.SERVING:
                 # Claim current epoch & mark SERVING, then start heartbeats
-                self._claim_and_mark_serving()
-                self._start_status_heartbeat()
+                if self._claim_and_mark_serving():
+                    self._start_status_heartbeat()
+                else:
+                    self.logger.warning(
+                        "Did not become owner; skipping status heartbeat."
+                    )
 
             elif status in (
                 health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING,
@@ -1794,75 +1815,6 @@ class WorkerRequestHandler:
         except Exception as exc:
             self.logger.error(f"Failed to reflect status '{name}' into /status: {exc}")
 
-    def _set_deployment_status(
-        self, status: health_pb2.HealthCheckResponse.ServingStatus
-    ):
-        """
-        Set the status of a deployment address in etcd. This will refresh lease for the deployment address.
-        :param status: Status of the worker, this
-        """
-        # self.logger.info(f"Setting deployment status: {health_pb2.HealthCheckResponse.ServingStatus.Name(status)}")
-        now = time.time()
-        if self._last_logged_status != status:
-            self.logger.info(
-                f"Setting deployment status: {health_pb2.HealthCheckResponse.ServingStatus.Name(status)}"
-            )
-            self._last_logged_status = status
-            self._last_status_log_ts = now
-        elif (now - self._last_status_log_ts) >= self._status_log_interval:
-            self.logger.debug(
-                f"Reaffirming deployment status: {health_pb2.HealthCheckResponse.ServingStatus.Name(status)}"
-            )
-            self._last_status_log_ts = now
-        else:
-            # Too soon to log again; keep silent
-            pass
-
-        if status != self._worker_state:
-            self.logger.info(
-                f"Updating deployment status from {self._worker_state} to {status}"
-            )
-
-        node_info = self.node_info
-        deployment_name = node_info['deployment_name']
-        address = f"{node_info['host']}:{node_info['port']}"
-
-        status_str = health_pb2.HealthCheckResponse.ServingStatus.Name(status)
-        key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
-        # Eagerly update local desired state so heartbeat publishes the intended value
-        self._worker_state = status
-
-        try:
-            self._etcd_put_with_lease(key, status_str, reason="_set_deployment_status")
-        except Exception as exc:
-            self.logger.error(f"Failed to set deploymente status in etcd: {exc}")
-
-    def _etcd_put_with_lease(self, key: str, value: str, *, reason: str) -> None:
-        """
-        Put a key/value in etcd using the current lease with a single retry after lease reacquire.
-        Simple and explicit:
-          - Ensure lease exists.
-          - Try once.
-          - If missing/expired lease, reacquire and retry once.
-        """
-        if self._lease is None:
-            self.logger.warning("No lease present; reacquiring (reason=%s).", reason)
-            self.reacquire_lease(reason=f"{reason}_missing_lease")
-
-        try:
-            self._etcd_client.put(key, value, lease=self._lease)
-        except Exception as exc:
-            if _is_missing_lease_error(exc):
-                self.logger.warning(
-                    "Lease missing/expired during put; reacquiring (reason=%s). Error: %s",
-                    reason,
-                    exc,
-                )
-                self.reacquire_lease(reason=f"{reason}_not_found")
-                self._etcd_client.put(key, value, lease=self._lease)
-            else:
-                raise
-
     def setup_heartbeat(self):
         """
         Set up an asynchronous heartbeat process with connection state monitoring.
@@ -1871,7 +1823,6 @@ class WorkerRequestHandler:
         self.logger.info("Calling heartbeat setup")
 
         def _hb():
-            # Only heartbeat while we consider ourselves active
             while not self._status_hb_stop.is_set():
                 try:
                     # Only heartbeat if we (think we) are serving
@@ -1883,16 +1834,8 @@ class WorkerRequestHandler:
                             self._node, self._deployment, self._worker_id
                         )
                 except Exception as e:
-                    self.logger.debug(f"status heartbeat error (non-fatal): {e}")
-                time.sleep(self._status_hb_interval_s)
-
-        # Base heartbeat as a fraction of TTL Here: 25%.
-        base_heartbeat = max(1.0, 0.25 * self._lease_time)  # guard a minimum
-
-        def next_heartbeat_delay(base=base_heartbeat, jitter_fraction=0.15):
-            # jitter_fraction in [0.10, 0.20]
-            j = random.uniform(-jitter_fraction, jitter_fraction)
-            return max(1.0, base * (1.0 + j))
+                    self.logger.error(f"status heartbeat error (non-fatal): {e}")
+                time.sleep(next_heartbeat_delay(self._base_heartbeat))
 
         self._etcd_client.add_connection_event_handler(
             ConnectionState.CONNECTED, self._on_etcd_connected
@@ -1919,7 +1862,7 @@ class WorkerRequestHandler:
 
             time.sleep(self._heartbeat_time)
 
-            while True:
+            while not self._hb_supervisor_stop.is_set():
                 try:
                     current_state = self._etcd_client.get_connection_state()
                     if (
@@ -1972,8 +1915,7 @@ class WorkerRequestHandler:
                     time.sleep(backoff_time)
                     continue
 
-                # time.sleep(self._heartbeat_time)
-                time.sleep(next_heartbeat_delay())
+                time.sleep(next_heartbeat_delay(self._base_heartbeat))
 
         self._heartbeat_thread = threading.Thread(target=_heartbeat_setup, daemon=True)
         self._heartbeat_thread.start()
@@ -2013,15 +1955,16 @@ class WorkerRequestHandler:
             f"{self._node}/{self._deployment}"
         )
 
-    def _claim_and_mark_serving(self) -> None:
+    def _claim_and_mark_serving(self) -> bool:
         """
         Claim /status (epoch-fenced) and set SERVING.
         Safe if already claimed by this worker; no-op if another owner wrote it.
         """
+        self.logger.info(f"Request handler: claiming {self._node}/{self._deployment}")
         d = self._desired_store.get(self._node, self._deployment)
         if not d or d.phase != "SCHEDULED":
             # Nothing scheduled for this node/deployment; don't write status
-            return
+            return False
 
         # First claim (sets NOT_SERVING or UNKNOWN by default)
         claimed = self._status_store.claim(
@@ -2037,9 +1980,24 @@ class WorkerRequestHandler:
             self._status_store.set_serving(
                 self._node, self._deployment, self._worker_id
             )
+            return True
+        return False
+
+    def _start_status_heartbeat(self):
+        """Enable the existing heartbeat loop started in setup_heartbeat()."""
+        # allow the already-running thread to emit heartbeats
+        self._status_hb_stop.clear()
+
+        try:
+            self._status_store.heartbeat(self._node, self._deployment, self._worker_id)
+        except Exception as e:
+            self.logger.warning(f"one-shot status heartbeat failed (non-fatal): {e}")
 
     def _stop_status_heartbeat(self):
         self._status_hb_stop.set()
-        t = self._status_hb_thread
-        if t and t.is_alive():
-            t.join(timeout=2.0)
+
+    def shutdown_heartbeat(self):
+        self._stop_status_heartbeat()
+        self._hb_supervisor_stop.set()
+        if self._status_hb_thread and self._status_hb_thread.is_alive():
+            self._status_hb_thread.join(timeout=2.0)

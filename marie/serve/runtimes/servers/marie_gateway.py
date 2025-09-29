@@ -7,13 +7,13 @@ import traceback
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, AsyncGenerator, AsyncIterator, Callable, Dict, Optional
+from typing import Any, AsyncGenerator, AsyncIterator, Dict, Optional
 from urllib.parse import urlparse
 
 import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, Request
 from rich.traceback import install
 
 import marie
@@ -42,9 +42,7 @@ from marie.scheduler.state import WorkState
 from marie.serve.discovery import JsonAddress
 from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
 from marie.serve.discovery.resolver import EtcdServiceResolver
-from marie.serve.networking.balancer.interceptor import LoadBalancerInterceptor
 from marie.serve.networking.balancer.load_balancer import LoadBalancerType
-from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
@@ -122,6 +120,16 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     logger.error("exc_value", exc_value)
     logger.error("exc_traceback", exc_traceback)
     traceback.print_exception(exc_type, exc_value, exc_traceback, file=sys.stdout)
+
+
+def _netloc(addr: str) -> str:
+    """
+    Accepts 'grpc://host:port' or 'host:port' and returns 'host:port'.
+    """
+    if "://" in addr:
+        p = urlparse(addr)
+        return p.netloc or addr
+    return addr
 
 
 class MarieServerGateway(CompositeServer):
@@ -869,7 +877,9 @@ class MarieServerGateway(CompositeServer):
         run_server_tasks.append(
             asyncio.create_task(self.wait_and_start_scheduler(timeout=5))
         )
-        run_server_tasks.append(asyncio.create_task(self._reconcile_loop()))
+        run_server_tasks.append(
+            asyncio.create_task(self._reconcile_loop(interval_s=10))
+        )
 
         await asyncio.gather(*run_server_tasks)
 
@@ -988,13 +998,11 @@ class MarieServerGateway(CompositeServer):
         elif _is_status_key(key):
             kind = EventKind.STATUS
         else:
-            # Ignore unknown under ROOT (or log)
-            return
+            raise ValueError(f"Unexpected state key: {key}")
 
         try:
             node, depl = self._parse_kv_key(key)
-        except Exception:
-            # log and drop
+        except Exception as e:
             self.logger.warning(f"Unexpected state key: {key}")
             return
 
@@ -1009,14 +1017,24 @@ class MarieServerGateway(CompositeServer):
         asyncio.run_coroutine_threadsafe(self.state_events_queue.put(se), self._loop)
 
     def _schedule_rebuild(self) -> None:
+        """
+        Schedule a rebuild of the deployments projection with debouncing.
+        Cancels any pending rebuild task and schedules a fresh one.
+        :raises asyncio.CancelledError: Raised if the task is canceled during execution.
+        """
+
         # Cancel any pending rebuild and schedule a fresh one
         if self._rebuild_task and not self._rebuild_task.done():
+            self.logger.info("Rebuilding deployments canceled...")
             self._rebuild_task.cancel()
 
         async def _rebuilder():
             try:
                 await asyncio.sleep(self._debounce_s)  # coalesce bursts
+                # THIS IS THE CRITICAL SECTION AND IT IS MESSYYY
+                self.logger.info("Rebuilding deployments projection...")
                 ClusterState.deployment_nodes = self.deployment_nodes
+                self._rebuild_deployments_projection()
                 await self.update_gateway_streamer()
                 self.ready_event.set()
             except asyncio.CancelledError:
@@ -1358,12 +1376,14 @@ class MarieServerGateway(CompositeServer):
         except Exception as e:
             self.logger.error(f"status_changed error for {ev_key}: {e}")
 
-    async def _reconcile_loop(self):
+    async def _reconcile_loop(self, interval_s: int = 10) -> None:
+        self.logger.info("Reconcile loop starting (interval=%ss)", interval_s)
 
-        interval = 10  # seconds
         while True:
             try:
+                self.logger.info(f"Reconciling")
                 for node, depl in self.desired_store.list_pairs():
+                    self.logger.info(f" - reconciling {node}/{depl}")
                     d = self.desired_store.get(node, depl)
                     if not d or d.phase != "SCHEDULED":
                         continue
@@ -1379,8 +1399,65 @@ class MarieServerGateway(CompositeServer):
 
                     if is_stale(st.heartbeat_at, HEARTBEAT_TIMEOUT_S):
                         # Worker considered dead,  bump epoch to fence and trigger a new claim
+                        self.logger.warning(
+                            f"Detected stale status for {node}/{depl} epoch {st.epoch}, bumping"
+                        )
                         self.desired_store.bump_epoch(node, depl)
             except Exception as e:
                 self.logger.error(f"Reconcile loop error: {e}", exc_info=True)
             finally:
-                await asyncio.sleep(interval)
+                await asyncio.sleep(interval_s)
+
+    def _choose_status_name(self, docs: list) -> str:
+        """
+        SERVING > NOT_SERVING > SERVICE_UNKNOWN > UNKNOWN
+        """
+        if not docs:
+            return "SERVICE_UNKNOWN"
+        names = {d.status_name for d in docs if d}
+        if "SERVING" in names:
+            return "SERVING"
+        if "NOT_SERVING" in names:
+            return "NOT_SERVING"
+        if "SERVICE_UNKNOWN" in names:
+            return "SERVICE_UNKNOWN"
+        return "UNKNOWN"
+
+    def _rebuild_deployments_projection(self) -> None:
+        """
+        Recreate self.deployments with the legacy format:
+          { "<host:port>": { 'prefix': 'deployments/status',
+                             'address': '<host:port>',
+                             'executor': '<executor>',
+                             'status': '<STATUS_NAME>' } }
+        """
+        # Index status docs by deployment/executor name
+        by_depl: dict[str, list[StatusDoc]] = {}
+        for (_, depl), st in self.status_map.items():
+            by_depl.setdefault(depl, []).append(st)
+
+        new_deployments: dict[str, dict] = {}
+
+        for executor, nodes in self.deployment_nodes.items():
+            # One status per executor (all addresses for that executor get same status)
+            status_name = self._choose_status_name(by_depl.get(executor, []))
+
+            # Many nodes share same address but different endpoints; we want 1 entry per address.
+            seen_addrs = set()
+            for n in nodes:
+                addr_raw = n.get("address", "")
+                hostport = _netloc(addr_raw)
+                if not hostport or hostport in seen_addrs:
+                    continue
+                seen_addrs.add(hostport)
+
+                new_deployments[hostport] = {
+                    "prefix": "deployments/status",  # keep this literal to match expectations
+                    "address": hostport,
+                    "executor": executor,
+                    "status": status_name,
+                }
+
+        # Atomic swap to preserve old behavior
+        self.deployments = new_deployments
+        ClusterState.deployments = new_deployments

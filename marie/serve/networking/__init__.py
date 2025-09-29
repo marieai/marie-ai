@@ -590,9 +590,6 @@ class GrpcConnectionPool:
                             "deployment": current_connection.deployment_name,
                         }
                         await self._safe_send_callback(send_callback, requests, ctx)
-                        # asyncio.create_task(
-                        #     self._safe_send_callback(send_callback, requests, ctx)
-                        # )
                     return await current_connection.send_requests(
                         requests=requests,
                         metadata=metadata,

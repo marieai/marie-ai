@@ -456,7 +456,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return: None
         """
         logger.info("Starting job scheduling agent")
-        return
         installed = await self.is_installed()
         logger.info(f"Tables installed: {installed}")
         if not installed:
@@ -562,7 +561,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
 
                 if not any(slots_by_executor.values()):
-                    self.logger.warning("No available executor slots. Backing off.")
+                    self.logger.debug("No available executor slots. Backing off.")
                     idle_streak += 1
                     wait_time = adjust_backoff(
                         wait_time,
@@ -579,7 +578,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 )
 
                 if not candidates_wi or len(candidates_wi) == 0:
-                    self.logger.warning("No ready work in memory; short sleep.")
+                    self.logger.debug("No ready work in memory; short sleep.")
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
                     idle_streak += 1
                     wait_time = adjust_backoff(

@@ -810,18 +810,23 @@ class EtcdClient(object):
             raise RuntimeError(f"Failed to create prefix watch for: {key_prefix}")
 
     @reconn_reauth_adaptor
-    def get(self, key: str) -> tuple:
+    def get(self, key: str, metadata: bool = False) -> tuple:
         """
         Get a single key from the etcd.
         Returns ``None`` if the key does not exist.
         The returned value may be an empty string if the value is a zero-length string.
+
+        - when metadata=True -> return (value_bytes, meta)
+        - when metadata=False -> return decoded str (legacy behavior)
 
         :param key: The key. This must be quoted by the caller as needed.
         :return:
         """
 
         mangled_key = self._mangle_key(key)
-        value, _ = self.client.get(mangled_key)
+        value, meta = self.client.get(mangled_key)
+        if metadata:
+            return value, meta  # raw bytes + meta (or (None, meta))
         return value.decode(self.encoding) if value is not None else None
 
     @reconn_reauth_adaptor
@@ -905,6 +910,30 @@ class EtcdClient(object):
         return make_dict_from_pairs(
             f"{_slash(scope_prefix)}{key_prefix}", pair_sets, "/"
         )
+
+    @reconn_reauth_adaptor
+    def get_prefix_dict(
+        self, key_prefix: str, sort_order=None, sort_target="key"
+    ) -> dict:
+        """
+        Returns a nested dict under key_prefix (your current get_prefix behavior).
+        Keeps canonical get_prefix free for etcd3-style (value, meta) iterators if needed elsewhere.
+        """
+        scope_prefix = ""
+        mangled_key_prefix = self._mangle_key(f"{_slash(scope_prefix)}{key_prefix}")
+        results = self.client.get_prefix(
+            mangled_key_prefix, sort_order=sort_order, sort_target=sort_target
+        )
+        pair_sets = {
+            self._demangle_key(k.key): v.decode(self.encoding) for v, k in results
+        }
+        return make_dict_from_pairs(
+            f"{_slash(scope_prefix)}{key_prefix}", pair_sets, "/"
+        )
+
+    @reconn_reauth_adaptor
+    def transaction(self, compare, success, failure):
+        return self.client.transaction(compare, success, failure)
 
     @reconn_reauth_adaptor
     def lease(self, ttl, lease_id=None):

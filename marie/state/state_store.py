@@ -20,8 +20,6 @@ def _value_to_json_str(v: Any) -> str:
     if isinstance(v, str):
         return v
     # etcd resolver sometimes surfaces parsed dicts; standardize
-    import json
-
     return json.dumps(v)
 
 
@@ -144,10 +142,12 @@ class BaseStore:
         except Exception:
             self._tx = None
 
-    # raw kv helpers
     def _get_raw(self, key: str) -> Optional[bytes]:
-        raw, _ = self.etcd.get(key, metadata=True)
-        return raw
+        # Works against your EtcdClient.get(key, metadata=True) and native etcd3
+        val, _meta = self.etcd.get(key, metadata=True)
+        if val is None:
+            return None
+        return val if isinstance(val, (bytes, bytearray)) else str(val).encode()
 
     def _put_json(self, key: str, obj: Dict[str, Any]) -> None:
         self.etcd.put(key, json.dumps(obj))
@@ -164,25 +164,36 @@ class BaseStore:
             else:
                 raise
 
-    # key helpers
     def _desired_key(self, node: str, depl: str) -> str:
         return _dkey(self.prefix, node, depl)
 
     def _status_key(self, node: str, depl: str) -> str:
         return _skey(self.prefix, node, depl)
 
-    # scans
     def iter_desired_pairs(self) -> Iterator[Tuple[str, str]]:
         root = f"{self.prefix}/deployments/"
-        for _, meta in self.etcd.get_prefix(root):
-            key = meta.key.decode()
+        nested = self.etcd.get_prefix_dict(root)
+
+        print(f'nested for : {root}')
+        print(nested)
+
+        def _walk(d: dict, base: str):
+            for k, v in d.items():
+                full = f"{base.rstrip('/')}/{k}" if k else base.rstrip("/")
+                if isinstance(v, dict):
+                    yield from _walk(v, full)
+                else:
+                    yield full
+
+        for key in _walk(nested, root.rstrip("/")):
             if not key.endswith("/desired"):
                 continue
             parts = key.split("/")
             try:
                 i = parts.index("deployments")
                 yield parts[i + 1], parts[i + 2]
-            except Exception:
+            except Exception as e:
+                print('Error parsing key:', key, e)
                 continue
 
 
@@ -317,7 +328,6 @@ class StatusStore(BaseStore):
             self._put_json(k, asdict(st))
         return True
 
-    # Convenience wrappers
     def set_serving(
         self,
         node: str,
