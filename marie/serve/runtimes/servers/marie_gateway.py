@@ -860,7 +860,12 @@ class MarieServerGateway(CompositeServer):
             run_server_tasks.append(asyncio.create_task(server.run_server()))
 
         # task for processing events and scheduler
-        run_server_tasks.append(asyncio.create_task(self.process_events(max_errors=5)))
+        run_server_tasks.append(
+            asyncio.create_task(self.process_service_events(max_errors=5))
+        )
+        run_server_tasks.append(
+            asyncio.create_task(self.process_state_events(max_errors=10))
+        )
         run_server_tasks.append(
             asyncio.create_task(self.wait_and_start_scheduler(timeout=5))
         )
@@ -1268,6 +1273,12 @@ class MarieServerGateway(CompositeServer):
                 self.logger.info(f"\t{outgoing}")
 
         # FIXME : this was a bad idea, we need to use the same deployment
+        print('Deployment Check')
+        print('self.deployments')
+        print(self.deployments)
+        print('self.deployment_nodes')
+        print(self.deployment_nodes)
+
         ClusterState.deployments = self.deployments
         ClusterState.deployment_nodes = self.deployment_nodes
 

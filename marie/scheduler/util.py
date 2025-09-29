@@ -142,20 +142,40 @@ def available_slots_by_entrypoint(deployment_nodes: dict) -> dict[str, int]:
 
 
 # # Example Usage
-# deployment_nodes = {
-#     'annotator_executor': [
-#         {'address': 'grpc://127.0.0.1:53543', 'endpoint': '_jina_dry_run_', 'executor': 'annotator_executor',
-#          'gateway': '127.0.0.1:53543'},
-#         {'address': 'grpc://127.0.0.1:53543', 'endpoint': '/default', 'executor': 'annotator_executor',
-#          'gateway': '127.0.0.1:53543'},
-#         {'address': 'grpc://127.0.0.1:53543', 'endpoint': '/annotator/llm', 'executor': 'annotator_executor',
-#          'gateway': '127.0.0.1:53543'},
-#         {'address': 'grpc://127.0.0.1:53543', 'endpoint': '/annotator/table-llm', 'executor': 'annotator_executor',
-#          'gateway': '127.0.0.1:53543'},
-#         {'address': 'grpc://127.0.0.1:53543', 'endpoint': '/annotator/result-parser', 'executor': 'annotator_executor',
-#          'gateway': '127.0.0.1:53543'}
-#     ]
-# }
+deployment_nodes = {
+    'annotator_executor': [
+        {
+            'address': 'grpc://127.0.0.1:53543',
+            'endpoint': '_jina_dry_run_',
+            'executor': 'annotator_executor',
+            'gateway': '127.0.0.1:53543',
+        },
+        {
+            'address': 'grpc://127.0.0.1:53543',
+            'endpoint': '/default',
+            'executor': 'annotator_executor',
+            'gateway': '127.0.0.1:53543',
+        },
+        {
+            'address': 'grpc://127.0.0.1:53543',
+            'endpoint': '/annotator/llm',
+            'executor': 'annotator_executor',
+            'gateway': '127.0.0.1:53543',
+        },
+        {
+            'address': 'grpc://127.0.0.1:53543',
+            'endpoint': '/annotator/table-llm',
+            'executor': 'annotator_executor',
+            'gateway': '127.0.0.1:53543',
+        },
+        {
+            'address': 'grpc://127.0.0.1:53543',
+            'endpoint': '/annotator/result-parser',
+            'executor': 'annotator_executor',
+            'gateway': '127.0.0.1:53543',
+        },
+    ]
+}
 #
 # result = available_slots_by_entrypoint(deployment_nodes)
 # print(result)
