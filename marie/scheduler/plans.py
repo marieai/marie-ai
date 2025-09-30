@@ -246,6 +246,11 @@ def fetch_next_job(schema: str):
     return query
 
 
+def delete_dags_and_jobs(schema: str, ids: list) -> str:
+    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    return f"select {schema}.delete_dags_and_jobs({ids_string}::uuid[])"
+
+
 def mark_as_active_jobs(
     schema: str, name: str, ids: list, include_metadata: bool = False
 ):
