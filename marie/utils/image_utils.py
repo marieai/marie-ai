@@ -1,6 +1,5 @@
 import hashlib
 import io
-import sys
 import time
 from math import ceil
 from typing import List, Tuple, Union
@@ -10,8 +9,6 @@ import numpy as np
 import PIL.Image
 from PIL import Image
 from rich import print
-
-from marie.timer import Timer
 
 
 def read_image(image):

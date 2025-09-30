@@ -184,3 +184,4 @@ sentence-transformers==5.1.0:  standard,core
 watchdog:                      standard,core
 
 qwen-vl-utils:                 standard,core
+portalocker==3.2.0:            standard,core
