@@ -259,7 +259,7 @@ class JobSupervisor:
             except Exception as e:
                 self.logger.warning(f"Failed to signal confirmation (no loop): {e}")
 
-    def send_callback(self, requests, request_info):
+    def send_callbackXXXXX(self, requests, request_info):
         job_callback_executor.submit(self._send_callback_sync, requests, request_info)
 
     def _await_worker_ack(
@@ -353,6 +353,19 @@ class JobSupervisor:
             total_duration,
             signal_duration,
         )
+
+    async def send_callback(self, requests, request_info):
+        node = request_info["address"]  #  host:port
+        depl = request_info["deployment"]
+
+        # Write /desired BEFORE the RPC goes out
+        try:
+            self._desired_store.upsert_scheduled(node, depl)
+            # small yield to let watchers process the new key
+            await asyncio.sleep(0)
+        except Exception as e:
+            self.logger.error(f"failed to upsert desired for {node}/{depl}: {e}")
+            # TODO: fail fast, or continue and let retry policy handle it.
 
     async def _submit_job_in_background(self, job_info: JobInfo):
         start_time = time.monotonic()

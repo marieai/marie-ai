@@ -1776,7 +1776,6 @@ class WorkerRequestHandler:
 
         # Update local state immediately
         self._worker_state = status
-
         # Reflect into the worker-owned /status document
         try:
             if status == health_pb2.HealthCheckResponse.ServingStatus.SERVING:
@@ -1964,6 +1963,7 @@ class WorkerRequestHandler:
         d = self._desired_store.get(self._node, self._deployment)
         if not d or d.phase != "SCHEDULED":
             # Nothing scheduled for this node/deployment; don't write status
+            self.logger.warning("No scheduled deployment; cannot claim /status")
             return False
 
         # First claim (sets NOT_SERVING or UNKNOWN by default)
@@ -1976,7 +1976,17 @@ class WorkerRequestHandler:
         )
         # If claim succeeded (or the current owner is already this worker), move to SERVING
         st = self._status_store.read(self._node, self._deployment)
-        if claimed or (st and st.owner == self._worker_id and st.epoch == d.epoch):
+        print('** claimed:', claimed, 'st:', st, 'd.epoch:', d.epoch)
+        print("claimed : ", claimed)
+        print("st : ", st)
+        print("d.epoch : ", d.epoch)
+        print("st.epoch : ", st.epoch)
+        print('self._worker_id : ', self._worker_id)
+        eval_cond = claimed or (
+            st and st.owner == self._worker_id and st.epoch == d.epoch
+        )
+        print('** eval_cond:', eval_cond)
+        if eval_cond:
             self._status_store.set_serving(
                 self._node, self._deployment, self._worker_id
             )

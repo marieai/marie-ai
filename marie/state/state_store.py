@@ -150,9 +150,11 @@ class BaseStore:
         return val if isinstance(val, (bytes, bytearray)) else str(val).encode()
 
     def _put_json(self, key: str, obj: Dict[str, Any]) -> None:
+        print('putting json to', key, obj)
         self.etcd.put(key, json.dumps(obj))
 
     def _put_json_with_lease(self, key: str, obj: Dict[str, Any], lease_getter) -> None:
+        print('putting json with lease to', key, obj)
         payload = json.dumps(obj)
         lease = lease_getter()  # etcd3.Lease
         try:
@@ -236,6 +238,44 @@ class DesiredStore(BaseStore):
     def list_pairs(self) -> Iterator[Tuple[str, str]]:
         yield from self.iter_desired_pairs()
 
+    def upsert_scheduled(self, node: str, deployment: str) -> DesiredDoc:
+        d = self.get(node, deployment)
+        if not d:
+            # First time → create with epoch=1 (or 0 if you prefer)
+            return self._create(node, deployment, phase="SCHEDULED", epoch=1, params={})
+        if d.phase != "SCHEDULED":
+            # Transition to SCHEDULED but keep epoch (important to avoid fencing mismatch)
+            return self._update_phase(node, deployment, phase="SCHEDULED")
+        return d
+
+    def _create(
+        self,
+        node: str,
+        depl: str,
+        phase: str,
+        epoch: int,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> DesiredDoc:
+        doc = DesiredDoc(
+            phase=phase,
+            epoch=epoch,
+            params=params or {},
+            updated_at=_now_iso(),
+        )
+        self._put_json(self._desired_key(node, depl), asdict(doc))
+        return doc
+
+    def _update_phase(self, node: str, depl: str, phase: str) -> DesiredDoc:
+        existing = self.get(node, depl)
+        if not existing:
+            # If called without existing doc, create a new one with epoch=1
+            return self._create(node, depl, phase=phase, epoch=1, params={})
+        existing.phase = phase
+        existing.updated_at = _now_iso()
+        # NOTE: keep epoch unchanged here (important!)
+        self._put_json(self._desired_key(node, depl), asdict(existing))
+        return existing
+
 
 class StatusStore(BaseStore):
     """Worker-only: observed serving status with heartbeats (HealthCheckResponse)."""
@@ -256,8 +296,12 @@ class StatusStore(BaseStore):
         First write of status for this epoch. Best-effort CAS if supported.
         Default initial status is NOT_SERVING (worker booting / not yet handling).
         """
+        print('claiming status for', node)
+
         k = self._status_key(node, depl)
         existing = self._get_raw(k)
+
+        print('existing status:', existing)
         doc = StatusDoc(
             status_code=initial_status,
             status_name=_status_name(initial_status),
@@ -269,6 +313,7 @@ class StatusStore(BaseStore):
         )
         v = json.dumps(asdict(doc))
 
+        print('new status:', v)
         if self._tx:
             cmp_list = (
                 [self._tx.Version(k) == 0]
@@ -335,6 +380,7 @@ class StatusStore(BaseStore):
         worker_id: str,
         details: Optional[Dict[str, Any]] = None,
     ) -> bool:
+        print('setting serving for', node)
         return self.set_status(
             node, depl, worker_id, HealthCheckResponse.ServingStatus.SERVING, details
         )

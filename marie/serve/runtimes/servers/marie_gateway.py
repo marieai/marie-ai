@@ -998,7 +998,9 @@ class MarieServerGateway(CompositeServer):
         elif _is_status_key(key):
             kind = EventKind.STATUS
         else:
-            raise ValueError(f"Unexpected state key: {key}")
+            # raise ValueError(f"Unexpected state key: {key}")
+            self.logger.warning(f"Unexpected state key: {key}")
+            return
 
         try:
             node, depl = self._parse_kv_key(key)
