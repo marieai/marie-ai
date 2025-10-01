@@ -58,6 +58,7 @@ class JobSupervisor:
         self.confirmation_event = confirmation_event  # we need to make sure that this is per job confirmation event
         self._active_tasks = set()
         self._loop = get_or_reuse_loop()
+        self._current_job_epoch: Optional[int] = None
 
         # K8s-style desired/status split
         self._prefix = "marie"
@@ -263,15 +264,17 @@ class JobSupervisor:
         job_callback_executor.submit(self._send_callback_sync, requests, request_info)
 
     def _await_worker_ack(
-        self, node: str, deployment: str, epoch: int, timeout_s: float = 3.0
+        self, node: str, deployment: str, epoch: int, timeout_s: float = 5.0
     ) -> bool:
         """
         Wait up to timeout_s for the worker to write /status with matching epoch and SERVING.
         Server remains read-only for /status.
         """
         deadline = time.monotonic() + timeout_s
+        print('_await_worker_ack : ', deadline)
         while time.monotonic() < deadline:
             st = self._status_store.read(node, deployment)
+            print('JOB SUPERVISOR: status store read', st)
             if (
                 st
                 and st.epoch == epoch
@@ -279,6 +282,7 @@ class JobSupervisor:
             ):
                 return True
             time.sleep(0.05)
+        print('JOB SUPERVISOR: timed out waiting for ack')
         return False
 
     def _send_callback_sync(
@@ -354,18 +358,153 @@ class JobSupervisor:
             signal_duration,
         )
 
-    async def send_callback(self, requests, request_info):
-        node = request_info["address"]  #  host:port
+    async def send_callback(
+        self, requests: Union[List[DataRequest] | DataRequest], request_info: Dict
+    ):
+        """
+        Callback when the job is submitted over the network to the executor.
+        MORE CORRECTLY: This method is called right before sending the request to the executor before the send method.
+
+        :param requests: The requests that were sent.
+        :param request_info: The request info.
+        """
+        # Validate and extract
+        req = requests[0] if isinstance(requests, Sequence) and requests else requests
+        if not req:
+            self.logger.error("No valid requests provided.")
+            return
+        self.request_info = request_info
+        required = ["request_id", "address", "deployment"]
+        if not all(k in request_info for k in required):
+            self.logger.error(f"Missing required keys in request_info: {request_info}")
+            return
+
+        node = request_info["address"]  # host:port
         depl = request_info["deployment"]
+        deployment_name = request_info["deployment"]
+
+        async def _wait_for_ack(epoch: int):
+            """Waits for worker acknowledgement in a background task."""
+            try:
+                self._signal_confirmation_threadsafe()
+                ack = await self._loop.run_in_executor(
+                    None, self._await_worker_ack, node, deployment_name, epoch, 3.0
+                )
+                self.logger.info(
+                    "Worker ack (SERVING) for %s/%s epoch=%s: %s",
+                    node,
+                    deployment_name,
+                    epoch,
+                    ack,
+                )
+                if not ack:
+                    self.logger.warning(
+                        f"Timed out waiting for worker ack for job {self._job_id}"
+                    )
+            except Exception as e:
+                self.logger.error(f"Error in ack waiting task for {node}/{depl}: {e}")
 
         # Write /desired BEFORE the RPC goes out
         try:
-            self._desired_store.upsert_scheduled(node, depl)
-            # small yield to let watchers process the new key
-            await asyncio.sleep(0)
+            desired = await self._loop.run_in_executor(
+                None, self._desired_store.upsert_scheduled, node, depl
+            )
+            await asyncio.sleep(0.01)
+
+            epoch = desired.epoch if desired else None
+            if epoch is None:
+                self.logger.warning(
+                    "No desired doc found for %s/%s; skipping ack wait",
+                    node,
+                    deployment_name,
+                )
+            else:
+                # Run the ack-waiting logic in a background task so this callback can return,
+                # allowing the gRPC call to be sent.
+                asyncio.create_task(_wait_for_ack(epoch))
+
         except Exception as e:
             self.logger.error(f"failed to upsert desired for {node}/{depl}: {e}")
             # TODO: fail fast, or continue and let retry policy handle it.
+
+    async def failure_callback(
+        self,
+        requests: Union[List[DataRequest] | DataRequest],
+        ctx: Dict,
+        exception: Exception,
+    ):
+        """
+        Callback executed when sending the request fails.
+        """
+        self.logger.error("Failure callback invoked.")
+        node = ctx.get("address", "N/A")
+        deployment_name = ctx.get("deployment", "N/A")
+        self.logger.error(
+            f"Request sending failed for {node}/{deployment_name}, job {self._job_id}. Exception: {exception}"
+        )
+
+    async def pre_send_callback(
+        self, requests: Union[List[DataRequest] | DataRequest], ctx: Dict
+    ):
+        """
+        Callback executed before sending the request. It claims the job by writing a 'desired' status.
+        """
+        self.logger.warning("Pre-send callback invoked.")
+        try:
+            node = ctx["address"]
+            depl = ctx["deployment"]
+            self.logger.info(f"Executing pre-send callback for {node}/{depl}")
+
+            desired = await self._loop.run_in_executor(
+                None, self._desired_store.upsert_scheduled, node, depl
+            )
+            self.logger.info(f"Desired state updated for {node}/{depl}: {desired}")
+            self._current_job_epoch = desired.epoch if desired else None
+            await asyncio.sleep(0.01)  # small yield to let watchers process the new key
+        except Exception as e:
+            self.logger.error(f"pre-send callback failed: {e}")
+            self._current_job_epoch = None
+
+    async def after_send_callback(
+        self,
+        requests: Union[List[DataRequest] | DataRequest],
+        ctx: Dict,
+        response: "DataRequest",
+    ):
+        """
+        Callback executed after a successful response is received. It waits for the worker acknowledgement.
+        """
+        self.logger.warning("After-send callback invoked.")
+        node = ctx["address"]
+        deployment_name = ctx["deployment"]
+        epoch = self._current_job_epoch
+
+        if epoch is None:
+            self.logger.warning(
+                f"No desired doc epoch found for {node}/{deployment_name}; skipping ack wait"
+            )
+            return
+
+        try:
+            self._signal_confirmation_threadsafe()
+            ack = await self._loop.run_in_executor(
+                None, self._await_worker_ack, node, deployment_name, epoch
+            )
+            self.logger.info(
+                "Worker ack (SERVING) for %s/%s epoch=%s: %s",
+                node,
+                deployment_name,
+                epoch,
+                ack,
+            )
+            if not ack:
+                self.logger.warning(
+                    f"Timed out waiting for worker ack for job {self._job_id}"
+                )
+        except Exception as e:
+            self.logger.error(
+                f"Error in ack waiting task for {node}/{deployment_name}: {e}"
+            )
 
     async def _submit_job_in_background(self, job_info: JobInfo):
         start_time = time.monotonic()
@@ -375,11 +514,17 @@ class JobSupervisor:
                 "Starting background submission for job: %s", self._job_id
             )
 
+            callbacks = (
+                self.pre_send_callback,
+                self.after_send_callback,
+                self.failure_callback,
+            )
+
             # Submit using the non-blocking wrapper, but DO NOT await the result here.
             send_task = await self._job_distributor.send_nowait(
                 submission_id=self._job_id,
                 job_info=job_info,
-                send_callback=self.send_callback,
+                send_callback=callbacks,
                 wait_for_ack=0.0,  # no extra wait here
             )
 

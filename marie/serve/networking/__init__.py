@@ -1,8 +1,10 @@
 import asyncio
+import functools
 import time
 from typing import (
     TYPE_CHECKING,
     AsyncGenerator,
+    Awaitable,
     Callable,
     Dict,
     List,
@@ -529,13 +531,79 @@ class GrpcConnectionPool:
 
         return async_generator_wrapper()
 
-    async def _safe_send_callback(self, send_callback, requests, ctx):
+    async def _safe_send_callbackXXXX(self, send_callback, requests, ctx):
         try:
             result = send_callback(requests, ctx)
             if inspect.isawaitable(result):
                 await result
         except Exception as e:
             self._logger.error(f"send_callback failed (ignored): {e}")
+
+    async def _safe_send_callback(
+        self,
+        send_callback: Optional[Callable],
+        *callback_args,
+        timeout: float = 0.25,
+        fire_and_forget: bool = False,
+    ) -> None:
+        """
+        Run a user-provided callback safely.
+
+        - Supports sync or async callbacks.
+        - Time-boxed with `timeout`.
+        - `fire_and_forget=True` detaches the task so it can't block the hot path.
+        - Never raises; logs any failure.
+        """
+        if not callable(send_callback):
+            return
+
+        async def _run_once():
+            try:
+                if inspect.iscoroutinefunction(send_callback):
+                    await asyncio.wait_for(
+                        send_callback(*callback_args), timeout=timeout
+                    )
+                else:
+                    loop = asyncio.get_running_loop()
+                    func = functools.partial(send_callback, *callback_args)
+                    # time-box a sync function by running it in a thread and waiting
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, func), timeout=timeout
+                    )
+            except asyncio.TimeoutError:
+                self._logger.warning(
+                    "send_callback timed out after %.3fs (callback=%r, args=%s)",
+                    timeout,
+                    getattr(send_callback, "__name__", repr(send_callback)),
+                    callback_args,
+                )
+            except asyncio.CancelledError:
+                # Do not swallow cancellation; just log and re-raise so upper layers can cancel cleanly if needed
+                self._logger.debug(
+                    "send_callback was cancelled (callback=%r)", send_callback
+                )
+                raise
+            except Exception as e:
+                self._logger.error(
+                    "send_callback failed (ignored): %s (callback=%r, args=%s)",
+                    e,
+                    getattr(send_callback, "__name__", repr(send_callback)),
+                    callback_args,
+                    exc_info=True,
+                )
+
+        if fire_and_forget:
+            # Detach; make sure exceptions are contained
+            async def _bg():
+                try:
+                    await _run_once()
+                except Exception:
+                    # already logged inside _run_once
+                    pass
+
+            asyncio.create_task(_bg())
+        else:
+            await _run_once()
 
     def _send_requests(
         self,
@@ -545,10 +613,22 @@ class GrpcConnectionPool:
         metadata: Optional[Dict[str, str]] = None,
         timeout: Optional[float] = None,
         retries: Optional[int] = -1,
-        send_callback: Optional[Callable[[List[Request], Dict[str, str]], None]] = None,
+        # send_callback: Optional[Callable[[List[Request], Dict[str, str]], None]] = None,
+        send_callback: Optional[
+            Tuple[Optional[Callable], Optional[Callable], Optional[Callable]]
+        ] = None,
     ) -> "asyncio.Task[Union[Tuple, AioRpcError, InternalNetworkError]]":
         # this wraps the awaitable object from grpc as a coroutine so it can be used as a task
         # the grpc call function is not a coroutine but some _AioCall
+
+        pre_send_cb, after_send_callback, on_failure_cb = None, None, None
+        if isinstance(send_callback, tuple) and len(send_callback) == 3:
+            pre_send_cb, after_send_callback, on_failure_cb = send_callback
+
+        print('send_callback : ', send_callback)
+        print('pre_send_cb is:', pre_send_cb)
+        print('after_send_callback is:', after_send_callback)
+        print('on_failure_cb is:', on_failure_cb)
 
         if endpoint:
             metadata = metadata or {}
@@ -582,20 +662,29 @@ class GrpcConnectionPool:
                         break
                 tried_addresses.add(current_connection.address)
                 connections.incr_usage(current_connection.address)
+
+                ctx = {
+                    "request_id": requests[0].request_id,
+                    "address": current_connection.address,
+                    "deployment": current_connection.deployment_name,
+                }
+
                 try:
-                    if callable(send_callback):
-                        ctx = {
-                            "request_id": requests[0].request_id,
-                            "address": current_connection.address,
-                            "deployment": current_connection.deployment_name,
-                        }
-                        await self._safe_send_callback(send_callback, requests, ctx)
-                    return await current_connection.send_requests(
+                    # BEFORE the RPC (ordered; must complete before sending)
+                    await self._safe_send_callback(
+                        pre_send_cb, requests, ctx, timeout=0.25
+                    )
+
+                    result = await current_connection.send_requests(
                         requests=requests,
                         metadata=metadata,
                         compression=self.compression,
                         timeout=timeout,
                     )
+                    await self._safe_send_callback(
+                        after_send_callback, requests, ctx, result, timeout=10
+                    )
+                    return result
                 except AioRpcError as e:
                     error = await self._handle_aiorpcerror(
                         error=e,

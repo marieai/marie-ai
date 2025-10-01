@@ -146,7 +146,9 @@ class GatewayJobDistributor(JobDistributor):
 
         self.logger.info(f"[{submission_id}] Publishing job via single-send")
         return await self.streamer.process_single_data(
-            request=request, send_callback=wrapped_cb
+            request=request,
+            # send_callback=wrapped_cb
+            send_callback=send_callback,
         )
 
     async def send_stream(
@@ -174,7 +176,8 @@ class GatewayJobDistributor(JobDistributor):
                 target_executor=target_exec,
                 parameters=parameters,
                 request_id=submission_id,
-                send_callback=wrapped_cb,
+                # send_callback=wrapped_cb,
+                send_callback=send_callback,
             ):
                 self.logger.info(
                     f"[{submission_id}] Stream send job published successfully"

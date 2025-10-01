@@ -273,6 +273,8 @@ class DesiredStore(BaseStore):
         yield from self.iter_desired_pairs()
 
     def upsert_scheduled(self, node: str, deployment: str) -> DesiredDoc:
+        print('upsert_scheduled for', node, deployment)
+
         d = self.get(node, deployment)
         if not d:
             # First time → create with epoch=1 (or 0 if you prefer)
@@ -334,8 +336,6 @@ class StatusStore(BaseStore):
 
         k = self._status_key(node, depl)
         existing = self._get_raw(k)
-
-        print('existing status:', existing)
         doc = StatusDoc(
             status_code=initial_status,
             status_name=_status_name(initial_status),
@@ -346,8 +346,6 @@ class StatusStore(BaseStore):
             details=None,
         )
         v = json.dumps(asdict(doc))
-
-        print('new status:', v)
         if self._tx:
             cmp_list = (
                 [self._tx.Version(k) == 0]
@@ -396,9 +394,6 @@ class StatusStore(BaseStore):
         """
         Update to a specific ServingStatus (e.g., SERVING, NOT_SERVING, UNKNOWN...).
         """
-        print('setting status for', node)
-        print('depl:', depl)
-        print('status:', status)
         k = self._status_key(node, depl)
         raw = self._get_raw(k)
 
@@ -429,7 +424,6 @@ class StatusStore(BaseStore):
         worker_id: str,
         details: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        print('setting serving for', node)
         return self.set_status(
             node, depl, worker_id, HealthCheckResponse.ServingStatus.SERVING, details
         )

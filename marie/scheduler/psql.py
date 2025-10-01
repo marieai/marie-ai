@@ -483,7 +483,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         #     self._heartbeat_loop(self.heartbeat_config)
         # )
 
-        await self.heartbeat.start()
+        # TODO : Heartbeat currently disabled
+        self.logger.warning("Heartbeat is currently disabled")
+        # await self.heartbeat.start()
+
         self._poll_task = asyncio.create_task(self._poll())
         self._cluster_state_monitor_task = asyncio.create_task(
             self.__monitor_deployment_updates()
@@ -969,7 +972,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param work_info: The information about the work item to be processed.
         :return: True if successfully dispatched and confirmed, False otherwise.
         """
-        self.logger.debug(f"Attempting to dispatch work item: {work_info.id}")
+        self.logger.info(f"Attempting to dispatch work item: {work_info.id}")
         confirmation_event = asyncio.Event()
         submission_id = work_info.id
         entrypoint = work_info.data.get("metadata", {}).get("on")

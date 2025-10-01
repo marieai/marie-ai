@@ -14,6 +14,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
+    Callable,
     Dict,
     Generator,
     List,
@@ -231,12 +232,9 @@ class WorkerRequestHandler:
         self._lease_time = 15  # default lease time
         self._heartbeat_time = 10  # default heartbeat time
 
-        self._heartbeat_thread = None
         self._etcd_client = get_etcd_client(etcd_args)
         self._lease_reacquire_lock = threading.Lock()
 
-        # --- status/desired stores & status lease ---
-        self._prefix = "marie"
         _host = self.node_info["host"]
         _port = self.node_info["port"]
         self._node = f"{_host}:{_port}"
@@ -271,10 +269,8 @@ class WorkerRequestHandler:
         self._status_hb_stop = threading.Event()
         self._hb_supervisor_stop = threading.Event()
 
-        print('self._lease_time', self._lease_time)
-        print('self._base_heartbeat: ', self._base_heartbeat)
-
-        self._set_deployment_status(self._worker_state)
+        # Claim ownership and publish explicit readiness on boot
+        self._claim_and_mark_ready()
         self.setup_heartbeat()
 
     def _http_fastapi_default_app(self, **kwargs):
@@ -1670,10 +1666,9 @@ class WorkerRequestHandler:
         self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.SERVING
 
         try:
-            await asyncio.to_thread(
-                self._set_deployment_status,
-                self._worker_state,
-            )
+            # Busy: claim with SERVING semantics immediately
+            await asyncio.to_thread(self._set_deployment_status, self._worker_state)
+
         except Exception as set_status_exc:
             self.logger.error(
                 f"Failed to set SERVING during _record_started_job: {set_status_exc}"
@@ -1708,10 +1703,8 @@ class WorkerRequestHandler:
         self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
 
         try:
-            await asyncio.to_thread(
-                self._set_deployment_status,
-                self._worker_state,
-            )
+            # Idle/ready when finished
+            await asyncio.to_thread(self._set_deployment_status, self._worker_state)
         except Exception as set_status_exc:
             self.logger.error(
                 f"Failed to set NOT_SERVING during _record_successful_job: {set_status_exc}"
@@ -1780,37 +1773,25 @@ class WorkerRequestHandler:
         self._worker_state = status
         try:
             if status == health_pb2.HealthCheckResponse.ServingStatus.SERVING:
-                if self._claim_and_mark_serving():
-                    self._start_status_heartbeat()
-                else:
-                    self.logger.warning(
-                        "Did not become owner; skipping status heartbeat."
-                    )
-
+                # Busy: ensure claim exists with SERVING semantics
+                if not self._claim_and_mark_serving():
+                    self.logger.warning("Could not claim/set SERVING; another owner?")
+                    raise RuntimeError("Could not claim/set SERVING; another owner?")
             elif status in (
                 health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING,
                 health_pb2.HealthCheckResponse.ServingStatus.SERVICE_UNKNOWN,
                 health_pb2.HealthCheckResponse.ServingStatus.UNKNOWN,
             ):
-                # Mark NOT_SERVING (or UNKNOWN/SERVICE_UNKNOWN mapped to NOT_SERVING for terminal)
-                try:
-                    self._status_store.set_not_serving(
-                        self._node, self._deployment, self._worker_id
-                    )
-                except Exception as e:
-                    self.logger.debug(f"set_not_serving error: {e}")
-                finally:
-                    self._stop_status_heartbeat()
-
+                # Idle/ready: explicitly claim and publish NOT_SERVING
+                self._claim_and_mark_ready()
             else:
-                # For any other code, try to set it directly (rare)
+                # Rare: write status directly
                 try:
                     self._status_store.set_status(
                         self._node, self._deployment, self._worker_id, status
                     )
                 except Exception as e:
                     self.logger.debug(f"set_status({name}) error: {e}")
-
         except Exception as exc:
             self.logger.error(f"Failed to reflect status '{name}' into /status: {exc}")
 
@@ -1824,14 +1805,11 @@ class WorkerRequestHandler:
         def _hb():
             while not self._status_hb_stop.is_set():
                 try:
-                    # Only heartbeat if we (think we) are serving
-                    if (
-                        self._worker_state
-                        == health_pb2.HealthCheckResponse.ServingStatus.SERVING
-                    ):
-                        self._status_store.heartbeat(
-                            self._node, self._deployment, self._worker_id
-                        )
+                    # Heartbeat regardless of SERVING/NOT_SERVING, so the gateway
+                    # continuously knows the node is alive & ready when idle.
+                    self._status_store.heartbeat(
+                        self._node, self._deployment, self._worker_id
+                    )
                 except Exception as e:
                     self.logger.error(f"status heartbeat error (non-fatal): {e}")
                 time.sleep(next_heartbeat_delay(self._base_heartbeat))
@@ -1916,8 +1894,8 @@ class WorkerRequestHandler:
 
                 time.sleep(next_heartbeat_delay(self._base_heartbeat))
 
-        self._heartbeat_thread = threading.Thread(target=_heartbeat_setup, daemon=True)
-        self._heartbeat_thread.start()
+        self._status_hb_thread = threading.Thread(target=_heartbeat_setup, daemon=True)
+        self._status_hb_thread.start()
 
     def _on_etcd_connected(self, event):
         """Handle etcd connection established."""
@@ -1925,8 +1903,13 @@ class WorkerRequestHandler:
         current_state = self._etcd_client.get_connection_state()
         self.logger.info(f"Event handler - connection state is now: {current_state}")
 
-        # we need to reacquire the lease if it was lost
-        # self.reacquire_lease()
+        try:
+            st = self._status_store.read(self._node, self._deployment)
+            if not st:
+                # Recreate a fresh NOT_SERVING doc on reconnect
+                self._claim_and_mark_ready()
+        except Exception as e:
+            self.logger.debug(f"post-reconnect reassert skipped: {e}")
 
     def _on_etcd_disconnected(self, event):
         """Handle etcd connection lost."""
@@ -1954,7 +1937,89 @@ class WorkerRequestHandler:
             f"{self._node}/{self._deployment}"
         )
 
+    def _claim_and_mark(
+        self,
+        *,
+        initial_status: HealthCheckResponse.ServingStatus,
+        final_apply: Callable[[], Any],
+        log_action: str,
+    ) -> bool:
+        """
+        Common helper to claim /status (epoch-fenced) and then apply a final status transition.
+
+        Args:
+            initial_status: Status to write as part of the claim (what the doc should be set to
+                            _during_ the claim handshake).
+            final_apply: Zero-arg callable that applies the final state (e.g., set_serving or set_not_serving).
+            log_action: Short string used in logs to indicate the action (e.g., 'claim+serving').
+
+        Returns:
+            True if we own the status doc for the current epoch and applied (or confirmed) the final state;
+            False if we couldn't claim or are out-of-epoch.
+        """
+        self.logger.info(
+            f"Request handler: {log_action} {self._node}/{self._deployment}"
+        )
+
+        d = self._desired_store.get(self._node, self._deployment)
+        if not d or d.phase != "SCHEDULED":
+            # Nothing scheduled for this node/deployment; don't write status
+            self.logger.warning("No scheduled deployment; cannot claim /status")
+            return False
+
+        # Attempt to claim with the provided initial status.
+        # This is idempotent and safe against already-claimed docs for the same owner/epoch.
+        claimed = self._status_store.claim(
+            self._node,
+            self._deployment,
+            self._worker_id,
+            d.epoch,
+            initial_status=initial_status,
+        )
+
+        # Read back to verify ownership & epoch fencing
+        st = self._status_store.read(self._node, self._deployment)
+
+        eval_cond = claimed or (
+            st and st.owner == self._worker_id and st.epoch == d.epoch
+        )
+        if eval_cond:
+            try:
+                final_apply()
+            except Exception as e:
+                # Keep this soft; the caller may decide to retry or just log.
+                self.logger.debug(f"final_apply error after claim ({log_action}): {e}")
+            return True
+
+        return False
+
     def _claim_and_mark_serving(self) -> bool:
+        """
+        Claim /status and set SERVING (busy).
+        Safe if already claimed by this worker; no-op if another owner wrote it.
+        """
+        return self._claim_and_mark(
+            initial_status=HealthCheckResponse.ServingStatus.SERVING,
+            final_apply=lambda: self._status_store.set_serving(
+                self._node, self._deployment, self._worker_id
+            ),
+            log_action="claim+serving",
+        )
+
+    def _claim_and_mark_ready(self) -> bool:
+        """
+        Claim /status and set NOT_SERVING (idle/ready).
+        Safe if already claimed by this worker; idempotent across reconnects.
+        """
+        return self._claim_and_mark(
+            initial_status=HealthCheckResponse.ServingStatus.NOT_SERVING,
+            final_apply=lambda: self._status_store.set_not_serving(
+                self._node, self._deployment, self._worker_id
+            ),
+            log_action="claim+ready",
+        )
+
+    def _claim_and_mark_servingXXXX(self) -> bool:
         """
         Claim /status (epoch-fenced) and set SERVING.
         Safe if already claimed by this worker; no-op if another owner wrote it.
@@ -1966,14 +2031,15 @@ class WorkerRequestHandler:
             self.logger.warning("No scheduled deployment; cannot claim /status")
             return False
 
-        # First claim (sets NOT_SERVING or UNKNOWN by default)
+        # Claim with correct busy semantics (avoid UNKNOWN flicker)
         claimed = self._status_store.claim(
             self._node,
             self._deployment,
             self._worker_id,
             d.epoch,
-            initial_status=HealthCheckResponse.ServingStatus.UNKNOWN,
+            initial_status=HealthCheckResponse.ServingStatus.SERVING,
         )
+
         # If claim succeeded (or the current owner is already this worker), move to SERVING
         st = self._status_store.read(self._node, self._deployment)
         print('** claimed:', claimed, 'st:', st, 'd.epoch:', d.epoch)
