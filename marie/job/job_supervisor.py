@@ -260,103 +260,27 @@ class JobSupervisor:
             except Exception as e:
                 self.logger.warning(f"Failed to signal confirmation (no loop): {e}")
 
-    def send_callbackXXXXX(self, requests, request_info):
-        job_callback_executor.submit(self._send_callback_sync, requests, request_info)
-
     def _await_worker_ack(
         self, node: str, deployment: str, epoch: int, timeout_s: float = 5.0
     ) -> bool:
         """
-        Wait up to timeout_s for the worker to write /status with matching epoch and SERVING.
+        Wait up to timeout_s for the worker to write /status with a matching epoch.
+        A matching epoch is sufficient to prove the worker has acknowledged the desired state.
         Server remains read-only for /status.
         """
         deadline = time.monotonic() + timeout_s
-        print('_await_worker_ack : ', deadline)
+        self.logger.debug(f'_await_worker_ack with deadline: {deadline}')
         while time.monotonic() < deadline:
             st = self._status_store.read(node, deployment)
-            print('JOB SUPERVISOR: status store read', st)
-            if (
-                st
-                and st.epoch == epoch
-                and st.status_code == HealthCheckResponse.ServingStatus.SERVING
-            ):
+            self.logger.debug(f'JOB SUPERVISOR: status store read {st}')
+            if st and st.epoch == epoch:
+                self.logger.debug(
+                    f'Worker ack received for epoch {epoch} with status {st.status_name}'
+                )
                 return True
             time.sleep(0.05)
-        print('JOB SUPERVISOR: timed out waiting for ack')
+        self.logger.warning('JOB SUPERVISOR: timed out waiting for ack')
         return False
-
-    def _send_callback_sync(
-        self, requests: Union[List[DataRequest] | DataRequest], request_info: Dict
-    ):
-        """
-        Callback when the job is submitted over the network to the executor.
-        MORE CORRECLY: This method is called right before sending the request to the executor before the send medhots.
-
-        :param requests: The requests that were sent.
-        :param request_info: The request info.
-        """
-        # Validate and extract
-        req = requests[0] if isinstance(requests, Sequence) and requests else requests
-        if not req:
-            self.logger.error("No valid requests provided.")
-            return
-        self.request_info = request_info
-        required = ["request_id", "address", "deployment"]
-        if not all(k in request_info for k in required):
-            self.logger.error(f"Missing required keys in request_info: {request_info}")
-            return
-
-        start = time.monotonic()
-        request_id = request_info["request_id"]
-        address = request_info["address"]
-        deployment_name = request_info["deployment"]
-        self.logger.info(f"Sent request to {address} on deployment {deployment_name}")
-
-        # Signal immediately
-        try:
-            self._signal_confirmation_threadsafe()
-        except Exception as e:
-            self.logger.warning(f"Failed to signal confirmation for {request_id}: {e}")
-
-        t_signal = time.monotonic()
-        from grpc_health.v1.health_pb2 import HealthCheckResponse
-
-        status = HealthCheckResponse.ServingStatus.SERVING
-        key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
-
-        t0 = t1 = t2 = start
-        try:
-            node = address  # node identifier, must match worker’s usage
-            desired = self._desired_store.get(node, deployment_name)
-            epoch = desired.epoch if desired else None
-            if epoch is None:
-                self.logger.warning(
-                    "No desired doc found for %s/%s; skipping ack wait",
-                    node,
-                    deployment_name,
-                )
-            else:
-                ack = self._await_worker_ack(
-                    node, deployment_name, epoch, timeout_s=3.0
-                )
-                self.logger.info(
-                    "Worker ack (SERVING) for %s/%s epoch=%s: %s",
-                    node,
-                    deployment_name,
-                    epoch,
-                    ack,
-                )
-        except Exception as e:
-            self.logger.warning("Ack wait error (ignored): %s", e)
-
-        total_duration = time.monotonic() - start
-        signal_duration = t_signal - start
-
-        self.logger.info(
-            "Callback: total=%.3fs, signal=%.3fs (no server-status write)",
-            total_duration,
-            signal_duration,
-        )
 
     async def send_callback(
         self, requests: Union[List[DataRequest] | DataRequest], request_info: Dict
@@ -422,7 +346,6 @@ class JobSupervisor:
                 # Run the ack-waiting logic in a background task so this callback can return,
                 # allowing the gRPC call to be sent.
                 asyncio.create_task(_wait_for_ack(epoch))
-
         except Exception as e:
             self.logger.error(f"failed to upsert desired for {node}/{depl}: {e}")
             # TODO: fail fast, or continue and let retry policy handle it.
