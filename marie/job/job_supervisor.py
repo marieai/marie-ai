@@ -61,8 +61,8 @@ class JobSupervisor:
 
         # K8s-style desired/status split
         self._prefix = "marie"
-        self._desired_store = DesiredStore(self._etcd_client, prefix=self._prefix)
-        self._status_store = StatusStore(self._etcd_client, prefix=self._prefix)
+        self._desired_store = DesiredStore(self._etcd_client)
+        self._status_store = StatusStore(self._etcd_client)
 
     async def ping(self) -> bool:
         """

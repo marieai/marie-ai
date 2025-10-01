@@ -1,15 +1,25 @@
 from __future__ import annotations
 
+import calendar
 import json
 import time
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 from grpc_health.v1.health_pb2 import HealthCheckResponse
 
+from marie.serve.discovery.etcd_client import EtcdClient
+
 # Key structure:
 # marie/deployments/{node}/{deployment}/desired   # gateway-only writer
 # marie/deployments/{node}/{deployment}/status    # worker-only writer
+
+
+def _tx_succeeded(ok) -> bool:
+    # etcd3-py often returns (succeeded, responses)
+    print("tx_succeeded : ", ok)
+    return ok[0] if isinstance(ok, tuple) else bool(ok)
 
 
 def _value_to_json_str(v: Any) -> str:
@@ -31,9 +41,6 @@ def _parse_iso(ts: Optional[str]) -> float:
     if not ts:
         return 0.0
     try:
-        import calendar
-        from datetime import datetime, timezone
-
         dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         return calendar.timegm(dt.timetuple())
     except Exception:
@@ -49,12 +56,14 @@ def is_stale(
     return (now_s - _parse_iso(ts_iso)) > timeout_s
 
 
-def _dkey(prefix: str, node: str, depl: str) -> str:
-    return f"{prefix}/deployments/{node}/{depl}/desired"
+def _dkey(node: str, depl: str) -> str:
+    # Removed 'prefix' argument as EtcdClient handles the namespace
+    return f"deployments/{node}/{depl}/desired"
 
 
-def _skey(prefix: str, node: str, depl: str) -> str:
-    return f"{prefix}/deployments/{node}/{depl}/status"
+def _skey(node: str, depl: str) -> str:
+    # Removed 'prefix' argument as EtcdClient handles the namespace
+    return f"deployments/{node}/{depl}/status"
 
 
 def _status_name(code: int) -> str:
@@ -132,19 +141,33 @@ class StatusDoc:
 
 
 class BaseStore:
-    def __init__(self, etcd_client, prefix: str = "marie"):
+    def __init__(self, etcd_client: EtcdClient):
         self.etcd = etcd_client
-        self.prefix = prefix.rstrip("/")
         try:
             from etcd3 import transactions as tx  # noqa
 
-            self._tx = tx
+            # self._tx = tx
+            # FIXME : We can't use TRANSACTIONS JUST YET
+            # OUR ETCD_CLIENT WRAPPER add a namespace and we don't have the TX implmemented in there yet
+            # /marie/deployments/192.168.1.21:54481/extract_executor/desired
+            # {"phase": "SCHEDULED", "epoch": 1, "params": {}, "updated_at": "2025-10-01T04:46:49Z"}"
+            # /marie/deployments/192.168.1.21:60714/extract_executor/desired
+            # {"phase": "SCHEDULED", "epoch": 1, "params": {}, "updated_at": "2025-10-01T04:49:44Z"}"
+            # /marie/deployments/192.168.1.21:65001/extract_executor/desired
+            # {"phase": "SCHEDULED", "epoch": 1, "params": {}, "updated_at": "2025-10-01T04:51:05Z"}
+            # /marie/deployments/192.168.1.21:65001/extract_executor/status
+            # {"status_code": 1, "status_name": "SERVING", "owner": "extract_executor/rep-0@192.168.1.21:65001", "epoch": 1, "updated_at":
+            #  "2025-10-01T04:51:05Z", "heartbeat_at": "2025-10-01T04:51:05Z", "details": null}
+            # /marie/gateway/marie/192.168.1.21:65001
+            # {"Op": 0, "Addr": "192.168.1.21:65001", "Metadata": "\"{\\\"extract_executor\\\": [\\\"grpc://192.168.1.21:65001\\\"]}\""}
+            self._tx = None
         except Exception:
             self._tx = None
 
     def _get_raw(self, key: str) -> Optional[bytes]:
-        # Works against your EtcdClient.get(key, metadata=True) and native etcd3
-        val, _meta = self.etcd.get(key, metadata=True)
+        # Force linearizable read (NOT serializable) so we see our own writes
+        # etcd3-py: serializable=True allows stale reads; set it to False.
+        val, _meta = self.etcd.get(key, metadata=True, serializable=False)
         if val is None:
             return None
         return val if isinstance(val, (bytes, bytearray)) else str(val).encode()
@@ -167,16 +190,21 @@ class BaseStore:
                 raise
 
     def _desired_key(self, node: str, depl: str) -> str:
-        return _dkey(self.prefix, node, depl)
+        # Call _dkey without the explicit prefix
+        return _dkey(node, depl)
 
     def _status_key(self, node: str, depl: str) -> str:
-        return _skey(self.prefix, node, depl)
+        # Call _skey without the explicit prefix
+        return _skey(node, depl)
 
     def iter_desired_pairs(self) -> Iterator[Tuple[str, str]]:
-        root = f"{self.prefix}/deployments/"
-        nested = self.etcd.get_prefix_dict(root)
+        # The key prefix for etcd_client should *not* contain the `marie` namespace,
+        # as etcd_client._mangle_key will add it.
+        # So, we pass "deployments/" and EtcdClient will turn it into "/marie/deployments/"
+        root_prefix_for_etcd_client = "deployments/"
+        nested = self.etcd.get_prefix_dict(root_prefix_for_etcd_client)
 
-        print(f'nested for : {root}')
+        print(f'nested for : {root_prefix_for_etcd_client}')
         print(nested)
 
         def _walk(d: dict, base: str):
@@ -187,11 +215,14 @@ class BaseStore:
                 else:
                     yield full
 
-        for key in _walk(nested, root.rstrip("/")):
+        # The keys yielded by _walk are already demangled and start from "deployments/"
+        for key in _walk(nested, root_prefix_for_etcd_client.rstrip('/')):
             if not key.endswith("/desired"):
                 continue
             parts = key.split("/")
             try:
+                # After demangling and splitting, parts would be like ['deployments', 'node', 'depl', 'desired']
+                # So index 1 and 2 will correctly extract node and depl
                 i = parts.index("deployments")
                 yield parts[i + 1], parts[i + 2]
             except Exception as e:
@@ -201,6 +232,9 @@ class BaseStore:
 
 class DesiredStore(BaseStore):
     """Gateway-only: desired intent/spec."""
+
+    def __init__(self, etcd_client):  # Removed 'prefix' argument
+        super().__init__(etcd_client)
 
     def set(
         self, node: str, depl: str, params: Dict[str, Any], phase: str = "SCHEDULED"
@@ -280,8 +314,8 @@ class DesiredStore(BaseStore):
 class StatusStore(BaseStore):
     """Worker-only: observed serving status with heartbeats (HealthCheckResponse)."""
 
-    def __init__(self, etcd_client, prefix: str = "marie", lease_getter=None):
-        super().__init__(etcd_client, prefix)
+    def __init__(self, etcd_client, lease_getter=None):  # Removed 'prefix' argument
+        super().__init__(etcd_client)
         self._lease_getter = lease_getter  # callable -> etcd lease (optional)
 
     def claim(
@@ -325,7 +359,15 @@ class StatusStore(BaseStore):
                     k, v, lease=(self._lease_getter() if self._lease_getter else None)
                 )
                 ok = self.etcd.transaction(compare=cmp_list, success=[put], failure=[])
-                return bool(ok)
+                succeeded = _tx_succeeded(ok)
+                print(f"TX claim result key={k} succeeded={succeeded}")
+                if succeeded:
+                    # optional sanity check
+                    if not self._get_raw(k):
+                        print(f"TX reported success but readback empty for {k}")
+                        return False
+                return succeeded
+
             except Exception as e:
                 if _is_missing_lease_error(e) and self._lease_getter:
                     put = self._tx.Put(k, v, lease=self._lease_getter())
@@ -354,8 +396,15 @@ class StatusStore(BaseStore):
         """
         Update to a specific ServingStatus (e.g., SERVING, NOT_SERVING, UNKNOWN...).
         """
+        print('setting status for', node)
+        print('depl:', depl)
+        print('status:', status)
         k = self._status_key(node, depl)
         raw = self._get_raw(k)
+
+        print('K = ', k)
+        print('raw = ', raw)
+
         if not raw:
             return False
         st = StatusDoc.from_json(raw)

@@ -30,7 +30,6 @@ def create_job_state_enum(schema: str):
       '{WorkState.EXPIRED.value}',
       '{WorkState.CANCELLED.value}',
       '{WorkState.FAILED.value}'
-      '{WorkState.LEASED.value}'
     )
     """
 

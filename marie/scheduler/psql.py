@@ -314,10 +314,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             "suspend_non_started_work.sql",
             "unsuspend_work.sql",
             "sync_job_dependencies.sql",
-            "lease_jobs.sql",
-            "release_expired_leases.sql",  # reaper to run periodically
-            "release_lease.sql",
-            "activate_from_lease.sql",
+            "lease/release_expired_leases.sql",  # reaper to run periodically
+            "lease/release_lease.sql",
+            "lease/activate_from_lease.sql",
+            "lease/clear_all_leases.sql",
+            "lease/hydrate_frontier.sql",
+            "lease/hydrate_frontier_jobs.sql",
+            "lease/lease_jobs_by_id.sql",
+            "lease/reap_expired_leases.sql",
         ]
 
         commands.extend(

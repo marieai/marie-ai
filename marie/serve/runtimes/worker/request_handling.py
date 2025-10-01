@@ -252,10 +252,9 @@ class WorkerRequestHandler:
         self._status_lease_cache = LeaseCache(
             self._etcd_client, ttl=self._lease_time, margin=1.0
         )
-        self._desired_store = DesiredStore(self._etcd_client, prefix=self._prefix)
+        self._desired_store = DesiredStore(self._etcd_client)
         self._status_store = StatusStore(
             self._etcd_client,
-            prefix=self._prefix,
             lease_getter=self._status_lease_getter,
         )
 
@@ -271,6 +270,9 @@ class WorkerRequestHandler:
         self._status_hb_thread = None
         self._status_hb_stop = threading.Event()
         self._hb_supervisor_stop = threading.Event()
+
+        print('self._lease_time', self._lease_time)
+        print('self._base_heartbeat: ', self._base_heartbeat)
 
         self._set_deployment_status(self._worker_state)
         self.setup_heartbeat()
@@ -1776,10 +1778,8 @@ class WorkerRequestHandler:
 
         # Update local state immediately
         self._worker_state = status
-        # Reflect into the worker-owned /status document
         try:
             if status == health_pb2.HealthCheckResponse.ServingStatus.SERVING:
-                # Claim current epoch & mark SERVING, then start heartbeats
                 if self._claim_and_mark_serving():
                     self._start_status_heartbeat()
                 else:
@@ -1979,8 +1979,6 @@ class WorkerRequestHandler:
         print('** claimed:', claimed, 'st:', st, 'd.epoch:', d.epoch)
         print("claimed : ", claimed)
         print("st : ", st)
-        print("d.epoch : ", d.epoch)
-        print("st.epoch : ", st.epoch)
         print('self._worker_id : ', self._worker_id)
         eval_cond = claimed or (
             st and st.owner == self._worker_id and st.epoch == d.epoch

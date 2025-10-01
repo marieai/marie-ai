@@ -4,7 +4,7 @@ import os
 import sys
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, AsyncGenerator, AsyncIterator, Dict, Optional
@@ -54,6 +54,7 @@ from marie.state.state_store import (
     DesiredStore,
     StatusDoc,
     StatusStore,
+    _now_iso,
     is_stale,
 )
 from marie.storage.kv.psql import PostgreSQLKV
@@ -62,11 +63,15 @@ from marie.types_core.request.status import StatusMessage
 from marie.utils.server_runtime import setup_auth, setup_storage, setup_toast_events
 from marie.utils.types import strtobool
 
-ROOT = "marie/deployments/"
+ROOT = "deployments/"
 
 HEARTBEAT_INTERVAL_S = 10  # worker -> status.heartbeat_at
 HEARTBEAT_TIMEOUT_S = 3 * HEARTBEAT_INTERVAL_S  # server considers dead
 RESCHEDULE_BACKOFF_S = 5  # server backoff before bumping epoch again
+
+CLAIM_TIMEOUT_S = 30  # how long you wait for a claim per epoch
+MAX_MISSES = 3  # after 5 failed epochs -> GC
+MAX_AGE_S = 30 * 60  # hard age cap (30 min)
 
 
 class EventKind(str, Enum):
@@ -224,8 +229,8 @@ class MarieServerGateway(CompositeServer):
         # we should start job scheduler after the gateway server is started
         storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
         self.etcd_client = get_etcd_client(convert_to_etcd_args(self.args))
-        self.desired_store = DesiredStore(self.etcd_client, prefix="marie")
-        self.status_store = StatusStore(self.etcd_client, prefix="marie")
+        self.desired_store = DesiredStore(self.etcd_client)
+        self.status_store = StatusStore(self.etcd_client)
 
         self.service_events_queue = asyncio.Queue(maxsize=512)
         self.state_events_queue = asyncio.Queue(maxsize=2048)  # tends to be chattier
@@ -1359,7 +1364,6 @@ class MarieServerGateway(CompositeServer):
             else:
                 # value is JSON from DesiredStore (e.g., {"phase":"SCHEDULED","epoch":123,...})
                 self.desired_map[key] = ev_value
-            # You may want to reflect into ClusterState
             ClusterState.desired = self.desired_map
         except Exception as e:
             self.logger.error(f"desired_changed error for {ev_key}: {e}")
@@ -1378,12 +1382,56 @@ class MarieServerGateway(CompositeServer):
         except Exception as e:
             self.logger.error(f"status_changed error for {ev_key}: {e}")
 
+    def _address_is_live(self, node: str) -> bool:
+        # node is "host:port"
+        # check against what your discovery currently sees
+        for _, nodes in self.deployment_nodes.items():
+            for n in nodes:
+                # n["address"] is like "grpc://host:port" or "host:port"
+                addr = n.get("address") or ""
+                if "://" in addr:
+                    addr = addr.split("://", 1)[1]
+                if addr == node:
+                    return True
+        return False
+
+    def _incr_miss_and_maybe_gc(self, node: str, depl: str, d: DesiredDoc) -> bool:
+        """Returns True if GC happened (entry removed)."""
+        # bump 'misses' counter
+        params = dict(d.params or {})
+        misses = int(params.get("misses", 0)) + 1
+        params["misses"] = misses
+        d.params = params
+        d.updated_at = _now_iso()
+        self.desired_store._put_json(
+            self.desired_store._desired_key(node, depl), asdict(d)
+        )
+
+        # hard age check
+        too_old = is_stale(d.updated_at, MAX_AGE_S)
+
+        if misses >= MAX_MISSES or too_old:
+            # only GC if the address is not currently live; this avoids killing an actually active worker that’s lagging
+            if not self._address_is_live(node):
+                self.logger.warning(
+                    f"GC misses={misses}, too_old={too_old}. Deleting desired+status subtree : {node}/{depl}"
+                )
+                # remove both desired and status for that node/depl
+                base = f"deployments/{node}/{depl}"
+                self.etcd_client.delete_prefix(base)
+                # bookkeeping maps
+                self.desired_map.pop((node, depl), None)
+                self.status_map.pop((node, depl), None)
+                ClusterState.desired = self.desired_map
+                ClusterState.status = self.status_map
+                return True
+        return False
+
     async def _reconcile_loop(self, interval_s: int = 10) -> None:
         self.logger.info("Reconcile loop starting (interval=%ss)", interval_s)
-
         while True:
             try:
-                self.logger.info(f"Reconciling")
+                self.logger.info("Reconciling")
                 for node, depl in self.desired_store.list_pairs():
                     self.logger.info(f" - reconciling {node}/{depl}")
                     d = self.desired_store.get(node, depl)
@@ -1392,19 +1440,31 @@ class MarieServerGateway(CompositeServer):
 
                     st = self.status_store.read(node, depl)
                     if not st:
-                        # Not claimed yet (or cleaned by crash) → fine; scheduler policy decides when to bump
+                        # no claim for this epoch — if it's been waiting too long, bump epoch
+                        if is_stale(d.updated_at, CLAIM_TIMEOUT_S):
+                            self.logger.warning(
+                                f"No status for {node}/{depl} epoch {d.epoch}; bumping"
+                            )
+                            self.desired_store.bump_epoch(node, depl)
+                            # count a miss and maybe GC
+                            if self._incr_miss_and_maybe_gc(node, depl, d):
+                                continue
                         continue
 
+                    # ignore status from different epoch
                     if st.epoch != d.epoch:
-                        # status from an older epoch → ignore
                         continue
 
+                    # worker considered dead?
                     if is_stale(st.heartbeat_at, HEARTBEAT_TIMEOUT_S):
-                        # Worker considered dead,  bump epoch to fence and trigger a new claim
                         self.logger.warning(
-                            f"Detected stale status for {node}/{depl} epoch {st.epoch}, bumping"
+                            f"Stale status {node}/{depl} epoch {st.epoch}; bumping"
                         )
                         self.desired_store.bump_epoch(node, depl)
+                        # count a miss and maybe GC
+                        if self._incr_miss_and_maybe_gc(node, depl, d):
+                            continue
+
             except Exception as e:
                 self.logger.error(f"Reconcile loop error: {e}", exc_info=True)
             finally:

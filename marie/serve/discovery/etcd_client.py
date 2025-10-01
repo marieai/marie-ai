@@ -810,7 +810,7 @@ class EtcdClient(object):
             raise RuntimeError(f"Failed to create prefix watch for: {key_prefix}")
 
     @reconn_reauth_adaptor
-    def get(self, key: str, metadata: bool = False) -> tuple:
+    def get(self, key: str, metadata: bool = False, serializable: bool = True) -> tuple:
         """
         Get a single key from the etcd.
         Returns ``None`` if the key does not exist.
@@ -820,11 +820,13 @@ class EtcdClient(object):
         - when metadata=False -> return decoded str (legacy behavior)
 
         :param key: The key. This must be quoted by the caller as needed.
+        :param metadata: If True, return (value_bytes, meta)
+        :param serializable: Force linearizable reads  etcd3-py: serializable=True allows stale reads; set it to False.
         :return:
         """
 
         mangled_key = self._mangle_key(key)
-        value, meta = self.client.get(mangled_key)
+        value, meta = self.client.get(mangled_key, serializable=serializable)
         if metadata:
             return value, meta  # raw bytes + meta (or (None, meta))
         return value.decode(self.encoding) if value is not None else None

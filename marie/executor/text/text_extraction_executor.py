@@ -414,7 +414,8 @@ class TextExtractionExecutorMock(MarieExecutor):
             raise RuntimeError("Mock error for testing purposes")
 
         self.logger.info(f"Sleeping for {sec} seconds : {time.time()}")
-        # time.sleep(sec)
+        sec = 10
+        time.sleep(sec)
 
         self.logger.info(f"Sleeping for {sec} seconds - done : {time.time()}")
         return {
