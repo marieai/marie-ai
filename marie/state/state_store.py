@@ -316,14 +316,27 @@ class DesiredStore(BaseStore):
         epoch: int,
         params: Optional[Dict[str, Any]] = None,
     ) -> DesiredDoc:
+        """
+        Create desired doc atomically:
+          - If key is absent -> create with epoch provided.
+          - If someone else created concurrently -> return the current stored doc (no overwrite).
+        """
+        k = self._desired_key(node, depl)
         doc = DesiredDoc(
             phase=phase,
-            epoch=epoch,
+            epoch=int(epoch),
             params=params or {},
             updated_at=_now_iso(),
         )
-        self._put_json(self._desired_key(node, depl), asdict(doc))
-        return doc
+        payload = json.dumps(asdict(doc))
+
+        # Fast path: atomic create
+        if self.etcd.put_if_absent(k, payload):
+            return doc
+
+        # Lost the race: read and return the winner (don’t clobber)
+        raw = self._get_raw(k)
+        return DesiredDoc.from_json(raw) if raw else doc
 
     def _update_phaseXXX(self, node: str, depl: str, phase: str) -> DesiredDoc:
         existing = self.get(node, depl)
