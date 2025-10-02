@@ -7,7 +7,11 @@ from marie import requests
 from marie.api.docs import AssetKeyDoc
 from marie.executor.asset_util import create_working_dir
 from marie.executor.marie_executor import MarieExecutor
-from marie.executor.request_util import get_frames_from_docs, parse_parameters
+from marie.executor.request_util import (
+    get_frames_from_docs,
+    get_payload_features,
+    parse_parameters,
+)
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.pipe.components import restore_assets, store_assets, update_existing_meta
@@ -89,11 +93,9 @@ class MetaMergeExecutor(MarieExecutor):
         frames = get_frames_from_docs(docs)
         root_asset_dir = create_working_dir(frames)
 
-        features = payload.get("features", [])
+        features = get_payload_features(payload, f_type="pipeline")
         meta_folders = [
-            str(feature.get("name"))
-            for feature in features
-            if feature.get("type") == "pipeline" and feature.get("name")
+            str(feature.get("name")) for feature in features if feature.get("name")
         ]
 
         if not meta_folders:
