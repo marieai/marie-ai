@@ -552,6 +552,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 except asyncio.TimeoutError:
                     pass
 
+                # TODO : This is legacy implemenation and will be replaces by Semphore
                 # current slots (will also be used to enforce per-executor caps DURING dispatch)
                 slots_by_executor = available_slots_by_executor(
                     ClusterState.deployments
@@ -577,6 +578,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         min_poll_period=MIN_POLL_PERIOD,
                     )
                     continue
+
+                print('slots_by_executor : ', slots_by_executor)
+                print('ClusterState.deployments : ', ClusterState.deployments)
 
                 # FETCH READY CANDIDATES (executor-agnostic)
                 # frontier should not filter by executors; let planner decide

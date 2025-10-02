@@ -14,6 +14,7 @@ import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
 from fastapi import Depends, Request
+from grpc_health.v1.health_pb2 import HealthCheckResponse
 from rich.traceback import install
 
 import marie
@@ -55,6 +56,8 @@ from marie.state.state_store import (
     StatusDoc,
     StatusStore,
     _now_iso,
+    _status_code,
+    _status_name,
     is_stale,
 )
 from marie.storage.kv.psql import PostgreSQLKV
@@ -1023,7 +1026,7 @@ class MarieServerGateway(CompositeServer):
         )
         asyncio.run_coroutine_threadsafe(self.state_events_queue.put(se), self._loop)
 
-    def _schedule_rebuild(self) -> None:
+    def _schedule_rebuild(self, update_gateway: bool = True) -> None:
         """
         Schedule a rebuild of the deployments projection with debouncing.
         Cancels any pending rebuild task and schedules a fresh one.
@@ -1042,7 +1045,9 @@ class MarieServerGateway(CompositeServer):
                 self.logger.info("Rebuilding deployments projection...")
                 ClusterState.deployment_nodes = self.deployment_nodes
                 self._rebuild_deployments_projection()
-                await self.update_gateway_streamer()
+
+                if update_gateway:
+                    await self.update_gateway_streamer()
                 self.ready_event.set()
             except asyncio.CancelledError:
                 pass
@@ -1064,7 +1069,7 @@ class MarieServerGateway(CompositeServer):
                     self.logger.warning(f"Unknown service ev_type: {ev.ev_type}")
 
                 # Always schedule a (debounced) rebuild
-                self._schedule_rebuild()
+                self._schedule_rebuild(True)
 
                 error_counter = 0
             except Exception as ex:
@@ -1081,24 +1086,40 @@ class MarieServerGateway(CompositeServer):
         error_counter = 0
         while True:
             ev: StateEvent = await self.state_events_queue.get()
+            print('process_state_events : ', ev)
+
             try:
                 if ev.kind == EventKind.DESIRED:
                     if ev.ev_type == "delete":
                         self.desired_map.pop((ev.node, ev.deployment), None)
                     else:
-                        self.desired_map[(ev.node, ev.deployment)] = ev.value
+                        self.desired_map[(ev.node, ev.deployment)] = (
+                            self._normalize_desired_event(
+                                ev.node, ev.deployment, ev.value or {}
+                            )
+                        )
                     ClusterState.desired = self.desired_map
+
                 elif ev.kind == EventKind.STATUS:
                     if ev.ev_type == "delete":
                         self.status_map.pop((ev.node, ev.deployment), None)
                     else:
-                        self.status_map[(ev.node, ev.deployment)] = ev.value
+                        self.status_map[(ev.node, ev.deployment)] = (
+                            self._normalize_status_event(
+                                ev.node, ev.deployment, ev.value or {}
+                            )
+                        )
                     ClusterState.status = self.status_map
+
                 else:
                     self.logger.warning(f"Ignoring unexpected state kind: {ev.kind}")
                     raise ValueError(f"Unexpected state kind : {ev.kind}")
 
+                # Keep legacy projections in sync
+                self._rebuild_deployments_projection()
+                # self._schedule_rebuild(False)
                 error_counter = 0
+
             except Exception as ex:
                 self.logger.error(f"State event error: {ex}", exc_info=True)
                 error_counter += 1
@@ -1108,6 +1129,75 @@ class MarieServerGateway(CompositeServer):
                 await asyncio.sleep(0.5)
             finally:
                 self.state_events_queue.task_done()
+
+    def _normalize_desired_event(self, node: str, depl: str, value: dict) -> DesiredDoc:
+        """
+        Incoming DESIRED event can be a dict or JSON string at:
+          { "<node>": { "<depl>": { ...DesiredDoc... } } }
+        """
+        inner = (value or {}).get(node, {})
+        raw = inner.get(depl, inner.get("desired", inner))
+
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode()
+        if isinstance(raw, str):
+            try:
+                data = json.loads(raw)
+            except Exception:
+                data = {}
+        elif isinstance(raw, dict):
+            data = raw
+        else:
+            data = {}
+
+        return DesiredDoc(
+            phase=str(data.get("phase") or "SCHEDULED"),
+            epoch=int(data.get("epoch") or 0),
+            params=dict(data.get("params") or {}),
+            updated_at=str(data.get("updated_at") or _now_iso()),
+        )
+
+    def _normalize_status_event(self, node: str, depl: str, value: dict) -> StatusDoc:
+        """
+        Incoming STATUS event shape (examples):
+          { "<node>": { "<depl>": { "status": "<json-string>" } } }
+          { "<node>": { "<depl>": { "status": { ... } } } }
+        We always return a StatusDoc.
+        """
+        inner = (value or {}).get(node, {})
+        exec_map = inner.get(depl, {})
+        raw_status = exec_map.get("status", exec_map)  # tolerate both shapes
+
+        if isinstance(raw_status, (bytes, bytearray)):
+            raw_status = raw_status.decode()
+        if isinstance(raw_status, str):
+            try:
+                payload = json.loads(raw_status)
+            except Exception:
+                payload = {}
+        elif isinstance(raw_status, dict):
+            payload = raw_status
+        else:
+            payload = {}
+
+        # Fill required StatusDoc fields with safe defaults if missing
+        status_code = payload.get("status_code")
+        if status_code is None and "status_name" in payload:
+            status_code = _status_code(payload["status_name"])
+        if status_code is None:
+            status_code = HealthCheckResponse.ServingStatus.SERVICE_UNKNOWN
+
+        status_name = payload.get("status_name") or _status_name(status_code)
+
+        return StatusDoc(
+            status_code=int(status_code),
+            status_name=str(status_name),
+            owner=str(payload.get("owner") or ""),
+            epoch=int(payload.get("epoch") or 0),
+            updated_at=str(payload.get("updated_at") or _now_iso()),
+            heartbeat_at=str(payload.get("heartbeat_at") or _now_iso()),
+            details=payload.get("details"),
+        )
 
     def parse_deployment_details(self, address: str, ev_value: dict) -> dict:
         # get the first executor from ev_value, we might have multiple executors in the future
@@ -1325,7 +1415,7 @@ class MarieServerGateway(CompositeServer):
             ]
 
     async def deployment_changed(self, ev_key: str, ev_type: str, ev_value: dict):
-        self.logger.debug(f"Deployment changed : {ev_key}, {ev_type}, {ev_value}")
+        self.logger.info(f"Deployment changed : {ev_key}, {ev_type}, {ev_value}")
         if ev_key == DEPLOYMENT_STATUS_PREFIX:
             return  # ignore the root key
 
@@ -1377,7 +1467,6 @@ class MarieServerGateway(CompositeServer):
             else:
                 # value is JSON from StatusStore (e.g., {"owner":"w1@node","epoch":123,"status":"SERVING","ts":...})
                 self.status_map[key] = ev_value
-            # You may want to reflect into ClusterState
             ClusterState.status = self.status_map
         except Exception as e:
             self.logger.error(f"status_changed error for {ev_key}: {e}")
@@ -1470,7 +1559,7 @@ class MarieServerGateway(CompositeServer):
             finally:
                 await asyncio.sleep(interval_s)
 
-    def _choose_status_name(self, docs: list) -> str:
+    def _choose_status_name(self, docs: list[StatusDoc]) -> str:
         """
         SERVING > NOT_SERVING > SERVICE_UNKNOWN > UNKNOWN
         """
@@ -1493,17 +1582,16 @@ class MarieServerGateway(CompositeServer):
                              'executor': '<executor>',
                              'status': '<STATUS_NAME>' } }
         """
+        print('_rebuild_deployments_projection')
         # Index status docs by deployment/executor name
         by_depl: dict[str, list[StatusDoc]] = {}
         for (_, depl), st in self.status_map.items():
             by_depl.setdefault(depl, []).append(st)
 
         new_deployments: dict[str, dict] = {}
-
         for executor, nodes in self.deployment_nodes.items():
             # One status per executor (all addresses for that executor get same status)
             status_name = self._choose_status_name(by_depl.get(executor, []))
-
             # Many nodes share same address but different endpoints; we want 1 entry per address.
             seen_addrs = set()
             for n in nodes:
@@ -1523,3 +1611,8 @@ class MarieServerGateway(CompositeServer):
         # Atomic swap to preserve old behavior
         self.deployments = new_deployments
         ClusterState.deployments = new_deployments
+
+        from marie.scheduler.util import available_slots_by_executor
+
+        slots = available_slots_by_executor(ClusterState.deployments)
+        self.logger.warning(f"Rebuilt deployments; slot summary: {slots}")

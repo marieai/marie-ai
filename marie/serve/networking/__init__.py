@@ -605,6 +605,34 @@ class GrpcConnectionPool:
         else:
             await _run_once()
 
+    async def _run_callback_bg(
+        self,
+        cb: Optional[callable],
+        requests: List["Request"],
+        ctx: Dict[str, str],
+        *cb_args,
+        timeout: float = 10.0,
+        label: str = "callback",
+    ) -> None:
+        """
+        Run a user-provided callback in the background, ignoring/logging errors.
+        Uses _safe_send_callback() for consistent timeout/error handling.
+        """
+        if cb is None:
+            return
+
+        async def _runner():
+            try:
+                await self._safe_send_callback(
+                    cb, requests, ctx, *cb_args, timeout=timeout
+                )
+            except Exception as e:
+                # Never let exceptions bubble up to the caller task.
+                self._logger.warning("%s failed (ignored): %s", label, e, exc_info=True)
+
+        # Shield so task cancellation of the caller doesn't kill the callback prematurely.
+        asyncio.create_task(asyncio.shield(_runner()))
+
     def _send_requests(
         self,
         requests: List[Request],
@@ -621,14 +649,14 @@ class GrpcConnectionPool:
         # this wraps the awaitable object from grpc as a coroutine so it can be used as a task
         # the grpc call function is not a coroutine but some _AioCall
 
-        pre_send_cb, after_send_callback, on_failure_cb = None, None, None
+        pre_send_cb, after_send_cb, on_failure_cb = None, None, None
         if isinstance(send_callback, tuple) and len(send_callback) == 3:
-            pre_send_cb, after_send_callback, on_failure_cb = send_callback
+            pre_send_cb, after_send_cb, on_failure_cb = send_callback
 
-        print('send_callback : ', send_callback)
-        print('pre_send_cb is:', pre_send_cb)
-        print('after_send_callback is:', after_send_callback)
-        print('on_failure_cb is:', on_failure_cb)
+        # print('send_callback : ', send_callback)
+        # print('pre_send_cb is:', pre_send_cb)
+        # print('after_send_cb is:', after_send_cb)
+        # print('on_failure_cb is:', on_failure_cb)
 
         if endpoint:
             metadata = metadata or {}
@@ -670,20 +698,39 @@ class GrpcConnectionPool:
                 }
 
                 try:
-                    # BEFORE the RPC (ordered; must complete before sending)
+                    # 1) BEFORE the RPC (awaited)
                     await self._safe_send_callback(
                         pre_send_cb, requests, ctx, timeout=0.25
                     )
 
-                    result = await current_connection.send_requests(
-                        requests=requests,
-                        metadata=metadata,
-                        compression=self.compression,
-                        timeout=timeout,
+                    # 2) Start the RPC and 3) start AFTER-SEND at the *same time*
+                    rpc_task = asyncio.create_task(
+                        current_connection.send_requests(
+                            requests=requests,
+                            metadata=metadata,
+                            compression=self.compression,
+                            timeout=timeout,
+                        )
                     )
-                    await self._safe_send_callback(
-                        after_send_callback, requests, ctx, result, timeout=10
-                    )
+
+                    # Fire-and-forget AFTER-SEND now, with result=None
+                    if after_send_cb is not None:
+
+                        async def _after_send_now():
+                            try:
+                                await self._safe_send_callback(
+                                    after_send_cb, requests, ctx, None, timeout=10.0
+                                )
+                            except Exception as e:
+                                self._logger.warning(
+                                    "after_send_callback (concurrent) failed (ignored): %s",
+                                    e,
+                                    exc_info=True,
+                                )
+
+                        asyncio.create_task(_after_send_now())
+                    # Await ONLY the RPC and return it
+                    result = await rpc_task
                     return result
                 except AioRpcError as e:
                     error = await self._handle_aiorpcerror(

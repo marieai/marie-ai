@@ -1807,11 +1807,42 @@ class WorkerRequestHandler:
                 try:
                     # Heartbeat regardless of SERVING/NOT_SERVING, so the gateway
                     # continuously knows the node is alive & ready when idle.
-                    self._status_store.heartbeat(
+                    ok = self._status_store.heartbeat(
                         self._node, self._deployment, self._worker_id
                     )
+                    if not ok:
+                        # Key missing or owner mismatch; re-claim and re-publish
+                        self.logger.warning(
+                            "Status heartbeat: status doc missing or owner mismatch. Re-claiming and re-publishing."
+                        )
+                        try:
+                            if (
+                                self._worker_state
+                                == health_pb2.HealthCheckResponse.ServingStatus.SERVING
+                            ):
+                                self._claim_and_mark_serving()
+                            else:
+                                self._claim_and_mark_ready()
+                        except Exception as e2:
+                            self.logger.error(f"status heartbeat recovery failed: {e2}")
                 except Exception as e:
-                    self.logger.error(f"status heartbeat error (non-fatal): {e}")
+                    # If lease is missing/expired, attempt to re-claim and re-publish current state
+                    if _is_missing_lease_error(e):
+                        self.logger.warning(
+                            "Status heartbeat: lease missing/expired. Re-claiming and re-publishing status."
+                        )
+                        try:
+                            if (
+                                self._worker_state
+                                == health_pb2.HealthCheckResponse.ServingStatus.SERVING
+                            ):
+                                self._claim_and_mark_serving()
+                            else:
+                                self._claim_and_mark_ready()
+                        except Exception as e2:
+                            self.logger.error(f"status heartbeat recovery failed: {e2}")
+                    else:
+                        self.logger.error(f"status heartbeat error (non-fatal): {e}")
                 time.sleep(next_heartbeat_delay(self._base_heartbeat))
 
         self._etcd_client.add_connection_event_handler(
@@ -2018,44 +2049,6 @@ class WorkerRequestHandler:
             ),
             log_action="claim+ready",
         )
-
-    def _claim_and_mark_servingXXXX(self) -> bool:
-        """
-        Claim /status (epoch-fenced) and set SERVING.
-        Safe if already claimed by this worker; no-op if another owner wrote it.
-        """
-        self.logger.info(f"Request handler: claiming {self._node}/{self._deployment}")
-        d = self._desired_store.get(self._node, self._deployment)
-        if not d or d.phase != "SCHEDULED":
-            # Nothing scheduled for this node/deployment; don't write status
-            self.logger.warning("No scheduled deployment; cannot claim /status")
-            return False
-
-        # Claim with correct busy semantics (avoid UNKNOWN flicker)
-        claimed = self._status_store.claim(
-            self._node,
-            self._deployment,
-            self._worker_id,
-            d.epoch,
-            initial_status=HealthCheckResponse.ServingStatus.SERVING,
-        )
-
-        # If claim succeeded (or the current owner is already this worker), move to SERVING
-        st = self._status_store.read(self._node, self._deployment)
-        print('** claimed:', claimed, 'st:', st, 'd.epoch:', d.epoch)
-        print("claimed : ", claimed)
-        print("st : ", st)
-        print('self._worker_id : ', self._worker_id)
-        eval_cond = claimed or (
-            st and st.owner == self._worker_id and st.epoch == d.epoch
-        )
-        print('** eval_cond:', eval_cond)
-        if eval_cond:
-            self._status_store.set_serving(
-                self._node, self._deployment, self._worker_id
-            )
-            return True
-        return False
 
     def _start_status_heartbeat(self):
         """Enable the existing heartbeat loop started in setup_heartbeat()."""

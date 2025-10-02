@@ -166,18 +166,16 @@ class BaseStore:
 
     def _get_raw(self, key: str) -> Optional[bytes]:
         # Force linearizable read (NOT serializable) so we see our own writes
-        # etcd3-py: serializable=True allows stale reads; set it to False.
         val, _meta = self.etcd.get(key, metadata=True, serializable=False)
         if val is None:
             return None
         return val if isinstance(val, (bytes, bytearray)) else str(val).encode()
 
     def _put_json(self, key: str, obj: Dict[str, Any]) -> None:
-        print('putting json to', key, obj)
         self.etcd.put(key, json.dumps(obj))
 
     def _put_json_with_lease(self, key: str, obj: Dict[str, Any], lease_getter) -> None:
-        print('putting json with lease to', key, obj)
+        # print('putting json with lease to', key, obj)
         payload = json.dumps(obj)
         lease = lease_getter()  # etcd3.Lease
         try:
@@ -190,22 +188,14 @@ class BaseStore:
                 raise
 
     def _desired_key(self, node: str, depl: str) -> str:
-        # Call _dkey without the explicit prefix
         return _dkey(node, depl)
 
     def _status_key(self, node: str, depl: str) -> str:
-        # Call _skey without the explicit prefix
         return _skey(node, depl)
 
     def iter_desired_pairs(self) -> Iterator[Tuple[str, str]]:
-        # The key prefix for etcd_client should *not* contain the `marie` namespace,
-        # as etcd_client._mangle_key will add it.
-        # So, we pass "deployments/" and EtcdClient will turn it into "/marie/deployments/"
         root_prefix_for_etcd_client = "deployments/"
         nested = self.etcd.get_prefix_dict(root_prefix_for_etcd_client)
-
-        print(f'nested for : {root_prefix_for_etcd_client}')
-        print(nested)
 
         def _walk(d: dict, base: str):
             for k, v in d.items():
@@ -256,6 +246,8 @@ class DesiredStore(BaseStore):
     def get(self, node: str, depl: str) -> Optional[DesiredDoc]:
         k = self._desired_key(node, depl)
         raw = self._get_raw(k)
+        print(' get   k = ', k)
+        print(' get raw = ', raw)
         return DesiredDoc.from_json(raw) if raw else None
 
     def bump_epoch(self, node: str, depl: str) -> Optional[DesiredDoc]:
@@ -272,7 +264,7 @@ class DesiredStore(BaseStore):
     def list_pairs(self) -> Iterator[Tuple[str, str]]:
         yield from self.iter_desired_pairs()
 
-    def upsert_scheduled(self, node: str, deployment: str) -> DesiredDoc:
+    def upsert_scheduledXXXX(self, node: str, deployment: str) -> DesiredDoc:
         print('upsert_scheduled for', node, deployment)
 
         d = self.get(node, deployment)
@@ -283,6 +275,32 @@ class DesiredStore(BaseStore):
             # Transition to SCHEDULED but keep epoch (important to avoid fencing mismatch)
             return self._update_phase(node, deployment, phase="SCHEDULED")
         return d
+
+    def schedule_new_epoch(
+        self, node: str, depl: str, params: Optional[Dict[str, Any]] = None
+    ) -> DesiredDoc:
+        """
+        Bump epoch and set phase=SCHEDULED every time we schedule a new job.
+        Creates the doc with epoch=1 if it doesn't exist.
+        """
+        k = self._desired_key(node, depl)
+        raw = self._get_raw(k)
+
+        if not raw:
+            # First intent for this (node,depl)
+            return self._create(
+                node, depl, phase="SCHEDULED", epoch=1, params=params or {}
+            )
+
+        doc = DesiredDoc.from_json(raw)
+        doc.epoch += 1
+        doc.phase = "SCHEDULED"
+        if params:
+            # allow caller to include job-specific params (optional)
+            doc.params = {**(doc.params or {}), **params}
+        doc.updated_at = _now_iso()
+        self._put_json(k, asdict(doc))
+        return doc
 
     def _create(
         self,
@@ -328,12 +346,64 @@ class StatusStore(BaseStore):
         epoch: int,
         initial_status: int = HealthCheckResponse.ServingStatus.NOT_SERVING,
     ) -> bool:
+
+        k = self._status_key(node, depl)
+        existing = self._get_raw(k)
+
+        new_doc = lambda e: StatusDoc(
+            status_code=initial_status,
+            status_name=_status_name(initial_status),
+            owner=worker_id,
+            epoch=e,
+            updated_at=_now_iso(),
+            heartbeat_at=_now_iso(),
+            details=None,
+        )
+
+        if not existing:
+            doc = new_doc(epoch)
+            if self._lease_getter:
+                self._put_json_with_lease(k, asdict(doc), self._lease_getter)
+            else:
+                self._put_json(k, asdict(doc))
+            return True
+
+        st = StatusDoc.from_json(existing)
+
+        # Same owner + same epoch -> idempotent success
+        if st.owner == worker_id and st.epoch == epoch:
+            # Ensure lease is refreshed and timestamps updated a bit
+            st.updated_at = _now_iso()
+            if self._lease_getter:
+                self._put_json_with_lease(k, asdict(st), self._lease_getter)
+            else:
+                self._put_json(k, asdict(st))
+            return True
+
+        # Same owner + lower epoch -> roll forward to new epoch
+        if st.owner == worker_id and st.epoch < epoch:
+            doc = new_doc(epoch)
+            if self._lease_getter:
+                self._put_json_with_lease(k, asdict(doc), self._lease_getter)
+            else:
+                self._put_json(k, asdict(doc))
+            return True
+
+        # Different owner or future epoch owned elsewhere -> fail (fencing)
+        return False
+
+    def claim_SINGLE_EPOCH(
+        self,
+        node: str,
+        depl: str,
+        worker_id: str,
+        epoch: int,
+        initial_status: int = HealthCheckResponse.ServingStatus.NOT_SERVING,
+    ) -> bool:
         """
         First write of status for this epoch. Best-effort CAS if supported.
         Default initial status is NOT_SERVING (worker booting / not yet handling).
         """
-        print('claiming status for', node)
-
         k = self._status_key(node, depl)
         existing = self._get_raw(k)
         doc = StatusDoc(
@@ -347,6 +417,8 @@ class StatusStore(BaseStore):
         )
         v = json.dumps(asdict(doc))
         if self._tx:
+            if True:
+                raise NotImplementedError
             cmp_list = (
                 [self._tx.Version(k) == 0]
                 if not existing
@@ -396,10 +468,6 @@ class StatusStore(BaseStore):
         """
         k = self._status_key(node, depl)
         raw = self._get_raw(k)
-
-        print('K = ', k)
-        print('raw = ', raw)
-
         if not raw:
             return False
         st = StatusDoc.from_json(raw)
@@ -487,4 +555,7 @@ class StatusStore(BaseStore):
     def read(self, node: str, depl: str) -> Optional[StatusDoc]:
         k = self._status_key(node, depl)
         raw = self._get_raw(k)
+        print('read : k ', k)
+        print('read : raw ', raw)
+
         return StatusDoc.from_json(raw) if raw else None

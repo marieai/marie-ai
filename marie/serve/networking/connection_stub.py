@@ -182,7 +182,6 @@ class _ConnectionStubs:
         if not self._initialized:
             await self._init_stubs()
         request_type = type(requests[0])
-
         timer = self._get_metric_timer()
         if request_type == DataRequest and len(requests) == 1:
             request = requests[0]
