@@ -579,8 +579,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
                     continue
 
-                print('slots_by_executor : ', slots_by_executor)
-                print('ClusterState.deployments : ', ClusterState.deployments)
+                print('scheduler - slots_by_executor : ', slots_by_executor)
+                print(
+                    'scheduler - ClusterState.deployments : ', ClusterState.deployments
+                )
 
                 # FETCH READY CANDIDATES (executor-agnostic)
                 # frontier should not filter by executors; let planner decide

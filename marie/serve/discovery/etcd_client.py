@@ -10,6 +10,7 @@ from urllib.parse import quote as _quote
 import etcd3
 import grpc
 from etcd3 import MultiEndpointEtcd3Client
+from etcd3 import transactions as tx
 from etcd3.client import Etcd3Client
 
 from marie.excepts import RuntimeFailToStart
@@ -26,6 +27,50 @@ from marie.serve.discovery.util import (
 __all__ = ["EtcdClient", "Event"]
 Event = namedtuple("Event", "key event value")
 quote = functools.partial(_quote, safe="")
+
+
+def _cmp_op(cmp_obj, op: str, rhs):
+    """
+    Map string operator to etcd3 transactions comparator.
+    Supported by etcd: '==', '!=', '<', '>'
+    """
+    if op == "==":
+        return cmp_obj == rhs
+    elif op == "!=":
+        return cmp_obj != rhs
+    elif op == "<":
+        return cmp_obj < rhs
+    elif op == ">":
+        return cmp_obj > rhs
+    else:
+        raise ValueError(
+            f"Unsupported comparator op for etcd: {op!r}. "
+            "Use one of '==', '!=', '<', '>'"
+        )
+
+
+def _prefix_end_key(start_key_bytes: bytes) -> bytes:
+    """
+    Compute the exclusive range end for a key prefix, as required by etcd range deletes.
+    Standard trick: bump the last byte (or append 0x00 if all 0xFF).
+    """
+    s = bytearray(start_key_bytes)
+    for i in range(len(s) - 1, -1, -1):
+        if s[i] != 0xFF:
+            s[i] += 1
+            return bytes(s[: i + 1])
+    # all 0xFF
+    return start_key_bytes + b'\x00'
+
+
+def _pref_end(b: bytes) -> bytes:
+    """Compute range_end for prefix range deletes."""
+    s = bytearray(b)
+    for i in range(len(s) - 1, -1, -1):
+        if s[i] != 0xFF:
+            s[i] += 1
+            return bytes(s[: i + 1])
+    return b + b"\x00"
 
 
 class EtcdClient(object):
@@ -454,9 +499,28 @@ class EtcdClient(object):
             raise
 
     def _mangle_key(self, key: str) -> bytes:
+        """
+        Turn a logical key like 'foo/bar' into b'/{ns}/foo/bar'.
+
+        Idempotent:
+          - '/{ns}/foo' → b'/{ns}/foo'
+          - 'foo'       → b'/{ns}/foo'
+          - '/foo'      → b'/{ns}/foo'
+        """
+        if not isinstance(key, str):
+            key = str(key)
+
+        ns_prefix = f"/{self.ns}/"
+
+        # If caller passed a full path beginning with '/{ns}/', strip it to avoid double namespace
+        if key.startswith(ns_prefix):
+            key = key[len(ns_prefix) :]
+
+        # If caller passed any leading slash, drop it (we add ours)
         if key.startswith("/"):
             key = key[1:]
-        return f"/{self.ns}/{key}".encode(self.encoding)
+
+        return f"{ns_prefix}{key}".encode(self.encoding)
 
     def _demangle_key(self, k: Union[bytes, str]) -> str:
         if isinstance(k, bytes):
@@ -465,6 +529,196 @@ class EtcdClient(object):
         if k.startswith(prefix):
             k = k[len(prefix) :]
         return k
+
+    class Txn:
+        """
+        Fluent transaction builder for EtcdClient.
+        Usage:
+            with client.txn() as t:
+                (t.if_missing("locks/mykey")
+                   .put("locks/mykey", owner_id, lease=my_lease.id))
+            ok, resp = t.commit()
+        """
+
+        def __init__(self, outer: "EtcdClient"):
+            self._outer = outer
+            self._cmp = []
+            self._then = []
+            self._else = []
+            self._committed = False
+
+        def if_value(
+            self, key: str, op: str, value: Union[str, bytes]
+        ) -> "EtcdClient.Txn":
+            mk = self._outer._mangle_key(key)
+            vb = (
+                value
+                if isinstance(value, (bytes, bytearray))
+                else str(value).encode(self._outer.encoding)
+            )
+            c = tx.Value(mk)
+            self._cmp.append(_cmp_op(c, op, vb))
+            return self
+
+        def if_version(self, key: str, op: str, ver: int) -> "EtcdClient.Txn":
+            mk = self._outer._mangle_key(key)
+            c = tx.Version(mk)
+            self._cmp.append(_cmp_op(c, op, ver))
+            return self
+
+        def if_mod_revision(self, key: str, op: str, rev: int) -> "EtcdClient.Txn":
+            mk = self._outer._mangle_key(key)
+            c = tx.Mod(mk)
+            self._cmp.append(_cmp_op(c, op, rev))
+            return self
+
+        def if_create_revision(self, key: str, op: str, rev: int) -> "EtcdClient.Txn":
+            mk = self._outer._mangle_key(key)
+            c = tx.Create(mk)
+            self._cmp.append(_cmp_op(c, op, rev))
+            return self
+
+        def if_exists(self, key: str) -> "EtcdClient.Txn":
+            # version(key) > 0 is a common idiom for "exists"
+            return self.if_version(key, ">", 0)
+
+        def if_missing(self, key: str) -> "EtcdClient.Txn":
+            # version(key) == 0 means "not created yet"
+            return self.if_version(key, "==", 0)
+
+        def put(
+            self,
+            key: str,
+            val: Union[str, bytes],
+            *,
+            lease=None,
+            else_branch: bool = False,
+        ) -> "EtcdClient.Txn":
+            mk = self._outer._mangle_key(key)
+            vb = (
+                val
+                if isinstance(val, (bytes, bytearray))
+                else str(val).encode(self._outer.encoding)
+            )
+            op = tx.Put(mk, vb, lease=lease)
+            (self._else if else_branch else self._then).append(op)
+            return self
+
+        def delete(self, key: str, *, else_branch: bool = False) -> "EtcdClient.Txn":
+            mk = self._outer._mangle_key(key)
+            op = tx.Delete(mk)
+            (self._else if else_branch else self._then).append(op)
+            return self
+
+        def delete_prefix(
+            self, key_prefix: str, *, else_branch: bool = False
+        ) -> "EtcdClient.Txn":
+            start = self._outer._mangle_key(key_prefix)
+            end = _prefix_end_key(start)
+            op = tx.Delete(start, range_end=end)
+            (self._else if else_branch else self._then).append(op)
+            return self
+
+        def then(self) -> List[Any]:
+            return self._then
+
+        def otherwise(self) -> List[Any]:
+            return self._else
+
+        def commit(self) -> Tuple[bool, list]:
+            if self._committed:
+                raise RuntimeError("Transaction already committed.")
+            self._committed = True
+            return self._outer.transaction(self._cmp, self._then, self._else)
+
+        def __enter__(self) -> "EtcdClient.Txn":
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            # do not auto-commit on exceptions
+            return False
+
+    def txn(self) -> "EtcdClient.Txn":
+        """Create a new fluent transaction builder."""
+        return EtcdClient.Txn(self)
+
+    @reconn_reauth_adaptor
+    def put_if_absent(self, key: str, val: Union[str, bytes], lease=None) -> bool:
+        """
+        Atomically create key if it does not exist.
+        Returns True if created, False if already present.
+        """
+        with self.txn() as t:
+            t.if_missing(key).put(key, val, lease=lease)
+            ok, _ = t.commit()
+            return bool(ok)
+
+    @reconn_reauth_adaptor
+    def compare_and_set(
+        self, key: str, expected: Union[str, bytes], new: Union[str, bytes], lease=None
+    ) -> bool:
+        """
+        CAS based on value equality.
+        Returns True if swapped, False if current value != expected or key missing.
+        """
+        with self.txn() as t:
+            t.if_value(key, "==", expected).put(key, new, lease=lease)
+            ok, _ = t.commit()
+            return bool(ok)
+
+    @reconn_reauth_adaptor
+    def update_if_unchanged(
+        self, key: str, new: Union[str, bytes], mod_revision: int, lease=None
+    ) -> bool:
+        """
+        CAS based on mod_revision (optimistic concurrency).
+        Returns True if swapped, False if key changed since caller read it.
+        """
+        with self.txn() as t:
+            t.if_mod_revision(key, "==", mod_revision).put(key, new, lease=lease)
+            ok, _ = t.commit()
+            return bool(ok)
+
+    @reconn_reauth_adaptor
+    def increment(
+        self,
+        key: str,
+        delta: int = 1,
+        *,
+        create_default: int = 0,
+        max_retries: int = 16,
+    ) -> int:
+        """
+        Atomic integer increment implemented as a read+CAS loop using mod_revision.
+        Returns the new integer value on success. Raises on exhaustion.
+        """
+        tries = 0
+        while True:
+            tries += 1
+            val_bytes, meta = self.get(key, metadata=True, serializable=False)
+            if val_bytes is None:
+                # try to create
+                target = int(create_default) + int(delta)
+                if self.put_if_absent(key, str(target)):
+                    return target
+                # someone beat us, retry
+            else:
+                cur_s = val_bytes.decode(self.encoding).strip()
+                try:
+                    cur = int(cur_s)
+                except ValueError:
+                    raise ValueError(
+                        f"increment() expects integer value at '{key}', found: {cur_s!r}"
+                    )
+                new_val = cur + int(delta)
+                if self.update_if_unchanged(key, str(new_val), meta.mod_revision):
+                    return new_val
+
+            if tries >= max_retries:
+                raise RuntimeError(
+                    f"increment() failed after {max_retries} CAS attempts for key '{key}'"
+                )
+            time.sleep(0.01 * tries)  # small backoff
 
     def call(self, method, *args, **kwargs):
         """Etcd operation proxy method with improved failover."""
@@ -810,7 +1064,9 @@ class EtcdClient(object):
             raise RuntimeError(f"Failed to create prefix watch for: {key_prefix}")
 
     @reconn_reauth_adaptor
-    def get(self, key: str, metadata: bool = False, serializable: bool = True) -> tuple:
+    def get(
+        self, key: str, metadata: bool = False, serializable: bool = True
+    ) -> tuple | str | None:
         """
         Get a single key from the etcd.
         Returns ``None`` if the key does not exist.

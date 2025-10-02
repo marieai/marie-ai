@@ -1,59 +1,19 @@
 from __future__ import annotations
 
-import calendar
 import json
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 from grpc_health.v1.health_pb2 import HealthCheckResponse
 
 from marie.serve.discovery.etcd_client import EtcdClient
 
+from .base import BaseStore, _now_iso, _tx_succeeded
+
 # Key structure:
 # marie/deployments/{node}/{deployment}/desired   # gateway-only writer
 # marie/deployments/{node}/{deployment}/status    # worker-only writer
-
-
-def _tx_succeeded(ok) -> bool:
-    # etcd3-py often returns (succeeded, responses)
-    print("tx_succeeded : ", ok)
-    return ok[0] if isinstance(ok, tuple) else bool(ok)
-
-
-def _value_to_json_str(v: Any) -> str:
-    if v is None:
-        return "{}"
-    if isinstance(v, (bytes, bytearray)):
-        return v.decode()
-    if isinstance(v, str):
-        return v
-    # etcd resolver sometimes surfaces parsed dicts; standardize
-    return json.dumps(v)
-
-
-def _now_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-def _parse_iso(ts: Optional[str]) -> float:
-    if not ts:
-        return 0.0
-    try:
-        dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-        return calendar.timegm(dt.timetuple())
-    except Exception:
-        return 0.0
-
-
-def is_stale(
-    ts_iso: Optional[str], timeout_s: float, now_s: Optional[float] = None
-) -> bool:
-    if timeout_s <= 0:
-        return False
-    now_s = time.time() if now_s is None else now_s
-    return (now_s - _parse_iso(ts_iso)) > timeout_s
 
 
 def _dkey(node: str, depl: str) -> str:
@@ -140,58 +100,113 @@ class StatusDoc:
         return cls(**data)
 
 
-class BaseStore:
-    def __init__(self, etcd_client: EtcdClient):
-        self.etcd = etcd_client
-        try:
-            from etcd3 import transactions as tx  # noqa
+class DesiredStore(BaseStore):
+    """Gateway-only: desired intent/spec."""
 
-            # self._tx = tx
-            # FIXME : We can't use TRANSACTIONS JUST YET
-            # OUR ETCD_CLIENT WRAPPER add a namespace and we don't have the TX implmemented in there yet
-            # /marie/deployments/192.168.1.21:54481/extract_executor/desired
-            # {"phase": "SCHEDULED", "epoch": 1, "params": {}, "updated_at": "2025-10-01T04:46:49Z"}"
-            # /marie/deployments/192.168.1.21:60714/extract_executor/desired
-            # {"phase": "SCHEDULED", "epoch": 1, "params": {}, "updated_at": "2025-10-01T04:49:44Z"}"
-            # /marie/deployments/192.168.1.21:65001/extract_executor/desired
-            # {"phase": "SCHEDULED", "epoch": 1, "params": {}, "updated_at": "2025-10-01T04:51:05Z"}
-            # /marie/deployments/192.168.1.21:65001/extract_executor/status
-            # {"status_code": 1, "status_name": "SERVING", "owner": "extract_executor/rep-0@192.168.1.21:65001", "epoch": 1, "updated_at":
-            #  "2025-10-01T04:51:05Z", "heartbeat_at": "2025-10-01T04:51:05Z", "details": null}
-            # /marie/gateway/marie/192.168.1.21:65001
-            # {"Op": 0, "Addr": "192.168.1.21:65001", "Metadata": "\"{\\\"extract_executor\\\": [\\\"grpc://192.168.1.21:65001\\\"]}\""}
-            self._tx = None
-        except Exception:
-            self._tx = None
-
-    def _get_raw(self, key: str) -> Optional[bytes]:
-        # Force linearizable read (NOT serializable) so we see our own writes
-        val, _meta = self.etcd.get(key, metadata=True, serializable=False)
-        if val is None:
-            return None
-        return val if isinstance(val, (bytes, bytearray)) else str(val).encode()
-
-    def _put_json(self, key: str, obj: Dict[str, Any]) -> None:
-        self.etcd.put(key, json.dumps(obj))
-
-    def _put_json_with_lease(self, key: str, obj: Dict[str, Any], lease_getter) -> None:
-        # print('putting json with lease to', key, obj)
-        payload = json.dumps(obj)
-        lease = lease_getter()  # etcd3.Lease
-        try:
-            self.etcd.put(key, payload, lease=lease)
-        except Exception as e:
-            if _is_missing_lease_error(e):
-                lease = lease_getter()
-                self.etcd.put(key, payload, lease=lease)
-            else:
-                raise
+    def __init__(self, etcd_client):  # Removed 'prefix' argument
+        super().__init__(etcd_client)
 
     def _desired_key(self, node: str, depl: str) -> str:
         return _dkey(node, depl)
 
-    def _status_key(self, node: str, depl: str) -> str:
-        return _skey(node, depl)
+    def setXXX(
+        self, node: str, depl: str, params: Dict[str, Any], phase: str = "SCHEDULED"
+    ) -> DesiredDoc:
+        k = self._desired_key(node, depl)
+        cur = self._get_raw(k)
+        epoch = 0
+        if cur:
+            try:
+                epoch = int(json.loads(cur.decode()).get("epoch", 0))
+            except Exception:
+                pass
+        doc = DesiredDoc(
+            phase=phase, epoch=epoch + 1, params=params or {}, updated_at=_now_iso()
+        )
+        self._put_json(k, asdict(doc))
+        return doc
+
+    def set(
+        self, node: str, depl: str, params: Dict[str, Any], phase: str = "SCHEDULED"
+    ) -> DesiredDoc:
+        """
+        Create or update desired with an atomic epoch bump using CAS on mod_revision.
+        """
+        k = self._desired_key(node, depl)
+
+        # Fast path: if missing -> create epoch=1
+        val, meta = self.etcd.get(k, metadata=True, serializable=False)
+        if val is None:
+            doc = DesiredDoc(
+                phase=phase, epoch=1, params=params or {}, updated_at=_now_iso()
+            )
+            if self.etcd.put_if_absent(k, json.dumps(asdict(doc))):
+                return doc
+            # someone raced us; fall through to CAS loop
+
+        # CAS loop on mod_revision
+        for _ in range(8):
+            val, meta = self.etcd.get(k, metadata=True, serializable=False)
+            if val is None:
+                # try to create again (another race may have deleted)
+                doc = DesiredDoc(
+                    phase=phase, epoch=1, params=params or {}, updated_at=_now_iso()
+                )
+                if self.etcd.put_if_absent(k, json.dumps(asdict(doc))):
+                    return doc
+                continue
+
+            cur = DesiredDoc.from_json(val)
+            cur.epoch += 1
+            cur.phase = phase
+            cur.params = params or {}
+            cur.updated_at = _now_iso()
+
+            if self.etcd.update_if_unchanged(
+                k, json.dumps(asdict(cur)), meta.mod_revision
+            ):
+                return cur
+
+            # lost the race; retry
+            time.sleep(0.01)
+        raise RuntimeError(f"DesiredStore.set CAS failed repeatedly for {k}")
+
+    def get(self, node: str, depl: str) -> Optional[DesiredDoc]:
+        k = self._desired_key(node, depl)
+        raw = self._get_raw(k)
+        print(' get   k = ', k)
+        print(' get raw = ', raw)
+        return DesiredDoc.from_json(raw) if raw else None
+
+    def bump_epochXXX(self, node: str, depl: str) -> Optional[DesiredDoc]:
+        k = self._desired_key(node, depl)
+        raw = self._get_raw(k)
+        if not raw:
+            return None
+        d = DesiredDoc.from_json(raw)
+        d.epoch += 1
+        d.updated_at = _now_iso()
+        self._put_json(k, asdict(d))
+        return d
+
+    def bump_epoch(self, node: str, depl: str) -> Optional[DesiredDoc]:
+        """
+        Strict atomic epoch++ without altering phase/params.
+        """
+        k = self._desired_key(node, depl)
+        for _ in range(8):
+            val, meta = self.etcd.get(k, metadata=True, serializable=False)
+            if val is None:
+                return None
+            cur = DesiredDoc.from_json(val)
+            cur.epoch += 1
+            cur.updated_at = _now_iso()
+            if self.etcd.update_if_unchanged(
+                k, json.dumps(asdict(cur)), meta.mod_revision
+            ):
+                return cur
+            time.sleep(0.01)
+        return None
 
     def iter_desired_pairs(self) -> Iterator[Tuple[str, str]]:
         root_prefix_for_etcd_client = "deployments/"
@@ -219,64 +234,10 @@ class BaseStore:
                 print('Error parsing key:', key, e)
                 continue
 
-
-class DesiredStore(BaseStore):
-    """Gateway-only: desired intent/spec."""
-
-    def __init__(self, etcd_client):  # Removed 'prefix' argument
-        super().__init__(etcd_client)
-
-    def set(
-        self, node: str, depl: str, params: Dict[str, Any], phase: str = "SCHEDULED"
-    ) -> DesiredDoc:
-        k = self._desired_key(node, depl)
-        cur = self._get_raw(k)
-        epoch = 0
-        if cur:
-            try:
-                epoch = int(json.loads(cur.decode()).get("epoch", 0))
-            except Exception:
-                pass
-        doc = DesiredDoc(
-            phase=phase, epoch=epoch + 1, params=params or {}, updated_at=_now_iso()
-        )
-        self._put_json(k, asdict(doc))
-        return doc
-
-    def get(self, node: str, depl: str) -> Optional[DesiredDoc]:
-        k = self._desired_key(node, depl)
-        raw = self._get_raw(k)
-        print(' get   k = ', k)
-        print(' get raw = ', raw)
-        return DesiredDoc.from_json(raw) if raw else None
-
-    def bump_epoch(self, node: str, depl: str) -> Optional[DesiredDoc]:
-        k = self._desired_key(node, depl)
-        raw = self._get_raw(k)
-        if not raw:
-            return None
-        d = DesiredDoc.from_json(raw)
-        d.epoch += 1
-        d.updated_at = _now_iso()
-        self._put_json(k, asdict(d))
-        return d
-
     def list_pairs(self) -> Iterator[Tuple[str, str]]:
         yield from self.iter_desired_pairs()
 
-    def upsert_scheduledXXXX(self, node: str, deployment: str) -> DesiredDoc:
-        print('upsert_scheduled for', node, deployment)
-
-        d = self.get(node, deployment)
-        if not d:
-            # First time → create with epoch=1 (or 0 if you prefer)
-            return self._create(node, deployment, phase="SCHEDULED", epoch=1, params={})
-        if d.phase != "SCHEDULED":
-            # Transition to SCHEDULED but keep epoch (important to avoid fencing mismatch)
-            return self._update_phase(node, deployment, phase="SCHEDULED")
-        return d
-
-    def schedule_new_epoch(
+    def schedule_new_epochXXX(
         self, node: str, depl: str, params: Optional[Dict[str, Any]] = None
     ) -> DesiredDoc:
         """
@@ -302,6 +263,51 @@ class DesiredStore(BaseStore):
         self._put_json(k, asdict(doc))
         return doc
 
+    def schedule_new_epoch(
+        self, node: str, depl: str, params: Optional[Dict[str, Any]] = None
+    ) -> DesiredDoc:
+        """
+        Atomic: if missing -> create epoch=1; else epoch++, phase=SCHEDULED, merge params.
+        """
+        k = self._desired_key(node, depl)
+        val, meta = self.etcd.get(k, metadata=True, serializable=False)
+        if val is None:
+            doc = DesiredDoc(
+                phase="SCHEDULED", epoch=1, params=params or {}, updated_at=_now_iso()
+            )
+            if self.etcd.put_if_absent(k, json.dumps(asdict(doc))):
+                return doc
+            # raced; fall through
+
+        for _ in range(8):
+            val, meta = self.etcd.get(k, metadata=True, serializable=False)
+            if val is None:
+                # create again in case it was deleted
+                doc = DesiredDoc(
+                    phase="SCHEDULED",
+                    epoch=1,
+                    params=params or {},
+                    updated_at=_now_iso(),
+                )
+                if self.etcd.put_if_absent(k, json.dumps(asdict(doc))):
+                    return doc
+                time.sleep(0.01)
+                continue
+
+            cur = DesiredDoc.from_json(val)
+            cur.epoch += 1
+            cur.phase = "SCHEDULED"
+            if params:
+                cur.params = {**(cur.params or {}), **params}
+            cur.updated_at = _now_iso()
+
+            if self.etcd.update_if_unchanged(
+                k, json.dumps(asdict(cur)), meta.mod_revision
+            ):
+                return cur
+            time.sleep(0.01)
+        raise RuntimeError(f"DesiredStore.schedule_new_epoch CAS failed for {k}")
+
     def _create(
         self,
         node: str,
@@ -319,7 +325,7 @@ class DesiredStore(BaseStore):
         self._put_json(self._desired_key(node, depl), asdict(doc))
         return doc
 
-    def _update_phase(self, node: str, depl: str, phase: str) -> DesiredDoc:
+    def _update_phaseXXX(self, node: str, depl: str, phase: str) -> DesiredDoc:
         existing = self.get(node, depl)
         if not existing:
             # If called without existing doc, create a new one with epoch=1
@@ -330,6 +336,39 @@ class DesiredStore(BaseStore):
         self._put_json(self._desired_key(node, depl), asdict(existing))
         return existing
 
+    def _update_phase(self, node: str, depl: str, phase: str) -> DesiredDoc:
+        """
+        Atomic phase update (epoch unchanged).
+        """
+        k = self._desired_key(node, depl)
+        val, meta = self.etcd.get(k, metadata=True, serializable=False)
+        if val is None:
+            # Create with epoch=1 if absent (preserves your original semantics)
+            doc = DesiredDoc(phase=phase, epoch=1, params={}, updated_at=_now_iso())
+            if self.etcd.put_if_absent(k, json.dumps(asdict(doc))):
+                return doc
+
+        for _ in range(8):
+            val, meta = self.etcd.get(k, metadata=True, serializable=False)
+            if val is None:
+                # try again
+                doc = DesiredDoc(phase=phase, epoch=1, params={}, updated_at=_now_iso())
+                if self.etcd.put_if_absent(k, json.dumps(asdict(doc))):
+                    return doc
+                time.sleep(0.01)
+                continue
+
+            cur = DesiredDoc.from_json(val)
+            cur.phase = phase
+            cur.updated_at = _now_iso()
+
+            if self.etcd.update_if_unchanged(
+                k, json.dumps(asdict(cur)), meta.mod_revision
+            ):
+                return cur
+            time.sleep(0.01)
+        raise RuntimeError(f"DesiredStore._update_phase CAS failed for {k}")
+
 
 class StatusStore(BaseStore):
     """Worker-only: observed serving status with heartbeats (HealthCheckResponse)."""
@@ -338,7 +377,23 @@ class StatusStore(BaseStore):
         super().__init__(etcd_client)
         self._lease_getter = lease_getter  # callable -> etcd lease (optional)
 
-    def claim(
+    def _status_key(self, node: str, depl: str) -> str:
+        return _skey(node, depl)
+
+    def _new_status_doc(
+        self, worker_id: str, epoch: int, initial_status: int
+    ) -> StatusDoc:
+        return StatusDoc(
+            status_code=initial_status,
+            status_name=_status_name(initial_status),
+            owner=worker_id,
+            epoch=epoch,
+            updated_at=_now_iso(),
+            heartbeat_at=_now_iso(),
+            details=None,
+        )
+
+    def claimXXX(
         self,
         node: str,
         depl: str,
@@ -392,7 +447,7 @@ class StatusStore(BaseStore):
         # Different owner or future epoch owned elsewhere -> fail (fencing)
         return False
 
-    def claim_SINGLE_EPOCH(
+    def claim(
         self,
         node: str,
         depl: str,
@@ -401,61 +456,64 @@ class StatusStore(BaseStore):
         initial_status: int = HealthCheckResponse.ServingStatus.NOT_SERVING,
     ) -> bool:
         """
-        First write of status for this epoch. Best-effort CAS if supported.
-        Default initial status is NOT_SERVING (worker booting / not yet handling).
+        Claim ownership with fencing by epoch.
+        Algorithm:
+          A) If key missing: create (with lease if provided) atomically.
+          B) Else read current -> if (same owner & same epoch) idempotent refresh.
+             Else if (same owner & lower epoch) roll-forward to new epoch.
+             Else (different owner or future epoch) -> reject.
+        All writes use CAS on mod_revision; lease refresh is applied if provided.
         """
         k = self._status_key(node, depl)
-        existing = self._get_raw(k)
-        doc = StatusDoc(
-            status_code=initial_status,
-            status_name=_status_name(initial_status),
-            owner=worker_id,
-            epoch=epoch,
-            updated_at=_now_iso(),
-            heartbeat_at=_now_iso(),
-            details=None,
-        )
-        v = json.dumps(asdict(doc))
-        if self._tx:
-            if True:
-                raise NotImplementedError
-            cmp_list = (
-                [self._tx.Version(k) == 0]
-                if not existing
-                else [self._tx.Value(k) == existing.decode()]
-            )
-            try:
-                put = self._tx.Put(
-                    k, v, lease=(self._lease_getter() if self._lease_getter else None)
-                )
-                ok = self.etcd.transaction(compare=cmp_list, success=[put], failure=[])
-                succeeded = _tx_succeeded(ok)
-                print(f"TX claim result key={k} succeeded={succeeded}")
-                if succeeded:
-                    # optional sanity check
-                    if not self._get_raw(k):
-                        print(f"TX reported success but readback empty for {k}")
-                        return False
-                return succeeded
-
-            except Exception as e:
-                if _is_missing_lease_error(e) and self._lease_getter:
-                    put = self._tx.Put(k, v, lease=self._lease_getter())
-                    ok = self.etcd.transaction(
-                        compare=cmp_list, success=[put], failure=[]
-                    )
-                    return bool(ok)
-                raise
-        else:
-            if existing:
-                return False
-            if self._lease_getter:
-                self._put_json_with_lease(k, asdict(doc), self._lease_getter)
-            else:
-                self._put_json(k, asdict(doc))
+        # A) attempt to create if absent
+        doc = self._new_status_doc(worker_id, epoch, initial_status)
+        payload = json.dumps(asdict(doc))
+        lease_id = self._lease_getter().id if self._lease_getter else None
+        if self.etcd.put_if_absent(k, payload, lease=lease_id):
             return True
 
-    def set_status(
+        # B) read+CAS path
+        for _ in range(8):
+            val, meta = self.etcd.get(k, metadata=True, serializable=False)
+            if val is None:
+                # deleted between steps, retry create
+                lease_id = self._lease_getter().id if self._lease_getter else None
+                if self.etcd.put_if_absent(k, payload, lease=lease_id):
+                    return True
+                time.sleep(0.01)
+                continue
+
+            st = StatusDoc.from_json(val)
+
+            # Idempotent refresh (same owner & same epoch)
+            if st.owner == worker_id and st.epoch == epoch:
+                st.updated_at = _now_iso()
+                st.heartbeat_at = st.heartbeat_at or st.updated_at
+                lease_id = self._lease_getter().id if self._lease_getter else None
+                if self.etcd.update_if_unchanged(
+                    k, json.dumps(asdict(st)), meta.mod_revision, lease=lease_id
+                ):
+                    return True
+                time.sleep(0.01)
+                continue
+
+            # Roll-forward (same owner, lower epoch)
+            if st.owner == worker_id and st.epoch < epoch:
+                newdoc = self._new_status_doc(worker_id, epoch, initial_status)
+                lease_id = self._lease_getter().id if self._lease_getter else None
+                if self.etcd.update_if_unchanged(
+                    k, json.dumps(asdict(newdoc)), meta.mod_revision, lease=lease_id
+                ):
+                    return True
+                time.sleep(0.01)
+                continue
+
+            # Different owner or someone is ahead -> fencing reject
+            return False
+
+        return False
+
+    def set_statusXXXX(
         self,
         node: str,
         depl: str,
@@ -484,6 +542,44 @@ class StatusStore(BaseStore):
         else:
             self._put_json(k, asdict(st))
         return True
+
+    def set_status(
+        self,
+        node: str,
+        depl: str,
+        worker_id: str,
+        status: int | str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """
+        CAS update: only the current owner can change status. Protect against concurrent owners by mod_revision CAS.
+        """
+        k = self._status_key(node, depl)
+        for _ in range(8):
+            val, meta = self.etcd.get(k, metadata=True, serializable=False)
+            if val is None:
+                return False
+            st = StatusDoc.from_json(val)
+            if st.owner != worker_id:
+                return False
+            code = _status_code(status)
+            st.status_code = code
+            st.status_name = _status_name(code)
+            st.updated_at = _now_iso()
+            if details:
+                st.details = {**(st.details or {}), **details}
+
+            try:
+                lease_id = self._lease_getter().id if self._lease_getter else None
+            except Exception:
+                lease_id = None
+
+            if self.etcd.update_if_unchanged(
+                k, json.dumps(asdict(st)), meta.mod_revision, lease=lease_id
+            ):
+                return True
+            time.sleep(0.01)
+        return False
 
     def set_serving(
         self,
@@ -537,7 +633,7 @@ class StatusStore(BaseStore):
             details,
         )
 
-    def heartbeat(self, node: str, depl: str, worker_id: str) -> bool:
+    def heartbeatXXX(self, node: str, depl: str, worker_id: str) -> bool:
         k = self._status_key(node, depl)
         raw = self._get_raw(k)
         if not raw:
@@ -551,6 +647,45 @@ class StatusStore(BaseStore):
         else:
             self._put_json(k, asdict(st))
         return True
+
+    def heartbeat(self, node: str, depl: str, worker_id: str) -> bool:
+        """
+        CAS heartbeat: only the current owner may update heartbeat_at.
+        If the lease vanished, surface False; caller can reacquire/claim.
+        """
+        k = self._status_key(node, depl)
+        for _ in range(8):
+            val, meta = self.etcd.get(k, metadata=True, serializable=False)
+            if val is None:
+                return False
+            st = StatusDoc.from_json(val)
+            if st.owner != worker_id:
+                return False
+            st.heartbeat_at = _now_iso()
+
+            lease_id = None
+            try:
+                lease_id = self._lease_getter().id if self._lease_getter else None
+            except Exception:
+                pass
+
+            try:
+                if self.etcd.update_if_unchanged(
+                    k, json.dumps(asdict(st)), meta.mod_revision, lease=lease_id
+                ):
+                    return True
+            except Exception as e:
+                # Handle missing/expired lease gracefully
+                if _is_missing_lease_error(e) and self._lease_getter:
+                    # refresh lease and retry once more in this iteration
+                    try:
+                        lease_id = self._lease_getter().id
+                    except Exception:
+                        return False
+                else:
+                    raise
+            time.sleep(0.01)
+        return False
 
     def read(self, node: str, depl: str) -> Optional[StatusDoc]:
         k = self._status_key(node, depl)
