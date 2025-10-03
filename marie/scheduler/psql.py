@@ -579,11 +579,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
                     continue
 
-                print('scheduler - slots_by_executor : ', slots_by_executor)
-                print(
-                    'scheduler - ClusterState.deployments : ', ClusterState.deployments
-                )
-
                 # FETCH READY CANDIDATES (executor-agnostic)
                 # frontier should not filter by executors; let planner decide
                 candidates_wi: list[WorkInfo] = await self.frontier.peek_ready(

@@ -42,6 +42,7 @@ from marie.serve.executors import BaseExecutor, __dry_run_endpoint__
 from marie.serve.instrumentation import MetricsTimer
 from marie.serve.networking.utils import host_is_local
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
+from marie.state.semaphore_store import SemaphoreStore
 from marie.state.state_store import DesiredStore, StatusStore
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
@@ -255,6 +256,12 @@ class WorkerRequestHandler:
             self._etcd_client,
             lease_getter=self._status_lease_getter,
         )
+
+        self._semaphore = SemaphoreStore(self._etcd_client, default_lease_ttl=30)
+        self._sem_default_ttl = 30  # seconds
+        # Active tickets we should keep alive: job_id -> {"slot": str, "ttl": int, "last": float}
+        self._active_sem_tickets: dict[str, dict] = {}
+        self._sem_renew_fraction = 0.4
 
         self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
         self._last_logged_status = None
@@ -992,6 +999,8 @@ class WorkerRequestHandler:
             await asyncio.gather(*[q.close() for q in self._all_batch_queues()])
             self._executor.close()
             self._is_closed = True
+
+        self._sem_untrack_all(release=True)
         self.logger.debug(f"Request Handler closed")
 
     @staticmethod
@@ -1610,6 +1619,9 @@ class WorkerRequestHandler:
                 f"Failed to set UNKNOWN during _record_failed_job: {set_status_exc}"
             )
 
+        # Always untrack & release on terminal
+        self._sem_untrack(job_id, release=True)
+
         if job_id is not None and self._job_info_client is not None:
             try:
                 # Extract the traceback information from the exception
@@ -1669,6 +1681,16 @@ class WorkerRequestHandler:
             # Busy: claim with SERVING semantics immediately
             await asyncio.to_thread(self._set_deployment_status, self._worker_state)
 
+            # Reserve a slot for this deployment and start renewal
+            try:
+                slot_type = (
+                    self._deployment
+                )  # capacity bucket; can be executor type if you prefer
+                self._sem_track(job_id, slot_type, ttl=self._sem_default_ttl)
+            except Exception as e:
+                self.logger.error(f"[sem] failed to track ticket for {job_id}: {e}")
+                raise e
+
         except Exception as set_status_exc:
             self.logger.error(
                 f"Failed to set SERVING during _record_started_job: {set_status_exc}"
@@ -1709,6 +1731,9 @@ class WorkerRequestHandler:
             self.logger.error(
                 f"Failed to set NOT_SERVING during _record_successful_job: {set_status_exc}"
             )
+
+        # Always untrack & release on terminal
+        self._sem_untrack(job_id, release=True)
 
         if job_id is not None and self._job_info_client is not None:
             try:
@@ -1825,6 +1850,13 @@ class WorkerRequestHandler:
                                 self._claim_and_mark_ready()
                         except Exception as e2:
                             self.logger.error(f"status heartbeat recovery failed: {e2}")
+
+                    # renew any active semaphore tickets
+                    try:
+                        self._sem_renew_all_if_due()
+                    except Exception as e:
+                        self.logger.error(f"[sem] renew loop error: {e}")
+                        raise e
                 except Exception as e:
                     # If lease is missing/expired, attempt to re-claim and re-publish current state
                     if _is_missing_lease_error(e):
@@ -2068,3 +2100,59 @@ class WorkerRequestHandler:
         self._hb_supervisor_stop.set()
         if self._status_hb_thread and self._status_hb_thread.is_alive():
             self._status_hb_thread.join(timeout=2.0)
+
+    def _sem_track(self, job_id: str, slot_type: str, ttl: int | None = None):
+        """Reserve capacity and start renewing in the heartbeat loop."""
+        if not job_id or not slot_type:
+            return
+        ttl = ttl or self._sem_default_ttl
+        try:
+            # Reserve (idempotent if already exists for same owner)
+            self._semaphore.reserve(slot_type=slot_type, ticket_id=job_id, ttl=ttl)
+            self._active_sem_tickets[job_id] = {
+                "slot": slot_type,
+                "ttl": ttl,
+                "last": 0.0,  # force immediate renew check next loop
+            }
+            self.logger.info(
+                f"[sem] reserved ticket {job_id} for slot '{slot_type}' (ttl={ttl})"
+            )
+        except Exception as e:
+            self.logger.error(f"[sem] reserve failed for {job_id}@{slot_type}: {e}")
+
+    def _sem_untrack(self, job_id: str, release: bool = True):
+        meta = self._active_sem_tickets.pop(job_id, None)
+        if not meta:
+            return
+        if release:
+            try:
+                self._semaphore.release(job_id)
+                self.logger.info(f"[sem] released ticket {job_id}")
+            except Exception as e:
+                self.logger.warning(f"[sem] release failed for {job_id}: {e}")
+
+    def _sem_untrack_all(self, release: bool = True):
+        for jid in list(self._active_sem_tickets.keys()):
+            self._sem_untrack(jid, release=release)
+
+    def _sem_renew_all_if_due(self):
+        """renews tickets slightly before TTL."""
+        now = time.monotonic()
+        for jid, meta in list(self._active_sem_tickets.items()):
+            ttl = max(5, int(meta.get("ttl") or self._sem_default_ttl))
+            renew_interval = max(5, int(ttl * self._sem_renew_fraction))
+            last = meta.get("last", 0.0)
+            if (now - last) >= renew_interval:
+                try:
+                    ok = self._semaphore.renew(jid, ttl)
+                    if not ok:
+                        # ticket was evicted; re-reserve (best-effort)
+                        self.logger.warning(
+                            f"[sem] renew miss for {jid} — re-reserving"
+                        )
+                        self._semaphore.reserve(
+                            slot_type=meta["slot"], ticket_id=jid, ttl=ttl
+                        )
+                    meta["last"] = now
+                except Exception as e:
+                    self.logger.error(f"[sem] renew error for {jid}: {e}")

@@ -50,6 +50,9 @@ from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
+from marie.state.base import is_stale
+from marie.state.semaphore_store import SemaphoreStore
+from marie.state.slot_capacity_manager import SlotCapacityManager
 from marie.state.state_store import (
     DesiredDoc,
     DesiredStore,
@@ -58,7 +61,6 @@ from marie.state.state_store import (
     _now_iso,
     _status_code,
     _status_name,
-    is_stale,
 )
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, Response
@@ -234,7 +236,13 @@ class MarieServerGateway(CompositeServer):
         self.etcd_client = get_etcd_client(convert_to_etcd_args(self.args))
         self.desired_store = DesiredStore(self.etcd_client)
         self.status_store = StatusStore(self.etcd_client)
-
+        self.semaphore_store = SemaphoreStore(self.etcd_client, default_lease_ttl=30)
+        self.capacity_manager = SlotCapacityManager(
+            semaphore_store=self.semaphore_store,
+            logger=self.logger,
+            # Optional mapping if slot types differ from executor names:
+            # slot_type_resolver=lambda executor: {"extract_executor": "ocr.gpu"}.get(executor, executor),
+        )
         self.service_events_queue = asyncio.Queue(maxsize=512)
         self.state_events_queue = asyncio.Queue(maxsize=2048)  # tends to be chattier
 
@@ -1070,6 +1078,7 @@ class MarieServerGateway(CompositeServer):
 
                 # Always schedule a (debounced) rebuild
                 self._schedule_rebuild(True)
+                self.capacity_manager.refresh_from_nodes(self.deployment_nodes)
 
                 error_counter = 0
             except Exception as ex:

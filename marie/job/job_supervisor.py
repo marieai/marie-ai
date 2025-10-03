@@ -1,6 +1,7 @@
 import asyncio
 import time
 from typing import Dict, List, Optional, Union
+from urllib.parse import urlparse
 
 import grpc
 from docarray import BaseDoc, DocList
@@ -19,6 +20,7 @@ from marie.serve.discovery.etcd_client import EtcdClient
 from marie.serve.networking import _NetworkingHistograms, _NetworkingMetrics
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
+from marie.state.semaphore_store import SemaphoreStore
 from marie.state.state_store import DesiredStore, StatusStore
 from marie.types_core.request.data import DataRequest
 
@@ -58,6 +60,13 @@ class JobSupervisor:
         # K8s-style desired/status split
         self._desired_store = DesiredStore(self._etcd_client)
         self._status_store = StatusStore(self._etcd_client)
+
+        # capacity/semaphore integration
+        self._sem = SemaphoreStore(self._etcd_client, default_lease_ttl=30)
+        self._reserved_slot: bool = False
+        self._slot_type: Optional[str] = None
+        self._ticket_id: Optional[str] = None
+        self._reserve_node: Optional[str] = None  # host:port (netloc)
 
     async def ping(self) -> bool:
         """
@@ -294,6 +303,8 @@ class JobSupervisor:
         self.logger.error(
             f"Request sending failed for {node}/{deployment_name}, job {self._job_id}. Exception: {exception}"
         )
+        # Release capacity if we had reserved
+        self._release_capacity_safely()
 
     async def pre_send_callback(
         self, requests: Union[List[DataRequest] | DataRequest], ctx: Dict
@@ -307,21 +318,56 @@ class JobSupervisor:
             depl = ctx["deployment"]
             self.logger.info(f"Executing pre-send callback for {node}/{depl}")
 
-            # Optionally carry job_id or other metadata in desired.params
-            params = {"job_id": self._job_id}
+            self.logger.warning("Pre-send callback invoked.")
+            node_addr = ctx["address"]  # may be 'grpc://host:port' or 'host:port'
+            depl = ctx["deployment"]
+            node = self._netloc(node_addr)
+            slot_type = depl  # convention: slot_type == deployment
+            ticket_id = self._job_id  # stable id per reservation
 
+            # --- capacity reservation ---
+            reserved = await asyncio.to_thread(
+                self._sem.reserve,
+                slot_type,
+                ticket_id,
+                job_id=self._job_id,
+                node=node,
+                ttl=30,  # lease; auto-gc if gateway dies
+            )
+            if not reserved:
+                # no capacity; abort send
+                self.logger.warning(
+                    f"[capacity] no free slots for {slot_type}; job {self._job_id} will not be sent"
+                )
+                raise RuntimeError(f"No capacity available for {slot_type}")
+
+            self._reserved_slot = True
+            self._slot_type = slot_type
+            self._ticket_id = ticket_id
+            self._reserve_node = node
+            self.logger.info(
+                f"[capacity] reserved 1 slot for {slot_type} ticket={ticket_id} node={node}"
+            )
+
+            # Continue with desired scheduling as before
+            self.logger.info(f"Executing pre-send callback for {node}/{depl}")
+            params = {"job_id": self._job_id}
             desired = await self._loop.run_in_executor(
                 None, self._desired_store.schedule_new_epoch, node, depl, params
             )
-
             self.logger.info(f"Desired state updated for {node}/{depl}: {desired}")
             self._current_job_epoch = desired.epoch if desired else None
-            await asyncio.sleep(
-                0.01
-            )  # small yield to let watchers process the new key ## NOT NEEDED
+            await asyncio.sleep(0.01)
         except Exception as e:
             self.logger.error(f"pre-send callback failed: {e}")
+            # ensure we don't think we reserved if we didn't
+            self._reserved_slot = False
+            self._slot_type = None
+            self._ticket_id = None
+            self._reserve_node = None
             self._current_job_epoch = None
+            # bubble up so distributor fails the send
+            raise
 
     async def after_send_callback(
         self,
@@ -478,3 +524,28 @@ class JobSupervisor:
                 self._job_id, JobStatus.FAILED, message="Submission error"
             )
             raise
+
+    def _release_capacity_safely(self):
+        if self._reserved_slot and self._slot_type and self._ticket_id:
+            try:
+                released = self._sem.release(self._slot_type, self._ticket_id)
+                self.logger.info(
+                    f"[capacity] release slot {self._slot_type} ticket={self._ticket_id} -> {released}"
+                )
+            except Exception as e:
+                self.logger.warning(f"[capacity] release failed: {e}")
+        self._reserved_slot = False
+        self._slot_type = None
+        self._ticket_id = None
+        self._reserve_node = None
+
+    @staticmethod
+    def _netloc(addr: str) -> str:
+        # Accepts 'grpc://host:port' or 'host:port' and returns 'host:port'
+        if "://" in addr:
+            try:
+                p = urlparse(addr)
+                return p.netloc or addr
+            except Exception:
+                return addr
+        return addr
