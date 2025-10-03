@@ -1,19 +1,6 @@
-import asyncio
 import logging
-import random
-import re
-import time
-import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import timedelta
-from unittest.mock import Mock, patch
 
-from docarray import DocList
-from docarray.documents import TextDoc
-
-from marie.job.job_supervisor import JobSupervisor
 from marie.serve.discovery.etcd_client import EtcdClient
-from marie.types_core.request.data import DataRequest
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -22,7 +9,6 @@ logger = logging.getLogger(__name__)
 
 import asyncio
 import logging
-import random
 import re
 import time
 import uuid

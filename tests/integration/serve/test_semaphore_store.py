@@ -155,3 +155,123 @@ def test_lease_ttl_does_not_block_basic_flow(sema: SemaphoreStore):
 
     # release should still work if holder exists
     assert sema.release(slot, t) is True
+# ... existing code ...
+
+def test_list_slot_types_and_capacities_all(sema: SemaphoreStore):
+    s1, s2, s3 = _slot(), _slot(), _slot()
+
+    # set capacities for three slot types
+    sema.set_capacity(s1, 3)
+    sema.set_capacity(s2, 1)
+    sema.set_capacity(s3, 0)  # still should appear in slots and capacities
+
+    # create activity for s1 to ensure semaphores/ paths exist too
+    t1 = _ticket()
+    assert sema.reserve(s1, t1, job_id="j1", node="n1") is True
+
+    slots = sema.list_slot_types()
+    assert {s1, s2, s3}.issubset(slots)
+
+    caps = sema.capacities_all()
+    assert caps.get(s1) == 3
+    assert caps.get(s2) == 1
+    assert caps.get(s3) == 0
+
+
+def test_read_count_all_and_holder_counts_and_list_holders_all(sema: SemaphoreStore):
+    s1, s2, s3 = _slot(), _slot(), _slot()
+
+    sema.set_capacity(s1, 3)
+    sema.set_capacity(s2, 2)
+    sema.set_capacity(s3, 5)
+
+    # reservations
+    t1a, t1b = _ticket(), _ticket()
+    t2a = _ticket()
+
+    assert sema.reserve(s1, t1a, job_id="j1a", node="n1") is True
+    assert sema.reserve(s1, t1b, job_id="j1b", node="n1") is True
+    assert sema.reserve(s2, t2a, job_id="j2a", node="n2") is True
+    # s3 has no holders
+
+    # read_count_all should reflect used counts
+    used = sema.read_count_all()
+    assert used.get(s1) == 2
+    assert used.get(s2) == 1
+    # even if no counter exists yet, slot must be present with 0
+    assert used.get(s3, 0) == 0
+
+    # holder_counts_all should match number of holders per slot
+    hcnt = sema.holder_counts_all()
+    assert hcnt.get(s1) == 2
+    assert hcnt.get(s2) == 1
+    assert hcnt.get(s3) == 0  # ensured present with zero
+
+    # list_holders_all returns mapping per slot, including empty for s3
+    all_holders = sema.list_holders_all()
+    assert s1 in all_holders and s2 in all_holders and s3 in all_holders
+    assert isinstance(all_holders[s1], dict) and isinstance(all_holders[s2], dict)
+    assert isinstance(all_holders[s3], dict) and len(all_holders[s3]) == 0
+
+    # specific tickets present and parsed as SemaphoreHolder
+    assert t1a in all_holders[s1] and isinstance(all_holders[s1][t1a], SemaphoreHolder)
+    assert all_holders[s1][t1a].job_id == "j1a"
+    assert t2a in all_holders[s2]
+
+
+def test_available_count_all(sema: SemaphoreStore):
+    s1, s2 = _slot(), _slot()
+    sema.set_capacity(s1, 2)
+    sema.set_capacity(s2, 1)
+
+    t1 = _ticket()
+    assert sema.reserve(s1, t1, job_id="j1", node="n1") is True
+
+    avail = sema.available_count_all()
+    # s1: cap 2, used 1
+    assert avail.get(s1) == 1
+    # s2: cap 1, used 0
+    assert avail.get(s2) == 1
+
+
+def test_snapshot_all_basic_and_with_holders(sema: SemaphoreStore):
+    s1, s2, s3 = _slot(), _slot(), _slot()
+    sema.set_capacity(s1, 3)
+    sema.set_capacity(s2, 1)
+    sema.set_capacity(s3, 2)
+
+    t1a, t1b, t2a = _ticket(), _ticket(), _ticket()
+    assert sema.reserve(s1, t1a, job_id="j1a", node="n1") is True
+    assert sema.reserve(s1, t1b, job_id="j1b", node="n1") is True
+    assert sema.reserve(s2, t2a, job_id="j2a", node="n2") is True
+    # s3 has no holders
+
+    snap = sema.snapshot_all(include_holders=False)
+    # Ensure all slots present
+    assert set([s1, s2, s3]).issubset(snap.keys())
+
+    # Validate core fields
+    assert snap[s1]["capacity"] == 3
+    assert snap[s1]["used"] == 2
+    assert snap[s1]["available"] == 1
+    assert snap[s1]["holder_count"] == 2
+    assert "holders" not in snap[s1]
+
+    assert snap[s2]["capacity"] == 1
+    assert snap[s2]["used"] == 1
+    assert snap[s2]["available"] == 0
+    assert snap[s2]["holder_count"] == 1
+
+    assert snap[s3]["capacity"] == 2
+    assert snap[s3]["used"] == 0
+    assert snap[s3]["available"] == 2
+    assert snap[s3]["holder_count"] == 0
+
+    # Now include holders
+    snap_h = sema.snapshot_all(include_holders=True)
+    assert "holders" in snap_h[s1]
+    assert isinstance(snap_h[s1]["holders"], dict)
+    assert t1a in snap_h[s1]["holders"]
+    assert isinstance(snap_h[s1]["holders"][t1a], SemaphoreHolder)
+    # s3 should include empty holders map
+    assert isinstance(snap_h[s3]["holders"], dict) and len(snap_h[s3]["holders"]) == 0
