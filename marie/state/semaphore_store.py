@@ -30,11 +30,22 @@ class SemaphoreHolder:
     node: str
     ttl: int
     created_at: str
+    # optional owner (worker identity) and renewal timestamp for observability
+    owner: Optional[str] = None
+    renewed_at: Optional[str] = None
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "SemaphoreHolder":
         data = json.loads(raw.decode() if isinstance(raw, (bytes, bytearray)) else raw)
-        return cls(**data)
+        # tolerate unknown/missing fields
+        return cls(
+            job_id=data.get("job_id", ""),
+            node=data.get("node", ""),
+            ttl=int(data.get("ttl", 0) or 0),
+            created_at=data.get("created_at") or _now_iso(),
+            owner=data.get("owner"),
+            renewed_at=data.get("renewed_at"),
+        )
 
 
 def _cap_key(slot_type: str) -> str:
@@ -60,17 +71,25 @@ class SemaphoreStore(BaseStore):
     Layout:
       capacity/<slot_type>                 -> {"limit": N, "owner": "...", "source": "...", "updated_at": "..."}
       semaphores/<slot_type>/count         -> "current_int"
-      semaphores/<slot_type>/holders/<id>  -> {"job_id","node","ttl","created_at"} (with lease)
+      semaphores/<slot_type>/holders/<id>  -> {"job_id","node","ttl","created_at","owner","renewed_at"} (with lease)
 
     reserve():
       1) read cap & count; if count >= cap -> fast-fail
       2) TX compare: cap unchanged, count unchanged (or missing), holder missing
          then: put count+1 and put holder (with lease)
+
+    renew():
+      TX compare: holder value unchanged (CAS), then re-put same holder (updated renewed_at/ttl)
+      with a *new* lease so TTL is extended. Optional owner check enforced.
+
     release():
-      TX compare: count unchanged AND holder exists
-         then: delete holder and put count-1
+      TX compare: count unchanged AND holder exists -> delete holder, put count-1
+
+    release_owned():
+      Like release(), but only if holder.owner == owner (prevents hijack).
+
     reconcile():
-      recompute count from holders and CAS update the counter
+      recompute count from holders and CAS update counter.
     """
 
     def __init__(self, etcd_client, default_lease_ttl: int = 30):
@@ -108,17 +127,10 @@ class SemaphoreStore(BaseStore):
         owner: Optional[str] = "capacity-manager",
         source: Optional[str] = "auto",
     ) -> int:
-        """
-        Safely set capacity with invariants:
-          - If never_below_used=True, clamp to >= current used holders.
-          - Uses CAS on mod_revision when updating existing docs.
-          - Returns the effective limit written (or current if unchanged/race).
-        """
         requested = max(0, int(requested_limit))
         used = max(0, int(self.read_count(slot_type))) if never_below_used else 0
         target = max(used, requested) if never_below_used else requested
 
-        # Try create-if-absent first
         val_bytes, meta = self._get_capacity_raw(slot_type)
         now = _now_iso()
 
@@ -127,11 +139,9 @@ class SemaphoreStore(BaseStore):
             payload = json.dumps(asdict(doc))
             if self.etcd.put_if_absent(_cap_key(slot_type), payload):
                 return target
-            # Lost race; fall through to CAS path.
 
         val_bytes, meta = self._get_capacity_raw(slot_type)
         if val_bytes is None:
-            # Deleted between steps; just write best-effort.
             self._write_capacity_doc(
                 slot_type,
                 CapacityDoc(limit=target, owner=owner, source=source, updated_at=now),
@@ -140,7 +150,7 @@ class SemaphoreStore(BaseStore):
 
         cur = CapacityDoc.from_json(val_bytes)
         if int(cur.limit) == int(target):
-            return cur.limit  # already desired
+            return cur.limit
 
         new_doc = CapacityDoc(limit=target, owner=owner, source=source, updated_at=now)
         swapped = self.etcd.update_if_unchanged(
@@ -180,9 +190,14 @@ class SemaphoreStore(BaseStore):
             try:
                 holders[ticket_id] = SemaphoreHolder.from_json(value_bytes)
             except Exception:
-                # skip malformed
                 pass
         return holders
+
+    def _get_holder_raw(self, slot_type: str, ticket_id: str):
+        """Return (val_bytes, meta) for a holder key (or (None, meta) if missing)."""
+        return self.etcd.get(
+            _holder_key(slot_type, ticket_id), metadata=True, serializable=False
+        )
 
     def reserve(
         self,
@@ -192,9 +207,10 @@ class SemaphoreStore(BaseStore):
         job_id: str,
         node: str,
         ttl: Optional[int] = None,
+        owner: Optional[str] = None,
     ) -> bool:
         """
-        Atomically try to reserve one slot. Returns True on success, False on capacity/race.
+        Atomically try to reserve one slot. Returns True on success, False otherwise.
         """
         cap_k = _cap_key(slot_type)
         cnt_k = _count_key(slot_type)
@@ -202,7 +218,7 @@ class SemaphoreStore(BaseStore):
 
         cap_raw = self._get_raw(cap_k)
         if not cap_raw:
-            return False  # capacity unknown -> treat as full/unavailable
+            return False
         try:
             limit = CapacityDoc.from_json(cap_raw).limit
         except Exception:
@@ -216,27 +232,23 @@ class SemaphoreStore(BaseStore):
             return False
 
         t = self.etcd.txn()
-
-        # capacity unchanged
         t.if_value(cap_k, "==", cap_raw)
-
-        # count unchanged (or missing)
         if cnt_raw is None:
             t.if_missing(cnt_k)
         else:
             t.if_value(cnt_k, "==", cnt_raw)
-
-        # holder must not exist
         t.if_missing(h_k)
 
-        # success writes
         new_count = old_count + 1
         lease = self.etcd.lease(ttl or self.default_lease_ttl)
+
         holder_doc = SemaphoreHolder(
             job_id=job_id,
             node=node,
             ttl=int(ttl or self.default_lease_ttl),
             created_at=_now_iso(),
+            owner=owner or f"{node}:{job_id}",  # default identity
+            renewed_at=None,
         )
 
         t.put(cnt_k, str(new_count))
@@ -245,7 +257,58 @@ class SemaphoreStore(BaseStore):
         ok, _resp = t.commit()
         return bool(ok)
 
-    def release(self, slot_type: str, ticket_id: str) -> bool:
+    def renew(
+        self,
+        slot_type: str,
+        ticket_id: str,
+        *,
+        owner: Optional[str] = None,
+        ttl: Optional[int] = None,
+        update_ttl_field: bool = True,
+    ) -> bool:
+        """
+        Renew a holder by re-binding it under a fresh lease.
+
+        Safety:
+          - CAS on current holder value (prevents hijack).
+          - Optional owner check (recommended): if provided, must match stored owner.
+          - Does NOT touch the counter (used stays the same).
+        """
+        h_k = _holder_key(slot_type, ticket_id)
+        raw, meta = self._get_holder_raw(slot_type, ticket_id)
+        if raw is None:
+            return False
+
+        try:
+            holder = SemaphoreHolder.from_json(raw)
+        except Exception:
+            return False
+
+        if owner is not None and holder.owner and holder.owner != owner:
+            # Do not renew someone else's ticket
+            return False
+
+        # refresh timestamps / ttl metadata we store (lease TTL is enforced by etcd)
+        if update_ttl_field and ttl:
+            holder.ttl = int(ttl)
+        holder.renewed_at = _now_iso()
+
+        # Re-put with CAS on the exact previous value and a *new* lease
+        lease = self.etcd.lease(ttl or holder.ttl or self.default_lease_ttl)
+        t = self.etcd.txn()
+        # Using value equality CAS (safer across servers than mod_revision for some etcd/python clients)
+        t.if_value(h_k, "==", raw)
+        t.put(h_k, json.dumps(asdict(holder)), lease=lease.id)
+        ok, _resp = t.commit()
+        return bool(ok)
+
+    def release(
+        self,
+        slot_type: str,
+        ticket_id: str,
+        *,
+        owner: Optional[str] = None,
+    ) -> bool:
         """
         Atomically release a slot. Returns True if released, False otherwise.
         """
@@ -265,7 +328,43 @@ class SemaphoreStore(BaseStore):
 
         t = self.etcd.txn()
         t.if_value(cnt_k, "==", cnt_raw)  # count unchanged
-        t.if_exists(h_k)  # holder must exist
+        t.if_value(h_k, "==", h_raw)  # holder unchanged & exists (CAS)
+        t.put(cnt_k, str(new_count))
+        t.delete(h_k)
+
+        ok, _resp = t.commit()
+        return bool(ok)
+
+    def release_owned(self, slot_type: str, ticket_id: str, *, owner: str) -> bool:
+        """
+        Release only if the holder is owned by `owner`. Prevents accidental releases.
+        """
+        h_k = _holder_key(slot_type, ticket_id)
+        cnt_k = _count_key(slot_type)
+
+        h_raw, h_meta = self._get_holder_raw(slot_type, ticket_id)
+        if h_raw is None:
+            return False
+
+        try:
+            holder = SemaphoreHolder.from_json(h_raw)
+        except Exception:
+            return False
+
+        if holder.owner and holder.owner != owner:
+            return False
+
+        cnt_raw = self._get_raw(cnt_k)
+        if cnt_raw is None:
+            return False
+
+        old_count = int(cnt_raw.decode())
+        new_count = max(0, old_count - 1)
+
+        # CAS on both: holder value and count value
+        t = self.etcd.txn()
+        t.if_value(cnt_k, "==", cnt_raw)
+        t.if_value(h_k, "==", h_raw)
         t.put(cnt_k, str(new_count))
         t.delete(h_k)
 
@@ -275,15 +374,8 @@ class SemaphoreStore(BaseStore):
     # ---------- Multi-slot helpers (for summaries & audits) ----------
 
     def list_slot_types(self) -> Set[str]:
-        """
-        Union of slot types discovered under:
-          - capacity/<slot_type>
-          - semaphores/<slot_type>/count
-          - semaphores/<slot_type>/holders/<id>
-        """
         slots: Set[str] = set()
 
-        # From capacity/*
         cap_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("capacity/"))
         for _val, meta in cap_iter:
             key = self.etcd._demangle_key(meta.key)
@@ -291,7 +383,6 @@ class SemaphoreStore(BaseStore):
             if len(parts) == 2 and parts[0] == "capacity":
                 slots.add(parts[1])
 
-        # From semaphores/*
         sem_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("semaphores/"))
         for _val, meta in sem_iter:
             key = self.etcd._demangle_key(meta.key)
@@ -302,10 +393,6 @@ class SemaphoreStore(BaseStore):
         return slots
 
     def read_count_all(self) -> Dict[str, int]:
-        """
-        Used counts for all slot types by scanning only /semaphores/*/count keys.
-        Falls back to 0 for slot types that exist only in capacity/* but lack a counter.
-        """
         used: Dict[str, int] = {s: 0 for s in self.list_slot_types()}
 
         sem_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("semaphores/"))
@@ -326,9 +413,6 @@ class SemaphoreStore(BaseStore):
         return used
 
     def holder_counts_all(self) -> Dict[str, int]:
-        """
-        Number of holder records by slot type (quick scan).
-        """
         counts: Dict[str, int] = {}
         sem_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("semaphores/"))
         for _val, meta in sem_iter:
@@ -343,9 +427,6 @@ class SemaphoreStore(BaseStore):
         return counts
 
     def available_count_all(self) -> Dict[str, int]:
-        """
-        Available = capacity - used, for every discovered slot type (clamped to 0).
-        """
         caps: Dict[str, int] = {}
         cap_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("capacity/"))
         for val_bytes, meta in cap_iter:
@@ -368,10 +449,6 @@ class SemaphoreStore(BaseStore):
         return out
 
     def list_holders_all(self) -> Dict[str, Dict[str, SemaphoreHolder]]:
-        """
-        Return all holders grouped by slot type:
-          { slot_type: { ticket_id: SemaphoreHolder, ... }, ... }
-        """
         result: Dict[str, Dict[str, SemaphoreHolder]] = {}
         sem_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("semaphores/"))
         for val_bytes, meta in sem_iter:
@@ -391,9 +468,6 @@ class SemaphoreStore(BaseStore):
         return result
 
     def capacities_all(self) -> Dict[str, int]:
-        """
-        capacity/<slot_type> -> {"limit": N}
-        """
         caps: Dict[str, int] = {}
         cap_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("capacity/"))
         for val_bytes, meta in cap_iter:
@@ -407,23 +481,8 @@ class SemaphoreStore(BaseStore):
         return caps
 
     def snapshot_all(self, include_holders: bool = False) -> Dict[str, dict]:
-        """
-        Single-pass snapshot for all slot types:
-          {
-            "<slot_type>": {
-              "capacity": int,
-              "used": int,
-              "available": int,
-              "holder_count": int,
-              # "holders": { "<ticket_id>": SemaphoreHolder, ... }   (if include_holders=True)
-            },
-            ...
-          }
-        """
-        # 1) Gather capacities
         caps = self.capacities_all()
 
-        # 2) One scan over semaphores/ to collect used counts and holders
         used: Dict[str, int] = {}
         holders_map: Dict[str, Dict[str, SemaphoreHolder]] = {}
         holder_counts: Dict[str, int] = {}
@@ -432,7 +491,6 @@ class SemaphoreStore(BaseStore):
         for val_bytes, meta in sem_iter:
             key = self.etcd._demangle_key(meta.key)
             parts = key.split("/")
-            # semaphores/<slot_type>/count
             if len(parts) == 3 and parts[0] == "semaphores" and parts[2] == "count":
                 st = parts[1]
                 try:
@@ -445,7 +503,6 @@ class SemaphoreStore(BaseStore):
                     used[st] = 0
                 continue
 
-            # semaphores/<slot_type>/holders/<id>
             if len(parts) == 4 and parts[0] == "semaphores" and parts[2] == "holders":
                 st = parts[1]
                 ticket_id = parts[3]
@@ -457,7 +514,6 @@ class SemaphoreStore(BaseStore):
                     except Exception:
                         pass
 
-        # 3) Union of all seen slot types
         all_slots: Set[str] = (
             set(caps.keys())
             | set(used.keys())
@@ -465,7 +521,6 @@ class SemaphoreStore(BaseStore):
             | self.list_slot_types()
         )
 
-        # 4) Assemble snapshot
         out: Dict[str, dict] = {}
         for st in sorted(all_slots):
             cap = caps.get(st, 0)
@@ -484,13 +539,7 @@ class SemaphoreStore(BaseStore):
 
         return out
 
-    # ---------- Maintenance ----------
-
     def reconcile(self, slot_type: str) -> int:
-        """
-        Recompute count from holders and CAS-update the counter.
-        Returns the new count written (or current if CAS lost).
-        """
         prefix = _holders_prefix(slot_type)
         results = self.etcd.client.get_prefix(self.etcd._mangle_key(prefix))
         live = sum(1 for _v, _m in results)
@@ -509,3 +558,12 @@ class SemaphoreStore(BaseStore):
         t.put(cnt_k, str(live))
         ok, _resp = t.commit()
         return live if ok else cur
+
+    def get_holder(self, slot_type: str, ticket_id: str) -> Optional[SemaphoreHolder]:
+        raw, _meta = self._get_holder_raw(slot_type, ticket_id)
+        if raw is None:
+            return None
+        try:
+            return SemaphoreHolder.from_json(raw)
+        except Exception:
+            return None

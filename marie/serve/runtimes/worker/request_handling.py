@@ -2102,57 +2102,100 @@ class WorkerRequestHandler:
             self._status_hb_thread.join(timeout=2.0)
 
     def _sem_track(self, job_id: str, slot_type: str, ttl: int | None = None):
-        """Reserve capacity and start renewing in the heartbeat loop."""
+        """
+        Adopt an existing ticket from the JobSupervisor (preferred) by renewing it.
+        If renew fails (e.g. supervisor crashed before reserving), try a one-time reserve.
+        Never double-reserve a ticket that already exists.
+        """
         if not job_id or not slot_type:
             return
-        ttl = ttl or self._sem_default_ttl
+
+        ttl = int(ttl or self._sem_default_ttl)
+        owner = f"{self._node}:{job_id}"  # must match supervisor's owner
+        node = self._node
+
         try:
-            # Reserve (idempotent if already exists for same owner)
-            self._semaphore.reserve(slot_type=slot_type, ticket_id=job_id, ttl=ttl)
+            # Try to adopt by renewing (extends the lease, no counter change)
+            ok = self._semaphore.renew(
+                slot_type, job_id, owner=owner, ttl=ttl, update_ttl_field=True
+            )
+            if not ok:
+                # If the holder isn't there yet, best-effort reserve once (increments count)
+                self.logger.warning(
+                    f"[sem] renew miss during adopt for {job_id}@{slot_type} — attempting reserve"
+                )
+                ok = self._semaphore.reserve(
+                    slot_type=slot_type,
+                    ticket_id=job_id,
+                    job_id=job_id,
+                    node=node,
+                    ttl=ttl,
+                    owner=owner,
+                )
+                if not ok:
+                    self.logger.error(
+                        f"[sem] could not adopt or reserve ticket {job_id}@{slot_type}"
+                    )
+                    return
+
+            # Track for the renew loop
             self._active_sem_tickets[job_id] = {
                 "slot": slot_type,
                 "ttl": ttl,
-                "last": 0.0,  # force immediate renew check next loop
+                "last": 0.0,  # force immediate check next loop
+                "owner": owner,
             }
             self.logger.info(
-                f"[sem] reserved ticket {job_id} for slot '{slot_type}' (ttl={ttl})"
+                f"[sem] adopted ticket {job_id} for slot '{slot_type}' (ttl={ttl}, owner={owner})"
             )
         except Exception as e:
-            self.logger.error(f"[sem] reserve failed for {job_id}@{slot_type}: {e}")
+            self.logger.error(f"[sem] adopt/track failed for {job_id}@{slot_type}: {e}")
 
     def _sem_untrack(self, job_id: str, release: bool = True):
         meta = self._active_sem_tickets.pop(job_id, None)
         if not meta:
             return
         if release:
+            slot = meta["slot"]
+            owner = meta.get("owner") or f"{self._node}:{job_id}"
             try:
-                self._semaphore.release(job_id)
-                self.logger.info(f"[sem] released ticket {job_id}")
+                released = self._semaphore.release_owned(slot, job_id, owner=owner)
+                self.logger.info(f"[sem] released ticket {job_id}@{slot} -> {released}")
             except Exception as e:
-                self.logger.warning(f"[sem] release failed for {job_id}: {e}")
+                self.logger.warning(f"[sem] release failed for {job_id}@{slot}: {e}")
 
     def _sem_untrack_all(self, release: bool = True):
         for jid in list(self._active_sem_tickets.keys()):
             self._sem_untrack(jid, release=release)
 
     def _sem_renew_all_if_due(self):
-        """renews tickets slightly before TTL."""
+        """Renew tickets slightly before TTL, with owner fencing."""
         now = time.monotonic()
         for jid, meta in list(self._active_sem_tickets.items()):
             ttl = max(5, int(meta.get("ttl") or self._sem_default_ttl))
             renew_interval = max(5, int(ttl * self._sem_renew_fraction))
-            last = meta.get("last", 0.0)
+            last = float(meta.get("last", 0.0))
             if (now - last) >= renew_interval:
+                slot = meta["slot"]
+                owner = meta.get("owner") or f"{self._node}:{jid}"
+
                 try:
-                    ok = self._semaphore.renew(jid, ttl)
+                    ok = self._semaphore.renew(
+                        slot, jid, owner=owner, ttl=ttl, update_ttl_field=True
+                    )
                     if not ok:
-                        # ticket was evicted; re-reserve (best-effort)
+                        # ticket was evicted; re-reserve once
                         self.logger.warning(
-                            f"[sem] renew miss for {jid} — re-reserving"
+                            f"[sem] renew miss for {jid}@{slot} — re-reserving"
                         )
                         self._semaphore.reserve(
-                            slot_type=meta["slot"], ticket_id=jid, ttl=ttl
+                            slot_type=slot,
+                            ticket_id=jid,
+                            job_id=jid,
+                            node=self._node,
+                            ttl=ttl,
+                            owner=owner,
                         )
                     meta["last"] = now
                 except Exception as e:
-                    self.logger.error(f"[sem] renew error for {jid}: {e}")
+                    self.logger.error(f"[sem] renew error for {jid}@{slot}: {e}")

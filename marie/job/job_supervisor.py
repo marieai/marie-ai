@@ -12,8 +12,6 @@ from marie.helper import get_or_reuse_loop
 from marie.job.common import ActorHandle, JobInfo, JobInfoStorageClient, JobStatus
 from marie.job.event_publisher import EventPublisher
 from marie.job.job_distributor import JobDistributor
-
-# from marie.job.lease_cache import LeaseCache
 from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.discovery.etcd_client import EtcdClient
@@ -67,6 +65,7 @@ class JobSupervisor:
         self._slot_type: Optional[str] = None
         self._ticket_id: Optional[str] = None
         self._reserve_node: Optional[str] = None  # host:port (netloc)
+        self._sem_owner: Optional[str] = None
 
     async def ping(self) -> bool:
         """
@@ -307,23 +306,31 @@ class JobSupervisor:
         self._release_capacity_safely()
 
     async def pre_send_callback(
-        self, requests: Union[List[DataRequest] | DataRequest], ctx: Dict
+        self, requests: Union[List[DataRequest], DataRequest], ctx: Dict
     ):
         """
-        Callback executed before sending the request. It claims the job by writing a 'desired' status.
+        Reserve capacity (semaphore) and write 'desired' state.
+        No renew loop here — renewals are handled by the WorkerRequestHandler.
+        On failure, release the reservation.
         """
         self.logger.warning("Pre-send callback invoked.")
-        try:
-            node = ctx["address"]
-            depl = ctx["deployment"]
-            self.logger.info(f"Executing pre-send callback for {node}/{depl}")
+        reserved_here = False
+        self._sem_owner = None  # reset per attempt
+        # in our current design we do not need to renew as the worker will take care of it
+        # self._sem.renew(slot_type, ticket_id, owner=self._sem_owner, ttl=new_ttl)
 
-            self.logger.warning("Pre-send callback invoked.")
-            node_addr = ctx["address"]  # may be 'grpc://host:port' or 'host:port'
-            depl = ctx["deployment"]
-            node = self._netloc(node_addr)
-            slot_type = depl  # convention: slot_type == deployment
-            ticket_id = self._job_id  # stable id per reservation
+        try:
+            # Required context — use direct indexing (raises if missing, which is good)
+            node_addr = ctx["address"]  # e.g. 'grpc://host:port'
+            deployment = ctx["deployment"]  # slot type convention: deployment name
+
+            node = self._netloc(node_addr)  # canonical 'host:port'
+            slot_type = deployment
+            ticket_id = self._job_id
+            ttl = 30
+
+            # Owner identity for renew/release
+            owner = f"{node}:{ticket_id}"
 
             # --- capacity reservation ---
             reserved = await asyncio.to_thread(
@@ -332,40 +339,61 @@ class JobSupervisor:
                 ticket_id,
                 job_id=self._job_id,
                 node=node,
-                ttl=30,  # lease; auto-gc if gateway dies
+                ttl=ttl,
+                owner=owner,
             )
+            # THIS SHOULD NOT HAPPEN as we check before scheduling
             if not reserved:
-                # no capacity; abort send
                 self.logger.warning(
                     f"[capacity] no free slots for {slot_type}; job {self._job_id} will not be sent"
                 )
                 raise RuntimeError(f"No capacity available for {slot_type}")
 
+            # Mark locally so we can release on any downstream failure
+            reserved_here = True
             self._reserved_slot = True
             self._slot_type = slot_type
             self._ticket_id = ticket_id
             self._reserve_node = node
+            self._sem_owner = owner
+
             self.logger.info(
-                f"[capacity] reserved 1 slot for {slot_type} ticket={ticket_id} node={node}"
+                f"[capacity] reserved 1 slot for {slot_type} ticket={ticket_id} node={node} owner={owner}"
             )
 
-            # Continue with desired scheduling as before
-            self.logger.info(f"Executing pre-send callback for {node}/{depl}")
+            # --- desired scheduling ---
             params = {"job_id": self._job_id}
             desired = await self._loop.run_in_executor(
-                None, self._desired_store.schedule_new_epoch, node, depl, params
+                None, self._desired_store.schedule_new_epoch, node, deployment, params
             )
-            self.logger.info(f"Desired state updated for {node}/{depl}: {desired}")
+            self.logger.info(
+                f"Desired state updated for {node}/{deployment}: {desired}"
+            )
             self._current_job_epoch = desired.epoch if desired else None
+
+            # tiny yield to let etcd watchers/other coroutines tick
             await asyncio.sleep(0.01)
+
         except Exception as e:
             self.logger.error(f"pre-send callback failed: {e}")
-            # ensure we don't think we reserved if we didn't
+            # If we actually reserved here, release to avoid leaks
+            if reserved_here and self._slot_type and self._ticket_id:
+                try:
+                    await asyncio.to_thread(
+                        self._sem.release_owned,
+                        self._slot_type,
+                        self._ticket_id,
+                        owner=self._sem_owner or "",
+                    )
+                except Exception as re:
+                    self.logger.error(f"[capacity] release on failure errored: {re}")
+            # clear local state
             self._reserved_slot = False
             self._slot_type = None
             self._ticket_id = None
             self._reserve_node = None
             self._current_job_epoch = None
+            self._sem_owner = None
             # bubble up so distributor fails the send
             raise
 
