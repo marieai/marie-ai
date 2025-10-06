@@ -59,14 +59,6 @@ class JobSupervisor:
         self._desired_store = DesiredStore(self._etcd_client)
         self._status_store = StatusStore(self._etcd_client)
 
-        # capacity/semaphore integration
-        self._sem = SemaphoreStore(self._etcd_client, default_lease_ttl=30)
-        self._reserved_slot: bool = False
-        self._slot_type: Optional[str] = None
-        self._ticket_id: Optional[str] = None
-        self._reserve_node: Optional[str] = None  # host:port (netloc)
-        self._sem_owner: Optional[str] = None
-
     async def ping(self) -> bool:
         """
         Perform a health-check ping against the configured executor deployment.
@@ -241,7 +233,6 @@ class JobSupervisor:
             # task = asyncio.create_task(self._submit_job_in_background(curr_info))
             # self._active_tasks.add(task)
             # task.add_done_callback(lambda t: self._active_tasks.discard(t))
-        self.logger.info(f"Job submitted in the background : {self._job_id}")
 
     def _signal_confirmation_threadsafe(self) -> None:
         """
@@ -270,21 +261,19 @@ class JobSupervisor:
         Server remains read-only for /status.
         """
         deadline = time.monotonic() + timeout_s
-        self.logger.info(
+        self.logger.debug(
             f'_await_worker_ack with deadline: {deadline} : {self._job_id}'
         )
         while time.monotonic() < deadline:
             st = self._status_store.read(node, deployment)
-            self.logger.info(f'JOB SUPERVISOR: status store read {st}')
+            self.logger.debug(f'Status store read {st}')
             if st and st.epoch == epoch:
-                self.logger.info(
+                self.logger.debug(
                     f'Worker ack received for epoch {epoch} with status {st.status_name}'
                 )
                 return True
             time.sleep(0.05)
-        self.logger.warning(
-            f'JOB SUPERVISOR: timed out waiting for ack : {self._job_id}'
-        )
+        self.logger.warning(f'Timed out waiting for ack : {self._job_id}')
         return False
 
     async def failure_callback(
@@ -302,99 +291,33 @@ class JobSupervisor:
         self.logger.error(
             f"Request sending failed for {node}/{deployment_name}, job {self._job_id}. Exception: {exception}"
         )
-        # Release capacity if we had reserved
-        self._release_capacity_safely()
 
     async def pre_send_callback(
         self, requests: Union[List[DataRequest], DataRequest], ctx: Dict
     ):
         """
-        Reserve capacity (semaphore) and write 'desired' state.
-        No renew loop here — renewals are handled by the WorkerRequestHandler.
-        On failure, release the reservation.
+        Only write 'desired' state. Capacity is reserved by PostgreSQLJobScheduler.
+        JobSupervisor does not reserve or release capacity anymore.
         """
-        self.logger.warning("Pre-send callback invoked.")
-        reserved_here = False
-        self._sem_owner = None  # reset per attempt
-        # in our current design we do not need to renew as the worker will take care of it
-        # self._sem.renew(slot_type, ticket_id, owner=self._sem_owner, ttl=new_ttl)
+        self.logger.warning("Pre-send callback invoked (no reservation).")
 
         try:
-            # Required context — use direct indexing (raises if missing, which is good)
-            node_addr = ctx["address"]  # e.g. 'grpc://host:port'
-            deployment = ctx["deployment"]  # slot type convention: deployment name
+            node_addr = ctx["address"]
+            deployment = ctx["deployment"]
 
-            node = self._netloc(node_addr)  # canonical 'host:port'
-            slot_type = deployment
-            ticket_id = self._job_id
-            ttl = 30
-
-            # Owner identity for renew/release
-            owner = f"{node}:{ticket_id}"
-
-            # --- capacity reservation ---
-            reserved = await asyncio.to_thread(
-                self._sem.reserve,
-                slot_type,
-                ticket_id,
-                job_id=self._job_id,
-                node=node,
-                ttl=ttl,
-                owner=owner,
-            )
-            # THIS SHOULD NOT HAPPEN as we check before scheduling
-            if not reserved:
-                self.logger.warning(
-                    f"[capacity] no free slots for {slot_type}; job {self._job_id} will not be sent"
-                )
-                raise RuntimeError(f"No capacity available for {slot_type}")
-
-            # Mark locally so we can release on any downstream failure
-            reserved_here = True
-            self._reserved_slot = True
-            self._slot_type = slot_type
-            self._ticket_id = ticket_id
-            self._reserve_node = node
-            self._sem_owner = owner
-
-            self.logger.info(
-                f"[capacity] reserved 1 slot for {slot_type} ticket={ticket_id} node={node} owner={owner}"
-            )
-
-            # --- desired scheduling ---
+            node = self._netloc(node_addr)
+            # desired scheduling only
             params = {"job_id": self._job_id}
             desired = await self._loop.run_in_executor(
                 None, self._desired_store.schedule_new_epoch, node, deployment, params
             )
-            self.logger.info(
-                f"Desired state updated for {node}/{deployment}: {desired}"
-            )
             self._current_job_epoch = desired.epoch if desired else None
 
-            # tiny yield to let etcd watchers/other coroutines tick
             await asyncio.sleep(0.01)
 
         except Exception as e:
             self.logger.error(f"pre-send callback failed: {e}")
-            # If we actually reserved here, release to avoid leaks
-            if reserved_here and self._slot_type and self._ticket_id:
-                try:
-                    await asyncio.to_thread(
-                        self._sem.release_owned,
-                        self._slot_type,
-                        self._ticket_id,
-                        owner=self._sem_owner or "",
-                    )
-                except Exception as re:
-                    self.logger.error(f"[capacity] release on failure errored: {re}")
-            # clear local state
-            self._reserved_slot = False
-            self._slot_type = None
-            self._ticket_id = None
-            self._reserve_node = None
             self._current_job_epoch = None
-            self._sem_owner = None
-            # bubble up so distributor fails the send
             raise
 
     async def after_send_callback(
@@ -406,7 +329,7 @@ class JobSupervisor:
         """
         Callback executed after a successful response is received. It waits for the worker acknowledgement.
         """
-        self.logger.warning("After-send callback invoked.")
+        self.logger.debug("After-send callback invoked.")
         node = ctx["address"]
         deployment_name = ctx["deployment"]
         epoch = self._current_job_epoch
@@ -420,7 +343,7 @@ class JobSupervisor:
             ack = await self._loop.run_in_executor(
                 None, self._await_worker_ack, node, deployment_name, epoch
             )
-            self.logger.info(
+            self.logger.debug(
                 "Worker ack for %s/%s epoch=%s: %s", node, deployment_name, epoch, ack
             )
             if not ack:
@@ -552,20 +475,6 @@ class JobSupervisor:
                 self._job_id, JobStatus.FAILED, message="Submission error"
             )
             raise
-
-    def _release_capacity_safely(self):
-        if self._reserved_slot and self._slot_type and self._ticket_id:
-            try:
-                released = self._sem.release(self._slot_type, self._ticket_id)
-                self.logger.info(
-                    f"[capacity] release slot {self._slot_type} ticket={self._ticket_id} -> {released}"
-                )
-            except Exception as e:
-                self.logger.warning(f"[capacity] release failed: {e}")
-        self._reserved_slot = False
-        self._slot_type = None
-        self._ticket_id = None
-        self._reserve_node = None
 
     @staticmethod
     def _netloc(addr: str) -> str:

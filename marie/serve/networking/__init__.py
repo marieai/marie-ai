@@ -531,14 +531,6 @@ class GrpcConnectionPool:
 
         return async_generator_wrapper()
 
-    async def _safe_send_callbackXXXX(self, send_callback, requests, ctx):
-        try:
-            result = send_callback(requests, ctx)
-            if inspect.isawaitable(result):
-                await result
-        except Exception as e:
-            self._logger.error(f"send_callback failed (ignored): {e}")
-
     async def _safe_send_callback(
         self,
         send_callback: Optional[Callable],
@@ -604,34 +596,6 @@ class GrpcConnectionPool:
             asyncio.create_task(_bg())
         else:
             await _run_once()
-
-    async def _run_callback_bg(
-        self,
-        cb: Optional[callable],
-        requests: List["Request"],
-        ctx: Dict[str, str],
-        *cb_args,
-        timeout: float = 10.0,
-        label: str = "callback",
-    ) -> None:
-        """
-        Run a user-provided callback in the background, ignoring/logging errors.
-        Uses _safe_send_callback() for consistent timeout/error handling.
-        """
-        if cb is None:
-            return
-
-        async def _runner():
-            try:
-                await self._safe_send_callback(
-                    cb, requests, ctx, *cb_args, timeout=timeout
-                )
-            except Exception as e:
-                # Never let exceptions bubble up to the caller task.
-                self._logger.warning("%s failed (ignored): %s", label, e, exc_info=True)
-
-        # Shield so task cancellation of the caller doesn't kill the callback prematurely.
-        asyncio.create_task(asyncio.shield(_runner()))
 
     def _send_requests(
         self,
@@ -700,7 +664,7 @@ class GrpcConnectionPool:
                 try:
                     # 1) BEFORE the RPC (awaited)
                     await self._safe_send_callback(
-                        pre_send_cb, requests, ctx, timeout=0.25
+                        pre_send_cb, requests, ctx, timeout=3.0
                     )
 
                     # 2) Start the RPC and 3) start AFTER-SEND at the *same time*
@@ -719,7 +683,7 @@ class GrpcConnectionPool:
                         async def _after_send_now():
                             try:
                                 await self._safe_send_callback(
-                                    after_send_cb, requests, ctx, None, timeout=10.0
+                                    after_send_cb, requests, ctx, None, timeout=3.0
                                 )
                             except Exception as e:
                                 self._logger.warning(

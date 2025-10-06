@@ -31,7 +31,7 @@ class SlotCapacityManager:
     ):
         self.sem = semaphore_store
         if logger is None:
-            logger = MarieLogger("SlotCapacityManager")
+            logger = MarieLogger(SlotCapacityManager.__name__)
         self.log = logger
         self.slot_type_resolver = slot_type_resolver or (lambda exec_name: exec_name)
         self.default_slots_per_node_env = "MARIE_SLOTS_PER_NODE"

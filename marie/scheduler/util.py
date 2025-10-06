@@ -3,6 +3,7 @@ from collections import defaultdict
 
 from marie.job.common import JobStatus
 from marie.scheduler.state import WorkState
+from marie.state.semaphore_store import SemaphoreStore
 
 
 def convert_job_status_to_work_state(job_status: JobStatus) -> WorkState:
@@ -41,104 +42,28 @@ def adjust_backoff(
     return min(wait_time * (1.5 + 0.1 * idle_streak), min_poll_period) * jitter
 
 
-def group_by_executor_and_status(deployments: list) -> dict:
-    """Groups deployment objects by their executor and status into a nested dictionary format."""
-    grouped = defaultdict(lambda: defaultdict(list))
-
-    for item in deployments:
-        executor = item["executor"]
-        status = item["status"]
-
-        grouped[executor][status].append(item)
-
-    return {executor: dict(statuses) for executor, statuses in grouped.items()}
+def has_available_slot(entrypoint: str, sem: SemaphoreStore) -> bool:
+    """True if at least one slot is available for the executor in `entrypoint`."""
+    return available_slots(entrypoint, sem) > 0
 
 
-def get_counts_by_executor_and_status(deployments: list):
-    """Returns a dictionary where the top-level keys are executors,
-    and each key maps to a dictionary of status-to-count mappings."""
-    counts = defaultdict(lambda: defaultdict(int))
-
-    for item in deployments:
-        executor = item["executor"]
-        status = item["status"]
-
-        counts[executor][status] += 1
-
-    return {executor: dict(status_cnt) for executor, status_cnt in counts.items()}
-
-
-def has_available_slot(entrypoint: str, deployments: dict) -> bool:
+def available_slots(entrypoint: str, sem: SemaphoreStore) -> int:
     """
-    Determines if job slots are available for the specified entrypoint.
-
-    :param entrypoint: A string in the format "executor://action" indicating
-        which executor should handle the job.
-    :returns: True if there is at least one slot available for the given executor,
-        otherwise False.
+    Return available slots for the executor part of `entrypoint` (e.g. 'extract_executor://default').
+    Reads from the semaphore store to ensure consistency with reserve()/renew().
     """
-    return available_slots(entrypoint, deployments) > 0
+    executor = entrypoint.split("://", 1)[0]
+    # single-slot query (O(1))
+    return max(0, sem.available_slot_count(executor))
 
 
-def available_slots(entrypoint: str, deployments: dict) -> int:
+def available_slots_by_executor(sem: SemaphoreStore) -> dict[str, int]:
     """
-    Determines the number of job slots available for the specified entrypoint.
-
-    :param entrypoint: A string in the format "executor://action" indicating
-        which executor should handle the job.
-    :returns: The number of available slots for the given executor.
+    Snapshot available slots for all executors from the semaphore store.
+    Equivalent to: capacities - used_count, based on holders/count keys.
     """
-    executor = entrypoint.split("://")[0]
-    grouped_by_executor = get_counts_by_executor_and_status(list(deployments.values()))
-
-    ready_workers = 0
-    if executor in grouped_by_executor:
-        worker_status = grouped_by_executor[executor]
-        ready_workers = int(worker_status.get("NOT_SERVING", 0)) + int(
-            worker_status.get("SERVICE_UNKNOWN", 0)
-        )
-
-    return ready_workers
-
-
-def available_slots_by_executor(deployments: dict) -> dict[str, int]:
-    """
-    Determines the number of job slots available for each executor(workers).
-
-    :param deployments: A dictionary of deployments.
-    :returns: A dictionary with executor names as keys and the number of available
-        slots as values.
-    """
-    grouped_by_executor = get_counts_by_executor_and_status(list(deployments.values()))
-    return {
-        executor: int(worker_status.get("NOT_SERVING", 0))
-        + int(worker_status.get("SERVICE_UNKNOWN", 0))
-        for executor, worker_status in grouped_by_executor.items()
-    }
-
-
-def available_slots_by_entrypoint(deployment_nodes: dict) -> dict[str, int]:
-    """
-    Determines available slots for each entrypoint based on deployment nodes.
-
-    Parameters:
-        deployment_nodes (dict): A dictionary where keys are executor names
-                                 and values are lists of endpoint definitions.
-
-    Returns:
-        dict: A dictionary of entrypoints to available slots, grouped by executor.
-    """
-    flattened_result = {}
-
-    for executor, nodes in deployment_nodes.items():
-        entrypoints = [node['endpoint'] for node in nodes]
-
-        for entrypoint in set(entrypoints):
-            if entrypoint.startswith('/'):
-                entrypoint = entrypoint[1:]
-            key = f"{executor}://{entrypoint}"
-            flattened_result[key] = flattened_result.get(key, 0) + 1
-    return flattened_result
+    # multi-slot snapshot (single pass over etcd keys)
+    return sem.available_count_all()
 
 
 # # Example Usage

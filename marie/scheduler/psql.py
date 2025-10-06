@@ -9,6 +9,7 @@ from asyncio import Queue
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from math import inf
 from typing import Any, Dict, List, Tuple
 
 import psycopg2
@@ -68,6 +69,8 @@ from marie.scheduler.util import (
     convert_job_status_to_work_state,
 )
 from marie.serve.runtimes.servers.cluster_state import ClusterState
+from marie.state.semaphore_store import SemaphoreStore
+from marie.state.slot_capacity_manager import SlotCapacityManager
 from marie.storage.database.postgres import PostgresqlMixin
 
 INIT_POLL_PERIOD = 2.250  # 250ms
@@ -185,6 +188,22 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self._job_cache = {}
         self._job_cache_max_size = 5000
+
+        # Semaphore-based capacity control, we hijaced the _etcd_client client here from job manager
+        self._semaphore_store = SemaphoreStore(
+            self.job_manager._etcd_client, default_lease_ttl=30
+        )
+        self._sem_default_ttl = 30
+        self._sem_owner_prefix = f"{socket.gethostname()}"
+        self._sem_owner_prefix = f""
+
+        self.capacity_manager = SlotCapacityManager(
+            semaphore_store=self._semaphore_store,
+            logger=self.logger,
+            # Optional mapping if slot types differ from executor names:
+            # slot_type_resolver=lambda executor: {"extract_executor": "ocr.gpu"}.get(executor, executor),
+        )
+        self.cycle_log_every = 10
 
     def validate_config(self, config: Dict[str, Any]):
         # TODO :Implement full validation of required fields
@@ -540,7 +559,22 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         idle_streak = 0
         _cycle_idx = 0
 
+        cycle_log_every = self.cycle_log_every
+        cycle_stats = {
+            "count": 0,
+            "sum_total": 0.0,
+            "sum_active": 0.0,
+            "min_total": inf,
+            "max_total": 0.0,
+            "min_active": inf,
+            "max_active": 0.0,
+        }
+
         while self.running:
+            scheduled_any = False
+            t_cycle_start = time.perf_counter()
+            t_active_start = None
+
             try:
                 self.logger.debug(
                     f"Polling : {wait_time:.2f}s — Queue size: {self._event_queue.qsize()} — Idle streak: {idle_streak}"
@@ -552,21 +586,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 except asyncio.TimeoutError:
                     pass
 
-                # TODO : This is legacy implemenation and will be replaces by Semphore
-                # current slots (will also be used to enforce per-executor caps DURING dispatch)
+                t_active_start = time.perf_counter()
                 slots_by_executor = available_slots_by_executor(
-                    ClusterState.deployments
+                    self._semaphore_store
                 ).copy()
-
-                def slot_filter(wi: WorkInfo) -> bool:
-                    ep = wi.data.get("metadata", {}).get("on", "")
-                    exe = ep.split("://", 1)[0] if "://" in ep else ep
-                    # allow NOOP/unknown
-                    return (
-                        True
-                        if not exe or exe == "noop"
-                        else (slots_by_executor.get(exe, 0) > 0)
-                    )
 
                 if not any(slots_by_executor.values()):
                     self.logger.debug("No available executor slots. Backing off.")
@@ -740,7 +763,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         try:
                             await self.complete(wi.id, wi, {}, force=True)
 
-                            # Clear local soft-lease (don't requeue a completed job)
                             self.frontier.leased_until.pop(wi.id, None)
                             await self.frontier.on_job_completed(wi.id)
                             scheduled_any = True
@@ -767,8 +789,35 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         await self.frontier.release_lease_local(wi.id)
                         continue
 
-                    # reserve a slot and dispatch
-                    slots_by_executor[exe] -= 1
+                    # Reserve capacity via semaphore before dispatch to avoid async races
+                    slot_type = exe
+                    # owner = f"{self._sem_owner_prefix}:{wi.id}"
+                    owner = f"{wi.id}"
+                    reserved = False
+                    try:
+                        reserved = await asyncio.to_thread(
+                            self._semaphore_store.reserve,
+                            slot_type,
+                            wi.id,  # ticket_id
+                            node='',  # at this time we don't know the placement where the job wil be executed yet
+                            ttl=self._sem_default_ttl,
+                            owner=wi.id,
+                        )
+                    except Exception as e:
+                        self.logger.error(
+                            f"[sem] reserve error for {wi.id}@{slot_type}: {e}"
+                        )
+                        reserved = False
+
+                    if not reserved:
+                        self.logger.warning(
+                            f"[sem] no capacity for {slot_type}; releasing lease for {wi.id} : slots_by_executor = {slots_by_executor}"
+                        )
+                        await self._release_lease_db([wi.id])
+                        await self.frontier.release_lease_local(wi.id)
+                        continue
+
+                    slots_by_executor[exe] = max(0, slots_by_executor.get(exe, 0) - 1)
                     enqueue_tasks.append(
                         {
                             "task": asyncio.create_task(
@@ -776,8 +825,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             ),
                             "wi": wi,
                             "exe": exe,
+                            "owner": owner,
                         }
                     )
+
+                self.logger.info('CAPACITY AFTER')
+                self.logger.info('-------------------------')
+                self.capacity_manager.refresh_from_nodes(ClusterState.deployment_nodes)
 
                 if enqueue_tasks:
                     results = await asyncio.gather(
@@ -786,12 +840,28 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     for i, result in enumerate(results):
                         wi = enqueue_tasks[i]["wi"]
                         exe = enqueue_tasks[i]["exe"]
+                        owner = enqueue_tasks[i]["owner"]
 
                         if isinstance(result, Exception) or not result:
                             # dispatch failed → release lease & requeue
                             self.logger.error(f"Dispatch failed for {wi.id}: {result}")
                             await self._release_lease_db([wi.id])
                             await self.frontier.release_lease_local(wi.id)
+
+                            try:
+                                released = await asyncio.to_thread(
+                                    self._semaphore_store.release_owned,
+                                    exe,
+                                    wi.id,
+                                    owner=owner,
+                                )
+                                self.logger.debug(
+                                    f"[sem] release on dispatch-fail {wi.id}@{slot_type} -> {released}"
+                                )
+                            except Exception as e:
+                                self.logger.warning(
+                                    f"[sem] release error after dispatch-fail {wi.id}@{slot_type}: {e}"
+                                )
                             continue
 
                         # runner accepted → activate from lease
@@ -836,6 +906,49 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.warning("Too many failures — entering cooldown")
                     await asyncio.sleep(60)
                     failures = 0
+            finally:
+                # ---- timing ----
+                t_end = time.perf_counter()
+                dt_total = t_end - t_cycle_start
+                dt_active = (t_end - t_active_start) if t_active_start else 0.0
+
+                cycle_stats["count"] += 1
+                cycle_stats["sum_total"] += dt_total
+                cycle_stats["sum_active"] += dt_active
+                cycle_stats["min_total"] = min(cycle_stats["min_total"], dt_total)
+                cycle_stats["max_total"] = max(cycle_stats["max_total"], dt_total)
+                cycle_stats["min_active"] = min(cycle_stats["min_active"], dt_active)
+                cycle_stats["max_active"] = max(cycle_stats["max_active"], dt_active)
+
+                _cycle_idx += 1
+                if (_cycle_idx % cycle_log_every) == 0:
+                    avg_total = cycle_stats["sum_total"] / cycle_stats["count"]
+                    avg_active = cycle_stats["sum_active"] / cycle_stats["count"]
+
+                    self.logger.info(
+                        "[poll] Cycle stats (last %d): total=%.1f ms (avg %.1f–%.1f) | "
+                        "active=%.1f ms (avg %.1f–%.1f) | wait=%.1fs | idle_streak=%d",
+                        cycle_stats["count"],
+                        avg_total * 1000,
+                        cycle_stats["min_total"] * 1000,
+                        cycle_stats["max_total"] * 1000,
+                        avg_active * 1000,
+                        cycle_stats["min_active"] * 1000,
+                        cycle_stats["max_active"] * 1000,
+                        wait_time,
+                        idle_streak,
+                    )
+
+                    # reset rolling window
+                    cycle_stats = {
+                        "count": 0,
+                        "sum_total": 0.0,
+                        "sum_active": 0.0,
+                        "min_total": inf,
+                        "max_total": 0.0,
+                        "min_active": inf,
+                        "max_active": 0.0,
+                    }
 
     async def _activate_and_enqueue_job(self, wi: WorkInfo) -> bool:
         """Marks a job as active in the database and then enqueues it to a worker."""

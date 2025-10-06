@@ -409,12 +409,13 @@ class TextExtractionExecutorMock(MarieExecutor):
         #     doc.text += " First Exec"
         sec = 3600
         sec = random.randint(1, 2)
+        # sec = 0
+
         if False:
             # sys.exit()
             raise RuntimeError("Mock error for testing purposes")
 
         self.logger.info(f"Sleeping for {sec} seconds : {time.time()}")
-        sec = 10
         time.sleep(sec)
 
         self.logger.info(f"Sleeping for {sec} seconds - done : {time.time()}")

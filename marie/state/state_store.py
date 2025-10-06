@@ -174,20 +174,7 @@ class DesiredStore(BaseStore):
     def get(self, node: str, depl: str) -> Optional[DesiredDoc]:
         k = self._desired_key(node, depl)
         raw = self._get_raw(k)
-        print(' get   k = ', k)
-        print(' get raw = ', raw)
         return DesiredDoc.from_json(raw) if raw else None
-
-    def bump_epochXXX(self, node: str, depl: str) -> Optional[DesiredDoc]:
-        k = self._desired_key(node, depl)
-        raw = self._get_raw(k)
-        if not raw:
-            return None
-        d = DesiredDoc.from_json(raw)
-        d.epoch += 1
-        d.updated_at = _now_iso()
-        self._put_json(k, asdict(d))
-        return d
 
     def bump_epoch(self, node: str, depl: str) -> Optional[DesiredDoc]:
         """
@@ -703,7 +690,4 @@ class StatusStore(BaseStore):
     def read(self, node: str, depl: str) -> Optional[StatusDoc]:
         k = self._status_key(node, depl)
         raw = self._get_raw(k)
-        print('read : k ', k)
-        print('read : raw ', raw)
-
         return StatusDoc.from_json(raw) if raw else None

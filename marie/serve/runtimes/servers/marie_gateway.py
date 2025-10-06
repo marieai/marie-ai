@@ -1050,7 +1050,7 @@ class MarieServerGateway(CompositeServer):
             try:
                 await asyncio.sleep(self._debounce_s)  # coalesce bursts
                 # THIS IS THE CRITICAL SECTION AND IT IS MESSYYY
-                self.logger.info("Rebuilding deployments projection...")
+                self.logger.debug("Rebuilding deployments projection...")
                 ClusterState.deployment_nodes = self.deployment_nodes
                 self._rebuild_deployments_projection()
 
@@ -1095,8 +1095,6 @@ class MarieServerGateway(CompositeServer):
         error_counter = 0
         while True:
             ev: StateEvent = await self.state_events_queue.get()
-            print('process_state_events : ', ev)
-
             try:
                 if ev.kind == EventKind.DESIRED:
                     if ev.ev_type == "delete":
@@ -1530,6 +1528,23 @@ class MarieServerGateway(CompositeServer):
         while True:
             try:
                 self.logger.info("Reconciling")
+                try:
+                    self.logger.info(
+                        "[sem] boot reconcile_all: deleting orphans and fixing counters"
+                    )
+                    summary = self.semaphore_store.reconcile_all(
+                        delete_orphan_holders=True,
+                        fix_counters=True,
+                    )
+                    self.logger.info(f"[sem] boot reconcile summary: {summary}")
+                except Exception as e:
+                    self.logger.warning(
+                        f"[sem] reconcile_all on boot failed (non-fatal): {e}"
+                    )
+
+                # Reconcile desire / status
+                self.logger.info("reconciling: desire/status")
+
                 for node, depl in self.desired_store.list_pairs():
                     self.logger.info(f" - reconciling {node}/{depl}")
                     d = self.desired_store.get(node, depl)
@@ -1591,7 +1606,6 @@ class MarieServerGateway(CompositeServer):
                              'executor': '<executor>',
                              'status': '<STATUS_NAME>' } }
         """
-        print('_rebuild_deployments_projection')
         # Index status docs by deployment/executor name
         by_depl: dict[str, list[StatusDoc]] = {}
         for (_, depl), st in self.status_map.items():
@@ -1623,5 +1637,5 @@ class MarieServerGateway(CompositeServer):
 
         from marie.scheduler.util import available_slots_by_executor
 
-        slots = available_slots_by_executor(ClusterState.deployments)
-        self.logger.warning(f"Rebuilt deployments; slot summary: {slots}")
+        slots = available_slots_by_executor(self.semaphore_store)
+        self.logger.debug(f"Rebuilt deployments; slot summary: {slots}")

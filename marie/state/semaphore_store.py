@@ -26,7 +26,7 @@ class CapacityDoc:
 
 @dataclass
 class SemaphoreHolder:
-    job_id: str
+    ticket_id: str
     node: str
     ttl: int
     created_at: str
@@ -37,9 +37,9 @@ class SemaphoreHolder:
     @classmethod
     def from_json(cls, raw: bytes | str) -> "SemaphoreHolder":
         data = json.loads(raw.decode() if isinstance(raw, (bytes, bytearray)) else raw)
-        # tolerate unknown/missing fields
+        # tolerate unknown/missing fields and legacy job_id
         return cls(
-            job_id=data.get("job_id", ""),
+            ticket_id=data.get("ticket_id") or data.get("job_id", ""),
             node=data.get("node", ""),
             ttl=int(data.get("ttl", 0) or 0),
             created_at=data.get("created_at") or _now_iso(),
@@ -71,7 +71,7 @@ class SemaphoreStore(BaseStore):
     Layout:
       capacity/<slot_type>                 -> {"limit": N, "owner": "...", "source": "...", "updated_at": "..."}
       semaphores/<slot_type>/count         -> "current_int"
-      semaphores/<slot_type>/holders/<id>  -> {"job_id","node","ttl","created_at","owner","renewed_at"} (with lease)
+      semaphores/<slot_type>/holders/<id>  -> {"ticket_id","node","ttl","created_at","owner","renewed_at"} (with lease)
 
     reserve():
       1) read cap & count; if count >= cap -> fast-fail
@@ -204,13 +204,13 @@ class SemaphoreStore(BaseStore):
         slot_type: str,
         ticket_id: str,
         *,
-        job_id: str,
         node: str,
         ttl: Optional[int] = None,
         owner: Optional[str] = None,
     ) -> bool:
         """
         Atomically try to reserve one slot. Returns True on success, False otherwise.
+        ticket_id is the single identifier used for the holder key and stored in the holder.
         """
         cap_k = _cap_key(slot_type)
         cnt_k = _count_key(slot_type)
@@ -243,11 +243,11 @@ class SemaphoreStore(BaseStore):
         lease = self.etcd.lease(ttl or self.default_lease_ttl)
 
         holder_doc = SemaphoreHolder(
-            job_id=job_id,
+            ticket_id=ticket_id,
             node=node,
             ttl=int(ttl or self.default_lease_ttl),
             created_at=_now_iso(),
-            owner=owner or f"{node}:{job_id}",  # default identity
+            owner=owner or f"{node}:{ticket_id}",  # default identity
             renewed_at=None,
         )
 
@@ -567,3 +567,102 @@ class SemaphoreStore(BaseStore):
             return SemaphoreHolder.from_json(raw)
         except Exception:
             return None
+
+    def reconcile_all(
+        self,
+        *,
+        delete_orphan_holders: bool = True,
+        fix_counters: bool = True,
+    ) -> Dict[str, dict]:
+        """
+        Server-startup reconciliation & cleanup across ALL slot types.
+
+        Steps per slot_type:
+          1) Find holder keys and identify "orphans" (lease_id missing/0).
+          2) Optionally delete orphans (best-effort).
+          3) Recompute live holder count.
+          4) Optionally CAS-update the /count key to match live holders.
+
+        Returns:
+          {slot_type: {
+              "before_count": int,
+              "after_count": int,
+              "deleted_orphans": int,
+              "malformed_holders": int
+          }, ...}
+        """
+        summary: Dict[str, dict] = {}
+        slot_types = self.list_slot_types()
+
+        for st in sorted(slot_types):
+            holders_prefix = _holders_prefix(st)
+            mangled_prefix = self.etcd._mangle_key(holders_prefix)
+
+            # 1) Scan holders and detect orphans
+            orphan_keys: list[str] = []
+            live_keys: list[str] = []
+            malformed = 0
+
+            scan_iter = self.etcd.client.get_prefix(mangled_prefix)
+            for val_bytes, meta in scan_iter:
+                key = self.etcd._demangle_key(meta.key)
+                # Try to parse holder for sanity; count malformed but don't delete by default
+                try:
+                    _ = SemaphoreHolder.from_json(val_bytes)
+                except Exception:
+                    malformed += 1
+
+                # etcd-python metadata usually exposes lease_id (0 or None if none)
+                lease_id = getattr(meta, "lease_id", 0) or getattr(meta, "lease", 0)
+                if not lease_id:
+                    orphan_keys.append(key)
+                else:
+                    live_keys.append(key)
+
+            # 2) Delete orphan holder keys (best-effort) — no counter math here;
+            # we'll recompute and CAS the counter in step (4)
+            deleted_orphans = 0
+            if delete_orphan_holders and orphan_keys:
+                for k in orphan_keys:
+                    try:
+                        # Direct delete; even if already gone, it's fine
+                        self.etcd.delete(k)
+                        deleted_orphans += 1
+                    except Exception:
+                        # ignore individual delete failures
+                        pass
+
+            # 3) Recompute live holder count after orphan cleanup
+            #    If we deleted orphans, we can avoid a second scan by using live_keys
+            #    but live_keys might include keys that concurrently disappeared; a cheap
+            #    re-scan ensures correctness.
+            live_count = 0
+            rescan_iter = self.etcd.client.get_prefix(mangled_prefix)
+            for _v, _m in rescan_iter:
+                live_count += 1
+
+            # Read current counter
+            cnt_k = _count_key(st)
+            cnt_raw = self._get_raw(cnt_k)
+            before_count = int(cnt_raw.decode()) if cnt_raw else 0
+            after_count = before_count
+
+            # 4) CAS-fix /count to the live holders
+            if fix_counters and before_count != live_count:
+                t = self.etcd.txn()
+                if cnt_raw is None:
+                    t.if_missing(cnt_k)
+                else:
+                    t.if_value(cnt_k, "==", cnt_raw)
+                t.put(cnt_k, str(live_count))
+                ok, _ = t.commit()
+                after_count = live_count if ok else before_count
+
+            summary[st] = {
+                "before_count": before_count,
+                "after_count": after_count,
+                "deleted_orphans": deleted_orphans,
+                "malformed_holders": malformed,
+            }
+
+        return summary

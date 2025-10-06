@@ -257,8 +257,10 @@ class WorkerRequestHandler:
             lease_getter=self._status_lease_getter,
         )
 
-        self._semaphore = SemaphoreStore(self._etcd_client, default_lease_ttl=30)
         self._sem_default_ttl = 30  # seconds
+        self._semaphore = SemaphoreStore(
+            self._etcd_client, default_lease_ttl=self._sem_default_ttl
+        )
         # Active tickets we should keep alive: job_id -> {"slot": str, "ttl": int, "last": float}
         self._active_sem_tickets: dict[str, dict] = {}
         self._sem_renew_fraction = 0.4
@@ -2111,32 +2113,38 @@ class WorkerRequestHandler:
             return
 
         ttl = int(ttl or self._sem_default_ttl)
-        owner = f"{self._node}:{job_id}"  # must match supervisor's owner
-        node = self._node
+        owner = job_id  # must match supervisor's owner / scheduler
 
         try:
-            # Try to adopt by renewing (extends the lease, no counter change)
             ok = self._semaphore.renew(
                 slot_type, job_id, owner=owner, ttl=ttl, update_ttl_field=True
             )
             if not ok:
-                # If the holder isn't there yet, best-effort reserve once (increments count)
-                self.logger.warning(
-                    f"[sem] renew miss during adopt for {job_id}@{slot_type} — attempting reserve"
-                )
+                # not present yet? reserve as this worker under the same neutral owner
                 ok = self._semaphore.reserve(
                     slot_type=slot_type,
                     ticket_id=job_id,
-                    job_id=job_id,
-                    node=node,
+                    node=self._node,  # stored in holder.node, fine to be real node or ''
                     ttl=ttl,
-                    owner=owner,
+                    owner=owner,  # must match job scheduler
                 )
-                if not ok:
-                    self.logger.error(
-                        f"[sem] could not adopt or reserve ticket {job_id}@{slot_type}"
-                    )
-                    return
+            if not ok:
+                self.logger.error(
+                    f"[sem] could not adopt or reserve ticket {job_id}@{slot_type}"
+                )
+                return
+
+            self._active_sem_tickets[job_id] = {
+                "slot": slot_type,
+                "ttl": ttl,
+                "last": 0.0,
+                "owner": owner,
+            }
+            self.logger.info(
+                f"[sem] adopted ticket {job_id} for slot '{slot_type}' (ttl={ttl}, owner={owner})"
+            )
+        except Exception as e:
+            self.logger.error(f"[sem] adopt/track failed for {job_id}@{slot_type}: {e}")
 
             # Track for the renew loop
             self._active_sem_tickets[job_id] = {
@@ -2153,16 +2161,19 @@ class WorkerRequestHandler:
 
     def _sem_untrack(self, job_id: str, release: bool = True):
         meta = self._active_sem_tickets.pop(job_id, None)
-        if not meta:
+        if not meta or not release:
             return
-        if release:
-            slot = meta["slot"]
-            owner = meta.get("owner") or f"{self._node}:{job_id}"
-            try:
-                released = self._semaphore.release_owned(slot, job_id, owner=owner)
-                self.logger.info(f"[sem] released ticket {job_id}@{slot} -> {released}")
-            except Exception as e:
-                self.logger.warning(f"[sem] release failed for {job_id}@{slot}: {e}")
+        slot = meta["slot"]
+        owner = meta.get("owner") or job_id
+
+        try:
+            released = self._semaphore.release_owned(slot, job_id, owner=owner)
+            if not released:
+                # last resort to avoid leaks (if someone mutated the holder unexpectedly)
+                released = self._semaphore.release(slot, job_id)
+            self.logger.info(f"[sem] released ticket {job_id}@{slot} -> {released}")
+        except Exception as e:
+            self.logger.warning(f"[sem] release failed for {job_id}@{slot}: {e}")
 
     def _sem_untrack_all(self, release: bool = True):
         for jid in list(self._active_sem_tickets.keys()):
@@ -2170,32 +2181,32 @@ class WorkerRequestHandler:
 
     def _sem_renew_all_if_due(self):
         """Renew tickets slightly before TTL, with owner fencing."""
+
         now = time.monotonic()
         for jid, meta in list(self._active_sem_tickets.items()):
             ttl = max(5, int(meta.get("ttl") or self._sem_default_ttl))
             renew_interval = max(5, int(ttl * self._sem_renew_fraction))
-            last = float(meta.get("last", 0.0))
-            if (now - last) >= renew_interval:
+            if (now - float(meta.get("last", 0.0))) >= renew_interval:
                 slot = meta["slot"]
-                owner = meta.get("owner") or f"{self._node}:{jid}"
+                owner = meta.get("owner") or jid  # <-- job_id
 
                 try:
                     ok = self._semaphore.renew(
                         slot, jid, owner=owner, ttl=ttl, update_ttl_field=True
                     )
                     if not ok:
-                        # ticket was evicted; re-reserve once
-                        self.logger.warning(
-                            f"[sem] renew miss for {jid}@{slot} — re-reserving"
-                        )
-                        self._semaphore.reserve(
+                        # if renew failed (e.g., orphaned), try reserve again with same owner
+                        ok = self._semaphore.reserve(
                             slot_type=slot,
                             ticket_id=jid,
-                            job_id=jid,
                             node=self._node,
                             ttl=ttl,
                             owner=owner,
                         )
                     meta["last"] = now
+                    if not ok:
+                        self.logger.warning(
+                            f"[sem] renew miss for {jid}@{slot} (owner={owner})"
+                        )
                 except Exception as e:
                     self.logger.error(f"[sem] renew error for {jid}@{slot}: {e}")
