@@ -74,6 +74,8 @@ class FaissHybridAnnotator(DocumentAnnotator):
         self.top_k_candidates = annotator_conf.get('top_k_candidates', 3)
         self.fuzzy_threshold = annotator_conf.get('fuzzy_threshold', 0.8)
         self.embedding_threshold = annotator_conf.get('embedding_threshold', 0.85)
+        self.block_threshold = annotator_conf.get('block_threshold', 0.75)
+        self.max_blocks = annotator_conf.get('max_blocks')
         self.fuzzy_weight = annotator_conf.get('fuzzy_weight', 0.3)
         self.embedding_weight = annotator_conf.get('embedding_weight', 0.7)
         self.min_final_score = annotator_conf.get('min_final_score', 0.7)
@@ -330,9 +332,10 @@ class FaissHybridAnnotator(DocumentAnnotator):
                 concept_view=True,
                 concepts=self.concepts(),
                 drift_monitor=True,
-                good_threshold=0.75,
+                good_threshold=self.block_threshold,
                 enforce_good_only=True,
                 annotate_good_flag=True,
+                max_blocks=self.max_blocks,
             )
 
             allowed = set()
