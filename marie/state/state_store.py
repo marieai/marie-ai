@@ -100,6 +100,28 @@ class StatusDoc:
         return cls(**data)
 
 
+def _iter_node_depl_pairs(etcd, suffix: str) -> Iterator[Tuple[str, str]]:
+    root = "deployments/"
+    nested = etcd.get_prefix_dict(root)
+
+    def _walk(d: dict, base: str):
+        for k, v in d.items():
+            full = f"{base.rstrip('/')}/{k}" if k else base.rstrip("/")
+            if isinstance(v, dict):
+                yield from _walk(v, full)
+            else:
+                yield full
+
+    for key in _walk(nested, root.rstrip('/')):
+        if key.endswith("/" + suffix):
+            parts = key.split("/")
+            try:
+                i = parts.index("deployments")
+                yield parts[i + 1], parts[i + 2]
+            except Exception:
+                continue
+
+
 class DesiredStore(BaseStore):
     """Gateway-only: desired intent/spec."""
 
@@ -195,60 +217,11 @@ class DesiredStore(BaseStore):
             time.sleep(0.01)
         return None
 
-    def iter_desired_pairs(self) -> Iterator[Tuple[str, str]]:
-        root_prefix_for_etcd_client = "deployments/"
-        nested = self.etcd.get_prefix_dict(root_prefix_for_etcd_client)
+    def iter_desired_pairs(self):
+        return _iter_node_depl_pairs(self.etcd, "desired")
 
-        def _walk(d: dict, base: str):
-            for k, v in d.items():
-                full = f"{base.rstrip('/')}/{k}" if k else base.rstrip("/")
-                if isinstance(v, dict):
-                    yield from _walk(v, full)
-                else:
-                    yield full
-
-        # The keys yielded by _walk are already demangled and start from "deployments/"
-        for key in _walk(nested, root_prefix_for_etcd_client.rstrip('/')):
-            if not key.endswith("/desired"):
-                continue
-            parts = key.split("/")
-            try:
-                # After demangling and splitting, parts would be like ['deployments', 'node', 'depl', 'desired']
-                # So index 1 and 2 will correctly extract node and depl
-                i = parts.index("deployments")
-                yield parts[i + 1], parts[i + 2]
-            except Exception as e:
-                print('Error parsing key:', key, e)
-                continue
-
-    def list_pairs(self) -> Iterator[Tuple[str, str]]:
+    def list_pairs(self):
         yield from self.iter_desired_pairs()
-
-    def schedule_new_epochXXX(
-        self, node: str, depl: str, params: Optional[Dict[str, Any]] = None
-    ) -> DesiredDoc:
-        """
-        Bump epoch and set phase=SCHEDULED every time we schedule a new job.
-        Creates the doc with epoch=1 if it doesn't exist.
-        """
-        k = self._desired_key(node, depl)
-        raw = self._get_raw(k)
-
-        if not raw:
-            # First intent for this (node,depl)
-            return self._create(
-                node, depl, phase="SCHEDULED", epoch=1, params=params or {}
-            )
-
-        doc = DesiredDoc.from_json(raw)
-        doc.epoch += 1
-        doc.phase = "SCHEDULED"
-        if params:
-            # allow caller to include job-specific params (optional)
-            doc.params = {**(doc.params or {}), **params}
-        doc.updated_at = _now_iso()
-        self._put_json(k, asdict(doc))
-        return doc
 
     def schedule_new_epoch(
         self, node: str, depl: str, params: Optional[Dict[str, Any]] = None
@@ -393,60 +366,6 @@ class StatusStore(BaseStore):
             details=None,
         )
 
-    def claimXXX(
-        self,
-        node: str,
-        depl: str,
-        worker_id: str,
-        epoch: int,
-        initial_status: int = HealthCheckResponse.ServingStatus.NOT_SERVING,
-    ) -> bool:
-
-        k = self._status_key(node, depl)
-        existing = self._get_raw(k)
-
-        new_doc = lambda e: StatusDoc(
-            status_code=initial_status,
-            status_name=_status_name(initial_status),
-            owner=worker_id,
-            epoch=e,
-            updated_at=_now_iso(),
-            heartbeat_at=_now_iso(),
-            details=None,
-        )
-
-        if not existing:
-            doc = new_doc(epoch)
-            if self._lease_getter:
-                self._put_json_with_lease(k, asdict(doc), self._lease_getter)
-            else:
-                self._put_json(k, asdict(doc))
-            return True
-
-        st = StatusDoc.from_json(existing)
-
-        # Same owner + same epoch -> idempotent success
-        if st.owner == worker_id and st.epoch == epoch:
-            # Ensure lease is refreshed and timestamps updated a bit
-            st.updated_at = _now_iso()
-            if self._lease_getter:
-                self._put_json_with_lease(k, asdict(st), self._lease_getter)
-            else:
-                self._put_json(k, asdict(st))
-            return True
-
-        # Same owner + lower epoch -> roll forward to new epoch
-        if st.owner == worker_id and st.epoch < epoch:
-            doc = new_doc(epoch)
-            if self._lease_getter:
-                self._put_json_with_lease(k, asdict(doc), self._lease_getter)
-            else:
-                self._put_json(k, asdict(doc))
-            return True
-
-        # Different owner or future epoch owned elsewhere -> fail (fencing)
-        return False
-
     def claim(
         self,
         node: str,
@@ -512,36 +431,6 @@ class StatusStore(BaseStore):
             return False
 
         return False
-
-    def set_statusXXXX(
-        self,
-        node: str,
-        depl: str,
-        worker_id: str,
-        status: int | str,
-        details: Optional[Dict[str, Any]] = None,
-    ) -> bool:
-        """
-        Update to a specific ServingStatus (e.g., SERVING, NOT_SERVING, UNKNOWN...).
-        """
-        k = self._status_key(node, depl)
-        raw = self._get_raw(k)
-        if not raw:
-            return False
-        st = StatusDoc.from_json(raw)
-        if st.owner != worker_id:
-            return False
-        code = _status_code(status)
-        st.status_code = code
-        st.status_name = _status_name(code)
-        st.updated_at = _now_iso()
-        if details:
-            st.details = {**(st.details or {}), **details}
-        if self._lease_getter:
-            self._put_json_with_lease(k, asdict(st), self._lease_getter)
-        else:
-            self._put_json(k, asdict(st))
-        return True
 
     def set_status(
         self,
@@ -633,21 +522,6 @@ class StatusStore(BaseStore):
             details,
         )
 
-    def heartbeatXXX(self, node: str, depl: str, worker_id: str) -> bool:
-        k = self._status_key(node, depl)
-        raw = self._get_raw(k)
-        if not raw:
-            return False
-        st = StatusDoc.from_json(raw)
-        if st.owner != worker_id:
-            return False
-        st.heartbeat_at = _now_iso()
-        if self._lease_getter:
-            self._put_json_with_lease(k, asdict(st), self._lease_getter)
-        else:
-            self._put_json(k, asdict(st))
-        return True
-
     def heartbeat(self, node: str, depl: str, worker_id: str) -> bool:
         """
         CAS heartbeat: only the current owner may update heartbeat_at.
@@ -691,3 +565,9 @@ class StatusStore(BaseStore):
         k = self._status_key(node, depl)
         raw = self._get_raw(k)
         return StatusDoc.from_json(raw) if raw else None
+
+    def iter_status_pairs(self):
+        return _iter_node_depl_pairs(self.etcd, "status")
+
+    def list_pairs(self):
+        yield from self.iter_status_pairs()

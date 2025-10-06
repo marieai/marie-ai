@@ -958,9 +958,11 @@ class MarieServerGateway(CompositeServer):
                 )
 
                 # watch node status changes
-                self.resolver.watch_service(
-                    ROOT, self._on_state_event, notify_on_start=True
-                )
+                # self.resolver.watch_service(
+                #     ROOT, self._on_state_event, notify_on_start=True
+                # )
+                # start the state watch
+                await self._start_state_watch()
             except Exception as e:
                 self.logger.error(
                     f"Failed to initialize etcd client on {etcd_host}:{etcd_port}"
@@ -1639,3 +1641,89 @@ class MarieServerGateway(CompositeServer):
 
         slots = available_slots_by_executor(self.semaphore_store)
         self.logger.debug(f"Rebuilt deployments; slot summary: {slots}")
+
+    async def _start_state_watch(self):
+        """
+        Watch deployments/<node>/<depl>/(desired|status) directly,
+        seed current state once, and stream updates into state_events_queue.
+        """
+        self.logger.info("Seeding initial state into state_events_queue")
+        # Initial seed (best effort
+        try:
+            for node, depl in self.desired_store.list_pairs():
+                d = self.desired_store.get(node, depl)
+                if d:
+                    await self.state_events_queue.put(
+                        StateEvent(
+                            kind=EventKind.DESIRED,
+                            node=node,
+                            deployment=depl,
+                            ev_type="put",
+                            value={node: {depl: asdict(d)}},
+                            key=f"{ROOT}{node}/{depl}/desired",
+                        )
+                    )
+            for node, depl in self.status_store.list_pairs():
+                s = self.status_store.read(node, depl)
+                if s:
+                    await self.state_events_queue.put(
+                        StateEvent(
+                            kind=EventKind.STATUS,
+                            node=node,
+                            deployment=depl,
+                            ev_type="put",
+                            value={node: {depl: {"status": asdict(s)}}},
+                            key=f"{ROOT}{node}/{depl}/status",
+                        )
+                    )
+        except Exception as e:
+            self.logger.warning(f"Initial state seed failed: {e}")
+
+        def _cb(_svc_unused: str, ev):
+            try:
+                k = self.etcd_client._demangle_key(ev.key)
+                if not (
+                    k.startswith(ROOT)
+                    and (k.endswith("/desired") or k.endswith("/status"))
+                ):
+                    return  # ignore anything else under deployments/
+
+                node, depl = self._parse_kv_key(k)
+                payload = (
+                    next(iter(ev.values.values()))
+                    if getattr(ev, "values", None)
+                    else {}
+                )
+                if k.endswith("/desired"):
+                    se = StateEvent(
+                        kind=EventKind.DESIRED,
+                        node=node,
+                        deployment=depl,
+                        ev_type=ev.event,
+                        value={node: {depl: payload}},
+                        key=k,
+                    )
+                else:
+                    se = StateEvent(
+                        kind=EventKind.STATUS,
+                        node=node,
+                        deployment=depl,
+                        ev_type=ev.event,
+                        value={node: {depl: {"status": payload}}},
+                        key=k,
+                    )
+                asyncio.run_coroutine_threadsafe(
+                    self.state_events_queue.put(se), self._loop
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"state-watch callback error for {getattr(ev, 'key', '?')}: {e}",
+                    exc_info=True,
+                )
+
+        # Start watching with revision tracking
+        self.resolver.watch_service(
+            ROOT,
+            _cb,
+            notify_on_start=False,  # we do our own seeding
+        )

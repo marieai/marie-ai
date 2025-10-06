@@ -18,7 +18,6 @@ from marie.serve.discovery.etcd_client import EtcdClient
 from marie.serve.networking import _NetworkingHistograms, _NetworkingMetrics
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
-from marie.state.semaphore_store import SemaphoreStore
 from marie.state.state_store import DesiredStore, StatusStore
 from marie.types_core.request.data import DataRequest
 
@@ -299,20 +298,18 @@ class JobSupervisor:
         Only write 'desired' state. Capacity is reserved by PostgreSQLJobScheduler.
         JobSupervisor does not reserve or release capacity anymore.
         """
-        self.logger.warning("Pre-send callback invoked (no reservation).")
+        self.logger.debug("Pre-send callback invoked (no reservation).")
 
         try:
             node_addr = ctx["address"]
             deployment = ctx["deployment"]
 
             node = self._netloc(node_addr)
-            # desired scheduling only
             params = {"job_id": self._job_id}
             desired = await self._loop.run_in_executor(
                 None, self._desired_store.schedule_new_epoch, node, deployment, params
             )
             self._current_job_epoch = desired.epoch if desired else None
-
             await asyncio.sleep(0.01)
 
         except Exception as e:
