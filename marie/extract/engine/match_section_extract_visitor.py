@@ -675,7 +675,10 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 template_fields_repeating=template_fields_repeating,
             )
 
-            match_section_to_populate.matched_field_rows = matched_field_rows
+            if not match_section_to_populate.matched_field_rows:
+                match_section_to_populate.matched_field_rows = matched_field_rows
+            else:  # MatchSection has collected rows from a previous region in scope
+                match_section_to_populate.matched_field_rows.extend(matched_field_rows)
 
     def _build_matched_field_rows(
         self,
