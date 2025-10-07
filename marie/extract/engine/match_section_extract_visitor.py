@@ -193,7 +193,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         for span in spans:
             page_id = span.page
             start_line = span.y
-            end_line = start_line + span.h
+            end_line = start_line + span.h + 1
 
             regions_by_page = document.regions_for_page(page_id)
             for region in regions_by_page:
@@ -217,7 +217,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     region_start = min(mins)
                     region_end = max(maxs)
                     # Fully-contained check
-                    if region_start > start_line and region_end < end_line:
+                    if region_start >= start_line and region_end <= end_line:
                         regions_in_scope.add(region)
                 except Exception:
                     raise
