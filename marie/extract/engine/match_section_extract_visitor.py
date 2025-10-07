@@ -192,8 +192,8 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
         for span in spans:
             page_id = span.page
-            start_line = span.y
-            end_line = start_line + span.h
+            start_line = span.start_line_id
+            end_line = span.end_line_id
 
             regions_by_page = document.regions_for_page(page_id)
             for region in regions_by_page:
@@ -217,7 +217,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     region_start = min(mins)
                     region_end = max(maxs)
                     # Fully-contained check
-                    if region_start > start_line and region_end < end_line:
+                    if region_start >= start_line and region_end <= end_line:
                         regions_in_scope.add(region)
                 except Exception:
                     raise
@@ -675,7 +675,10 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 template_fields_repeating=template_fields_repeating,
             )
 
-            match_section_to_populate.matched_field_rows = matched_field_rows
+            if not match_section_to_populate.matched_field_rows:
+                match_section_to_populate.matched_field_rows = matched_field_rows
+            else:  # MatchSection has collected rows from a previous region in scope
+                match_section_to_populate.matched_field_rows.extend(matched_field_rows)
 
     def _build_matched_field_rows(
         self,
@@ -819,8 +822,8 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
                 page_id = span.page
                 tables_by_page: List[Table] = document.tables_for_page(page_id)
-                start_line = span.y
-                end_line = start_line + span.h
+                start_line = span.start_line_id
+                end_line = span.end_line_id
 
                 for table in tables_by_page:
                     rows = table.cells
