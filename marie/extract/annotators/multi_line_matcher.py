@@ -446,6 +446,7 @@ class MultiLinePatternMatcher:
         good_threshold: Optional[float] = None,  # e.g., 0.75 for “GOOD”
         enforce_good_only: bool = False,  # if True, drop non-good matches
         annotate_good_flag: bool = True,  # add is_good flag to outputs
+        max_blocks: int = None,  # top N matched blocks per page
     ) -> List[Dict]:
         if not lines or not self.reference_embs:
             return []
@@ -671,25 +672,29 @@ class MultiLinePatternMatcher:
                     matched_blocks = [item]
                 else:
                     matched_blocks = []
-
-            if not allow_overlap and len(matched_blocks) > 1:
-                matched_blocks = suppress_overlapping_blocks(matched_blocks)
         else:
-            if not final_cands:
-                return []
-            score, label, start_idx, end_idx, window_size, window_text, _ = final_cands[
-                0
-            ]
-            item = build_item(
-                label, score, start_idx, end_idx, window_size, window_text
-            )
-            if (
-                enforce_good_only
-                and good_threshold is not None
-                and score < float(good_threshold)
-            ):
-                matched_blocks = []
-            else:
-                matched_blocks = [item]
+            for (
+                score,
+                label,
+                start_idx,
+                end_idx,
+                window_size,
+                window_text,
+                _diag,
+            ) in final_cands:
+                if not (
+                    enforce_good_only
+                    and good_threshold is not None
+                    and score < float(good_threshold)
+                ):
+                    item = build_item(
+                        label, score, start_idx, end_idx, window_size, window_text
+                    )
+                    matched_blocks.append(item)
 
-        return matched_blocks
+        if not allow_overlap and len(matched_blocks) > 1:
+            matched_blocks = suppress_overlapping_blocks(matched_blocks)
+
+        matched_blocks.sort(key=lambda x: x["score"], reverse=True)
+
+        return matched_blocks[:max_blocks] if max_blocks is not None else matched_blocks
