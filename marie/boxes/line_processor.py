@@ -46,7 +46,7 @@ def find_line_number(lines: List[List[int]], box: List[int]) -> int:
     return line_number
 
 
-def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
+def __line_merge(image, bboxes, min_iou=0.5, strict: bool = False) -> List[Any]:
     if len(bboxes) == 0:
         return []
     bboxes = np.array(bboxes)
@@ -62,17 +62,14 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
             continue
         visited[idx] = True
         box = bboxes[idx]
-        x, y, w, h = box
         overlaps, indexes, scores = find_overlap_vertical(box, bboxes)
         # logger.debug(f" ***   {box}  -> : {len(overlaps)} ::: {overlaps} , {scores} , {indexes}")
 
         # now we check each overlap against each other
         # for each item that overlaps our box check to make sure that the ray back is valid
-        # exp_count = len(overlaps)
-        exp_count = sum(x >= min_iou for x in scores)
+        exp_count = len(overlaps) if strict else sum(x >= min_iou for x in scores)
         idx_to_merge = [idx]
 
-        idx_to_remove = []
         for k, (overlap, index, score) in enumerate(zip(overlaps, indexes, scores)):
             if visited[index] or score < min_iou:
                 continue
@@ -80,8 +77,11 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
             bi_overlaps, bi_indexes, bi_scores = find_overlap_vertical(overlap, bboxes)
 
             # # if source is overlapping the candidate and the candidate is overlapping the source
-            # # if len(bi_overlaps) == exp_count:
-            if sum(x >= min_iou for x in bi_scores) == exp_count:
+            # If each has the same number of overlaps then we merge
+            valid_bi_overlaps = (
+                len(bi_overlaps) if strict else sum(x >= min_iou for x in bi_scores)
+            )
+            if valid_bi_overlaps == exp_count:
                 idx_to_merge.append(index)
                 visited[index] = True
 
@@ -101,13 +101,17 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
 
 
 def line_merge(
-    image, bboxes: List[List[int]], enable_visualization: Optional[bool] = False
+    image,
+    bboxes: List[List[int]],
+    enable_visualization: Optional[bool] = False,
+    strict: bool = False,
 ) -> List[List[int]]:
     """Merge overlapping bounding boxes into lines
 
     :param image: image to overlay the bounding boxes on
     :param bboxes: list of bounding boxes in (x, y, w, h) format
     :param enable_visualization:  enable visualization of the bounding boxes
+    :param strict: when True, only merge boxes that have the same number of overlapping boxes, even if above min IoU
     :return: list of merged bounding boxes in (x, y, w, h) format
     """
 
@@ -129,7 +133,7 @@ def line_merge(
     for i in range(0, len(iou_scores)):
         # overlay = copy.deepcopy(image)
         size_before_merge = len(merged_bboxes)
-        merged_bboxes = __line_merge(image, merged_bboxes, iou_scores[i])
+        merged_bboxes = __line_merge(image, merged_bboxes, iou_scores[i], strict)
         size_after_merge = len(merged_bboxes)
         if size_before_merge == size_after_merge:
             no_change_count += 1
