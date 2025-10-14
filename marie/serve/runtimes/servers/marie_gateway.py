@@ -13,8 +13,7 @@ from urllib.parse import urlparse
 import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
-from fastapi import Depends, FastAPI, Header, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import FastAPI, Request
 from grpc_health.v1.health_pb2 import HealthCheckResponse
 from rich.traceback import install
 
