@@ -1470,12 +1470,6 @@ class MarieServerGateway(CompositeServer):
                 self.logger.info(f"\t{outgoing}")
 
         # FIXME : this was a bad idea, we need to use the same deployment
-        print('Deployment Check')
-        print('self.deployments')
-        print(self.deployments)
-        print('self.deployment_nodes')
-        print(self.deployment_nodes)
-
         ClusterState.deployments = self.deployments
         ClusterState.deployment_nodes = self.deployment_nodes
 

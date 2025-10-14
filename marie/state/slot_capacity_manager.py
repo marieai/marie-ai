@@ -37,8 +37,6 @@ class SlotCapacityManager:
         self.default_slots_per_node_env = "MARIE_SLOTS_PER_NODE"
         self.zero_absent_env = "MARIE_CAPACITY_ZERO_ON_ABSENT"
 
-    # ----------------- Public API -----------------
-
     def refresh_from_nodes(
         self,
         deployment_nodes: Mapping[str, List[dict]],
