@@ -81,7 +81,7 @@ def visualize_bboxes(
     format="xyxy",
     blackout=False,
     blackout_color=(0, 0, 0, 255),
-    labels: Optional[List[str]] = None
+    labels: Optional[List[str]] = None,
 ) -> PIL.Image:
     """Visualize bounding boxes on the image
     Args:
@@ -203,11 +203,12 @@ def blackout_bboxes(
     return image
 
 
-def lines_from_bboxes(image, bboxes):
+def lines_from_bboxes(image, bboxes, bbox_strict_line_merge: bool = False):
     """Create lines out of bboxes for given image.
     Args:
         image(ndarray): numpy array of shape (H, W), where H is the image height and W is the image width.
         bboxes: Bounding boxes for image (xmin,ymin,xmax,ymax)
+        bbox_strict_line_merge: when True, only merge boxes that have the same number of overlapping boxes, even if above min IoU
 
     Returns:
         lines_bboxes: Bounding boxes for the lines in (x,y,w,h) format
@@ -282,7 +283,7 @@ def lines_from_bboxes(image, bboxes):
         line_bboxes.append([x, y, w, h])
 
     # the format now will be in xywh
-    lines_bboxes = line_merge(binary_mask, line_bboxes)
+    lines_bboxes = line_merge(binary_mask, line_bboxes, strict=bbox_strict_line_merge)
 
     if enable_visualization:
         viz_img = visualize_bboxes(image, lines_bboxes, format="xywh")
@@ -516,6 +517,7 @@ class BoxProcessorUlimDit(BoxProcessor):
         bbox_context_aware: Optional[bool] = True,
         bbox_refinement: Optional[bool] = None,
         enable_visualization: Optional[bool] = False,
+        bbox_strict_line_merge: Optional[bool] = False,
     ):
         try:
             self.logger.debug(f"Starting box predictions : {image.shape}")
@@ -654,7 +656,7 @@ class BoxProcessorUlimDit(BoxProcessor):
             # sort by xy-coordinated
             ind = np.lexsort((bboxes[:, 0], bboxes[:, 1]))
             bboxes = bboxes[ind]
-            lines = lines_from_bboxes(image, bboxes)
+            lines = lines_from_bboxes(image, bboxes, bbox_strict_line_merge)
 
             return bboxes, classes, scores, lines, classes
         except Exception as e:
@@ -687,6 +689,7 @@ class BoxProcessorUlimDit(BoxProcessor):
         bbox_optimization: Optional[bool] = False,
         bbox_context_aware: Optional[bool] = True,
         bbox_refinement: Optional[bool] = None,
+        bbox_strict_line_merge: Optional[bool] = False,
     ) -> Tuple[Any, Any, Any, Any, Any]:
         if img is None:
             raise Exception("Input image can't be empty")
@@ -714,7 +717,11 @@ class BoxProcessorUlimDit(BoxProcessor):
             # Page Segmentation Model
             if psm == PSMode.SPARSE:
                 bboxes, polys, scores, lines_bboxes, classes = self.psm_sparse(
-                    image, bbox_optimization, bbox_context_aware, bbox_refinement
+                    image,
+                    bbox_optimization=bbox_optimization,
+                    bbox_context_aware=bbox_context_aware,
+                    bbox_refinement=bbox_refinement,
+                    bbox_strict_line_merge=bbox_strict_line_merge,
                 )
             # elif psm == PSMode.WORD:
             #     bboxes, polys, scores, lines_bboxes, classes = self.psm_word(image_norm)

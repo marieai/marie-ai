@@ -205,24 +205,40 @@ def estimate_token_count(prompt: str, model_name: str = "gpt-3.5-turbo-0301") ->
         raise ValueError(f"An error occurred while estimating tokens: {e}")
 
 
+def _b64_png(image_path: str) -> str:
+    # RGB + modest PNG optimization to keep payload smaller without quality loss for OCR
+    with Image.open(image_path) as im:
+        im = im.convert("RGB")
+        buf = io.BytesIO()
+        im.save(buf, format="PNG", optimize=True)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
 # Qwen/Qwen2.5-VL-7B-Instruct  Qwen/Qwen2.5-VL-72B-Instruct-AWQ"
 def inference_with_api(
     image_path,
     prompt,
     sys_prompt="You are a helpful assistant.",
-    # model_id="Qwen/Qwen2.5-VL-7B-Instruct",
     model_id="qwen_v2_5_vl",
     min_pixels=1280 * 28 * 28,
     max_pixels=2400 * 28 * 28,
+    temperature=0.1,
+    top_p=0.2,
+    enable_thinking=True,
 ):
+    min_pixels = 512 * 28 * 28  # ~0.4 MP
+    max_pixels = 1536 * 28 * 28  # ~1.2 MP
+
     # base64_image = encode_image(image_path)
     with io.BytesIO() as buffer:
         Image.open(image_path).convert("RGB").save(buffer, format="PNG")
         bytes_data = buffer.getvalue()
+
     image_type = "png"
-    base64_image = base64.b64encode(bytes_data).decode('utf-8')
+    # base64_image = base64.b64encode(bytes_data).decode('utf-8')
+    base64_image = _b64_png(image_path)
     estimated_tokens = estimate_token_count(prompt)
-    estimated_tokens = 8192  #  estimated_tokens + 512  #
+    estimated_tokens = 8192 * 2  #  estimated_tokens + 512  #
     # --max-batch-prefill-tokens 4096 --max-total-tokens 4096 --max-input-tokens 2048
 
     print('estimated_tokens : ', estimated_tokens)
@@ -231,7 +247,7 @@ def inference_with_api(
         api_key=api_key,
         base_url=base_url,
     )
-    sys_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+    # sys_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
     messages = [
         {
             "role": "system",
@@ -272,26 +288,46 @@ def inference_with_api(
     # 2. **top_p=1.0** – Disables nucleus sampling, ensuring no additional probability mass is truncated.
     # 3. **frequency_penalty=0.0** and **presence_penalty=0.0** – Ensures no penalization that would otherwise alter token probabilities
 
+    # Predictable + Complete
+    # Parameter	Typical Value	Why
+    # temperature	0.1–0.2	Keeps JSON completion stable; avoids deterministic freezing
+    # top-p	0.1–0.3	Smooths token choice; resists OCR noise
+    # penalties	0 / 0	Keeps schema identical every run
+
     max_tokens: int = estimated_tokens  # 2048
-    frequency_penalty = 0.0  # Turns off frequency penalty
-    presence_penalty = 0.0  # Turns off presence penalty
     stop: List[str] = []
 
     completion = client.chat.completions.create(
         model=model_id,
         messages=messages,
-        temperature=0.0,
-        top_p=1.0,  # 1.0 Ensures the full distribution is considered
-        frequency_penalty=frequency_penalty,
-        presence_penalty=presence_penalty,
+        temperature=temperature,
+        top_p=top_p,
+        frequency_penalty=0.0,
+        presence_penalty=0.0,
         max_tokens=max_tokens,
         stop=stop,
+        seed=42,  # ensures deterministic output across identical inputs
+        # enable_thinking=enable_thinking,
+        # THIS DOES NOT WORK YET
+        extra_body={
+            "chat_template_kwargs": {
+                "thinking": enable_thinking,
+                "enable_thinking": enable_thinking,
+            }
+        },
     )
 
     return completion.choices[0].message.content
 
 
-def qwen_inference(media_input, text_input=None):
+def qwen_inference(
+    media_input,
+    text_input=None,
+    system_prompt=None,
+    temperature=0.1,
+    top_p=0.2,
+    enable_thinking=True,
+):
     if isinstance(media_input, str):  # If it's a filepath
         media_path = media_input
         if media_path.endswith(tuple([i for i, f in image_extensions.items()])):
@@ -310,7 +346,20 @@ def qwen_inference(media_input, text_input=None):
     print(media_path)
     image = Image.open(media_path)
 
-    result = inference_with_api(media_path, text_input)
+    # Use provided system prompt or default
+    if system_prompt is None or system_prompt.strip() == "":
+        system_prompt = (
+            "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+        )
+
+    result = inference_with_api(
+        media_path,
+        text_input,
+        sys_prompt=system_prompt,
+        temperature=temperature,
+        top_p=top_p,
+        enable_thinking=enable_thinking,
+    )
     print('result')
     print(result)
     messages = [
@@ -351,7 +400,39 @@ with gr.Blocks(css=css) as demo:
             with gr.Column():
                 input_media = gr.File(label="Upload Image to analyze", type="filepath")
                 preview_image = gr.Image(label="Preview", visible=True)
+                system_prompt = gr.Textbox(
+                    label="System Prompt",
+                    value="You are Qwen, created by Alibaba Cloud. You are a helpful assistant.",
+                    lines=3,
+                    placeholder="Enter system prompt here...",
+                )
                 text_input = gr.Textbox(label="Text Input (optional)")
+
+                # Model parameters
+                with gr.Row():
+                    temperature = gr.Slider(
+                        minimum=0.0,
+                        maximum=2.0,
+                        value=0.1,
+                        step=0.1,
+                        label="Temperature",
+                        info="Controls randomness (0.0 = deterministic, higher = more random)",
+                    )
+                    top_p = gr.Slider(
+                        minimum=0.0,
+                        maximum=1.0,
+                        value=0.2,
+                        step=0.1,
+                        label="Top-p",
+                        info="Controls diversity (lower = more focused)",
+                    )
+
+                enable_thinking = gr.Checkbox(
+                    label="Enable Thinking",
+                    value=True,
+                    info="Allow the model to show reasoning process",
+                )
+
                 submit_btn = gr.Button(value="Submit")
             with gr.Column():
                 output_text = gr.Textbox(label="Output Text")
@@ -362,7 +443,18 @@ with gr.Blocks(css=css) as demo:
             outputs=[input_media, preview_image],
         )
 
-        submit_btn.click(qwen_inference, [input_media, text_input], [output_text])
+        submit_btn.click(
+            qwen_inference,
+            [
+                input_media,
+                text_input,
+                system_prompt,
+                temperature,
+                top_p,
+                enable_thinking,
+            ],
+            [output_text],
+        )
 
 demo.launch(debug=True, share=False)
 

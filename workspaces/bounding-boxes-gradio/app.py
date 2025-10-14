@@ -14,6 +14,7 @@ class GradioBoxProcessor:
         self.sel_content_aware = False
         self.sel_bbox_optimization = False
         self.sel_bbox_refinement = True
+        self.sel_bbox_strict_line_merge = False
 
         self.box = BoxProcessorUlimDit(
             models_dir="../../model_zoo/unilm/dit/text_detection",
@@ -29,10 +30,15 @@ class GradioBoxProcessor:
     def update_bbox_optimization(self, value):
         self.sel_bbox_optimization = value
 
+    def update_bbox_strict_line_merge(self, value):
+        self.sel_bbox_strict_line_merge = value
+
     def process_image(self, image):
         print("Processing image")
         print(f"Content Aware: {self.sel_content_aware}")
         print(f"BBox Optimization: {self.sel_bbox_optimization}")
+        print(f"BBox Refinement: {self.sel_bbox_refinement}")
+        print(f"BBox Strict Line Merge: {self.sel_bbox_strict_line_merge}")
 
         (
             boxes,
@@ -48,6 +54,7 @@ class GradioBoxProcessor:
             self.sel_content_aware,
             self.sel_bbox_optimization,
             self.sel_bbox_refinement,
+            self.sel_bbox_strict_line_merge,
         )
 
         bboxes_img = visualize_bboxes(
@@ -85,6 +92,25 @@ def interface():
             with gr.Column():
                 chk_apply_bbox_optimization = gr.Checkbox(
                     label="Bounding Box optimization",
+                    value=processor.sel_bbox_optimization,
+                    interactive=True,
+                )
+
+                chk_apply_content_aware = gr.Checkbox(
+                    label="Content aware transformation",
+                    value=processor.sel_content_aware,
+                    interactive=True,
+                )
+
+                chk_apply_bbox_refinement = gr.Checkbox(
+                    label="Bounding box refinement",
+                    value=processor.sel_bbox_refinement,
+                    interactive=True,
+                )
+
+                chk_apply_bbox_strict_line_merge = gr.Checkbox(
+                    label="Strict line merge",
+                    value=processor.sel_bbox_strict_line_merge,
                     interactive=True,
                 )
 
@@ -92,16 +118,6 @@ def interface():
                     lambda x: processor.update_bbox_optimization(x),
                     inputs=[chk_apply_bbox_optimization],
                     outputs=[],
-                )
-
-                chk_apply_content_aware = gr.Checkbox(
-                    label="Content aware transformation",
-                    interactive=True,
-                )
-
-                chk_apply_bbox_refinement = gr.Checkbox(
-                    label="Bounding box refinement",
-                    interactive=True,
                 )
 
                 chk_apply_content_aware.change(
@@ -113,6 +129,12 @@ def interface():
                 chk_apply_bbox_refinement.change(
                     lambda x: processor.update_bbox_refinement(x),
                     inputs=[chk_apply_bbox_refinement],
+                    outputs=[],
+                )
+
+                chk_apply_bbox_strict_line_merge.change(
+                    lambda x: processor.update_bbox_strict_line_merge(x),
+                    inputs=[chk_apply_bbox_strict_line_merge],
                     outputs=[],
                 )
 

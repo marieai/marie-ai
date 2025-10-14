@@ -2,20 +2,17 @@ import imghdr
 import io
 import os
 import tempfile
-from typing import Any, AnyStr, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
 import PyPDF4
 import skimage.io as skio
 from docarray import DocList
-from docarray.documents import ImageDoc
 from PIL import Image
 from PyPDF4 import PdfFileReader
 from PyPDF4.utils import PdfReadError
 
-from marie import Document, DocumentArray
-from marie._core.definitions.events import AssetKey
 from marie.api.docs import DOC_KEY_PAGE_NUMBER, MarieDoc
 from marie.common.file_io import StrOrBytesPath
 from marie.logging_core.predefined import default_logger as logger
