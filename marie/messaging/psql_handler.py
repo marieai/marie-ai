@@ -8,7 +8,6 @@ from docarray import DocList
 from marie.api.docs import StorageDoc
 from marie.excepts import BadConfigSource
 from marie.executor.mixin import StorageMixin
-from marie.helper import get_or_reuse_loop
 from marie.logging_core.logger import MarieLogger
 from marie.messaging.events import EventMessage
 from marie.messaging.toast_handler import ToastHandler

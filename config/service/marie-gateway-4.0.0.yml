@@ -117,6 +117,23 @@ with:
       default_table: event_tracking
       enabled : True
 
+    # SSE backend for real-time UI via /sse/{api_key}
+    sse:
+      enabled: true
+      broker:
+        replay_size: 200            # per-topic (api_key) replay buffer used for Last-Event-ID
+        subscriber_q_max: 1024      # bound per client; drops oldest on overflow
+        heartbeat_interval_s: 15.0
+      # handler (producer) queue/backoff knobs
+      queue:
+        maxsize: 4096
+        drop_if_full: false
+        enqueue_timeout_s: 0
+      retry:
+        backoff_base_s: 0.1
+        backoff_max_s: 2.0
+        max_attempts: 0            # 0 => infinite
+
   # Document Storage
   # The storage service is used to store the data that is being processed
   # Storage can be backed by S3 compatible

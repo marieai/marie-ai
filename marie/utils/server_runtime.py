@@ -1,11 +1,13 @@
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Union
 
 from marie.constants import __cache_path__
 from marie.logging_core.predefined import default_logger as logger
 from marie.messaging.native_handler import NativeToastHandler
 from marie.messaging.psql_handler import PsqlToastHandler
 from marie.messaging.rabbit_handler import RabbitMQToastHandler
+from marie.messaging.sse_broker import SseBroker
+from marie.messaging.sse_toast_handler import SseToastHandler
 from marie.messaging.toast_registry import Toast
 from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.types import strtobool
@@ -22,28 +24,47 @@ def setup_auth(auth_config: Dict[str, Any]) -> None:
     APIKeyManager.from_config(auth_config)
 
 
-def setup_toast_events(toast_config: Dict[str, Any]):
+def setup_toast_events(toast_config: Dict[str, Any]) -> Union[SseBroker | None]:
     """
     Setup the toast events for the server notification system
     :param toast_config: The toast config
+    :return: SseBroker or None
     """
     if toast_config is None or not toast_config:
         logger.warning("No toast config provided")
-        return
+        return None
 
     native_config = toast_config["native"]
-    psql_config = toast_config["psql"]
-    rabbitmq_config = toast_config["rabbitmq"]
+    psql_cfg = toast_config["psql"]
+    rabbitmq_cfg = toast_config["rabbitmq"]
+    sse_cfg = toast_config.get("sse", {})
 
     Toast.register(
         NativeToastHandler(os.path.join(__cache_path__, "events.json")), native=True
     )
 
-    if psql_config is not None:
-        Toast.register(PsqlToastHandler(psql_config), native=False)
+    if psql_cfg is not None:
+        if bool(psql_cfg.get("enabled", False)):
+            Toast.register(PsqlToastHandler(psql_cfg), native=False)
 
-    if rabbitmq_config is not None:
-        Toast.register(RabbitMQToastHandler(rabbitmq_config), native=False)
+    if rabbitmq_cfg is not None:
+        if bool(rabbitmq_cfg.get("enabled", False)):
+            Toast.register(RabbitMQToastHandler(rabbitmq_cfg), native=False)
+
+    sse_broker = None
+    if sse_cfg is not None:
+        if bool(sse_cfg.get("enabled", True)):
+            logger.info("Setting up sse broker")
+            broker_cfg = sse_cfg.get("broker", {}) or {}
+            sse_broker = SseBroker(
+                replay_size=int(broker_cfg.get("replay_size", 200)),
+                subscriber_q_max=int(broker_cfg.get("subscriber_q_max", 1024)),
+                heartbeat_interval_s=float(
+                    broker_cfg.get("heartbeat_interval_s", 15.0)
+                ),
+            )
+            Toast.register(SseToastHandler(sse_cfg, broker=sse_broker), native=False)
+    return sse_broker
 
 
 def setup_storage(storage_config: Dict[str, Any]) -> None:

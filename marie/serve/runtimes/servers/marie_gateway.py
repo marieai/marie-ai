@@ -13,7 +13,8 @@ from urllib.parse import urlparse
 import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
-from fastapi import Depends, Request
+from fastapi import Depends, FastAPI, Header, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from grpc_health.v1.health_pb2 import HealthCheckResponse
 from rich.traceback import install
 
@@ -230,6 +231,7 @@ class MarieServerGateway(CompositeServer):
             logger=self.logger,
         )
 
+        self.sse_broker = None
         # FIXME : We need to get etcd host and port from the config
         # we should start job scheduler after the gateway server is started
         storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
@@ -268,9 +270,9 @@ class MarieServerGateway(CompositeServer):
         self._rebuild_task: asyncio.Task | None = None
         self._debounce_s = 0.05
 
-        def _extend_rest_function(app):
-            from fastapi import HTTPException, Request
-            from fastapi.responses import JSONResponse
+        def _extend_rest_function(app: 'FastAPI'):
+            from fastapi import Depends, Header, HTTPException, Query, Request, Response
+            from fastapi.responses import JSONResponse, StreamingResponse
 
             @app.exception_handler(Exception)
             async def global_exception_handler(request: Request, exc: Exception):
@@ -536,6 +538,78 @@ class MarieServerGateway(CompositeServer):
                 # return EventSourceResponse(event_generator)
                 # # ['header', 'parameters', 'routes', 'data'
                 # return {"header": {}, "parameters": {}, "data": None}
+
+            async def _sse_auth(authorization: str | None):
+                if not authorization:
+                    raise HTTPException(status_code=401, detail="Missing Authorization")
+
+            @app.get("/sse/all")
+            async def sse_all(
+                response: Response,
+                last_event_id: str | None = Header(
+                    default=None, convert_underscores=False
+                ),
+                named: bool = Query(
+                    True,
+                    description="False => single default 'message' with {type,topic,payload}",
+                ),
+                authorization: str | None = Header(default=None),
+            ):
+                print('http/sse sse_all')
+                await _sse_auth(authorization)
+                response.headers["Content-Type"] = "text/event-stream"
+                response.headers["Cache-Control"] = "no-cache"
+                response.headers["Connection"] = "keep-alive"
+                response.headers["X-Accel-Buffering"] = "no"
+                try:
+                    lei = (
+                        int(last_event_id)
+                        if last_event_id and last_event_id.isdigit()
+                        else None
+                    )
+                except Exception:
+                    lei = None
+
+                async def gen():
+                    async for frame in self.sse_broker.subscribe_all(
+                        last_event_id=lei, named=named, retry_ms=20000
+                    ):
+                        print("Yielding frame : ", frame)
+                        yield frame
+
+                return StreamingResponse(gen(), media_type="text/event-stream")
+
+            @app.get("/sse/{api_key}")
+            async def sse_tenant(
+                api_key: str,
+                response: Response,
+                last_event_id: str | None = Header(
+                    default=None, convert_underscores=False
+                ),
+                authorization: str | None = Header(default=None),
+            ):
+                print('http/sse sse_tenant')
+                await _sse_auth(authorization)
+                response.headers["Content-Type"] = "text/event-stream"
+                response.headers["Cache-Control"] = "no-cache"
+                response.headers["Connection"] = "keep-alive"
+                response.headers["X-Accel-Buffering"] = "no"
+                try:
+                    lei = (
+                        int(last_event_id)
+                        if last_event_id and last_event_id.isdigit()
+                        else None
+                    )
+                except Exception:
+                    lei = None
+
+                async def gen():
+                    async for frame in self.sse_broker.subscribe(
+                        topic=api_key, last_event_id=lei, retry_ms=20000
+                    ):
+                        yield frame
+
+                return StreamingResponse(gen(), media_type="text/event-stream")
 
             return app
 
@@ -868,7 +942,7 @@ class MarieServerGateway(CompositeServer):
         self.logger.debug(f"Setting up MarieGateway server")
         await super().setup_server()
 
-        setup_toast_events(self.args.get("toast", {}))
+        self.sse_broker = setup_toast_events(self.args.get("toast", {}))
         setup_storage(self.args.get("storage", {}))
         setup_auth(self.args.get("auth", {}))
         await self.setup_service_discovery(
