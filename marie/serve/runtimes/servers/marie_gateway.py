@@ -19,6 +19,7 @@ from rich.traceback import install
 
 import marie
 import marie.helper
+from marie._core.definitions.metadata import JsonMetadataValue
 from marie._core.utils import run_background_task
 from marie.auth.api_key_manager import APIKeyManager
 from marie.auth.auth_bearer import TokenBearer
@@ -36,6 +37,8 @@ from marie.job.gateway_job_distributor import GatewayJobDistributor
 from marie.job.job_manager import JobManager
 from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import mark_as_failed, mark_as_scheduled
+from marie.messaging.events import EngineEventData, MarieEvent, MarieEventType
+from marie.messaging.sse_broker import SseBroker
 from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.scheduler import PostgreSQLJobScheduler
 from marie.scheduler.models import DEFAULT_RETRY_POLICY, JobSubmissionModel, WorkInfo
@@ -172,6 +175,9 @@ class MarieServerGateway(CompositeServer):
 
         self.desired_map: Dict[tuple[str, str], DesiredDoc] = {}
         self.status_map: Dict[tuple[str, str], StatusDoc] = {}
+        self._sse_event_queue: asyncio.Queue[tuple[str, str, dict]] = asyncio.Queue(
+            maxsize=2048
+        )
 
         self.args = {**vars(self.runtime_args), **kwargs}
         yml_config = self.args.get("uses")
@@ -941,9 +947,10 @@ class MarieServerGateway(CompositeServer):
         self.logger.debug(f"Setting up MarieGateway server")
         await super().setup_server()
 
-        self.sse_broker = setup_toast_events(self.args.get("toast", {}))
+        self.sse_broker: SseBroker = setup_toast_events(self.args.get("toast", {}))
         setup_storage(self.args.get("storage", {}))
         setup_auth(self.args.get("auth", {}))
+
         await self.setup_service_discovery(
             etcd_host=self.args["discovery_host"],
             etcd_port=self.args["discovery_port"],
@@ -969,6 +976,8 @@ class MarieServerGateway(CompositeServer):
         run_server_tasks.append(
             asyncio.create_task(self._reconcile_loop(interval_s=10))
         )
+        # Background SSE pump
+        run_server_tasks.append(asyncio.create_task(self._sse_pump_loop()))
 
         await asyncio.gather(*run_server_tasks)
 
@@ -1153,8 +1162,21 @@ class MarieServerGateway(CompositeServer):
 
                 # Always schedule a (debounced) rebuild
                 self._schedule_rebuild(True)
-                self.capacity_manager.refresh_from_nodes(self.deployment_nodes)
-
+                capacity_stats = self.capacity_manager.refresh_from_nodes(
+                    self.deployment_nodes
+                )
+                print('capacity_stats : ', capacity_stats)
+                self.logger.debug(f"Capacity stats : {capacity_stats}")
+                event = MarieEvent.engine_event(
+                    f"Capacity updated",
+                    EngineEventData(
+                        metadata={
+                            "stats": JsonMetadataValue(capacity_stats),
+                        },
+                        marker_start=MarieEventType.RESOURCE_EXECUTOR_UPDATED,
+                    ),
+                )
+                await self.emit_engine_event(event, topic="gateway")
                 error_counter = 0
             except Exception as ex:
                 self.logger.error(f"Service event error: {ex}", exc_info=True)
@@ -1794,3 +1816,55 @@ class MarieServerGateway(CompositeServer):
             _cb,
             notify_on_start=False,  # we do our own seeding
         )
+
+    async def _sse_pump_loop(self) -> None:
+        """
+        Single consumer that drains the SSE queue and publishes to the broker.
+        Keeps publish I/O off the producer paths.
+        """
+        while True:
+            topic, ev_type, payload = await self._sse_event_queue.get()
+            try:
+                if self.sse_broker and isinstance(self.sse_broker, SseBroker):
+                    await self.sse_broker.publish(
+                        topic=topic, event=ev_type, payload=payload
+                    )
+            except Exception as e:
+                self.logger.warning(f"SSE pump publish failed: {e}")
+            finally:
+                self._sse_event_queue.task_done()
+
+    def _enqueue_sse(self, topic: str, ev_type: str, payload: dict) -> None:
+        """
+        Non-blocking enqueue to SSE buffer with drop-oldest backpressure.
+        Ensures producers never await on publish.
+        """
+        try:
+            self._sse_event_queue.put_nowait((topic, ev_type, payload))
+        except asyncio.QueueFull:
+            try:
+                _ = self._sse_event_queue.get_nowait()
+                self._sse_event_queue.task_done()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                self._sse_event_queue.put_nowait((topic, ev_type, payload))
+            except asyncio.QueueFull:
+                self.logger.debug(
+                    "SSE queue full; dropping event for topic=%s type=%s",
+                    topic,
+                    ev_type,
+                )
+
+    async def emit_engine_event(self, event: MarieEvent, topic: str = "system") -> None:
+        """
+        Serialize the dataclass and enqueue to SSE buffer.
+        Non-blocking for the caller; actual publish is handled by the pump loop.
+        """
+        try:
+            payload = asdict(event)
+            self._enqueue_sse(
+                topic=topic, ev_type=event.event_type.as_event_name(), payload=payload
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to enqueue engine event: {e}")

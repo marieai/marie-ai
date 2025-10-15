@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Mapping, NamedTuple, Optional
+from typing import Any, Mapping, Optional
 
 from marie import check
 from marie._core.definitions.metadata import MetadataValue, normalize_metadata
@@ -14,6 +14,8 @@ class MarieEventType(str, Enum):
     RESOURCE_INIT_STARTED = "RESOURCE_INIT_STARTED"
     RESOURCE_INIT_SUCCESS = "RESOURCE_INIT_SUCCESS"
     RESOURCE_INIT_FAILURE = "RESOURCE_INIT_FAILURE"
+
+    RESOURCE_EXECUTOR_UPDATED = "RESOURCE_EXECUTOR_UPDATED"
 
     STEP_OUTPUT = "STEP_OUTPUT"
     STEP_INPUT = "STEP_INPUT"
@@ -36,6 +38,10 @@ class MarieEventType(str, Enum):
 
     ENGINE_EVENT = "ENGINE_EVENT"
 
+    def as_event_name(self) -> str:
+        """Convert enum value to lowercase with dots for SSE events."""
+        return self.value.lower().replace('_', '.')
+
 
 FAILURE_EVENTS = {
     MarieEventType.RUN_FAILURE,
@@ -48,6 +54,7 @@ MARKER_EVENTS = {
     MarieEventType.RESOURCE_INIT_STARTED,
     MarieEventType.RESOURCE_INIT_SUCCESS,
     MarieEventType.RESOURCE_INIT_FAILURE,
+    MarieEventType.RESOURCE_EXECUTOR_UPDATED,
 }
 
 ASSET_EVENTS = {
@@ -80,9 +87,6 @@ class EventMessage:
     payload: Any
 
 
-# @dataclass(frozen=True)
-
-
 @dataclass(frozen=False)
 class EngineEventData:
     metadata: Mapping[str, MetadataValue]
@@ -109,18 +113,32 @@ class EngineEventData:
         return EngineEventData(metadata={}, error=error)
 
 
+@dataclass(frozen=True)
 class MarieEvent:
+    event_type: MarieEventType
+    message: str
+    event_specific_data: Optional[EngineEventData] = None
+
+    @classmethod
+    def from_job(
+        cls,
+        event_type: MarieEventType,
+        message: str,
+        event_specific_data: Optional["EngineEventData"] = None,
+    ) -> "MarieEvent":
+        return cls(
+            event_type=event_type,
+            message=message,
+            event_specific_data=event_specific_data,
+        )
+
     @staticmethod
     def engine_event(
         message: str,
         event_specific_data: Optional["EngineEventData"] = None,
     ) -> "MarieEvent":
-        print("MarieEvent.engine_event")
-        print(message)
-        print(event_specific_data)
-        return None
-        # return MarieEvent.from_job(
-        #     MarieEventType.ENGINE_EVENT,
-        #     message,
-        #     event_specific_data=event_specific_data,
-        # )
+        return MarieEvent.from_job(
+            MarieEventType.ENGINE_EVENT,
+            message,
+            event_specific_data=event_specific_data,
+        )

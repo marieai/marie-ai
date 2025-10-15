@@ -67,6 +67,7 @@ class SseBroker:
     async def publish(self, *, topic: str, event: str, payload: Any) -> None:
         print('Publishing SSE', topic, event, payload)
         data_json = json.dumps(payload, default=str)
+
         async with self._lock:
             # Per-topic
             next_id, dq = self._replay_topics[topic]

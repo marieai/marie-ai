@@ -22,6 +22,16 @@ class SlotCapacityManager:
       MARIE_CAPACITY_ZERO_ON_ABSENT=true|false   (default=false)
     """
 
+    SUMMARY_HEADERS: tuple[str, ...] = (
+        "SLOT",
+        "CAPACITY",
+        "TARGET",
+        "USED",
+        "AVAIL",
+        "HOLDERS",
+        "NOTES",
+    )
+
     def __init__(
         self,
         semaphore_store: SemaphoreStore,
@@ -40,12 +50,14 @@ class SlotCapacityManager:
     def refresh_from_nodes(
         self,
         deployment_nodes: Mapping[str, List[dict]],
-    ) -> None:
+    ) -> tuple[list[tuple], dict[str, int]]:
         """
         Reconcile capacities for all executors present in `deployment_nodes`.
         Idempotent. Safe to call frequently.
 
         deployment_nodes: { executor: [ { "address": "...", "gateway": "...", ... }, ... ] }
+        Returns:
+          (rows, totals) computed from the current store snapshot after reconciliation.
         """
         targets = self._capacity_targets_from_nodes(deployment_nodes)
 
@@ -61,22 +73,31 @@ class SlotCapacityManager:
                 used = max(0, int(self.sem.read_count(slot_type)))
                 self._safe_set_capacity(slot_type, used)
 
-        # 3) print a concise summary
         self.print_summary(targets=targets)
+        return self.compute_summary_rows_and_totals(targets)
 
-    def print_summary(self, targets: Optional[Dict[str, int]] = None) -> None:
+    def compute_summary_rows_and_totals(
+        self, targets: Optional[Dict[str, int]] = None
+    ) -> tuple[list[tuple], dict[str, int]]:
         """
-        Log a table of current slot state: SLOT | CAPACITY | TARGET | USED | AVAIL | HOLDERS | NOTES
+        Public helper to build summary rows and totals from current store snapshot and optional targets.
+
+        Returns:
+          (rows, totals)
+            rows: list of tuples (slot, cap, tgt, used, avail, holders, notes_str)
+            totals: dict with summed 'capacity', 'used', 'available', 'holder_count'
         """
         targets = targets or {}
         snapshot = self.sem.snapshot_all(include_holders=False)
 
-        if not snapshot:
-            self.log.info("[capacity] No slots discovered.")
-            return
+        rows: list[tuple] = []
+        totals: dict[str, int] = {
+            "capacity": 0,
+            "used": 0,
+            "available": 0,
+            "holder_count": 0,
+        }
 
-        rows = []
-        totals = {"capacity": 0, "used": 0, "available": 0, "holder_count": 0}
         for slot in sorted(snapshot.keys()):
             info = snapshot[slot]
             cap = int(info.get("capacity", 0))
@@ -85,7 +106,7 @@ class SlotCapacityManager:
             holders = int(info.get("holder_count", 0))
             tgt = int(targets.get(slot, cap))
 
-            notes = []
+            notes: list[str] = []
             if tgt < used and cap == used:
                 notes.append("CLAMPED")
             if used != holders:
@@ -98,7 +119,19 @@ class SlotCapacityManager:
 
             rows.append((slot, cap, tgt, used, avail, holders, ", ".join(notes)))
 
-        headers = ("SLOT", "CAPACITY", "TARGET", "USED", "AVAIL", "HOLDERS", "NOTES")
+        return rows, totals
+
+    def print_summary(self, targets: Optional[Dict[str, int]] = None) -> None:
+        """
+        Log a table of current slot state: SLOT | CAPACITY | TARGET | USED | AVAIL | HOLDERS | NOTES
+        """
+        rows, totals = self.compute_summary_rows_and_totals(targets)
+
+        if not rows:
+            self.log.info("[capacity] No slots discovered.")
+            return
+
+        headers = self.SUMMARY_HEADERS
         widths = [
             max(len(str(r[i])) for r in ([headers] + rows)) for i in range(len(headers))
         ]
@@ -124,8 +157,6 @@ class SlotCapacityManager:
         self.log.info(
             "\n".join(["[capacity] Slot summary:", header, sep, body, sep, total_row])
         )
-
-    # ----------------- Internals -----------------
 
     def _zero_absent_enabled(self) -> bool:
         v = os.environ.get(self.zero_absent_env, "false").lower()

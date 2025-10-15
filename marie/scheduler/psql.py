@@ -2582,6 +2582,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         )
 
         snap = self.frontier.summary(detail=True, top_n=3)
+        print('Frontier snapshot:', snap)
         self.logger.info(
             "Frontier: dags=%s jobs=%s ready=%s leased=%s age(p50/p90/max)=%.1f/%.1f/%.1f",
             snap["totals"]["dags"],

@@ -53,6 +53,8 @@ class SseToastHandler(ToastHandler):
             raise BadConfigSource("'api_key' missing on EventMessage")
         event_name = getattr(msg, "event", None) or "event"
 
+        # for SSE we prepend a prefix to the event name to avoid collisions
+        event_name = f"job.{event_name}"
         # payload: send the entire EventMessage (JSON-serializable)
         await self.broker.publish(
             topic=api_key,
