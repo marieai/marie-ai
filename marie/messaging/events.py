@@ -1,10 +1,19 @@
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping, Optional
+from urllib.parse import urlparse
 
 from marie import check
 from marie._core.definitions.metadata import MetadataValue, normalize_metadata
 from marie.utils.error import SerializableErrorInfo
+
+
+def validate_source(source: str):
+    parsed = urlparse(source)
+    # Accept URIs with a scheme and either a netloc (e.g., "gateway://scheduler")
+    # or a path (e.g., "extract://executor/document")
+    if not parsed.scheme or not (parsed.netloc or parsed.path):
+        raise ValueError(f"Invalid source URI: {source}")
 
 
 class MarieEventType(str, Enum):
@@ -84,6 +93,10 @@ class EventMessage:
         payload (Any): The payload of the message.
     """
 
+    # We need to use URI-like convention for source  e.g. "extract://executor/document", "gateway://scheduler"
+    id: str  # Unique event ID
+    source: str
+
     api_key: str
     jobid: str
     event: str
@@ -123,16 +136,21 @@ class EngineEventData:
 class MarieEvent:
     event_type: MarieEventType
     message: str
+    source: str
     event_specific_data: Optional[EngineEventData] = None
 
     @classmethod
-    def from_job(
+    def from_event(
         cls,
         event_type: MarieEventType,
+        source: str,
         message: str,
         event_specific_data: Optional["EngineEventData"] = None,
     ) -> "MarieEvent":
+        validate_source(source)
+
         return cls(
+            source=source,
             event_type=event_type,
             message=message,
             event_specific_data=event_specific_data,
@@ -140,11 +158,13 @@ class MarieEvent:
 
     @staticmethod
     def engine_event(
+        source: str,
         message: str,
         event_specific_data: Optional["EngineEventData"] = None,
     ) -> "MarieEvent":
-        return MarieEvent.from_job(
+        return MarieEvent.from_event(
             MarieEventType.ENGINE_EVENT,
+            source,
             message,
             event_specific_data=event_specific_data,
         )

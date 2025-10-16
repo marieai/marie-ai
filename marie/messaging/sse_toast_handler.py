@@ -53,10 +53,10 @@ class SseToastHandler(ToastHandler):
         event_name = msg.event or "event"
         api_key = msg.api_key
         payload = msg if isinstance(msg, (dict, list)) else msg.__dict__
-        # for SSE we prepend a prefix to the event name to avoid collisions
-        # event_name = f"job.{event_name}"
-        # payload: send the entire EventMessage (JSON-serializable)
+        source = msg.source or "unknown"
+
         await self.broker.publish(
+            source=source,
             topic=api_key,
             event=event_name,
             payload=payload,
@@ -86,8 +86,6 @@ class SseToastHandler(ToastHandler):
                     self.logger.warning(
                         f"SSE publish failed (attempt {attempts}); retry in {backoff:.2f}s: {e}"
                     )
-                    print(e)
-                    raise e
                     if self._max_attempts and attempts >= self._max_attempts:
                         self.logger.error(
                             f"Dropping SSE event after {attempts} attempts: {getattr(item, 'event', 'unknown')}"

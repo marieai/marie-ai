@@ -4,7 +4,35 @@ import asyncio
 import json
 import time
 from collections import defaultdict, deque
-from typing import Any, AsyncIterator, Deque, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Deque, Dict, List, NamedTuple, Optional
+
+
+class TopicEvent(NamedTuple):
+    id: int
+    event: str
+    source: str
+    payload: Any
+
+
+class AllEvent(NamedTuple):
+    id: int
+    topic: str
+    event: str
+    source: str
+    payload: Any
+
+
+@dataclass
+class TopicState:
+    next_id: int
+    events: Deque[TopicEvent]
+
+
+@dataclass
+class AllState:
+    next_id: int
+    events: Deque[AllEvent]
 
 
 class SseBroker:
@@ -12,8 +40,9 @@ class SseBroker:
     In-process SSE broker with:
       - topics by api_key
       - per-topic replay ring buffer
-      - bounded per-subscriber queues (backpressure: drop-oldest)
+      - bounded per-subscriber queues (drop-oldest backpressure)
       - periodic heartbeats
+      - unified event serialization
     """
 
     def __init__(
@@ -22,26 +51,48 @@ class SseBroker:
         replay_size: int = 200,
         subscriber_q_max: int = 1024,
         heartbeat_interval_s: float = 15.0,
+        debug: bool = False,
     ):
         self._replay_size = replay_size
         self._subscriber_q_max = subscriber_q_max
         self._hb_s = heartbeat_interval_s
+        self._debug = debug
 
-        # Per-topic state: topic -> (next_id, deque[(id, event, data_json)])
-        self._replay_topics: Dict[str, Tuple[int, Deque[Tuple[int, str, str]]]] = (
-            defaultdict(lambda: (1, deque(maxlen=self._replay_size)))
+        self._replay_topics: Dict[str, TopicState] = defaultdict(
+            lambda: TopicState(next_id=1, events=deque(maxlen=self._replay_size))
         )
+        self._replay_all: AllState = AllState(
+            next_id=1, events=deque(maxlen=self._replay_size)
+        )
+
         self._subs_topics: Dict[str, set[asyncio.Queue[str]]] = defaultdict(set)
-
-        # Global state (ALL): (next_id, deque[(id, topic, event, data_json)])
-        self._replay_all: Tuple[int, Deque[Tuple[int, str, str, str]]] = (
-            1,
-            deque(maxlen=self._replay_size),
-        )
-        # Queue -> bool(named=True/False)
         self._subs_all: Dict[asyncio.Queue[str], bool] = {}
 
         self._lock = asyncio.Lock()
+
+    # ---------- Helpers ----------
+
+    def _log(self, *args):
+        if self._debug:
+            print(*args)
+
+    @staticmethod
+    def _render_topic_data(*, payload: Any) -> str:
+        """Topic subscribers see only the event payload (no embedded source)."""
+        return json.dumps(payload, default=str)
+
+    @staticmethod
+    def _render_all_named(*, payload: Any) -> str:
+        """Named 'ALL' subscribers get raw payloads under event type name."""
+        return json.dumps(payload, default=str)
+
+    @staticmethod
+    def _render_all_unnamed(*, ev: str, src: str, topic: str, payload: Any) -> str:
+        """Unnamed 'ALL' subscribers get normalized envelopes."""
+        return json.dumps(
+            {"type": ev, "source": src, "topic": topic, "payload": payload},
+            default=str,
+        )
 
     @staticmethod
     def _sse_frame(
@@ -60,23 +111,30 @@ class SseBroker:
             lines.append(f"event: {event}")
         for line in data.splitlines() or [""]:
             lines.append(f"data: {line}")
-        lines.append("")  # blank terminator
-        print('SSE Frame :', lines)
+        lines.append("")  # blank line terminator
         return "\n".join(lines)
 
-    async def publish(self, *, topic: str, event: str, payload: Any) -> None:
-        print('Publishing SSE', topic, event, payload)
-        data_json = json.dumps(payload, default=str)
+    # ---------- Core Logic ----------
+
+    async def publish(
+        self, *, source: str, topic: str, event: str, payload: Any
+    ) -> None:
+        """Publish a new SSE event to a specific topic and global stream."""
+        self._log("Publishing SSE", source, topic, event)
 
         async with self._lock:
-            # Per-topic
-            next_id, dq = self._replay_topics[topic]
-            msg_id = next_id
-            self._replay_topics[topic] = (next_id + 1, dq)
-            dq.append((msg_id, event, data_json))
+            # Per-topic ring
+            ts = self._replay_topics[topic]
+            msg_id = ts.next_id
+            ts.next_id += 1
+            ts.events.append(
+                TopicEvent(id=msg_id, event=event, source=source, payload=payload)
+            )
 
-            frame_topic = self._sse_frame(event=event, data=data_json, id_=msg_id)
-            dead: List[asyncio.Queue[str]] = []
+            frame_topic = self._sse_frame(
+                event=event, data=self._render_topic_data(payload=payload), id_=msg_id
+            )
+            dead_topic: List[asyncio.Queue[str]] = []
             for q in self._subs_topics[topic]:
                 while q.qsize() >= self._subscriber_q_max:
                     try:
@@ -86,15 +144,19 @@ class SseBroker:
                 try:
                     q.put_nowait(frame_topic)
                 except asyncio.QueueFull:
-                    dead.append(q)
-            for q in dead:
+                    dead_topic.append(q)
+            for q in dead_topic:
                 self._subs_topics[topic].discard(q)
 
-            # Global (ALL)
-            next_all, dq_all = self._replay_all
-            all_id = next_all
-            self._replay_all = (next_all + 1, dq_all)
-            dq_all.append((all_id, topic, event, data_json))
+            # Global ring
+            all_state = self._replay_all
+            all_id = all_state.next_id
+            all_state.next_id += 1
+            all_state.events.append(
+                AllEvent(
+                    id=all_id, topic=topic, event=event, source=source, payload=payload
+                )
+            )
 
             dead_all: List[asyncio.Queue[str]] = []
             for q, named in list(self._subs_all.items()):
@@ -104,20 +166,13 @@ class SseBroker:
                     except asyncio.QueueEmpty:
                         break
                 if named:
-                    frame = self._sse_frame(event=event, data=data_json, id_=all_id)
+                    data = self._render_all_named(payload=payload)
+                    frame = self._sse_frame(event=event, data=data, id_=all_id)
                 else:
-                    # default message event with type + topic included
-                    frame = self._sse_frame(
-                        event=None,
-                        data=json.dumps(
-                            {
-                                "type": event,
-                                "topic": topic,
-                                "payload": json.loads(data_json),
-                            }
-                        ),
-                        id_=all_id,
+                    data = self._render_all_unnamed(
+                        ev=event, src=source, topic=topic, payload=payload
                     )
+                    frame = self._sse_frame(event=None, data=data, id_=all_id)
                 try:
                     q.put_nowait(frame)
                 except asyncio.QueueFull:
@@ -125,20 +180,23 @@ class SseBroker:
             for q in dead_all:
                 self._subs_all.pop(q, None)
 
+    # ---------- Topic Subscription ----------
+
     async def subscribe(
         self, *, topic: str, last_event_id: Optional[int] = None, retry_ms: int = 20000
     ) -> AsyncIterator[str]:
+        """Subscribe to a topic; receives plain payloads (source known from topic)."""
         q: asyncio.Queue[str] = asyncio.Queue(maxsize=self._subscriber_q_max)
         stop = asyncio.Event()
 
         async with self._lock:
             self._subs_topics[topic].add(q)
             await q.put(self._sse_frame(event=None, data="", retry_ms=retry_ms))
-            if last_event_id is not None:
-                _, dq = self._replay_topics[topic]
-                for mid, ev, dj in dq:
-                    if mid > last_event_id:
-                        await q.put(self._sse_frame(event=ev, data=dj, id_=mid))
+            for te in self._replay_topics[topic].events:
+                if last_event_id is not None and te.id <= last_event_id:
+                    continue
+                data = self._render_topic_data(payload=te.payload)
+                await q.put(self._sse_frame(event=te.event, data=data, id_=te.id))
 
         async def heartbeat():
             while not stop.is_set():
@@ -155,38 +213,34 @@ class SseBroker:
             async with self._lock:
                 self._subs_topics[topic].discard(q)
 
+    # ---------- Global Subscription ----------
+
     async def subscribe_all(
         self,
         *,
         last_event_id: Optional[int] = None,
-        named: bool = True,  # True => keep SSE event names; False => single default 'message'
+        named: bool = True,
         retry_ms: int = 20000,
     ) -> AsyncIterator[str]:
+        """Subscribe to all events (either as named events or normalized envelopes)."""
         q: asyncio.Queue[str] = asyncio.Queue(maxsize=self._subscriber_q_max)
         stop = asyncio.Event()
-        print('SSE SUBSCRIBE ALL', last_event_id, named, retry_ms)
+        self._log("SSE SUBSCRIBE ALL", last_event_id, named, retry_ms)
 
         async with self._lock:
             self._subs_all[q] = named
             await q.put(self._sse_frame(event=None, data="", retry_ms=retry_ms))
-            # replay from global buffer
-            next_all, dq_all = self._replay_all
-            for mid, topic, ev, dj in dq_all:
-                print('sse all debug ', topic, ev, dj)
-                if last_event_id is not None and mid <= last_event_id:
+            for ae in self._replay_all.events:
+                if last_event_id is not None and ae.id <= last_event_id:
                     continue
                 if named:
-                    await q.put(self._sse_frame(event=ev, data=dj, id_=mid))
+                    data = self._render_all_named(payload=ae.payload)
+                    await q.put(self._sse_frame(event=ae.event, data=data, id_=ae.id))
                 else:
-                    await q.put(
-                        self._sse_frame(
-                            event=None,
-                            data=json.dumps(
-                                {"type": ev, "topic": topic, "payload": json.loads(dj)}
-                            ),
-                            id_=mid,
-                        )
+                    data = self._render_all_unnamed(
+                        ev=ae.event, src=ae.source, topic=ae.topic, payload=ae.payload
                     )
+                    await q.put(self._sse_frame(event=None, data=data, id_=ae.id))
 
         async def heartbeat():
             while not stop.is_set():

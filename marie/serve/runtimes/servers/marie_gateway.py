@@ -852,17 +852,16 @@ class MarieServerGateway(CompositeServer):
                 "job_id": job_id,
             }
             self.logger.info(f"Job submitted with id {job_id}")
-            run_background_task(
-                mark_as_scheduled(
-                    api_key=api_key,  # project_id,
-                    job_id=job_id,
-                    event_name=event_name,
-                    job_tag=ref_type,
-                    status="OK",
-                    timestamp=int(time.time()),
-                    payload=metadata,
-                )
+            await mark_as_scheduled(
+                api_key=api_key,  # project_id,
+                job_id=job_id,
+                event_name=event_name,
+                job_tag=ref_type,
+                status="OK",
+                timestamp=int(time.time()),
+                payload=metadata,
             )
+
             return response
         except BaseException as ex:
             response = self.error_response(
@@ -1167,6 +1166,7 @@ class MarieServerGateway(CompositeServer):
                 print('capacity_stats : ', capacity_stats)
                 self.logger.debug(f"Capacity stats : {capacity_stats}")
                 event = MarieEvent.engine_event(
+                    "gateway://control-plane",
                     f"Capacity updated",
                     EngineEventData(
                         metadata={

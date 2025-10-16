@@ -1,5 +1,6 @@
 import asyncio
 import time
+import uuid
 from typing import Any, Iterable, MutableMapping, Optional, OrderedDict, Tuple, Union
 
 from marie.excepts import BadConfigSource
@@ -55,21 +56,36 @@ class Toast:
     _ENQ_COUNT: int = 0
     _DROP_COUNT: int = 0
 
+    # Global timing configuration (set via configure)
+    _TRACK_TIMING: bool = True  # measure handler processing time in worker
+    _AWAIT_NOTIFY_TIMING: bool = True  # await worker in notify before returning
+
+    # Last dispatch metrics (visible via stats)
+    _LAST_DISPATCH_MS: float = 0.0
+    _LAST_HANDLER_COUNT: int = 0
+
     @staticmethod
     def configure(
         *,
         warn_qsize_threshold: Optional[int] = None,
         warn_qsize_ratio: Optional[float] = None,
         warn_interval_s: Optional[float] = None,
+        track_timing: Optional[bool] = None,
+        await_notify_timing: Optional[bool] = None,
     ) -> None:
-        """runtime tuning for high-water warnings."""
+        """runtime tuning settings."""
         if warn_qsize_threshold is not None:
             Toast._WARN_QSIZE_THRESHOLD = max(1, int(warn_qsize_threshold))
         if warn_qsize_ratio is not None:
-            # clamp between 0.0 and 1.0
             Toast._WARN_QSIZE_RATIO = max(0.0, min(1.0, float(warn_qsize_ratio)))
         if warn_interval_s is not None:
             Toast._WARN_INTERVAL_S = max(0.1, float(warn_interval_s))
+
+        # Global timing configuration
+        if track_timing is not None:
+            Toast._TRACK_TIMING = bool(track_timing)
+        if await_notify_timing is not None:
+            Toast._AWAIT_NOTIFY_TIMING = bool(await_notify_timing)
 
     @staticmethod
     def _high_water_threshold() -> Optional[int]:
@@ -114,6 +130,8 @@ class Toast:
           - dropped: int
           - high_water_threshold: int | None
           - last_high_water_warn_ts: float
+          - last_handler_count: int
+          - last_dispatch_ms: float
         """
         q = Toast._queue
         wt = Toast._worker_task
@@ -126,6 +144,8 @@ class Toast:
             "dropped": Toast._DROP_COUNT,
             "high_water_threshold": Toast._high_water_threshold(),
             "last_high_water_warn_ts": Toast._last_warn_ts,
+            "last_handler_count": Toast._LAST_HANDLER_COUNT,
+            "last_dispatch_ms": Toast._LAST_DISPATCH_MS,
         }
 
     @staticmethod
@@ -152,12 +172,42 @@ class Toast:
                         continue
                     event_name, msg, kw = item
                     if event_name is None or msg is None:
-                        # drop harmless wake-ups / bad inputs
                         continue
                     if not isinstance(kw, dict):
                         kw = {}
 
-                    await Toast._dispatch_to_handlers(event_name, msg, **kw)
+                    ack_fut: Optional[asyncio.Future] = kw.pop("ack_fut", None)
+
+                    # Measure handler processing time if configured
+                    t0 = time.perf_counter()
+                    results = await Toast._dispatch_to_handlers(event_name, msg, **kw)
+                    dt_ms = (
+                        (time.perf_counter() - t0) * 1000.0
+                        if Toast._TRACK_TIMING
+                        else 0.0
+                    )
+
+                    # Update last metrics
+                    Toast._LAST_HANDLER_COUNT = (
+                        len(results) if isinstance(results, list) else 0
+                    )
+                    if Toast._TRACK_TIMING:
+                        Toast._LAST_DISPATCH_MS = dt_ms
+                        logger.info(
+                            f"Toast dispatch took : {dt_ms:.2f} ms ({dt_ms/1000:.6f} s)"
+                        )
+
+                    # Fulfill ack if notify is awaiting worker completion
+                    if ack_fut and not ack_fut.done():
+                        try:
+                            ack_fut.set_result(True)
+                        except Exception:
+                            try:
+                                ack_fut.set_exception(
+                                    RuntimeError("Failed to acknowledge dispatch")
+                                )
+                            except Exception:
+                                pass
 
                 except asyncio.CancelledError:
                     break
@@ -289,9 +339,9 @@ class Toast:
         event_name = f"{ns}.{dotted}" if not dotted.startswith(f"{ns}.") else dotted
 
         print('event_name : ', event_name)
-
         payload: dict[str, Any] = {"message": ev.message}
 
+        source = ev.source
         es = ev.event_specific_data
         if es is not None:
             # Always include normalized metadata
@@ -320,6 +370,8 @@ class Toast:
         )
 
         return EventMessage(
+            id=str(uuid.uuid4()),
+            source=source,
             api_key=api_key,
             jobid=jobid or (node or ns),
             event=event_name,
@@ -388,7 +440,10 @@ class Toast:
         notification: Optional[EventMessage] = None,
         **kwargs: Any,
     ) -> bool:
-        """Enqueue a toast event; returns True if enqueued."""
+        """Enqueue a toast event; returns True when enqueued (and when configured, after dispatch completes)."""
+        # Optionally await worker completion globally (configured)
+        awaiting = Toast._AWAIT_NOTIFY_TIMING
+
         if isinstance(event, MarieEvent):
             msg = Toast.marie_event_to_message(
                 event,
@@ -398,8 +453,17 @@ class Toast:
                 timestamp=kwargs.pop("timestamp", None),
                 extra_payload=kwargs.pop("extra_payload", None),
             )
-            Toast._enqueue(msg.event, msg, **kwargs)
-            return True
+            if awaiting:
+                loop = asyncio.get_running_loop()
+                ack_fut: asyncio.Future = loop.create_future()
+                # Inject ack future for the worker; no per-call timing flags
+                kwargs["ack_fut"] = ack_fut
+                Toast._enqueue(msg.event, msg, **kwargs)
+                await ack_fut
+                return True
+            else:
+                Toast._enqueue(msg.event, msg, **kwargs)
+                return True
 
         event_name: str = event
         if notification is None:
@@ -408,8 +472,17 @@ class Toast:
             )
         if notification.api_key is None:
             raise ValueError(f"'api_key' not present in notification : {notification}")
-        Toast._enqueue(event_name, notification, **kwargs)
-        return True
+
+        if awaiting:
+            loop = asyncio.get_running_loop()
+            ack_fut: asyncio.Future = loop.create_future()
+            kwargs["ack_fut"] = ack_fut
+            Toast._enqueue(event_name, notification, **kwargs)
+            await ack_fut
+            return True
+        else:
+            Toast._enqueue(event_name, notification, **kwargs)
+            return True
 
     @staticmethod
     def register(handler: ToastHandler, native: Optional[bool] = False) -> None:

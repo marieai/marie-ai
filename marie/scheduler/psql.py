@@ -24,7 +24,8 @@ from marie.job.common import JobStatus
 from marie.job.job_manager import JobManager
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
-from marie.messaging import mark_as_complete
+from marie.messaging import mark_as_complete as mark_as_complete_toast
+from marie.messaging import mark_as_started as mark_as_started_toast
 from marie.query_planner.base import (
     QueryPlan,
 )
@@ -761,6 +762,25 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     if _is_noop_query_definition(node):
                         # Complete locally while we still hold the DB lease
                         try:
+                            # if we are a root node we have to emit a DAG-level event for job start aka activation
+                            is_root = wi.job_level == 0
+                            if is_root:
+                                # toas tnotification
+                                event_name = wi.data.get("name", wi.name)
+                                api_key = wi.data.get("api_key", None)
+                                metadata = wi.data.get("metadata", {})
+                                ref_type = metadata.get("ref_type")
+
+                                await mark_as_started_toast(
+                                    api_key=api_key,
+                                    job_id=wi.dag_id,
+                                    event_name=event_name,
+                                    job_tag=ref_type,
+                                    status="OK",
+                                    timestamp=int(time.time()),
+                                    payload=metadata,
+                                )
+
                             await self.complete(wi.id, wi, {}, force=True)
 
                             self.frontier.leased_until.pop(wi.id, None)
@@ -1048,17 +1068,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         # Add active DAGs information if available
         if self.active_dags:
-            debug_data["active_dags"] = {
-                dag_id: {
-                    "dag_id": dag_id,
-                    "status": (
-                        getattr(dag_info, 'status', 'unknown')
-                        if hasattr(dag_info, 'status')
-                        else 'unknown'
-                    ),
-                }
-                for dag_id, dag_info in self.active_dags.items()
-            }
+            active = {}
+            for dag_id, dag_info in self.active_dags.items():
+                status_val = "unknown"
+                try:
+                    status_val = dag_info.status
+                except Exception:
+                    pass
+                active[dag_id] = {"dag_id": dag_id, "status": status_val}
+            debug_data["active_dags"] = active
 
         # Add queue status information
         try:
@@ -1075,6 +1093,33 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             debug_data["dag_state_counts"] = self._db.count_dag_states()
         except Exception as e:
             debug_data["dag_state_counts_error"] = str(e)
+
+        # Include detailed frontier summary without using getattr
+        frontier_info = {"available": self.frontier is not None}
+        if self.frontier:
+            try:
+                # Prefer detailed view with top-N stalest items
+                frontier_info["summary"] = self.frontier.summary(detail=True, top_n=10)
+            except TypeError:
+                # Fallback to default signature
+                try:
+                    frontier_info["summary"] = self.frontier.summary(detail=True)
+                except Exception as e:
+                    frontier_info["summary_error"] = str(e)
+            except Exception as e:
+                frontier_info["summary_error"] = str(e)
+
+            # Known scheduler-level frontier settings
+            try:
+                frontier_info["batch_size"] = self.frontier_batch_size
+            except Exception:
+                pass
+            try:
+                frontier_info["lease_ttl_seconds"] = self.lease_ttl_seconds
+            except Exception:
+                pass
+
+        debug_data["frontier"] = frontier_info
 
         return debug_data
 
@@ -2148,14 +2193,16 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.logger.warning(
                     f"Missing API key or event name: api_key={api_key}, event_name={event_name}"
                 )
-                return False
+                raise ValueError(
+                    f"Missing API key or event name: api_key={api_key}, event_name={event_name}"
+                )
 
             status = "OK" if dag_state == "completed" else "FAILED"
 
             if status == "OK":
                 fs = await self.frontier.finalize_dag(work_info.dag_id)
 
-            await mark_as_complete(
+            await mark_as_complete_toast(
                 api_key=api_key,
                 job_id=work_info.dag_id,
                 event_name=event_name,

@@ -1,3 +1,4 @@
+import uuid
 from typing import Any, Literal, Optional
 
 from marie.logging_core.predefined import default_logger as logger
@@ -24,6 +25,8 @@ def event_builder(
     """Build the event message"""
     return EventMessage(
         **{
+            "id": str(uuid.uuid4()),
+            "source": f"job://{event_name}/{job_id}",
             "api_key": api_key,
             "jobid": job_id,
             "event": event_name,
@@ -66,7 +69,7 @@ async def _mark_job_status(
         )
         return disabled_return_value
 
-    logger.debug(f"Executing mark_request_as_{status_suffix} : {job_id} : {timestamp}")
+    logger.info(f"Executing mark_request_as_{status_suffix} : {job_id} : {timestamp}")
     event = f"{event_name}.{status_suffix}"
     try:
         await Toast.notify(
