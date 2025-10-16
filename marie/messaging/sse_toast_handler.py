@@ -48,18 +48,18 @@ class SseToastHandler(ToastHandler):
 
     async def _publish_once(self, msg: EventMessage) -> None:
         # topic is per-tenant/api_key; event type drives "event:" name
-        api_key = getattr(msg, "api_key", None)
-        if not api_key:
+        if msg.api_key is None or msg.api_key == "":
             raise BadConfigSource("'api_key' missing on EventMessage")
-        event_name = getattr(msg, "event", None) or "event"
-
+        event_name = msg.event or "event"
+        api_key = msg.api_key
+        payload = msg if isinstance(msg, (dict, list)) else msg.__dict__
         # for SSE we prepend a prefix to the event name to avoid collisions
-        event_name = f"job.{event_name}"
+        # event_name = f"job.{event_name}"
         # payload: send the entire EventMessage (JSON-serializable)
         await self.broker.publish(
             topic=api_key,
             event=event_name,
-            payload=msg if isinstance(msg, (dict, list)) else msg.__dict__,
+            payload=payload,
         )
 
     async def _worker(self) -> None:
@@ -86,6 +86,8 @@ class SseToastHandler(ToastHandler):
                     self.logger.warning(
                         f"SSE publish failed (attempt {attempts}); retry in {backoff:.2f}s: {e}"
                     )
+                    print(e)
+                    raise e
                     if self._max_attempts and attempts >= self._max_attempts:
                         self.logger.error(
                             f"Dropping SSE event after {attempts} attempts: {getattr(item, 'event', 'unknown')}"

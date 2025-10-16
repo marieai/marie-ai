@@ -39,6 +39,11 @@ def setup_toast_events(toast_config: Dict[str, Any]) -> Union[SseBroker | None]:
     rabbitmq_cfg = toast_config["rabbitmq"]
     sse_cfg = toast_config.get("sse", {})
 
+    Toast.configure(
+        warn_qsize_threshold=256,  # absolute threshold wins
+        warn_interval_s=3.0,  # rate-limit warnings
+    )
+
     Toast.register(
         NativeToastHandler(os.path.join(__cache_path__, "events.json")), native=True
     )

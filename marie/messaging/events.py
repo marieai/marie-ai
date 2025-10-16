@@ -49,6 +49,12 @@ FAILURE_EVENTS = {
     MarieEventType.RUN_CANCELED,
 }
 
+SUCCESS_EVENTS = {
+    MarieEventType.RUN_SUCCESS,
+    MarieEventType.STEP_SUCCESS,
+    MarieEventType.RESOURCE_INIT_SUCCESS,
+}
+
 MARKER_EVENTS = {
     MarieEventType.ENGINE_EVENT,
     MarieEventType.RESOURCE_INIT_STARTED,
