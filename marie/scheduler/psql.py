@@ -849,10 +849,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         }
                     )
 
-                self.logger.info('CAPACITY AFTER')
-                self.logger.info('-------------------------')
-                self.capacity_manager.refresh_from_nodes(ClusterState.deployment_nodes)
-
                 if enqueue_tasks:
                     results = await asyncio.gather(
                         *[t["task"] for t in enqueue_tasks], return_exceptions=True

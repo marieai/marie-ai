@@ -1163,14 +1163,15 @@ class MarieServerGateway(CompositeServer):
                 capacity_stats = self.capacity_manager.refresh_from_nodes(
                     self.deployment_nodes
                 )
-                print('capacity_stats : ', capacity_stats)
+
                 self.logger.debug(f"Capacity stats : {capacity_stats}")
                 event = MarieEvent.engine_event(
                     "gateway://control-plane",
-                    f"Capacity updated",
+                    "Cluster capacity updated",
                     EngineEventData(
                         metadata={
                             "stats": JsonMetadataValue(capacity_stats),
+                            "capacity": JsonMetadataValue(capacity_stats),
                         },
                         marker_start=MarieEventType.RESOURCE_EXECUTOR_UPDATED,
                     ),
