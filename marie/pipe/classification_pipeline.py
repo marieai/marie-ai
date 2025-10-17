@@ -1,12 +1,13 @@
 import os
 import shutil
 from datetime import datetime
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import numpy as np
 from PIL import Image
 
 from marie.boxes import PSMode
+from marie.common.file_io import get_cache_dir
 from marie.excepts import BadConfigSource
 from marie.models.utils import initialize_device_settings
 from marie.ocr import CoordinateFormat
@@ -14,14 +15,14 @@ from marie.ocr.util import get_known_ocr_engines
 from marie.pipe.base_pipeline import BasePipeline
 from marie.pipe.components import (
     burst_frames,
+    get_config_from_name,
+    is_component_enabled,
     load_pipeline,
     ocr_frames,
     restore_assets,
-    split_filename,
     store_assets,
 )
 from marie.utils.image_utils import hash_frames_fast
-from marie.utils.json import store_json_object
 from marie.utils.utils import ensure_exists
 
 
@@ -52,7 +53,7 @@ class ClassificationPipeline(BasePipeline):
 
     def __init__(
         self,
-        pipelines_config: List[dict[str, any]] = None,
+        pipelines_config: List[dict[str, Any]] = None,
         device: Optional[str] = "cuda",
         silence_exceptions: bool = False,
         **kwargs,
@@ -86,9 +87,12 @@ class ClassificationPipeline(BasePipeline):
         self.device = resolved_devices[0]
         has_cuda = True if self.device.type.startswith("cuda") else False
 
-        self.ocr_engines = get_known_ocr_engines(
-            device=self.device.type, engine="default"
-        )
+        if self.default_pipeline_config.get("ocr", {}).get("enabled", True):
+            self.ocr_engines = get_known_ocr_engines(self.device.type, "default")
+        else:
+            self.logger.warning("Disabling OCR capabilities as configured.")
+            self.ocr_engines = {"default": None}
+
         (
             self.pipeline_name,
             self.classifier_groups,
@@ -102,8 +106,8 @@ class ClassificationPipeline(BasePipeline):
         frames: List[np.ndarray],
         root_asset_dir: str,
         job_id: str,
-        runtime_conf: Optional[dict[str, any]] = None,
-    ) -> dict[str, any]:
+        runtime_conf: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         if ref_type is None or ref_id is None:
             raise ValueError("Invalid reference type or id")
 
@@ -111,10 +115,6 @@ class ClassificationPipeline(BasePipeline):
             f"Executing pipeline for document : {ref_id}, {ref_type} > {root_asset_dir}"
         )
         self.logger.info(f"Executing pipeline runtime_conf : {runtime_conf}")
-
-        page_classifier_enabled = runtime_conf.get("page_classifier", {}).get(
-            "enabled", True
-        )
 
         # check if the current pipeline name is the default pipeline name
         if "name" in runtime_conf:
@@ -129,7 +129,20 @@ class ClassificationPipeline(BasePipeline):
                     self.indexer_groups,
                 ) = self.reload_pipeline(expected_pipeline_name, self.pipelines_config)
 
-        page_indexer_enabled = runtime_conf.get("page_indexer", {}).get("enabled", True)
+        pipline_config = get_config_from_name(self.pipeline_name, self.pipelines_config)
+
+        page_classifier_enabled = is_component_enabled(
+            "page_classifier",
+            pipeline_config=pipline_config,
+            runtime_config=runtime_conf,
+            default=True,
+        )
+        page_indexer_enabled = is_component_enabled(
+            "page_indexer",
+            pipeline_config=pipline_config,
+            runtime_config=runtime_conf,
+            default=True,
+        )
 
         self.logger.info(
             f"Feature : page classifier enabled : {page_classifier_enabled}"
@@ -154,43 +167,27 @@ class ClassificationPipeline(BasePipeline):
 
         ocr_results = ocr_frames(self.ocr_engines, ref_id, frames, root_asset_dir)
         metadata["ocr"] = ocr_results
-        self.execute_classifier_and_indexer_pipeline(
-            frames,
-            metadata,
-            metadata["ocr"],
-            self.pipeline_name,
-            self.classifier_groups,
-            self.indexer_groups,
-            page_indexer_enabled,
-        )
 
-        self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
+        if not page_classifier_enabled:
+            self.logger.warning("Page classifier(s) are disabled")
+        else:
+            self.execute_classifier_and_indexer_pipeline(
+                frames,
+                metadata,
+                metadata["ocr"],
+                self.pipeline_name,
+                self.classifier_groups,
+                self.indexer_groups,
+                page_indexer_enabled,
+            )
+
+        self.store_metadata(
+            ref_id, ref_type, root_asset_dir, metadata, pipeline_name=self.pipeline_name
+        )
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
         del metadata["ocr"]
 
         return metadata
-
-    def store_metadata(
-        self,
-        ref_id: str,
-        ref_type: str,
-        root_asset_dir: str,
-        metadata: dict[str, any],
-        infix: str = "meta",
-    ) -> None:
-        """
-        Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
-        :param ref_id: reference id of the document
-        :param ref_type: reference type of the document
-        :param root_asset_dir: root asset directory
-        :param metadata: metadata to store
-        :param infix: infix to use for the metadata file, default is "meta" e.g. {ref_id}.meta.json
-        :return: None
-        """
-        filename, prefix, suffix = split_filename(ref_id)
-        metadata_path = os.path.join(root_asset_dir, f"{filename}.{infix}.json")
-        self.logger.info(f"Storing metadata : {metadata_path}")
-        store_json_object(metadata, metadata_path)
 
     def execute(
         self,
@@ -202,8 +199,8 @@ class ClassificationPipeline(BasePipeline):
         regions: List = None,
         queue_id: str = None,
         job_id: str = None,
-        runtime_conf: Optional[dict[str, any]] = None,
-    ) -> dict[str, any]:
+        runtime_conf: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """
         Execute the pipeline for the document with the given frames.If regions are specified,
         then only the specified regions will be extracted from the document with the rest of the steps being skipped.
@@ -228,6 +225,9 @@ class ClassificationPipeline(BasePipeline):
 
         # create local asset directory
         frame_checksum = hash_frames_fast(frames=frames)
+        cache_dir = get_cache_dir()
+        generators_dir = os.path.join(cache_dir, "generators")
+
         # create backup name by appending a timestamp
         # TODO : Need to refactor this
         if False:  # os.path.exists(os.path.join("/tmp/generators", frame_checksum)):
@@ -237,7 +237,7 @@ class ClassificationPipeline(BasePipeline):
                 os.path.join("/tmp/generators", f"{frame_checksum}-{ts}"),
             )
 
-        root_asset_dir = ensure_exists(os.path.join("/tmp/generators", frame_checksum))
+        root_asset_dir = ensure_exists(os.path.join(generators_dir, frame_checksum))
 
         self.logger.info(f"Root asset dir {ref_id}, {ref_type} : {root_asset_dir}")
         self.logger.info(f"runtime_conf args : {runtime_conf}")

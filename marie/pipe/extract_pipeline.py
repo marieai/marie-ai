@@ -3,7 +3,7 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import cv2
 import numpy as np
@@ -22,6 +22,7 @@ from marie.ocr.util import get_known_ocr_engines
 from marie.pipe.base_pipeline import BasePipeline
 from marie.pipe.components import (
     burst_frames,
+    is_component_enabled,
     load_pipeline,
     ocr_frames,
     restore_assets,
@@ -74,7 +75,7 @@ class ExtractPipeline(BasePipeline):
 
     def __init__(
         self,
-        pipeline_config: dict[str, any] = None,
+        pipeline_config: dict[str, Any] = None,
         cuda: bool = True,
         silence_exceptions: bool = False,
         **kwargs,
@@ -187,7 +188,7 @@ class ExtractPipeline(BasePipeline):
         frames: Union[list[np.ndarray], list[Image.Image]],
         root_asset_dir: str,
         enabled: bool = True,
-    ) -> tuple[list[np.ndarray], list[dict[str, any]]]:
+    ) -> tuple[list[np.ndarray], list[dict[str, Any]]]:
         """
         Run boundary registration on the frames and return the registered frames
 
@@ -239,7 +240,7 @@ class ExtractPipeline(BasePipeline):
         root_asset_dir: str,
         ocr_results: dict,
         enabled: bool = True,
-    ) -> list[dict[str, any]]:
+    ) -> list[dict[str, Any]]:
         """ """
 
         self.logger.info(f"Template matching")
@@ -266,8 +267,9 @@ class ExtractPipeline(BasePipeline):
         frames: List[np.ndarray],
         root_asset_dir: str,
         job_id: str,
-        runtime_conf: Optional[dict[str, any]] = None,
-    ) -> dict[str, any]:
+        runtime_conf: Optional[dict[str, Any]] = None,
+        force_ocr: bool = False,
+    ) -> dict[str, Any]:
         """
         Execute the pipeline for the document with the given frames.
         :param ref_id: reference id of the document (e.g. file name)
@@ -276,6 +278,7 @@ class ExtractPipeline(BasePipeline):
         :param root_asset_dir: root asset directory to store the results
         :param job_id: job id to associate with the document
         :param runtime_conf: runtime configuration for the pipeline (e.g. which steps to execute) default is None.
+        :param force_ocr: force OCR even if the OCR results are already present
         :return: metadata for the document (e.g. OCR results, classification results, etc)
         """
         if ref_type is None or ref_id is None:
@@ -286,19 +289,36 @@ class ExtractPipeline(BasePipeline):
         )
         self.logger.info(f"Executing pipeline runtime_conf : {runtime_conf}")
 
-        page_classifier_enabled = runtime_conf.get("page_classifier", {}).get(
-            "enabled", True
+        # Default to defaults set in the default pipeline config
+        page_classifier_enabled = is_component_enabled(
+            "page_classifier",
+            pipeline_config=self.default_pipeline_config,
+            runtime_config=runtime_conf,
+            default=True,
         )
-
-        page_indexer_enabled = runtime_conf.get("page_indexer", {}).get("enabled", True)
-        page_cleaner_enabled = runtime_conf.get("page_cleaner", {}).get(
-            "enabled", False
-        )  # default to False, client should enable
-        page_boundary_enabled = runtime_conf.get("page_boundary", {}).get(
-            "enabled", True
+        page_indexer_enabled = is_component_enabled(
+            "page_indexer",
+            pipeline_config=self.default_pipeline_config,
+            runtime_config=runtime_conf,
+            default=True,
         )
-        template_matching_enabled = runtime_conf.get("template_matching", {}).get(
-            "enabled", True
+        page_cleaner_enabled = is_component_enabled(
+            "page_cleaner",
+            pipeline_config=self.default_pipeline_config,
+            runtime_config=runtime_conf,
+            default=False,  # default to False, client should enable
+        )
+        page_boundary_enabled = is_component_enabled(
+            "page_boundary",
+            pipeline_config=self.default_pipeline_config,
+            runtime_config=runtime_conf,
+            default=True,
+        )
+        template_matching_enabled = is_component_enabled(
+            "template_matching",
+            pipeline_config=self.default_pipeline_config,
+            runtime_config=runtime_conf,
+            default=True,
         )
 
         self.logger.info(f"Feature : classifier enabled : {page_classifier_enabled}")
@@ -350,6 +370,7 @@ class ExtractPipeline(BasePipeline):
             ref_id,
             clean_frames,
             root_asset_dir,
+            force=force_ocr,
             engine_name=self.engine_name,
         )
 
@@ -387,16 +408,6 @@ class ExtractPipeline(BasePipeline):
 
         return metadata
 
-    def store_metadata(
-        self, ref_id: str, ref_type: str, root_asset_dir: str, metadata: dict[str, any]
-    ) -> None:
-        """
-        Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
-        """
-        filename, prefix, suffix = split_filename(ref_id)
-        metadata_path = os.path.join(root_asset_dir, f"{filename}.meta.json")
-        store_json_object(metadata, metadata_path)
-
     def execute_regions_pipeline(
         self,
         ref_id: str,
@@ -407,8 +418,8 @@ class ExtractPipeline(BasePipeline):
         ps_mode: PSMode = PSMode.SPARSE,
         coordinate_format: CoordinateFormat = CoordinateFormat.XYWH,
         job_id: str = None,
-        runtime_conf: Optional[dict[str, any]] = None,
-    ) -> dict[str, any]:
+        runtime_conf: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         self.logger.info(
             f"Executing pipeline : {ref_id}, {ref_type} with regions : {regions}"
         )
@@ -455,8 +466,9 @@ class ExtractPipeline(BasePipeline):
         regions: List = None,
         queue_id: str = None,
         job_id: str = None,
-        runtime_conf: Optional[dict[str, any]] = None,
-    ) -> dict[str, any]:
+        runtime_conf: Optional[dict[str, Any]] = None,
+        force_ocr: bool = False,
+    ) -> dict[str, Any]:
         """
         Execute the pipeline for the document with the given frames.If regions are specified,
         then only the specified regions will be extracted from the document with the rest of the steps being skipped.
@@ -479,6 +491,7 @@ class ExtractPipeline(BasePipeline):
         :param queue_id:  queue id to associate with the document
         :param job_id: job id to associate with the document
         :param runtime_conf: runtime configuration for the pipeline (e.g. which steps to execute) default is None.
+        :param force_ocr: force OCR even if the OCR results are already present
         :return:  metadata for the document (e.g. OCR results, classification results, etc)
         """
 
@@ -525,7 +538,13 @@ class ExtractPipeline(BasePipeline):
                 )
             else:
                 return self.execute_frames_pipeline(
-                    ref_id, ref_type, frames, root_asset_dir, job_id, runtime_conf
+                    ref_id,
+                    ref_type,
+                    frames,
+                    root_asset_dir,
+                    job_id,
+                    runtime_conf,
+                    force_ocr=force_ocr,
                 )
         except Exception as e:
             self.logger.error(f"Error executing pipeline : {e}")
@@ -588,7 +607,7 @@ class ExtractPipeline(BasePipeline):
         )
 
     def pack_assets(
-        self, ref_id: str, ref_type: str, root_asset_dir, metadata: dict[str, any]
+        self, ref_id: str, ref_type: str, root_asset_dir, metadata: dict[str, Any]
     ):
         # create assets
         assets_dir = ensure_exists(os.path.join(root_asset_dir, "assets"))
