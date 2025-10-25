@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from types import SimpleNamespace as NS
 
 import pytest
@@ -66,26 +67,52 @@ class FakeRunner:
 
 # ---------- FakeScheduler ----------
 class FakeScheduler:
-    def __init__(self, frontier: MemoryFrontier, db: FakeDB, runner: FakeRunner,
-                 planner: GlobalPriorityExecutionPlanner):
+    def __init__(self, frontier: MemoryFrontier, db, runner, planner: GlobalPriorityExecutionPlanner):
         self.frontier = frontier
         self.db = db
         self.runner = runner
         self.planner = planner
 
     @staticmethod
-    def _executor_of(wi):
-        ep = wi.data.get("metadata", {}).get("on", "")
-        # OLD (wrong): return ep.split("://", 1)[0] if "://" in ep else ep
-        return ep.split("://", 1)[1] if "://" in ep else ep  # "exe://A" -> "A"
+    def _endpoint(wi):
+        # Use the endpoint stored in metadata.on (e.g., "exe://A")
+        return wi.data.get("metadata", {}).get("on", "") or ""
+
+    @staticmethod
+    def _member_of_endpoint(ep: str) -> str:
+        # "exe://A" -> "A"
+        return ep.split("://", 1)[1] if "://" in ep else ep
 
     def slot_filter(self, slots_by_executor: dict[str, int]):
         def _f(wi):
-            exe = self._executor_of(wi)
-            # allow NOOP/unknown executors; otherwise require >0 slots
-            return True if not exe or exe == "noop" else (slots_by_executor.get(exe, 0) > 0)
+            ep = self._endpoint(wi)
+            member = self._member_of_endpoint(ep)
+            # Allow unknown/noop members unconditionally; otherwise require available member slots
+            return True if not member or member == "noop" else (slots_by_executor.get(member, 0) > 0)
 
         return _f
+
+    @staticmethod
+    def _ensure_min_fields_for_planner(candidates: list):
+        # Ensure minimal fields that some planners expect to exist
+        now = datetime.now()
+        for wi in candidates:
+            if not hasattr(wi, "state"):
+                wi.state = "created"
+            if not hasattr(wi, "retry_limit"):
+                wi.retry_limit = 0
+            if not hasattr(wi, "retry_delay"):
+                wi.retry_delay = 0
+            if not hasattr(wi, "retry_backoff"):
+                wi.retry_backoff = False
+            if not hasattr(wi, "start_after"):
+                wi.start_after = now
+            if not hasattr(wi, "expire_in_seconds"):
+                wi.expire_in_seconds = 3600
+            if not hasattr(wi, "keep_until"):
+                wi.keep_until = now + timedelta(days=1)
+            if not hasattr(wi, "dependencies"):
+                wi.dependencies = []
 
     async def cycle_peek_plan_take_backfill_dispatch(
             self,
@@ -100,55 +127,53 @@ class FakeScheduler:
           peek → plan → take (+ backfill) → cap-to-slots → DB lease → dispatch → activate
         Returns: {"planned": list[(ep, wi)], "leased": set[str], "dispatched": set[str], "activated": set[str]}
         """
-        #  PEAK RUNNABLE WINDOW (slot-aware) ----
+        # PEAK RUNNABLE WINDOW (slot-aware)
         free = sum(max(v, 0) for v in slots_by_executor.values())
         window = max(batch_size, min(2000, 4 * free + 64))
-        filt = self.slot_filter(slots_by_executor)  # uses member after "://", allows NOOP/unknown
+        filt = self.slot_filter(slots_by_executor)
+
         candidates = await self.frontier.peek_ready(window, filter_fn=filt)
         if not candidates:
             return {"planned": [], "leased": set(), "dispatched": set(), "activated": set()}
 
-        # PLAN ----
-        planner_candidates = [(wi.data["metadata"]["on"], wi) for wi in candidates]
+        # Normalize fields for planner expectations
+        self._ensure_min_fields_for_planner(candidates)
 
-        # planner may expect scheme-level capacity (e.g., "exe"); provide both.
+        # Prepare planner candidates as (endpoint, wi)
+        planner_candidates = [(self._endpoint(wi), wi) for wi in candidates]
+
+        # Planner: provide scheme-level capacity only (e.g., "exe"), per-member caps enforced later
         schemes_present = {ep.split("://", 1)[0] for ep, _ in planner_candidates if "://" in ep}
         sum_all = sum(max(v, 0) for v in slots_by_executor.values())
-        planner_slots = slots_by_executor.copy()
-        for sch in schemes_present:
-            planner_slots[sch] = sum_all
+        planner_slots = {sch: sum_all for sch in schemes_present}
 
         planned = self.planner.plan(
             planner_candidates,
             planner_slots,
-            active_dags={},
+            active_dags=set(),
             exclude_blocked=True,
         )
         if not planned:
             return {"planned": [], "leased": set(), "dispatched": set(), "activated": set()}
 
-        #  TAKE CHOSEN (soft-lease) ----
+        # TAKE CHOSEN (soft-lease)
         planned_ids = [wi.id for _, wi in planned]
         chosen_wi = await self.frontier.take(planned_ids, lease_ttl=lease_ttl)
 
-        #  BACKFILL MISSES (atomic) ----
+        # BACKFILL MISSES (atomic)
         missing = len(planned_ids) - len(chosen_wi)
         if missing > 0:
             refill = await self.frontier.select_ready(
                 missing, filter_fn=filt, lease_ttl=lease_ttl, scan_budget=backfill_scan_budget
             )
             for wi2 in refill:
-                planned.append((wi2.data["metadata"]["on"], wi2))
+                planned.append((self._endpoint(wi2), wi2))
                 chosen_wi.append(wi2)
 
         if not chosen_wi:
             return {"planned": planned, "leased": set(), "dispatched": set(), "activated": set()}
 
-        #  ENFORCE MEMBER-LEVEL CAPS *BEFORE* DB LEASE ----
-        def _member_exe(wi):
-            ep = wi.data.get("metadata", {}).get("on", "")
-            return ep.split("://", 1)[1] if "://" in ep else ep  # "exe://A" -> "A"
-
+        # ENFORCE MEMBER-LEVEL CAPS BEFORE DB LEASE
         remaining = {k: max(v, 0) for k, v in slots_by_executor.items()}
         eligible: list = []
         overflow: list = []
@@ -156,25 +181,25 @@ class FakeScheduler:
 
         for ep, wi in planned:
             if wi.id not in chosen_ids_set:
-                continue  # only consider items we actually soft-leased
-            exe = _member_exe(wi)
-            if not exe or exe == "noop":
+                continue
+            member = self._member_of_endpoint(ep)
+            if not member or member == "noop":
                 eligible.append(wi)
                 continue
-            if remaining.get(exe, 0) > 0:
+            if remaining.get(member, 0) > 0:
                 eligible.append(wi)
-                remaining[exe] -= 1
+                remaining[member] -= 1
             else:
                 overflow.append(wi)
 
         # Over-capacity → release soft lease immediately
         for wi in overflow:
-            self.frontier.release_lease_local(wi.id)
+            await self.frontier.release_lease_local(wi.id)
 
         if not eligible:
             return {"planned": planned, "leased": set(), "dispatched": set(), "activated": set()}
 
-        #  DB LEASE (only for eligible set) ----
+        # DB LEASE (only for eligible set)
         by_name: dict[str, list[str]] = {}
         for wi in eligible:
             by_name.setdefault(wi.name, []).append(wi.id)
@@ -182,15 +207,15 @@ class FakeScheduler:
         leased = await self.db.lease(by_name)
         if not leased:
             for wi in eligible:
-                self.frontier.release_lease_local(wi.id)
+                await self.frontier.release_lease_local(wi.id)
             return {"planned": planned, "leased": set(), "dispatched": set(), "activated": set()}
 
         # Release soft lease for non-leased
         for wi in eligible:
             if wi.id not in leased:
-                self.frontier.release_lease_local(wi.id)
+                await self.frontier.release_lease_local(wi.id)
 
-        # DISPATCH → ACTIVATE ----
+        # DISPATCH → ACTIVATE
         dispatched_ok: set[str] = set()
         activated: set[str] = set()
 
@@ -201,18 +226,16 @@ class FakeScheduler:
             ok = await self.runner.enqueue(wi)
             if not ok:
                 await self.db.release([wi.id])
-                self.frontier.release_lease_local(wi.id)
+                await self.frontier.release_lease_local(wi.id)
                 continue
             dispatched_ok.add(wi.id)
 
             # activation (runner + DB)
             if await self.runner.activate(wi.id):
-                # activated_ids = await self.db.activate_from_lease([wi.id])
-                # if wi.id in activated_ids: activated.add(wi.id)
                 activated.add(wi.id)
             else:
                 await self.db.release([wi.id])
-                self.frontier.release_lease_local(wi.id)
+                await self.frontier.release_lease_local(wi.id)
 
         return {
             "planned": planned,
@@ -221,13 +244,18 @@ class FakeScheduler:
             "activated": set(activated),
         }
 
+
 @pytest.fixture
 def frontier():
     return MemoryFrontier(higher_priority_wins=True, default_lease_ttl=0.25)
 
 
-def add_ready(frontier: MemoryFrontier, jobs):
-    frontier.add_dag(None, list(jobs))
+async def add_ready(frontier: MemoryFrontier, jobs):
+    # Clear dependencies to make jobs immediately runnable
+    for j in jobs:
+        j.dependencies = []
+
+    await frontier.add_dag(None, list(jobs))
 
 
 # ---------- Tests ----------
@@ -236,7 +264,7 @@ def add_ready(frontier: MemoryFrontier, jobs):
 async def test_happy_path(frontier):
     jobs = [wi(f"A{i}", level=3, exe="exe://A") for i in range(4)] + [wi(f"B{i}", level=2, exe="exe://B") for i in
                                                                       range(3)]
-    add_ready(frontier, jobs)
+    await add_ready(frontier, jobs)
 
     slots = {"A": 2, "B": 1}
     db = FakeDB()  # lease all
@@ -256,7 +284,7 @@ async def test_backfill_on_take_race(frontier):
     # Two runnable for A, and extras to backfill
     runnable = [wi("A0", level=5, exe="exe://A"), wi("A1", level=5, exe="exe://A")]
     extra = [wi(f"Ae{i}", level=4, exe="exe://A") for i in range(3)]
-    add_ready(frontier, runnable + extra)
+    await add_ready(frontier, runnable + extra)
 
     # Simulate race: remove A0 from ready_set before cycle
     frontier._remove_from_ready_set("A0")
@@ -275,7 +303,7 @@ async def test_backfill_on_take_race(frontier):
 @pytest.mark.asyncio
 async def test_partial_db_lease_releases_non_leased(frontier):
     jobs = [wi(f"A{i}", level=3, exe="exe://A") for i in range(4)]
-    add_ready(frontier, jobs)
+    await add_ready(frontier, jobs)
 
     slots = {"A": 3}
     # DB will only lease the first two IDs lexicographically
@@ -296,7 +324,7 @@ async def test_partial_db_lease_releases_non_leased(frontier):
 @pytest.mark.asyncio
 async def test_dispatch_and_activation_failures_release(frontier):
     jobs = [wi(f"A{i}", level=4, exe="exe://A") for i in range(3)]
-    add_ready(frontier, jobs)
+    await add_ready(frontier, jobs)
 
     slots = {"A": 3}
     db = FakeDB()  # lease all
