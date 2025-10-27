@@ -175,25 +175,34 @@ def topological_sort(plan: QueryPlan) -> list:
 def compute_job_levels(sorted_nodes: list[str], plan: QueryPlan) -> dict[str, int]:
     """
     Given a list of node IDs in topological order and the original QueryPlan,
-    compute a job_level for each node representing its distance from the nearest root.
+    compute a job_level for each node representing its distance from the furthest leaf.
+    Higher levels indicate nodes closer to roots (more critical for unlocking downstream work).
 
     :param sorted_nodes: Node IDs in topological order.
     :param plan: The original QueryPlan with dependency information.
     :return: A dict mapping node_id to its level (int).
     """
-    # Build a map from node_id to its dependencies for quick lookup
+    # Build a map from node_id to its dependencies
     dependency_map = {node.task_id: node.dependencies for node in plan.nodes}
+
+    # Build reverse dependency map (which nodes depend on each node)
+    dependents_map = {node_id: [] for node_id in sorted_nodes}
+    for node_id in sorted_nodes:
+        deps = dependency_map.get(node_id, []) or []
+        for dep in deps:
+            if dep in dependents_map:
+                dependents_map[dep].append(node_id)
 
     # Initialize all levels to 0
     job_level = {node_id: 0 for node_id in sorted_nodes}
 
-    # Iterate in topological order, so dependencies are processed first
-    for node_id in sorted_nodes:
-        deps = dependency_map.get(node_id, []) or []
-        if deps:
-            # level = max level of dependencies + 1
-            max_dep_level = max(job_level.get(dep, 0) for dep in deps)
-            job_level[node_id] = max_dep_level + 1
+    # Iterate in REVERSE topological order (leaves to roots), so dependents are processed first
+    for node_id in reversed(sorted_nodes):
+        dependents = dependents_map.get(node_id, [])
+        if dependents:
+            # level = max level of nodes that depend on this + 1
+            max_dependent_level = max(job_level.get(dep, 0) for dep in dependents)
+            job_level[node_id] = max_dependent_level + 1
 
     return job_level
 
@@ -263,14 +272,8 @@ def ensure_single_entry_point(
     base_job_id = planner_info.base_id
     current_id = planner_info.current_id
 
-    referenced_nodes = set()
-    for node in nodes:
-        referenced_nodes.update(node.dependencies)
-
-    # Find natural root nodes (nodes that aren't dependencies of any other node)
-    natural_roots = [node for node in nodes if node.task_id not in referenced_nodes]
-
-    strict = False
+    # Find natural root nodes (nodes with no dependencies)
+    natural_roots = [node for node in nodes if not node.dependencies]
     if strict and len(natural_roots) != 1:
         error_message = (
             f"Query plan must have exactly one root node, found {len(natural_roots)}"

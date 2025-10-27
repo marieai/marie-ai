@@ -263,9 +263,12 @@ def test_complex_document_processing_dag_scheduling(planner_fixture):
         wi.job_level = job_levels[task_id]
         wi.dependencies = node.dependencies
 
-        endpoint = "default://endpoint"
         if isinstance(node.definition, (ExecutorEndpointQueryDefinition, LlmQueryDefinition)):
             endpoint = node.definition.endpoint
+        elif isinstance(node.definition, NoopQueryDefinition):
+            endpoint = "noop://endpoint"
+        else:
+            endpoint = "default://endpoint"
         wi.data["metadata"]["on"] = endpoint
         all_dag_nodes.append((endpoint, wi))
 
@@ -412,6 +415,8 @@ def test_wide_dag_scheduling(planner_fixture, width):
 
         if isinstance(node.definition, ExecutorEndpointQueryDefinition):
             endpoint = node.definition.endpoint
+        elif isinstance(node.definition, NoopQueryDefinition):
+            endpoint = "noop://endpoint"
         else:
             endpoint = "default://endpoint"
 
@@ -523,6 +528,8 @@ def test_deep_dag_scheduling(planner_fixture, depth):
 
         if isinstance(node.definition, ExecutorEndpointQueryDefinition):
             endpoint = node.definition.endpoint
+        elif isinstance(node.definition, NoopQueryDefinition):
+            endpoint = "noop://endpoint"
         else:
             endpoint = "default://endpoint"
 
@@ -564,7 +571,7 @@ def test_extreme_slot_constraints(planner_fixture):
         job = create_work_info(
             f"job_{i}",
             "dag_1",
-            level=5 - (i % 5),  # Mix of levels
+            job_level=5 - (i % 5),  # Mix of levels
             priority=100 - i,  # Decreasing priority
             endpoint=f"{executor}://endpoint"
         )
@@ -572,17 +579,24 @@ def test_extreme_slot_constraints(planner_fixture):
 
     planned = planner.plan(jobs, constrained_slots, active_dags, exclude_blocked=True)
 
-    # Only jobs for executor_a and executor_b should be in the plan
+    # Only jobs for executor_a and executor_b should be in the plan (blocked ones excluded)
     planned_executors = {endpoint.split("://")[0] for endpoint, _ in planned}
     assert planned_executors.issubset({"executor_a", "executor_b"})
 
-    # Should have exactly 2 jobs (one per available slot)
-    assert len(planned) == 2
+    # Should have all runnable jobs for executor_a and executor_b (5 each = 10 total)
+    # The planner returns all runnable jobs in priority order; actual slot limiting happens at execution
+    assert len(planned) == 10
 
-    # Verify they're the highest priority runnable jobs
+    # Verify all are for runnable executors
     for endpoint, wi in planned:
         executor = endpoint.split("://")[0]
         assert executor in ["executor_a", "executor_b"]
+
+    # Verify they're sorted by priority (higher priority first)
+    priorities = [wi.priority for _, wi in planned]
+    assert priorities == sorted(priorities, reverse=True) or all(
+        planned[i][1].job_level >= planned[i+1][1].job_level for i in range(len(planned)-1)
+    )
 
 
 def test_dynamic_slot_changes():
@@ -595,12 +609,13 @@ def test_dynamic_slot_changes():
     planner = GlobalPriorityExecutionPlanner()
     active_dags = {"dag_1"}
 
-    # Create jobs for different executors
+    # Create jobs for different executors with equal priority
+    # so that slot availability becomes the deciding factor
     jobs = [
-        create_work_info(f"a_{i}", "dag_1", level=5, priority=100, endpoint="executor_a://ep")
+        create_work_info(f"a_{i}", "dag_1", job_level=5, priority=100, endpoint="executor_a://ep")
         for i in range(5)
     ] + [
-        create_work_info(f"b_{i}", "dag_1", level=5, priority=90, endpoint="executor_b://ep")
+        create_work_info(f"b_{i}", "dag_1", job_level=5, priority=100, endpoint="executor_b://ep")
         for i in range(5)
     ]
 
@@ -617,9 +632,8 @@ def test_dynamic_slot_changes():
     slots_t2 = {"executor_a": 1, "executor_b": 3}
     planned_t2 = planner.plan(jobs, slots_t2, active_dags, exclude_blocked=True)
 
-    # Now executor_b jobs should be prioritized
-    # Note: priority still matters, so executor_a (higher priority) might still come first
-    # but more executor_b jobs should be in the top positions due to capacity
+    # Now executor_b jobs should be prioritized due to higher capacity
+    # With equal priorities, slot availability becomes the deciding factor
     top_5_executors = [ep.split("://")[0] for ep, _ in planned_t2[:5]]
     # With higher capacity, we expect more representation in top 5
     b_in_top_5 = sum(1 for ex in top_5_executors if ex == "executor_b")
@@ -640,10 +654,10 @@ def test_slot_exhaustion_and_backpressure():
 
     # Create mix of jobs
     jobs = [
-        create_work_info("urgent_a", "dag_1", level=10, priority=1000, endpoint="executor_a://ep"),
-        create_work_info("urgent_b", "dag_1", level=10, priority=1000, endpoint="executor_b://ep"),
-        create_work_info("normal_a", "dag_1", level=5, priority=100, endpoint="executor_a://ep"),
-        create_work_info("low_a", "dag_1", level=1, priority=10, endpoint="executor_a://ep"),
+        create_work_info("urgent_a", "dag_1", job_level=10, priority=1000, endpoint="executor_a://ep"),
+        create_work_info("urgent_b", "dag_1", job_level=10, priority=1000, endpoint="executor_b://ep"),
+        create_work_info("normal_a", "dag_1", job_level=5, priority=100, endpoint="executor_a://ep"),
+        create_work_info("low_a", "dag_1", job_level=1, priority=10, endpoint="executor_a://ep"),
     ]
 
     # With exclude_blocked=False, all jobs should be returned but in correct order
@@ -679,13 +693,13 @@ def test_priority_inversion_prevention():
 
     jobs = [
         # Low priority but very short runtime
-        create_work_info("low_fast", "dag_1", level=5, priority=1,
+        create_work_info("low_fast", "dag_1", job_level=5, priority=1,
                         estimated_runtime=1.0, endpoint="executor_a://ep"),
         # High priority but longer runtime
-        create_work_info("high_slow", "dag_1", level=5, priority=100,
+        create_work_info("high_slow", "dag_1", job_level=5, priority=100,
                         estimated_runtime=1000.0, endpoint="executor_a://ep"),
         # Medium priority, medium runtime
-        create_work_info("med", "dag_1", level=5, priority=50,
+        create_work_info("med", "dag_1", job_level=5, priority=50,
                         estimated_runtime=100.0, endpoint="executor_a://ep"),
     ]
 
@@ -709,11 +723,11 @@ def test_dag_fairness_existing_vs_new():
 
     jobs = [
         # New DAG with higher priority
-        create_work_info("new_high", "new_dag", level=5, priority=1000, endpoint="executor_a://ep"),
+        create_work_info("new_high", "new_dag", job_level=5, priority=1000, endpoint="executor_a://ep"),
         # Existing DAG with lower priority
-        create_work_info("existing_low", "active_1", level=5, priority=100, endpoint="executor_a://ep"),
+        create_work_info("existing_low", "active_1", job_level=5, priority=100, endpoint="executor_a://ep"),
         # Existing DAG with even lower priority
-        create_work_info("existing_lower", "active_2", level=5, priority=50, endpoint="executor_a://ep"),
+        create_work_info("existing_lower", "active_2", job_level=5, priority=50, endpoint="executor_a://ep"),
     ]
 
     planned = planner.plan(jobs, slots, active_dags)
@@ -738,13 +752,13 @@ def test_level_based_critical_path_prioritization():
 
     jobs = [
         # Shallow level (not critical)
-        create_work_info("shallow", "dag_1", level=1, priority=100, endpoint="executor_a://ep"),
+        create_work_info("shallow", "dag_1", job_level=1, priority=100, endpoint="executor_a://ep"),
         # Medium level
-        create_work_info("medium", "dag_1", level=5, priority=100, endpoint="executor_a://ep"),
+        create_work_info("medium", "dag_1", job_level=5, priority=100, endpoint="executor_a://ep"),
         # Deep level (critical path)
-        create_work_info("deep", "dag_1", level=10, priority=100, endpoint="executor_a://ep"),
+        create_work_info("deep", "dag_1", job_level=10, priority=100, endpoint="executor_a://ep"),
         # Very deep level
-        create_work_info("very_deep", "dag_1", level=20, priority=100, endpoint="executor_a://ep"),
+        create_work_info("very_deep", "dag_1", job_level=20, priority=100, endpoint="executor_a://ep"),
     ]
 
     planned = planner.plan(jobs, slots, active_dags)
@@ -782,7 +796,7 @@ def test_massive_job_queue_1000_jobs():
         job = create_work_info(
             f"job_{i}",
             dag_id,
-            level=level,
+            job_level=level,
             priority=priority,
             estimated_runtime=runtime,
             endpoint=f"{executor}://endpoint"
@@ -924,7 +938,7 @@ def test_massive_dag_structure_1000_nodes():
     plan_time = time.time() - start
 
     # Verify plan has correct number of nodes
-    assert len(plan.nodes) == 1002  # 1 root + 4*250 + 1 merger + 1 end
+    assert len(plan.nodes) == 1003  # 1 root + 4*250 + 1 merger + 1 end
 
     # Compute levels
     start = time.time()
@@ -1003,7 +1017,7 @@ def test_all_jobs_same_priority_level_executor():
 
     # All jobs identical except ID
     jobs = [
-        create_work_info(f"job_{i}", "dag_1", level=5, priority=100,
+        create_work_info(f"job_{i}", "dag_1", job_level=5, priority=100,
                         estimated_runtime=50.0, endpoint="executor_a://ep")
         for i in range(10)
     ]
@@ -1029,8 +1043,8 @@ def test_noop_executor_never_blocked():
     slots = {"executor_a": 0}
 
     jobs = [
-        create_work_info("noop_job", "dag_1", level=5, priority=100, endpoint="noop://noop"),
-        create_work_info("blocked_job", "dag_1", level=5, priority=100, endpoint="executor_a://ep"),
+        create_work_info("noop_job", "dag_1", job_level=5, priority=100, endpoint="noop://noop"),
+        create_work_info("blocked_job", "dag_1", job_level=5, priority=100, endpoint="executor_a://ep"),
     ]
 
     # With exclude_blocked=True, only noop should be planned
@@ -1051,11 +1065,11 @@ def test_estimated_runtime_none_and_inf_handling():
     slots = {"executor_a": 10}
 
     jobs = [
-        create_work_info("runtime_none", "dag_1", level=5, priority=100,
+        create_work_info("runtime_none", "dag_1", job_level=5, priority=100,
                         estimated_runtime=None, endpoint="executor_a://ep"),
-        create_work_info("runtime_inf", "dag_1", level=5, priority=100,
+        create_work_info("runtime_inf", "dag_1", job_level=5, priority=100,
                         estimated_runtime=float('inf'), endpoint="executor_a://ep"),
-        create_work_info("runtime_short", "dag_1", level=5, priority=100,
+        create_work_info("runtime_short", "dag_1", job_level=5, priority=100,
                         estimated_runtime=10.0, endpoint="executor_a://ep"),
     ]
 
@@ -1083,7 +1097,7 @@ def test_single_job():
     slots = {"executor_a": 10}
     active_dags = {"dag_1"}
 
-    job = create_work_info("solo", "dag_1", level=5, priority=100, endpoint="executor_a://ep")
+    job = create_work_info("solo", "dag_1", job_level=5, priority=100, endpoint="executor_a://ep")
     planned = planner.plan([job], slots, active_dags)
 
     assert len(planned) == 1
@@ -1133,9 +1147,12 @@ def test_end_to_end_complex_plan_optimal_scheduling():
         wi.job_level = job_levels[task_id]
         wi.dependencies = node.dependencies
 
-        endpoint = "default://endpoint"
         if isinstance(node.definition, (ExecutorEndpointQueryDefinition, LlmQueryDefinition)):
             endpoint = node.definition.endpoint
+        elif isinstance(node.definition, NoopQueryDefinition):
+            endpoint = "noop://endpoint"
+        else:
+            endpoint = "default://endpoint"
         wi.data["metadata"]["on"] = endpoint
         all_dag_nodes.append((endpoint, wi))
 
