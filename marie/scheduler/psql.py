@@ -593,7 +593,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 ).copy()
 
                 if not any(slots_by_executor.values()):
-                    self.logger.debug("No available executor slots. Backing off.")
+                    self.logger.warning(
+                        f"[WORK_DIST] No available executor slots. Backing off. "
+                        f"Slots by executor: {slots_by_executor} | "
+                        f"Idle streak: {idle_streak} | "
+                        f"Wait time: {wait_time:.2f}s"
+                    )
                     idle_streak += 1
                     wait_time = adjust_backoff(
                         wait_time,
@@ -603,6 +608,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
                     continue
 
+                self.logger.info(f"[WORK_DIST] Available slots: {slots_by_executor}")
+
                 # FETCH READY CANDIDATES (executor-agnostic)
                 # frontier should not filter by executors; let planner decide
                 candidates_wi: list[WorkInfo] = await self.frontier.peek_ready(
@@ -610,7 +617,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 )
 
                 if not candidates_wi or len(candidates_wi) == 0:
-                    self.logger.debug("No ready work in memory; short sleep.")
+                    frontier_summary = self.frontier.summary(detail=False)
+                    self.logger.warning(
+                        f"[WORK_DIST] No ready work in frontier. Short sleep. "
+                        f"Batch size: {batch_size} | "
+                        f"Frontier summary: {frontier_summary} | "
+                        f"Idle streak: {idle_streak} | "
+                        f"Wait time: {wait_time:.2f}s"
+                    )
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
                     idle_streak += 1
                     wait_time = adjust_backoff(
@@ -621,14 +635,26 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
                     continue
 
+                self.logger.info(
+                    f"[WORK_DIST] Fetched {len(candidates_wi)} candidates from frontier. "
+                    f"Sample IDs: {[wi.id for wi in candidates_wi[:5]]}"
+                )
+
                 # Build (entrypoint, wi) tuples for planner input
                 planner_candidates: list[tuple[str, WorkInfo]] = []
                 for wi in candidates_wi:
                     ep = wi.data.get("metadata", {}).get("on", "")
                     if not ep:
-                        self.logger.error(f"Job without entrypoint 'on': {wi.id}")
+                        self.logger.error(
+                            f"[WORK_DIST] Job without entrypoint 'on': {wi.id}"
+                        )
                         continue
                     planner_candidates.append((ep, wi))
+
+                self.logger.info(
+                    f"[WORK_DIST] Built {len(planner_candidates)} planner candidates from {len(candidates_wi)} candidates. "
+                    f"Executors needed: {set(ep for ep, _ in planner_candidates)}"
+                )
 
                 # Give the planner: candidates + a COPY of slots + active_dags
                 pick_slots = slots_by_executor.copy()
@@ -643,8 +669,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     candidates_wi, planned, pick_slots, self.active_dags, self.frontier
                 )
                 if not planned:
+                    # Group candidates by executor for detailed analysis
+                    candidates_by_executor = defaultdict(list)
+                    for ep, wi in planner_candidates:
+                        exe = ep.split("://", 1)[0]
+                        candidates_by_executor[exe].append(wi.id)
+
+                    active_dag_count = len(self.active_dags)
                     self.logger.warning(
-                        "Planner returned no picks; short sleep. planner_candidates = {len(planner_candidates)}"
+                        f"[WORK_DIST] Planner returned NO picks. Short sleep. "
+                        f"Candidates count: {len(planner_candidates)} | "
+                        f"Candidates by executor: {dict(candidates_by_executor)} | "
+                        f"Available slots: {pick_slots} | "
+                        f"Active DAGs: {active_dag_count}/{max_concurrent_dags} | "
+                        f"Idle streak: {idle_streak}"
                     )
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
                     idle_streak += 1
@@ -655,6 +693,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         min_poll_period=MIN_POLL_PERIOD,
                     )
                     continue
+
+                self.logger.info(
+                    f"[WORK_DIST] Planner selected {len(planned)} jobs to schedule. "
+                    f"Job IDs: {[wi.id for _, wi in planned[:10]]}"
+                )
 
                 # TAKE + SOFT-LEASE
                 selected_ids = [wi.id for _, wi in planned]
@@ -666,8 +709,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     taken_ids = {wi.id for wi in selected_wis}
                     missing = list(set(selected_ids) - taken_ids)
                     self.logger.warning(
-                        f"Not all jobs taken from frontier: taken={taken} / selected={requested}; "
-                        f"missing_ids={missing[:10]}{'...' if len(missing) > 10 else ''}"
+                        f"[WORK_DIST] Not all jobs taken from frontier: taken={taken}/{requested}. "
+                        f"Missing IDs: {missing[:10]}{'...' if len(missing) > 10 else ''}"
+                    )
+                else:
+                    self.logger.info(
+                        f"[WORK_DIST] Successfully took {taken} jobs from frontier for soft-lease"
                     )
 
                 planned_by_id = {wi.id: (ep, wi) for ep, wi in planned}
@@ -679,28 +726,33 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 leased_ids: set[str] = set()
                 for job_name, ids in ids_by_job_name.items():
                     try:
-                        self.logger.debug(
-                            f'_lease_jobs_db size = {job_name} : {len(ids)}'
+                        self.logger.info(
+                            f'[WORK_DIST] Attempting DB lease for job={job_name}, count={len(ids)}'
                         )
                         got = await self._lease_jobs_db(job_name, ids)
                         leased_ids.update(got)
-                        self.logger.debug(
-                            f'_lease_jobs_db got = {job_name} : {len(got)}'
+                        self.logger.info(
+                            f'[WORK_DIST] DB lease result for job={job_name}: leased {len(got)}/{len(ids)}'
                         )
                         if len(got) < len(ids):
+                            missing_ids = set(ids) - set(got)
                             self.logger.warning(
-                                f"DB lease shortfall for '{job_name}': got {len(got)}/{len(ids)}"
+                                f"[WORK_DIST] DB lease shortfall for '{job_name}': got {len(got)}/{len(ids)}. "
+                                f"Missing IDs: {list(missing_ids)[:5]}"
                             )
                     except Exception as e:
                         self.logger.error(
-                            f"DB lease failed for '{job_name}' ({len(ids)} ids): {e}"
+                            f"[WORK_DIST] DB lease FAILED for '{job_name}' ({len(ids)} ids): {e}",
+                            exc_info=True,
                         )
                 # put *everything* back
                 if not leased_ids:
                     for wi in selected_wis:
                         await self.frontier.release_lease_local(wi.id)
                     self.logger.warning(
-                        "No candidates could be leased in DB; backing off."
+                        f"[WORK_DIST] NO candidates could be leased in DB; backing off. "
+                        f"Attempted {len(selected_wis)} jobs across {len(ids_by_job_name)} job names. "
+                        f"Job names: {list(ids_by_job_name.keys())}"
                     )
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
                     idle_streak += 1
@@ -711,6 +763,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         min_poll_period=MIN_POLL_PERIOD,
                     )
                     continue
+
+                self.logger.info(
+                    f"[WORK_DIST] Successfully leased {len(leased_ids)} jobs in DB. "
+                    f"Processing leased jobs now..."
+                )
 
                 # return non-leased back to frontier immediately
                 for wi in selected_wis:
@@ -727,14 +784,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 jobs_scheduled_this_cycle = defaultdict(int)
                 enqueue_tasks = []
 
+                self.logger.info(
+                    f"[WORK_DIST] Processing {len(leased_jobs)} leased jobs..."
+                )
+
                 for entrypoint, wi in leased_jobs:
                     dag_id = wi.dag_id
                     if (
                         dag_id not in self.active_dags
                         and len(self.active_dags) >= max_concurrent_dags
                     ):
-                        self.logger.debug(
-                            f"Max DAG limit reached ({len(self.active_dags)}/{max_concurrent_dags}). Skipping {wi.id}"
+                        self.logger.warning(
+                            f"[WORK_DIST] Max DAG limit reached ({len(self.active_dags)}/{max_concurrent_dags}). "
+                            f"Skipping job {wi.id} (DAG: {dag_id}). "
+                            f"Active DAGs: {list(self.active_dags.keys())}"
                         )
                         await self._release_lease_db([wi.id])
                         await self.frontier.release_lease_local(wi.id)
@@ -804,7 +867,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     # Normal job: check slots then dispatch
                     exe = entrypoint.split("://", 1)[0]
                     if slots_by_executor.get(exe, 0) <= 0:
-                        self.logger.debug(f"No slots for {exe}, delaying job {wi.id}")
+                        self.logger.warning(
+                            f"[WORK_DIST] No slots available for executor={exe}, delaying job {wi.id}. "
+                            f"Current slots_by_executor: {slots_by_executor}"
+                        )
                         await self._release_lease_db([wi.id])
                         await self.frontier.release_lease_local(wi.id)
                         continue
@@ -815,6 +881,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     owner = f"{wi.id}"
                     reserved = False
                     try:
+                        self.logger.debug(
+                            f"[WORK_DIST] Attempting semaphore reservation for job={wi.id}, executor={slot_type}"
+                        )
                         reserved = await asyncio.to_thread(
                             self._semaphore_store.reserve,
                             slot_type,
@@ -823,15 +892,21 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             ttl=self._sem_default_ttl,
                             owner=wi.id,
                         )
+                        if reserved:
+                            self.logger.info(
+                                f"[WORK_DIST] Semaphore reserved successfully for job={wi.id}, executor={slot_type}"
+                            )
                     except Exception as e:
                         self.logger.error(
-                            f"[sem] reserve error for {wi.id}@{slot_type}: {e}"
+                            f"[WORK_DIST] Semaphore reserve ERROR for job={wi.id}, executor={slot_type}: {e}",
+                            exc_info=True,
                         )
                         reserved = False
 
                     if not reserved:
                         self.logger.warning(
-                            f"[sem] no capacity for {slot_type}; releasing lease for {wi.id} : slots_by_executor = {slots_by_executor}"
+                            f"[WORK_DIST] NO semaphore capacity for executor={slot_type}; releasing lease for job={wi.id}. "
+                            f"slots_by_executor={slots_by_executor}"
                         )
                         await self._release_lease_db([wi.id])
                         await self.frontier.release_lease_local(wi.id)
@@ -850,8 +925,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
 
                 if enqueue_tasks:
+                    self.logger.info(
+                        f"[WORK_DIST] Dispatching {len(enqueue_tasks)} jobs via _activate_and_enqueue_job..."
+                    )
                     results = await asyncio.gather(
                         *[t["task"] for t in enqueue_tasks], return_exceptions=True
+                    )
+                    self.logger.info(
+                        f"[WORK_DIST] Dispatch completed. Processing {len(results)} results..."
                     )
                     for i, result in enumerate(results):
                         wi = enqueue_tasks[i]["wi"]
@@ -860,7 +941,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                         if isinstance(result, Exception) or not result:
                             # dispatch failed → release lease & requeue
-                            self.logger.error(f"Dispatch failed for {wi.id}: {result}")
+                            self.logger.error(
+                                f"[WORK_DIST] Dispatch FAILED for job={wi.id}, executor={exe}: {result}",
+                                exc_info=(
+                                    True if isinstance(result, Exception) else False
+                                ),
+                            )
                             await self._release_lease_db([wi.id])
                             await self.frontier.release_lease_local(wi.id)
 
