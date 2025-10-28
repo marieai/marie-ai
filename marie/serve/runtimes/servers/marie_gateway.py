@@ -20,7 +20,6 @@ from rich.traceback import install
 import marie
 import marie.helper
 from marie._core.definitions.metadata import JsonMetadataValue
-from marie._core.utils import run_background_task
 from marie.auth.api_key_manager import APIKeyManager
 from marie.auth.auth_bearer import TokenBearer
 from marie.constants import (

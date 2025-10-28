@@ -49,15 +49,15 @@ def test_available_count_and_read_count(sema: SemaphoreStore):
     assert sema.read_count(slot) == 0
     assert sema.available_slot_count(slot) == 2
 
-    ok1 = sema.reserve(slot, _ticket(), job_id="j1", node="n1")
-    ok2 = sema.reserve(slot, _ticket(), job_id="j2", node="n2")
+    ok1 = sema.reserve(slot, _ticket(),  node="n1")
+    ok2 = sema.reserve(slot, _ticket(),  node="n2")
 
     assert ok1 is True and ok2 is True
     assert sema.read_count(slot) == 2
     assert sema.available_slot_count(slot) == 0
 
     # third should fail due to capacity
-    ok3 = sema.reserve(slot, _ticket(), job_id="j3", node="n3")
+    ok3 = sema.reserve(slot, _ticket(), node="n3")
     assert ok3 is False
 
 
@@ -66,7 +66,7 @@ def test_reserve_success_and_release(sema: SemaphoreStore):
     sema.set_capacity(slot, 1)
 
     ticket = _ticket()
-    ok_r = sema.reserve(slot, ticket, job_id="job", node="node")
+    ok_r = sema.reserve(slot, ticket,  node="node")
     assert ok_r is True
     assert sema.read_count(slot) == 1
 
@@ -85,7 +85,7 @@ def test_release_requires_existing_holder_and_count(sema: SemaphoreStore):
 
     # reserve once
     ticket = _ticket()
-    assert sema.reserve(slot, ticket, job_id="j", node="n") is True
+    assert sema.reserve(slot, ticket, node="n") is True
 
     # releasing unknown ticket -> False (holder missing)
     assert sema.release(slot, _ticket()) is False
@@ -99,14 +99,14 @@ def test_list_holders(sema: SemaphoreStore):
     sema.set_capacity(slot, 3)
 
     t1, t2 = _ticket(), _ticket()
-    assert sema.reserve(slot, t1, job_id="j1", node="n1") is True
-    assert sema.reserve(slot, t2, job_id="j2", node="n2") is True
+    assert sema.reserve(slot, t1,  node="n1") is True
+    assert sema.reserve(slot, t2,  node="n2") is True
 
     holders = sema.list_holders(slot)
     assert isinstance(holders, dict)
     assert t1 in holders and t2 in holders
     assert isinstance(holders[t1], SemaphoreHolder)
-    assert holders[t1].job_id == "j1"
+    assert holders[t1].ticket_id == t1
     assert holders[t2].node == "n2"
 
 
@@ -117,7 +117,7 @@ def test_reconcile_updates_counter(sema: SemaphoreStore):
     # reserve three
     tickets = [_ticket() for _ in range(3)]
     for i, t in enumerate(tickets):
-        assert sema.reserve(slot, t, job_id=f"j{i}", node=f"n{i}") is True
+        assert sema.reserve(slot, t, node=f"n{i}") is True
 
     # manually skew the counter down by one using direct put via client to emulate drift
     cnt_key = f"semaphores/{slot}/count"
@@ -147,7 +147,7 @@ def test_lease_ttl_does_not_block_basic_flow(sema: SemaphoreStore):
 
     t = _ticket()
     # use a shorter ttl to ensure lease mechanics don't raise in basic reserve path
-    ok = sema.reserve(slot, t, job_id="job", node="node", ttl=2)
+    ok = sema.reserve(slot, t, node="node", ttl=2)
     assert ok is True
 
     # wait a bit (not necessarily beyond ttl to keep test quick)
@@ -155,7 +155,7 @@ def test_lease_ttl_does_not_block_basic_flow(sema: SemaphoreStore):
 
     # release should still work if holder exists
     assert sema.release(slot, t) is True
-# ... existing code ...
+
 
 def test_list_slot_types_and_capacities_all(sema: SemaphoreStore):
     s1, s2, s3 = _slot(), _slot(), _slot()
@@ -167,7 +167,7 @@ def test_list_slot_types_and_capacities_all(sema: SemaphoreStore):
 
     # create activity for s1 to ensure semaphores/ paths exist too
     t1 = _ticket()
-    assert sema.reserve(s1, t1, job_id="j1", node="n1") is True
+    assert sema.reserve(s1, t1, node="n1") is True
 
     slots = sema.list_slot_types()
     assert {s1, s2, s3}.issubset(slots)
@@ -189,9 +189,9 @@ def test_read_count_all_and_holder_counts_and_list_holders_all(sema: SemaphoreSt
     t1a, t1b = _ticket(), _ticket()
     t2a = _ticket()
 
-    assert sema.reserve(s1, t1a, job_id="j1a", node="n1") is True
-    assert sema.reserve(s1, t1b, job_id="j1b", node="n1") is True
-    assert sema.reserve(s2, t2a, job_id="j2a", node="n2") is True
+    assert sema.reserve(s1, t1a, node="n1") is True
+    assert sema.reserve(s1, t1b, node="n1") is True
+    assert sema.reserve(s2, t2a, node="n2") is True
     # s3 has no holders
 
     # read_count_all should reflect used counts
@@ -215,7 +215,7 @@ def test_read_count_all_and_holder_counts_and_list_holders_all(sema: SemaphoreSt
 
     # specific tickets present and parsed as SemaphoreHolder
     assert t1a in all_holders[s1] and isinstance(all_holders[s1][t1a], SemaphoreHolder)
-    assert all_holders[s1][t1a].job_id == "j1a"
+    assert all_holders[s1][t1a].ticket_id == t1a
     assert t2a in all_holders[s2]
 
 
@@ -225,7 +225,7 @@ def test_available_count_all(sema: SemaphoreStore):
     sema.set_capacity(s2, 1)
 
     t1 = _ticket()
-    assert sema.reserve(s1, t1, job_id="j1", node="n1") is True
+    assert sema.reserve(s1, t1, node="n1") is True
 
     avail = sema.available_count_all()
     # s1: cap 2, used 1
@@ -241,9 +241,9 @@ def test_snapshot_all_basic_and_with_holders(sema: SemaphoreStore):
     sema.set_capacity(s3, 2)
 
     t1a, t1b, t2a = _ticket(), _ticket(), _ticket()
-    assert sema.reserve(s1, t1a, job_id="j1a", node="n1") is True
-    assert sema.reserve(s1, t1b, job_id="j1b", node="n1") is True
-    assert sema.reserve(s2, t2a, job_id="j2a", node="n2") is True
+    assert sema.reserve(s1, t1a, node="n1") is True
+    assert sema.reserve(s1, t1b, node="n1") is True
+    assert sema.reserve(s2, t2a, node="n2") is True
     # s3 has no holders
 
     snap = sema.snapshot_all(include_holders=False)
@@ -275,3 +275,141 @@ def test_snapshot_all_basic_and_with_holders(sema: SemaphoreStore):
     assert isinstance(snap_h[s1]["holders"][t1a], SemaphoreHolder)
     # s3 should include empty holders map
     assert isinstance(snap_h[s3]["holders"], dict) and len(snap_h[s3]["holders"]) == 0
+
+def test_release_with_missing_counter(sema: SemaphoreStore):
+    """
+    Bug #2 fix: Test that release() handles missing counter gracefully.
+    Previously, if the counter was deleted but holder existed, release would fail
+    and the holder would be stuck until lease expiration.
+    """
+    slot = _slot()
+    sema.set_capacity(slot, 2)
+
+    # Reserve a slot
+    ticket = _ticket()
+    assert sema.reserve(slot, ticket, node="node1") is True
+    assert sema.read_count(slot) == 1
+
+    # Simulate counter deletion (e.g., manual deletion, etcd issue, bug)
+    cnt_key = f"semaphores/{slot}/count"
+    sema.etcd.delete(cnt_key)
+
+    # Verify counter is missing but holder still exists
+    assert sema.read_count(slot) == 0  # Counter missing returns 0
+    holders = sema.list_holders(slot)
+    assert ticket in holders  # Holder still exists
+
+    # The fix: release() should succeed even with missing counter
+    ok_rel = sema.release(slot, ticket)
+    assert ok_rel is True
+
+    # After release:
+    # - Holder should be deleted
+    # - Counter should be initialized to 0
+    assert sema.read_count(slot) == 0
+    holders_after = sema.list_holders(slot)
+    assert ticket not in holders_after
+
+
+def test_release_owned_with_missing_counter(sema: SemaphoreStore):
+    """
+    Bug #2 fix: Test that release_owned() handles missing counter gracefully
+    while still enforcing ownership checks.
+    """
+    slot = _slot()
+    sema.set_capacity(slot, 2)
+
+    # Reserve with specific owner
+    ticket = _ticket()
+    owner = "worker-123"
+    assert sema.reserve(slot, ticket, node="node1", owner=owner) is True
+    assert sema.read_count(slot) == 1
+
+    # Verify holder has correct owner
+    holder = sema.get_holder(slot, ticket)
+    assert holder is not None
+    assert holder.owner == owner
+
+    # Simulate counter deletion
+    cnt_key = f"semaphores/{slot}/count"
+    sema.etcd.delete(cnt_key)
+
+    # Verify counter is missing but holder still exists
+    assert sema.read_count(slot) == 0
+    holders = sema.list_holders(slot)
+    assert ticket in holders
+
+    # The fix: release_owned() should succeed with correct owner
+    ok_rel = sema.release_owned(slot, ticket, owner=owner)
+    assert ok_rel is True
+
+    # After release:
+    # - Holder should be deleted
+    # - Counter should be initialized to 0
+    assert sema.read_count(slot) == 0
+    holders_after = sema.list_holders(slot)
+    assert ticket not in holders_after
+
+
+def test_release_owned_with_missing_counter_wrong_owner(sema: SemaphoreStore):
+    """
+    Bug #2 fix: Test that release_owned() still enforces ownership checks
+    even when counter is missing.
+    """
+    slot = _slot()
+    sema.set_capacity(slot, 2)
+
+    # Reserve with specific owner
+    ticket = _ticket()
+    correct_owner = "worker-123"
+    wrong_owner = "worker-456"
+    assert sema.reserve(slot, ticket, node="node1", owner=correct_owner) is True
+
+    # Simulate counter deletion
+    cnt_key = f"semaphores/{slot}/count"
+    sema.etcd.delete(cnt_key)
+
+    # Attempt to release with wrong owner should fail
+    ok_rel = sema.release_owned(slot, ticket, owner=wrong_owner)
+    assert ok_rel is False
+
+    # Holder should still exist (not released)
+    holders = sema.list_holders(slot)
+    assert ticket in holders
+
+    # Now release with correct owner should succeed
+    ok_rel_correct = sema.release_owned(slot, ticket, owner=correct_owner)
+    assert ok_rel_correct is True
+
+    # Holder should now be deleted
+    holders_after = sema.list_holders(slot)
+    assert ticket not in holders_after
+
+
+def test_multiple_releases_with_missing_counter(sema: SemaphoreStore):
+    """
+    Bug #2 fix: Test that multiple holders can be released when counter is missing.
+    """
+    slot = _slot()
+    sema.set_capacity(slot, 3)
+
+    # Reserve multiple slots
+    t1, t2, t3 = _ticket(), _ticket(), _ticket()
+    assert sema.reserve(slot, t1, node="n1") is True
+    assert sema.reserve(slot, t2, node="n2") is True
+    assert sema.reserve(slot, t3, node="n3") is True
+    assert sema.read_count(slot) == 3
+
+    # Simulate counter deletion
+    cnt_key = f"semaphores/{slot}/count"
+    sema.etcd.delete(cnt_key)
+
+    # Release all three - each should succeed
+    assert sema.release(slot, t1) is True
+    assert sema.release(slot, t2) is True
+    assert sema.release(slot, t3) is True
+
+    # All holders should be gone
+    holders_after = sema.list_holders(slot)
+    assert len(holders_after) == 0
+    assert sema.read_count(slot) == 0

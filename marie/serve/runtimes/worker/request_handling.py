@@ -894,6 +894,9 @@ class WorkerRequestHandler:
                 return_data: Any,
                 raised_exception: Exception,
             ):
+                self.logger.info(
+                    f"[callback] executor_completion_callback invoked for job_id={job_id}, has_exception={raised_exception is not None}"
+                )
                 self.logger.debug(f"executor_completion_callback : {job_id}")
                 self.logger.debug(f"requests FROM MONITOR : {requests}")
 
@@ -919,6 +922,10 @@ class WorkerRequestHandler:
                     await self._record_successful_job(
                         job_id, requests, additional_metadata
                     )
+
+                self.logger.info(
+                    f"[callback] executor_completion_callback completed for job_id={job_id}"
+                )
 
             try:
                 # we adding a callback to track when the executor have finished as the client disconnect will trigger
@@ -1602,8 +1609,11 @@ class WorkerRequestHandler:
         e: Exception,
         metadata_attributes: Optional[Dict],
     ):
-        self.logger.info(f"Record job failed: {job_id} - {e}")
+        self.logger.info(f"[lifecycle] Recording job failure for {job_id} - {e}")
         if self.is_dry_run(requests):
+            self.logger.debug(
+                f"Dry run mode - skipping job failure recording for {job_id}"
+            )
             return
 
         # TODO :
@@ -1622,6 +1632,7 @@ class WorkerRequestHandler:
             )
 
         # Always untrack & release on terminal
+        self.logger.info(f"[lifecycle] Calling _sem_untrack for failed job {job_id}")
         self._sem_untrack(job_id, release=True)
 
         if job_id is not None and self._job_info_client is not None:
@@ -1721,9 +1732,12 @@ class WorkerRequestHandler:
         metadata_attributes: Optional[Dict],
     ):
         if self.is_dry_run(requests):
+            self.logger.debug(
+                f"Dry run mode - skipping job success recording for {job_id}"
+            )
             return
 
-        self.logger.info(f"Record job success: {job_id}")
+        self.logger.info(f"[lifecycle] Recording job success for {job_id}")
         self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
 
         try:
@@ -1735,6 +1749,9 @@ class WorkerRequestHandler:
             )
 
         # Always untrack & release on terminal
+        self.logger.info(
+            f"[lifecycle] Calling _sem_untrack for successful job {job_id}"
+        )
         self._sem_untrack(job_id, release=True)
 
         if job_id is not None and self._job_info_client is not None:
@@ -1830,6 +1847,9 @@ class WorkerRequestHandler:
         self.logger.info("Calling heartbeat setup")
 
         def _hb():
+            consecutive_failures = 0
+            max_consecutive_failures = 3
+
             while not self._status_hb_stop.is_set():
                 try:
                     # Heartbeat regardless of SERVING/NOT_SERVING, so the gateway
@@ -1838,10 +1858,28 @@ class WorkerRequestHandler:
                         self._node, self._deployment, self._worker_id
                     )
                     if not ok:
+                        consecutive_failures += 1
                         # Key missing or owner mismatch; re-claim and re-publish
                         self.logger.warning(
-                            "Status heartbeat: status doc missing or owner mismatch. Re-claiming and re-publishing."
+                            f"Status heartbeat: status doc missing or owner mismatch "
+                            f"(consecutive failures: {consecutive_failures}/{max_consecutive_failures})"
                         )
+
+                        # Log diagnostic info after multiple failures
+                        if consecutive_failures >= max_consecutive_failures:
+                            try:
+                                current_status = self._status_store.read(
+                                    self._node, self._deployment
+                                )
+                                self.logger.error(
+                                    f"Repeated heartbeat failures. Current status in etcd: {current_status}, "
+                                    f"expected owner: {self._worker_id}"
+                                )
+                            except Exception as diag_err:
+                                self.logger.error(
+                                    f"Failed to read current status for diagnostics: {diag_err}"
+                                )
+
                         try:
                             if (
                                 self._worker_state
@@ -1850,8 +1888,16 @@ class WorkerRequestHandler:
                                 self._claim_and_mark_serving()
                             else:
                                 self._claim_and_mark_ready()
+                            consecutive_failures = 0  # Reset on successful recovery
                         except Exception as e2:
                             self.logger.error(f"status heartbeat recovery failed: {e2}")
+                    else:
+                        # Heartbeat succeeded, reset failure counter
+                        if consecutive_failures > 0:
+                            self.logger.info(
+                                f"Status heartbeat recovered after {consecutive_failures} failures"
+                            )
+                            consecutive_failures = 0
 
                     # renew any active semaphore tickets
                     try:
@@ -2156,24 +2202,37 @@ class WorkerRequestHandler:
             self.logger.info(
                 f"[sem] adopted ticket {job_id} for slot '{slot_type}' (ttl={ttl}, owner={owner})"
             )
-        except Exception as e:
-            self.logger.error(f"[sem] adopt/track failed for {job_id}@{slot_type}: {e}")
 
     def _sem_untrack(self, job_id: str, release: bool = True):
         meta = self._active_sem_tickets.pop(job_id, None)
-        if not meta or not release:
+        if not meta:
+            self.logger.warning(
+                f"[sem] untrack called for {job_id} but no active ticket found "
+                f"(active tickets: {list(self._active_sem_tickets.keys())})"
+            )
             return
+        if not release:
+            self.logger.debug(f"[sem] untrack {job_id} without release (release=False)")
+            return
+
         slot = meta["slot"]
         owner = meta.get("owner") or job_id
 
         try:
+            self.logger.info(f"[sem] releasing ticket {job_id}@{slot} (owner={owner})")
             released = self._semaphore.release_owned(slot, job_id, owner=owner)
             if not released:
+                self.logger.warning(
+                    f"[sem] release_owned returned False for {job_id}@{slot}, "
+                    "trying fallback release without owner check"
+                )
                 # last resort to avoid leaks (if someone mutated the holder unexpectedly)
                 released = self._semaphore.release(slot, job_id)
             self.logger.info(f"[sem] released ticket {job_id}@{slot} -> {released}")
         except Exception as e:
-            self.logger.warning(f"[sem] release failed for {job_id}@{slot}: {e}")
+            self.logger.error(
+                f"[sem] release failed for {job_id}@{slot}: {e}", exc_info=True
+            )
 
     def _sem_untrack_all(self, release: bool = True):
         for jid in list(self._active_sem_tickets.keys()):

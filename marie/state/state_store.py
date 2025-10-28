@@ -7,9 +7,7 @@ from typing import Any, Dict, Iterator, Optional, Tuple
 
 from grpc_health.v1.health_pb2 import HealthCheckResponse
 
-from marie.serve.discovery.etcd_client import EtcdClient
-
-from .base import BaseStore, _now_iso, _tx_succeeded
+from .base import BaseStore, _now_iso
 
 # Key structure:
 # marie/deployments/{node}/{deployment}/desired   # gateway-only writer
@@ -130,23 +128,6 @@ class DesiredStore(BaseStore):
 
     def _desired_key(self, node: str, depl: str) -> str:
         return _dkey(node, depl)
-
-    def setXXX(
-        self, node: str, depl: str, params: Dict[str, Any], phase: str = "SCHEDULED"
-    ) -> DesiredDoc:
-        k = self._desired_key(node, depl)
-        cur = self._get_raw(k)
-        epoch = 0
-        if cur:
-            try:
-                epoch = int(json.loads(cur.decode()).get("epoch", 0))
-            except Exception:
-                pass
-        doc = DesiredDoc(
-            phase=phase, epoch=epoch + 1, params=params or {}, updated_at=_now_iso()
-        )
-        self._put_json(k, asdict(doc))
-        return doc
 
     def set(
         self, node: str, depl: str, params: Dict[str, Any], phase: str = "SCHEDULED"

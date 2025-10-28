@@ -98,8 +98,8 @@ with:
       wheel_directories:
         - /mnt/data/marie-ai/config/wheels
       planners:
-#        - name: tid_100985
-#          py_module: grapnel_g5.query.tid_100985.query
+        - name: mock_planners
+          py_module: tests.integration.scheduler.mock_query_plans
 #        - name: tid_121880
 #          py_module: grapnel_g5.query.tid_121880.query
 

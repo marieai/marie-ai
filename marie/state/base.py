@@ -14,7 +14,6 @@ from marie.serve.discovery.etcd_client import EtcdClient
 
 def _tx_succeeded(ok) -> bool:
     # etcd3-py often returns (succeeded, responses)
-    print("tx_succeeded : ", ok)
     return ok[0] if isinstance(ok, tuple) else bool(ok)
 
 

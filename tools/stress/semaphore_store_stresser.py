@@ -59,8 +59,6 @@ class SemaphoreStoreStresser:
             f"mode={self.mode} slot_type={self.slot_type} capacity={self.capacity} ttl={lease_ttl}"
         )
 
-    # ------------- Helpers -------------
-
     @staticmethod
     def _parse_duration(duration_str: str) -> timedelta:
         if not duration_str:
@@ -80,8 +78,6 @@ class SemaphoreStoreStresser:
         cur = self._sema.get_capacity(self.slot_type)
         if cur is None or cur != self.capacity:
             self._sema.set_capacity(self.slot_type, self.capacity)
-
-    # ------------- Single ops -------------
 
     def _op_set_capacity(self, idx: int) -> bool:
         try:
@@ -104,7 +100,6 @@ class SemaphoreStoreStresser:
                 ok = self._sema.reserve(
                     slot_type=self.slot_type,
                     ticket_id=ticket_id,
-                    job_id=f"job-{idx}",
                     node=f"node-{idx % 32}",
                     ttl=None,
                 )
@@ -136,7 +131,6 @@ class SemaphoreStoreStresser:
             ok_r = self._sema.reserve(
                 slot_type=self.slot_type,
                 ticket_id=ticket_id,
-                job_id=f"job-{idx}",
                 node=f"node-{idx % 32}",
                 ttl=None,
             )
@@ -169,7 +163,6 @@ class SemaphoreStoreStresser:
                 ok_r = self._sema.reserve(
                     slot_type=self.slot_type,
                     ticket_id=ticket_id,
-                    job_id=f"job-{idx}",
                     node=f"node-{idx % 32}",
                     ttl=None,
                 )

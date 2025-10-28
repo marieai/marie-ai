@@ -86,7 +86,7 @@ def query_planner_mock_simple(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
 
 @register_query_plan("mock_medium")
 def query_planner_mock_medium(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
-    """
+    """T
     Medium complexity mock query plan for performance testing.
 
     Structure:

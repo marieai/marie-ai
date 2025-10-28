@@ -308,68 +308,148 @@ class SemaphoreStore(BaseStore):
         ticket_id: str,
         *,
         owner: Optional[str] = None,
+        max_retries: int = 5,
     ) -> bool:
         """
         Atomically release a slot. Returns True if released, False otherwise.
+
+        Handles missing counter gracefully to prevent holder leaks:
+        - If counter exists: decrement and delete holder
+        - If counter missing but holder exists: delete holder and initialize counter to 0
+
+        Uses CAS with automatic retry on contention to prevent holder leaks under high load.
         """
+        import time
+
         cnt_k = _count_key(slot_type)
         h_k = _holder_key(slot_type, ticket_id)
 
-        cnt_raw = self._get_raw(cnt_k)
-        if cnt_raw is None:
-            return False  # avoid underflow; caller can reconcile later
+        for attempt in range(max_retries):
+            # Read holder - if it doesn't exist, we're done (already released or never existed)
+            h_raw = self._get_raw(h_k)
+            if not h_raw:
+                return (
+                    True if attempt > 0 else False
+                )  # True if deleted during retry, False if never existed
 
-        h_raw = self._get_raw(h_k)
-        if not h_raw:
-            return False
+            cnt_raw = self._get_raw(cnt_k)
 
-        old_count = int(cnt_raw.decode())
-        new_count = max(0, old_count - 1)
+            # Handle missing counter case - prevent holder leak
+            if cnt_raw is None:
+                # Counter missing but holder exists
+                # Delete holder and set count to 0 atomically
+                t = self.etcd.txn()
+                t.if_missing(cnt_k)  # Verify counter still missing
+                t.if_value(h_k, "==", h_raw)  # Holder unchanged & exists (CAS)
+                t.put(cnt_k, "0")  # Initialize counter to 0
+                t.delete(h_k)
 
-        t = self.etcd.txn()
-        t.if_value(cnt_k, "==", cnt_raw)  # count unchanged
-        t.if_value(h_k, "==", h_raw)  # holder unchanged & exists (CAS)
-        t.put(cnt_k, str(new_count))
-        t.delete(h_k)
+                ok, _resp = t.commit()
+                if ok:
+                    return True
+                # CAS failed - retry with backoff
+                if attempt < max_retries - 1:
+                    time.sleep(
+                        0.001 * (2**attempt)
+                    )  # Exponential backoff: 1ms, 2ms, 4ms, 8ms, 16ms
+                continue
 
-        ok, _resp = t.commit()
-        return bool(ok)
+            # Normal case: counter exists
+            old_count = int(cnt_raw.decode())
+            new_count = max(0, old_count - 1)
 
-    def release_owned(self, slot_type: str, ticket_id: str, *, owner: str) -> bool:
+            t = self.etcd.txn()
+            t.if_value(cnt_k, "==", cnt_raw)  # count unchanged
+            t.if_value(h_k, "==", h_raw)  # holder unchanged & exists (CAS)
+            t.put(cnt_k, str(new_count))
+            t.delete(h_k)
+
+            ok, _resp = t.commit()
+            if ok:
+                return True
+            # CAS failed - retry with backoff
+            if attempt < max_retries - 1:
+                time.sleep(0.001 * (2**attempt))
+            continue
+
+        return False  # All retries exhausted
+
+    def release_owned(
+        self, slot_type: str, ticket_id: str, *, owner: str, max_retries: int = 5
+    ) -> bool:
         """
         Release only if the holder is owned by `owner`. Prevents accidental releases.
+
+        Handles missing counter gracefully to prevent holder leaks:
+        - If counter exists: verify ownership, decrement counter, and delete holder
+        - If counter missing but holder exists: verify ownership, delete holder, and initialize counter to 0
+
+        Uses CAS with automatic retry on contention to prevent holder leaks under high load.
         """
+        import time
+
         h_k = _holder_key(slot_type, ticket_id)
         cnt_k = _count_key(slot_type)
 
-        h_raw, h_meta = self._get_holder_raw(slot_type, ticket_id)
-        if h_raw is None:
-            return False
+        for attempt in range(max_retries):
+            h_raw, h_meta = self._get_holder_raw(slot_type, ticket_id)
+            if h_raw is None:
+                # Holder doesn't exist
+                return (
+                    True if attempt > 0 else False
+                )  # True if deleted during retry, False if never existed
 
-        try:
-            holder = SemaphoreHolder.from_json(h_raw)
-        except Exception:
-            return False
+            try:
+                holder = SemaphoreHolder.from_json(h_raw)
+            except Exception:
+                return False
 
-        if holder.owner and holder.owner != owner:
-            return False
+            # Verify ownership
+            if holder.owner and holder.owner != owner:
+                return False  # Not the owner, reject release (don't retry)
 
-        cnt_raw = self._get_raw(cnt_k)
-        if cnt_raw is None:
-            return False
+            cnt_raw = self._get_raw(cnt_k)
 
-        old_count = int(cnt_raw.decode())
-        new_count = max(0, old_count - 1)
+            # Handle missing counter case - prevent holder leak
+            if cnt_raw is None:
+                # Counter missing but holder exists and ownership verified
+                # Delete holder and set count to 0 atomically
+                t = self.etcd.txn()
+                t.if_missing(cnt_k)  # Verify counter still missing
+                t.if_value(h_k, "==", h_raw)  # Holder unchanged (CAS)
+                t.put(cnt_k, "0")  # Initialize counter to 0
+                t.delete(h_k)
 
-        # CAS on both: holder value and count value
-        t = self.etcd.txn()
-        t.if_value(cnt_k, "==", cnt_raw)
-        t.if_value(h_k, "==", h_raw)
-        t.put(cnt_k, str(new_count))
-        t.delete(h_k)
+                ok, _resp = t.commit()
+                if ok:
+                    return True
+                # CAS failed - retry with backoff
+                if attempt < max_retries - 1:
+                    time.sleep(
+                        0.001 * (2**attempt)
+                    )  # Exponential backoff: 1ms, 2ms, 4ms, 8ms, 16ms
+                continue
 
-        ok, _resp = t.commit()
-        return bool(ok)
+            # Normal case: counter exists
+            old_count = int(cnt_raw.decode())
+            new_count = max(0, old_count - 1)
+
+            # CAS on both: holder value and count value
+            t = self.etcd.txn()
+            t.if_value(cnt_k, "==", cnt_raw)
+            t.if_value(h_k, "==", h_raw)
+            t.put(cnt_k, str(new_count))
+            t.delete(h_k)
+
+            ok, _resp = t.commit()
+            if ok:
+                return True
+            # CAS failed - retry with backoff
+            if attempt < max_retries - 1:
+                time.sleep(0.001 * (2**attempt))
+            continue
+
+        return False  # All retries exhausted
 
     # ---------- Multi-slot helpers (for summaries & audits) ----------
 

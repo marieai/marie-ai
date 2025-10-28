@@ -843,7 +843,13 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         if is_parameters_pydantic_model:
             func = parameters_as_pydantic_models_decorator(func, parameters_model)
 
-        completion_callback = kwargs.pop("completion_callback")
+        # Make completion_callback optional with a no-op default
+        async def _noop_completion_callback(return_data, raised_exception):
+            pass
+
+        completion_callback = kwargs.pop(
+            "completion_callback", _noop_completion_callback
+        )
 
         async def exec_func(
             summary, histogram, histogram_metric_labels, tracing_context
