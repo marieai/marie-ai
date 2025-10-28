@@ -13,7 +13,9 @@ from functools import partial
 from multiprocessing import Queue
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
+from aiohttp import ClientOSError
 from docarray import DocList
 from docarray.documents import TextDoc
 from pydantic.tools import parse_obj_as
@@ -40,6 +42,8 @@ from examples.utils import (
 job_to_file = {}
 main_queue = Queue()
 stop_event = threading.Event()
+job_to_file_lock = threading.Lock()
+job_to_file_path: str | None = None
 
 # Configuration constants
 REF_TYPE = "extract"
@@ -160,32 +164,46 @@ def publish_extract(
                 request_size=-1,
                 return_responses=True,
                 return_exceptions=True,
-                asyncio=True,
+                asyncio=False,  # make synchronous to avoid per-thread event loops
                 **request_kwargs,
             ):
                 logger.info(f"Response: {resp}")
                 json_result = deserialize_value(resp.parameters)
                 logger.info(f"Adding job id: {json_result['job_id']}")
 
-                job_to_file[json_result["job_id"]] = {
-                    "file": file_path,
-                    "output_dir": output_dir,
-                    "filename": filename,
-                }
+                # Update and persist atomically
+                try:
+                    # global job_to_file_path
+                    with job_to_file_lock:
+                        job_to_file[json_result["job_id"]] = {
+                            "file": file_path,
+                            "output_dir": output_dir,
+                            "filename": filename,
+                        }
+                        if job_to_file_path:
+                            store_json_object(dict(job_to_file), job_to_file_path)
+                        else:
+                            logger.warning(
+                                "job_to_file_path is not set; cannot persist job_to_file."
+                            )
+                except Exception as persist_err:
+                    logger.error(f"Failed to persist job_to_file: {persist_err}")
 
             end_time = time.time()
             elapsed_time = end_time - start_time
             logger.info(f"Request completed in {elapsed_time:.2f} seconds")
             return
 
-        except Exception as e:
-            logger.error(f"Error on attempt {attempt}: {e}")
+        except ClientOSError as e:
+            logger.error(f"Connection error on attempt {attempt}: {e}")
             if attempt == max_retries:
                 raise ConnectionError(f"Max retries reached. Last error: {e}") from e
-            else:
-                retry_time = retry_delay * (backoff_factor ** (attempt - 1))
-                logger.info(f"Retrying in {retry_time:.2f} seconds...")
-                time.sleep(retry_time)
+            retry_time = retry_delay * (backoff_factor ** (attempt - 1))
+            logger.info(f"Retrying in {retry_time:.2f} seconds...")
+            time.sleep(retry_time)
+        except Exception as e:
+            logger.error(f"Unexpected error on attempt {attempt}: {e}")
+            raise
 
 
 @timer_func
@@ -391,6 +409,22 @@ if __name__ == "__main__":
     # Use the API key from config
     API_KEY = config.api_key
 
+    # Initialize job_to_file backing path and load if exists
+
+    job_to_file_path = os.path.join(
+        os.path.expanduser(config.working_dir), "job_to_file.json"
+    )
+    try:
+        os.makedirs(os.path.dirname(job_to_file_path), exist_ok=True)
+    except Exception as e:
+        logger.warning(f"Unable to ensure job_to_file directory: {e}")
+    if os.path.exists(job_to_file_path):
+        logger.info(f"Loading job_to_file from {job_to_file_path}")
+        job_to_file = load_json_file(job_to_file_path)
+
+    print('job_to_file_path : ', job_to_file_path)
+    print('Total jobs in job_to_file : ', len(job_to_file))
+
     setup_s3_storage(storage_config)
     setup_queue(
         queue_config,
@@ -402,19 +436,20 @@ if __name__ == "__main__":
         partial(message_handler, stop_event),
     )
 
-    if os.path.exists(os.path.join(config.working_dir, "job_to_file.json")):
-        logger.info(f"Loading job_to_file from {config.working_dir}")
-        job_to_file = load_json_file(
-            os.path.join(config.working_dir, "job_to_file.json")
-        )
+    api_base_url = raw_config["api_base_url"]
 
-    api_url = config.api_base_url.replace("http://", "").replace("https://", "")
+    try:
+        parsed_url = urlparse(api_base_url)
+        protocol = parsed_url.scheme or "http"
+        netloc = parsed_url.netloc or parsed_url.path
+        host = netloc.split(":")[0]
+        port = netloc.split(":")[1] if ":" in netloc else "51000"
+        address = f"{host}:{port}"
+        print(f"Connecting to {address} using {protocol} protocol")
+    except Exception as e:
+        logger.error(f"Failed to parse API base URL '{api_base_url}': {e}")
+        raise
 
-    address = api_url
-    protocol = "http"
-    logger.info(f"Connecting to {address} using {protocol} protocol")
-
-    host, port = address.split(":")
     client = Client(
         host=host, port=int(port), protocol=protocol, request_size=-1, asyncio=False
     )
