@@ -794,10 +794,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         dag_id not in self.active_dags
                         and len(self.active_dags) >= max_concurrent_dags
                     ):
-                        self.logger.warning(
+                        self.logger.debug(
                             f"[WORK_DIST] Max DAG limit reached ({len(self.active_dags)}/{max_concurrent_dags}). "
                             f"Skipping job {wi.id} (DAG: {dag_id}). "
-                            f"Active DAGs: {list(self.active_dags.keys())}"
+                            # f"Active DAGs: {list(self.active_dags.keys())}"
                         )
                         await self._release_lease_db([wi.id])
                         await self.frontier.release_lease_local(wi.id)
@@ -824,9 +824,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     node = get_node_from_dag(wi.id, self.active_dags[dag_id])
                     if _is_noop_query_definition(node):
                         # Complete locally while we still hold the DB lease
+                        self.logger.info('[WORK_DIST] NOOP query definition detected.')
                         try:
+                            # Get job levels for this DAG (needed for root/leaf detection)
+                            sorted_nodes, job_levels = (
+                                self._topology_cache.get_sorted_nodes_and_levels(
+                                    self.active_dags[dag_id], dag_id
+                                )
+                            )
+
+                            # With new leveling: root nodes have MAX level, leaf nodes have MIN level (0)
                             # if we are a root node we have to emit a DAG-level event for job start aka activation
-                            is_root = wi.job_level == 0
+                            is_root = wi.job_level == max(job_levels.values())
                             if is_root:
                                 # toas tnotification
                                 event_name = wi.data.get("name", wi.name)
@@ -850,12 +859,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             await self.frontier.on_job_completed(wi.id)
                             scheduled_any = True
 
-                            sorted_nodes, job_levels = (
-                                self._topology_cache.get_sorted_nodes_and_levels(
-                                    self.active_dags[dag_id], dag_id
-                                )
+                            self.logger.info(
+                                f'[WORK_DIST] {len(sorted_nodes)} nodes in DB.'
                             )
-                            if job_levels.get(wi.id, -1) == max(job_levels.values()):
+                            self.logger.info(
+                                f'[WORK_DIST] {sorted_nodes} >>> {job_levels}'
+                            )
+                            self.logger.info(
+                                f'[WORK_DIST] noop level : {job_levels.get(wi.id, -1)} == {min(job_levels.values())}'
+                            )
+
+                            # Leaf nodes have minimum job_level, only resolve DAG when leaf completes
+                            if job_levels.get(wi.id, -1) == min(job_levels.values()):
                                 await self.resolve_dag_status(wi.id, wi)
 
                         except Exception as e:
@@ -2223,7 +2238,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         the corresponding logic for the DAG lifecycle, including sending notification
         about the completion or failure of the DAG.
         """
-        self.logger.debug(f"🔍 Resolving DAG status: {work_info.dag_id}")
+        self.logger.info(f"Resolving DAG status: {work_info.dag_id}")
 
         try:
 
@@ -2251,7 +2266,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self._db_executor, _sync, work_info.dag_id
             )
 
-            self.logger.debug(f"Resolved DAG state: {dag_state}")
+            self.logger.info(f"Resolved DAG state: {dag_state}")
             if dag_state not in ("completed", "failed"):
                 self.logger.debug(f"DAG is still in progress: {work_info.dag_id}")
                 return False
@@ -2262,7 +2277,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     f"Removed DAG from cache: {work_info.dag_id}, size = {len(self.active_dags)}"
                 )
 
-            self.logger.debug(
+            self.logger.info(
                 f"Resolved DAG status: {work_info.dag_id}, status={dag_state}, active_dag = {len(self.active_dags)}"
             )
             # notification
