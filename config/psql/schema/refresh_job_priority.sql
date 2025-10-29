@@ -4,11 +4,13 @@ DECLARE
     now_time TIMESTAMP := NOW();
 BEGIN
     -- Update priorities and SLA miss flags in a single pass
+    -- Include jobs from incomplete DAGs to prevent priority = 0
     WITH ordered AS (
-        SELECT id
-        FROM marie_scheduler.job
-        WHERE state <> 'completed'
-        ORDER BY id
+        SELECT j.id
+        FROM marie_scheduler.job j
+        JOIN marie_scheduler.dag d ON d.id = j.dag_id
+        WHERE d.state <> 'completedxx'
+        ORDER BY j.id
         FOR UPDATE
     )
     UPDATE marie_scheduler.job
