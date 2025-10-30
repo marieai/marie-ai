@@ -26,7 +26,31 @@ additional_colors = [
 # https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct/discussions/10
 min_pixels = 512 * 28 * 28
 max_pixels = 2048 * 28 * 28
-MODEL_ID = ""
+import requests
+
+# Default model list fallback
+DEFAULT_MODEL_LIST = ["table_extractionXXX", "deepseek_r1_32", "qwen_v2_5_vlXXX"]
+
+
+def get_model_list():
+    """Fetch model list from endpoint, fallback to default if unavailable."""
+    try:
+        url = base_url.rstrip("/") + "/models"
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            # Try to extract model names from OpenAI-compatible response
+            if isinstance(data, dict) and "data" in data:
+                return [m["id"] for m in data["data"] if "id" in m]
+            # Or just a list of strings
+            if isinstance(data, list):
+                return data
+        print(f"Model endpoint returned status {resp.status_code}, using default list.")
+    except Exception as e:
+        print(f"Could not fetch model list from endpoint: {e}")
+    return DEFAULT_MODEL_LIST
+
+
 DESCRIPTION = f"[QWEN 2.5VL API]"
 
 image_extensions = Image.registered_extensions()
@@ -324,6 +348,7 @@ def qwen_inference(
     media_input,
     text_input=None,
     system_prompt=None,
+    model_id="qwen_v2_5_vl",
     temperature=0.1,
     top_p=0.2,
     enable_thinking=True,
@@ -356,6 +381,7 @@ def qwen_inference(
         media_path,
         text_input,
         sys_prompt=system_prompt,
+        model_id=model_id,
         temperature=temperature,
         top_p=top_p,
         enable_thinking=enable_thinking,
@@ -400,6 +426,14 @@ with gr.Blocks(css=css) as demo:
             with gr.Column():
                 input_media = gr.File(label="Upload Image to analyze", type="filepath")
                 preview_image = gr.Image(label="Preview", visible=True)
+                # Model selection
+                model_list = get_model_list()
+                model_id = gr.Dropdown(
+                    choices=model_list,
+                    value=model_list[0] if model_list else "qwen_v2_5_vl",
+                    label="Model",
+                    info="Select the model to use",
+                )
                 system_prompt = gr.Textbox(
                     label="System Prompt",
                     value="You are Qwen, created by Alibaba Cloud. You are a helpful assistant.",
@@ -449,6 +483,7 @@ with gr.Blocks(css=css) as demo:
                 input_media,
                 text_input,
                 system_prompt,
+                model_id,
                 temperature,
                 top_p,
                 enable_thinking,
