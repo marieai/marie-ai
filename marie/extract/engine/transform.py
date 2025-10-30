@@ -250,6 +250,7 @@ def convert_date_format(
         'YYYY-MM-DD',
         'DD/MM/YYYY',
         'MM-DD-YYYY',
+        'MM/DD/YY'
     ]
     if field_format:
         common_formats = [field_format] + common_formats
@@ -270,6 +271,24 @@ def convert_date_format(
         for fmt in common_formats:
             try:
                 return datetime.strptime(date_str.strip(), fmt).strftime(output_format)
+            except ValueError:
+                continue
+        # Generalize this
+        token_map = {
+            "DD": "%d",
+            "MM": "%m",
+            "YYYY": "%Y",
+            "YY": "%y",
+        }
+        py_output_format = output_format
+        for k, v in token_map.items():
+            py_output_format = py_output_format.replace(k, v)
+
+        # Try parsing with 4-digit year first, then fallback to 2-digit
+        for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+            try:
+                dt = datetime.strptime(date_str, fmt)
+                return dt.strftime(py_output_format)
             except ValueError:
                 continue
         return None

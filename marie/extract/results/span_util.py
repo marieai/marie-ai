@@ -23,7 +23,7 @@ def pluck_lines_by_span(
     start_line = span.start_line_id
     end_line = span.end_line_id
 
-    return [line for line in lines if start_line <= line.metadata.line_id < end_line]
+    return [line for line in lines if start_line <= line.metadata.line_id <= end_line]
 
 
 def create_page_span_from_lines(

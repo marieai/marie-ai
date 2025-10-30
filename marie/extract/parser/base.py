@@ -158,7 +158,14 @@ def parse_markdown_table(section_text: str):
 
     for row in rows:
         cols = row.find_all(["th", "td"])
-        cols_text = [col.get_text(strip=True) for col in cols]
+        cols_text = []
+        for col in cols:
+            # Replace <br> and <br/> tags with a space before extracting text. REMARK CODE
+            for br in col.find_all("br"):
+                br.replace_with(" ")
+            text = col.get_text()
+            cols_text.append(text)
+        # cols_text = [col.get_text(strip=True) for col in cols]
         table_data.append(cols_text)
 
     if not table_data:

@@ -217,7 +217,9 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     region_start = min(mins)
                     region_end = max(maxs)
                     # Fully-contained check
-                    if region_start > start_line and region_end < end_line:
+                    # TODO: need work
+                    # this hack to make it work
+                    if region_start >= start_line and region_end <= end_line + 1:
                         regions_in_scope.add(region)
                 except Exception:
                     raise

@@ -78,8 +78,8 @@ class MatchSectionRenderingVisitor(BaseProcessingVisitor):
             current = queue.popleft()
             if (
                 current.type == MatchSectionType.WRAPPER
-                or not current.matched_non_repeating_fields
-                or len(current.matched_non_repeating_fields) == 0
+                # or not current.matched_non_repeating_fields
+                # or len(current.matched_non_repeating_fields) == 0
             ):
                 queue.extend(current.sections)
                 continue
@@ -87,41 +87,92 @@ class MatchSectionRenderingVisitor(BaseProcessingVisitor):
             remit = ET.SubElement(root_element, "remits")
 
             # Add all fields from this section
-            for field in current.matched_non_repeating_fields:
-                field_elem = ET.SubElement(remit, "fields")
+            if current.matched_non_repeating_fields:
+                for field in current.matched_non_repeating_fields:
+                    field_elem = ET.SubElement(remit, "fields")
 
-                ET.SubElement(field_elem, "fieldName").text = field.field_name or ""
-                ET.SubElement(field_elem, "fieldType").text = (
-                    field.field_type or "ALPHA"
-                )
-                ET.SubElement(field_elem, "isRequired").text = str(
-                    field.is_required
-                ).lower()
-                ET.SubElement(field_elem, "value").text = field.value or ""
-                ET.SubElement(field_elem, "x").text = str(field.x)
-                ET.SubElement(field_elem, "y").text = str(field.y)
-                ET.SubElement(field_elem, "width").text = str(field.width)
-                ET.SubElement(field_elem, "height").text = str(field.height)
-                ET.SubElement(field_elem, "page").text = str(field.page)
-                ET.SubElement(field_elem, "xdpi").text = str(field.xdpi)
-                ET.SubElement(field_elem, "ydpi").text = str(field.ydpi)
-                ET.SubElement(field_elem, "confidence").text = str(field.confidence)
-                ET.SubElement(field_elem, "scrubbed").text = str(field.scrubbed).lower()
-
-                if field.uuid:
-                    ET.SubElement(field_elem, "uuid").text = field.uuid
-
-                if field.reference_uuid:
-                    ET.SubElement(field_elem, "referenceUuid").text = (
-                        field.reference_uuid
+                    ET.SubElement(field_elem, "fieldName").text = field.field_name or ""
+                    ET.SubElement(field_elem, "fieldType").text = (
+                        field.field_type or "ALPHA"
                     )
+                    ET.SubElement(field_elem, "isRequired").text = str(
+                        field.is_required
+                    ).lower()
+                    ET.SubElement(field_elem, "value").text = field.value or ""
+                    ET.SubElement(field_elem, "x").text = str(field.x)
+                    ET.SubElement(field_elem, "y").text = str(field.y)
+                    ET.SubElement(field_elem, "width").text = str(field.width)
+                    ET.SubElement(field_elem, "height").text = str(field.height)
+                    ET.SubElement(field_elem, "page").text = str(field.page)
+                    ET.SubElement(field_elem, "xdpi").text = str(field.xdpi)
+                    ET.SubElement(field_elem, "ydpi").text = str(field.ydpi)
+                    ET.SubElement(field_elem, "confidence").text = str(field.confidence)
+                    ET.SubElement(field_elem, "scrubbed").text = str(field.scrubbed).lower()
 
-                if field.value_original is not None:
-                    ET.SubElement(field_elem, "valueOriginal").text = (
-                        field.value_original
-                    )
+                    if field.uuid:
+                        ET.SubElement(field_elem, "uuid").text = field.uuid
+
+                    if field.reference_uuid:
+                        ET.SubElement(field_elem, "referenceUuid").text = (
+                            field.reference_uuid
+                        )
+
+                    if field.value_original is not None:
+                        ET.SubElement(field_elem, "valueOriginal").text = (
+                            field.value_original
+                        )
 
             # Process all matched_field_rows for this section
+            for sec in current.sections:
+                if sec.matched_field_rows is not None:
+                    for row in sec.matched_field_rows:
+                        service_lines = ET.SubElement(
+                            remit, "serviceLines"
+                        )  # Directly create <serviceLines> for each row
+                        # our structure is foobared as there is no container for the fields  but rather they are added one at a  time
+
+                        for field in row.fields:
+                            if field.value is not None:
+                                field_elem = ET.SubElement(service_lines, "fields")
+
+                                ET.SubElement(field_elem, "fieldName").text = (
+                                        field.field_name or ""
+                                )
+                                ET.SubElement(field_elem, "fieldType").text = (
+                                        field.field_type or "ALPHA"
+                                )
+                                ET.SubElement(field_elem, "isRequired").text = str(
+                                    field.is_required
+                                ).lower()
+                                ET.SubElement(field_elem, "value").text = field.value or ""
+                                ET.SubElement(field_elem, "x").text = str(field.x)
+                                ET.SubElement(field_elem, "y").text = str(field.y)
+                                ET.SubElement(field_elem, "width").text = str(field.width)
+                                ET.SubElement(field_elem, "height").text = str(field.height)
+
+                                # Add optional field attributes
+                                date_format = ET.SubElement(field_elem, "dateFormat")
+                                ET.SubElement(date_format, "formatString").text = (
+                                        field.date_format or ""
+                                )
+
+                                ET.SubElement(field_elem, "columnName").text = (
+                                        field.column_name or ""
+                                )
+                                ET.SubElement(field_elem, "page").text = str(field.page)
+                                ET.SubElement(field_elem, "xdpi").text = str(field.xdpi)
+                                ET.SubElement(field_elem, "ydpi").text = str(field.ydpi)
+                                ET.SubElement(field_elem, "confidence").text = str(
+                                    field.confidence
+                                )
+                                ET.SubElement(field_elem, "scrubbed").text = str(
+                                    field.scrubbed
+                                ).lower()
+
+                                if field.value_original is not None:
+                                    ET.SubElement(field_elem, "valueOriginal").text = (
+                                        field.value_original
+                                    )
             if current.matched_field_rows is not None:
                 for row in current.matched_field_rows:
                     service_lines = ET.SubElement(
