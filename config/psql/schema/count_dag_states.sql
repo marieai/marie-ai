@@ -21,3 +21,4 @@ $$;
 -- NEED TO ADD THIS TO OUR CONFIG
 -- SET enable_partitionwise_aggregate = on;
 -- SET enable_partitionwise_join = on;
+

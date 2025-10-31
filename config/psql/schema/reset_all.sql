@@ -11,6 +11,7 @@ BEGIN
     SET
         state = 'created',
         started_on = NULL,
+        created_on = NOW(),
         completed_on = NULL;
     GET DIAGNOSTICS dag_count = ROW_COUNT;
 
@@ -19,6 +20,7 @@ BEGIN
     SET
         state = 'created',
         started_on = NULL,
+        created_on = NOW(),
         completed_on = NULL
     WHERE
        dag_id IN (

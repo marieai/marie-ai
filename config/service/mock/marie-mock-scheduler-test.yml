@@ -131,7 +131,7 @@ executors:
         py_modules:
           - marie.executor.mock
     timeout_ready: 3000000
-    replicas: 1
+    replicas: 2
 
   # Medium speed, reliable executor
   - name: mock_executor_b
@@ -152,7 +152,7 @@ executors:
         py_modules:
           - marie.executor.mock
     timeout_ready: 3000000
-    replicas: 1
+    replicas: 2
 
   # Standard speed, reliable executor
   - name: mock_executor_c
@@ -173,7 +173,7 @@ executors:
         py_modules:
           - marie.executor.mock
     timeout_ready: 3000000
-    replicas: 1
+    replicas: 2
 
   # Slow executor (for SLA testing)
   - name: mock_executor_d
@@ -194,7 +194,7 @@ executors:
         py_modules:
           - marie.executor.mock
     timeout_ready: 3000000
-    replicas: 1
+    replicas: 2
 
   # Fast but occasionally flaky executor
   - name: mock_executor_e
@@ -215,7 +215,7 @@ executors:
         py_modules:
           - marie.executor.mock
     timeout_ready: 3000000
-    replicas: 1
+    replicas: 2
 
   # Medium speed, moderately flaky executor
   - name: mock_executor_f
@@ -236,7 +236,7 @@ executors:
         py_modules:
           - marie.executor.mock
     timeout_ready: 3000000
-    replicas: 1
+    replicas: 2
 
   # Very slow executor (for timeout testing)
   - name: mock_executor_g
@@ -257,7 +257,7 @@ executors:
         py_modules:
           - marie.executor.mock
     timeout_ready: 3000000
-    replicas: 1
+    replicas: 2
 
   # Very flaky executor (for error recovery testing)
   - name: mock_executor_h
@@ -278,7 +278,7 @@ executors:
         py_modules:
           - marie.executor.mock
     timeout_ready: 3000000
-    replicas: 1
+    replicas: 2
 
 # Authentication and Authorization configuration
 auth:

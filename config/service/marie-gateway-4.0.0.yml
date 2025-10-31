@@ -77,7 +77,7 @@ with:
     dag_manager:
       strategy: dynamic # fixed or dynamic
       min_concurrent_dags: 2      # Minimum number of concurrent DAGs (safety floor)
-      max_concurrent_dags: 16     # Maximum number of concurrent DAGs (resource ceiling)
+      max_concurrent_dags: 4     # Maximum number of concurrent DAGs (resource ceiling)
       cache_ttl_seconds: 10       # Cache TTL for capacity calculations
 
     # Heartbeat & Monitoring Configuration

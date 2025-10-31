@@ -102,7 +102,7 @@ echo "$metadata"
 
 for i in $(seq 1 "$2"); do
     echo "Submitting job $i"
-    python ./send_request_to_gateway.py job submit mock_medium --metadata-json "$metadata" --address "$host" --protocol "$protocol" --api_key "$api_key" &
+    python ./send_request_to_gateway.py job submit mock_parallel_subgraphs --metadata-json "$metadata" --address "$host" --protocol "$protocol" --api_key "$api_key" &
     echo "Job $i submitted"
     sleep 1
 done

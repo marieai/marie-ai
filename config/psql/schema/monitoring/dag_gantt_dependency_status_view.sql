@@ -16,7 +16,7 @@ SELECT
   d2.created_on AS start_time,
   d2.completed_on AS end_time,
   EXTRACT(EPOCH FROM (d2.completed_on - d2.created_on)) / 60.0 AS duration_mins,
-
+  EXTRACT(EPOCH FROM (d2.completed_on - d2.created_on))  AS duration_sec,
   CASE
     WHEN dep.depends_on_id IS NULL THEN true
     WHEN d2.state = 'completed' THEN true
@@ -38,4 +38,4 @@ WHERE j.state IS NOT NULL
 ORDER BY j.dag_id, j.job_level, j.id;
 
 
-SELECT * from marie_scheduler.dag_gantt_dependency_status_view
+SELECT * from marie_scheduler.dag_gantt_dependency_status_view WHERE dag_id = '06904972-5932-7dca-8000-36cda241d087'
