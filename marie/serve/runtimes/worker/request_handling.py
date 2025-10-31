@@ -1860,7 +1860,7 @@ class WorkerRequestHandler:
                     if not ok:
                         consecutive_failures += 1
                         # Key missing or owner mismatch; re-claim and re-publish
-                        self.logger.warning(
+                        self.logger.debug(
                             f"Status heartbeat: status doc missing or owner mismatch "
                             f"(consecutive failures: {consecutive_failures}/{max_consecutive_failures})"
                         )
@@ -2068,14 +2068,13 @@ class WorkerRequestHandler:
             True if we own the status doc for the current epoch and applied (or confirmed) the final state;
             False if we couldn't claim or are out-of-epoch.
         """
-        self.logger.info(
+        self.logger.debug(
             f"Request handler: {log_action} {self._node}/{self._deployment}"
         )
 
         d = self._desired_store.get(self._node, self._deployment)
         if not d or d.phase != "SCHEDULED":
-            # Nothing scheduled for this node/deployment; don't write status
-            self.logger.warning("No scheduled deployment; cannot claim /status")
+            self.logger.debug("No scheduled deployment; cannot claim /status")
             return False
 
         # Attempt to claim with the provided initial status.

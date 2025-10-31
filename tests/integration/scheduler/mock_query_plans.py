@@ -10,6 +10,8 @@ Usage:
         query_planner_mock_simple,
         query_planner_mock_medium,
         query_planner_mock_complex,
+        query_planner_mock_with_subgraphs,
+        query_planner_mock_parallel_subgraphs,
     )
 
     planner_info = PlannerInfo(name="mock_simple", base_id=generate_job_id())
@@ -66,7 +68,7 @@ def query_planner_mock_simple(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
         dependencies=[root.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor://process",
+            endpoint="mock_executor_a://document/process",
             params={"layout": layout},
         ),
     )
@@ -119,10 +121,11 @@ def query_planner_mock_medium(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
     prepare = Query(
         task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
         query_str=f"{planner_info.current_id}: Prepare data",
+
         dependencies=[root.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_a://prepare",
+            endpoint="mock_executor_a://document/process",
             params={"layout": layout},
         ),
     )
@@ -131,22 +134,30 @@ def query_planner_mock_medium(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
     # PARALLEL WORKERS
     workers = []
     worker_configs = [
-        ("Worker 1: Extract text", "mock_executor_b://extract"),
-        ("Worker 2: Classify", "mock_executor_b://classify"),
-        ("Worker 3: Analyze", "mock_executor_c://analyze"),
+        ("Worker 1: Extract text", "mock_executor_b://document/process", "LLM"),
+        ("Worker 2: Classify", "mock_executor_c://document/process", "LLM"),
+        ("Worker 3: Analyze", "mock_executor_d://document/process", "EXECUTOR"),
     ]
 
-    for name, endpoint in worker_configs:
+    for name, endpoint, def_type in worker_configs:
+        if def_type == "LLM":
+            definition = LlmQueryDefinition(
+                model_name="mock_model",
+                endpoint=endpoint,
+                params={"layout": layout, "key": name.lower()},
+            )
+        else:
+            definition = ExecutorEndpointQueryDefinition(
+                endpoint=endpoint,
+                params={"layout": layout, "key": name.lower()},
+            )
+
         worker = Query(
             task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
             query_str=f"{planner_info.current_id}: {name}",
             dependencies=[prepare.task_id],
             node_type=QueryType.COMPUTE,
-            definition=LlmQueryDefinition(
-                model_name="mock_model",
-                endpoint=endpoint,
-                params={"layout": layout, "key": name.lower()},
-            ),
+            definition=definition,
         )
         planner_info.current_id += 1
         workers.append(worker)
@@ -168,7 +179,7 @@ def query_planner_mock_medium(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
         dependencies=[merge.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_a://finalize",
+            endpoint="mock_executor_e://document/process",
             params={"layout": layout},
         ),
     )
@@ -232,11 +243,11 @@ def query_planner_mock_complex(planner_info: PlannerInfo, **kwargs) -> QueryPlan
     # PARALLEL ANNOTATORS - mimicking KV, Tables, Code, Name, Embeddings
     annotators = []
     annotator_configs = [
-        ("KV Annotator", "mock_executor_llm://annotator/kv", "LLM"),
-        ("Table Annotator", "mock_executor_llm://annotator/table", "LLM"),
-        ("Code Annotator", "mock_executor_llm://annotator/code", "LLM"),
-        ("Name Annotator", "mock_executor_llm://annotator/name", "LLM"),
-        ("Embedding Generator", "mock_executor_embed://embeddings", "EXECUTOR"),
+        ("KV Annotator", "mock_executor_a://document/process", "LLM"),
+        ("Table Annotator", "mock_executor_b://document/process", "LLM"),
+        ("Code Annotator", "mock_executor_c://document/process", "LLM"),
+        ("Name Annotator", "mock_executor_d://document/process", "LLM"),
+        ("Embedding Generator", "mock_executor_e://document/process", "EXECUTOR"),
     ]
 
     for name, endpoint, def_type in annotator_configs:
@@ -280,7 +291,7 @@ def query_planner_mock_complex(planner_info: PlannerInfo, **kwargs) -> QueryPlan
         dependencies=[merge.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_parser://parser/table",
+            endpoint="mock_executor_f://document/process",
             params={"layout": layout, "key": "table-extract"},
         ),
     )
@@ -294,7 +305,7 @@ def query_planner_mock_complex(planner_info: PlannerInfo, **kwargs) -> QueryPlan
         node_type=QueryType.COMPUTE,
         definition=LlmQueryDefinition(
             model_name="qwen_v2_5_vl",
-            endpoint="mock_executor_table://extractor/table",
+            endpoint="mock_executor_g://document/process",
             params={"layout": layout, "key": "table-extract"},
         ),
     )
@@ -307,7 +318,7 @@ def query_planner_mock_complex(planner_info: PlannerInfo, **kwargs) -> QueryPlan
         dependencies=[table_extractor.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_validator://validator",
+            endpoint="mock_executor_h://document/process",
             params={"layout": layout},
         ),
     )
@@ -365,13 +376,15 @@ def _build_subgraph_mock(
     # Parallel tasks
     parallel_tasks = []
     for i in range(num_parallel_tasks):
+        # Limit to 8 executors (a-h), wrap around if needed
+        executor_letter = chr(97 + (i % 8))
         task = Query(
             task_id=f"{increment_uuid7str(planner_info.base_id, planner_info.current_id)}",
             query_str=f"Parallel task {i+1}",
             dependencies=[root.task_id],
             node_type=QueryType.COMPUTE,
             definition=ExecutorEndpointQueryDefinition(
-                endpoint=f"mock_executor_{chr(97+i)}://parallel",
+                endpoint=f"mock_executor_{executor_letter}://document/process",
                 params={"layout": layout, "task_num": i},
             ),
         )
@@ -440,7 +453,7 @@ def query_planner_mock_with_subgraphs(planner_info: PlannerInfo, **kwargs) -> Qu
         dependencies=[subgraph1["end"].task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_main://process",
+            endpoint="mock_executor_d://document/process",
             params={"layout": layout},
         ),
     )
@@ -468,6 +481,282 @@ def query_planner_mock_with_subgraphs(planner_info: PlannerInfo, **kwargs) -> Qu
     )
 
 
+@register_query_plan("mock_parallel_subgraphs")
+def query_planner_mock_parallel_subgraphs(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
+    """
+    Highly complex mock query plan with multiple parallel subgraphs.
+
+    This demonstrates advanced DAG execution where multiple independent subgraphs
+    run concurrently, each containing their own internal parallel tasks. This
+    pattern is useful for testing complex scheduling scenarios with nested
+    parallelism and resource contention.
+
+    Structure:
+        START -> INIT ->
+        [
+            Subgraph 1 (Text Processing): 4 parallel tasks,
+            Subgraph 2 (Image Processing): 5 parallel tasks,
+            Subgraph 3 (Data Analysis): 3 parallel tasks
+        ] (all running in parallel) ->
+        MERGE ALL -> POST_PROCESS -> VALIDATE -> END
+
+    Total: ~20+ nodes with deep parallelism
+
+    Args:
+        planner_info: Contains configuration and state information
+        **kwargs: Additional keyword arguments
+
+    Returns:
+        QueryPlan: A highly complex plan with parallel subgraphs
+    """
+    base_id = planner_info.base_id
+    layout = planner_info.name
+
+    # START
+    root = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: START",
+        dependencies=[],
+        node_type=QueryType.COMPUTE,
+        definition=NoopQueryDefinition(),
+    )
+    planner_info.current_id += 1
+
+    # INIT - Prepare data for parallel subgraphs
+    init_node = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: Initialize parallel subgraphs",
+        dependencies=[root.task_id],
+        node_type=QueryType.COMPUTE,
+        definition=ExecutorEndpointQueryDefinition(
+            endpoint="mock_executor_a://document/process",
+            params={"layout": layout},
+        ),
+    )
+    planner_info.current_id += 1
+
+    # SUBGRAPH 1: Text Processing Pipeline
+    # This subgraph handles text extraction, NER, sentiment, and summarization
+    text_subgraph_root = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: TEXT_SUBGRAPH: Start text processing",
+        dependencies=[init_node.task_id],
+        node_type=QueryType.MERGER,
+        definition=NoopQueryDefinition(params={"layout": layout, "subgraph": "text"}),
+    )
+    planner_info.current_id += 1
+
+    text_tasks = []
+    text_task_configs = [
+        ("Extract text", "mock_executor_a://document/process", "EXECUTOR"),
+        ("NER extraction", "mock_executor_b://document/process", "LLM"),
+        ("Sentiment analysis", "mock_executor_c://document/process", "LLM"),
+        ("Text summarization", "mock_executor_d://document/process", "LLM"),
+    ]
+
+    for name, endpoint, def_type in text_task_configs:
+        if def_type == "LLM":
+            definition = LlmQueryDefinition(
+                model_name="deepseek_r1_32",
+                endpoint=endpoint,
+                params={"layout": layout, "key": name.lower().replace(" ", "_")},
+            )
+        else:
+            definition = ExecutorEndpointQueryDefinition(
+                endpoint=endpoint,
+                params={"layout": layout, "key": name.lower().replace(" ", "_")},
+            )
+
+        task = Query(
+            task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+            query_str=f"{planner_info.current_id}: TEXT: {name}",
+            dependencies=[text_subgraph_root.task_id],
+            node_type=QueryType.COMPUTE,
+            definition=definition,
+        )
+        planner_info.current_id += 1
+        text_tasks.append(task)
+
+    text_subgraph_end = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: TEXT_SUBGRAPH: Merge text results",
+        dependencies=[t.task_id for t in text_tasks],
+        node_type=QueryType.MERGER,
+        definition=NoopQueryDefinition(params={"layout": layout, "subgraph": "text"}),
+    )
+    planner_info.current_id += 1
+
+    # SUBGRAPH 2: Image Processing Pipeline
+    # This subgraph handles OCR, object detection, image classification, etc.
+    image_subgraph_root = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: IMAGE_SUBGRAPH: Start image processing",
+        dependencies=[init_node.task_id],
+        node_type=QueryType.MERGER,
+        definition=NoopQueryDefinition(params={"layout": layout, "subgraph": "image"}),
+    )
+    planner_info.current_id += 1
+
+    image_tasks = []
+    image_task_configs = [
+        ("OCR processing", "mock_executor_b://document/process", "EXECUTOR"),
+        ("Object detection", "mock_executor_c://document/process", "EXECUTOR"),
+        ("Image classification", "mock_executor_d://document/process", "LLM"),
+        ("Visual QA", "mock_executor_e://document/process", "LLM"),
+        ("Image captioning", "mock_executor_f://document/process", "LLM"),
+    ]
+
+    for name, endpoint, def_type in image_task_configs:
+        if def_type == "LLM":
+            definition = LlmQueryDefinition(
+                model_name="qwen_v2_5_vl",
+                endpoint=endpoint,
+                params={"layout": layout, "key": name.lower().replace(" ", "_")},
+            )
+        else:
+            definition = ExecutorEndpointQueryDefinition(
+                endpoint=endpoint,
+                params={"layout": layout, "key": name.lower().replace(" ", "_")},
+            )
+
+        task = Query(
+            task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+            query_str=f"{planner_info.current_id}: IMAGE: {name}",
+            dependencies=[image_subgraph_root.task_id],
+            node_type=QueryType.COMPUTE,
+            definition=definition,
+        )
+        planner_info.current_id += 1
+        image_tasks.append(task)
+
+    image_subgraph_end = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: IMAGE_SUBGRAPH: Merge image results",
+        dependencies=[t.task_id for t in image_tasks],
+        node_type=QueryType.MERGER,
+        definition=NoopQueryDefinition(params={"layout": layout, "subgraph": "image"}),
+    )
+    planner_info.current_id += 1
+
+    # SUBGRAPH 3: Data Analysis Pipeline
+    # This subgraph handles structured data analysis, statistics, and insights
+    data_subgraph_root = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: DATA_SUBGRAPH: Start data analysis",
+        dependencies=[init_node.task_id],
+        node_type=QueryType.MERGER,
+        definition=NoopQueryDefinition(params={"layout": layout, "subgraph": "data"}),
+    )
+    planner_info.current_id += 1
+
+    data_tasks = []
+    data_task_configs = [
+        ("Statistical analysis", "mock_executor_e://document/process", "EXECUTOR"),
+        ("Pattern recognition", "mock_executor_f://document/process", "LLM"),
+        ("Anomaly detection", "mock_executor_g://document/process", "EXECUTOR"),
+    ]
+
+    for name, endpoint, def_type in data_task_configs:
+        if def_type == "LLM":
+            definition = LlmQueryDefinition(
+                model_name="deepseek_r1_32",
+                endpoint=endpoint,
+                params={"layout": layout, "key": name.lower().replace(" ", "_")},
+            )
+        else:
+            definition = ExecutorEndpointQueryDefinition(
+                endpoint=endpoint,
+                params={"layout": layout, "key": name.lower().replace(" ", "_")},
+            )
+
+        task = Query(
+            task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+            query_str=f"{planner_info.current_id}: DATA: {name}",
+            dependencies=[data_subgraph_root.task_id],
+            node_type=QueryType.COMPUTE,
+            definition=definition,
+        )
+        planner_info.current_id += 1
+        data_tasks.append(task)
+
+    data_subgraph_end = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: DATA_SUBGRAPH: Merge data results",
+        dependencies=[t.task_id for t in data_tasks],
+        node_type=QueryType.MERGER,
+        definition=NoopQueryDefinition(params={"layout": layout, "subgraph": "data"}),
+    )
+    planner_info.current_id += 1
+
+    # MERGE ALL SUBGRAPHS - Combines results from all three parallel subgraphs
+    global_merge = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: GLOBAL_MERGE: Merge all subgraph results",
+        dependencies=[
+            text_subgraph_end.task_id,
+            image_subgraph_end.task_id,
+            data_subgraph_end.task_id,
+        ],
+        node_type=QueryType.MERGER,
+        definition=NoopQueryDefinition(params={"layout": layout, "merge_type": "global"}),
+    )
+    planner_info.current_id += 1
+
+    # POST-PROCESSING - Final processing of combined results
+    post_process = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: Post-process combined results",
+        dependencies=[global_merge.task_id],
+        node_type=QueryType.COMPUTE,
+        definition=ExecutorEndpointQueryDefinition(
+            endpoint="mock_executor_g://document/process",
+            params={"layout": layout},
+        ),
+    )
+    planner_info.current_id += 1
+
+    # VALIDATION - Validate final output quality
+    validate = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: Validate final output",
+        dependencies=[post_process.task_id],
+        node_type=QueryType.COMPUTE,
+        definition=ExecutorEndpointQueryDefinition(
+            endpoint="mock_executor_h://document/process",
+            params={"layout": layout},
+        ),
+    )
+    planner_info.current_id += 1
+
+    # END
+    end = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: END",
+        dependencies=[validate.task_id],
+        node_type=QueryType.COMPUTE,
+        definition=NoopQueryDefinition(),
+    )
+
+    # Build complete node list
+    all_nodes = (
+        [root, init_node]
+        + [text_subgraph_root]
+        + text_tasks
+        + [text_subgraph_end]
+        + [image_subgraph_root]
+        + image_tasks
+        + [image_subgraph_end]
+        + [data_subgraph_root]
+        + data_tasks
+        + [data_subgraph_end]
+        + [global_merge, post_process, validate, end]
+    )
+
+    return QueryPlan(nodes=all_nodes)
+
+
 if __name__ == "__main__":
     """
     Example usage and validation of mock query plans.
@@ -487,6 +776,7 @@ if __name__ == "__main__":
         ("mock_medium", "Medium Mock Plan"),
         ("mock_complex", "Complex Mock Plan"),
         ("mock_with_subgraphs", "Mock Plan with Subgraphs"),
+        ("mock_parallel_subgraphs", "Mock Plan with Parallel Subgraphs"),
     ]
 
     for plan_name, description in plans_to_test:

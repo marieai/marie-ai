@@ -27,7 +27,8 @@ metadata=$(cat <<EOF
 {
     "on__": "/extract",
     "on___": "extract_executor://document/extract",
-    "on": "mock_executor://document/extract",    
+    "on": "extract_executor://document/extract",
+    
     "project_id": "project_id_000001",
     "doc_idXXXX": "doc_id_$RANDOM",
     "ref_id": "doc_id_0001",
@@ -92,9 +93,16 @@ fi
 echo "Using metadata:"
 echo "$metadata"
 
+# extract
+# mock_simple
+# mock_medium
+# mock_complex
+# mock_with_subgraphs
+# mock_parallel_subgraphs 
+
 for i in $(seq 1 "$2"); do
     echo "Submitting job $i"
-    python ./send_request_to_gateway.py job submit mock_simple --metadata-json "$metadata" --address "$host" --protocol "$protocol" --api_key "$api_key" &
+    python ./send_request_to_gateway.py job submit mock_medium --metadata-json "$metadata" --address "$host" --protocol "$protocol" --api_key "$api_key" &
     echo "Job $i submitted"
     sleep 1
 done

@@ -77,7 +77,8 @@ def has_mapper_config(base_dir: str, layout_name: str) -> bool:
 def get_mapper_config(base_dir: str, layout_name: str) -> DictConfig:
     """
     Generate a configuration dictionary by merging a base configuration file
-    with a layout-specific file. The resulting configuration is made read-only.
+    with a layout-specific file. If the layout-specific file doesn't exist,
+    falls back to using only the base configuration.
 
     :param base_dir: The base directory where the configuration files are located.
     :param layout_name: The identifier for the layout configuration.
@@ -86,9 +87,25 @@ def get_mapper_config(base_dir: str, layout_name: str) -> DictConfig:
     base_cfg_path = os.path.join(base_dir, "base", "mapper.yml")
     layout_cfg_path = os.path.join(base_dir, f"TID-{layout_name}", "mapper.yml")
 
+    if not os.path.exists(base_cfg_path):
+        raise FileNotFoundError(
+            f"Base mapper configuration not found: {base_cfg_path}. "
+            "Ensure the base configuration file exists."
+        )
+
     parent_cfg = OmegaConf.load(base_cfg_path)
-    layout_cfg = OmegaConf.load(layout_cfg_path)
-    merged_conf = OmegaConf.merge(parent_cfg, layout_cfg)
+
+    # If layout-specific config exists, merge it with the base config
+    # Otherwise, just use the base config
+    if os.path.exists(layout_cfg_path):
+        layout_cfg = OmegaConf.load(layout_cfg_path)
+        merged_conf = OmegaConf.merge(parent_cfg, layout_cfg)
+    else:
+        logger.debug(
+            f"Layout-specific mapper config not found: {layout_cfg_path}. "
+            "Using base configuration."
+        )
+        merged_conf = parent_cfg
 
     OmegaConf.set_readonly(merged_conf, True)
     return merged_conf

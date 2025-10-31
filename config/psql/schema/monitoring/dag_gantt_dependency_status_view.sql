@@ -36,3 +36,6 @@ LEFT JOIN marie_scheduler.job_dependencies dep ON dep.job_id = j.id
 LEFT JOIN marie_scheduler.job d2 ON d2.id = dep.depends_on_id
 WHERE j.state IS NOT NULL
 ORDER BY j.dag_id, j.job_level, j.id;
+
+
+SELECT * from marie_scheduler.dag_gantt_dependency_status_view

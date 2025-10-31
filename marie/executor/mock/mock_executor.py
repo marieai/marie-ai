@@ -1,8 +1,8 @@
+import asyncio
 import os
 import time
 from typing import Optional, Union
 
-import numpy as np
 import torch
 from docarray import DocList
 
@@ -15,7 +15,6 @@ from marie.models.utils import (
     setup_torch_optimizations,
 )
 from marie.storage import StorageManager
-from marie.utils.docs import docs_from_asset, frames_from_docs
 from marie.utils.network import get_ip_address
 
 
@@ -27,14 +26,21 @@ class IntegrationExecutorMock(MarieExecutor):
         num_worker_preprocess: int = 4,
         pipeline: Optional[dict[str, any]] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
+        process_time: float = 3.0,
+        failure_rate: float = 0.0,
+        failure_mode: str = "exception",
         **kwargs,
     ):
         """
+        Mock executor for integration testing with configurable behavior.
+
         :param device: 'cpu' or 'cuda'. Default is None, which auto-detects the device.
         :param num_worker_preprocess: The number of CPU workers to preprocess images and texts. Default is 4.
-        :param minibatch_size: The size of the minibatch for preprocessing and encoding. Default is 32. Reduce this
-            number if you encounter OOM errors.
+        :param pipeline: Pipeline configuration dictionary.
         :param dtype: inference data type, if None defaults to torch.float32 if device == 'cpu' else torch.float16.
+        :param process_time: Base processing time in seconds. Default is 3.0. Can be overridden per request.
+        :param failure_rate: Probability of failure (0.0 to 1.0). Default is 0.0 (no failures).
+        :param failure_mode: Type of failure to simulate: 'exception', 'timeout', 'random'. Default is 'exception'.
         """
         super().__init__(**kwargs)
 
@@ -44,6 +50,9 @@ class IntegrationExecutorMock(MarieExecutor):
         logger.info(f"Pipeline config: {pipeline}")
         logger.info(f"Device : {device}")
         logger.info(f"Num worker preprocess : {num_worker_preprocess}")
+        logger.info(f"Process time : {process_time}s")
+        logger.info(f"Failure rate : {failure_rate}")
+        logger.info(f"Failure mode : {failure_mode}")
         logger.info(f"Kwargs : {kwargs}")
 
         setup_torch_optimizations()
@@ -61,6 +70,11 @@ class IntegrationExecutorMock(MarieExecutor):
             device = "cpu"
         self.device = device
 
+        # Mock behavior configuration
+        self.process_time = process_time
+        self.failure_rate = max(0.0, min(1.0, failure_rate))  # Clamp between 0 and 1
+        self.failure_mode = failure_mode
+
         self.runtime_info = {
             "name": self.__class__.__name__,
             "instance_name": kwargs.get("runtime_args", {}).get("name", "not_defined"),
@@ -69,6 +83,9 @@ class IntegrationExecutorMock(MarieExecutor):
             "workspace": self.workspace,
             "use_cuda": use_cuda,
             "device": self.device.__str__() if self.device is not None else "",
+            "process_time": self.process_time,
+            "failure_rate": self.failure_rate,
+            "failure_mode": self.failure_mode,
         }
 
         logger.info(f"Runtime info: {self.runtime_info}")
@@ -86,7 +103,7 @@ class IntegrationExecutorMock(MarieExecutor):
     # def validate(self, parameters, **kwargs):
     #     return {"valid": True}
 
-    @requests(on="/document/extract")
+    @requests(on="/document/process")
     async def func_extract(
         self,
         docs: DocList[AssetKeyDoc],
@@ -94,138 +111,74 @@ class IntegrationExecutorMock(MarieExecutor):
         *args,
         **kwargs,
     ):
+        """
+        Process documents with configurable processing time and failure simulation.
+
+        Parameters can override executor-level settings via the 'parameters' dict:
+        - 'process_time': Override the base processing time
+        - 'failure_rate': Override the failure rate for this request
+        - 'failure_mode': Override the failure mode for this request
+        - 'force_fail': If True, force a failure regardless of failure_rate
+        """
         if parameters is None:
             parameters = {}
+
         self.logger.info(f"func called : {len(docs)}, {parameters}")
-        # randomly throw an error to test the error handling
+
+        # Get processing time (allow per-request override)
+        process_time = parameters.get("process_time", self.process_time)
+
+        # Add randomness if requested (for more realistic simulation)
+        if parameters.get("randomize_time", False):
+            import random
+
+            min_time = process_time * 0.5
+            max_time = process_time * 1.5
+            process_time = random.uniform(min_time, max_time)
+
+        # Check if we should fail this request
         import random
 
-        # if random.random() > 0.5:
-        #     raise Exception("random error in exec")
-        # for doc in docs:
-        #     doc.text += " First Exec"
-        sec = 3600
-        sec = random.randint(3, 6)
-        sec = 3
+        failure_rate = parameters.get("failure_rate", self.failure_rate)
+        failure_mode = parameters.get("failure_mode", self.failure_mode)
+        force_fail = parameters.get("force_fail", False)
 
-        if False:
-            # sys.exit()
-            raise RuntimeError("Mock error for testing purposes")
+        should_fail = force_fail or (random.random() < failure_rate)
 
-        self.logger.info(f"Sleeping for {sec} seconds : {time.time()}")
-        time.sleep(sec)
+        if should_fail:
+            self.logger.warning(f"Simulating failure (mode: {failure_mode})")
 
-        self.logger.info(f"Sleeping for {sec} seconds - done : {time.time()}")
+            if failure_mode == "exception":
+                raise RuntimeError(
+                    f"Mock failure: Simulated exception in {self.runtime_info['instance_name']}"
+                )
+            elif failure_mode == "timeout":
+                # Simulate a timeout by sleeping much longer
+                self.logger.warning(
+                    "Simulating timeout by sleeping for extended period"
+                )
+                await asyncio.sleep(process_time * 10)
+                raise TimeoutError(
+                    f"Mock failure: Simulated timeout in {self.runtime_info['instance_name']}"
+                )
+            elif failure_mode == "random":
+                # Randomly choose between different failure types
+                failure_types = [
+                    RuntimeError("Mock failure: Random runtime error"),
+                    ValueError("Mock failure: Random value error"),
+                    ConnectionError("Mock failure: Random connection error"),
+                ]
+                raise random.choice(failure_types)
+
+        # Normal processing - simulate work
+        self.logger.info(f"Processing for {process_time:.2f} seconds : {time.time()}")
+        await asyncio.sleep(process_time)
+        self.logger.info(f"Processing complete : {time.time()}")
+
         return {
             "parameters": parameters,
             "data": "Data reply",
+            "processed_docs": len(docs),
+            "process_time": process_time,
+            "executor": self.runtime_info["instance_name"],
         }
-
-
-class LLMExtractionExecutorMock(MarieExecutor):
-    def __init__(
-        self,
-        name: str = "",
-        device: Optional[str] = None,
-        num_worker_preprocess: int = 4,
-        pipeline: Optional[dict[str, any]] = None,
-        dtype: Optional[Union[str, torch.dtype]] = None,
-        **kwargs,
-    ):
-        """
-        :param device: 'cpu' or 'cuda'. Default is None, which auto-detects the device.
-        :param num_worker_preprocess: The number of CPU workers to preprocess images and texts. Default is 4.
-        :param minibatch_size: The size of the minibatch for preprocessing and encoding. Default is 32. Reduce this
-            number if you encounter OOM errors.
-        :param dtype: inference data type, if None defaults to torch.float32 if device == 'cpu' else torch.float16.
-        """
-        super().__init__(**kwargs)
-        logger.info(f"Starting mock executor : {time.time()}")
-        self.show_error = True  # show prediction errors
-        # sometimes we have CUDA/GPU support but want to only use CPU
-        use_cuda = torch.cuda.is_available()
-        if os.environ.get("MARIE_DISABLE_CUDA"):
-            use_cuda = False
-        self.logger = MarieLogger(context=self.__class__.__name__)
-
-        if not device:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if not use_cuda:
-            device = "cpu"
-        self.device = device
-
-        self.runtime_info = {
-            "name": self.__class__.__name__,
-            "instance_name": kwargs.get("runtime_args", {}).get("name", "not_defined"),
-            "model": "",
-            "host": get_ip_address(),
-            "workspace": self.workspace,
-            "use_cuda": use_cuda,
-            "device": self.device.__str__() if self.device is not None else "",
-        }
-
-        logger.info(f"Runtime info: {self.runtime_info}")
-        logger.info(f"Pipeline : {pipeline}")
-
-    # @requests(on="/document/status")
-    # def status(self, parameters, **kwargs):
-    #     use_cuda = torch.cuda.is_available()
-    #     print(f"{use_cuda=}")
-    #     return {"index": "complete", "use_cuda": use_cuda}
-    #
-    # @requests(on="/document/validate")
-    # def validate(self, parameters, **kwargs):
-    #     return {"valid": True}
-
-    @requests(on="/document/llm-annotate")
-    def extract(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
-        print("LLM-TEXT-EXTRACT")
-        print(parameters)
-        print(docs)
-
-        logger.info(kwargs)
-        logger.info(parameters)
-
-        if len(docs) == 0:
-            return {"error": "empty payload"}
-        if len(docs) > 1:
-            return {"error": "expected single document"}
-
-        doc = docs[0]
-        # load documents from specified document asset key
-        docs = docs_from_asset(doc.asset_key, doc.pages)
-
-        for doc in docs:
-            print(doc.id)
-
-        frames = frames_from_docs(docs)
-        frame_len = len(frames)
-
-        print(f"{frame_len=}")
-        # this value will be stuffed in the  resp.parameters["__results__"] as we are using raw Responses
-
-        if "payload" not in parameters or parameters["payload"] is None:
-            return {"error": "empty payload"}
-        else:
-            payload = parameters["payload"]
-
-        # https://github.com/marieai/marie-ai/issues/51
-
-        regions = payload["regions"] if "regions" in payload else []
-        for region in regions:
-            region["id"] = int(region["id"])
-            region["pageIndex"] = int(region["pageIndex"])
-
-        np_arr = np.array([1, 2, 3])
-
-        out = [
-            {"sample": 112, "complex": ["a", "b"]},
-            {"sample": 112, "complex": ["a", "b"], "np_arr": np_arr},
-        ]
-
-        time.sleep(1)
-        # invoke the safely_encoded decorator as a function
-        meta = get_ip_address()
-        #  DocList / Dict / `None`
-        # converted = safely_encoded(lambda x: x)(self.runtime_info)
-        # return converted

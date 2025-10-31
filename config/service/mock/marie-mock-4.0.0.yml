@@ -189,8 +189,13 @@ executors:
        exit_on_exceptions:
          - CUDARuntimeTerminated
        with:
+         # Mock behavior configuration
+         process_time: 3.0        # Base processing time in seconds (default: 3.0)
+         failure_rate: 0.0        # Probability of failure 0.0-1.0 (default: 0.0)
+         failure_mode: exception  # Type of failure: exception, timeout, random (default: exception)
+
          health:
-           gpu_monitor_enabled: true
+           gpu_monitor_enabled: false
            interval_s: 30
            consecutive_failures: 3
            fail_fast_on_error: true
@@ -211,8 +216,6 @@ executors:
      timeout_ready: 3000000
 
      replicas: 1
-#     replicas: ${{ CONTEXT.gpu_device_count }}
-
      env:
        CUDA_VISIBLE_DEVICES: RR
 
@@ -220,12 +223,54 @@ executors:
 # Authentication and Authorization configuration
 auth:
   keys:
-    - name: Default Service-Integration
-      api_key: mas_0aPJ9Q9nUO1Ac1vJTfffXEXs9FyGLf9BzfYgZ_RaHm707wmbfHJNPQ
-      enabled: True
-      roles: [ admin, user ]
+    - name : service-A
+      api_key : mas_0aPJ9Q9nUO1Ac1vJTfffXEXs9FyGLf9BzfYgZ_RaHm707wmbfHJNPQ
+      enabled : True
+      roles : [admin, user]
 
-    - name: Default Testing-Integration
-      api_key: mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ
-      enabled: True
-      roles: [ admin, user ]
+    - name : service-B
+      api_key : mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ
+      enabled : True
+      roles : [admin, user]
+
+
+# =============================================================================
+# MOCK EXECUTOR CONFIGURATION EXAMPLES
+# =============================================================================
+#
+# The mock executor supports configurable behavior for testing different scenarios:
+#
+# 1. FAST EXECUTOR (for SLA testing):
+#    process_time: 1.0
+#    failure_rate: 0.0
+#    failure_mode: exception
+#
+# 2. SLOW EXECUTOR (for timeout/SLA violation testing):
+#    process_time: 30.0
+#    failure_rate: 0.0
+#    failure_mode: exception
+#
+# 3. FLAKY EXECUTOR (for error handling testing):
+#    process_time: 3.0
+#    failure_rate: 0.3      # 30% failure rate
+#    failure_mode: random   # random error types
+#
+# 4. TIMEOUT EXECUTOR (for timeout testing):
+#    process_time: 5.0
+#    failure_rate: 0.5
+#    failure_mode: timeout
+#
+# 5. VARIABLE PERFORMANCE (realistic testing):
+#    process_time: 5.0
+#    failure_rate: 0.1      # 10% failure rate
+#    failure_mode: exception
+#    # Use 'randomize_time: true' in request parameters for ±50% variance
+#
+# Per-request parameter overrides (in request parameters dict):
+#   - process_time: Override base processing time
+#   - failure_rate: Override failure rate
+#   - failure_mode: Override failure mode
+#   - force_fail: Force a failure regardless of failure_rate
+#   - randomize_time: Add ±50% randomness to process_time
+#
+# =============================================================================

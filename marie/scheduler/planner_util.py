@@ -103,18 +103,24 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
         wi.id = node.task_id
         wi.job_level = job_levels[task_id]
 
-        if has_mapper_config(__default_extract_dir__, query_planner_name):
-            meta = JobMetadata.from_task(node, query_planner_name)
-            meta_dict = meta.model_dump()  # need plain dict
-            metadata = meta_dict["metadata"]
-            wi.data['metadata'].update(metadata)
-        else:
-            if query_planner_name not in _mapper_warnings_shown:
-                logger.warning(
-                    f"No mapper configuration found for {query_planner_name}, "
-                    "using default metadata."
+        # Always use mapper config - will fall back to base config if layout-specific doesn't exist
+        meta = JobMetadata.from_task(node, query_planner_name)
+        meta_dict = meta.model_dump()  # need plain dict
+        metadata = meta_dict["metadata"]
+        wi.data['metadata'].update(metadata)
+
+        # Log info about mapper config usage (only once per planner)
+        if query_planner_name not in _mapper_warnings_shown:
+            if has_mapper_config(__default_extract_dir__, query_planner_name):
+                logger.debug(
+                    f"Using layout-specific mapper configuration for {query_planner_name}"
                 )
-                _mapper_warnings_shown.add(query_planner_name)
+            else:
+                logger.info(
+                    f"No layout-specific mapper configuration found for {query_planner_name}, "
+                    "using base mapper configuration."
+                )
+            _mapper_warnings_shown.add(query_planner_name)
 
         if i == 0:
             # this should already been handled by the query planner

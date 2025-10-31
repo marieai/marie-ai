@@ -593,7 +593,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 ).copy()
 
                 if not any(slots_by_executor.values()):
-                    self.logger.warning(
+                    self.logger.debug(
                         f"[WORK_DIST] No available executor slots. Backing off. "
                         f"Slots by executor: {slots_by_executor} | "
                         f"Idle streak: {idle_streak} | "

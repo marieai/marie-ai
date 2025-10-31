@@ -1,0 +1,318 @@
+jtype: Flow
+version: '1'
+
+# Configuration for testing scheduler with multiple mock executors
+# This config creates 8 different mock executors (mock_executor_a through mock_executor_h)
+# with varying processing times and failure rates to test scheduler behavior
+
+# Shared configuration
+shared_config:
+  storage: &storage
+    psql: &psql_conf_shared
+      provider: postgresql
+      hostname: 127.0.0.1
+      port: 5432
+      username: postgres
+      password: 123456
+      database: postgres
+      default_table: shared_docs
+
+  message: &message
+    rabbitmq: &rabbitmq_conf_shared
+      provider: rabbitmq
+      hostname: ${{ ENV.RABBIT_MQ_HOSTNAME }}
+      port: ${{ ENV.RABBIT_MQ_PORT }}
+      username: ${{ ENV.RABBIT_MQ_USERNAME }}
+      password: ${{ ENV.RABBIT_MQ_PASSWORD }}
+      tls: False
+      virtualhost: /
+
+# Toast event tracking
+toast:
+  native:
+    enabled: True
+    path: /tmp/marie/events.json
+  rabbitmq:
+    <<: *rabbitmq_conf_shared
+    enabled: True
+  psql:
+    <<: *psql_conf_shared
+    default_table: event_tracking
+    enabled: True
+
+# Storage configuration
+storage:
+  s3: &s3_conf_shared
+    enabled: True
+    metadata_only: False
+    endpoint_url: ${{ ENV.S3_ENDPOINT_URL }}
+    access_key_id: ${{ ENV.S3_ACCESS_KEY_ID }}
+    secret_access_key: ${{ ENV.S3_SECRET_ACCESS_KEY }}
+    bucket_name: ${{ ENV.S3_BUCKET_NAME }}
+    region: ${{ ENV.S3_REGION }}
+    insecure: True
+    addressing_style: path
+
+  psql:
+    <<: *psql_conf_shared
+    default_table: store_metadata
+    enabled: False
+
+# Job Queue scheduler
+scheduler:
+  psql:
+    <<: *psql_conf_shared
+    default_table: job_queue
+    enabled: True
+
+# Gateway configuration
+with:
+  protocol:
+    - grpc
+
+  discovery: true
+  discovery_host: 127.0.0.1
+  discovery_port: 2379
+  discovery_watchdog_interval: 5
+  discovery_service_name: gateway/marie
+  discovery_namespace: marie
+  discovery_lease_sec: 6
+  discovery_heartbeat_sec: 1.5
+  discovery_timeout_sec: 10
+  discovery_retry_times: 5
+
+  kv_store_kwargs:
+    provider: postgresql
+    hostname: 127.0.0.1
+    port: 5432
+    username: postgres
+    password: '123456'
+    database: postgres
+    default_table: kv_store_worker
+    max_pool_size: 5
+    max_connections: 5
+
+  host: 0.0.0.0
+  tracing: False
+  traces_exporter_host: http://0.0.0.0
+  traces_exporter_port: 4317
+  metrics: False
+  metrics_exporter_host: http://0.0.0.0
+  metrics_exporter_port: 4317
+  event_tracking: True
+
+  expose_endpoints:
+    /document/process:
+      methods: ["POST"]
+      summary: Process document
+      tags:
+        - document
+
+prefetch: 4
+
+# Multiple mock executors with different configurations for scheduler testing
+executors:
+  # Fast, reliable executor
+  - name: mock_executor_a
+    uses:
+      jtype: IntegrationExecutorMock
+      with:
+        process_time: 1.0
+        failure_rate: 0.0
+        failure_mode: none #timeout
+        storage:
+          psql:
+            <<: *psql_conf_shared
+            enabled: True
+          s3:
+            <<: *s3_conf_shared
+            enabled: True
+      metas:
+        py_modules:
+          - marie.executor.mock
+    timeout_ready: 3000000
+    replicas: 1
+
+  # Medium speed, reliable executor
+  - name: mock_executor_b
+    uses:
+      jtype: IntegrationExecutorMock
+      with:
+        process_time: 2.0
+        failure_rate: 0.0
+        failure_mode: none #timeout
+        storage:
+          psql:
+            <<: *psql_conf_shared
+            enabled: True
+          s3:
+            <<: *s3_conf_shared
+            enabled: True
+      metas:
+        py_modules:
+          - marie.executor.mock
+    timeout_ready: 3000000
+    replicas: 1
+
+  # Standard speed, reliable executor
+  - name: mock_executor_c
+    uses:
+      jtype: IntegrationExecutorMock
+      with:
+        process_time: 3.0
+        failure_rate: 0.0
+        failure_mode: none #timeout
+        storage:
+          psql:
+            <<: *psql_conf_shared
+            enabled: True
+          s3:
+            <<: *s3_conf_shared
+            enabled: True
+      metas:
+        py_modules:
+          - marie.executor.mock
+    timeout_ready: 3000000
+    replicas: 1
+
+  # Slow executor (for SLA testing)
+  - name: mock_executor_d
+    uses:
+      jtype: IntegrationExecutorMock
+      with:
+        process_time: 5.0
+        failure_rate: 0.0
+        failure_mode: none #timeout
+        storage:
+          psql:
+            <<: *psql_conf_shared
+            enabled: True
+          s3:
+            <<: *s3_conf_shared
+            enabled: True
+      metas:
+        py_modules:
+          - marie.executor.mock
+    timeout_ready: 3000000
+    replicas: 1
+
+  # Fast but occasionally flaky executor
+  - name: mock_executor_e
+    uses:
+      jtype: IntegrationExecutorMock
+      with:
+        process_time: 1.5
+        failure_rate: 0.1  # 10% failure rate
+        failure_mode: none #timeout
+        storage:
+          psql:
+            <<: *psql_conf_shared
+            enabled: True
+          s3:
+            <<: *s3_conf_shared
+            enabled: True
+      metas:
+        py_modules:
+          - marie.executor.mock
+    timeout_ready: 3000000
+    replicas: 1
+
+  # Medium speed, moderately flaky executor
+  - name: mock_executor_f
+    uses:
+      jtype: IntegrationExecutorMock
+      with:
+        process_time: 3.0
+        failure_rate: 0.2  # 20% failure rate
+        failure_mode: none #timeout #random
+        storage:
+          psql:
+            <<: *psql_conf_shared
+            enabled: True
+          s3:
+            <<: *s3_conf_shared
+            enabled: True
+      metas:
+        py_modules:
+          - marie.executor.mock
+    timeout_ready: 3000000
+    replicas: 1
+
+  # Very slow executor (for timeout testing)
+  - name: mock_executor_g
+    uses:
+      jtype: IntegrationExecutorMock
+      with:
+        process_time: 8.0
+        failure_rate: 0.0
+        failure_mode: none #timeout
+        storage:
+          psql:
+            <<: *psql_conf_shared
+            enabled: True
+          s3:
+            <<: *s3_conf_shared
+            enabled: True
+      metas:
+        py_modules:
+          - marie.executor.mock
+    timeout_ready: 3000000
+    replicas: 1
+
+  # Very flaky executor (for error recovery testing)
+  - name: mock_executor_h
+    uses:
+      jtype: IntegrationExecutorMock
+      with:
+        process_time: 2.0
+        failure_rate: 0.5  # 50% failure rate
+        failure_mode: none #timeout #random
+        storage:
+          psql:
+            <<: *psql_conf_shared
+            enabled: True
+          s3:
+            <<: *s3_conf_shared
+            enabled: True
+      metas:
+        py_modules:
+          - marie.executor.mock
+    timeout_ready: 3000000
+    replicas: 1
+
+# Authentication and Authorization configuration
+auth:
+  keys:
+    - name : service-A
+      api_key : mas_0aPJ9Q9nUO1Ac1vJTfffXEXs9FyGLf9BzfYgZ_RaHm707wmbfHJNPQ
+      enabled : True
+      roles : [admin, user]
+
+    - name : service-B
+      api_key : mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ
+      enabled : True
+      roles : [admin, user]
+
+# =============================================================================
+# SCHEDULER TESTING CONFIGURATION
+# =============================================================================
+#
+# This configuration creates 8 mock executors with different characteristics:
+#
+# mock_executor_a: Fast (1.0s), 0% failure - Baseline for performance
+# mock_executor_b: Medium (2.0s), 0% failure - Standard processing
+# mock_executor_c: Normal (3.0s), 0% failure - Default behavior
+# mock_executor_d: Slow (5.0s), 0% failure - SLA boundary testing
+# mock_executor_e: Fast (1.5s), 10% failure - Light flakiness
+# mock_executor_f: Normal (3.0s), 20% failure - Moderate flakiness
+# mock_executor_g: Very slow (8.0s), 0% failure - Timeout testing
+# mock_executor_h: Medium (2.0s), 50% failure - Heavy error testing
+#
+# Use this config with the mock_parallel_subgraphs query plan to test:
+# - Parallel subgraph execution
+# - SLA enforcement across different executors
+# - Error handling and retry logic
+# - Resource allocation and scheduling
+# - Job distribution performance
+#
+# =============================================================================
