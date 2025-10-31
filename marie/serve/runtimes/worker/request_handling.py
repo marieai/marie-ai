@@ -943,9 +943,21 @@ class WorkerRequestHandler:
                 )
                 _ = self._set_result(requests, return_data, docs, http=http)
             except asyncio.CancelledError:
-                # this could be due to client disconnect or Executor raising an exception of CancelledError
-                self.logger.warning("Task was cancelled due to client disconnect")
-                client_disconnected = True
+                # Differentiate between client disconnect and other cancellation sources
+                # This is important for ETCD state management
+                self.logger.warning(
+                    f"Task was cancelled (could be due to client disconnect or system shutdown). "
+                    f"Job: {getattr(self, '_job_id', 'unknown')}, "
+                    f"Active semaphores: {len(self._active_sem_tickets) if hasattr(self, '_active_sem_tickets') else 'unknown'}"
+                )
+                # Ensure semaphore cleanup happens properly during cancellation
+                try:
+                    # Clean up any active semaphore tickets to prevent orphaned leases in ETCD
+                    self._sem_untrack_all()
+                except Exception as e:
+                    self.logger.error(
+                        f"Failed to cleanup semaphores during task cancellation: {e}"
+                    )
                 raise
             except Exception as e:
                 self.logger.error(f"Error during __acall__ {client_disconnected}: {e}")
