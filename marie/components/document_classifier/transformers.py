@@ -157,8 +157,13 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 # use_auth_token=use_auth_token,
             )
         elif task == "text-classification-multimodal":
+            # Eventually, will need to use safetensors for security reason.
+            # https://github.com/pytorch/pytorch/security/advisories/GHSA-53q9-r3pm-6pq6
+
+            use_safetensors = any(f.endswith(".safetensors") for f in os.listdir(model_name_or_path))
             self.model = AutoModelForSequenceClassification.from_pretrained(
-                model_name_or_path
+                    model_name_or_path,
+                    use_safetensors=use_safetensors
             )
             self.model = self.optimize_model(self.model)
             self.model = self.model.eval().to(resolved_devices[0])
