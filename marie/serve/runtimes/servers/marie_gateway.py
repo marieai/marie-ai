@@ -612,6 +612,152 @@ class MarieServerGateway(CompositeServer):
 
                 return StreamingResponse(gen(), media_type="text/event-stream")
 
+            @app.api_route(
+                path="/api/deployments",
+                methods=["GET"],
+                summary="Get all deployments information /api/deployments",
+            )
+            async def get_deployments():
+                """
+                Get all deployments information including status and nodes.
+                :return:
+                """
+                self.logger.info(f"Deployments info requested at {datetime.now()}")
+                try:
+                    return {
+                        "status": "OK",
+                        "result": {
+                            "deployments": self.deployments,
+                            "deployment_nodes": self.deployment_nodes,
+                        },
+                    }
+                except Exception as e:
+                    self.logger.error(f"Error getting deployments info: {str(e)}")
+                    return {
+                        "status": "error",
+                        "result": f"Failed to get deployments info: {str(e)}",
+                    }
+
+            @app.api_route(
+                path="/api/deployment-nodes",
+                methods=["GET"],
+                summary="Get deployment nodes /api/deployment-nodes",
+            )
+            async def get_deployment_nodes():
+                """
+                Get all deployment nodes information.
+                :return:
+                """
+                self.logger.info(f"Deployment nodes info requested at {datetime.now()}")
+                try:
+                    return {
+                        "status": "OK",
+                        "result": self.deployment_nodes,
+                    }
+                except Exception as e:
+                    self.logger.error(f"Error getting deployment nodes: {str(e)}")
+                    return {
+                        "status": "error",
+                        "result": f"Failed to get deployment nodes: {str(e)}",
+                    }
+
+            @app.api_route(
+                path="/api/deployment-status",
+                methods=["GET"],
+                summary="Get deployment status /api/deployment-status",
+            )
+            async def get_deployment_status():
+                """
+                Get deployment status including desired and status maps.
+                :return:
+                """
+                self.logger.info(f"Deployment status requested at {datetime.now()}")
+                try:
+                    # Convert the maps to a serializable format
+                    desired_data = {}
+                    for (node, deployment), desired in self.desired_map.items():
+                        key = f"{node}/{deployment}"
+                        desired_data[key] = {
+                            "phase": desired.phase,
+                            "epoch": desired.epoch,
+                            "params": desired.params,
+                            "updated_at": desired.updated_at,
+                        }
+
+                    status_data = {}
+                    for (node, deployment), status in self.status_map.items():
+                        key = f"{node}/{deployment}"
+                        status_data[key] = {
+                            "status_code": status.status_code,
+                            "status_name": status.status_name,
+                            "owner": status.owner,
+                            "epoch": status.epoch,
+                            "updated_at": status.updated_at,
+                            "heartbeat_at": status.heartbeat_at,
+                            "details": status.details,
+                        }
+
+                    return {
+                        "status": "OK",
+                        "result": {
+                            "desired": desired_data,
+                            "status": status_data,
+                        },
+                    }
+                except Exception as e:
+                    self.logger.error(f"Error getting deployment status: {str(e)}")
+                    return {
+                        "status": "error",
+                        "result": f"Failed to get deployment status: {str(e)}",
+                    }
+
+            @app.api_route(
+                path="/api/capacity",
+                methods=["GET"],
+                summary="Get capacity and slot information /api/capacity",
+            )
+            async def get_capacity():
+                """
+                Get capacity and slot information from the capacity manager.
+                :return:
+                """
+                self.logger.info(f"Capacity info requested at {datetime.now()}")
+                try:
+                    # Get current capacity snapshot
+                    rows, totals = (
+                        self.capacity_manager.compute_summary_rows_and_totals()
+                    )
+
+                    # Convert rows to dict format for easier consumption
+                    slots = []
+                    for row in rows:
+                        slot, cap, tgt, used, avail, holders, notes = row
+                        slots.append(
+                            {
+                                "name": slot,
+                                "capacity": cap,
+                                "target": tgt,
+                                "used": used,
+                                "available": avail,
+                                "holders": holders,
+                                "notes": notes,
+                            }
+                        )
+
+                    return {
+                        "status": "OK",
+                        "result": {
+                            "slots": slots,
+                            "totals": totals,
+                        },
+                    }
+                except Exception as e:
+                    self.logger.error(f"Error getting capacity info: {str(e)}")
+                    return {
+                        "status": "error",
+                        "result": f"Failed to get capacity info: {str(e)}",
+                    }
+
             return app
 
         marie.helper.extend_rest_interface = _extend_rest_function

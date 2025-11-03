@@ -330,6 +330,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             "refresh_job_durations.sql",
             "reset_active_dags_and_jobs.sql",
             "reset_all.sql",
+            "reset_dag.sql",
+            "reset_job.sql",
             "reset_completed_dags_and_jobs.sql",
             "suspend_non_started_work.sql",
             "unsuspend_work.sql",
