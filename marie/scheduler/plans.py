@@ -10,11 +10,20 @@ from marie.scheduler.state import WorkState
 def to_timestamp_with_tz(dt: datetime):
     """
     Convert a datetime object to a timestamp with timezone.
-    :param dt:
-    :return:
+    If the datetime is naive (no timezone), it is assumed to be in UTC.
+    :param dt: datetime object (timezone-aware or naive), or None
+    :return: ISO format string with timezone (Z suffix), or None if input is None
     """
-    timestamp = dt.replace(tzinfo=timezone.utc).timestamp()
-    return datetime.utcfromtimestamp(timestamp).isoformat() + "Z"
+    if dt is None:
+        return None
+
+    # If naive, assume UTC; if aware, convert to UTC
+    if dt.tzinfo is None:
+        dt_utc = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt_utc = dt.astimezone(timezone.utc)
+
+    return dt_utc.isoformat().replace('+00:00', 'Z')
 
 
 def try_set_maintenance_time(schema: str, maintenance_state_interval_seconds: int):
@@ -79,7 +88,7 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
             ELSE interval '15 minutes'
           END as expire_in,
           CASE
-            WHEN right(keep_until, 1) = 'Z' THEN CAST(keep_until as timestamp with time zone)
+            WHEN right(keep_until, 1) = 'Z' THEN CAST(keep_until as timestamptz)
           END as keep_until,
 
           COALESCE(j.retry_limit, q.retry_limit, retry_limit_default, 2) as retry_limit,
@@ -101,13 +110,13 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
                 '{work_info.dag_id}'::uuid as dag_id,
                 '{work_info.name}'::text as name,
                 {work_info.priority}::int as priority,
-                {work_info.job_level}::int as job_level,                
-                CAST('{to_timestamp_with_tz(work_info.soft_sla)}' as timestamp with time zone) as soft_sla,
-                CAST('{to_timestamp_with_tz(work_info.hard_sla)}' as timestamp with time zone) as hard_sla,
+                {work_info.job_level}::int as job_level,
+                CAST('{to_timestamp_with_tz(work_info.soft_sla)}' as timestamptz) as soft_sla,
+                CAST('{to_timestamp_with_tz(work_info.hard_sla)}' as timestamptz) as hard_sla,
                 '{WorkState.CREATED.value}'::{schema}.job_state as state,
                 {work_info.retry_limit}::int as retry_limit,
                 CASE
-                  WHEN right('{to_timestamp_with_tz(work_info.start_after)}', 1) = 'Z' THEN CAST('{to_timestamp_with_tz(work_info.start_after)}' as timestamp with time zone)
+                  WHEN right('{to_timestamp_with_tz(work_info.start_after)}', 1) = 'Z' THEN CAST('{to_timestamp_with_tz(work_info.start_after)}' as timestamptz)
                   ELSE now() + CAST(COALESCE('{to_timestamp_with_tz(work_info.start_after)}','0') as interval)
                 END as start_after,
 

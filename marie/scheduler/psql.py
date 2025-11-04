@@ -96,11 +96,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     _mapper_warnings_shown = set()
     """A PostgreSQL-based job scheduler."""
 
-    def __init__(self, config: Dict[str, Any], job_manager: JobManager):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        job_manager: JobManager,
+        gateway_ready_event: asyncio.Event = None,
+    ):
         super().__init__()
         self.logger = MarieLogger(PostgreSQLJobScheduler.__name__)
         if job_manager is None:
             raise BadConfigSource("job_manager argument is required for JobScheduler")
+
+        self._gateway_ready_event = gateway_ready_event
 
         self.validate_config(config)
         self._fetch_event = asyncio.Event()
@@ -236,7 +243,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.logger.error(f"WorkItem not found: {job_id}")
                 return
 
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             work_state = convert_job_status_to_work_state(status)
             work_item.state = work_state
 
@@ -377,7 +384,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         # Write query to temp file for review
         tmp_path = "/tmp/marie/psql"
         os.makedirs(tmp_path, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         query_file = os.path.join(tmp_path, f"locked_query_{timestamp}.sql")
 
         try:
@@ -588,6 +595,25 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     wait_time = MIN_POLL_PERIOD
                 except asyncio.TimeoutError:
                     pass
+
+                # Check if gateway is ready before attempting to dispatch work
+                if (
+                    self._gateway_ready_event is not None
+                    and not self._gateway_ready_event.is_set()
+                ):
+                    if _cycle_idx % 10 == 0:  # Log every 10 cycles to avoid spam
+                        self.logger.warning(
+                            f"[WORK_DIST] Gateway not ready yet. Scheduler will wait. "
+                            f"Queue size: {self._event_queue.qsize()}"
+                        )
+                    idle_streak += 1
+                    wait_time = adjust_backoff(
+                        wait_time,
+                        idle_streak,
+                        scheduled=False,
+                        min_poll_period=MIN_POLL_PERIOD,
+                    )
+                    continue
 
                 t_active_start = time.perf_counter()
                 slots_by_executor = available_slots_by_executor(
@@ -1813,11 +1839,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             update_fields = [f"state = '{status.value}'"]
             if started_on:
                 update_fields.append(
-                    f"started_on = '{to_timestamp_with_tz(started_on)}'::timestamp with time zone "
+                    f"started_on = '{to_timestamp_with_tz(started_on)}'::timestamptz"
                 )
             if completed_on:
                 update_fields.append(
-                    f"completed_on = '{to_timestamp_with_tz(completed_on)}'::timestamp with time zone "
+                    f"completed_on = '{to_timestamp_with_tz(completed_on)}'::timestamptz"
                 )
 
             update_query = f"""

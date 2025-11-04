@@ -45,7 +45,7 @@ BEGIN
         state = v_new_state,
         completed_on = CASE
             WHEN v_new_state IN ('completed', 'failed') AND completed_on IS NULL
-            THEN NOW()
+            THEN now()
             ELSE completed_on
         END
     WHERE id = p_dag_id;

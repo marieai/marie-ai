@@ -5,7 +5,7 @@ import sys
 import time
 import traceback
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator, AsyncIterator, Dict, Optional
 from urllib.parse import urlparse
@@ -230,6 +230,7 @@ class MarieServerGateway(CompositeServer):
             gateway_streamer=None,
             deployment_nodes=None,
             logger=self.logger,
+            ready_event=self.ready_event,
         )
 
         self.sse_broker = None
@@ -255,7 +256,9 @@ class MarieServerGateway(CompositeServer):
             etcd_client=self.etcd_client,
         )
         self.job_scheduler = PostgreSQLJobScheduler(
-            config=job_scheduler_kwargs, job_manager=job_manager
+            config=job_scheduler_kwargs,
+            job_manager=job_manager,
+            gateway_ready_event=self.ready_event,
         )
 
         # perform monkey patching
@@ -283,11 +286,7 @@ class MarieServerGateway(CompositeServer):
                     content={
                         "status": "error",
                         "message": "Internal server error",
-                        "detail": (
-                            str(exc)
-                            if self.args.debug
-                            else "An unexpected error occurred"
-                        ),
+                        "detail": (str(exc)),
                     },
                 )
 
@@ -309,7 +308,7 @@ class MarieServerGateway(CompositeServer):
                 summary=f"Submit a job /api/submit",
             )
             async def job_submit(text: str):
-                now = datetime.now()
+                now = datetime.now(timezone.utc)
                 self.logger.info(f"Received request at {now}")
                 work_info = WorkInfo(
                     name="extract",
@@ -331,7 +330,7 @@ class MarieServerGateway(CompositeServer):
 
             @app.get("/check")
             async def get_health(text: str):
-                self.logger.info(f"Received request at {datetime.now()}")
+                self.logger.info(f"Received request at {datetime.now(timezone.utc)}")
                 return {"result": "ok"}
 
             @app.api_route(
@@ -344,7 +343,9 @@ class MarieServerGateway(CompositeServer):
                 Get debug information from the job scheduler.
                 :return:
                 """
-                self.logger.info(f"Debug info requested at {datetime.now()}")
+                self.logger.info(
+                    f"Debug info requested at {datetime.now(timezone.utc)}"
+                )
                 try:
                     debug_data = self.job_scheduler.debug_info()
                     return {"status": "OK", "result": debug_data}
@@ -365,7 +366,9 @@ class MarieServerGateway(CompositeServer):
                 Reset the active DAGs in the job scheduler.
                 :return:
                 """
-                self.logger.info(f"Reset active DAGs requested at {datetime.now()}")
+                self.logger.info(
+                    f"Reset active DAGs requested at {datetime.now(timezone.utc)}"
+                )
                 try:
                     result = await self.job_scheduler.reset_active_dags()
                     if result["success"]:
@@ -381,7 +384,9 @@ class MarieServerGateway(CompositeServer):
 
             async def list_jobs_handler(request: Request):
                 try:
-                    self.logger.info(f"Received request at {datetime.now()}")
+                    self.logger.info(
+                        f"Received request at {datetime.now(timezone.utc)}"
+                    )
                     params = request.path_params
                     state = params.get("state")
 
@@ -430,7 +435,7 @@ class MarieServerGateway(CompositeServer):
                 summary="Stop a job /api/jobs/{job_id}",
             )
             async def get_job_info(request: Request):
-                self.logger.info(f"Received request at {datetime.now()}")
+                self.logger.info(f"Received request at {datetime.now(timezone.utc)}")
                 # params = request.query_params
                 params = request.path_params
                 job_id = params.get("job_id")
@@ -447,7 +452,7 @@ class MarieServerGateway(CompositeServer):
                 summary="Stop a job /api/jobs/{job_id}/stop",
             )
             async def stop_job(request: Request):
-                self.logger.info(f"Received request at {datetime.now()}")
+                self.logger.info(f"Received request at {datetime.now(timezone.utc)}")
                 return {"status": "OK", "result": "Job stopped"}
 
             @app.api_route(
@@ -456,7 +461,7 @@ class MarieServerGateway(CompositeServer):
                 summary="Delete a job /api/jobs/{job_id}/stop",
             )
             async def delete_job(request: Request):
-                self.logger.info(f"Received request at {datetime.now()}")
+                self.logger.info(f"Received request at {datetime.now(timezone.utc)}")
                 return {"status": "OK", "result": "Job deleted"}
 
             @app.api_route(
@@ -468,7 +473,7 @@ class MarieServerGateway(CompositeServer):
             async def invoke_command(
                 request: Request, token: str = Depends(TokenBearer())
             ):
-                self.logger.info(f"Received request at {datetime.now()}")
+                self.logger.info(f"Received request at {datetime.now(timezone.utc)}")
                 self.logger.debug(f"Token : {token}")
                 # For testing purposes, we can return a mock response
                 # if False:
@@ -622,7 +627,9 @@ class MarieServerGateway(CompositeServer):
                 Get all deployments information including status and nodes.
                 :return:
                 """
-                self.logger.info(f"Deployments info requested at {datetime.now()}")
+                self.logger.info(
+                    f"Deployments info requested at {datetime.now(timezone.utc)}"
+                )
                 try:
                     return {
                         "status": "OK",
@@ -648,7 +655,9 @@ class MarieServerGateway(CompositeServer):
                 Get all deployment nodes information.
                 :return:
                 """
-                self.logger.info(f"Deployment nodes info requested at {datetime.now()}")
+                self.logger.info(
+                    f"Deployment nodes info requested at {datetime.now(timezone.utc)}"
+                )
                 try:
                     return {
                         "status": "OK",
@@ -671,7 +680,9 @@ class MarieServerGateway(CompositeServer):
                 Get deployment status including desired and status maps.
                 :return:
                 """
-                self.logger.info(f"Deployment status requested at {datetime.now()}")
+                self.logger.info(
+                    f"Deployment status requested at {datetime.now(timezone.utc)}"
+                )
                 try:
                     # Convert the maps to a serializable format
                     desired_data = {}
@@ -721,7 +732,9 @@ class MarieServerGateway(CompositeServer):
                 Get capacity and slot information from the capacity manager.
                 :return:
                 """
-                self.logger.info(f"Capacity info requested at {datetime.now()}")
+                self.logger.info(
+                    f"Capacity info requested at {datetime.now(timezone.utc)}"
+                )
                 try:
                     # Get current capacity snapshot
                     rows, totals = (
@@ -922,7 +935,7 @@ class MarieServerGateway(CompositeServer):
 
         api_key = message["api_key"]
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         submission_model = JobSubmissionModel(**message)
         metadata = submission_model.metadata
         project_id = metadata.get("project_id", None)
@@ -940,8 +953,14 @@ class MarieServerGateway(CompositeServer):
         else:
             if isinstance(soft_sla, str):
                 soft_sla = datetime.fromisoformat(soft_sla)
+                # Ensure timezone-aware: if naive, assume UTC
+                if soft_sla.tzinfo is None:
+                    soft_sla = soft_sla.replace(tzinfo=timezone.utc)
             if isinstance(hard_sla, str):
                 hard_sla = datetime.fromisoformat(hard_sla)
+                # Ensure timezone-aware: if naive, assume UTC
+                if hard_sla.tzinfo is None:
+                    hard_sla = hard_sla.replace(tzinfo=timezone.utc)
 
         if soft_sla > hard_sla:
             return self.error_response(

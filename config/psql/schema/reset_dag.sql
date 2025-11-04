@@ -11,7 +11,7 @@
 --   - For each updated row the following columns are set:
 --       state -> 'created'
 --       started_on -> NULL
---       created_on -> NOW()
+--       created_on -> now()
 --       completed_on -> NULL
 --   - Emits a NOTICE summarizing affected row counts.
 --
@@ -44,7 +44,7 @@ BEGIN
     SET
         state = 'created',
         started_on = NULL,
-        created_on = NOW(),
+        created_on = now(),
         completed_on = NULL
     WHERE dag_id = p_dag_id;
     GET DIAGNOSTICS job_count = ROW_COUNT;
@@ -54,7 +54,7 @@ BEGIN
     SET
         state = 'created',
         started_on = NULL,
-        created_on = NOW(),
+        created_on = now(),
         completed_on = NULL
     WHERE id = p_dag_id;
     GET DIAGNOSTICS dag_count = ROW_COUNT;
@@ -74,7 +74,7 @@ Effect:
   - Updates all job rows where dag_id = p_dag_id and the corresponding dag row:
       state => 'created'
       started_on => NULL
-      created_on => NOW()
+      created_on => now()
       completed_on => NULL
 
 Usage example:

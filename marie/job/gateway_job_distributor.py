@@ -22,17 +22,21 @@ class GatewayJobDistributor(JobDistributor):
         gateway_streamer: Optional[GatewayStreamer] = None,
         deployment_nodes: Optional[Dict[str, List]] = None,
         logger: Optional[MarieLogger] = None,
+        ready_event: Optional[asyncio.Event] = None,
     ):
         """
         GatewayJobDistributor constructor.
         :param gateway_streamer: GatewayStreamer instance to be used to send the jobs to executors.
         :param deployment_nodes: Optional dictionary with the nodes that are going to be used in the graph. If not provided, the graph will be built using the executor_addresses.
         :param logger: Optional logger to be used by the GatewayJobDistributor.
+        :param ready_event: Optional asyncio.Event that signals when the gateway is ready to process jobs.
         """
         self.logger = logger or MarieLogger(self.__class__.__name__)
         self.streamer = gateway_streamer
         self.deployment_nodes = deployment_nodes or {}
         self._inflight: Dict[str, asyncio.Task] = {}
+        self._ready_event = ready_event
+        self._readiness_timeout = 60  # seconds to wait for gateway initialization
 
     def _validate_preconditions(
         self, submission_id: str, job_info: JobInfo, send_callback: Optional[SendCb]

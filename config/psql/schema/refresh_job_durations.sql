@@ -9,7 +9,7 @@ BEGIN
         FOR UPDATE
     )
     UPDATE marie_scheduler.job
-    SET duration = NOW() - started_on
+    SET duration = now() - started_on
     WHERE id IN (SELECT id FROM ordered);
 END;
 $$ LANGUAGE plpgsql;

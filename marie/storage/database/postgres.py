@@ -52,7 +52,7 @@ class PostgresqlMixin:
                 # Add connection validation
                 # HINT:  Available values: serializable, repeatable read, read committed, read uncommitted.
                 **{
-                    # 'options': "-c default_transaction_isolation=read committed",
+                    'options': '-c timezone=UTC',
                     'application_name': application_name
                 }
             )

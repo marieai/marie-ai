@@ -10,7 +10,7 @@
 --     `id = ANY(p_dag_ids)` to:
 --       * `state`       => 'created'
 --       * `started_on`  => NULL
---       * `created_on`  => NOW()
+--       * `created_on`  => now()
 --       * `completed_on`=> NULL
 --   - Emits a NOTICE summarizing the number of job and DAG rows affected.
 --
@@ -55,7 +55,7 @@ BEGIN
     SET
         state = 'created',
         started_on = NULL,
-        created_on = NOW(),
+        created_on = now(),
         completed_on = NULL
     WHERE dag_id = ANY(p_dag_ids);
     GET DIAGNOSTICS job_count = ROW_COUNT;
@@ -65,7 +65,7 @@ BEGIN
     SET
         state = 'created',
         started_on = NULL,
-        created_on = NOW(),
+        created_on = now(),
         completed_on = NULL
     WHERE id = ANY(p_dag_ids);
     GET DIAGNOSTICS dag_count = ROW_COUNT;
@@ -85,7 +85,7 @@ Effect:
   - Updates all job rows where dag_id = ANY(p_dag_ids) and all DAG rows where id = ANY(p_dag_ids):
       state => 'created'
       started_on => NULL
-      created_on => NOW()
+      created_on => now()
       completed_on => NULL
 
 Behavior:

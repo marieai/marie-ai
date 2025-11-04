@@ -1,7 +1,7 @@
 import copy
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Tuple
 
 from marie.constants import (
@@ -160,8 +160,8 @@ async def debug_candidates_and_plan(
         # return
 
     os.makedirs("/tmp/marie/plans", exist_ok=True)
-    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    # timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
     debug_file_path = f"/tmp/marie/plans/candidates_plan_debug_{timestamp}.txt"
 

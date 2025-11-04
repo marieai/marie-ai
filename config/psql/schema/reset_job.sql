@@ -9,7 +9,7 @@
 --   - If the supplied job id does not exist, the function returns early and emits a NOTICE.
 --   - The function updates only the single job (by id) and the DAG row referenced by that job.
 --   - Both job and DAG rows have: state -> 'created', started_on -> NULL,
---     created_on -> NOW(), completed_on -> NULL.
+--     created_on -> now(), completed_on -> NULL.
 --   - The function emits a NOTICE summarizing affected row counts.
 --
 -- Usage:
@@ -42,7 +42,7 @@ BEGIN
     SET
         state = 'created',
         started_on = NULL,
-        created_on = NOW(),
+        created_on = now(),
         completed_on = NULL
     WHERE id = p_job_id;
     GET DIAGNOSTICS job_count = ROW_COUNT;
@@ -52,7 +52,7 @@ BEGIN
     SET
         state = 'created',
         started_on = NULL,
-        created_on = NOW(),
+        created_on = now(),
         completed_on = NULL
     WHERE id = v_dag_id;
     GET DIAGNOSTICS dag_count = ROW_COUNT;
@@ -73,7 +73,7 @@ Effect:
   - Updates the target job row and its parent dag row:
       state => 'created'
       started_on => NULL
-      created_on => NOW()
+      created_on => now()
       completed_on => NULL
 
 Usage example:

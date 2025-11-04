@@ -13,9 +13,9 @@ def create_version_table(schema: str):
     return f"""
     CREATE TABLE {schema}.version (
       version int primary key,
-      maintained_on timestamp with time zone,
-      cron_on timestamp with time zone,
-      monitored_on timestamp with time zone
+      maintained_on timestamptz,
+      cron_on timestamptz,
+      monitored_on timestamptz
     )
     """
 
@@ -48,14 +48,14 @@ def create_job_table(schema: str):
       retry_count integer not null default(0),
       retry_delay integer not null default(0),
       retry_backoff boolean not null default false,
-      start_after timestamp with time zone not null default now(),
-      started_on timestamp with time zone,
+      start_after timestamptz not null default now(),
+      started_on timestamptz,
 --       singleton_key text,
 --       singleton_on timestamp without time zone,
       expire_in interval not null default interval '15 minutes',
-      created_on timestamp with time zone not null default now(),
-      completed_on timestamp with time zone,
-      keep_until timestamp with time zone NOT NULL default now() + interval '14 days',
+      created_on timestamptz not null default now(),
+      completed_on timestamptz,
+      keep_until timestamptz NOT NULL default now() + interval '14 days',
       output jsonb,
       dead_letter text,
       policy text,
@@ -64,8 +64,8 @@ def create_job_table(schema: str):
       job_level integer not null default(0),
       duration interval,
       sla_interval interval,
-      soft_sla timestamp with time zone,
-      hard_sla timestamp with time zone,
+      soft_sla timestamptz,
+      hard_sla timestamptz,
       sla_miss_logged boolean not null default false,
       lease_owner text,
       lease_expires_at timestamptz,
@@ -95,24 +95,24 @@ def create_job_history_table(schema: str):
       retry_count integer not null default(0),
       retry_delay integer not null default(0),
       retry_backoff boolean not null default false,
-      start_after timestamp with time zone not null default now(),
+      start_after timestamptz not null default now(),
       expire_in interval not null default interval '15 minutes',
-      created_on timestamp with time zone not null default now(),
-      started_on timestamp with time zone,
-      completed_on timestamp with time zone,
-      keep_until timestamp with time zone not null default now() + interval '14 days',       
+      created_on timestamptz not null default now(),
+      started_on timestamptz,
+      completed_on timestamptz,
+      keep_until timestamptz not null default now() + interval '14 days',       
       output jsonb,
       dead_letter text,
       policy text,
       duration interval,
       sla_interval interval,
-      soft_sla timestamp with time zone,
-      hard_sla timestamp with time zone,
+      soft_sla timestamptz,
+      hard_sla timestamptz,
       sla_miss_logged boolean not null default false,
       dag_id uuid not null,
       job_level integer not null default 0,
       dependencies jsonb default '[]'::jsonb,
-      history_created_on timestamp with time zone not null default now()
+      history_created_on timestamptz not null default now()
     )
     """
 
@@ -168,8 +168,8 @@ def create_table_queue(schema: str) -> str:
       retention_minutes int,
       dead_letter text REFERENCES {schema}.queue (name),
       partition_name text,
-      created_on timestamp with time zone not null default now(),
-      updated_on timestamp with time zone not null default now(),
+      created_on timestamptz not null default now(),
+      updated_on timestamptz not null default now(),
       PRIMARY KEY (name)
     )
     """
@@ -183,8 +183,8 @@ def create_schedule_table(schema):
       timezone text,
       data jsonb,
       options jsonb,
-      created_on timestamp with time zone not null default now(),
-      updated_on timestamp with time zone not null default now()
+      created_on timestamptz not null default now(),
+      updated_on timestamptz not null default now()
     )
     """
 
@@ -194,8 +194,8 @@ def create_subscription_table(schema):
     CREATE TABLE {schema}.subscription (
       event text not null,
       name text not null,
-      created_on timestamp with time zone not null default now(),
-      updated_on timestamp with time zone not null default now(),
+      created_on timestamptz not null default now(),
+      updated_on timestamptz not null default now(),
       PRIMARY KEY(event, name)
     )
     """
@@ -323,7 +323,7 @@ def create_index_job_fetch(schema):
 def create_exponential_backoff_function(schema):
     return f"""
     CREATE OR REPLACE FUNCTION {schema}.exponential_backoff(retry_delay INT, retry_count INT)
-    RETURNS TIMESTAMP WITH TIME ZONE AS $$
+    RETURNS timestamptz AS $$
     BEGIN
         RETURN now() + (retry_delay * (2 ^ LEAST(16, retry_count + 1) / 2) +
                         retry_delay * (2 ^ LEAST(16, retry_count + 1) / 2) * random()) * INTERVAL '1 second';
@@ -353,15 +353,15 @@ def create_dag_table(schema: str):
             default_view VARCHAR(50) DEFAULT 'graph', -- Possible values: grid, graph, tree, gantt, duration
             serialized_dag JSONB,
             serialized_dag_pickle BYTEA,
-            started_on timestamp with time zone,
-            completed_on timestamp with time zone,            
-            created_on timestamp with time zone not null default now(),
-            updated_on timestamp with time zone not null default now(),
-            
+            started_on timestamptz,
+            completed_on timestamptz,
+            created_on timestamptz not null default now(),
+            updated_on timestamptz not null default now(),
+
             duration interval,
             sla_interval interval,
-            soft_sla timestamp with time zone,
-            hard_sla timestamp with time zone,
+            soft_sla timestamptz,
+            hard_sla timestamptz,
             sla_miss_logged boolean not null default false,
             PRIMARY KEY (id)  --  Ensures compatibility with foreign key constraints
         );
@@ -382,18 +382,18 @@ def create_dag_table_history(schema: str):
           is_subdag        BOOLEAN DEFAULT FALSE,
           default_view     VARCHAR(50) DEFAULT 'graph',  -- e.g., grid, graph, tree, gantt, duration
           serialized_dag   JSONB,
-          started_on       TIMESTAMP WITH TIME ZONE,
-          completed_on     TIMESTAMP WITH TIME ZONE,          
-          created_on       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-          updated_on       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+          started_on       timestamptz,
+          completed_on     timestamptz,
+          created_on       timestamptz NOT NULL DEFAULT now(),
+          updated_on       timestamptz NOT NULL DEFAULT now(),
           duration         INTERVAL,
           sla_interval     INTERVAL,
-          soft_sla         TIMESTAMP WITH TIME ZONE,
-          hard_sla         TIMESTAMP WITH TIME ZONE,
+          soft_sla         timestamptz,
+          hard_sla         timestamptz,
           sla_miss_logged  BOOLEAN,
-        
+
           -- Timestamp for when this row was added to the history:
-          history_created_on TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+          history_created_on timestamptz NOT NULL DEFAULT now()
         );
     """
 
@@ -588,7 +588,7 @@ def create_dag_resolve_state_function(schema: str):
                 state = v_new_state,
                 completed_on = CASE
                     WHEN v_new_state IN ('completed', 'failed') AND completed_on IS NULL
-                    THEN NOW()
+                    THEN now()
                     ELSE completed_on
                 END
             WHERE id = p_dag_id;
