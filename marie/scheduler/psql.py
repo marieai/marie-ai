@@ -653,7 +653,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
                     continue
 
-                self.logger.info(f"[WORK_DIST] Available slots: {slots_by_executor}")
+                self.logger.debug(f"[WORK_DIST] Available slots: {slots_by_executor}")
 
                 # FETCH READY CANDIDATES (executor-agnostic)
                 # frontier should not filter by executors; let planner decide
@@ -663,7 +663,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                 if not candidates_wi or len(candidates_wi) == 0:
                     frontier_summary = self.frontier.summary(detail=False)
-                    self.logger.warning(
+                    self.logger.debug(
                         f"[WORK_DIST] No ready work in frontier. Short sleep. "
                         f"Batch size: {batch_size} | "
                         f"Frontier summary: {frontier_summary} | "
@@ -680,9 +680,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
                     continue
 
-                self.logger.info(
+                self.logger.debug(
                     f"[WORK_DIST] Fetched {len(candidates_wi)} candidates from frontier. "
-                    f"Sample IDs: {[wi.id for wi in candidates_wi[:5]]}"
                 )
 
                 # Build (entrypoint, wi) tuples for planner input

@@ -1783,12 +1783,12 @@ class MarieServerGateway(CompositeServer):
         return False
 
     async def _reconcile_loop(self, interval_s: int = 10) -> None:
-        self.logger.info("Reconcile loop starting (interval=%ss)", interval_s)
+        self.logger.debug("Reconcile loop starting (interval=%ss)", interval_s)
         while True:
             try:
-                self.logger.info("Reconciling")
+                self.logger.debug("Reconciling")
                 try:
-                    self.logger.info(
+                    self.logger.debug(
                         "[sem] boot reconcile_all: deleting orphans and fixing counters"
                     )
                     summary = self.semaphore_store.reconcile_all(
@@ -1812,28 +1812,23 @@ class MarieServerGateway(CompositeServer):
 
                     st = self.status_store.read(node, depl)
                     if not st:
-                        # no claim for this epoch — if it's been waiting too long, bump epoch
                         if is_stale(d.updated_at, CLAIM_TIMEOUT_S):
                             self.logger.warning(
                                 f"No status for {node}/{depl} epoch {d.epoch}; bumping"
                             )
                             self.desired_store.bump_epoch(node, depl)
-                            # count a miss and maybe GC
                             if self._incr_miss_and_maybe_gc(node, depl, d):
                                 continue
                         continue
 
-                    # ignore status from different epoch
                     if st.epoch != d.epoch:
                         continue
 
-                    # worker considered dead?
                     if is_stale(st.heartbeat_at, HEARTBEAT_TIMEOUT_S):
                         self.logger.warning(
                             f"Stale status {node}/{depl} epoch {st.epoch}; bumping"
                         )
                         self.desired_store.bump_epoch(node, depl)
-                        # count a miss and maybe GC
                         if self._incr_miss_and_maybe_gc(node, depl, d):
                             continue
 
