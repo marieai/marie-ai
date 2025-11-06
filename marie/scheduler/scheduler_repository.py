@@ -3,7 +3,7 @@ from typing import Any, Dict
 import psycopg2
 
 from marie.logging_core.logger import MarieLogger
-from marie.scheduler.plans import (
+from marie.scheduler.repository.plans import (
     count_dag_states,
     count_job_states,
 )

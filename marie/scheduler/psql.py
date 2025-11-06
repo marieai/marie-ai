@@ -45,7 +45,7 @@ from marie.scheduler.planner_util import (
     get_node_from_dag,
     query_plan_work_items,
 )
-from marie.scheduler.plans import (
+from marie.scheduler.repository.plans import (
     cancel_jobs,
     complete_jobs,
     complete_jobs_by_id,
@@ -62,8 +62,8 @@ from marie.scheduler.plans import (
     try_set_monitor_time,
     version_table_exists,
 )
-from marie.scheduler.repository import SchedulerRepository
 from marie.scheduler.scheduler_heartbeat import SchedulerHeartbeat
+from marie.scheduler.scheduler_repository import SchedulerRepository
 from marie.scheduler.state import WorkState
 from marie.scheduler.util import (
     adjust_backoff,
@@ -159,6 +159,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._setup_event_subscriptions()
         self._setup_storage(config, connection_only=True)
         self._db = SchedulerRepository(config)
+
+        # Initialize JobRepository for database operations
+        from marie.scheduler.repository import JobRepository
+
+        self.repository = JobRepository(config, max_workers=self.max_workers)
+
+        # Initialize NotificationService for PostgreSQL LISTEN/NOTIFY
+        from marie.scheduler.services import NotificationService
+
+        self.notification_service = NotificationService(config)
+        # Register handler for DAG state changes
+        self.notification_service.register_handler(
+            channel='dag_state_changed', handler=self._handle_dag_state_notification
+        )
 
         self.execution_planner = GlobalPriorityExecutionPlanner()
         register_all_known_planners(
@@ -283,59 +297,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.error(
                 f"Error handling job event {event_type} for job {job_id}: {e}"
             )
-
-    def _setup_dag_state_listener(self):
-        """
-        Set up a dedicated PostgreSQL connection for LISTEN/NOTIFY.
-        This connection cannot be part of the connection pool since it needs
-        to remain open for receiving notifications.
-        """
-        try:
-            config = self.config
-            self._listen_connection = psycopg2.connect(
-                user=config["username"],
-                password=config["password"],
-                database=config["database"],
-                host=config["hostname"],
-                port=int(config["port"]),
-                options='-c timezone=UTC',
-                application_name=f"{config.get('application_name', 'marie_scheduler')}_listener",
-            )
-            self._listen_connection.set_isolation_level(
-                psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
-            )
-            cursor = self._listen_connection.cursor()
-            cursor.execute("LISTEN dag_state_changed;")
-            cursor.close()
-            self.logger.info(
-                "Set up PostgreSQL LISTEN for dag_state_changed channel - "
-                f"Connection: {self._listen_connection.get_backend_pid()}"
-            )
-        except Exception as e:
-            self.logger.error(f"Failed to set up DAG state listener: {e}")
-            raise
-
-    async def test_dag_notification(self):
-        """
-        Test method to send a test notification and verify the listener is working.
-        Can be called manually to debug notification issues.
-        """
-        try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            test_payload = json.dumps(
-                {"dag_id": "test-dag-id", "state": "created", "op": "UPDATE"}
-            )
-            cursor.execute(
-                "SELECT pg_notify('dag_state_changed', %s);", (test_payload,)
-            )
-            conn.commit()
-            cursor.close()
-            self._close_connection(conn)
-            self.logger.info(f"Sent test notification: {test_payload}")
-        except Exception as e:
-            self.logger.error(f"Failed to send test notification: {e}")
-            raise
 
     async def _handle_dag_state_notification(self, payload: dict):
         """
@@ -469,306 +430,54 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.error(f"Error handling DAG state notification: {e}")
             traceback.print_exc()
 
-    async def _listen_for_dag_state_changes(self):
-        """
-        Background task that listens for PostgreSQL NOTIFY events on the
-        dag_state_changed channel and processes them.
-
-        This task handles its own connection setup to avoid blocking the event loop.
-        If setup fails, it raises RuntimeFailToStart since the listener is critical
-        for maintaining consistency between database and in-memory state.
-        """
-        import json
-        import select
-
-        self.logger.info("Starting DAG state change listener")
-
-        # Set up connection in background task to avoid blocking startup
-        try:
-            self.logger.debug("Setting up PostgreSQL LISTEN connection in background")
-            await asyncio.get_event_loop().run_in_executor(
-                None, self._setup_dag_state_listener
-            )
-            self.logger.info("PostgreSQL LISTEN connection established successfully")
-        except Exception as e:
-            error_msg = f"Failed to set up DAG state listener: {e}"
-            self.logger.error(error_msg)
-            raise RuntimeFailToStart(error_msg) from e
-
-        try:
-            while self.running:
-                try:
-                    # Use select to wait for notifications with timeout
-                    # Run select in executor to avoid blocking the event loop
-                    loop = asyncio.get_event_loop()
-                    ready = await loop.run_in_executor(
-                        None,
-                        lambda: select.select([self._listen_connection], [], [], 1.0),
-                    )
-
-                    if ready == ([], [], []):
-                        # Timeout - no notifications, continue loop
-                        continue
-
-                    # Poll for notifications (also blocking, run in executor)
-                    await loop.run_in_executor(None, self._listen_connection.poll)
-
-                    # Process notifications in the main event loop
-                    while self._listen_connection.notifies:
-                        notify = self._listen_connection.notifies.pop(0)
-                        self.logger.debug(
-                            f"Received notification on channel {notify.channel}: {notify.payload}"
-                        )
-
-                        try:
-                            payload = json.loads(notify.payload)
-                            await self._handle_dag_state_notification(payload)
-                        except json.JSONDecodeError as e:
-                            self.logger.error(
-                                f"Failed to parse notification payload: {notify.payload}, error: {e}"
-                            )
-                        except Exception as e:
-                            self.logger.error(f"Error processing notification: {e}")
-                            traceback.print_exc()
-
-                except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
-                    self.logger.error(
-                        f"PostgreSQL connection error in listener: {e}. Attempting to reconnect..."
-                    )
-                    try:
-                        if self._listen_connection:
-                            self._listen_connection.close()
-                        await asyncio.sleep(2)
-                        # Reconnect in executor to avoid blocking
-                        await asyncio.get_event_loop().run_in_executor(
-                            None, self._setup_dag_state_listener
-                        )
-                        self.logger.info("Successfully reconnected DAG state listener")
-                    except Exception as reconnect_error:
-                        self.logger.error(
-                            f"Failed to reconnect listener: {reconnect_error}"
-                        )
-                        await asyncio.sleep(5)
-
-                except asyncio.CancelledError:
-                    self.logger.info("DAG state listener task cancelled")
-                    break
-
-                except Exception as e:
-                    self.logger.error(f"Unexpected error in DAG state listener: {e}")
-                    traceback.print_exc()
-                    await asyncio.sleep(1)
-
-        finally:
-            if self._listen_connection:
-                try:
-                    self._listen_connection.close()
-                    self.logger.info("Closed DAG state listener connection")
-                except Exception as e:
-                    self.logger.warning(f"Error closing listener connection: {e}")
-            self._listen_connection = None
+    # ==================== Schema Management (Delegated to Repository) ====================
 
     def create_tables(self, schema: str):
         """
-        :param schema: The name of the schema where the tables will be created.
+        Create all database tables, functions, and triggers.
+        Delegates to JobRepository.
+
+        :param schema: The name of the schema where the tables will be created
         :return: None
         """
-        version = 1
-        commands = [
-            create_schema(schema),
-            create_version_table(schema),
-            create_table_queue(schema),
-            create_job_state_enum(schema),
-            create_job_table(schema),
-            create_primary_key_job(schema),
-            create_job_history_table(schema),
-            create_job_update_trigger_function(schema),
-            create_job_update_trigger(schema),
-            clone_job_table_for_archive(schema),
-            create_schedule_table(schema),
-            create_subscription_table(schema),
-            add_archived_on_to_archive(schema),
-            add_archived_on_index_to_archive(schema),
-            add_id_index_to_archive(schema),
-            # create_index_singleton_on(schema),
-            # create_index_singleton_key_on(schema),
-            create_index_job_name(schema),
-            create_index_job_fetch(schema),
-            create_queue_function(schema),
-            delete_queue_function(schema),
-            insert_version(schema, version),
-            create_exponential_backoff_function(schema),
-            create_dag_table(schema),
-            create_dag_table_history(schema),
-            create_dag_history_trigger_function(schema),
-            # create_dag_resolve_state_function(schema),
-        ]
-
-        # SQL files to be loaded
-        sql_files = [
-            "job_dependencies.sql",
-            "fetch_next_job.sql",
-            "create_indexes.sql",
-            "create_constraints.sql",
-            "resolve_dag_state.sql",
-            "count_job_states.sql",
-            "count_dag_states.sql",
-            "refresh_job_priority.sql",
-            "delete_dags_and_jobs.sql",
-            "delete_failed_dags_and_jobs.sql",
-            "delete_orphaned_jobs.sql",
-            "jobs_with_unmet_dependencies.sql",
-            "notify_dag_state_change.sql",
-            "purge_non_started_work.sql",
-            "ready_jobs_view.sql",
-            "refresh_dag_durations.sql",
-            "refresh_job_durations.sql",
-            "reset_active_dags_and_jobs.sql",
-            "reset_all.sql",
-            "reset_dag.sql",
-            "reset_job.sql",
-            "reset_completed_dags_and_jobs.sql",
-            "suspend_non_started_work.sql",
-            "unsuspend_work.sql",
-            "sync_job_dependencies.sql",
-            "lease/release_expired_leases.sql",  # reaper to run periodically
-            "lease/release_lease.sql",
-            "lease/activate_from_lease.sql",
-            "lease/clear_all_leases.sql",
-            "lease/hydrate_frontier.sql",
-            "lease/hydrate_frontier_jobs.sql",
-            "lease/lease_jobs_by_id.sql",
-            "lease/reap_expired_leases.sql",
-        ]
-
-        commands.extend(
-            [
-                create_sql_from_file(
-                    schema, os.path.join(__default_schema_dir__, fname)
-                )
-                for fname in sql_files
-            ]
-        )
-
-        commands.extend(
-            [
-                create_sql_from_file(
-                    schema, os.path.join(__default_psql_dir__, "cron_job_init.sql")
-                )
-            ]
-        )
-
-        query = ";\n".join(commands)
-
-        locked_query = f"""
-           BEGIN;
-           SET LOCAL statement_timeout = '30s';
-           SELECT pg_try_advisory_lock(1);
-           {query};
-           SELECT pg_advisory_unlock(1);
-           COMMIT;
-           """
-
-        # Write query to temp file for review
-        tmp_path = "/tmp/marie/psql"
-        os.makedirs(tmp_path, exist_ok=True)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        query_file = os.path.join(tmp_path, f"locked_query_{timestamp}.sql")
-
-        try:
-            with open(query_file, 'w') as f:
-                f.write(locked_query)
-            self.logger.info(f"Wrote locked query to: {query_file}")
-        except Exception as e:
-            self.logger.error(f"Failed to write query to file: {e}")
-
-        conn = None
-        try:
-            conn = self._get_connection()
-            self._execute_sql_gracefully(locked_query, connection=conn)
-        except (Exception, psycopg2.Error) as error:
-            if isinstance(error, psycopg2.errors.DuplicateTable):
-                self.logger.warning("Tables already exist, skipping creation.")
-            else:
-                self.logger.error(f"Error creating tables: {error}")
-                raise RuntimeFailToStart(
-                    f"Failed to create tables in schema '{schema}': {error}"
-                )
-        finally:
-            self._close_connection(conn)
+        self.repository.create_tables(schema)
 
     async def wipe(self) -> None:
-        """Clears the schedule storage."""
-        schema = DEFAULT_SCHEMA
-        query = f"""
-           TRUNCATE {schema}.job, {schema}.archive
-           """
-        self.logger.info(f"Wiping all data in schema '{schema}'")
-        conn = None
-        try:
-            conn = self._get_connection()
-            self._execute_sql_gracefully(query, connection=conn)
-        except (Exception, psycopg2.Error) as error:
-            self.logger.error(f"Error wiping tables: {error}")
-            raise RuntimeFailToStart(
-                f"Failed to wipe tables in schema '{schema}': {error}"
-            )
-        finally:
-            self._close_connection(conn)
+        """
+        Clear all data from job and archive tables.
+        Delegates to JobRepository.
+
+        :return: None
+        """
+        await self.repository.wipe(DEFAULT_SCHEMA)
 
     async def is_installed(self) -> bool:
-        """check if the tables are installed"""
-        schema = DEFAULT_SCHEMA
-        cursor = None
-        conn = None
-        try:
-            conn = self._get_connection()
-            cursor = self._execute_sql_gracefully(
-                version_table_exists(schema), return_cursor=True, connection=conn
-            )
+        """
+        Check if the scheduler tables are installed.
+        Delegates to JobRepository.
 
-            if cursor and cursor.rowcount > 0:
-                result = cursor.fetchone()
-                if result and result[0] is not None:
-                    return True
-        except (Exception, psycopg2.Error) as error:
-            self.logger.error(f"Error checking tables: {error}")
-            raise RuntimeFailToStart(
-                f"Unable to check installation in schema '{schema}': {error}"
-            )
-        finally:
-            self._close_cursor(cursor)
-            self._close_connection(conn)
-        return False
+        :return: True if tables are installed, False otherwise
+        """
+        return await self.repository.is_installed(DEFAULT_SCHEMA)
 
     async def create_queue(self, queue_name: str) -> None:
-        """Setup the queue for the scheduler."""
-        self._execute_sql_gracefully(create_queue(DEFAULT_SCHEMA, queue_name, {}))
+        """
+        Create a new queue.
+        Delegates to JobRepository.
+
+        :param queue_name: Name of the queue to create
+        :return: None
+        """
+        await self.repository.create_queue(queue_name)
 
     async def _get_defined_queues(self) -> set[str]:
-        """Setup the queue for the scheduler."""
-        cursor = None
-        conn = None
-        try:
-            conn = self._get_connection()
-            cursor = self._execute_sql_gracefully(
-                f"SELECT name FROM {DEFAULT_SCHEMA}.queue",
-                return_cursor=True,
-                connection=conn,
-            )
-            if cursor and cursor.rowcount > 0:
-                result = cursor.fetchall()
-                return {name[0] for name in result}
-        except (Exception, psycopg2.Error) as error:
-            self.logger.error(f"Error getting known queues: {error}")
-            raise RuntimeFailToStart(
-                f"Unable to find queues in schema '{DEFAULT_SCHEMA}': {error}"
-            )
-        finally:
-            self._close_cursor(cursor)
-            self._close_connection(conn)
+        """
+        Get all defined queues from the database.
+        Delegates to JobRepository.
 
-        return set()  # Return an empty set if no queues are defined
+        :return: Set of queue names
+        """
+        return await self.repository.get_defined_queues(DEFAULT_SCHEMA)
 
     async def start(self) -> None:
         """
@@ -777,16 +486,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return: None
         """
         logger.info("Starting job scheduling agent")
-        installed = await self.is_installed()
+        # Check if tables are installed and create if needed (delegate to repository)
+        installed = await self.repository.is_installed(DEFAULT_SCHEMA)
         logger.info(f"Tables installed: {installed}")
         if not installed:
-            self.create_tables(DEFAULT_SCHEMA)
+            self.repository.create_tables(DEFAULT_SCHEMA)
 
-        defined_queues = await self._get_defined_queues()
+        # Get defined queues from repository
+        defined_queues = await self.repository.get_defined_queues(DEFAULT_SCHEMA)
         for work_queue in self.known_queues.difference(defined_queues):
             self.logger.info(f"Create queue: {work_queue}")
-            await self.create_queue(work_queue)
-            await self.create_queue(f"${work_queue}_dlq")
+            await self.repository.create_queue(work_queue)
+            await self.repository.create_queue(f"${work_queue}_dlq")
 
         # We need to display the status
         await self.hydrate_from_db()
@@ -814,27 +525,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             for worker_id in range(self.max_workers)
         ]
 
-        # Set up and start the DAG state change listener
-        # Note: Connection setup happens in the background task to avoid blocking startup
-        # If setup fails, the task will raise RuntimeFailToStart
-        self._dag_state_listener_task = asyncio.create_task(
-            self._listen_for_dag_state_changes()
-        )
-        self.logger.info("Started DAG state change listener task")
-
-        # Wait briefly to ensure the listener connection is established
-        # This allows us to catch RuntimeFailToStart early during startup
+        # Start the NotificationService for DAG state change notifications
+        # The service handles PostgreSQL LISTEN/NOTIFY in a non-blocking way
         try:
-            await asyncio.sleep(0.5)  # Give it time to connect
-            if self._dag_state_listener_task.done():
-                # Task completed/failed early - check for exceptions
-                await self._dag_state_listener_task  # This will re-raise any exception
-        except RuntimeFailToStart:
-            self.logger.error("Critical: DAG state listener failed to start")
+            await self.notification_service.start()
+            self.logger.info(
+                "Started NotificationService for DAG state change notifications"
+            )
+        except RuntimeFailToStart as e:
+            self.logger.error(f"Critical: NotificationService failed to start: {e}")
             raise
         except Exception as e:
-            self.logger.error(f"Unexpected error in DAG state listener: {e}")
-            raise RuntimeFailToStart(f"DAG state listener failed to start: {e}") from e
+            self.logger.error(f"Unexpected error starting NotificationService: {e}")
+            raise RuntimeFailToStart(f"NotificationService failed to start: {e}") from e
 
         # self._sync_dag_task = asyncio.create_task(self._sync_dag())
         await self.notify_event()
@@ -1422,8 +1125,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if self._sync_dag_task:
             tasks.append(self._sync_dag_task)
 
-        if self._dag_state_listener_task:
-            tasks.append(self._dag_state_listener_task)
+        # Stop NotificationService
+        try:
+            await self.notification_service.stop()
+            self.logger.info("Stopped NotificationService")
+        except Exception as e:
+            self.logger.error(f"Error stopping NotificationService: {e}")
 
         for task in tasks:
             if task and not task.done():
@@ -1601,50 +1308,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         Get a job by its ID from cache or database.
         :param job_id: The ID of the job to retrieve.
         """
-        # Fast path, no lock
+        # Fast path - check cache first
         if job_id in self._job_cache:
-            # Move to end to signify it's recently used
+            # Move to end to signify it's recently used (LRU)
             self._job_cache[job_id] = self._job_cache.pop(job_id)
             return self._job_cache[job_id]
 
-        def db_call():
-            """Synchronous database call to fetch the job."""
-            schema = DEFAULT_SCHEMA
-            table = DEFAULT_JOB_TABLE
-            cursor = None
-            conn = None
-            try:
-                conn = self._get_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    f"""
-                    SELECT
-                          id, name, priority, state, retry_limit, start_after,
-                          expire_in, data, retry_delay, retry_backoff, keep_until,
-                          dag_id, job_level
-                    FROM {schema}.{table}
-                    WHERE id = %s
-                    """,
-                    (job_id,),
-                )
-                record = cursor.fetchone()
-                conn.commit()
-                if record:
-                    return self.record_to_work_info(record)
-                return None
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error getting job '{job_id}': {error}")
-                if conn:
-                    conn.rollback()
-                return None
-            finally:
-                self._close_cursor(cursor)
-                self._close_connection(conn)
+        # Cache miss - fetch from repository
+        work_item = await self.repository.get_job_by_id(job_id)
 
-        work_item = await self._loop.run_in_executor(self._db_executor, db_call)
-        # Evict oldest if cache is over size
+        # Update cache if found
         if work_item:
             self._job_cache[job_id] = work_item
+            # Evict oldest if cache is over size
             if len(self._job_cache) > self._job_cache_max_size:
                 self._job_cache.pop(next(iter(self._job_cache)))
 
@@ -1652,51 +1328,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def get_job_for_policy(self, work_info: WorkInfo) -> Optional[WorkInfo]:
         """
-        Find a job by its name and data.
-        :param work_info:
+        Find a job by its name and data (used for policy checks).
+        :param work_info: WorkInfo containing metadata with ref_type and ref_id
+        :return: WorkInfo if found, None otherwise
         """
-        schema = DEFAULT_SCHEMA
-        table = DEFAULT_JOB_TABLE
         ref_type = work_info.data.get("metadata", {}).get("ref_type", "")
         ref_id = work_info.data.get("metadata", {}).get("ref_id", "")
-        cursor = None
-        conn = None
 
-        try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                    SELECT
-                    id,
-                    name,
-                    priority,
-                    state,
-                    retry_limit,
-                    start_after,
-                    expire_in,
-                    data,
-                    retry_delay,
-                    retry_backoff,
-                    keep_until,
-                    dag_id,
-                    job_level
-                FROM {schema}.{table}
-                WHERE data->'metadata'->>'ref_type' = '{ref_type}'
-                AND data->'metadata'->>'ref_id' = '{ref_id}'
-                """
-            )
-            record = cursor.fetchone()
-            conn.commit()
-            if record:
-                return self.record_to_work_info(record)
-            return None
-        except (Exception, psycopg2.Error) as error:
-            self.logger.error(f"Error getting job: {error}")
-            conn.rollback()
-        finally:
-            self._close_cursor(cursor)
-            self._close_connection(conn)
+        # Delegate to repository
+        return await self.repository.get_job_by_policy(ref_type, ref_id)
 
     async def list_jobs(
         self, state: Optional[str | list[str]] = None, batch_size: int = 0
@@ -2735,42 +2375,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not ids:
             return set()
 
+        # Skip leasing if not in distributed mode
         if not self.distributed_scheduler:
             return set(ids)
 
-        norm_ids = list({str(i) for i in ids})
-
-        def _lease_sync() -> set[str]:
-            conn = None
-            cursor = None
-            try:
-                conn = self._get_connection()
-                sql = f"""
-                    SELECT unnest({DEFAULT_SCHEMA}.lease_jobs_by_id(
-                        %s::uuid[],          -- _ids
-                        %s::interval,        -- _ttl
-                        %s,                  -- _owner
-                        %s                   -- _name
-                    ))
-                """
-                ttl_interval = f"{int(self.lease_ttl_seconds)} seconds"
-                params = (norm_ids, ttl_interval, self.lease_owner, job_name)
-                cursor = self._execute_sql_gracefully(
-                    sql, data=params, return_cursor=True, connection=conn
-                )
-                if not cursor:
-                    return set()
-                leased: set[str] = set()
-                # tolerate either 1-column or 2-column return from the function
-                for row in cursor.fetchall():
-                    if len(row) >= 1 and row[0] is not None:
-                        leased.add(str(row[0]))
-                return leased
-            finally:
-                self._close_cursor(cursor)
-                self._close_connection(conn)
-
-        return await self._loop.run_in_executor(self._db_executor, _lease_sync)
+        # Delegate to repository
+        return await self.repository.lease_jobs(
+            job_ids=ids,
+            owner=self.lease_owner,
+            ttl_seconds=self.lease_ttl_seconds,
+            job_name=job_name,
+        )
 
     async def _activate_from_lease_db(self, ids: list[str]) -> set[str]:
         """
@@ -2779,34 +2394,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not ids:
             return set()
 
+        # Skip activation if not in distributed mode
         if not self.distributed_scheduler:
             return set(ids)
 
-        def _activate_sync() -> set[str]:
-            conn = None
-            cursor = None
-            try:
-                conn = self._get_connection()
-                # Function signature: activate_from_lease(_ids uuid[], _run_owner text, _run_ttl interval)
-                sql = (
-                    f"SELECT unnest({DEFAULT_SCHEMA}.activate_from_lease("
-                    f"%s::uuid[], %s, %s::interval)) AS id"
-                )
-                params = (
-                    ids,  # -> %s::uuid[]
-                    self.lease_owner,  # -> _run_owner text
-                    f"{self.run_ttl_seconds} seconds",  # -> _run_ttl interval
-                )
-                cursor = self._execute_sql_gracefully(
-                    sql, data=params, return_cursor=True, connection=conn
-                )
-                rows = cursor.fetchall() if cursor else []
-                return {row[0] for row in rows}
-            finally:
-                self._close_cursor(cursor)
-                self._close_connection(conn)
-
-        return await self._loop.run_in_executor(self._db_executor, _activate_sync)
+        # Delegate to repository
+        return await self.repository.activate_from_lease(
+            job_ids=ids, owner=self.lease_owner, run_ttl_seconds=self.run_ttl_seconds
+        )
 
     async def _release_lease_db(self, ids: list[str]) -> set[str]:
         """
@@ -2815,27 +2410,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not ids:
             return set()
 
+        # Skip release if not in distributed mode
         if not self.distributed_scheduler:
             return set(ids)
 
-        def _release_sync() -> set[str]:
-            conn = None
-            cursor = None
-            try:
-                conn = self._get_connection()
-                # Cast to uuid[] and UNNEST the returned uuid[]
-                sql = f"SELECT unnest({DEFAULT_SCHEMA}.release_lease(%s::uuid[])) AS id"
-                params = (ids,)
-                cursor = self._execute_sql_gracefully(
-                    sql, data=params, return_cursor=True, connection=conn
-                )
-                rows = cursor.fetchall() if cursor else []
-                return {str(row[0]) for row in rows}
-            finally:
-                self._close_cursor(cursor)
-                self._close_connection(conn)
-
-        return await self._loop.run_in_executor(self._db_executor, _release_sync)
+        # Delegate to repository
+        return await self.repository.release_lease(job_ids=ids)
 
     async def hydrate_single_dag_from_db(self, dag_id: str) -> bool:
         """
@@ -2844,56 +2424,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param dag_id: The ID of the DAG to hydrate
         :return: True if DAG was hydrated, False if not found or failed
         """
-
-        def _load_dag_and_jobs():
-            conn = self._get_connection()
-            cur = None
-            try:
-                # Get the DAG
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    SELECT dag_id, serialized_dag
-                    FROM marie_scheduler.hydrate_frontier_dags()
-                    WHERE dag_id = %s
-                    """,
-                    (dag_id,),
-                )
-                dag_row = cur.fetchone()
-                if not dag_row:
-                    return None, []
-
-                _, serialized_dag = dag_row
-
-                # Get the jobs for this DAG
-                cur.execute(
-                    """
-                    SELECT dag_id, job
-                    FROM marie_scheduler.hydrate_frontier_jobs(ARRAY[%s]::uuid[])
-                    """,
-                    (dag_id,),
-                )
-                job_rows = cur.fetchall()
-
-                conn.commit()
-                return serialized_dag, job_rows
-            except Exception:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                raise
-            finally:
-                if cur and not cur.closed:
-                    self._close_cursor(cur)
-                self._close_connection(conn)
-
         try:
             self.logger.info(f"Hydrating single DAG from DB: {dag_id}")
 
-            serialized_dag, job_rows = await self._loop.run_in_executor(
-                self._db_executor, _load_dag_and_jobs
-            )
+            # Load DAG and jobs from repository
+            serialized_dag, job_rows = await self.repository.load_dag_and_jobs(dag_id)
 
             if serialized_dag is None:
                 self.logger.warning(

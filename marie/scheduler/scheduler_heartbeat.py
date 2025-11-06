@@ -14,7 +14,7 @@ from marie.scheduler.printers import (
     print_job_state_summary,
     print_slots_table,
 )
-from marie.scheduler.repository import SchedulerRepository
+from marie.scheduler.scheduler_repository import SchedulerRepository
 from marie.scheduler.util import available_slots_by_executor
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 
