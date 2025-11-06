@@ -1,4 +1,5 @@
 ----------- DAG NOTIFY----------
+-- Optimized version: only sends minimal payload (dag_id, state, operation)
 CREATE OR REPLACE FUNCTION marie_scheduler.notify_dag_state_change() RETURNS trigger AS $$
 DECLARE
     payload TEXT;
@@ -9,13 +10,11 @@ BEGIN
         RAISE NOTICE 'OLD.state: %, NEW.state: %', OLD.state, NEW.state;
 
         IF NEW.state IS DISTINCT FROM OLD.state THEN
+            -- Minimal payload: only dag_id, state, and operation
             payload := json_build_object(
                 'dag_id', NEW.id,
-                'name', NEW.name,
-                'old_state', OLD.state,
-                'new_state', NEW.state,
-                'operation', 'UPDATE',
-                'updated_on', NEW.updated_on
+                'state', NEW.state,
+                'op', 'UPDATE'
             )::text;
 
             RAISE NOTICE 'Sending NOTIFY with payload: %', payload;
@@ -25,12 +24,10 @@ BEGIN
         END IF;
 
     ELSIF TG_OP = 'DELETE' THEN
+        -- Minimal payload: only dag_id and operation (state not needed for DELETE)
         payload := json_build_object(
             'dag_id', OLD.id,
-            'name', OLD.name,
-            'state', OLD.state,
-            'operation', 'DELETE',
-            'deleted_on', now()
+            'op', 'DELETE'
         )::text;
 
         RAISE NOTICE 'Sending DELETE NOTIFY with payload: %', payload;

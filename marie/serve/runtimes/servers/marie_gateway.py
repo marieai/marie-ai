@@ -1802,10 +1802,10 @@ class MarieServerGateway(CompositeServer):
                     )
 
                 # Reconcile desire / status
-                self.logger.info("reconciling: desire/status")
+                self.logger.debug("reconciling: desire/status")
 
                 for node, depl in self.desired_store.list_pairs():
-                    self.logger.info(f" - reconciling {node}/{depl}")
+                    self.logger.debug(f" - reconciling {node}/{depl}")
                     d = self.desired_store.get(node, depl)
                     if not d or d.phase != "SCHEDULED":
                         continue

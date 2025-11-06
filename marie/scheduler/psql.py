@@ -1,4 +1,5 @@
 import asyncio
+import json
 import math
 import socket
 import time
@@ -110,6 +111,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._gateway_ready_event = gateway_ready_event
 
         self.validate_config(config)
+        self.config = config  # Store config for listener setup
         self._fetch_event = asyncio.Event()
         self._fetch_counter = 0
         self._debounced_notify = False
@@ -125,6 +127,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._worker_tasks = None
         self._sync_dag_task = None
         self._cluster_state_monitor_task = None
+        self._dag_state_listener_task = None
+        self._listen_connection = None
         self._submission_count = 0
         self._pending_requests = {}  # Track pending requests by ID
         self._request_queue = Queue()  # Buffer up to 1000 requests
@@ -280,6 +284,290 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"Error handling job event {event_type} for job {job_id}: {e}"
             )
 
+    def _setup_dag_state_listener(self):
+        """
+        Set up a dedicated PostgreSQL connection for LISTEN/NOTIFY.
+        This connection cannot be part of the connection pool since it needs
+        to remain open for receiving notifications.
+        """
+        try:
+            config = self.config
+            self._listen_connection = psycopg2.connect(
+                user=config["username"],
+                password=config["password"],
+                database=config["database"],
+                host=config["hostname"],
+                port=int(config["port"]),
+                options='-c timezone=UTC',
+                application_name=f"{config.get('application_name', 'marie_scheduler')}_listener",
+            )
+            self._listen_connection.set_isolation_level(
+                psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
+            )
+            cursor = self._listen_connection.cursor()
+            cursor.execute("LISTEN dag_state_changed;")
+            cursor.close()
+            self.logger.info(
+                "Set up PostgreSQL LISTEN for dag_state_changed channel - "
+                f"Connection: {self._listen_connection.get_backend_pid()}"
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to set up DAG state listener: {e}")
+            raise
+
+    async def test_dag_notification(self):
+        """
+        Test method to send a test notification and verify the listener is working.
+        Can be called manually to debug notification issues.
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            test_payload = json.dumps(
+                {"dag_id": "test-dag-id", "state": "created", "op": "UPDATE"}
+            )
+            cursor.execute(
+                "SELECT pg_notify('dag_state_changed', %s);", (test_payload,)
+            )
+            conn.commit()
+            cursor.close()
+            self._close_connection(conn)
+            self.logger.info(f"Sent test notification: {test_payload}")
+        except Exception as e:
+            self.logger.error(f"Failed to send test notification: {e}")
+            raise
+
+    async def _handle_dag_state_notification(self, payload: dict):
+        """
+        Handle a DAG state change notification from PostgreSQL.
+
+        Optimized payload structure:
+        - UPDATE: {'dag_id': '<id>', 'state': '<new_state>', 'op': 'UPDATE'}
+        - DELETE: {'dag_id': '<id>', 'op': 'DELETE'}
+
+        :param payload: The notification payload with minimal fields (dag_id, state, op)
+        """
+        try:
+            op = payload.get("op")
+            dag_id = payload.get("dag_id")
+
+            if not dag_id:
+                self.logger.warning(f"Received notification without dag_id: {payload}")
+                return
+
+            self.logger.info(
+                f"Received DAG state notification: op={op}, dag_id={dag_id}"
+            )
+
+            if op == "DELETE":
+                # DAG was deleted from database, remove from MemoryFrontier
+                self.logger.info(
+                    f"DAG {dag_id} was deleted, removing from memory frontier"
+                )
+                stats = await self.frontier.finalize_dag(dag_id)
+                self.logger.info(f"Finalized DAG {dag_id} from memory: {stats}")
+
+                # Remove from active_dags tracking
+                if dag_id in self.active_dags:
+                    del self.active_dags[dag_id]
+                    self.logger.info(f"Removed DAG {dag_id} from active_dags")
+
+            elif op == "UPDATE":
+                new_state = payload.get("state")
+                self.logger.info(f"DAG {dag_id} state changed to: {new_state}")
+
+                # Handle different states appropriately
+                if new_state == "created":
+                    # DAG was reset (via reset_all or similar)
+                    # Remove from memory and re-hydrate from DB
+                    self.logger.info(
+                        f"DAG {dag_id} reset to 'created' - removing from memory and re-hydrating from DB"
+                    )
+                    stats = await self.frontier.finalize_dag(dag_id)
+                    self.logger.info(
+                        f"Removed DAG {dag_id} from memory frontier: {stats}"
+                    )
+
+                    if dag_id in self.active_dags:
+                        del self.active_dags[dag_id]
+                        self.logger.info(f"Removed DAG {dag_id} from active_dags")
+
+                    # Re-hydrate the DAG from DB with fresh state
+                    hydrated = await self.hydrate_single_dag_from_db(dag_id)
+                    if hydrated:
+                        self.logger.info(
+                            f"Successfully re-hydrated DAG {dag_id} from database"
+                        )
+                    else:
+                        self.logger.warning(
+                            f"Could not re-hydrate DAG {dag_id} - may not have eligible jobs"
+                        )
+
+                elif new_state == "cancelled":
+                    # DAG was cancelled - remove from active processing
+                    self.logger.info(
+                        f"DAG {dag_id} cancelled - removing from memory and active processing"
+                    )
+                    stats = await self.frontier.finalize_dag(dag_id)
+                    self.logger.info(
+                        f"Removed cancelled DAG {dag_id} from memory: {stats}"
+                    )
+
+                    if dag_id in self.active_dags:
+                        del self.active_dags[dag_id]
+                        self.logger.info(
+                            f"Removed cancelled DAG {dag_id} from active_dags"
+                        )
+
+                elif new_state == "suspended":
+                    # DAG was suspended - remove from active execution but keep tracked
+                    self.logger.info(
+                        f"DAG {dag_id} suspended - removing from active execution"
+                    )
+                    stats = await self.frontier.finalize_dag(dag_id)
+                    self.logger.info(
+                        f"Removed suspended DAG {dag_id} from memory: {stats}"
+                    )
+
+                    # Keep in active_dags for tracking but it won't be scheduled
+                    # When resumed, it will be re-hydrated from DB
+
+                elif new_state in ["completed", "failed"]:
+                    # DAG finished - clean up memory
+                    self.logger.info(
+                        f"DAG {dag_id} finished with state '{new_state}' - cleaning up memory"
+                    )
+                    stats = await self.frontier.finalize_dag(dag_id)
+                    self.logger.info(
+                        f"Cleaned up finished DAG {dag_id} from memory: {stats}"
+                    )
+
+                    if dag_id in self.active_dags:
+                        del self.active_dags[dag_id]
+                        self.logger.info(
+                            f"Removed finished DAG {dag_id} from active_dags"
+                        )
+
+                elif new_state in ["running", "pending"]:
+                    # DAG should be active - if not in memory, it might need hydration
+                    if dag_id not in self.active_dags:
+                        self.logger.warning(
+                            f"DAG {dag_id} is in '{new_state}' state but not in active_dags. "
+                            "It will be hydrated on next scheduler cycle."
+                        )
+
+                else:
+                    # Unknown state - log for investigation
+                    self.logger.warning(
+                        f"DAG {dag_id} changed to unknown state '{new_state}' - no action taken"
+                    )
+
+            # Wake up the scheduler to process changes
+            await self.notify_event()
+
+        except Exception as e:
+            self.logger.error(f"Error handling DAG state notification: {e}")
+            traceback.print_exc()
+
+    async def _listen_for_dag_state_changes(self):
+        """
+        Background task that listens for PostgreSQL NOTIFY events on the
+        dag_state_changed channel and processes them.
+
+        This task handles its own connection setup to avoid blocking the event loop.
+        If setup fails, it raises RuntimeFailToStart since the listener is critical
+        for maintaining consistency between database and in-memory state.
+        """
+        import json
+        import select
+
+        self.logger.info("Starting DAG state change listener")
+
+        # Set up connection in background task to avoid blocking startup
+        try:
+            self.logger.debug("Setting up PostgreSQL LISTEN connection in background")
+            await asyncio.get_event_loop().run_in_executor(
+                None, self._setup_dag_state_listener
+            )
+            self.logger.info("PostgreSQL LISTEN connection established successfully")
+        except Exception as e:
+            error_msg = f"Failed to set up DAG state listener: {e}"
+            self.logger.error(error_msg)
+            raise RuntimeFailToStart(error_msg) from e
+
+        try:
+            while self.running:
+                try:
+                    # Use select to wait for notifications with timeout
+                    # Run select in executor to avoid blocking the event loop
+                    loop = asyncio.get_event_loop()
+                    ready = await loop.run_in_executor(
+                        None,
+                        lambda: select.select([self._listen_connection], [], [], 1.0),
+                    )
+
+                    if ready == ([], [], []):
+                        # Timeout - no notifications, continue loop
+                        continue
+
+                    # Poll for notifications (also blocking, run in executor)
+                    await loop.run_in_executor(None, self._listen_connection.poll)
+
+                    # Process notifications in the main event loop
+                    while self._listen_connection.notifies:
+                        notify = self._listen_connection.notifies.pop(0)
+                        self.logger.debug(
+                            f"Received notification on channel {notify.channel}: {notify.payload}"
+                        )
+
+                        try:
+                            payload = json.loads(notify.payload)
+                            await self._handle_dag_state_notification(payload)
+                        except json.JSONDecodeError as e:
+                            self.logger.error(
+                                f"Failed to parse notification payload: {notify.payload}, error: {e}"
+                            )
+                        except Exception as e:
+                            self.logger.error(f"Error processing notification: {e}")
+                            traceback.print_exc()
+
+                except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+                    self.logger.error(
+                        f"PostgreSQL connection error in listener: {e}. Attempting to reconnect..."
+                    )
+                    try:
+                        if self._listen_connection:
+                            self._listen_connection.close()
+                        await asyncio.sleep(2)
+                        # Reconnect in executor to avoid blocking
+                        await asyncio.get_event_loop().run_in_executor(
+                            None, self._setup_dag_state_listener
+                        )
+                        self.logger.info("Successfully reconnected DAG state listener")
+                    except Exception as reconnect_error:
+                        self.logger.error(
+                            f"Failed to reconnect listener: {reconnect_error}"
+                        )
+                        await asyncio.sleep(5)
+
+                except asyncio.CancelledError:
+                    self.logger.info("DAG state listener task cancelled")
+                    break
+
+                except Exception as e:
+                    self.logger.error(f"Unexpected error in DAG state listener: {e}")
+                    traceback.print_exc()
+                    await asyncio.sleep(1)
+
+        finally:
+            if self._listen_connection:
+                try:
+                    self._listen_connection.close()
+                    self.logger.info("Closed DAG state listener connection")
+                except Exception as e:
+                    self.logger.warning(f"Error closing listener connection: {e}")
+            self._listen_connection = None
+
     def create_tables(self, schema: str):
         """
         :param schema: The name of the schema where the tables will be created.
@@ -330,7 +618,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             "delete_failed_dags_and_jobs.sql",
             "delete_orphaned_jobs.sql",
             "jobs_with_unmet_dependencies.sql",
-            # "notify_dag_state_change.sql", NOT USING CURRENTLY
+            "notify_dag_state_change.sql",
             "purge_non_started_work.sql",
             "ready_jobs_view.sql",
             "refresh_dag_durations.sql",
@@ -525,6 +813,28 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             asyncio.create_task(self._process_submission_queue(worker_id))
             for worker_id in range(self.max_workers)
         ]
+
+        # Set up and start the DAG state change listener
+        # Note: Connection setup happens in the background task to avoid blocking startup
+        # If setup fails, the task will raise RuntimeFailToStart
+        self._dag_state_listener_task = asyncio.create_task(
+            self._listen_for_dag_state_changes()
+        )
+        self.logger.info("Started DAG state change listener task")
+
+        # Wait briefly to ensure the listener connection is established
+        # This allows us to catch RuntimeFailToStart early during startup
+        try:
+            await asyncio.sleep(0.5)  # Give it time to connect
+            if self._dag_state_listener_task.done():
+                # Task completed/failed early - check for exceptions
+                await self._dag_state_listener_task  # This will re-raise any exception
+        except RuntimeFailToStart:
+            self.logger.error("Critical: DAG state listener failed to start")
+            raise
+        except Exception as e:
+            self.logger.error(f"Unexpected error in DAG state listener: {e}")
+            raise RuntimeFailToStart(f"DAG state listener failed to start: {e}") from e
 
         # self._sync_dag_task = asyncio.create_task(self._sync_dag())
         await self.notify_event()
@@ -865,7 +1175,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             # if we are a root node we have to emit a DAG-level event for job start aka activation
                             is_root = wi.job_level == max(job_levels.values())
                             if is_root:
-                                # toas tnotification
+                                # toast notification
                                 event_name = wi.data.get("name", wi.name)
                                 api_key = wi.data.get("api_key", None)
                                 metadata = wi.data.get("metadata", {})
@@ -886,17 +1196,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             self.frontier.leased_until.pop(wi.id, None)
                             await self.frontier.on_job_completed(wi.id)
                             scheduled_any = True
-
-                            self.logger.info(
-                                f'[WORK_DIST] {len(sorted_nodes)} nodes in DB.'
-                            )
-                            self.logger.info(
-                                f'[WORK_DIST] {sorted_nodes} >>> {job_levels}'
-                            )
-                            self.logger.info(
-                                f'[WORK_DIST] noop level : {job_levels.get(wi.id, -1)} == {min(job_levels.values())}'
-                            )
-
                             # Leaf nodes have minimum job_level, only resolve DAG when leaf completes
                             if job_levels.get(wi.id, -1) == min(job_levels.values()):
                                 await self.resolve_dag_status(wi.id, wi)
@@ -1122,6 +1421,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         if self._sync_dag_task:
             tasks.append(self._sync_dag_task)
+
+        if self._dag_state_listener_task:
+            tasks.append(self._dag_state_listener_task)
 
         for task in tasks:
             if task and not task.done():
@@ -2031,8 +2333,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if counts > 0:
                     self.logger.debug(f"Completed job: {job_id} : {counts}")
                 else:
-                    self.logger.error(
-                        f"Error completing job: {job_id} : {counts} \n {query}"
+                    # Job completion failed - likely state was changed (e.g., reset_all())
+                    # This is expected: job was reset while running, completion should be ignored
+                    self.logger.warning(
+                        f"Job {job_id} completion ignored - state was changed (likely reset). "
+                        "Job will be re-executed from fresh state."
                     )
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error completing job: {error}")
@@ -2531,6 +2836,132 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self._close_connection(conn)
 
         return await self._loop.run_in_executor(self._db_executor, _release_sync)
+
+    async def hydrate_single_dag_from_db(self, dag_id: str) -> bool:
+        """
+        Hydrate a specific DAG from the database into the MemoryFrontier.
+
+        :param dag_id: The ID of the DAG to hydrate
+        :return: True if DAG was hydrated, False if not found or failed
+        """
+
+        def _load_dag_and_jobs():
+            conn = self._get_connection()
+            cur = None
+            try:
+                # Get the DAG
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT dag_id, serialized_dag
+                    FROM marie_scheduler.hydrate_frontier_dags()
+                    WHERE dag_id = %s
+                    """,
+                    (dag_id,),
+                )
+                dag_row = cur.fetchone()
+                if not dag_row:
+                    return None, []
+
+                _, serialized_dag = dag_row
+
+                # Get the jobs for this DAG
+                cur.execute(
+                    """
+                    SELECT dag_id, job
+                    FROM marie_scheduler.hydrate_frontier_jobs(ARRAY[%s]::uuid[])
+                    """,
+                    (dag_id,),
+                )
+                job_rows = cur.fetchall()
+
+                conn.commit()
+                return serialized_dag, job_rows
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                if cur and not cur.closed:
+                    self._close_cursor(cur)
+                self._close_connection(conn)
+
+        try:
+            self.logger.info(f"Hydrating single DAG from DB: {dag_id}")
+
+            serialized_dag, job_rows = await self._loop.run_in_executor(
+                self._db_executor, _load_dag_and_jobs
+            )
+
+            if serialized_dag is None:
+                self.logger.warning(
+                    f"DAG {dag_id} not found in database or not eligible for hydration"
+                )
+                return False
+
+            # DAG is stored as JSON, psycopg2 returns it as dict
+            # Convert to QueryPlan object using Pydantic
+            try:
+                dag = QueryPlan.model_validate(serialized_dag)
+            except Exception as e:
+                self.logger.error(f"Failed to parse DAG {dag_id}: {e}")
+                traceback.print_exc()
+                return False
+
+            # Parse the jobs (also stored as JSON)
+            nodes = []
+            for _, job_dict in job_rows:
+                try:
+                    # Manually construct WorkInfo with field mapping and defaults
+                    # (same pattern as hydrate_from_db to handle missing fields)
+                    state_raw = job_dict.get("state")
+                    wi = WorkInfo(
+                        id=str(job_dict["id"]),
+                        name=job_dict["name"],
+                        priority=job_dict["priority"],
+                        state=WorkState(state_raw) if state_raw else None,
+                        retry_limit=job_dict["retry_limit"],
+                        start_after=job_dict["start_after"],
+                        expire_in_seconds=job_dict.get(
+                            "expire_in_seconds", 0
+                        ),  # Default to 0
+                        data=job_dict["data"],
+                        retry_delay=job_dict["retry_delay"],
+                        retry_backoff=job_dict["retry_backoff"],
+                        keep_until=job_dict["keep_until"],
+                        dag_id=dag_id,
+                        job_level=job_dict["job_level"],
+                    )
+                    # Handle dependencies separately
+                    deps = job_dict.get("dependencies") or []
+                    wi.dependencies = [str(d) for d in deps]
+                    nodes.append(wi)
+                except Exception as e:
+                    self.logger.error(f"Failed to parse job for DAG {dag_id}: {e}")
+                    traceback.print_exc()
+                    continue
+
+            if not nodes:
+                self.logger.warning(f"No jobs found for DAG {dag_id}")
+                return False
+
+            # Add to frontier
+            await self.frontier.add_dag(dag, nodes)
+
+            # Track as active
+            self.active_dags[dag_id] = dag
+
+            self.logger.info(
+                f"Successfully hydrated DAG {dag_id} with {len(nodes)} job(s)"
+            )
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to hydrate DAG {dag_id}: {e}")
+            traceback.print_exc()
+            return False
 
     async def hydrate_from_db(
         self,
