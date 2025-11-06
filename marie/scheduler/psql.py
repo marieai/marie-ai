@@ -189,7 +189,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         )
 
         dag_config = config.get("dag_manager", {})
-        dag_strategy = dag_config.get("strategy", 'fixed')  # fixed or dynamic
         min_concurrent_dags = int(dag_config.get("min_concurrent_dags", 1))
         max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
         cache_ttl_seconds = int(dag_config.get("cache_ttl_seconds", 5))
@@ -329,14 +328,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             )
 
             if op == "DELETE":
-                # DAG was deleted from database, remove from MemoryFrontier
                 self.logger.info(
                     f"DAG {dag_id} was deleted, removing from memory frontier"
                 )
                 stats = await self.frontier.finalize_dag(dag_id)
                 self.logger.info(f"Finalized DAG {dag_id} from memory: {stats}")
 
-                # Remove from active_dags tracking
                 if dag_id in self.active_dags:
                     del self.active_dags[dag_id]
                     self.logger.info(f"Removed DAG {dag_id} from active_dags")
@@ -345,7 +342,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 new_state = payload.get("state")
                 self.logger.info(f"DAG {dag_id} state changed to: {new_state}")
 
-                # Handle different states appropriately
                 if new_state == "created":
                     # DAG was reset (via reset_all or similar)
                     # Remove from memory and re-hydrate from DB
@@ -361,7 +357,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         del self.active_dags[dag_id]
                         self.logger.info(f"Removed DAG {dag_id} from active_dags")
 
-                    # Re-hydrate the DAG from DB with fresh state
                     hydrated = await self.hydrate_single_dag_from_db(dag_id)
                     if hydrated:
                         self.logger.info(
@@ -373,7 +368,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         )
 
                 elif new_state == "cancelled":
-                    # DAG was cancelled - remove from active processing
                     self.logger.info(
                         f"DAG {dag_id} cancelled - removing from memory and active processing"
                     )
@@ -389,7 +383,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         )
 
                 elif new_state == "suspended":
-                    # DAG was suspended - remove from active execution but keep tracked
                     self.logger.info(
                         f"DAG {dag_id} suspended - removing from active execution"
                     )
@@ -397,12 +390,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.info(
                         f"Removed suspended DAG {dag_id} from memory: {stats}"
                     )
-
-                    # Keep in active_dags for tracking but it won't be scheduled
-                    # When resumed, it will be re-hydrated from DB
-
                 elif new_state in ["completed", "failed"]:
-                    # DAG finished - clean up memory
                     self.logger.info(
                         f"DAG {dag_id} finished with state '{new_state}' - cleaning up memory"
                     )
@@ -426,12 +414,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         )
 
                 else:
-                    # Unknown state - log for investigation
                     self.logger.warning(
                         f"DAG {dag_id} changed to unknown state '{new_state}' - no action taken"
                     )
 
-            # Wake up the scheduler to process changes
             await self.notify_event()
 
         except Exception as e:
@@ -735,7 +721,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         candidates_by_executor[exe].append(wi.id)
 
                     active_dag_count = len(self.active_dags)
-                    self.logger.warning(
+                    self.logger.debug(
                         f"[WORK_DIST] Planner returned NO picks. Short sleep. "
                         f"Candidates count: {len(planner_candidates)} | "
                         f"Candidates by executor: {dict(candidates_by_executor)} | "
@@ -753,7 +739,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
                     continue
 
-                self.logger.info(
+                self.logger.debug(
                     f"[WORK_DIST] Planner selected {len(planned)} jobs to schedule. "
                     f"Job IDs: {[wi.id for _, wi in planned[:10]]}"
                 )
