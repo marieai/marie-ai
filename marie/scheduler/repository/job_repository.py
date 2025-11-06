@@ -595,7 +595,7 @@ class JobRepository(PostgresqlMixin):
 
                 if result and len(result) > 0:
                     row = result[0]
-                    serialized_dag = row[1]  # JSON data
+                    serialized_dag = row[0]  # JSON data (single column from query)
                     return QueryPlan.model_validate(serialized_dag)
                 return None
             except Exception as error:
@@ -1090,6 +1090,176 @@ class JobRepository(PostgresqlMixin):
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error getting defined queues: {error}")
                 return set()
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
+    # ==================== Job State Transitions ====================
+
+    async def cancel_job(
+        self, job_id: str, queue_name: str, schema: str = DEFAULT_SCHEMA
+    ) -> None:
+        """
+        Cancel a job by its ID.
+
+        :param job_id: The ID of the job to cancel
+        :param queue_name: The name of the queue
+        :param schema: The database schema (default: marie_scheduler)
+        """
+        self.logger.info(f"Cancelling job: {job_id}")
+
+        def db_call():
+            conn = None
+            try:
+                conn = self._get_connection()
+                self._execute_sql_gracefully(
+                    cancel_jobs(schema, queue_name, [job_id]),
+                    connection=conn,
+                )
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error cancelling job: {error}")
+            finally:
+                self._close_connection(conn)
+
+        await self._loop.run_in_executor(self._db_executor, db_call)
+
+    async def resume_job(
+        self, job_id: str, queue_name: str, schema: str = DEFAULT_SCHEMA
+    ) -> None:
+        """
+        Resume a job by its ID.
+
+        :param job_id: The ID of the job to resume
+        :param queue_name: The name of the queue
+        :param schema: The database schema (default: marie_scheduler)
+        """
+        self.logger.info(f"Resuming job: {job_id}")
+
+        def db_call():
+            conn = None
+            try:
+                conn = self._get_connection()
+                self._execute_sql_gracefully(
+                    resume_jobs(schema, queue_name, [job_id]), connection=conn
+                )
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error resuming job: {error}")
+            finally:
+                self._close_connection(conn)
+
+        await self._loop.run_in_executor(self._db_executor, db_call)
+
+    async def complete_job(
+        self,
+        job_id: str,
+        queue_name: str,
+        output_metadata: dict = None,
+        force: bool = False,
+        schema: str = DEFAULT_SCHEMA,
+    ) -> int:
+        """
+        Mark a job as completed.
+
+        :param job_id: The ID of the job to complete
+        :param queue_name: The name of the queue
+        :param output_metadata: Optional metadata to store with completion
+        :param force: If True, complete job regardless of current state
+        :param schema: The database schema (default: marie_scheduler)
+        :return: Number of jobs completed (0 or 1)
+        """
+        self.logger.info(f"Completing job: {job_id}")
+
+        def db_call():
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+
+                # Choose appropriate completion function based on force flag
+                if force:
+                    query = complete_jobs_by_id(
+                        schema,
+                        queue_name,
+                        [job_id],
+                        {"on_complete": "done", **(output_metadata or {})},
+                    )
+                else:
+                    query = complete_jobs(
+                        schema,
+                        queue_name,
+                        [job_id],
+                        {"on_complete": "done", **(output_metadata or {})},
+                    )
+
+                cursor = self._execute_sql_gracefully(
+                    query,
+                    return_cursor=True,
+                    connection=conn,
+                )
+                counts = cursor.fetchone()[0]
+
+                if counts > 0:
+                    self.logger.debug(f"Completed job: {job_id} : {counts}")
+                else:
+                    # Job completion failed - likely state was changed (e.g., reset_all())
+                    self.logger.warning(
+                        f"Job {job_id} completion ignored - state was changed (likely reset). "
+                        "Job will be re-executed from fresh state."
+                    )
+                return counts
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error completing job: {error}")
+                return 0
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
+    async def fail_job(
+        self,
+        job_id: str,
+        queue_name: str,
+        output_metadata: dict = None,
+        schema: str = DEFAULT_SCHEMA,
+    ) -> int:
+        """
+        Mark a job as failed.
+
+        :param job_id: The ID of the job to mark as failed
+        :param queue_name: The name of the queue
+        :param output_metadata: Optional metadata to store with failure
+        :param schema: The database schema (default: marie_scheduler)
+        :return: Number of jobs marked as failed (0 or 1)
+        """
+        self.logger.info(f"Marking job as failed: {job_id}")
+
+        def db_call():
+            cursor = None
+            conn = None
+            try:
+                conn = self._get_connection()
+                cursor = self._execute_sql_gracefully(
+                    fail_jobs_by_id(
+                        schema,
+                        queue_name,
+                        [job_id],
+                        {"on_complete": "failed", **(output_metadata or {})},
+                    ),
+                    return_cursor=True,
+                    connection=conn,
+                )
+                counts = cursor.fetchone()[0]
+                if counts > 0:
+                    self.logger.info(f"Completed failed job: {job_id}")
+                else:
+                    self.logger.error(f"Error completing failed job: {job_id}")
+                return counts
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error completing failed job: {error}")
+                return 0
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)

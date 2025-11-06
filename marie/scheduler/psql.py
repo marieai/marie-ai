@@ -1,6 +1,4 @@
 import asyncio
-import json
-import math
 import socket
 import time
 import traceback
@@ -15,10 +13,6 @@ from typing import Any, Dict, List, Tuple
 
 import psycopg2
 
-from marie.constants import (
-    __default_psql_dir__,
-    __default_schema_dir__,
-)
 from marie.excepts import BadConfigSource, RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobStatus
@@ -45,25 +39,22 @@ from marie.scheduler.planner_util import (
     get_node_from_dag,
     query_plan_work_items,
 )
+from marie.scheduler.repository import JobRepository
 from marie.scheduler.repository.plans import (
-    cancel_jobs,
-    complete_jobs,
-    complete_jobs_by_id,
-    create_queue,
-    fail_jobs_by_id,
     insert_dag,
     insert_job,
-    insert_version,
-    load_dag,
     mark_as_active_dags,
     mark_as_active_jobs,
-    resume_jobs,
     to_timestamp_with_tz,
     try_set_monitor_time,
-    version_table_exists,
 )
 from marie.scheduler.scheduler_heartbeat import SchedulerHeartbeat
 from marie.scheduler.scheduler_repository import SchedulerRepository
+from marie.scheduler.services import (
+    DAGManagementService,
+    MaintenanceService,
+    NotificationService,
+)
 from marie.scheduler.state import WorkState
 from marie.scheduler.util import (
     adjust_backoff,
@@ -153,25 +144,43 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             raise BadConfigSource("Queue names are required for JobScheduler")
         self.logger.info(f"Queue names to monitor: {self.known_queues}")
 
-        self.active_dags = {}
         self.job_manager = job_manager
         self._loop = get_or_reuse_loop()
         self._setup_event_subscriptions()
         self._setup_storage(config, connection_only=True)
         self._db = SchedulerRepository(config)
 
-        # Initialize JobRepository for database operations
-        from marie.scheduler.repository import JobRepository
-
         self.repository = JobRepository(config, max_workers=self.max_workers)
-
-        # Initialize NotificationService for PostgreSQL LISTEN/NOTIFY
-        from marie.scheduler.services import NotificationService
-
         self.notification_service = NotificationService(config)
-        # Register handler for DAG state changes
+
+        # Initialize scheduler state (frontier and active_dags)
+        self.frontier = MemoryFrontier()
+        self.active_dags = {}
+
+        # Initialize DAGManagementService for DAG lifecycle management
+        # Service operates on scheduler's frontier and active_dags
+        self.dag_service = DAGManagementService(
+            repository=self.repository,
+            frontier=self.frontier,
+            active_dags=self.active_dags,
+            loop=self._loop,
+            executor=self._db_executor,
+            notify_callback=self.notify_event,
+        )
+
+        # Register handler for DAG state changes (delegate to DAGManagementService)
         self.notification_service.register_handler(
-            channel='dag_state_changed', handler=self._handle_dag_state_notification
+            channel='dag_state_changed', handler=self.dag_service.handle_state_change
+        )
+
+        # Initialize MaintenanceService for periodic cleanup tasks
+        maintenance_interval = config.get("maintenance_interval", 60)  # Default: 60s
+        self.maintenance_service = MaintenanceService(
+            repository=self.repository,
+            loop=self._loop,
+            executor=self._db_executor,
+            notify_callback=self.notify_event,
+            maintenance_interval=maintenance_interval,
         )
 
         self.execution_planner = GlobalPriorityExecutionPlanner()
@@ -200,7 +209,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self.max_concurrent_dags = max_concurrent_dags
         self._start_time = datetime.now(timezone.utc)
-        self.frontier = MemoryFrontier()
 
         self.frontier_batch_size = int(dag_config.get("frontier_batch_size", 1000))
         self.lease_ttl_seconds: int = int(config.get("lease_ttl_seconds", 5))
@@ -538,6 +546,16 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         except Exception as e:
             self.logger.error(f"Unexpected error starting NotificationService: {e}")
             raise RuntimeFailToStart(f"NotificationService failed to start: {e}") from e
+
+        # Start the MaintenanceService for periodic cleanup tasks
+        try:
+            await self.maintenance_service.start()
+            self.logger.info(
+                f"Started MaintenanceService (interval: {self.maintenance_service.maintenance_interval}s)"
+            )
+        except Exception as e:
+            self.logger.error(f"Error starting MaintenanceService: {e}")
+            # Non-critical - continue without maintenance service
 
         # self._sync_dag_task = asyncio.create_task(self._sync_dag())
         await self.notify_event()
@@ -1132,6 +1150,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         except Exception as e:
             self.logger.error(f"Error stopping NotificationService: {e}")
 
+        # Stop MaintenanceService
+        try:
+            await self.maintenance_service.stop()
+            self.logger.info("Stopped MaintenanceService")
+        except Exception as e:
+            self.logger.error(f"Error stopping MaintenanceService: {e}")
+
         for task in tasks:
             if task and not task.done():
                 try:
@@ -1335,7 +1360,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         ref_type = work_info.data.get("metadata", {}).get("ref_type", "")
         ref_id = work_info.data.get("metadata", {}).get("ref_id", "")
 
-        # Delegate to repository
         return await self.repository.get_job_by_policy(ref_type, ref_id)
 
     async def list_jobs(
@@ -1716,48 +1740,32 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def cancel_job(self, job_id: str, work_item: WorkInfo) -> None:
         """
         Cancel a job by its ID.
+        Delegates to JobRepository.
+
         :param job_id: The ID of the job.
         :param work_item: The work item to cancel.
         """
-        self.logger.info(f"Cancelling job: {job_id}")
-
-        def db_call():
-            conn = None
-            try:
-                conn = self._get_connection()
-                self._execute_sql_gracefully(
-                    cancel_jobs(DEFAULT_SCHEMA, work_item.name, [job_id]),
-                    connection=conn,
-                )
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error cancelling job: {error}")
-            finally:
-                self._close_connection(conn)
-
         async with self._status_update_lock[job_id]:
-            await self._loop.run_in_executor(self._db_executor, db_call)
+            await self.repository.cancel_job(
+                job_id=job_id,
+                queue_name=work_item.name,
+                schema=DEFAULT_SCHEMA,
+            )
 
     async def resume_job(self, job_id: str) -> None:
         """
         Resume a job by its ID.
-        :param job_id:
+        Delegates to JobRepository.
+
+        :param job_id: The ID of the job to resume
         """
-        name = "extract"  # TODO this is a placeholder
-        self.logger.info(f"Resuming job: {job_id}")
-
-        def db_call():
-            conn = None
-            try:
-                conn = self._get_connection()
-                self._execute_sql_gracefully(
-                    resume_jobs(DEFAULT_SCHEMA, name, [job_id]), connection=conn
-                )
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error resuming job: {error}")
-            finally:
-                self._close_connection(conn)
-
-        await self._loop.run_in_executor(self._db_executor, db_call)
+        # TODO: This queue name is a placeholder - should be determined from job metadata
+        queue_name = "extract"
+        await self.repository.resume_job(
+            job_id=job_id,
+            queue_name=queue_name,
+            schema=DEFAULT_SCHEMA,
+        )
 
     async def put_status(
         self,
@@ -1810,49 +1818,32 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def maintenance(self):
         """
         Performs the maintenance process, including expiring, archiving, and purging.
+        Delegates to MaintenanceService.
 
         :return: None
         """
-        try:
-            await self.expire()
-            await self.archive()
-            await self.purge()
-        except Exception as e:
-            self.logger.error(f"Error in maintenance: {e}")
+        await self.maintenance_service.maintenance()
 
     async def expire(self):
-        """Expire jobs with expired leases."""
-        self.logger.debug("Checking for expired job leases")
-
-        def db_call():
-            """Sync DB call to release expired leases."""
-            conn = None
-            released_count = 0
-            try:
-                conn = self._get_connection()
-                query = "SELECT marie_scheduler.release_expired_leases()"
-                result = self._execute_sql_gracefully(query, connection=conn)
-
-                if result and isinstance(result, list) and len(result) > 0:
-                    count = result[0][0]
-                    if count:
-                        released_count = count
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Failed to expire jobs: {error}", exc_info=True)
-            finally:
-                self._close_connection(conn)
-            return released_count
-
-        released_count = await self._loop.run_in_executor(self._db_executor, db_call)
-        if released_count > 0:
-            self.logger.info(f"Released expired job leases : {released_count}")
-            await self.notify_event()
+        """
+        Expire jobs with expired leases.
+        Delegates to MaintenanceService.
+        """
+        await self.maintenance_service.expire()
 
     async def archive(self):
-        self.logger.info("Archiving jobs")
+        """
+        Archive completed jobs.
+        Delegates to MaintenanceService.
+        """
+        await self.maintenance_service.archive()
 
     async def purge(self):
-        self.logger.info("Purging jobs")
+        """
+        Purge old archived jobs.
+        Delegates to MaintenanceService.
+        """
+        await self.maintenance_service.purge()
 
     def _setup_event_subscriptions(self):
         self.job_manager.event_publisher.subscribe(
@@ -1931,97 +1922,43 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         output_metadata: dict = None,
         force=False,
     ):
-        self.logger.info(f"Job completed : {job_id}")
+        """
+        Mark a job as completed.
+        Delegates to JobRepository.
 
-        def db_call():
-            def complete_jobs_wrapper(
-                schema: str, name: str, ids: list, output: dict, _force: bool
-            ):
-                if _force:
-                    return complete_jobs_by_id(schema, name, ids, output)
-                else:
-                    return complete_jobs(schema, name, ids, output)
-
-            conn = None
-            cursor = None
-            try:
-                conn = self._get_connection()
-                if False:
-                    sql_probe = """
-                                SELECT id, name, state, lease_owner, completed_on
-                                FROM marie_scheduler.job
-                                WHERE id = ANY (%s::uuid[]);
-                                """
-                    with conn, conn.cursor() as cur:
-                        ids = [job_id]
-                        cur.execute(sql_probe, (ids,))
-                        self.logger.info(f"pre-complete probe rows={cur.fetchall()}")
-
-                query = complete_jobs_wrapper(
-                    DEFAULT_SCHEMA,
-                    work_item.name,
-                    [job_id],
-                    {"on_complete": "done", **(output_metadata or {})},
-                    force,
-                )
-                cursor = self._execute_sql_gracefully(
-                    query,
-                    return_cursor=True,
-                    connection=conn,
-                )
-                counts = cursor.fetchone()[0]
-                if counts > 0:
-                    self.logger.debug(f"Completed job: {job_id} : {counts}")
-                else:
-                    # Job completion failed - likely state was changed (e.g., reset_all())
-                    # This is expected: job was reset while running, completion should be ignored
-                    self.logger.warning(
-                        f"Job {job_id} completion ignored - state was changed (likely reset). "
-                        "Job will be re-executed from fresh state."
-                    )
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error completing job: {error}")
-            finally:
-                self._close_cursor(cursor)
-                self._close_connection(conn)
-
+        :param job_id: The ID of the job to complete
+        :param work_item: The work item containing queue name
+        :param output_metadata: Optional metadata to store with completion
+        :param force: If True, complete job regardless of current state
+        """
         async with self._status_update_lock[job_id]:
-            await self._loop.run_in_executor(self._db_executor, db_call)
+            await self.repository.complete_job(
+                job_id=job_id,
+                queue_name=work_item.name,
+                output_metadata=output_metadata,
+                force=force,
+                schema=DEFAULT_SCHEMA,
+            )
             # self._job_cache.pop(job_id, None) # invalidate cache
 
     async def fail(
         self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
     ):
-        self.logger.info(f"Job failed : {job_id}")
+        """
+        Mark a job as failed.
+        Delegates to JobRepository.
 
-        def db_call():
-            cursor = None
-            conn = None
-            try:
-                conn = self._get_connection()
-                cursor = self._execute_sql_gracefully(
-                    fail_jobs_by_id(
-                        DEFAULT_SCHEMA,
-                        work_item.name,
-                        [job_id],
-                        {"on_complete": "failed", **(output_metadata or {})},
-                    ),
-                    return_cursor=True,
-                    connection=conn,
-                )
-                counts = cursor.fetchone()[0]
-                if counts > 0:
-                    self.logger.info(f"Completed failed job: {job_id}")
-                else:
-                    self.logger.error(f"Error completing failed job: {job_id}")
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error completing failed job: {error}")
-            finally:
-                self._close_cursor(cursor)
-                self._close_connection(conn)
-
+        :param job_id: The ID of the job to mark as failed
+        :param work_item: The work item containing queue name
+        :param output_metadata: Optional metadata to store with failure
+        """
         async with self._status_update_lock[job_id]:
-            await self._loop.run_in_executor(self._db_executor, db_call)
+            await self.repository.fail_job(
+                job_id=job_id,
+                queue_name=work_item.name,
+                output_metadata=output_metadata,
+                schema=DEFAULT_SCHEMA,
+            )
             # self._job_cache.pop(job_id, None) # invalidate cache
 
     async def _sync(self):
@@ -2181,12 +2118,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.logger.debug(f"DAG sync polling stopped")
 
     def _remove_dag_from_memory(self, dag_id: str, reason: str):
-        """Centralized method to remove DAG from memory with logging"""
-        if dag_id in self.active_dags:
-            del self.active_dags[dag_id]
-            self.logger.warning(f"Removed DAG {dag_id} from active_dags ({reason})")
-        else:
-            self.logger.debug(f"DAG {dag_id} not in active_dags ({reason})")
+        """
+        Centralized method to remove DAG from memory with logging.
+        Delegates to DAGManagementService.
+        """
+        self.dag_service.remove_dag(dag_id, reason)
 
     async def notify_event(self) -> bool:
         if self._debounced_notify:
@@ -2294,38 +2230,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         Retrieves a DAG by its ID, using in-memory cache if available.
         Falls back to loading from db if missing.
+        Delegates to DAGManagementService.
         """
-        # Return from cache if present
-        if dag_id in self.active_dags:
-            return self.active_dags[dag_id]
-
-        def db_call() -> QueryPlan | None:
-            cursor = None
-            conn = None
-            try:
-                conn = self._get_connection()
-                cursor = self._execute_sql_gracefully(
-                    load_dag(DEFAULT_SCHEMA, dag_id),
-                    return_cursor=True,
-                    connection=conn,
-                )
-                result = cursor.fetchone()
-                if result and result[0]:
-                    dag_definition = result[0]
-                    dag = QueryPlan(**dag_definition)
-                    self.logger.debug(f"Loaded DAG from DB: {dag_id}")
-                    return dag
-                else:
-                    self.logger.warning(f"DAG not found in DB: {dag_id}")
-                    return None
-            except Exception as e:
-                self.logger.error(f"Error loading DAG {dag_id}: {e}")
-                return None
-            finally:
-                self._close_cursor(cursor)
-                self._close_connection(conn)
-
-        return await self._loop.run_in_executor(self._db_executor, db_call)
+        return await self.dag_service.get_dag(dag_id)
 
     def get_available_slots(self) -> dict[str, int]:
         return available_slots_by_executor(ClusterState.deployments)
@@ -2334,38 +2241,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         Reset the active DAGs dictionary, clearing all currently tracked DAGs.
         This can be useful for debugging or when you need to force a fresh state.
+        Delegates to DAGManagementService.
 
         Returns:
             dict: Information about the reset operation including count of cleared DAGs
         """
-        try:
-            cleared_count = len(self.active_dags) if self.active_dags else 0
-            cleared_dags = list(self.active_dags.keys()) if self.active_dags else []
-
-            for dag_id in cleared_dags:
-                await self.frontier.finalize_dag(dag_id)
-
-            self.active_dags = {}
-
-            self.logger.info(f"Reset active DAGs: cleared {cleared_count} DAGs")
-            if cleared_dags:
-                self.logger.debug(f"Cleared DAGs: {cleared_dags}")
-
-            return {
-                "success": True,
-                "cleared_count": cleared_count,
-                "cleared_dags": cleared_dags,
-                "message": f"Successfully rescheduling summary for this cycle active DAGs, cleared {cleared_count} DAGs",
-            }
-        except Exception as e:
-            error_msg = f"Failed to reset active DAGs: {str(e)}"
-            self.logger.error(error_msg)
-            return {
-                "success": False,
-                "error": error_msg,
-                "cleared_count": 0,
-                "cleared_dags": [],
-            }
+        return await self.dag_service.reset_all_dags()
 
     async def _lease_jobs_db(self, job_name: str, ids: list[str]) -> set[str]:
         """
@@ -2379,7 +2260,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not self.distributed_scheduler:
             return set(ids)
 
-        # Delegate to repository
         return await self.repository.lease_jobs(
             job_ids=ids,
             owner=self.lease_owner,
@@ -2398,7 +2278,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not self.distributed_scheduler:
             return set(ids)
 
-        # Delegate to repository
         return await self.repository.activate_from_lease(
             job_ids=ids, owner=self.lease_owner, run_ttl_seconds=self.run_ttl_seconds
         )
@@ -2414,89 +2293,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not self.distributed_scheduler:
             return set(ids)
 
-        # Delegate to repository
         return await self.repository.release_lease(job_ids=ids)
 
     async def hydrate_single_dag_from_db(self, dag_id: str) -> bool:
         """
         Hydrate a specific DAG from the database into the MemoryFrontier.
+        Delegates to DAGManagementService.
 
         :param dag_id: The ID of the DAG to hydrate
         :return: True if DAG was hydrated, False if not found or failed
         """
-        try:
-            self.logger.info(f"Hydrating single DAG from DB: {dag_id}")
-
-            # Load DAG and jobs from repository
-            serialized_dag, job_rows = await self.repository.load_dag_and_jobs(dag_id)
-
-            if serialized_dag is None:
-                self.logger.warning(
-                    f"DAG {dag_id} not found in database or not eligible for hydration"
-                )
-                return False
-
-            # DAG is stored as JSON, psycopg2 returns it as dict
-            # Convert to QueryPlan object using Pydantic
-            try:
-                dag = QueryPlan.model_validate(serialized_dag)
-            except Exception as e:
-                self.logger.error(f"Failed to parse DAG {dag_id}: {e}")
-                traceback.print_exc()
-                return False
-
-            # Parse the jobs (also stored as JSON)
-            nodes = []
-            for _, job_dict in job_rows:
-                try:
-                    # Manually construct WorkInfo with field mapping and defaults
-                    # (same pattern as hydrate_from_db to handle missing fields)
-                    state_raw = job_dict.get("state")
-                    wi = WorkInfo(
-                        id=str(job_dict["id"]),
-                        name=job_dict["name"],
-                        priority=job_dict["priority"],
-                        state=WorkState(state_raw) if state_raw else None,
-                        retry_limit=job_dict["retry_limit"],
-                        start_after=job_dict["start_after"],
-                        expire_in_seconds=job_dict.get(
-                            "expire_in_seconds", 0
-                        ),  # Default to 0
-                        data=job_dict["data"],
-                        retry_delay=job_dict["retry_delay"],
-                        retry_backoff=job_dict["retry_backoff"],
-                        keep_until=job_dict["keep_until"],
-                        dag_id=dag_id,
-                        job_level=job_dict["job_level"],
-                    )
-                    # Handle dependencies separately
-                    deps = job_dict.get("dependencies") or []
-                    wi.dependencies = [str(d) for d in deps]
-                    nodes.append(wi)
-                except Exception as e:
-                    self.logger.error(f"Failed to parse job for DAG {dag_id}: {e}")
-                    traceback.print_exc()
-                    continue
-
-            if not nodes:
-                self.logger.warning(f"No jobs found for DAG {dag_id}")
-                return False
-
-            # Add to frontier
-            await self.frontier.add_dag(dag, nodes)
-
-            # Track as active
-            self.active_dags[dag_id] = dag
-
-            self.logger.info(
-                f"Successfully hydrated DAG {dag_id} with {len(nodes)} job(s)"
-            )
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Failed to hydrate DAG {dag_id}: {e}")
-            traceback.print_exc()
-            return False
+        return await self.dag_service.hydrate_single_dag(dag_id)
 
     async def hydrate_from_db(
         self,
@@ -2505,234 +2312,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         log_every_seconds: float = 2.0,
     ) -> None:
         """
-        Rebuild MemoryFrontier from DB in two phases with progress & timing logs:
-          1) Stream DAGs that still have unfinished work (created/retry).
-          2) In batches of DAG IDs, stream their unfinished jobs with already-filtered deps.
-          3) Add once per DAG: self.frontier.add_dag(dag, nodes)
+        Rebuild MemoryFrontier from DB in two phases with progress & timing logs.
+        Delegates to DAGManagementService.
+
+        :param dag_batch_size: Number of DAGs to process in each batch
+        :param itersize: Cursor iteration size for streaming
+        :param log_every_seconds: How often to log progress
         """
-
-        def _stream_dags():
-            conn = self._get_connection()
-            cur = None
-            try:
-                cur = conn.cursor(name="hydrate_frontier_dags")
-                cur.itersize = itersize
-                cur.execute(
-                    "SELECT dag_id, serialized_dag FROM marie_scheduler.hydrate_frontier_dags()"
-                )
-                for dag_id, serialized_dag in cur:
-                    yield dag_id, serialized_dag
-                if cur and not cur.closed:
-                    self._close_cursor(cur)
-                cur = None  # so we don't try to close again in finally
-                conn.commit()
-            except Exception:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                raise
-            finally:
-                if cur and not cur.closed:
-                    self._close_cursor(cur)
-                self._close_connection(conn)
-
-        t0 = time.monotonic()
-        self.logger.info("Hydrate: phase 1 (DAG discovery) started…")
-
-        dag_rows = await self._loop.run_in_executor(
-            self._db_executor, lambda: list(_stream_dags())
+        await self.dag_service.hydrate_bulk(
+            dag_batch_size=dag_batch_size,
+            itersize=itersize,
+            log_every_seconds=log_every_seconds,
         )
-        discover_elapsed = time.monotonic() - t0
-        self.logger.info(
-            f"Hydrate: phase 1 complete — discovered {len(dag_rows)} DAG(s) in {discover_elapsed:.2f}s "
-            f"({(len(dag_rows) / discover_elapsed if discover_elapsed > 0 else 0):.1f} DAGs/sec)."
-        )
-
-        # Build map of dag_id -> QueryPlan
-        dags: dict[str, QueryPlan] = {}
-        dag_ids_ordered: list[str] = []
-        parse_skipped = 0
-        for dag_id, dag_def in dag_rows:
-            if not dag_def:
-                parse_skipped += 1
-                self.logger.warning(
-                    f"Hydrate: DAG {dag_id} has no serialized_dag; skipping."
-                )
-                continue
-            try:
-                dags[str(dag_id)] = QueryPlan(**dag_def)
-                dag_ids_ordered.append(str(dag_id))
-            except Exception as e:
-                parse_skipped += 1
-                self.logger.error(f"Hydrate: unable to parse DAG {dag_id}: {e}")
-
-        if not dags:
-            total_elapsed = time.monotonic() - t0
-            self.logger.info(
-                f"Hydrate: no DAGs to hydrate (skipped {parse_skipped}). Done in {total_elapsed:.2f}s."
-            )
-            await self.notify_event()
-            return
-
-        self.logger.info(
-            f"Hydrate: {len(dags)} DAG(s) ready for job loading "
-            f"(skipped {parse_skipped}, total discovered {len(dag_rows)})."
-        )
-
-        def _stream_jobs_for_batch(dag_ids_batch):
-            conn = self._get_connection()
-            cur = None
-            try:
-                dag_ids_text = [
-                    str(x) for x in dag_ids_batch
-                ]  # ensure strings so psycopg2 adapts them cleanly when casting to uuid[]
-                cur = conn.cursor(name="hydrate_frontier_jobs")
-                cur.itersize = itersize
-                cur.execute(
-                    "SELECT dag_id, job FROM marie_scheduler.hydrate_frontier_jobs((%s)::uuid[])",
-                    (dag_ids_text,),
-                )
-                for row in cur:
-                    yield row
-                if cur and not cur.closed:
-                    self._close_cursor(cur)
-                cur = None
-                conn.commit()
-            except Exception:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                raise
-            finally:
-                if cur and not cur.closed:
-                    self._close_cursor(cur)
-                self._close_connection(conn)
-
-        def _chunks(seq, n):
-            for i in range(0, len(seq), n):
-                yield seq[i : i + n]
-
-        self.logger.info(
-            f"Hydrate: phase 2 (job loading) — {len(dag_ids_ordered)} DAG(s), "
-            f"batch size {dag_batch_size}, cursor itersize {itersize}."
-        )
-
-        buckets: dict[str, list[WorkInfo]] = defaultdict(list)
-
-        # Progress counters
-        total_dags = len(dag_ids_ordered)
-        processed_dags = 0
-        processed_jobs = 0
-        last_log_t = time.monotonic()
-        phase2_start = last_log_t
-
-        # For batch-level logging
-        batch_idx = 0
-        for batch in _chunks(dag_ids_ordered, dag_batch_size):
-            batch_idx += 1
-            b_start = time.monotonic()
-
-            rows = await self._loop.run_in_executor(
-                self._db_executor, lambda: list(_stream_jobs_for_batch(batch))
-            )
-
-            for dag_id, j in rows:
-                dag_id = str(dag_id)
-                if dag_id not in dags:
-                    continue
-                try:
-                    state_raw = j.get("state")
-                    wi = WorkInfo(
-                        id=str(j["id"]),
-                        name=j["name"],
-                        priority=j["priority"],
-                        state=WorkState(state_raw) if state_raw else None,
-                        retry_limit=j["retry_limit"],
-                        start_after=j["start_after"],
-                        expire_in_seconds=0,  # map INTERVAL to seconds
-                        data=j["data"],
-                        retry_delay=j["retry_delay"],
-                        retry_backoff=j["retry_backoff"],
-                        keep_until=j["keep_until"],
-                        dag_id=dag_id,
-                        job_level=j["job_level"],
-                    )
-                    deps = j.get("dependencies") or []
-                    wi.dependencies = [str(d) for d in deps]
-                    buckets[dag_id].append(wi)
-                    processed_jobs += 1
-                except Exception as e:
-                    self.logger.error(
-                        f"Hydrate: failed to build WorkInfo for DAG {dag_id}: {e}"
-                    )
-
-            processed_dags += len(batch)
-            b_elapsed = time.monotonic() - b_start
-            jobs_in_batch = len(rows)
-            job_rate = jobs_in_batch / b_elapsed if b_elapsed > 0 else 0.0
-
-            now = time.monotonic()
-            if (now - last_log_t) >= log_every_seconds:
-                overall_elapsed = now - phase2_start
-                overall_rate = (
-                    processed_jobs / overall_elapsed if overall_elapsed > 0 else 0.0
-                )
-                pct = (processed_dags / total_dags) * 100.0
-                # ETA by DAG batches (rough) — avoids needing total jobs in advance
-                remaining_dags = max(0, total_dags - processed_dags)
-                dags_per_sec = (len(batch) / b_elapsed) if b_elapsed > 0 else 0.0
-                eta_s = (
-                    (remaining_dags / dags_per_sec) if dags_per_sec > 0 else math.inf
-                )
-
-                self.logger.info(
-                    f"Hydrate: batch {batch_idx} — "
-                    f"{len(batch)} DAG(s) in {b_elapsed:.2f}s, {jobs_in_batch} jobs "
-                    f"({job_rate:.1f} jobs/s). "
-                    f"Progress: {processed_dags}/{total_dags} DAGs ({pct:.1f}%), "
-                    f"{processed_jobs} jobs total, "
-                    f"overall {overall_rate:.1f} jobs/s, "
-                    f"ETA ~ {eta_s:.1f}s."
-                )
-                last_log_t = now
-
-        add_start = time.monotonic()
-        added = 0
-        total_pending_jobs = 0
-        for dag_id, nodes in buckets.items():
-            if not nodes:
-                continue
-            try:
-                await self.frontier.add_dag(dags[dag_id], nodes)
-                added += 1
-                total_pending_jobs += len(nodes)
-            except Exception as e:
-                self.logger.error(f"Hydrate: frontier.add_dag failed for {dag_id}: {e}")
-        add_elapsed = time.monotonic() - add_start
-
-        total_elapsed = time.monotonic() - t0
-        self.logger.info(
-            f"Hydrate: complete — {added} DAG(s) added to frontier, "
-            f"{total_pending_jobs} pending jobs. "
-            f"Add phase {add_elapsed:.2f}s, total elapsed {total_elapsed:.2f}s."
-        )
-
-        snap = self.frontier.summary(detail=True, top_n=3)
-        print('Frontier snapshot:', snap)
-        self.logger.info(
-            "Frontier: dags=%s jobs=%s ready=%s leased=%s age(p50/p90/max)=%.1f/%.1f/%.1f",
-            snap["totals"]["dags"],
-            snap["totals"]["jobs"],
-            snap["totals"]["ready"],
-            snap["totals"]["leased"],
-            snap["ready_age_seconds"]["p50"],
-            snap["ready_age_seconds"]["p90"],
-            snap["ready_age_seconds"]["max"],
-        )
-
-        await self.notify_event()
 
     async def __monitor_deployment_updates(self):
         """
