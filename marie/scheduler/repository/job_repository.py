@@ -3,7 +3,7 @@ import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import psycopg2
 import psycopg2.extras
@@ -273,14 +273,21 @@ class JobRepository(PostgresqlMixin):
     # ==================== Job State Management ====================
 
     async def update_job_state(
-        self, job_id: str, state: WorkState, output: Optional[Dict] = None
+        self,
+        job_id: str,
+        state: WorkState,
+        output: Optional[Dict] = None,
+        started_on: Optional[datetime] = None,
+        completed_on: Optional[datetime] = None,
     ) -> bool:
         """
-        Update the state of a job.
+        Update the state of a job with optional timestamps.
 
         :param job_id: Job ID
         :param state: New state
         :param output: Optional output data
+        :param started_on: Optional start timestamp
+        :param completed_on: Optional completion timestamp
         :return: True if updated, False otherwise
         """
 
@@ -291,24 +298,32 @@ class JobRepository(PostgresqlMixin):
                 conn = self._get_connection()
                 cursor = conn.cursor()
 
+                # Build dynamic UPDATE fields
+                update_fields = ["state = %s"]
+                params = [state.value]
+
                 if output:
-                    cursor.execute(
-                        f"""
-                        UPDATE {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
-                        SET state = %s, output = %s, completed_on = now()
-                        WHERE id = %s
-                        """,
-                        (state.value, Json(output), job_id),
-                    )
-                else:
-                    cursor.execute(
-                        f"""
-                        UPDATE {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
-                        SET state = %s
-                        WHERE id = %s
-                        """,
-                        (state.value, job_id),
-                    )
+                    update_fields.append("output = %s")
+                    params.append(Json(output))
+
+                if started_on:
+                    update_fields.append("started_on = %s")
+                    params.append(started_on)
+
+                if completed_on:
+                    update_fields.append("completed_on = %s")
+                    params.append(completed_on)
+
+                params.append(job_id)  # WHERE clause parameter
+
+                cursor.execute(
+                    f"""
+                    UPDATE {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                    SET {', '.join(update_fields)}
+                    WHERE id = %s
+                    """,
+                    tuple(params),
+                )
 
                 updated = cursor.rowcount > 0
                 conn.commit()
@@ -324,11 +339,12 @@ class JobRepository(PostgresqlMixin):
 
         return await self._loop.run_in_executor(self._db_executor, db_call)
 
-    async def mark_jobs_as_active(self, job_ids: List[str]) -> int:
+    async def mark_jobs_as_active(self, job_ids: List[str], job_name: str) -> int:
         """
         Mark multiple jobs as active.
 
         :param job_ids: List of job IDs to mark as active
+        :param job_name: Name of the job queue
         :return: Number of jobs marked as active
         """
         if not job_ids:
@@ -338,9 +354,9 @@ class JobRepository(PostgresqlMixin):
             conn = None
             try:
                 conn = self._get_connection()
-                query = mark_as_active_jobs(DEFAULT_SCHEMA, job_ids)
+                query = mark_as_active_jobs(DEFAULT_SCHEMA, job_name, job_ids)
                 result = self._execute_sql_gracefully(query, connection=conn)
-                return result if result else 0
+                return len(result) if result else 0
             except Exception as error:
                 self.logger.error(f"Error marking jobs as active: {error}")
                 return 0
@@ -372,7 +388,8 @@ class JobRepository(PostgresqlMixin):
                     query = complete_jobs_by_id(DEFAULT_SCHEMA, job_ids, None)
 
                 result = self._execute_sql_gracefully(query, connection=conn)
-                return result if result else 0
+                # Extract count from SELECT COUNT(*) result: [(count,)]
+                return result[0][0] if result and len(result) > 0 else 0
             except Exception as error:
                 self.logger.error(f"Error completing jobs: {error}")
                 return 0
@@ -399,7 +416,8 @@ class JobRepository(PostgresqlMixin):
                 output = Json({"error": error_message})
                 query = fail_jobs_by_id(DEFAULT_SCHEMA, job_ids, output)
                 result = self._execute_sql_gracefully(query, connection=conn)
-                return result if result else 0
+                # Extract count from SELECT COUNT(*) result: [(count,)]
+                return result[0][0] if result and len(result) > 0 else 0
             except Exception as error:
                 self.logger.error(f"Error failing jobs: {error}")
                 return 0
@@ -424,7 +442,8 @@ class JobRepository(PostgresqlMixin):
                 conn = self._get_connection()
                 query = cancel_jobs(DEFAULT_SCHEMA, job_ids)
                 result = self._execute_sql_gracefully(query, connection=conn)
-                return result if result else 0
+                # Extract count from SELECT COUNT(*) result: [(count,)]
+                return result[0][0] if result and len(result) > 0 else 0
             except Exception as error:
                 self.logger.error(f"Error cancelling jobs: {error}")
                 return 0
@@ -449,7 +468,8 @@ class JobRepository(PostgresqlMixin):
                 conn = self._get_connection()
                 query = resume_jobs(DEFAULT_SCHEMA, job_ids)
                 result = self._execute_sql_gracefully(query, connection=conn)
-                return result if result else 0
+                # Extract count from SELECT COUNT(*) result: [(count,)]
+                return result[0][0] if result and len(result) > 0 else 0
             except Exception as error:
                 self.logger.error(f"Error resuming jobs: {error}")
                 return 0
@@ -607,9 +627,80 @@ class JobRepository(PostgresqlMixin):
 
         return await self._loop.run_in_executor(self._db_executor, db_call)
 
+    async def create_dag_with_jobs(
+        self,
+        dag_id: str,
+        plan: QueryPlan,
+        dag_nodes: List[WorkInfo],
+        work_info: WorkInfo,
+    ) -> Tuple[bool, str]:
+        """
+        Create a DAG and its associated jobs in a single transaction.
+        This is the primary method for DAG creation during job submission.
+
+        :param dag_id: Unique identifier for the DAG
+        :param plan: The query plan representing the DAG structure
+        :param dag_nodes: List of WorkInfo objects representing individual jobs in the DAG
+        :param work_info: Original WorkInfo object containing DAG-level metadata (SLA, planner)
+        :return: Tuple of (new_key_added: bool, new_dag_key: str)
+        """
+
+        def db_call() -> Tuple[bool, str]:
+            dag_name = f"{dag_id}_dag"
+            connection = None
+            cursor = None
+            new_key_added = False
+            try:
+                json_serialized_dag = plan.model_dump()
+                # Extract planner name from work_info metadata
+                planner_name = work_info.data.get("metadata", {}).get("planner", None)
+
+                connection = self._get_connection()
+                cursor = self._execute_sql_gracefully(
+                    insert_dag(
+                        DEFAULT_SCHEMA,
+                        dag_id,
+                        dag_name,
+                        json_serialized_dag,
+                        work_info.soft_sla,
+                        work_info.hard_sla,
+                        planner_name,
+                    ),
+                    connection=connection,
+                    return_cursor=True,
+                )
+                # Check if DAG was inserted (ON CONFLICT DO NOTHING returns no rows if exists)
+                result = cursor.fetchone() if cursor else None
+                new_dag_key = result[0] if result else None
+                # new_key_added indicates if this is a new submission (DAG was created)
+                new_key_added = result is not None
+                self._close_cursor(cursor)
+
+                # Insert all jobs in the DAG
+                for i, dag_work_info in enumerate(dag_nodes):
+                    cursor = self._execute_sql_gracefully(
+                        insert_job(DEFAULT_SCHEMA, dag_work_info),
+                        connection=connection,
+                        return_cursor=True,
+                    )
+                    self._close_cursor(cursor)
+
+                connection.commit()
+                return new_key_added, new_dag_key
+            except (Exception, psycopg2.Error) as error:
+                if connection:
+                    connection.rollback()
+                raise ValueError(f"Job creation failed for {dag_id}: {error}")
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(connection)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
     async def create_dag(self, dag: QueryPlan, jobs: List[WorkInfo]) -> bool:
         """
         Create a DAG and its associated jobs.
+        DEPRECATED: Use create_dag_with_jobs for new code.
 
         :param dag: QueryPlan DAG definition
         :param jobs: List of jobs belonging to this DAG
@@ -621,8 +712,31 @@ class JobRepository(PostgresqlMixin):
             try:
                 conn = self._get_connection()
 
-                # Insert DAG
-                dag_query = insert_dag(DEFAULT_SCHEMA, dag)
+                # Insert DAG - extract DAG metadata from first job
+                if not jobs:
+                    raise ValueError("Cannot create DAG without jobs")
+
+                first_job = jobs[0]
+                dag_id = first_job.dag_id
+                if not dag_id:
+                    raise ValueError("Jobs must have dag_id set")
+
+                dag_name = f"{dag_id}_dag"
+                serialized_dag = dag.model_dump()
+
+                # Extract planner name from first job metadata
+                planner_name = first_job.data.get("metadata", {}).get("planner", None)
+
+                # Use SLA from the first job (representing DAG-level SLA)
+                dag_query = insert_dag(
+                    DEFAULT_SCHEMA,
+                    dag_id,
+                    dag_name,
+                    serialized_dag,
+                    first_job.soft_sla,
+                    first_job.hard_sla,
+                    planner_name,
+                )
                 self._execute_sql_gracefully(dag_query, connection=conn)
 
                 # Insert jobs
@@ -654,11 +768,85 @@ class JobRepository(PostgresqlMixin):
                 conn = self._get_connection()
                 query = mark_as_active_dags(DEFAULT_SCHEMA, [dag_id])
                 result = self._execute_sql_gracefully(query, connection=conn)
-                return result > 0 if result else False
+                return len(result) > 0 if result else False
             except Exception as error:
                 self.logger.error(f"Error marking DAG as active: {error}")
-                return False
+                raise error
             finally:
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
+    async def resolve_dag_state(self, dag_id: str) -> Optional[str]:
+        """
+        Resolve the final state of a DAG by calling the database function.
+        This function determines if all jobs in the DAG are complete and what the final state is.
+
+        :param dag_id: DAG ID to resolve
+        :return: Final DAG state ('completed', 'failed', or None if still in progress)
+        """
+
+        def db_call() -> Optional[str]:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"SELECT {DEFAULT_SCHEMA}.resolve_dag_state(%s::uuid);",
+                    (dag_id,),
+                )
+                result = cursor.fetchone()
+                conn.commit()
+                return result[0] if result else None
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error resolving DAG state for {dag_id}: {error}")
+                if conn:
+                    conn.rollback()
+                return None
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
+    async def get_active_dag_ids(self, dag_ids: List[str]) -> Set[str]:
+        """
+        Validates which DAGs from the provided list are still active in the database.
+        This is used for syncing in-memory DAG cache with the database state.
+
+        :param dag_ids: List of DAG IDs to validate
+        :return: Set of DAG IDs that are still active in database
+        """
+        if not dag_ids:
+            return set()
+
+        def db_call() -> Set[str]:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+
+                # Build parameterized query
+                placeholders = ','.join(['%s'] * len(dag_ids))
+                query = f"""
+                    SELECT id FROM {DEFAULT_SCHEMA}.dag
+                    WHERE id IN ({placeholders}) AND state = 'active'
+                """
+                cursor.execute(query, dag_ids)
+                valid_dag_records = cursor.fetchall()
+                conn.commit()
+
+                # Return set of valid DAG IDs
+                return {str(record[0]) for record in valid_dag_records}
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error validating active DAGs: {error}")
+                if conn:
+                    conn.rollback()
+                return set()
+            finally:
+                self._close_cursor(cursor)
                 self._close_connection(conn)
 
         return await self._loop.run_in_executor(self._db_executor, db_call)
@@ -810,6 +998,48 @@ class JobRepository(PostgresqlMixin):
 
         return await self._loop.run_in_executor(self._db_executor, db_call)
 
+    # ==================== Monitoring Operations ====================
+
+    async def update_monitor_time(
+        self, monitor_state_interval_seconds: int
+    ) -> Optional[bool]:
+        """
+        Updates the monitoring timestamp in the version table.
+        This is used to track when the scheduler last checked for expired/stale jobs.
+
+        :param monitor_state_interval_seconds: Minimum seconds between monitor updates
+        :return: True if timestamp was updated, None if skipped (interval not elapsed)
+        """
+
+        def db_call() -> Optional[bool]:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+
+                # Update monitored_on timestamp if interval has elapsed
+                query = f"""
+                    UPDATE {DEFAULT_SCHEMA}.version
+                    SET monitored_on = now()
+                    WHERE EXTRACT(EPOCH FROM (now() - COALESCE(monitored_on, now() - interval '1 week'))) > %s
+                    RETURNING true
+                """
+                cursor.execute(query, (monitor_state_interval_seconds,))
+                result = cursor.fetchone()
+                conn.commit()
+                return result[0] if result else None
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error updating monitor time: {error}")
+                if conn:
+                    conn.rollback()
+                return None
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
     # ==================== Queue Operations ====================
 
     async def create_queue(self, queue_name: str) -> bool:
@@ -824,7 +1054,7 @@ class JobRepository(PostgresqlMixin):
             conn = None
             try:
                 conn = self._get_connection()
-                query = create_queue(DEFAULT_SCHEMA, queue_name)
+                query = create_queue(DEFAULT_SCHEMA, queue_name, {})
                 self._execute_sql_gracefully(query, connection=conn)
                 return True
             except Exception as error:

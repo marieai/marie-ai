@@ -398,7 +398,6 @@ class MarieServerGateway(CompositeServer):
                     return {"status": "OK", "result": jobs}
 
                 except ValueError as e:
-                    # Handle invalid state parameter from job scheduler
                     self.logger.warning(f"Invalid job state parameter: {e}")
                     return {
                         "status": "error",

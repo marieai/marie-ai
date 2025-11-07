@@ -137,20 +137,46 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
     """
 
 
-def insert_dag(schema: str, dag_id: str, dag_name: str, serialized_dag: dict) -> str:
+def insert_dag(
+    schema: str,
+    dag_id: str,
+    dag_name: str,
+    serialized_dag: dict,
+    soft_sla: datetime = None,
+    hard_sla: datetime = None,
+    planner: str = None,
+) -> str:
+    soft_sla_str = (
+        f"CAST('{to_timestamp_with_tz(soft_sla)}' as timestamptz)"
+        if soft_sla
+        else "NULL"
+    )
+    hard_sla_str = (
+        f"CAST('{to_timestamp_with_tz(hard_sla)}' as timestamptz)"
+        if hard_sla
+        else "NULL"
+    )
+    planner_str = f"'{planner}'" if planner else "NULL"
+
     return f"""
         INSERT INTO {schema}.dag (
             id,
             name,
             state,
-            serialized_dag
+            serialized_dag,
+            soft_sla,
+            hard_sla,
+            planner
             )
         VALUES (
             '{dag_id}'::uuid,
             '{dag_name}'::text,
             '{WorkState.CREATED.value}',
-            {Json(serialized_dag)}::jsonb
-            ) 
+            {Json(serialized_dag)}::jsonb,
+            {soft_sla_str},
+            {hard_sla_str},
+            {planner_str}
+            )
         ON CONFLICT DO NOTHING
         RETURNING id
     """

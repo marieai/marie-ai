@@ -9,7 +9,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from math import inf
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 import psycopg2
 
@@ -40,14 +40,6 @@ from marie.scheduler.planner_util import (
     query_plan_work_items,
 )
 from marie.scheduler.repository import JobRepository
-from marie.scheduler.repository.plans import (
-    insert_dag,
-    insert_job,
-    mark_as_active_dags,
-    mark_as_active_jobs,
-    to_timestamp_with_tz,
-    try_set_monitor_time,
-)
 from marie.scheduler.scheduler_heartbeat import SchedulerHeartbeat
 from marie.scheduler.scheduler_repository import SchedulerRepository
 from marie.scheduler.services import (
@@ -262,11 +254,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         job_id = message.get("job_id")
         try:
             status = JobStatus(event_type)
-            work_item: WorkInfo = await self.get_job(job_id)
+            work_item: Optional[WorkInfo] = await self.get_job(job_id)
 
             if work_item is None:
                 self.logger.error(f"WorkItem not found: {job_id}")
-                return
+                raise ValueError(f"WorkItem not found: {job_id}")
 
             now = datetime.now(timezone.utc)
             work_state = convert_job_status_to_work_state(status)
@@ -317,9 +309,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         try:
             op = payload.get("op")
-            dag_id = payload.get("dag_id")
+            dag_id: str = payload.get("dag_id", "00000000-0000-0000-0000-000000000000")
 
-            if not dag_id:
+            if not dag_id or dag_id == "00000000-0000-0000-0000-000000000000":
                 self.logger.warning(f"Received notification without dag_id: {payload}")
                 return
 
@@ -345,7 +337,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if new_state == "created":
                     # DAG was reset (via reset_all or similar)
                     # Remove from memory and re-hydrate from DB
-                    self.logger.info(
+                    self.logger.warning(
                         f"DAG {dag_id} reset to 'created' - removing from memory and re-hydrating from DB"
                     )
                     stats = await self.frontier.finalize_dag(dag_id)
@@ -995,6 +987,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                                     True if isinstance(result, Exception) else False
                                 ),
                             )
+
+                            raise Exception(f"Dispatch failed for job {wi.id}")
                             await self._release_lease_db([wi.id])
                             await self.frontier.release_lease_local(wi.id)
 
@@ -1458,7 +1452,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             try:
                 request = await self._request_queue.get()
                 try:
-
                     result = await self.__submit_job(
                         request.work_info, request.overwrite
                     )
@@ -1523,62 +1516,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             },
         }
 
-    def _create_dag_and_jobs_sync(
-        self,
-        work_info: WorkInfo,
-        submission_id: str,
-        plan: QueryPlan,
-        dag_nodes: list[WorkInfo],
-    ) -> Tuple[bool, str]:
-        """Synchronous method for blocking database operations
-        It is important to run this in a thread to prevent blocking the main event loop.
-
-        :param work_info: WorkInfo object containing job details
-        :param submission_id: Unique identifier for the job submission
-        :param plan: The query plan representing the DAG structure
-        :param dag_nodes: List of WorkInfo objects representing individual jobs in the DAG
-        :return: Tuple indicating if a new key was added and the new DAG key
-        """
-        dag_id = submission_id
-        dag_name = f"{dag_id}_dag"
-        work_info.dag_id = dag_id
-        connection = None
-        cursor = None
-        new_key_added = False
-        try:
-            json_serialized_dag = plan.model_dump()
-            connection = self._get_connection()
-            cursor = self._execute_sql_gracefully(
-                insert_dag(DEFAULT_SCHEMA, dag_id, dag_name, json_serialized_dag),
-                connection=connection,
-                return_cursor=True,
-            )
-            new_dag_key = (
-                result[0] if cursor and (result := cursor.fetchone()) else None
-            )
-            self._close_cursor(cursor)
-
-            for i, dag_work_info in enumerate(dag_nodes):
-                cursor = self._execute_sql_gracefully(
-                    insert_job(DEFAULT_SCHEMA, dag_work_info),
-                    connection=connection,
-                    return_cursor=True,
-                )
-                job_inserted = cursor is not None and cursor.rowcount > 0
-                if i == 0:
-                    new_key_added = job_inserted
-                self._close_cursor(cursor)
-
-            connection.commit()
-            return new_key_added, new_dag_key
-        except (Exception, psycopg2.Error) as error:
-            if connection:
-                connection.rollback()
-            raise ValueError(f"Job creation failed for {submission_id}: {error}")
-        finally:
-            self._close_cursor(cursor)
-            self._close_connection(connection)
-
     async def __submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> str:
         """
         :param work_info: WorkInfo object containing job details
@@ -1600,18 +1537,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         # Build plan & nodes once (used by DB and memory)
         plan, dag_nodes = query_plan_work_items(work_info)
 
-        # until we upgrade to pycog3 and convert to async we have to run in a thread to prevent blocking of the loop
-        def _sync():
-            for dag_work_info in dag_nodes:
-                dag_work_info.dag_id = submission_id
+        # Set dag_id on all nodes
+        for dag_work_info in dag_nodes:
+            dag_work_info.dag_id = submission_id
 
-            return self._create_dag_and_jobs_sync(
-                work_info, submission_id, plan, dag_nodes
-            )
-
-        new_key_added, new_dag_key = await self._loop.run_in_executor(
-            self._db_executor, _sync
+        # Delegate DAG and job creation to repository
+        new_key_added, new_dag_key = await self.repository.create_dag_with_jobs(
+            dag_id=submission_id,
+            plan=plan,
+            dag_nodes=dag_nodes,
+            work_info=work_info,
         )
+
         if not new_key_added:
             raise ValueError(
                 f"Job with submission_id {submission_id} already exists. "
@@ -1633,40 +1570,28 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.error(f"Failed to refresh job priorities: {e}")
 
     async def mark_as_active(self, work_info: WorkInfo) -> bool:
+        """
+        Mark a job as active.
+        Delegates to JobRepository.
+
+        :param work_info: WorkInfo containing job ID and name
+        :return: True if successful, False otherwise
+        """
         self.logger.debug(f"Marking as active : {work_info.id}")
-        return await self._mark_active(
-            "job", mark_as_active_jobs(DEFAULT_SCHEMA, work_info.name, [work_info.id])
+        count = await self.repository.mark_jobs_as_active(
+            job_ids=[work_info.id], job_name=work_info.name
         )
+        return count > 0
 
     async def mark_as_active_dag(self, work_info: WorkInfo) -> bool:
-        return await self._mark_active(
-            "dag", mark_as_active_dags(DEFAULT_SCHEMA, [work_info.dag_id])
-        )
+        """
+        Mark a DAG as active.
+        Delegates to JobRepository.
 
-    async def _mark_active(self, label: str, query: str) -> bool:
-        self.logger.debug(f"Marking as active : {label} ")
-
-        def db_call() -> bool:
-            cursor = None
-            conn = None
-            try:
-                conn = self._get_connection()
-                cursor = self._execute_sql_gracefully(
-                    query, return_cursor=True, connection=conn
-                )
-                val = result[0] if cursor and (result := cursor.fetchone()) else False
-                conn.commit()
-                return val
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error updating {label}: {error}")
-                return False
-            finally:
-                self._close_cursor(cursor)
-                self._close_connection(conn)
-
-        # There is no need to lock here as we are the entrypoint
-        # async with self._status_update_lock:
-        return await self._loop.run_in_executor(self._db_executor, db_call)
+        :param work_info: WorkInfo containing DAG ID
+        :return: True if successful, False otherwise
+        """
+        return await self.repository.mark_dag_as_active(work_info.dag_id)
 
     async def is_valid_submission(
         self, work_info: WorkInfo, policy: ExistingWorkPolicy
@@ -1761,43 +1686,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     ):
         """
         Update the status of a job.
+        Delegates to JobRepository.
+
         :param job_id: The ID of the job.
         :param status: The new status of the job.
         :param started_on: Optional start time of the job.
         :param completed_on: Optional completion time of the job.
         """
-
-        def db_call():
-            schema = DEFAULT_SCHEMA
-            table = "job"
-
-            update_fields = [f"state = '{status.value}'"]
-            if started_on:
-                update_fields.append(
-                    f"started_on = '{to_timestamp_with_tz(started_on)}'::timestamptz"
-                )
-            if completed_on:
-                update_fields.append(
-                    f"completed_on = '{to_timestamp_with_tz(completed_on)}'::timestamptz"
-                )
-
-            update_query = f"""
-            UPDATE {schema}.{table}
-            SET {', '.join(update_fields)}
-            WHERE id = '{job_id}'
-            """
-
-            conn = None
-            try:
-                conn = self._get_connection()
-                self._execute_sql_gracefully(update_query, connection=conn)
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error handling job event: {error}")
-            finally:
-                self._close_connection(conn)
-
         async with self._status_update_lock[job_id]:
-            await self._loop.run_in_executor(self._db_executor, db_call)
+            await self.repository.update_job_state(
+                job_id=job_id,
+                state=status,
+                started_on=started_on,
+                completed_on=completed_on,
+            )
             # self._job_cache.pop(job_id, None)
 
     async def maintenance(self):
@@ -1865,32 +1767,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         )
 
     async def _monitor(self):
+        """
+        Background monitoring loop that updates the monitor timestamp.
+        Delegates to JobRepository.
+        """
         wait_time = MONITORING_POLL_PERIOD
         while self.running:
             self.logger.debug(f"Polling jobs status : {wait_time}")
             await asyncio.sleep(wait_time)
 
             try:
-                monitored_on = None
-                conn = None
-                cursor = None
-
-                try:
-                    conn = self._get_connection()
-                    cursor = self._execute_sql_gracefully(
-                        try_set_monitor_time(
-                            DEFAULT_SCHEMA,
-                            monitor_state_interval_seconds=int(MONITORING_POLL_PERIOD),
-                        ),
-                        return_cursor=True,
-                        connection=conn,
-                    )
-                    monitored_on = cursor.fetchone()
-                except (Exception, psycopg2.Error) as error:
-                    self.logger.error(f"Error handling job event: {error}")
-                finally:
-                    self._close_cursor(cursor)
-                    self._close_connection(conn)
+                # Delegate to repository to update monitor time
+                monitored_on = await self.repository.update_monitor_time(
+                    monitor_state_interval_seconds=int(MONITORING_POLL_PERIOD)
+                )
 
                 if monitored_on is None:
                     self.logger.error("Error setting monitor time")
@@ -2046,14 +1936,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     def _blocking_sync_dag(self, interval: int = 30) -> None:
         """
-        Validate that DAGs in memory still exist and are active in database
+        Validate that DAGs in memory still exist and are active in database.
+        This runs in a background thread and delegates DB access to repository.
         """
         self.logger.info(f"Starting DAG sync polling (interval: {interval}s)")
 
         while self.running:
-            cursor = None
-            conn = None
-
             try:
                 if not self.active_dags:
                     self.logger.debug("No active DAGs in memory to validate")
@@ -2063,24 +1951,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 memory_dag_ids = list(self.active_dags.keys())
                 self.logger.debug(f"Validating {len(memory_dag_ids)} DAGs in memory")
 
-                placeholders = ','.join(['%s'] * len(memory_dag_ids))
-                query = f"""
-                    SELECT id FROM marie_scheduler.dag 
-                    WHERE id IN ({placeholders}) AND state = 'active'
-                """
-
-                conn = self._get_connection()
-                cursor = self._execute_sql_gracefully(
-                    query, memory_dag_ids, return_cursor=True, connection=conn
+                # Delegate to repository to get active DAG IDs
+                # We need to run this async method from sync context
+                future = asyncio.run_coroutine_threadsafe(
+                    self.repository.get_active_dag_ids(memory_dag_ids), self._loop
                 )
-                if not cursor:
-                    self.logger.warning("No result from DAG validation query")
-                    self._close_connection(conn)
-                    time.sleep(interval)
-                    continue
+                valid_db_dags = future.result(timeout=30)
 
-                valid_dag_records = cursor.fetchall()
-                valid_db_dags = {record[0] for record in valid_dag_records}
                 invalid_dags = set(memory_dag_ids) - valid_db_dags
 
                 if invalid_dags:
@@ -2096,9 +1973,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
             except Exception as error:
                 self.logger.error(f"Error validating DAGs: {error}")
-            finally:
-                self._close_cursor(cursor)
-                self._close_connection(conn)
+
             time.sleep(interval)
         self.logger.debug(f"DAG sync polling stopped")
 
@@ -2135,30 +2010,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.logger.info(f"Resolving DAG status: {work_info.dag_id}")
 
         try:
-
-            def _sync(dag_id: str) -> Optional[str]:
-                """Synchronous helper to resolve DAG status in the database."""
-                conn = None
-                cursor = None
-                try:
-                    conn = self._get_connection()
-                    resolve_query = (
-                        f"SELECT {DEFAULT_SCHEMA}.resolve_dag_state('{dag_id}'::uuid);"
-                    )
-                    cursor = self._execute_sql_gracefully(
-                        resolve_query, return_cursor=True, connection=conn
-                    )
-                    dag_state = (
-                        result[0] if cursor and (result := cursor.fetchone()) else None
-                    )
-                    return dag_state
-                finally:
-                    self._close_cursor(cursor)
-                    self._close_connection(conn)
-
-            dag_state = await self._loop.run_in_executor(
-                self._db_executor, _sync, work_info.dag_id
-            )
+            # Delegate to repository to resolve DAG state
+            dag_state = await self.repository.resolve_dag_state(work_info.dag_id)
 
             self.logger.info(f"Resolved DAG state: {dag_state}")
             if dag_state not in ("completed", "failed"):

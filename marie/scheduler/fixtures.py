@@ -363,6 +363,7 @@ def create_dag_table(schema: str):
             soft_sla timestamptz,
             hard_sla timestamptz,
             sla_miss_logged boolean not null default false,
+            planner VARCHAR(250), -- Name of the planner that created this DAG
             PRIMARY KEY (id)  --  Ensures compatibility with foreign key constraints
         );
     """
@@ -391,6 +392,7 @@ def create_dag_table_history(schema: str):
           soft_sla         timestamptz,
           hard_sla         timestamptz,
           sla_miss_logged  BOOLEAN,
+          planner          VARCHAR(250), -- Name of the planner that created this DAG
 
           -- Timestamp for when this row was added to the history:
           history_created_on timestamptz NOT NULL DEFAULT now()
@@ -421,7 +423,8 @@ def create_dag_history_trigger_function(schema: str):
               sla_interval,
               soft_sla,
               hard_sla,
-              sla_miss_logged
+              sla_miss_logged,
+              planner
             )
             VALUES (
               NEW.id,
@@ -439,7 +442,8 @@ def create_dag_history_trigger_function(schema: str):
               NEW.sla_interval,
               NEW.soft_sla,
               NEW.hard_sla,
-              NEW.sla_miss_logged
+              NEW.sla_miss_logged,
+              NEW.planner
             );
             RETURN NEW;
 
@@ -460,7 +464,8 @@ def create_dag_history_trigger_function(schema: str):
               sla_interval,
               soft_sla,
               hard_sla,
-              sla_miss_logged
+              sla_miss_logged,
+              planner
             )
             VALUES (
               NEW.id,
@@ -478,7 +483,8 @@ def create_dag_history_trigger_function(schema: str):
               NEW.sla_interval,
               NEW.soft_sla,
               NEW.hard_sla,
-              NEW.sla_miss_logged
+              NEW.sla_miss_logged,
+              NEW.planner
             );
             RETURN NEW;
 
@@ -499,7 +505,8 @@ def create_dag_history_trigger_function(schema: str):
               sla_interval,
               soft_sla,
               hard_sla,
-              sla_miss_logged
+              sla_miss_logged,
+              planner
             )
             VALUES (
               OLD.id,
@@ -517,7 +524,8 @@ def create_dag_history_trigger_function(schema: str):
               OLD.sla_interval,
               OLD.soft_sla,
               OLD.hard_sla,
-              OLD.sla_miss_logged
+              OLD.sla_miss_logged,
+              OLD.planner
             );
             RETURN OLD;
           END IF;
