@@ -1047,7 +1047,8 @@ class JobRepository(PostgresqlMixin):
         Create a new queue.
 
         :param queue_name: Name of the queue to create
-        :return: True if successful, False otherwise
+        :return: True if successful
+        :raises RuntimeFailToStart: If queue creation fails, indicating bootstrap failure
         """
 
         def db_call():
@@ -1059,7 +1060,14 @@ class JobRepository(PostgresqlMixin):
                 return True
             except Exception as error:
                 self.logger.error(f"Error creating queue '{queue_name}': {error}")
-                return False
+                # Re-raise as RuntimeFailToStart since this indicates a bootstrap failure
+                from marie.excepts import RuntimeFailToStart
+
+                raise RuntimeFailToStart(
+                    f"Failed to create queue '{queue_name}' during bootstrap. "
+                    f"This indicates the database schema may be incompatible or corrupt. "
+                    f"Error: {error}"
+                )
             finally:
                 self._close_connection(conn)
 
@@ -1106,8 +1114,6 @@ class JobRepository(PostgresqlMixin):
             job_level=job_level,
         )
         return wi
-
-    # ==================== Schema Management ====================
 
     def create_tables(self, schema: str = DEFAULT_SCHEMA):
         """
@@ -1172,6 +1178,7 @@ class JobRepository(PostgresqlMixin):
             "suspend_non_started_work.sql",
             "unsuspend_work.sql",
             "sync_job_dependencies.sql",
+            "slots_columns.sql",
             "lease/release_expired_leases.sql",
             "lease/release_lease.sql",
             "lease/activate_from_lease.sql",

@@ -153,7 +153,7 @@ def create_job_update_trigger(schema: str):
 
 
 def clone_job_table_for_archive(schema):
-    return f"CREATE TABLE {schema}.archive (LIKE {schema}.job)"
+    return f"CREATE TABLE {schema}.archive (LIKE {schema}.job INCLUDING ALL)"
 
 
 def create_table_queue(schema: str) -> str:
@@ -203,7 +203,7 @@ def create_subscription_table(schema):
 
 def delete_queue_function(schema: str) -> str:
     return f"""
-    CREATE FUNCTION {schema}.delete_queue(queue_name text)
+    CREATE OR REPLACE FUNCTION {schema}.delete_queue(queue_name text)
     RETURNS VOID AS
     $$
     DECLARE
@@ -225,7 +225,7 @@ def delete_queue_function(schema: str) -> str:
 
 def create_queue_function(schema: str) -> str:
     return f"""
-    CREATE FUNCTION {schema}.create_queue(queue_name text, options json)
+    CREATE OR REPLACE FUNCTION {schema}.create_queue(queue_name text, options json)
     RETURNS VOID AS
     $$
     DECLARE
@@ -265,10 +265,29 @@ def create_queue_function(schema: str) -> str:
         RETURN;
       END IF;
 
-      EXECUTE format('CREATE TABLE {schema}.%I (LIKE {schema}.job INCLUDING DEFAULTS)', table_name);
-      EXECUTE format('{format_partition_command(create_primary_key_job(schema))}', table_name);
-      EXECUTE format('ALTER TABLE {schema}.%I ADD CONSTRAINT cjc CHECK (name=%L)', table_name, queue_name);
-      EXECUTE format('ALTER TABLE {schema}.job ATTACH PARTITION {schema}.%I FOR VALUES IN (%L)', table_name, queue_name);
+      -- Check if partition table already exists
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_tables
+        WHERE schemaname = '{schema}' AND tablename = table_name
+      ) THEN
+        -- Create new partition table with all attributes from parent
+        EXECUTE format('CREATE TABLE {schema}.%I (LIKE {schema}.job INCLUDING ALL)', table_name);
+
+        -- Add primary key only if it doesn't exist
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = ('{schema}.' || table_name)::regclass
+          AND contype = 'p'
+        ) THEN
+          EXECUTE format('{format_partition_command(create_primary_key_job(schema))}', table_name);
+        END IF;
+
+        -- Add check constraint
+        EXECUTE format('ALTER TABLE {schema}.%I ADD CONSTRAINT cjc CHECK (name=%L)', table_name, queue_name);
+
+        -- Attach partition to parent table
+        EXECUTE format('ALTER TABLE {schema}.job ATTACH PARTITION {schema}.%I FOR VALUES IN (%L)', table_name, queue_name);
+      END IF;
     END;
     $$
     LANGUAGE plpgsql;
