@@ -432,6 +432,8 @@ class QueryType(str, enum.Enum):
     SEGMENTER = "SEGMENTER"
     COMPUTE = "COMPUTE"
     MERGER = "MERGER"
+    BRANCH = "BRANCH"  # Conditional branching node
+    SWITCH = "SWITCH"  # Multi-way switch node
 
 
 class ComputeQuery(BaseModel):

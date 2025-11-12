@@ -136,7 +136,7 @@ Use this setup for testing or development:
 3. Start the cluster:
 
    ```bash
-   docker-compose -f docker-compose.etcd.yml up -d
+   docker compose -f docker-compose.etcd.yml up -d
    ```
 4. Check health on any node:
 
