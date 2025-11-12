@@ -3,11 +3,11 @@ from typing import Any, List, Optional, Union
 import torch
 from docarray import DocList
 
-from marie import Executor, requests, safely_encoded
+from marie import requests, safely_encoded
 from marie.api import value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc, StorageDoc
 from marie.boxes import PSMode
-from marie.executor.mixin import StorageMixin
+from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.mdc import MDC
 from marie.logging_core.predefined import default_logger as logger
@@ -25,7 +25,7 @@ from marie.utils.network import get_ip_address
 # TODO : Refactor this to as it is a duplicate of the one in text_extraction_executor.py
 
 
-class DocumentClassificationExecutor(Executor, StorageMixin):
+class DocumentClassificationExecutor(MarieExecutor):
     """Executor for document classification"""
 
     def __init__(
@@ -38,6 +38,7 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
+        kwargs['storage'] = storage
         super().__init__(**kwargs)
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
@@ -83,11 +84,6 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
             "workspace": self.workspace,
             "use_cuda": has_cuda,
         }
-
-        self.storage_enabled = False
-        if storage is not None and "psql" in storage:
-            sconf = storage["psql"]
-            self.setup_storage(sconf.get("enabled", False), sconf)
 
     @requests(on="/default")
     def default(self, parameters, **kwargs):
@@ -223,7 +219,20 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
             del frames
             del regions
 
-            self.persist(ref_id, ref_type, metadata)
+            # Extract optional DAG tracking parameters
+            dag_id = parameters.get("dag_id")
+            node_task_id = parameters.get("node_task_id")
+            partition_key = parameters.get("partition_key")
+
+            self.persist(
+                ref_id=ref_id,
+                ref_type=ref_type,
+                results=metadata,
+                job_id=job_id,
+                dag_id=dag_id,
+                node_task_id=node_task_id,
+                partition_key=partition_key,
+            )
 
             # strip out ocr results from metadata
             include_ocr = True
@@ -251,8 +260,17 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
             torch_gc()
             MDC.remove("request_id")
 
-    def persist(self, ref_id: str, ref_type: str, results: Any) -> None:
-        """Persist results"""
+    def persist(
+        self,
+        ref_id: str,
+        ref_type: str,
+        results: Any,
+        job_id: Optional[str] = None,
+        dag_id: Optional[str] = None,
+        node_task_id: Optional[str] = None,
+        partition_key: Optional[str] = None,
+    ) -> None:
+        """Persist results and optionally track assets"""
 
         def _tags(index: int, ftype: str, checksum: str):
             return {
@@ -264,9 +282,8 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
                 "runtime": self.runtime_info,
             }
 
+        # Legacy storage
         if self.storage_enabled:
-            # frame_checksum = hash_frames_fast(frames=[frame])
-
             docs = DocList[StorageDoc](
                 [
                     StorageDoc(
@@ -282,3 +299,99 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
                 store_mode="content",
                 docs=docs,
             )
+
+        # Asset tracking
+        if self.asset_tracking_enabled and job_id:
+            import hashlib
+            import json
+
+            from marie.assets import AssetTracker
+
+            assets = []
+
+            # Extract document type asset (primary)
+            if "classification" in results:
+                classification = results["classification"]
+
+                # Get document type and confidence
+                document_type = classification.get("document_type", "unknown")
+                confidence = classification.get("confidence", 0.0)
+
+                result_data = {
+                    "document_type": document_type,
+                    "confidence": confidence,
+                }
+                result_bytes = json.dumps(result_data).encode("utf-8")
+
+                # Compute version
+                upstream_versions = self._get_upstream_versions(dag_id, node_task_id)
+                version = AssetTracker.compute_asset_version(
+                    payload_bytes=result_bytes,
+                    code_fingerprint=getattr(self, "code_version", "unknown"),
+                    prompt_fingerprint=getattr(
+                        self.pipeline, "pipeline_name", "classification-pipeline"
+                    ),
+                    upstream_versions=upstream_versions,
+                )
+
+                assets.append(
+                    {
+                        "asset_key": "classify/document_type",
+                        "version": version,
+                        "kind": "classification",
+                        "size_bytes": len(result_bytes),
+                        "checksum": hashlib.sha256(result_bytes).hexdigest(),
+                        "metadata": {
+                            "document_type": document_type,
+                            "confidence": confidence,
+                        },
+                    }
+                )
+
+                # Extract confidence scores asset (optional)
+                if "confidence_scores" in classification:
+                    scores = classification["confidence_scores"]
+                    scores_bytes = json.dumps(scores).encode("utf-8")
+
+                    scores_version = AssetTracker.compute_asset_version(
+                        payload_bytes=scores_bytes,
+                        code_fingerprint=getattr(self, "code_version", "unknown"),
+                        upstream_versions=upstream_versions,
+                    )
+
+                    assets.append(
+                        {
+                            "asset_key": "classify/confidence_scores",
+                            "version": scores_version,
+                            "kind": "metadata",
+                            "size_bytes": len(scores_bytes),
+                            "checksum": hashlib.sha256(scores_bytes).hexdigest(),
+                            "metadata": {
+                                "score_count": len(scores),
+                                "max_score": max(scores.values()) if scores else 0.0,
+                            },
+                        }
+                    )
+
+            # Record materializations
+            if assets:
+                try:
+                    upstream = self._get_upstream_asset_tuples(dag_id, node_task_id)
+
+                    # Note: This is a blocking call that returns a Future
+                    self.asset_tracker.record_materializations(
+                        storage_event_id=None,
+                        assets=assets,
+                        job_id=job_id,
+                        dag_id=dag_id,
+                        node_task_id=node_task_id,
+                        partition_key=partition_key,
+                        upstream_assets=upstream,
+                    )
+                    self.logger.debug(
+                        f"Recorded {len(assets)} asset materializations for job {job_id}"
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"Failed to record asset materializations: {e}", exc_info=True
+                    )

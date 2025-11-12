@@ -1,5 +1,6 @@
 import asyncio
 import os
+import random
 import time
 from typing import Optional, Union
 
@@ -14,7 +15,6 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import (
     setup_torch_optimizations,
 )
-from marie.storage import StorageManager
 from marie.utils.network import get_ip_address
 
 
@@ -24,6 +24,7 @@ class IntegrationExecutorMock(MarieExecutor):
         name: str = "",
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
+        storage: dict[str, any] = None,
         pipeline: Optional[dict[str, any]] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         process_time: float = 3.0,
@@ -36,17 +37,20 @@ class IntegrationExecutorMock(MarieExecutor):
 
         :param device: 'cpu' or 'cuda'. Default is None, which auto-detects the device.
         :param num_worker_preprocess: The number of CPU workers to preprocess images and texts. Default is 4.
+        :param storage: Storage configuration dictionary with 'psql' settings for asset tracking.
         :param pipeline: Pipeline configuration dictionary.
         :param dtype: inference data type, if None defaults to torch.float32 if device == 'cpu' else torch.float16.
         :param process_time: Base processing time in seconds. Default is 3.0. Can be overridden per request.
         :param failure_rate: Probability of failure (0.0 to 1.0). Default is 0.0 (no failures).
         :param failure_mode: Type of failure to simulate: 'exception', 'timeout', 'random'. Default is 'exception'.
         """
+        kwargs['storage'] = storage
         super().__init__(**kwargs)
 
         logger.info(f"Starting mock executor : {time.time()}")
         logger.info(f"Starting executor : {self.__class__.__name__}")
         logger.info(f"Runtime args : {kwargs.get('runtime_args')}")
+        logger.info(f"Storage config: {storage}")
         logger.info(f"Pipeline config: {pipeline}")
         logger.info(f"Device : {device}")
         logger.info(f"Num worker preprocess : {num_worker_preprocess}")
@@ -90,8 +94,6 @@ class IntegrationExecutorMock(MarieExecutor):
 
         logger.info(f"Runtime info: {self.runtime_info}")
         logger.info(f"Pipeline : {pipeline}")
-        connected = StorageManager.ensure_connection("s3://", silence_exceptions=False)
-        logger.warning(f"S3 connection status : {connected}")
 
     # @requests(on="/document/status")
     # def status(self, parameters, **kwargs):
@@ -130,14 +132,11 @@ class IntegrationExecutorMock(MarieExecutor):
 
         # Add randomness if requested (for more realistic simulation)
         if parameters.get("randomize_time", False):
-            import random
-
             min_time = process_time * 0.5
             max_time = process_time * 1.5
             process_time = random.uniform(min_time, max_time)
 
         # Check if we should fail this request
-        import random
 
         failure_rate = parameters.get("failure_rate", self.failure_rate)
         failure_mode = parameters.get("failure_mode", self.failure_mode)
@@ -175,10 +174,135 @@ class IntegrationExecutorMock(MarieExecutor):
         await asyncio.sleep(process_time)
         self.logger.info(f"Processing complete : {time.time()}")
 
-        return {
+        result = {
             "parameters": parameters,
             "data": "Data reply",
             "processed_docs": len(docs),
             "process_time": process_time,
             "executor": self.runtime_info["instance_name"],
         }
+
+        # Extract optional DAG tracking parameters
+        job_id = parameters.get("job_id")
+        dag_id = parameters.get("dag_id")
+        node_task_id = parameters.get("node_task_id")
+        partition_key = parameters.get("partition_key")
+
+        # Persist results and track assets if enabled
+        if job_id:
+            self.persist(
+                results=result,
+                job_id=job_id,
+                dag_id=dag_id,
+                node_task_id=node_task_id,
+                partition_key=partition_key,
+            )
+
+        print(f"Mock executor results : {result}")
+        return result
+
+    def persist(
+        self,
+        results: any,
+        job_id: Optional[str] = None,
+        dag_id: Optional[str] = None,
+        node_task_id: Optional[str] = None,
+        partition_key: Optional[str] = None,
+    ) -> None:
+        """Persist results and optionally track assets"""
+        from typing import Any
+
+        from marie.api.docs import StorageDoc
+
+        def _tags(index: int, ftype: str, checksum: str):
+            return {
+                "action": "mock_process",
+                "index": index,
+                "type": ftype,
+                "ttl": 48 * 60,
+                "checksum": checksum,
+                "runtime": self.runtime_info,
+            }
+
+        # Legacy storage that persist documents directly
+        if self.storage_enabled:
+            docs = DocList[StorageDoc](
+                [
+                    StorageDoc(
+                        content=results,
+                        tags=_tags(-1, "metadata", job_id or "unknown"),
+                    )
+                ]
+            )
+
+            self.store(
+                ref_id=job_id or "unknown",
+                ref_type="mock_process",
+                store_mode="content",
+                docs=docs,
+            )
+
+        # Asset tracking
+        if self.asset_tracking_enabled and job_id:
+            import hashlib
+            import json
+
+            from marie.assets import AssetTracker
+
+            assets = []
+
+            # Create a random number of mock assets between 1 and 5
+            n_assets = random.randint(1, 5)
+
+            for i in range(n_assets):
+                # Create per-asset metadata
+                result_data = {
+                    "processed_docs": results.get("processed_docs", 0),
+                    "process_time": results.get("process_time", 0),
+                    "executor": results.get("executor", "unknown"),
+                    "asset_index": i,
+                }
+                result_bytes = json.dumps(result_data).encode("utf-8")
+
+                # Compute version using upstream versions
+                upstream_versions = self._get_upstream_versions(dag_id, node_task_id)
+                version = AssetTracker.compute_asset_version(
+                    payload_bytes=result_bytes,
+                    code_fingerprint=getattr(self, "code_version", "unknown"),
+                    prompt_fingerprint=f"mock-executor-v1-{i}",
+                    upstream_versions=upstream_versions,
+                )
+
+                assets.append(
+                    {
+                        "asset_key": f"mock/processed/{job_id}/{i}",
+                        "version": version,
+                        "kind": "json",
+                        "size_bytes": len(result_bytes),
+                        "checksum": hashlib.sha256(result_bytes).hexdigest(),
+                        "metadata": result_data,
+                    }
+                )
+
+            # Record materializations
+            if assets:
+                try:
+                    upstream = self._get_upstream_asset_tuples(dag_id, node_task_id)
+
+                    # Note: This is a blocking call that returns a Future
+                    self.asset_tracker.record_materializations(
+                        storage_event_id=None,
+                        assets=assets,
+                        job_id=job_id,
+                        dag_id=dag_id,
+                        node_task_id=node_task_id,
+                        partition_key=partition_key,
+                        upstream_assets=upstream,
+                    )
+                    self.logger.debug(
+                        f"Recorded {len(assets)} asset materializations for job {job_id}"
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"Failed to record asset materializations: {e}", exc_info=True
+                    )

@@ -11,6 +11,7 @@ from docarray.documents import TextDoc
 
 from marie import Executor, requests
 from marie.excepts import CUDARuntimeTerminated
+from marie.executor.mixin import StorageMixin
 from marie.logging_core.logger import MarieLogger
 from marie.serve.executors import __dry_run_endpoint__
 from marie.utils.server_runtime import setup_storage, setup_toast_events
@@ -32,7 +33,7 @@ except ModuleNotFoundError:
     _torch_exist = False
 
 
-class MarieExecutor(Executor):
+class MarieExecutor(Executor, StorageMixin):
     """
     Base executor with:
       - Toast & storage setup
@@ -141,8 +142,29 @@ class MarieExecutor(Executor):
     # ---------------------- Setup ----------------------
 
     def setup_executor(self, config: Dict[str, Any]) -> None:
+        """Setup executor with toast events, storage, and asset tracking"""
         setup_toast_events(config.get("toast", {}))
         setup_storage(config.get("storage", {}))
+
+        # Setup storage and asset tracking via StorageMixin
+        storage_config = config.get("storage", {})
+
+        print(f'storage_config >>> {storage_config}')
+        if storage_config and "psql" in storage_config:
+            sconf = storage_config["psql"]
+            # Check if asset tracking is enabled in config
+            asset_tracking = sconf.get("asset_tracking_enabled", True)
+            self.setup_storage(
+                storage_enabled=sconf.get("enabled", False),
+                storage_conf=sconf,
+                asset_tracking_enabled=asset_tracking,
+            )
+        else:
+            self.storage_enabled = False
+            self.asset_tracking_enabled = False
+
+        self.logger.info(f"storage_enabled  = {self.storage_enabled}")
+        self.logger.info(f"asset_tracking_enabled  = {self.asset_tracking_enabled}")
 
     # ---------------------- Status / markers ----------------------
 

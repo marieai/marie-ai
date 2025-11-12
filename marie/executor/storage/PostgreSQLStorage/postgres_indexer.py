@@ -120,3 +120,17 @@ class PostgreSQLStorage:
         Returns the top k similar vectors to the query vector.
         """
         return self.handler.similarity_search(query_vector, k)
+
+    def _get_connection(self):
+        """
+        Get a database connection from the pool.
+        Delegates to the underlying handler.
+        """
+        return self.handler._get_connection()
+
+    def _close_connection(self, conn):
+        """
+        Return a database connection to the pool.
+        Delegates to the underlying handler.
+        """
+        return self.handler._close_connection(conn)

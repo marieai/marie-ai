@@ -127,9 +127,16 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
         }
 
         self.storage_enabled = False
+        self.asset_tracking_enabled = False
         if storage is not None and "psql" in storage:
             sconf = storage["psql"]
-            self.setup_storage(sconf.get("enabled", False), sconf)
+            # Check if asset tracking is enabled in config
+            asset_tracking = sconf.get("asset_tracking_enabled", False)
+            self.setup_storage(
+                storage_enabled=sconf.get("enabled", False),
+                storage_conf=sconf,
+                asset_tracking_enabled=asset_tracking,
+            )
 
         connected = StorageManager.ensure_connection("s3://", silence_exceptions=False)
         logger.warning(f"S3 connection status : {connected}")
@@ -223,7 +230,20 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
             del frames
             del regions
 
-            self.persist(ref_id, ref_type, metadata)
+            # Extract optional DAG tracking parameters
+            dag_id = parameters.get("dag_id")
+            node_task_id = parameters.get("node_task_id")
+            partition_key = parameters.get("partition_key")
+
+            self.persist(
+                ref_id=ref_id,
+                ref_type=ref_type,
+                results=metadata,
+                job_id=job_id,
+                dag_id=dag_id,
+                node_task_id=node_task_id,
+                partition_key=partition_key,
+            )
 
             # strip out ocr results from metadata
             if not include_ocr and "ocr" in metadata:
@@ -263,8 +283,17 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
     def default(self, parameters, **kwargs):
         return {"valid": True}
 
-    def persist(self, ref_id: str, ref_type: str, results: Any) -> None:
-        """Persist results"""
+    def persist(
+        self,
+        ref_id: str,
+        ref_type: str,
+        results: Any,
+        job_id: Optional[str] = None,
+        dag_id: Optional[str] = None,
+        node_task_id: Optional[str] = None,
+        partition_key: Optional[str] = None,
+    ) -> None:
+        """Persist results and optionally track assets"""
 
         def _tags(index: int, ftype: str, checksum: str):
             return {
@@ -276,9 +305,8 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
                 "runtime": self.runtime_info,
             }
 
+        # Legacy storage
         if self.storage_enabled:
-            # frame_checksum = hash_frames_fast(frames=[frame])
-
             docs = DocList[StorageDoc](
                 [
                     StorageDoc(
@@ -294,6 +322,139 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
                 store_mode="content",
                 docs=docs,
             )
+
+        # Asset tracking
+        if self.asset_tracking_enabled and job_id:
+            import hashlib
+            import json
+
+            from marie.assets import AssetTracker
+
+            assets = []
+
+            # Extract text asset
+            if "ocr" in results and results["ocr"]:
+                ocr_results = results["ocr"]
+                # Flatten all text from all pages
+                text_parts = []
+                for page_result in ocr_results:
+                    if "lines" in page_result:
+                        for line in page_result["lines"]:
+                            if "text" in line:
+                                text_parts.append(line["text"])
+
+                text_content = "\n".join(text_parts)
+                text_bytes = text_content.encode("utf-8")
+
+                # Compute version
+                upstream_versions = self._get_upstream_versions(dag_id, node_task_id)
+                text_version = AssetTracker.compute_asset_version(
+                    payload_bytes=text_bytes,
+                    code_fingerprint=getattr(self, "code_version", "unknown"),
+                    prompt_fingerprint=getattr(
+                        self.pipeline, "pipeline_name", "extract-pipeline"
+                    ),
+                    upstream_versions=upstream_versions,
+                )
+
+                assets.append(
+                    {
+                        "asset_key": "ocr/text",
+                        "version": text_version,
+                        "kind": "text",
+                        "size_bytes": len(text_bytes),
+                        "checksum": hashlib.sha256(text_bytes).hexdigest(),
+                        "metadata": {
+                            "char_count": len(text_content),
+                            "line_count": len(text_parts),
+                            "page_count": len(ocr_results),
+                        },
+                    }
+                )
+
+                # Extract bboxes asset
+                bboxes = []
+                for page_result in ocr_results:
+                    if "lines" in page_result:
+                        for line in page_result["lines"]:
+                            if "bbox" in line:
+                                bboxes.append(line["bbox"])
+
+                if bboxes:
+                    bbox_bytes = json.dumps(bboxes).encode("utf-8")
+                    bbox_version = AssetTracker.compute_asset_version(
+                        payload_bytes=bbox_bytes,
+                        code_fingerprint=getattr(self, "code_version", "unknown"),
+                        upstream_versions=upstream_versions,
+                    )
+
+                    assets.append(
+                        {
+                            "asset_key": "ocr/bboxes",
+                            "version": bbox_version,
+                            "kind": "bbox",
+                            "size_bytes": len(bbox_bytes),
+                            "checksum": hashlib.sha256(bbox_bytes).hexdigest(),
+                            "metadata": {"bbox_count": len(bboxes)},
+                        }
+                    )
+
+                # Extract confidence asset (optional)
+                confidences = {}
+                for page_idx, page_result in enumerate(ocr_results):
+                    if "lines" in page_result:
+                        for line_idx, line in enumerate(page_result["lines"]):
+                            if "confidence" in line:
+                                key = f"page_{page_idx}_line_{line_idx}"
+                                confidences[key] = line["confidence"]
+
+                if confidences:
+                    conf_bytes = json.dumps(confidences).encode("utf-8")
+                    conf_version = AssetTracker.compute_asset_version(
+                        payload_bytes=conf_bytes,
+                        code_fingerprint=getattr(self, "code_version", "unknown"),
+                        upstream_versions=upstream_versions,
+                    )
+
+                    avg_confidence = sum(confidences.values()) / len(confidences)
+
+                    assets.append(
+                        {
+                            "asset_key": "ocr/confidence",
+                            "version": conf_version,
+                            "kind": "metadata",
+                            "size_bytes": len(conf_bytes),
+                            "checksum": hashlib.sha256(conf_bytes).hexdigest(),
+                            "metadata": {
+                                "avg_confidence": avg_confidence,
+                                "confidence_count": len(confidences),
+                            },
+                        }
+                    )
+
+            # Record materializations
+            if assets:
+                try:
+                    upstream = self._get_upstream_asset_tuples(dag_id, node_task_id)
+
+                    # Note: This is a blocking call that returns a Future
+                    # We're not awaiting it since persist() is not async
+                    self.asset_tracker.record_materializations(
+                        storage_event_id=None,
+                        assets=assets,
+                        job_id=job_id,
+                        dag_id=dag_id,
+                        node_task_id=node_task_id,
+                        partition_key=partition_key,
+                        upstream_assets=upstream,
+                    )
+                    self.logger.debug(
+                        f"Recorded {len(assets)} asset materializations for job {job_id}"
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"Failed to record asset materializations: {e}", exc_info=True
+                    )
 
 
 class TextExtractionExecutorMock(MarieExecutor):

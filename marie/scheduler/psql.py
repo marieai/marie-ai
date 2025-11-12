@@ -180,6 +180,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             QueryPlannersConf.from_dict(config.get("query_planners", {}))
         )
 
+        # Asset mapper kept for static utility methods (e.g., get_upstream_assets_for_node)
+        # No longer used for pre-registration
+        from marie.assets import DAGAssetMapper
+
+        self.asset_mapper = DAGAssetMapper()
+        self.logger.debug(
+            "Initialized asset mapper (used for upstream asset queries only)"
+        )
+
         dag_config = config.get("dag_manager", {})
         min_concurrent_dags = int(dag_config.get("min_concurrent_dags", 1))
         max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
@@ -1281,10 +1290,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             return False
 
         try:
+            # Inject DAG tracking parameters into metadata for asset tracking
+            # These are needed by executors to record asset materializations
+            job_metadata = work_info.data.copy()
+            if work_info.dag_id:
+                job_metadata['dag_id'] = work_info.dag_id
+                job_metadata['node_task_id'] = (
+                    work_info.id
+                )  # job ID serves as node task ID
+
             await self.job_manager.submit_job(
                 entrypoint=entrypoint,
                 submission_id=submission_id,
-                metadata=work_info.data,
+                metadata=job_metadata,
                 confirmation_event=confirmation_event,
             )
 
@@ -1554,6 +1572,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"Job with submission_id {submission_id} already exists. "
                 "Please use a different submission_id."
             )
+
+        # Asset registration removed - assets are now tracked dynamically
+        # as they are materialized by executors
 
         await self.frontier.add_dag(plan, dag_nodes)
         await self.notify_event()
