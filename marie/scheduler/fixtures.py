@@ -67,13 +67,14 @@ def create_job_table(schema: str):
       soft_sla timestamptz,
       hard_sla timestamptz,
       sla_miss_logged boolean not null default false,
+      branch_metadata jsonb,              -- Branch execution metadata for tracking
       lease_owner text,
       lease_expires_at timestamptz,
       lease_epoch bigint DEFAULT 0,     -- monotonic per-lease CAS
       run_owner text,                     -- executor id once ACTIVE
       run_lease_expires_at timestamptz   -- optional executor heartbeat lease
      -- CONSTRAINT job_pkey PRIMARY KEY (name, id) -- adde via partition
-    ) 
+    )
     PARTITION BY LIST (name)
     """
 
@@ -100,7 +101,7 @@ def create_job_history_table(schema: str):
       created_on timestamptz not null default now(),
       started_on timestamptz,
       completed_on timestamptz,
-      keep_until timestamptz not null default now() + interval '14 days',       
+      keep_until timestamptz not null default now() + interval '14 days',
       output jsonb,
       dead_letter text,
       policy text,
@@ -112,6 +113,7 @@ def create_job_history_table(schema: str):
       dag_id uuid not null,
       job_level integer not null default 0,
       dependencies jsonb default '[]'::jsonb,
+      branch_metadata jsonb,              -- Branch execution metadata for tracking
       history_created_on timestamptz not null default now()
     )
     """
@@ -123,19 +125,19 @@ def create_job_update_trigger_function(schema: str):
     RETURNS TRIGGER AS $$
     BEGIN
         INSERT INTO {schema}.job_history (
-            id, name, priority, data, state, retry_limit, retry_count, retry_delay, 
-            retry_backoff, start_after, expire_in, created_on, started_on, 
+            id, name, priority, data, state, retry_limit, retry_count, retry_delay,
+            retry_backoff, start_after, expire_in, created_on, started_on,
             completed_on, keep_until, output, dead_letter, policy, duration,
             sla_interval, soft_sla, hard_sla, sla_miss_logged,
-            dag_id, job_level, dependencies, history_created_on
+            dag_id, job_level, dependencies, branch_metadata, history_created_on
         )
         VALUES (
-            NEW.id, NEW.name, NEW.priority, NEW.data, NEW.state, NEW.retry_limit, 
-            NEW.retry_count, NEW.retry_delay, NEW.retry_backoff, NEW.start_after, 
-            NEW.expire_in, NEW.created_on, NEW.started_on, NEW.completed_on, 
+            NEW.id, NEW.name, NEW.priority, NEW.data, NEW.state, NEW.retry_limit,
+            NEW.retry_count, NEW.retry_delay, NEW.retry_backoff, NEW.start_after,
+            NEW.expire_in, NEW.created_on, NEW.started_on, NEW.completed_on,
             NEW.keep_until, NEW.output, NEW.dead_letter, NEW.policy, NEW.duration,
             NEW.sla_interval, NEW.soft_sla, NEW.hard_sla, NEW.sla_miss_logged,
-            NEW.dag_id, NEW.job_level, NEW.dependencies, now()
+            NEW.dag_id, NEW.job_level, NEW.dependencies, NEW.branch_metadata, now()
         );
         RETURN NEW;
     END;
@@ -334,8 +336,31 @@ def create_index_job_name(schema):
 
 def create_index_job_fetch(schema):
     return f"""
-    CREATE INDEX job_fetch ON {schema}.job (name text_pattern_ops, start_after) 
+    CREATE INDEX job_fetch ON {schema}.job (name text_pattern_ops, start_after)
     WHERE state < '{WorkState.ACTIVE.value}'
+    """
+
+
+def create_index_branch_metadata(schema):
+    """Create GIN index on branch_metadata for efficient JSON queries"""
+    return f"""
+    CREATE INDEX job_branch_metadata_idx ON {schema}.job USING gin(branch_metadata)
+    """
+
+
+def create_index_branch_skipped(schema):
+    """Create index for quickly finding skipped jobs"""
+    return f"""
+    CREATE INDEX job_branch_skipped_idx ON {schema}.job ((branch_metadata->>'skipped'))
+    WHERE branch_metadata->>'skipped' = 'true'
+    """
+
+
+def create_index_branch_node_type(schema):
+    """Create index for finding BRANCH/SWITCH nodes"""
+    return f"""
+    CREATE INDEX job_branch_node_type_idx ON {schema}.job ((branch_metadata->>'node_type'))
+    WHERE branch_metadata->>'node_type' IN ('BRANCH', 'SWITCH')
     """
 
 

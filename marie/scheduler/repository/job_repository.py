@@ -339,6 +339,61 @@ class JobRepository(PostgresqlMixin):
 
         return await self._loop.run_in_executor(self._db_executor, db_call)
 
+    async def update_job_metadata(
+        self,
+        job_id: str,
+        queue_name: str,
+        metadata_updates: Dict[str, Any],
+    ) -> bool:
+        """
+        Update specific metadata fields for a job (e.g., branch_metadata).
+
+        :param job_id: Job ID
+        :param queue_name: Queue/partition name
+        :param metadata_updates: Dict of fields to update (e.g., {"branch_metadata": {...}})
+        :return: True if updated, False otherwise
+        """
+
+        def db_call():
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+
+                # Build dynamic UPDATE fields for JSONB columns
+                update_fields = []
+                params = []
+
+                for field_name, field_value in metadata_updates.items():
+                    update_fields.append(f"{field_name} = %s")
+                    params.append(Json(field_value))
+
+                params.extend([queue_name, job_id])  # WHERE clause parameters
+
+                cursor.execute(
+                    f"""
+                    UPDATE {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                    SET {', '.join(update_fields)}
+                    WHERE name = %s AND id = %s
+                    """,
+                    tuple(params),
+                )
+
+                updated = cursor.rowcount > 0
+                conn.commit()
+                return updated
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error updating job metadata: {error}")
+                if conn:
+                    conn.rollback()
+                return False
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
     async def mark_jobs_as_active(self, job_ids: List[str], job_name: str) -> int:
         """
         Mark multiple jobs as active.

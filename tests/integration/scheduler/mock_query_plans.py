@@ -833,7 +833,7 @@ def query_planner_mock_branch_simple(planner_info: PlannerInfo, **kwargs) -> Que
         dependencies=[start.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_a://document/classify",
+            endpoint="mock_executor_a://document/process",
             params={"layout": layout},
         ),
     )
@@ -1006,7 +1006,7 @@ def query_planner_mock_switch_complexity(planner_info: PlannerInfo, **kwargs) ->
         dependencies=[start.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_a://document/analyze",
+            endpoint="mock_executor_a://document/process",
             params={"layout": layout},
         ),
     )
@@ -1153,7 +1153,7 @@ def query_planner_mock_branch_multi_condition(planner_info: PlannerInfo, **kwarg
         dependencies=[start.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_a://document/classify",
+            endpoint="mock_executor_a://document/process",
             params={"layout": layout},
         ),
     )
@@ -1301,7 +1301,7 @@ def query_planner_mock_branch_multi_condition(planner_info: PlannerInfo, **kwarg
         dependencies=[merger.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_e://document/validate",
+            endpoint="mock_executor_e://document/process",
             params={"layout": layout},
         ),
     )
@@ -1365,7 +1365,7 @@ def query_planner_mock_nested_branches(planner_info: PlannerInfo, **kwargs) -> Q
         dependencies=[start.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_a://document/classify",
+            endpoint="mock_executor_a://document/process",
             params={"layout": layout},
         ),
     )
@@ -1421,7 +1421,7 @@ def query_planner_mock_nested_branches(planner_info: PlannerInfo, **kwargs) -> Q
         dependencies=[branch1.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_b://document/analyze",
+            endpoint="mock_executor_b://document/process",
             params={"layout": layout},
         ),
     )
@@ -1436,7 +1436,7 @@ def query_planner_mock_nested_branches(planner_info: PlannerInfo, **kwargs) -> Q
         dependencies=[branch1.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_e://document/validate",
+            endpoint="mock_executor_e://document/process",
             params={"layout": layout, "doc_type": "contract"},
         ),
     )
@@ -1491,7 +1491,7 @@ def query_planner_mock_nested_branches(planner_info: PlannerInfo, **kwargs) -> Q
         dependencies=[branch2.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_c://document/validate",
+            endpoint="mock_executor_c://document/process",
             params={"layout": layout, "mode": "fast"},
         ),
     )
@@ -1506,7 +1506,7 @@ def query_planner_mock_nested_branches(planner_info: PlannerInfo, **kwargs) -> Q
         node_type=QueryType.COMPUTE,
         definition=LlmQueryDefinition(
             model_name="deepseek_r1_32",
-            endpoint="mock_executor_d://document/validate",
+            endpoint="mock_executor_d://document/process",
             params={"layout": layout, "mode": "enhanced"},
         ),
     )
@@ -1584,7 +1584,7 @@ def query_planner_mock_branch_python_function(planner_info: PlannerInfo, **kwarg
         dependencies=[start.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_a://document/analyze",
+            endpoint="mock_executor_a://document/process",
             params={"layout": layout, "compute_risk_score": True},
         ),
     )
@@ -1734,7 +1734,7 @@ def query_planner_mock_branch_jsonpath_advanced(planner_info: PlannerInfo, **kwa
         dependencies=[start.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_a://document/extract",
+            endpoint="mock_executor_a://document/process",
             params={"layout": layout, "extract_recipients": True, "extract_tags": True},
         ),
     )
@@ -1843,7 +1843,7 @@ def query_planner_mock_branch_jsonpath_advanced(planner_info: PlannerInfo, **kwa
         node_type=QueryType.COMPUTE,
         definition=LlmQueryDefinition(
             model_name="deepseek_r1_32",
-            endpoint="mock_executor_d://document/expedite",
+            endpoint="mock_executor_d://document/process",
             params={"layout": layout, "mode": "urgent"},
         ),
     )
@@ -1942,7 +1942,7 @@ def query_planner_mock_branch_all_match(planner_info: PlannerInfo, **kwargs) -> 
         node_type=QueryType.COMPUTE,
         definition=LlmQueryDefinition(
             model_name="deepseek_r1_32",
-            endpoint="mock_executor_a://document/classify",
+            endpoint="mock_executor_a://document/process",
             params={"layout": layout, "detect_content_types": True},
         ),
     )
@@ -2015,7 +2015,7 @@ def query_planner_mock_branch_all_match(planner_info: PlannerInfo, **kwargs) -> 
         dependencies=[branch.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_b://document/review",
+            endpoint="mock_executor_b://document/process",
             params={"layout": layout, "review_type": "legal"},
         ),
     )
@@ -2029,7 +2029,7 @@ def query_planner_mock_branch_all_match(planner_info: PlannerInfo, **kwargs) -> 
         dependencies=[branch.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_c://document/review",
+            endpoint="mock_executor_c://document/process",
             params={"layout": layout, "review_type": "financial"},
         ),
     )
@@ -2043,7 +2043,7 @@ def query_planner_mock_branch_all_match(planner_info: PlannerInfo, **kwargs) -> 
         dependencies=[branch.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_d://document/review",
+            endpoint="mock_executor_d://document/process",
             params={"layout": layout, "review_type": "compliance"},
         ),
     )
@@ -2076,7 +2076,7 @@ def query_planner_mock_branch_all_match(planner_info: PlannerInfo, **kwargs) -> 
         dependencies=[merger.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_e://document/validate",
+            endpoint="mock_executor_e://document/process",
             params={"layout": layout},
         ),
     )
@@ -2140,7 +2140,7 @@ def query_planner_mock_branch_regex_matching(planner_info: PlannerInfo, **kwargs
         dependencies=[start.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="mock_executor_a://document/extract",
+            endpoint="mock_executor_a://document/process",
             params={"layout": layout, "extract_primary_field": True},
         ),
     )
