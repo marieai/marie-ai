@@ -23,9 +23,16 @@ from marie.messaging import mark_as_complete as mark_as_complete_toast
 from marie.messaging import mark_as_started as mark_as_started_toast
 from marie.query_planner.base import (
     QueryPlan,
+    QueryType,
+)
+from marie.query_planner.branching import (
+    BranchQueryDefinition,
+    SkipReason,
+    SwitchQueryDefinition,
 )
 from marie.query_planner.builtin import register_all_known_planners
 from marie.query_planner.model import QueryPlannersConf
+from marie.scheduler.branch_evaluator import BranchEvaluationContext, BranchEvaluator
 from marie.scheduler.dag_topology_cache import DagTopologyCache
 from marie.scheduler.fixtures import *
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
@@ -180,6 +187,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             QueryPlannersConf.from_dict(config.get("query_planners", {}))
         )
 
+        # Initialize BranchEvaluator for conditional branching
+        self.branch_evaluator = BranchEvaluator()
+
         dag_config = config.get("dag_manager", {})
         min_concurrent_dags = int(dag_config.get("min_concurrent_dags", 1))
         max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
@@ -273,6 +283,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             elif status == JobStatus.SUCCEEDED:
                 await self.complete(job_id, work_item)
                 await self.frontier.on_job_completed(job_id)
+
+                # Check if this is a branch node and evaluate paths if so
+                dag_plan = await self.get_dag_by_id(work_item.dag_id)
+                if dag_plan:
+                    node = get_node_from_dag(job_id, dag_plan)
+                    if node and self._is_branch_node(node):
+                        self.logger.info(
+                            f"Completed branch node detected: {job_id}. Evaluating paths..."
+                        )
+                        await self._evaluate_and_mark_branch_paths(
+                            job_id, work_item, dag_plan
+                        )
             elif status == JobStatus.FAILED:
                 await self.fail(job_id, work_item)
                 await self.frontier.on_job_failed(job_id)
@@ -295,6 +317,210 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         except Exception as e:
             self.logger.error(
                 f"Error handling job event {event_type} for job {job_id}: {e}"
+            )
+
+    def _is_branch_node(self, node) -> bool:
+        """Check if a node is a BRANCH or SWITCH node."""
+        if not node or not hasattr(node, 'definition'):
+            return False
+
+        # Check if it's a BRANCH or SWITCH query type
+        return isinstance(
+            node.definition, (BranchQueryDefinition, SwitchQueryDefinition)
+        )
+
+    async def _evaluate_and_mark_branch_paths(
+        self, branch_node_id: str, work_item: WorkInfo, dag_plan: QueryPlan
+    ) -> None:
+        """
+        Evaluate a branch node and mark its child paths as READY or SKIPPED.
+
+        :param branch_node_id: ID of the completed branch node
+        :param work_item: WorkInfo of the branch node
+        :param dag_plan: The DAG plan containing the branch
+        """
+        try:
+            self.logger.info(f"Evaluating branch paths for node: {branch_node_id}")
+
+            # Get the branch node from the DAG
+            branch_node = get_node_from_dag(branch_node_id, dag_plan)
+            if not branch_node or not self._is_branch_node(branch_node):
+                self.logger.warning(
+                    f"Node {branch_node_id} is not a branch node, skipping evaluation"
+                )
+                return
+
+            branch_def = branch_node.definition
+
+            # Build evaluation context
+            # TODO: Gather execution results from previous nodes if needed
+            execution_results = {}
+            context = BranchEvaluationContext(
+                work_info=work_item,
+                dag_plan=dag_plan,
+                branch_node=branch_node,
+                execution_results=execution_results,
+            )
+
+            # Evaluate the branch to determine active paths
+            if isinstance(branch_def, BranchQueryDefinition):
+                active_path_ids = await self.branch_evaluator.evaluate_branch(
+                    branch_def, context
+                )
+            elif isinstance(branch_def, SwitchQueryDefinition):
+                active_path_ids = await self.branch_evaluator.evaluate_switch(
+                    branch_def, context
+                )
+            else:
+                self.logger.error(f"Unknown branch definition type: {type(branch_def)}")
+                return
+
+            self.logger.info(
+                f"Branch evaluation complete. Active paths: {active_path_ids}"
+            )
+
+            # Mark active paths' target nodes as READY
+            # Mark inactive paths' target nodes as SKIPPED
+            all_target_nodes = set()
+            active_target_nodes = set()
+
+            # Collect all target nodes from all paths
+            for path in branch_def.paths:
+                all_target_nodes.update(path.target_node_ids)
+                if path.path_id in active_path_ids:
+                    active_target_nodes.update(path.target_node_ids)
+
+            # Nodes to skip are all targets minus active targets
+            skipped_target_nodes = all_target_nodes - active_target_nodes
+
+            # Mark active nodes as READY (CREATED state)
+            if active_target_nodes:
+                await self._mark_nodes_ready(list(active_target_nodes), work_item.name)
+                self.logger.info(
+                    f"Marked {len(active_target_nodes)} nodes as READY: {active_target_nodes}"
+                )
+
+            # Mark skipped nodes as SKIPPED and cascade to descendants
+            if skipped_target_nodes:
+                skip_reason = SkipReason(
+                    branch_node_id=branch_node_id,
+                    reason=f"Branch condition not met. Active paths: {active_path_ids}",
+                    evaluated_condition={"active_paths": active_path_ids},
+                    selected_paths=active_path_ids,
+                    timestamp=datetime.now(timezone.utc),
+                )
+                await self._mark_nodes_skipped(
+                    list(skipped_target_nodes),
+                    work_item.name,
+                    skip_reason,
+                    dag_plan,
+                )
+                self.logger.info(
+                    f"Marked {len(skipped_target_nodes)} nodes as SKIPPED: {skipped_target_nodes}"
+                )
+
+        except Exception as e:
+            self.logger.error(
+                f"Error evaluating branch paths for {branch_node_id}: {e}",
+                exc_info=True,
+            )
+
+    async def _mark_nodes_ready(self, node_ids: list[str], queue_name: str) -> None:
+        """Mark nodes as READY (keep them in CREATED state)."""
+        # Nodes that should be executed remain in CREATED state
+        # The scheduler will pick them up once their dependencies are met
+        self.logger.debug(f"Nodes marked as ready: {node_ids}")
+        # No database update needed - they're already in CREATED state
+
+    async def _mark_nodes_skipped(
+        self,
+        node_ids: list[str],
+        queue_name: str,
+        skip_reason: SkipReason,
+        dag_plan: QueryPlan,
+    ) -> None:
+        """
+        Mark nodes as SKIPPED and cascade to descendants.
+
+        :param node_ids: List of node IDs to mark as skipped
+        :param queue_name: Queue name for the jobs
+        :param skip_reason: Reason for skipping
+        :param dag_plan: DAG plan to find descendants
+        """
+        if not node_ids:
+            return
+
+        try:
+            # Mark nodes as SKIPPED in database
+            skip_metadata = {
+                "skip_reason": skip_reason.dict(),
+                "skipped_at": skip_reason.timestamp.isoformat(),
+            }
+
+            await self.repository.mark_jobs_as_skipped(
+                job_ids=node_ids,
+                queue_name=queue_name,
+                output_metadata=skip_metadata,
+            )
+
+            # Update frontier to mark these as skipped
+            for node_id in node_ids:
+                await self.frontier.update_job_state(node_id, WorkState.SKIPPED)
+                await self.frontier.on_job_completed(node_id)  # Remove from ready queue
+
+            # Cascade skip to all descendants
+            await self._cascade_skip_to_descendants(
+                node_ids, queue_name, skip_reason, dag_plan
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error marking nodes as skipped: {e}", exc_info=True)
+
+    async def _cascade_skip_to_descendants(
+        self,
+        skipped_node_ids: list[str],
+        queue_name: str,
+        skip_reason: SkipReason,
+        dag_plan: QueryPlan,
+    ) -> None:
+        """
+        Recursively mark all descendants of skipped nodes as SKIPPED.
+
+        :param skipped_node_ids: List of skipped node IDs
+        :param queue_name: Queue name
+        :param skip_reason: Original skip reason
+        :param dag_plan: DAG plan to traverse
+        """
+        if not skipped_node_ids:
+            return
+
+        descendants = set()
+
+        # Find all descendants using the DAG structure
+        for node_id in skipped_node_ids:
+            node = get_node_from_dag(node_id, dag_plan)
+            if not node:
+                continue
+
+            # Traverse the DAG to find all downstream nodes
+            # This is a simplified traversal - in production, use topology cache
+            for query in dag_plan.queries:
+                if node_id in query.depends_on:
+                    descendants.add(query.query)
+
+        if descendants:
+            # Create cascaded skip reason
+            cascaded_reason = SkipReason(
+                branch_node_id=skip_reason.branch_node_id,
+                reason=f"Ancestor node(s) skipped: {skipped_node_ids}",
+                evaluated_condition=skip_reason.evaluated_condition,
+                selected_paths=skip_reason.selected_paths,
+                timestamp=datetime.now(timezone.utc),
+            )
+
+            # Mark descendants as skipped
+            await self._mark_nodes_skipped(
+                list(descendants), queue_name, cascaded_reason, dag_plan
             )
 
     async def _handle_dag_state_notification(self, payload: dict):

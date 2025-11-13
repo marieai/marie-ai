@@ -62,6 +62,22 @@ class MergerOperatorConfig(BaseOperator):
     pass
 
 
+class BranchOperatorConfig(BaseOperator):
+    """
+    Operator structure for BRANCH tasks.
+    """
+
+    pass
+
+
+class SwitchOperatorConfig(BaseOperator):
+    """
+    Operator structure for SWITCH tasks.
+    """
+
+    pass
+
+
 def has_mapper_config(base_dir: str, layout_name: str) -> bool:
     """
     Check if the mapper configuration file exists for a given layout.
@@ -137,7 +153,13 @@ class JobMetadata(BaseModel):
             f"Processing task: {task}",
         )
 
+        # Handle both string and enum types for node_type
         task_type = task.node_type
+        if hasattr(task_type, 'value'):
+            # It's an enum, get the string value
+            task_type = task_type.value
+        task_type = str(task_type).upper()
+
         task_definition = task.definition
         method = task_definition.method if task_definition.method else "NOOP"
         endpoint = (
@@ -194,6 +216,16 @@ class JobMetadata(BaseModel):
             params['model_name'] = model_name
         elif method == "NOOP":
             executor_endpoint = "noop://noop"
+        elif method == "BRANCH":
+            # BRANCH nodes are control flow nodes that don't execute on an executor
+            # They evaluate conditions and mark paths as active or skipped
+            executor_endpoint = "branch://control"
+        elif method == "SWITCH":
+            # SWITCH nodes are control flow nodes for value-based routing
+            executor_endpoint = "switch://control"
+        elif method == "MERGER_ENHANCED":
+            # Enhanced merger that handles skipped branches
+            executor_endpoint = endpoint if has_executor else "merger://control"
         else:
             raise ValueError(f"Unsupported method type: {method}")
 
@@ -220,13 +252,15 @@ class JobMetadataFactory:
         """
         Retrieve the Pydantic model class corresponding to a node type.
 
-        :param node_type: The node type, e.g., "EXTRACTOR", "COMPUTE", "MERGER".
+        :param node_type: The node type, e.g., "EXTRACTOR", "COMPUTE", "MERGER", "BRANCH", "SWITCH".
         :return: The corresponding class derived from BaseOperator.
         """
         type_mapping = {
             "EXTRACTOR": ExtractorOperatorConfig,
             "COMPUTE": ComputeOperatorConfig,
             "MERGER": MergerOperatorConfig,
+            "BRANCH": BranchOperatorConfig,
+            "SWITCH": SwitchOperatorConfig,
         }
         return type_mapping.get(node_type, BaseOperator)
 

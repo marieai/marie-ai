@@ -1503,6 +1503,73 @@ class JobRepository(PostgresqlMixin):
 
         return await self._loop.run_in_executor(self._db_executor, db_call)
 
+    async def mark_jobs_as_skipped(
+        self,
+        job_ids: list[str],
+        queue_name: str,
+        output_metadata: dict = None,
+        schema: str = DEFAULT_SCHEMA,
+    ) -> int:
+        """
+        Mark jobs as SKIPPED. This is used for branch paths that were not selected.
+
+        :param job_ids: List of job IDs to mark as skipped
+        :param queue_name: The name of the queue
+        :param output_metadata: Optional metadata to store (e.g., skip_reason)
+        :param schema: The database schema (default: marie_scheduler)
+        :return: Number of jobs marked as skipped
+        """
+        if not job_ids:
+            return 0
+
+        self.logger.info(f"Marking {len(job_ids)} jobs as SKIPPED: {job_ids}")
+
+        def db_call():
+            cursor = None
+            conn = None
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+
+                # Update jobs to SKIPPED state
+                cursor.execute(
+                    f"""
+                    UPDATE {schema}.{queue_name}
+                    SET state = 'skipped',
+                        completed_on = NOW(),
+                        output = %s
+                    WHERE id = ANY(%s)
+                      AND state NOT IN ('completed', 'failed', 'cancelled', 'skipped')
+                    """,
+                    (
+                        Json({"on_skip": "skipped", **(output_metadata or {})}),
+                        job_ids,
+                    ),
+                )
+
+                count = cursor.rowcount
+                conn.commit()
+
+                if count > 0:
+                    self.logger.info(f"Marked {count} jobs as SKIPPED")
+                else:
+                    self.logger.warning(
+                        f"No jobs were marked as SKIPPED (may already be in terminal state)"
+                    )
+
+                return count
+
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error marking jobs as skipped: {error}")
+                if conn:
+                    conn.rollback()
+                return 0
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
     async def close(self):
         """
         Close the repository and cleanup resources.
