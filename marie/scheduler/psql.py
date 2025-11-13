@@ -332,7 +332,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def _process_control_flow_node(self, wi: WorkInfo) -> None:
         """
-        Process a control flow node (NOOP, BRANCH, or SWITCH).
+        Process a control flow node (NOOP, BRANCH, SWITCH, or MERGER).
         These nodes don't execute on executors - they're completed locally.
 
         :param wi: WorkInfo for the control flow node
@@ -404,6 +404,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             elif node_type == "noop":
                 # NOOP nodes just complete
                 self.logger.info(f"[CONTROL_FLOW] Completing NOOP node {wi.id}")
+                await self.complete(wi.id, wi, {}, force=True)
+
+            elif node_type == "merger":
+                # MERGER nodes wait for branches to complete via dependencies
+                # The actual merge logic is handled by the dependency system
+                # MERGER can complete immediately - dependencies prevent it from
+                # running until all required branches are done
+                self.logger.info(
+                    f"[CONTROL_FLOW] Completing MERGER node {wi.id} "
+                    "(merge logic handled by dependencies)"
+                )
                 await self.complete(wi.id, wi, {}, force=True)
 
             else:
@@ -653,19 +664,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param branch_metadata: Metadata about branch evaluation/selection
         """
         try:
-            # Update in repository
+            # Update in repository (database is source of truth)
             await self.repository.update_job_metadata(
                 job_id=job_id,
                 queue_name=queue_name,
                 metadata_updates={"branch_metadata": branch_metadata},
             )
-
-            # Update in frontier if job is in memory
-            job = await self.frontier.get_job(job_id)
-            if job:
-                if "branch_metadata" not in job.data:
-                    job.data["branch_metadata"] = {}
-                job.data["branch_metadata"].update(branch_metadata)
 
             self.logger.debug(
                 f"Updated branch_metadata for job {job_id}: {branch_metadata}"
@@ -1186,9 +1190,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         )
                         continue
 
-                    # Check if this is a control flow node (noop, branch, switch)
+                    # Check if this is a control flow node (noop, branch, switch, merger)
                     exe = ep.split("://", 1)[0].lower()
-                    if exe in ("noop", "branch", "switch"):
+                    if exe in ("noop", "branch", "switch", "merger"):
                         control_flow_jobs.append(wi)
                     else:
                         regular_candidates.append(wi)
