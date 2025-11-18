@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from multiprocessing import Queue
 from pathlib import Path
