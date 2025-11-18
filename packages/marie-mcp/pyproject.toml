@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marie-mcp"
+version = "0.1.0"
+description = "MCP server for Marie AI document intelligence platform"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Marie AI", email = "support@marieai.co"}
+]
+keywords = ["mcp", "marie", "ai", "document-processing", "ocr", "data-extraction"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "mcp>=1.6.0",
+    "httpx>=0.24.0",
+    "python-dotenv>=1.0.0",
+    "aiofiles>=24.1.0",
+    "tenacity>=9.1.2",
+    "pydantic>=2.0.0",
+    "boto3>=1.26.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-httpx>=0.22.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/marieai/marie-ai"
+Documentation = "https://docs.marieai.co"
+Repository = "https://github.com/marieai/marie-ai"
+Issues = "https://github.com/marieai/marie-ai/issues"
+
+[project.scripts]
+marie-mcp = "marie_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/marie_mcp"]
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
