@@ -17,7 +17,6 @@ class RabbitMQToastHandler(ToastHandler):
 
     def __init__(self, config: Any, **kwargs: Any):
         self.config = config
-        print('Initializing RabbitMQToastHandler with config:', config)
         self.logger = MarieLogger(context=self.__class__.__name__)
         self._client: AsyncPikaClient | None = None
         self._client_ready = asyncio.Lock()  # serialize first-time init

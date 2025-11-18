@@ -1242,6 +1242,7 @@ class JobRepository(PostgresqlMixin):
             "lease/hydrate_frontier_jobs.sql",
             "lease/lease_jobs_by_id.sql",
             "lease/reap_expired_leases.sql",
+            "assets.sql",
         ]
 
         commands.extend(

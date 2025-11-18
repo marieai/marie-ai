@@ -191,6 +191,7 @@ def get_main_parser():
     from marie.parsers.flow import set_flow_parser
     from marie.parsers.helper import _SHOW_ALL_ARGS, _chf
     from marie.parsers.ping import set_ping_parser
+    from marie.parsers.scaffold import set_scaffold_parser
     from marie.parsers.server import set_server_parser
 
     # create the top-level parser
@@ -242,6 +243,15 @@ def get_main_parser():
             "new",
             help="Create a new Marie project",
             description="Create a new Marie project with a predefined template",
+            formatter_class=_chf,
+        )
+    )
+
+    set_scaffold_parser(
+        sp.add_parser(
+            "scaffold",
+            help="Scaffold components from templates",
+            description="Generate boilerplate code for executors, assets, and other components",
             formatter_class=_chf,
         )
     )

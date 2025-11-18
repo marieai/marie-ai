@@ -86,6 +86,16 @@ class GatewayJobDistributor(JobDistributor):
         parameters, asset_doc = await parse_payload_to_docs(metadata)
         parameters["job_id"] = submission_id
         parameters["payload"] = metadata
+
+        # Pass through DAG tracking parameters for asset materialization
+        # These are set by the scheduler when dispatching DAG jobs
+        if "dag_id" in job_info.metadata:
+            parameters["dag_id"] = job_info.metadata["dag_id"]
+        if "node_task_id" in job_info.metadata:
+            parameters["node_task_id"] = job_info.metadata["node_task_id"]
+        if "partition_key" in job_info.metadata:
+            parameters["partition_key"] = job_info.metadata["partition_key"]
+
         return parameters, asset_doc
 
     def _resolve_endpoint(self, submission_id: str, entrypoint: str):
