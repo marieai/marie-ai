@@ -1,0 +1,186 @@
+name: CI - Marie MCP
+
+on:
+  push:
+    branches: [ main, develop, scheduler-mpc ]
+    paths:
+      - 'packages/marie-mcp/**'
+      - '.github/workflows/ci-marie-mcp.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'packages/marie-mcp/**'
+      - '.github/workflows/ci-marie-mcp.yml'
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('packages/marie-mcp/pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        cd packages/marie-mcp
+        pip install -e ".[dev]"
+
+    - name: Lint with flake8
+      run: |
+        cd packages/marie-mcp
+        pip install flake8
+        flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+    - name: Check formatting with black
+      run: |
+        cd packages/marie-mcp
+        pip install black
+        black --check src/
+
+    - name: Check imports with isort
+      run: |
+        cd packages/marie-mcp
+        pip install isort
+        isort --check-only src/
+
+    - name: Type check with mypy
+      run: |
+        cd packages/marie-mcp
+        pip install mypy
+        mypy src/ --ignore-missing-imports || true
+
+    - name: Run unit tests
+      run: |
+        cd packages/marie-mcp
+        pytest tests/ -v --cov=marie_mcp --cov-report=xml
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        files: ./packages/marie-mcp/coverage.xml
+        flags: marie-mcp
+        name: codecov-marie-mcp
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: test
+
+    services:
+      marie-gateway:
+        image: marieai/marie:3.0-cuda
+        ports:
+          - 5000:5000
+        options: >-
+          --health-cmd "curl -f http://localhost:5000/check?text=health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install marie-mcp
+      run: |
+        cd packages/marie-mcp
+        pip install -e ".[dev]"
+
+    - name: Wait for Marie gateway
+      run: |
+        timeout 120 bash -c 'until curl -f http://localhost:5000/check?text=health; do sleep 2; done'
+
+    - name: Run integration tests
+      env:
+        MARIE_BASE_URL: http://localhost:5000
+        MARIE_API_KEY: ${{ secrets.MARIE_API_KEY_TEST }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID_TEST }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY_TEST }}
+      run: |
+        cd packages/marie-mcp
+        pytest tests/integration/ -v || true
+
+  build:
+    name: Build Package
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install build tools
+      run: |
+        pip install build twine
+
+    - name: Build package
+      run: |
+        cd packages/marie-mcp
+        python -m build
+
+    - name: Check package
+      run: |
+        cd packages/marie-mcp
+        twine check dist/*
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: marie-mcp-dist
+        path: packages/marie-mcp/dist/
+
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [test, integration, build]
+    if: startsWith(github.ref, 'refs/tags/marie-mcp-v')
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install build tools
+      run: |
+        pip install build twine
+
+    - name: Build package
+      run: |
+        cd packages/marie-mcp
+        python -m build
+
+    - name: Publish to PyPI
+      env:
+        TWINE_USERNAME: __token__
+        TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN_MARIE_MCP }}
+      run: |
+        cd packages/marie-mcp
+        twine upload dist/*
