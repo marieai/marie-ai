@@ -1,1 +1,1 @@
-from .executor import IntegrationExecutorMock
+from .mock_executor import IntegrationExecutorMock

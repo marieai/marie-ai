@@ -43,10 +43,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/marieai/marie-mcp-server"
+Homepage = "https://github.com/marieai/marie-ai"
 Documentation = "https://docs.marieai.co"
-Repository = "https://github.com/marieai/marie-mcp-server"
-Issues = "https://github.com/marieai/marie-mcp-server/issues"
+Repository = "https://github.com/marieai/marie-ai"
+Issues = "https://github.com/marieai/marie-ai/issues"
 
 [project.scripts]
 marie-mcp = "marie_mcp.server:main"

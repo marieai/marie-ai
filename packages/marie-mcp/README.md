@@ -362,4 +362,3 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 - [Marie AI](https://github.com/marieai/marie-ai) - Main Marie AI platform
 - [Model Context Protocol](https://modelcontextprotocol.io/) - MCP specification
-- [Upstage MCP](https://github.com/upstage-ai/mcp-upstage) - Inspiration for this project
