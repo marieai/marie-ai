@@ -1799,10 +1799,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             return False
 
         try:
+            # Inject DAG tracking parameters into metadata for asset tracking
+            # These are needed by executors to record asset materializations
+            job_metadata = work_info.data.copy()
+            if work_info.dag_id:
+                job_metadata['dag_id'] = work_info.dag_id
+                job_metadata['node_task_id'] = (
+                    work_info.id
+                )  # job ID serves as node task ID
+
             await self.job_manager.submit_job(
                 entrypoint=entrypoint,
                 submission_id=submission_id,
-                metadata=work_info.data,
+                metadata=job_metadata,
                 confirmation_event=confirmation_event,
             )
 

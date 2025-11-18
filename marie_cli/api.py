@@ -224,6 +224,19 @@ def cloud(args: "Namespace"):
     raise NotImplementedError
 
 
+def scaffold(args: "Namespace"):
+    """
+    Scaffold components from templates
+    :param args: arguments coming from the CLI.
+    """
+    if args.scaffold_type == "asset":
+        from marie.scaffolding.asset import scaffold_asset
+
+        scaffold_asset(args)
+    else:
+        raise ValueError(f"Unknown scaffold type: {args.scaffold_type}")
+
+
 def server(args: "Namespace"):
     """
     Marie server CLI
