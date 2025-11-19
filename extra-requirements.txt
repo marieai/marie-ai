@@ -86,11 +86,15 @@ black==24.3.0:              test
 kubernetes>=18.20.0,<31.0.0: test
 pytest-kind==22.11.1:       test
 pytest-lazy-fixture:        test
+torch:                      cicd
 psutil:                     test
 strawberry-graphql>=0.96.0: cicd,devel
 
+
 watchfiles>=0.18.0:           devel
 urllib3>=1.25.9,<2.0.0:       core
+transformers==4.49:           standard,core
+#flash-attn==2.7.2.post1:      standard,core
 anyconfig:                    standard,core
 
 # python-consul2:               standard,devel
@@ -110,7 +114,10 @@ imagecodecs:                  standard,core
 imutils:                      standard,core
 PyPDF4:                       standard,core
 reportlab:                    standard,core
-
+pycocotools:                  standard,core
+nltk:                         standard,core
+timm==1.0.11:                 standard,core
+#segmentation-models-pytorch:  standard,core
 Wand:                         standard,core
 
 Cython:                       standard,core
@@ -125,7 +132,14 @@ munch:                        standard,core
 
 # opentelemetry-api:          standard,core
 
+onnx:                         standard,core
+onnxruntime:                  standard,core
+onnxruntime-gpu:              standard,core
+# onnxconverter_common==1.13.0: standard,core
+# onnxmltools:                  standard,core
+
 pika:                         standard,core
+sentencepiece:                standard,core
 Levenshtein:                  standard,core
 boto3:                       standard,core
 sqlalchemy:                   standard,core
@@ -138,11 +152,18 @@ omegaconf==2.3.0:             standard,core
 hydra-core==1.3.1:            standard,core
 Pillow-SIMD:                  standard,core
 
+# INSTALLED VIA CONTAINER BUILD
 # https://github.com/facebookresearch/detectron2/issues/5010
-pillow~=9.5:                  standard,core
+# pillow~=9.5:                  standard,core
 
+pytesseract:                  standard,core
 patchify==0.2.3:              standard,core
 colorcet:                     standard,core
+fast_pytorch_kmeans:          standard,core
+
+sahi:                         standard,core
+openai-clip:                  standard,core
+efficientnet-pytorch:         standard,core
 seaborn:                      standard,core
 textual:                      standard,core
 textual_textarea:             standard,core
@@ -151,10 +172,20 @@ textual_fastdatatable:        standard,core
 # etcd3:                        standard,core
 
 typing_extensions>=4.12.2:    standard,core
+# DIRECTLY INSTALLED IN container
+vllm==0.7.3:                  standard,core
 rtree:                        standard,core
 scikit-image:                  standard,core
 filetype:                      standard,core
 dataclasses_json:              standard,core
+
+faiss-gpu-cu12:                standard,core
+sentence-transformers==5.1.0:  standard,core
 watchdog:                      standard,core
-cachetools==5.5.0:             standard,core
+
+qwen-vl-utils:                 standard,core
 portalocker==3.2.0:            standard,core
+peft==0.17.1:                  standard,core
+ruamel.yaml:                   standard,core
+tenacity:                      standard,core
+pydantic-settings:2.8.1        standard,core
