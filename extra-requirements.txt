@@ -189,3 +189,6 @@ peft==0.17.1:                  standard,core
 ruamel.yaml:                   standard,core
 tenacity:                      standard,core
 pydantic-settings:2.8.1        standard,core
+pydantic-settings:2.8.1        standard,core
+graphviz:                      standard,core
+networkx:                      standard,core
