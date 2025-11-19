@@ -28,6 +28,11 @@ from marie.query_planner.branching import (
     SkipReason,
     SwitchQueryDefinition,
 )
+from marie.query_planner.hitl import (
+    HitlApprovalQueryDefinition,
+    HitlCorrectionQueryDefinition,
+    HitlRouterQueryDefinition,
+)
 from marie.query_planner.jsonpath_evaluator import (
     ComparisonOperator,
     JSONPathCondition,
@@ -81,4 +86,8 @@ __all__ = [
     "JSONPathCondition",
     "JSONPathConditionGroup",
     "ComparisonOperator",
+    # HITL
+    "HitlApprovalQueryDefinition",
+    "HitlCorrectionQueryDefinition",
+    "HitlRouterQueryDefinition",
 ]
