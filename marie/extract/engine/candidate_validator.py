@@ -8,11 +8,57 @@ from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import (
     LocationType,
     MatchSection,
+    ResultType,
     ScanResult,
     TypedScanResult,
 )
+from marie.extract.models.models import LineModel
+from marie.extract.structures import UnstructuredDocument
+from marie.extract.structures.line_metadata import LineMetadata
+from marie.extract.structures.line_with_meta import LineWithMeta
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _create_end_of_context(document: UnstructuredDocument) -> TypedScanResult:
+    """
+    Creates an end-of-context stop cutpoint to ensure all document lines are included.
+
+    This function extracts the metadata from the last line of the given document
+    to calculate the location parameters for an end-of-context marker. It returns
+    a result specifying a stop location.
+
+    Args:
+        document (UnstructuredDocument): The document from the context.
+
+    Returns:
+        TypedScanResult: Encapsulates the location type and metadata indicating
+        the end-of-context marker.
+    """
+    last_line = document.lines[-1]
+    last_line_meta = last_line.metadata
+    page = last_line_meta.page_id
+    line = last_line_meta.line_id + 1
+
+    return TypedScanResult(
+        location_type=LocationType.STOP,
+        type=ResultType.CUTPOINT,
+        page=page,
+        line=LineWithMeta(
+            str(line),
+            LineMetadata(
+                page_id=page,
+                line_id=line,
+                model=LineModel(
+                    line=line,
+                    wordids=[],
+                    text="",
+                    bbox=[0, 0, 0, 0],
+                    confidence=1.0,
+                ),
+            ),
+        ),
+    )
 
 
 class CandidateValidator:
@@ -32,9 +78,6 @@ class CandidateValidator:
         assert context.document is not None, "Document cannot be None"
         document = context.document
 
-        first_line = document.lines[0]
-        last_line = document.lines[-1]
-
         starts = TypedScanResult.wrap(start_candidates, LocationType.START)
         stops = TypedScanResult.wrap(stop_candidates, LocationType.STOP)
 
@@ -52,7 +95,7 @@ class CandidateValidator:
             print(loc)
 
         # build our adaptive dfa, THIS NEED TO BE CONFIGURED via the config per layer/layout
-
+        first_line = document.lines[0]
         begin = State(
             "BEGIN", ScanResult(page=first_line.metadata.page_id, line=first_line)
         )
@@ -60,14 +103,7 @@ class CandidateValidator:
         continuation = State("CONTINUATION")
         stop = State("STOP")
 
-        end = State(
-            "END",
-            TypedScanResult(
-                location_type=LocationType.STOP,
-                page=last_line.metadata.page_id,
-                line=last_line,
-            ),
-        )
+        end = State("END", _create_end_of_context(document))
 
         dfa = AdaptiveDFA(initial_state=begin)
 
