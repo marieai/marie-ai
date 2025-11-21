@@ -770,6 +770,138 @@ class MarieServerGateway(CompositeServer):
                         "result": f"Failed to get capacity info: {str(e)}",
                     }
 
+            # Query Planner Management Endpoints
+            @app.get(
+                path="/api/planners",
+                summary="List all registered query planners",
+                tags=["Query Planners"],
+            )
+            async def list_planners():
+                """
+                Get a list of all registered query planners with their metadata.
+
+                Returns:
+                    List of planner metadata dictionaries
+                """
+                from marie.query_planner.base import QueryPlanRegistry
+
+                planners = QueryPlanRegistry.list_planners_with_metadata()
+                return {"planners": planners, "total": len(planners)}
+
+            @app.get(
+                path="/api/planners/{planner_id}",
+                summary="Get a specific query planner by ID",
+                tags=["Query Planners"],
+            )
+            async def get_planner(planner_id: str, response: Response):
+                """
+                Get metadata and plan definition for a specific query planner by ID.
+
+                Args:
+                    planner_id: ID of the query planner
+
+                Returns:
+                    Planner metadata including plan definition if available
+                """
+                from fastapi import status
+
+                from marie.query_planner.base import QueryPlanRegistry
+
+                metadata = QueryPlanRegistry.get_metadata_by_id(planner_id)
+
+                if metadata is None:
+                    response.status_code = status.HTTP_404_NOT_FOUND
+                    return {"error": f"Planner with ID '{planner_id}' not found"}
+
+                return metadata.model_dump()
+
+            @app.post(
+                path="/api/planners",
+                summary="Register a new query planner from JSON",
+                tags=["Query Planners"],
+                status_code=201,
+            )
+            async def register_planner(
+                name: str,
+                plan: Dict[str, Any],
+                description: Optional[str] = None,
+                version: str = "1.0.0",
+                tags: Optional[list] = None,
+                category: Optional[str] = None,
+                response: Response = None,
+            ):
+                """
+                Register a new query planner from a JSON plan definition.
+
+                This endpoint allows Marie Studio to publish query plan templates.
+
+                Args:
+                    name: Unique name for the planner
+                    plan: JSON plan definition (QueryPlan structure)
+                    description: Optional description
+                    version: Version string (default: "1.0.0")
+                    tags: Optional list of tags
+                    category: Optional category
+
+                Returns:
+                    Success message with planner metadata
+                """
+                from marie.query_planner.base import QueryPlanRegistry
+
+                success = QueryPlanRegistry.register_from_json(
+                    name=name,
+                    plan_definition=plan,
+                    description=description,
+                    version=version,
+                    tags=tags,
+                    category=category,
+                )
+
+                if success:
+                    metadata = QueryPlanRegistry.get_metadata(name)
+                    return {
+                        "success": True,
+                        "message": f"Planner '{name}' registered successfully",
+                        "planner": metadata.model_dump() if metadata else None,
+                    }
+                else:
+                    response.status_code = 400
+                    return {
+                        "success": False,
+                        "error": f"Failed to register planner '{name}'",
+                    }
+
+            @app.delete(
+                path="/api/planners/{planner_id}",
+                summary="Unregister a query planner by ID",
+                tags=["Query Planners"],
+            )
+            async def unregister_planner(planner_id: str, response: Response):
+                """
+                Unregister a query planner by ID.
+
+                Args:
+                    planner_id: ID of the planner to unregister
+
+                Returns:
+                    Success message
+                """
+                from marie.query_planner.base import QueryPlanRegistry
+
+                success = QueryPlanRegistry.unregister_by_id(planner_id)
+
+                if success:
+                    return {
+                        "success": True,
+                        "message": f"Planner unregistered successfully",
+                    }
+                else:
+                    response.status_code = 404
+                    return {
+                        "success": False,
+                        "error": f"Planner with ID '{planner_id}' not found",
+                    }
+
             return app
 
         marie.helper.extend_rest_interface = _extend_rest_function

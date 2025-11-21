@@ -8,6 +8,7 @@ from marie.query_planner.base import (
     LlmQueryDefinition,
     NoopQueryDefinition,
     PlannerInfo,
+    PlannerMetadata,
     PythonFunctionQueryDefinition,
     Query,
     QueryDefinition,
@@ -55,6 +56,7 @@ __all__ = [
     "QueryType",
     "QueryDefinition",
     "PlannerInfo",
+    "PlannerMetadata",
     "QueryPlanRegistry",
     "register_query_plan",
     # Query definitions

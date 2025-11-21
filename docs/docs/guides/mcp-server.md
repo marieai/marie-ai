@@ -692,7 +692,7 @@ Need help?
 
 ## Next Steps
 
-- Learn about [Document Extraction](/docs/extract)
+- Learn about [Document Extraction](/docs/extract/extract-overview)
 - Explore [Template Matching](/docs/guides/template_matching)
 - Understand [Service Architecture](/docs/guides/architecture-overview)
 - Check [API Reference](/docs/api)

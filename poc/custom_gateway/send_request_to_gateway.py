@@ -23,6 +23,7 @@ def create_job_submit_request(args: argparse.Namespace):
         }
     }
     docs = DocList[TextDoc]([TextDoc(text=f"Text : {_}") for _ in range(10)])
+
     return param, docs
 
 

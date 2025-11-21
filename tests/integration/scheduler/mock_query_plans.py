@@ -368,16 +368,16 @@ def query_planner_mock_complex(planner_info: PlannerInfo, **kwargs) -> QueryPlan
 
     return QueryPlan(
         nodes=[root, init_node]
-        + annotators
-        + [merge, table_parser, table_extractor, validator, end]
+              + annotators
+              + [merge, table_parser, table_extractor, validator, end]
     )
 
 
 def _build_subgraph_mock(
-    planner_info: PlannerInfo,
-    layout: str,
-    parent_task_id: str,
-    num_parallel_tasks: int = 3,
+        planner_info: PlannerInfo,
+        layout: str,
+        parent_task_id: str,
+        num_parallel_tasks: int = 3,
 ) -> dict:
     """
     Helper function to build a mock subgraph with parallel execution.
@@ -413,7 +413,7 @@ def _build_subgraph_mock(
         executor_letter = chr(97 + (i % 8))
         task = Query(
             task_id=f"{increment_uuid7str(planner_info.base_id, planner_info.current_id)}",
-            query_str=f"Parallel task {i+1}",
+            query_str=f"Parallel task {i + 1}",
             dependencies=[root.task_id],
             node_type=QueryType.COMPUTE,
             definition=ExecutorEndpointQueryDefinition(
@@ -516,7 +516,7 @@ def query_planner_mock_with_subgraphs(planner_info: PlannerInfo, **kwargs) -> Qu
 
 @register_query_plan("mock_parallel_subgraphs")
 def query_planner_mock_parallel_subgraphs(
-    planner_info: PlannerInfo, **kwargs
+        planner_info: PlannerInfo, **kwargs
 ) -> QueryPlan:
     """
     Highly complex mock query plan with multiple parallel subgraphs.
@@ -774,17 +774,17 @@ def query_planner_mock_parallel_subgraphs(
 
     # Build complete node list
     all_nodes = (
-        [root, init_node]
-        + [text_subgraph_root]
-        + text_tasks
-        + [text_subgraph_end]
-        + [image_subgraph_root]
-        + image_tasks
-        + [image_subgraph_end]
-        + [data_subgraph_root]
-        + data_tasks
-        + [data_subgraph_end]
-        + [global_merge, post_process, validate, end]
+            [root, init_node]
+            + [text_subgraph_root]
+            + text_tasks
+            + [text_subgraph_end]
+            + [image_subgraph_root]
+            + image_tasks
+            + [image_subgraph_end]
+            + [data_subgraph_root]
+            + data_tasks
+            + [data_subgraph_end]
+            + [global_merge, post_process, validate, end]
     )
 
     return QueryPlan(nodes=all_nodes)
@@ -2982,69 +2982,76 @@ def query_planner_mock_hitl_complete_workflow(planner_info: PlannerInfo, **kwarg
 
 if __name__ == "__main__":
     """
-    Example usage and validation of mock query plans.
+    Persist each mock query plan as JSON and validate that it can be restored.
+
+    Writes JSON files to `tmp/query_plans` and for each plan:
+      - generates the plan
+      - dumps it to disk using the plan's model dump
+      - reloads the JSON and re-validates into a QueryPlan
+      - asserts node count and task id set equality
     """
-    from pprint import pprint
+    import json
+    import traceback
+    from pathlib import Path
 
-    from marie.query_planner.planner import (
-        print_query_plan,
-        print_sorted_nodes,
-        topological_sort,
-        visualize_query_plan_graph,
-    )
+    output_dir = Path("tmp/query_plans")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Test each plan
     plans_to_test = [
         ("mock_simple", "Simple Mock Plan"),
         ("mock_medium", "Medium Mock Plan"),
         ("mock_complex", "Complex Mock Plan"),
-        ("mock_with_subgraphs", "Mock Plan with Subgraphs"),
-        ("mock_parallel_subgraphs", "Mock Plan with Parallel Subgraphs"),
-        ("mock_branch_simple", "Simple Branching Mock Plan (JSONPath)"),
-        ("mock_switch_complexity", "SWITCH-based Complexity Routing"),
-        ("mock_branch_multi_condition", "Multi-Condition Branching (AND/OR)"),
-        ("mock_nested_branches", "Nested Branching (Branch within Branch)"),
-        ("mock_branch_python_function", "Python Function Branching"),
-        ("mock_branch_jsonpath_advanced", "Advanced JSONPath Expressions"),
-        ("mock_branch_all_match", "ALL_MATCH Evaluation Mode"),
-        ("mock_branch_regex_matching", "Regex Pattern Matching"),
-        ("mock_hitl_approval", "HITL Approval Workflow"),
-        ("mock_hitl_correction", "HITL Data Correction Workflow"),
-        ("mock_hitl_router", "HITL Confidence Router Workflow"),
-        ("mock_hitl_complete_workflow", "Complete HITL Workflow (All Node Types)"),
+        ("mock_with_subgraphs", "Plan With Subgraphs"),
+        ("mock_parallel_subgraphs", "Parallel Subgraphs Plan"),
+        ("mock_branch_simple", "Branch Simple Plan"),
+        ("mock_switch_complexity", "Switch Complexity Plan"),
+        ("mock_branch_multi_condition", "Branch Multi Condition Plan"),
+        ("mock_nested_branches", "Nested Branches Plan"),
+        ("mock_branch_python_function", "Branch Python Function Plan"),
+        ("mock_branch_jsonpath_advanced", "Branch JSONPath Advanced Plan"),
+        ("mock_branch_all_match", "Branch All Match Plan"),
+        ("mock_branch_regex_matching", "Branch Regex Matching Plan"),
+        ("mock_hitl_approval", "HITL Approval Plan"),
+        ("mock_hitl_correction", "HITL Correction Plan"),
+        ("mock_hitl_router", "HITL Router Plan"),
+        ("mock_hitl_complete_workflow", "HITL Complete Workflow Plan"),
     ]
 
     for plan_name, description in plans_to_test:
-        print(f"\n{'='*80}")
-        print(f"{description.upper()}")
-        print(f"{'='*80}\n")
-
-        # Create planner info
-        planner_info = PlannerInfo(name=plan_name, base_id=generate_job_id())
-
-        # Get the registered planner function
-        planner_func = QueryPlanRegistry.get(plan_name)
-
-        # Generate the plan
-        plan = planner_func(planner_info)
-
-        # Print plan details
-        print(f"Plan: {plan_name}")
-        print(f"Number of nodes: {len(plan.nodes)}")
-        print(f"\nNode details:")
-        pprint(plan.model_dump(), width=120)
-
-        # Topological sort
-        sorted_nodes = topological_sort(plan)
-        print(f"\nTopological order:")
-        print_sorted_nodes(sorted_nodes, plan)
-
-        # Print formatted plan
-        print_query_plan(plan, plan_name)
-
-        # Visualize (if graphviz is available)
+        print(f"\n{'=' * 80}")
+        print(f"{description.upper()} - {plan_name}")
+        print(f"{'=' * 80}\n")
         try:
-            visualize_query_plan_graph(plan)
-            print(f"\nGraph visualization saved for {plan_name}")
-        except Exception as e:
-            print(f"\nSkipping visualization (graphviz not available): {e}")
+            # Create planner info and generate plan
+            planner_info = PlannerInfo(name=plan_name, base_id=generate_job_id())
+            planner_func = QueryPlanRegistry.get(plan_name)
+            if planner_func is None:
+                print(f"Skipping {plan_name}: no registered planner found.")
+                continue
+
+            plan = planner_func(planner_info)
+
+            # Dump to JSON
+            plan_dict = plan.model_dump()  # safe dict representation
+            out_path = output_dir / f"{plan_name}.json"
+            with out_path.open("w", encoding="utf-8") as fh:
+                json.dump(plan_dict, fh, ensure_ascii=False, indent=2)
+
+            print(f"Persisted plan to: {out_path} (nodes: {len(plan.nodes)})")
+
+            # Load back and validate
+            with out_path.open("r", encoding="utf-8") as fh:
+                loaded = json.load(fh)
+
+            restored_plan = QueryPlan.model_validate(loaded)
+
+            # Basic validations
+            assert len(plan.nodes) == len(restored_plan.nodes), "Node count mismatch"
+            original_ids = {n.task_id for n in plan.nodes}
+            restored_ids = {n.task_id for n in restored_plan.nodes}
+            assert original_ids == restored_ids, "Task ID sets differ after restore"
+
+            print(f"Restore validation succeeded for {plan_name}: node_count={len(plan.nodes)}")
+        except Exception:
+            print(f"ERROR processing plan {plan_name}:")
+            traceback.print_exc()

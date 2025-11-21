@@ -414,6 +414,9 @@ def get_fastapi_app(
             schema = strawberry.Schema(query=Query, mutation=Mutation)
             app.include_router(GraphQLRouter(schema), prefix="/graphql")
 
+    # Note: Query Planner API endpoints are now defined in MarieGateway._extend_rest_function
+    # See marie/serve/runtimes/servers/marie_gateway.py
+
     async def _get_singleton_result(request_iterator) -> Dict:
         """
         Streams results from AsyncPrefetchCall as a dict
