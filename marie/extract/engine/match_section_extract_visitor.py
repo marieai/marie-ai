@@ -194,6 +194,9 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             page_id = span.page
             start_line = span.start_line_id
             end_line = span.end_line_id
+            # Make sure to include the last line only if our span extends to the end of the page
+            if end_line == len(document.lines_for_page(page_id)):
+                end_line += 1
 
             regions_by_page = document.regions_for_page(page_id)
             for region in regions_by_page:
