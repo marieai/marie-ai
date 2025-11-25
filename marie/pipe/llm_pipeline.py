@@ -260,12 +260,12 @@ class LLMPipeline(BasePipeline):
         # Main save to meta file
         meta_path = os.path.join(root_asset_dir, meta_filename)
         if os.path.exists(meta_path):
-            self.logger.debug(f"Loading existing meta data : {meta_path}")
+            self.logger.info(f"Loading existing meta data : {meta_path}")
             existing_meta = load_json_file(meta_path, True)
             self.logger.debug(f"Updating existing meta data : {meta_path}")
             metadata = update_existing_meta(existing_meta, metadata)
         else:
-            self.logger.warning(f"No previous meta found : {meta_path}")
+            self.logger.info(f"No previous meta found : {meta_path}")
 
         self.logger.info(f"Storing metadata : {meta_path}")
         store_json_object(metadata, meta_path)
