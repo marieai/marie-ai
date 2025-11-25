@@ -147,23 +147,38 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 device=resolved_devices[0],
             )
         elif task == "text-classification":
+            hf_model = AutoModelForSequenceClassification.from_pretrained(
+                model_name_or_path,
+            )
+
+            max_pos = getattr(hf_model.config, "max_position_embeddings", None)
+
+            attn = getattr(hf_model.config, "attention_window", None)
+            if isinstance(attn, (list, tuple)):
+                attn = min(attn)
+
+            if attn is not None and max_pos is not None:
+                max_pos = (max_pos // attn) * attn
+
             self.model = pipeline(
                 task=task,
-                model=model_name_or_path,
+                model=hf_model,
                 tokenizer=tokenizer,
                 device=resolved_devices[0],
                 revision=model_version,
                 top_k=top_k,
-                # use_auth_token=use_auth_token,
+                truncation=True,
+                max_length=max_pos,
             )
         elif task == "text-classification-multimodal":
             # Eventually, will need to use safetensors for security reason.
             # https://github.com/pytorch/pytorch/security/advisories/GHSA-53q9-r3pm-6pq6
 
-            use_safetensors = any(f.endswith(".safetensors") for f in os.listdir(model_name_or_path))
+            use_safetensors = any(
+                f.endswith(".safetensors") for f in os.listdir(model_name_or_path)
+            )
             self.model = AutoModelForSequenceClassification.from_pretrained(
-                    model_name_or_path,
-                    use_safetensors=use_safetensors
+                model_name_or_path, use_safetensors=use_safetensors
             )
             self.model = self.optimize_model(self.model)
             self.model = self.model.eval().to(resolved_devices[0])
@@ -242,7 +257,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                             return text
 
                     pipe_batched_results = self.model(
-                        IterableData(batch), top_k=self.top_k, truncation=True
+                        IterableData(batch), top_k=self.top_k
                     )
                     k_results = []
 
