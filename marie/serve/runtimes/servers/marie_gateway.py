@@ -1611,14 +1611,9 @@ class MarieServerGateway(CompositeServer):
             graph_description[executor] = ["end-gateway"]
 
         self.logger.info(f"graph_description: {graph_description}")
-        # FIXME: testing with only one executor
-        deployments_addresses = {}
-        graph_descriptionXXXX = {
-            "start-gateway": ["executor0"],
-            "executor0": ["end-gateway"],
-        }
 
         deployments_metadata = {"deployment0": {"key": "value"}}
+        deployments_addresses = {}
         for i, (executor, nodes) in enumerate(self.deployment_nodes.items()):
             connections = []
             for node in nodes:
@@ -1632,25 +1627,24 @@ class MarieServerGateway(CompositeServer):
         self.logger.info(f"graph_description: {graph_description}")
         self.logger.info(f"deployments_addresses: {deployments_addresses}")
 
-        streamer = GatewayStreamer(
-            graph_representation=graph_description,
-            executor_addresses=deployments_addresses,
-            deployments_metadata=deployments_metadata,
-            load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
-            # aio_tracing_client_interceptors=[create_trace_interceptor()],
-            grpc_channel_options=(
-                self.runtime_args.grpc_channel_options
-                if hasattr(self.runtime_args, "grpc_channel_options")
-                else None
-            ),
-        )
+        # Check if we can do an incremental update
+        if self._can_update_incrementally(graph_description):
+            await self._apply_incremental_updates(deployments_addresses)
+            self.logger.info("Applied incremental update to gateway streamer")
+        else:
+            # Full recreation required (topology changed or first time)
+            await self._create_new_gateway_streamer(
+                graph_description, deployments_addresses, deployments_metadata
+            )
+            self.logger.info("Created new gateway streamer (full rebuild)")
 
-        self.streamer = streamer
-        self.distributor.streamer = streamer
+        # Store for future incremental update checks
+        self._last_graph_description = graph_description
+        self._last_deployments_addresses = deployments_addresses
+
         self.distributor.deployment_nodes = self.deployment_nodes
 
         # Lets get the new deployment topology
-        # self.streamer.topology_graph.collect_all_results()
         self.logger.info(f'topology_graph : {self.streamer.topology_graph}')
         self.logger.info("-----------------------------")
         for node in self.streamer.topology_graph.all_nodes:
@@ -1661,6 +1655,83 @@ class MarieServerGateway(CompositeServer):
         # FIXME : this was a bad idea, we need to use the same deployment
         ClusterState.deployments = self.deployments
         ClusterState.deployment_nodes = self.deployment_nodes
+
+    def _can_update_incrementally(self, new_graph: dict) -> bool:
+        """
+        Check if we can update incrementally (same topology, different addresses).
+
+        :param new_graph: New graph description
+        :return: True if incremental update is possible
+        """
+        # Need existing streamer
+        if not hasattr(self, "streamer") or self.streamer is None:
+            return False
+
+        # Need previous graph description
+        if not hasattr(self, "_last_graph_description"):
+            return False
+
+        # Same executor set = incremental possible
+        # Compare executor names (ignoring start-gateway and end-gateway)
+        old_executors = set(self._last_graph_description.get("start-gateway", []))
+        new_executors = set(new_graph.get("start-gateway", []))
+
+        return old_executors == new_executors
+
+    async def _apply_incremental_updates(self, new_addresses: dict) -> None:
+        """
+        Apply address changes incrementally without recreating the streamer.
+
+        :param new_addresses: New deployment addresses mapping
+        """
+        # Update existing deployments
+        for deployment, addresses in new_addresses.items():
+            await self.streamer.update_executor_addresses(deployment, addresses)
+
+        # Handle removed deployments
+        if hasattr(self, "_last_deployments_addresses"):
+            current_deployments = set(self._last_deployments_addresses.keys())
+            new_deployments = set(new_addresses.keys())
+
+            for removed in current_deployments - new_deployments:
+                self.logger.info(f"Removing deployment: {removed}")
+                for addr in self._last_deployments_addresses[removed]:
+                    await self.streamer.remove_connection(removed, addr)
+
+    async def _create_new_gateway_streamer(
+        self,
+        graph_description: dict,
+        deployments_addresses: dict,
+        deployments_metadata: dict,
+    ) -> None:
+        """
+        Create a new gateway streamer (full rebuild).
+
+        :param graph_description: Graph topology description
+        :param deployments_addresses: Deployment addresses mapping
+        :param deployments_metadata: Deployment metadata
+        """
+        # Close old streamer if exists
+        if hasattr(self, "streamer") and self.streamer is not None:
+            try:
+                await self.streamer.close()
+            except Exception as e:
+                self.logger.warning(f"Error closing old streamer: {e}")
+
+        streamer = GatewayStreamer(
+            graph_representation=graph_description,
+            executor_addresses=deployments_addresses,
+            deployments_metadata=deployments_metadata,
+            load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
+            grpc_channel_options=(
+                self.runtime_args.grpc_channel_options
+                if hasattr(self.runtime_args, "grpc_channel_options")
+                else None
+            ),
+        )
+
+        self.streamer = streamer
+        self.distributor.streamer = streamer
 
     async def gateway_server_offline(self, service: str, ev_value):
         """

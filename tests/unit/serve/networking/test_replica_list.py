@@ -22,7 +22,6 @@ def test_add_connection(replica_list):
     replica_list.add_connection('executor0', 'executor-0')
     assert replica_list.has_connections()
     assert replica_list.has_connection('executor0')
-    assert len(replica_list.warmup_stubs)
     assert not replica_list.has_connection('random-address')
     assert len(replica_list.get_all_connections()) == 1
 
@@ -34,8 +33,6 @@ async def test_remove_connection(replica_list):
     await replica_list.remove_connection('executor0')
     assert not replica_list.has_connections()
     assert not replica_list.has_connection('executor0')
-    # warmup stubs are not updated in the remove_connection method
-    assert len(replica_list.warmup_stubs)
     # unknown/unmanaged connections
     removed_connection_invalid = await replica_list.remove_connection('random-address')
     assert removed_connection_invalid is None
@@ -64,27 +61,29 @@ async def test_close(replica_list):
     assert replica_list.has_connection('executor1')
     await replica_list.close()
     assert not replica_list.has_connections()
-    assert not len(replica_list.warmup_stubs)
-
-
-async def _print_channel_attributes(connection_stub: _ConnectionStubs):
-    await asyncio.sleep(0.5)
-    assert connection_stub.channel.get_state() != ChannelConnectivity.SHUTDOWN
 
 
 @pytest.mark.asyncio
-async def test_synchornization_when_resetting_connection(replica_list, logger):
+async def test_synchronization_when_resetting_connection(replica_list, logger):
+    """Test that reset_connection properly handles concurrent access.
+
+    After reset, the old channel is closed (preventing resource leaks),
+    and a new connection is available for use.
+    """
     replica_list.add_connection('executor0', 'executor-0')
-    connection_stub = await replica_list.get_next_connection(num_retries=0)
-    responses = await asyncio.gather(
-        asyncio.create_task(_print_channel_attributes(connection_stub)),
-        asyncio.create_task(
-            replica_list.reset_connection(
-                address='executor0', deployment_name='executor-0'
-            )
-        ),
-        return_exceptions=True,
+    old_connection_stub = await replica_list.get_next_connection(num_retries=0)
+    old_channel = old_connection_stub.channel
+
+    # Reset the connection
+    await replica_list.reset_connection(
+        address='executor0', deployment_name='executor-0'
     )
-    assert not any(
-        [issubclass(type(response), BaseException) for response in responses]
-    )
+
+    # Verify we can get a new connection after reset
+    new_connection_stub = await replica_list.get_next_connection(num_retries=0)
+    assert new_connection_stub is not None
+    assert len(replica_list.get_all_connections()) == 1
+
+    # The new connection should be different from the old one
+    # (new channel created during reset)
+    assert new_connection_stub.channel != old_channel

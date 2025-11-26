@@ -1,8 +1,10 @@
+import threading
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Union
 from urllib.parse import urlparse
 
 from grpc.aio import ClientInterceptor
 
+from marie.serve.networking.balancer.circuit_breaker import CircuitBreakerConfig
 from marie.serve.networking.balancer.load_balancer import LoadBalancer, LoadBalancerType
 from marie.serve.networking.connection_stub import create_async_channel_stub
 from marie.serve.networking.instrumentation import (
@@ -35,6 +37,7 @@ class _ReplicaList:
         load_balancer_type: Optional[
             Union[LoadBalancerType, str]
         ] = LoadBalancerType.ROUND_ROBIN,
+        circuit_breaker_config: Optional[CircuitBreakerConfig] = None,
     ):
         self.runtime_name = runtime_name
         self._connections = []
@@ -48,12 +51,22 @@ class _ReplicaList:
         self._deployment_name = deployment_name
         self.channel_options = channel_options
 
-        # a set containing all the ConnectionStubs that will be created using add_connection
-        # this set is not updated in reset_connection and remove_connection
+        # Create load balancer with optional circuit breaker
         self.load_balancer = LoadBalancer.create_load_balancer(
-            load_balancer_type, deployment_name, logger
+            load_balancer_type,
+            deployment_name,
+            logger,
+            circuit_breaker_config=circuit_breaker_config,
         )
         self._logger.info(f'Load balancer type: {load_balancer_type}')
+        if circuit_breaker_config:
+            self._logger.info(
+                f'Circuit breaker enabled for {deployment_name}: '
+                f'failure_threshold={circuit_breaker_config.failure_threshold}, '
+                f'recovery_timeout={circuit_breaker_config.recovery_timeout}s'
+            )
+        # Thread safety lock for connection modifications
+        self._lock = threading.Lock()
 
     async def reset_connection(self, address: str, deployment_name: str):
         """
@@ -67,21 +80,41 @@ class _ReplicaList:
         self._logger.debug(f"resetting connection for {deployment_name} to {address}")
         parsed_address = urlparse(address)
         resolved_address = parsed_address.netloc if parsed_address.netloc else address
-        if (
-            resolved_address in self._address_to_connection_idx
-            and self._address_to_connection_idx[resolved_address] is not None
-        ):
+
+        old_channel = None
+        with self._lock:
+            if (
+                resolved_address not in self._address_to_connection_idx
+                or self._address_to_connection_idx[resolved_address] is None
+            ):
+                return
+
             # remove connection:
             # in contrast to remove_connection(), we don't 'shorten' the data structures below, instead
-            # update the data structure with the new connection and let the old connection be colleced by
-            # the GC
+            # update the data structure with the new connection and close the old channel explicitly
             id_to_reset = self._address_to_connection_idx[resolved_address]
+
+            # Save old channel for cleanup (fix: prevent channel leak)
+            if resolved_address in self._address_to_channel:
+                old_channel = self._address_to_channel[resolved_address]
+
             # re-add connection:
             self._address_to_connection_idx[resolved_address] = id_to_reset
             stubs, channel = self._create_connection(address, deployment_name)
             self._address_to_channel[resolved_address] = channel
             self._connections[id_to_reset] = stubs
-            self.load_balancer.update_connections(self._connections)
+
+        # Close old channel outside lock to avoid blocking (fix: prevent channel leak)
+        if old_channel is not None:
+            try:
+                await old_channel.close(0.5)
+            except Exception as e:
+                self._logger.warning(
+                    f"Error closing old channel for {resolved_address}: {e}"
+                )
+
+        # Update load balancer outside lock (it handles its own locking)
+        self.load_balancer.update_connections(self._connections)
 
     def add_connection(self, address: str, deployment_name: str):
         """
@@ -92,7 +125,10 @@ class _ReplicaList:
         parsed_address = urlparse(address)
         resolved_address = parsed_address.netloc if parsed_address.netloc else address
 
-        if resolved_address not in self._address_to_connection_idx:
+        with self._lock:
+            if resolved_address in self._address_to_connection_idx:
+                return  # Already exists
+
             self._address_to_connection_idx[resolved_address] = len(self._connections)
             stubs, channel = self._create_connection(address, deployment_name)
             self._address_to_channel[resolved_address] = channel
@@ -100,7 +136,9 @@ class _ReplicaList:
             # create a new set of stubs and channels for warmup to avoid
             # loosing channel during remove_connection or reset_connection
             stubs, _ = self._create_connection(address, deployment_name)
-            self.load_balancer.update_connections(self._connections)
+
+        # Update load balancer outside lock (it handles its own locking)
+        self.load_balancer.update_connections(self._connections)
 
     async def remove_connection(self, address: str):
         """
@@ -116,18 +154,40 @@ class _ReplicaList:
         """
         parsed_address = urlparse(address)
         resolved_address = parsed_address.netloc if parsed_address.netloc else address
-        if resolved_address in self._address_to_connection_idx:
-            self._rr_counter = (
-                self._rr_counter % (len(self._connections) - 1)
-                if (len(self._connections) - 1)
-                else 0
-            )
-            idx_to_delete = self._address_to_connection_idx.pop(resolved_address)
-            self._connections.pop(idx_to_delete)
-            # update the address/idx mapping
-            for a in self._address_to_connection_idx:
-                if self._address_to_connection_idx[a] > idx_to_delete:
-                    self._address_to_connection_idx[a] -= 1
+
+        channel_to_close = None
+        with self._lock:
+            if resolved_address not in self._address_to_connection_idx:
+                return
+
+            idx_to_delete = self._address_to_connection_idx[resolved_address]
+
+            # Copy-on-write: create new list without the removed item (atomic update)
+            new_connections = [
+                c for i, c in enumerate(self._connections) if i != idx_to_delete
+            ]
+
+            # Rebuild index mapping atomically
+            new_idx_map = {c.address: i for i, c in enumerate(new_connections)}
+
+            # Get channel to close (do actual close outside lock)
+            if resolved_address in self._address_to_channel:
+                channel_to_close = self._address_to_channel.pop(resolved_address)
+
+            # Atomic swap of data structures
+            self._connections = new_connections
+            self._address_to_connection_idx = new_idx_map
+
+        # Close channel outside of lock to avoid blocking
+        if channel_to_close is not None:
+            try:
+                await channel_to_close.close(0.5)
+            except Exception as e:
+                self._logger.warning(
+                    f"Error closing channel for {resolved_address}: {e}"
+                )
+
+        # Update load balancer (it handles its own locking)
         self.load_balancer.update_connections(self._connections)
 
     def _create_connection(self, address, deployment_name: str):

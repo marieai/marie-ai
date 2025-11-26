@@ -25,6 +25,7 @@ from marie.importer import ImportExtensions
 from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.helper import format_grpc_error
+from marie.serve.networking.balancer.circuit_breaker import CircuitBreakerConfig
 from marie.serve.networking.balancer.load_balancer import LoadBalancer
 from marie.serve.networking.connection_pool_map import _ConnectionPoolMap
 from marie.serve.networking.connection_stub import create_async_channel_stub
@@ -76,6 +77,7 @@ class GrpcConnectionPool:
         tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
         channel_options: Optional[list] = None,
         load_balancer_type: Optional[str] = "round_robin",
+        circuit_breaker_config: Optional[CircuitBreakerConfig] = None,
     ):
         self._logger = logger or MarieLogger(self.__class__.__name__)
         self.channel_options = channel_options
@@ -160,6 +162,7 @@ class GrpcConnectionPool:
             tracing_client_interceptor=self.tracing_client_interceptor,
             channel_options=self.channel_options,
             load_balancer_type=load_balancer_type,
+            circuit_breaker_config=circuit_breaker_config,
         )
         self._deployment_address_map = {}
 
@@ -386,9 +389,9 @@ class GrpcConnectionPool:
         error: AioRpcError,
         retry_i: int = 0,
         request_id: str = "",
-        tried_addresses: Set[str] = {
-            ""
-        },  # same deployment can have multiple addresses (replicas)
+        tried_addresses: Optional[
+            Set[str]
+        ] = None,  # same deployment can have multiple addresses (replicas)
         total_num_tries: int = 1,  # number of retries + 1
         current_address: str = "",  # the specific address that was contacted during this attempt
         current_deployment: str = "",  # the specific deployment that was contacted during this attempt
@@ -403,6 +406,16 @@ class GrpcConnectionPool:
         # if an Executor is down behind an API gateway, grpc.StatusCode.NOT_FOUND is returned
         # requests usually gets cancelled when the server shuts down
         # retries for cancelled requests will hit another replica in K8s
+
+        # Fix: avoid mutable default argument - initialize here if None
+        if tried_addresses is None:
+            tried_addresses = {""}
+
+        # Record failure in circuit breaker (if enabled)
+        if connection_list and current_address:
+            lb = connection_list.get_load_balancer()
+            lb.record_failure(current_address)
+
         skip_resetting = False
         if (
             error.code() == grpc.StatusCode.UNAVAILABLE
@@ -509,6 +522,10 @@ class GrpcConnectionPool:
                         timeout=timeout,
                     ):
                         yield resp, metadata_resp
+                    # Record success in circuit breaker (if enabled)
+                    connections.get_load_balancer().record_success(
+                        current_connection.address
+                    )
                     return
                 except AioRpcError as e:
                     error = await self._handle_aiorpcerror(
@@ -695,6 +712,10 @@ class GrpcConnectionPool:
                         asyncio.create_task(_after_send_now())
                     # Await ONLY the RPC and return it
                     result = await rpc_task
+                    # Record success in circuit breaker (if enabled)
+                    connections.get_load_balancer().record_success(
+                        current_connection.address
+                    )
                     return result
                 except AioRpcError as e:
                     error = await self._handle_aiorpcerror(
@@ -744,9 +765,14 @@ class GrpcConnectionPool:
                 )
                 tried_addresses.add(connection.address)
                 try:
-                    return await connection.send_discover_endpoint(
+                    result = await connection.send_discover_endpoint(
                         timeout=timeout,
                     )
+                    # Record success in circuit breaker (if enabled)
+                    connection_list.get_load_balancer().record_success(
+                        connection.address
+                    )
+                    return result
                 except AioRpcError as e:
                     error = await self._handle_aiorpcerror(
                         error=e,

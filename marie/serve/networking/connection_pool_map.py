@@ -1,7 +1,9 @@
 import os
+import threading
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 from marie.logging_core.logger import MarieLogger
+from marie.serve.networking.balancer.circuit_breaker import CircuitBreakerConfig
 from marie.serve.networking.instrumentation import (
     _NetworkingHistograms,
     _NetworkingMetrics,
@@ -27,6 +29,7 @@ class _ConnectionPoolMap:
         tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
         channel_options: Optional[list] = None,
         load_balancer_type: Optional[str] = "round_robin",
+        circuit_breaker_config: Optional[CircuitBreakerConfig] = None,
     ):
         self._logger = logger
         # this maps deployments to shards or heads
@@ -43,14 +46,19 @@ class _ConnectionPoolMap:
         self.tracing_client_interceptor = tracing_client_interceptor
         self.channel_options = channel_options
         self.load_balancer_type = load_balancer_type
+        self.circuit_breaker_config = circuit_breaker_config
+        # Thread safety: RLock allows nested calls (e.g., _add_deployment from _add_connection)
+        self._lock = threading.RLock()
 
     def add_replica(self, deployment: str, shard_id: int, address: str):
-        self._add_connection(deployment, shard_id, address, "shards")
+        with self._lock:
+            self._add_connection(deployment, shard_id, address, "shards")
 
     def add_head(
         self, deployment: str, address: str, head_id: Optional[int] = 0
     ):  # the head_id is always 0 for now, this will change when scaling the head
-        self._add_connection(deployment, head_id, address, "heads")
+        with self._lock:
+            self._add_connection(deployment, head_id, address, "heads")
 
     def get_replicas(
         self,
@@ -60,37 +68,51 @@ class _ConnectionPoolMap:
         increase_access_count: bool = True,
     ) -> Optional[_ReplicaList]:
         # returns all replicas of a given deployment, using a given shard
-        if deployment in self._deployments:
-            type_ = "heads" if head else "shards"
-            if entity_id is None and head:
-                entity_id = 0
-            return self._get_connection_list(
-                deployment, type_, entity_id, increase_access_count
-            )
-        else:
-            self._logger.debug(
-                f"Unknown deployment {deployment}, no replicas available"
-            )
-            return None
+        with self._lock:
+            if deployment in self._deployments:
+                type_ = "heads" if head else "shards"
+                if entity_id is None and head:
+                    entity_id = 0
+                return self._get_connection_list(
+                    deployment, type_, entity_id, increase_access_count
+                )
+            else:
+                self._logger.debug(
+                    f"Unknown deployment {deployment}, no replicas available"
+                )
+                return None
 
     def get_replicas_all_shards(self, deployment: str) -> List[_ReplicaList]:
         # returns all replicas of a given deployment, for all available shards
         # result is a list of 'shape' (num_shards, num_replicas), containing all replicas for all shards
-        replicas = []
-        if deployment in self._deployments:
-            for shard_id in self._deployments[deployment]["shards"]:
-                replicas.append(
-                    self._get_connection_list(deployment, "shards", shard_id)
-                )
-        return replicas
+        with self._lock:
+            replicas = []
+            if deployment in self._deployments:
+                # Copy shard_ids to avoid iteration issues
+                shard_ids = list(self._deployments[deployment]["shards"].keys())
+                for shard_id in shard_ids:
+                    replicas.append(
+                        self._get_connection_list(deployment, "shards", shard_id)
+                    )
+            return replicas
 
     async def close(self):
         # Close all connections to all replicas
-        for deployment in self._deployments:
-            for entity_type in self._deployments[deployment]:
-                for shard_in in self._deployments[deployment][entity_type]:
-                    await self._deployments[deployment][entity_type][shard_in].close()
-        self._deployments.clear()
+        # Collect all replica lists under lock, then close outside lock
+        replica_lists_to_close = []
+        with self._lock:
+            for deployment in self._deployments:
+                for entity_type in self._deployments[deployment]:
+                    for shard_id in self._deployments[deployment][entity_type]:
+                        replica_lists_to_close.append(
+                            self._deployments[deployment][entity_type][shard_id]
+                        )
+            self._deployments.clear()
+            self._access_count.clear()
+
+        # Close outside lock to avoid blocking
+        for replica_list in replica_lists_to_close:
+            await replica_list.close()
 
     def _get_connection_list(
         self,
@@ -147,6 +169,7 @@ class _ConnectionPoolMap:
                 deployment_name=deployment,
                 channel_options=self.channel_options,
                 load_balancer_type=self.load_balancer_type,
+                circuit_breaker_config=self.circuit_breaker_config,
             )
             self._deployments[deployment][type][entity_id] = connection_list
 
@@ -172,15 +195,29 @@ class _ConnectionPoolMap:
         return await self._remove_connection(deployment, shard_id, address, "shards")
 
     async def _remove_connection(self, deployment, entity_id, address, type):
-        if (
-            deployment in self._deployments
-            and entity_id in self._deployments[deployment][type]
-        ):
-            self._logger.debug(
-                f"removing connection for deployment {deployment}/{type}/{entity_id} to {address}"
-            )
-            await self._deployments[deployment][type][entity_id].remove_connection(
-                address
-            )
-            if not self._deployments[deployment][type][entity_id].has_connections():
-                self._deployments[deployment][type].pop(entity_id)
+        # Get replica list under lock, but release before async operation
+        replica_list = None
+        with self._lock:
+            if (
+                deployment in self._deployments
+                and entity_id in self._deployments[deployment][type]
+            ):
+                self._logger.debug(
+                    f"removing connection for deployment {deployment}/{type}/{entity_id} to {address}"
+                )
+                replica_list = self._deployments[deployment][type][entity_id]
+
+        # Call async remove outside lock to avoid blocking
+        if replica_list is not None:
+            await replica_list.remove_connection(address)
+
+            # Re-check and clean up under lock
+            with self._lock:
+                if (
+                    deployment in self._deployments
+                    and entity_id in self._deployments[deployment][type]
+                    and not self._deployments[deployment][type][
+                        entity_id
+                    ].has_connections()
+                ):
+                    self._deployments[deployment][type].pop(entity_id)

@@ -443,6 +443,82 @@ class GatewayStreamer:
     def _set_env_streamer_args(**kwargs):
         os.environ["JINA_STREAMER_ARGS"] = json.dumps(kwargs)
 
+    # Incremental update methods for node registration
+
+    def add_connection(self, deployment: str, address: str) -> None:
+        """
+        Add a single connection incrementally without recreating the streamer.
+
+        :param deployment: Name of the deployment/executor
+        :param address: Address to add (host:port format)
+        """
+        self._connection_pool.add_connection(
+            deployment=deployment, address=address, head=True
+        )
+        if deployment not in self._executor_addresses:
+            self._executor_addresses[deployment] = []
+        if address not in self._executor_addresses[deployment]:
+            self._executor_addresses[deployment].append(address)
+        self.logger.debug(f"Added connection for {deployment}: {address}")
+
+    async def remove_connection(self, deployment: str, address: str) -> None:
+        """
+        Remove a single connection incrementally without recreating the streamer.
+
+        :param deployment: Name of the deployment/executor
+        :param address: Address to remove (host:port format)
+        """
+        await self._connection_pool.remove_connection(
+            deployment=deployment, address=address, head=True
+        )
+        if deployment in self._executor_addresses:
+            self._executor_addresses[deployment] = [
+                a for a in self._executor_addresses[deployment] if a != address
+            ]
+        self.logger.debug(f"Removed connection for {deployment}: {address}")
+
+    async def update_executor_addresses(
+        self, deployment: str, new_addresses: List[str]
+    ) -> None:
+        """
+        Update addresses for a deployment incrementally.
+        Adds new addresses and removes stale ones.
+
+        :param deployment: Name of the deployment/executor
+        :param new_addresses: New list of addresses for the deployment
+        """
+        current = set(self._executor_addresses.get(deployment, []))
+        new = set(new_addresses)
+
+        # Add new addresses
+        for addr in new - current:
+            self.add_connection(deployment, addr)
+
+        # Remove old addresses
+        for addr in current - new:
+            await self.remove_connection(deployment, addr)
+
+        self.logger.info(
+            f"Updated {deployment}: added {len(new - current)}, removed {len(current - new)}"
+        )
+
+    def get_executor_addresses(self, deployment: str) -> List[str]:
+        """
+        Get current addresses for a deployment.
+
+        :param deployment: Name of the deployment/executor
+        :return: List of addresses for the deployment
+        """
+        return list(self._executor_addresses.get(deployment, []))
+
+    def get_all_executor_addresses(self) -> Dict[str, List[str]]:
+        """
+        Get all executor addresses.
+
+        :return: Dictionary mapping deployment names to address lists
+        """
+        return {k: list(v) for k, v in self._executor_addresses.items()}
+
 
 class _ExecutorStreamer:
     def __init__(self, connection_pool: GrpcConnectionPool, executor_name: str) -> None:

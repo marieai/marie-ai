@@ -23,7 +23,6 @@ def test_add_connection(replica_list):
     replica_list.add_connection('executor0', 'executor-0')
     assert replica_list.has_connections()
     assert replica_list.has_connection('executor0')
-    assert len(replica_list.warmup_stubs)
     assert not replica_list.has_connection('random-address')
     assert len(replica_list.get_all_connections()) == 1
 
@@ -35,8 +34,6 @@ async def test_remove_connection(replica_list):
     await replica_list.remove_connection('executor0')
     assert not replica_list.has_connections()
     assert not replica_list.has_connection('executor0')
-    # warmup stubs are not updated in the remove_connection method
-    assert len(replica_list.warmup_stubs)
     # unknown/unmanaged connections
     removed_connection_invalid = await replica_list.remove_connection('random-address')
     assert removed_connection_invalid is None
