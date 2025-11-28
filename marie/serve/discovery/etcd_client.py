@@ -17,6 +17,7 @@ from marie.excepts import RuntimeFailToStart
 from marie.logging_core.predefined import default_logger as logger
 from marie.serve.discovery.base import ConnectionEvent, ConnectionState
 from marie.serve.discovery.state_tracker import StateTracker
+from marie.serve.discovery.timeout_utils import OperationTimeoutError, run_with_timeout
 from marie.serve.discovery.util import (
     _slash,
     make_dict_from_pairs,
@@ -261,7 +262,8 @@ class EtcdClient(object):
             self._set_connection_state(ConnectionState.FAILED)
             return
 
-        delay = min(5 * (1.5**self._reconnect_attempts), 60)
+        # Faster reconnection with bounded backoff: 2s, 3s, 4.5s, 6.75s, 10s, 15s (capped)
+        delay = min(2 * (1.5**self._reconnect_attempts), 15)
         self._reconnect_attempts += 1
 
         logger.info(
@@ -317,12 +319,14 @@ class EtcdClient(object):
         self._connection_monitor_thread.start()
 
     def _monitor_connection_health(self):
-        """Monitor connection health and update state with hysteresis and event-based waits."""
+        """Monitor connection health with timeout-protected health checks."""
         logger.info("Started etcd connection monitor")
         self._monitor_ready.set()
 
-        check_interval = 5.0
-        failure_threshold = 15.0  # seconds since last success before we *consider* down
+        # Balanced detection parameters - faster than before but not too aggressive
+        check_interval = 3.0  # Was 5.0 - check every 3 seconds
+        failure_threshold = 6.0  # Was 15.0 - 2 consecutive failed checks
+        health_check_timeout = 2.0  # NEW - timeout for health check
 
         # Hysteresis counters
         consecutive_failures = 0
@@ -345,7 +349,12 @@ class EtcdClient(object):
                         self._set_connection_state(ConnectionState.DISCONNECTED)
 
                 try:
-                    self.get("__health_check__")
+                    # CRITICAL FIX: Health check with explicit timeout to prevent blocking
+                    run_with_timeout(
+                        lambda: self.get("__health_check__"),
+                        timeout=health_check_timeout,
+                        operation_name="health_check",
+                    )
 
                     consecutive_successes += 1
                     consecutive_failures = 0
@@ -359,6 +368,18 @@ class EtcdClient(object):
                         and consecutive_successes >= 2
                     ):
                         self._set_connection_state(ConnectionState.CONNECTED)
+
+                except OperationTimeoutError:
+                    consecutive_failures += 1
+                    consecutive_successes = 0
+                    logger.warning(
+                        f"Health check timed out after {health_check_timeout}s "
+                        f"(failures: {consecutive_failures})"
+                    )
+
+                    cur = self.get_connection_state()
+                    if cur == ConnectionState.CONNECTED and consecutive_failures >= 2:
+                        self._set_connection_state(ConnectionState.DISCONNECTED)
 
                 except Exception as e:
                     consecutive_failures += 1

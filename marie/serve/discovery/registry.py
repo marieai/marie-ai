@@ -8,6 +8,7 @@ from marie.serve.discovery.address import JsonAddress, PlainAddress
 from marie.serve.discovery.base import ConnectionState, ServiceRegistry
 from marie.serve.discovery.etcd_client import EtcdClient
 from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
+from marie.serve.discovery.timeout_utils import OperationTimeoutError, run_with_timeout
 from marie.serve.discovery.util import form_service_key
 from marie.utils.timing import exponential_backoff
 
@@ -72,6 +73,7 @@ class EtcdServiceRegistry(ServiceRegistry):
         self._leases = {}
         self._services = {}
         self._heartbeat_time = heartbeat_time
+        self._default_service_ttl = 6  # Match container.py ETCD_LEASE_SEC default
         self.setup_heartbeat_async()
 
     def _on_etcd_connected(self, event):
@@ -95,7 +97,7 @@ class EtcdServiceRegistry(ServiceRegistry):
                         except AttributeError:
                             ttl = None
                 if not ttl:
-                    ttl = 5  # sensible fallback
+                    ttl = self._default_service_ttl
                 if service_names:
                     services_to_reregister.append(
                         (list(service_names), service_addr, ttl)
@@ -208,8 +210,10 @@ class EtcdServiceRegistry(ServiceRegistry):
 
         return lease
 
-    def heartbeat(self, service_addr=None, service_ttl=5):
+    def heartbeat(self, service_addr=None, service_ttl=None):
         """Service heartbeat with connection state awareness."""
+        if service_ttl is None:
+            service_ttl = self._default_service_ttl
         logger.debug(f"Heartbeat service_addr : {service_addr}")
 
         state = self._etcd_client.get_connection_state()
@@ -242,7 +246,19 @@ class EtcdServiceRegistry(ServiceRegistry):
                 ttl_before = self._lease_ttl(lease)
                 logger.debug(f"Refreshing lease for: {svc_addr}, TTL: {ttl_before}")
 
-                refresh_result = lease.refresh()
+                # Wrap lease.refresh() with timeout to prevent blocking
+                try:
+                    refresh_result = run_with_timeout(
+                        lambda: lease.refresh(),
+                        timeout=3.0,  # 3 second timeout for lease refresh
+                        operation_name=f"lease_refresh_{svc_addr}",
+                    )
+                except OperationTimeoutError:
+                    logger.warning(
+                        f"Lease refresh timed out for {svc_addr}, will retry next heartbeat"
+                    )
+                    continue  # Skip to next lease instead of blocking
+
                 # Normalize return (could be (resp,) or object)
                 try:
                     resp = refresh_result[0]

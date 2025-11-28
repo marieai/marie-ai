@@ -1,5 +1,7 @@
 import asyncio
+import glob
 import os
+import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -13,7 +15,7 @@ from marie.constants import __default_psql_dir__, __default_schema_dir__
 from marie.excepts import RuntimeFailToStart
 from marie.logging_core.logger import MarieLogger
 from marie.query_planner.base import QueryPlan
-from marie.scheduler.fixtures import *  # noqa: F403
+from marie.scheduler.fixtures import create_sql_from_file
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.repository.plans import (
     cancel_jobs,
@@ -1119,91 +1121,54 @@ class JobRepository(PostgresqlMixin):
         """
         Create all database tables, functions, and triggers for the scheduler.
 
+        SQL files are auto-discovered and loaded based on their numeric prefix.
+        Files with 3-digit prefix (e.g., 001_schema.sql) are loaded first in sorted order.
+
         :param schema: The name of the schema where the tables will be created
         :return: None
         :raises RuntimeFailToStart: If table creation fails
         """
         version = 1
+
+        # Auto-discover SQL files in schema directory
+        schema_dir = __default_schema_dir__
+        all_sql_paths = glob.glob(os.path.join(schema_dir, "*.sql"))
+
+        # Separate numbered files (e.g., 001_schema.sql) from non-numbered files
+        numbered_pattern = re.compile(r"^\d{3}_")
+        numbered_files = []
+
+        for path in all_sql_paths:
+            filename = os.path.basename(path)
+            if numbered_pattern.match(filename):
+                numbered_files.append(filename)
+
+        # Sort numbered files by their prefix
+        numbered_files.sort()
+
+        self.logger.info(f"Loading {len(numbered_files)} SQL files from {schema_dir}")
+
+        # Load all numbered SQL files
         commands = [
-            create_schema(schema),
-            create_version_table(schema),
-            create_table_queue(schema),
-            create_job_state_enum(schema),
-            create_job_table(schema),
-            create_primary_key_job(schema),
-            create_job_history_table(schema),
-            create_job_update_trigger_function(schema),
-            create_job_update_trigger(schema),
-            clone_job_table_for_archive(schema),
-            create_schedule_table(schema),
-            create_subscription_table(schema),
-            add_archived_on_to_archive(schema),
-            add_archived_on_index_to_archive(schema),
-            add_id_index_to_archive(schema),
-            create_index_job_name(schema),
-            create_index_job_fetch(schema),
-            create_queue_function(schema),
-            delete_queue_function(schema),
-            insert_version(schema, version),
-            create_exponential_backoff_function(schema),
-            create_dag_table(schema),
-            create_dag_table_history(schema),
-            create_dag_history_trigger_function(schema),
+            create_sql_from_file(schema, os.path.join(schema_dir, fname))
+            for fname in numbered_files
         ]
 
-        # SQL files to be loaded
-        sql_files = [
-            "job_dependencies.sql",
-            "fetch_next_job.sql",
-            "create_indexes.sql",
-            "create_constraints.sql",
-            "resolve_dag_state.sql",
-            "count_job_states.sql",
-            "count_dag_states.sql",
-            "refresh_job_priority.sql",
-            "delete_dags_and_jobs.sql",
-            "delete_failed_dags_and_jobs.sql",
-            "delete_orphaned_jobs.sql",
-            "jobs_with_unmet_dependencies.sql",
-            "notify_dag_state_change.sql",
-            "purge_non_started_work.sql",
-            "ready_jobs_view.sql",
-            "refresh_dag_durations.sql",
-            "refresh_job_durations.sql",
-            "reset_active_dags_and_jobs.sql",
-            "reset_all.sql",
-            "reset_dag.sql",
-            "reset_job.sql",
-            "reset_completed_dags_and_jobs.sql",
-            "suspend_non_started_work.sql",
-            "unsuspend_work.sql",
-            "sync_job_dependencies.sql",
-            "slots_columns.sql",
-            "lease/release_expired_leases.sql",
-            "lease/release_lease.sql",
-            "lease/activate_from_lease.sql",
-            "lease/clear_all_leases.sql",
-            "lease/hydrate_frontier.sql",
-            "lease/hydrate_frontier_jobs.sql",
-            "lease/lease_jobs_by_id.sql",
-            "lease/reap_expired_leases.sql",
-        ]
+        # Add version insert
+        commands.append(insert_version(schema, version))
 
-        commands.extend(
-            [
-                create_sql_from_file(
-                    schema, os.path.join(__default_schema_dir__, fname)
-                )
-                for fname in sql_files
-            ]
-        )
+        # Load lease-related SQL files from subdirectory
+        lease_dir = os.path.join(schema_dir, "lease")
+        if os.path.isdir(lease_dir):
+            lease_files = sorted(glob.glob(os.path.join(lease_dir, "*.sql")))
+            self.logger.info(f"Loading {len(lease_files)} lease SQL files")
+            commands.extend([create_sql_from_file(schema, f) for f in lease_files])
 
-        commands.extend(
-            [
-                create_sql_from_file(
-                    schema, os.path.join(__default_psql_dir__, "cron_job_init.sql")
-                )
-            ]
+        # Add cron job initialization
+        commands.append(
+            create_sql_from_file(
+                schema, os.path.join(__default_psql_dir__, "cron_job_init.sql")
+            )
         )
 
         query = ";\n".join(commands)
