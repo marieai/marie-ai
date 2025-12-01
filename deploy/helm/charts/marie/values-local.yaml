@@ -1,0 +1,167 @@
+# Marie-AI Helm Chart - Local Development Values
+# Usage: helm install marie . -f values-local.yaml -n marie --create-namespace
+#
+# This configuration matches the local Docker environment:
+# - PostgreSQL: ghcr.io/ferretdb/postgres-documentdb:17-0.103.0
+# - MinIO: minio/minio:latest
+# - RabbitMQ: rabbitmq:3-management-alpine
+
+# Marie-AI core settings
+marie:
+  image:
+    repository: marieai/marie
+    tag: "3.0"
+    pullPolicy: IfNotPresent
+
+  logging:
+    level: INFO
+    format: json
+
+  # Use Kubernetes for service discovery in local dev
+  discovery:
+    mechanism: kubernetes
+
+# Server configuration
+server:
+  enabled: true
+  replicas: 1
+
+  service:
+    type: NodePort
+    port: 52000
+    httpPort: 8080
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+
+# Executor configuration - minimal for local dev
+executor:
+  enabled: true
+  pools:
+    # Single CPU executor for local testing
+    - name: cpu-local
+      enabled: true
+      replicas: 1
+      gpu: false
+      stateful: false
+
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+
+    # GPU executor - disabled by default for local
+    - name: gpu-ocr
+      enabled: false
+
+# PostgreSQL - using FerretDB DocumentDB image
+postgresql:
+  enabled: true
+
+  image:
+    registry: ghcr.io
+    repository: ferretdb/postgres-documentdb
+    tag: "17-0.103.0"
+
+  auth:
+    postgresPassword: "marie-password"
+    username: postgres
+    password: "marie-password"
+    database: marie
+
+  primary:
+    persistence:
+      enabled: true
+      size: 5Gi
+
+# MinIO - S3-compatible storage
+minio:
+  enabled: true
+
+  image:
+    registry: docker.io
+    repository: minio/minio
+    tag: latest
+
+  mode: standalone
+
+  auth:
+    rootUser: minioadmin
+    rootPassword: "minioadmin123"
+
+  defaultBuckets: "marie"
+
+  persistence:
+    enabled: true
+    size: 5Gi
+
+  service:
+    type: NodePort
+    ports:
+      api: 9000
+      console: 9001
+
+# RabbitMQ - message queue
+rabbitmq:
+  enabled: true
+
+  image:
+    registry: docker.io
+    repository: rabbitmq
+    tag: "3-management-alpine"
+
+  auth:
+    username: marie
+    password: "marie-mq-password"
+
+  persistence:
+    enabled: true
+    size: 2Gi
+
+# etcd - disabled for local (using Kubernetes service discovery)
+etcd:
+  enabled: false
+
+# Storage configuration
+storage:
+  type: minio
+
+# Observability - minimal for local
+observability:
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: false
+
+  grafana:
+    dashboards:
+      enabled: false
+
+  jaeger:
+    enabled: false
+
+  otel:
+    enabled: false
+
+# Security - relaxed for local development
+security:
+  podSecurityContext:
+    runAsNonRoot: false
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+
+  networkPolicy:
+    enabled: false
+
+  tls:
+    enabled: false

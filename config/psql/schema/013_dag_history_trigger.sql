@@ -10,12 +10,12 @@ BEGIN
         INSERT INTO {schema}.dag_history (
             id, name, state, root_dag_id, is_subdag, default_view, serialized_dag,
             started_on, completed_on, created_on, updated_on,
-            duration, sla_interval, soft_sla, hard_sla, sla_miss_logged
+            duration, sla_interval, soft_sla, hard_sla, sla_miss_logged, planner
         )
         VALUES (
             NEW.id, NEW.name, NEW.state, NEW.root_dag_id, NEW.is_subdag, NEW.default_view,
             NEW.serialized_dag, NEW.started_on, NEW.completed_on, NEW.created_on, NEW.updated_on,
-            NEW.duration, NEW.sla_interval, NEW.soft_sla, NEW.hard_sla, NEW.sla_miss_logged
+            NEW.duration, NEW.sla_interval, NEW.soft_sla, NEW.hard_sla, NEW.sla_miss_logged, NEW.planner
         );
         RETURN NEW;
 
@@ -23,12 +23,12 @@ BEGIN
         INSERT INTO {schema}.dag_history (
             id, name, state, root_dag_id, is_subdag, default_view, serialized_dag,
             started_on, completed_on, created_on, updated_on,
-            duration, sla_interval, soft_sla, hard_sla, sla_miss_logged
+            duration, sla_interval, soft_sla, hard_sla, sla_miss_logged, planner
         )
         VALUES (
             NEW.id, NEW.name, NEW.state, NEW.root_dag_id, NEW.is_subdag, NEW.default_view,
             NEW.serialized_dag, NEW.started_on, NEW.completed_on, NEW.created_on, NEW.updated_on,
-            NEW.duration, NEW.sla_interval, NEW.soft_sla, NEW.hard_sla, NEW.sla_miss_logged
+            NEW.duration, NEW.sla_interval, NEW.soft_sla, NEW.hard_sla, NEW.sla_miss_logged, NEW.planner
         );
         RETURN NEW;
 
@@ -36,12 +36,12 @@ BEGIN
         INSERT INTO {schema}.dag_history (
             id, name, state, root_dag_id, is_subdag, default_view, serialized_dag,
             started_on, completed_on, created_on, updated_on,
-            duration, sla_interval, soft_sla, hard_sla, sla_miss_logged
+            duration, sla_interval, soft_sla, hard_sla, sla_miss_logged, planner
         )
         VALUES (
             OLD.id, OLD.name, OLD.state, OLD.root_dag_id, OLD.is_subdag, OLD.default_view,
             OLD.serialized_dag, OLD.started_on, OLD.completed_on, OLD.created_on, OLD.updated_on,
-            OLD.duration, OLD.sla_interval, OLD.soft_sla, OLD.hard_sla, OLD.sla_miss_logged
+            OLD.duration, OLD.sla_interval, OLD.soft_sla, OLD.hard_sla, OLD.sla_miss_logged, OLD.planner
         );
         RETURN OLD;
     END IF;

@@ -1,0 +1,20 @@
+{{- if .Values.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-executor-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "executor.labels" . | nindent 4 }}
+data:
+  # Executor pools configuration
+  EXECUTOR_POOLS: |
+    {{- range $pool := .Values.pools }}
+    {{- if $pool.enabled }}
+    - name: {{ $pool.name }}
+      gpu: {{ $pool.gpu }}
+      replicas: {{ $pool.replicas }}
+      port: {{ $pool.service.port }}
+    {{- end }}
+    {{- end }}
+{{- end }}

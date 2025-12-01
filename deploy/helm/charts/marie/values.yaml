@@ -1,0 +1,420 @@
+# Marie-AI Helm Chart Values
+# This is the umbrella chart configuration
+
+# Global settings applied to all subcharts
+global:
+  # Container image registry
+  imageRegistry: ""
+  # Image pull secrets for private registries
+  imagePullSecrets: []
+  # Default storage class for PVCs
+  storageClass: ""
+  # Common labels applied to all resources
+  labels: {}
+  # Common annotations applied to all resources
+  annotations: {}
+
+# Marie-AI core settings
+marie:
+  image:
+    repository: marieai/marie
+    tag: "3.0-cuda"
+    pullPolicy: IfNotPresent
+
+  # Configuration that maps to marie.yml
+  config:
+    protocol: grpc
+    port: 52000
+    httpPort: 8080
+
+  # Service discovery settings
+  discovery:
+    # etcd endpoints for service discovery
+    etcdEndpoints: []
+    # Discovery mechanism: etcd, kubernetes, static
+    mechanism: kubernetes
+
+  # Logging configuration
+  logging:
+    level: INFO
+    format: json
+
+  # Tracing configuration
+  tracing:
+    enabled: true
+    exporterType: jaeger
+    jaegerEndpoint: ""
+
+# -----------------------------------------------------------------------------
+# Server Configuration (combined gateway + scheduler)
+# Runs: marie server --start --uses config/marie.yml
+# -----------------------------------------------------------------------------
+server:
+  enabled: true
+  replicas: 1
+
+  image:
+    repository: ""
+    tag: ""
+
+  service:
+    type: ClusterIP
+    port: 52000
+    httpPort: 8080
+
+  resources:
+    requests:
+      cpu: "1"
+      memory: "2Gi"
+    limits:
+      cpu: "4"
+      memory: "8Gi"
+
+  # Ingress configuration
+  ingress:
+    enabled: false
+    className: nginx
+    annotations: {}
+    hosts:
+      - host: marie.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+  # Persistence for server state
+  persistence:
+    enabled: false
+    storageClass: ""
+    size: 10Gi
+
+  # Pod settings
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  # Health checks
+  probes:
+    startup:
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      failureThreshold: 30
+    liveness:
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 10
+    readiness:
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 5
+
+# -----------------------------------------------------------------------------
+# Executor Configuration
+# -----------------------------------------------------------------------------
+executor:
+  enabled: true
+
+  # Define executor pools (CPU and GPU)
+  pools:
+    # CPU executor pool for general workloads
+    - name: cpu-general
+      enabled: true
+      replicas: 2
+      gpu: false
+
+      image:
+        repository: ""
+        tag: ""
+
+      resources:
+        requests:
+          cpu: "2"
+          memory: "4Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
+
+      # Additional environment variables
+      env: []
+
+    # GPU executor pool for ML workloads
+    - name: gpu-ocr
+      enabled: true
+      replicas: 1
+      gpu: true
+
+      image:
+        repository: ""
+        tag: ""
+
+      resources:
+        requests:
+          cpu: "4"
+          memory: "16Gi"
+          nvidia.com/gpu: 1
+        limits:
+          cpu: "8"
+          memory: "32Gi"
+          nvidia.com/gpu: 1
+
+      # GPU-specific node selection
+      nodeSelector:
+        # GKE: cloud.google.com/gke-accelerator: nvidia-tesla-t4
+        # EKS: node.kubernetes.io/instance-type: g4dn.xlarge
+        {}
+
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+
+      affinity: {}
+
+      # Scale-to-zero configuration
+      scaleToZero:
+        enabled: true
+        # Annotation to allow cluster autoscaler to evict pods
+        annotations:
+          cluster-autoscaler.kubernetes.io/safe-to-evict: "true"
+
+      env: []
+
+  # Stateful executor settings (for executors needing persistent storage)
+  stateful:
+    enabled: false
+    persistence:
+      storageClass: ""
+      size: 50Gi
+      accessModes:
+        - ReadWriteOnce
+
+# -----------------------------------------------------------------------------
+# PostgreSQL Configuration
+# -----------------------------------------------------------------------------
+postgresql:
+  enabled: true
+
+  # Use FerretDB DocumentDB image for MongoDB compatibility
+  image:
+    registry: ghcr.io
+    repository: ferretdb/postgres-documentdb
+    tag: "17-0.103.0"
+
+  auth:
+    postgresPassword: ""
+    username: marie
+    password: ""
+    database: marie
+
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+
+  # External PostgreSQL (when enabled=false)
+  external:
+    host: ""
+    port: 5432
+    database: marie
+    username: marie
+    existingSecret: ""
+    existingSecretPasswordKey: password
+
+# -----------------------------------------------------------------------------
+# RabbitMQ Configuration
+# -----------------------------------------------------------------------------
+rabbitmq:
+  enabled: true
+
+  auth:
+    username: marie
+    password: ""
+
+  persistence:
+    enabled: true
+    size: 8Gi
+
+  # External RabbitMQ (when enabled=false)
+  external:
+    host: ""
+    port: 5672
+    username: marie
+    existingSecret: ""
+    existingSecretPasswordKey: password
+
+# -----------------------------------------------------------------------------
+# etcd Configuration
+# -----------------------------------------------------------------------------
+etcd:
+  enabled: true
+
+  replicaCount: 3
+
+  auth:
+    rbac:
+      create: true
+      rootPassword: ""
+
+  persistence:
+    enabled: true
+    size: 8Gi
+
+  # External etcd (when enabled=false)
+  external:
+    endpoints: []
+    # - http://etcd-0:2379
+    # - http://etcd-1:2379
+    # - http://etcd-2:2379
+
+# -----------------------------------------------------------------------------
+# MinIO Configuration (S3-compatible storage)
+# -----------------------------------------------------------------------------
+minio:
+  enabled: true
+
+  image:
+    registry: docker.io
+    repository: minio/minio
+    tag: latest
+
+  mode: standalone
+
+  auth:
+    rootUser: minioadmin
+    rootPassword: ""
+
+  # Default buckets to create
+  defaultBuckets: "marie"
+
+  persistence:
+    enabled: true
+    size: 20Gi
+
+  # Service account credentials for Marie
+  provisioning:
+    enabled: true
+    users:
+      - username: marie-access-key
+        password: marie-secret-key
+        policies:
+          - readwrite
+
+  # External MinIO (when enabled=false)
+  external:
+    endpoint: ""
+    accessKey: ""
+    secretKey: ""
+    bucket: marie
+
+# -----------------------------------------------------------------------------
+# Storage Configuration
+# -----------------------------------------------------------------------------
+storage:
+  # Storage backend: s3, minio, gcs, azure, local
+  type: minio
+
+  s3:
+    bucket: marie
+    region: us-east-1
+    endpoint: ""
+    accessKey: ""
+    secretKey: ""
+    existingSecret: ""
+
+  gcs:
+    bucket: marie-documents
+    project: ""
+    credentialsJson: ""
+    existingSecret: ""
+
+  azure:
+    container: marie-documents
+    accountName: ""
+    accountKey: ""
+    existingSecret: ""
+
+# -----------------------------------------------------------------------------
+# Observability Configuration
+# -----------------------------------------------------------------------------
+observability:
+  # Prometheus integration
+  prometheus:
+    enabled: true
+    # Create ServiceMonitor for Prometheus Operator
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+      scrapeTimeout: 10s
+      labels: {}
+
+  # Grafana dashboards
+  grafana:
+    # Install pre-built dashboards
+    dashboards:
+      enabled: true
+
+  # Distributed tracing
+  jaeger:
+    enabled: false
+    # If enabled, specify agent/collector endpoints
+    agent:
+      host: jaeger-agent
+      port: 6831
+    collector:
+      endpoint: ""
+
+  # OpenTelemetry Collector
+  otel:
+    enabled: false
+    endpoint: ""
+    insecure: true
+
+# -----------------------------------------------------------------------------
+# Security Configuration
+# -----------------------------------------------------------------------------
+security:
+  # Pod Security Standards
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  # Network Policies
+  networkPolicy:
+    enabled: false
+    # Ingress rules
+    ingress: []
+    # Egress rules
+    egress: []
+
+  # TLS configuration
+  tls:
+    enabled: false
+    secretName: ""
+    # Generate self-signed certificates
+    selfSigned: false
+
+# -----------------------------------------------------------------------------
+# ServiceAccount Configuration
+# -----------------------------------------------------------------------------
+serviceAccount:
+  # Create a ServiceAccount
+  create: true
+  # Name of the ServiceAccount (auto-generated if empty)
+  name: ""
+  # Annotations for the ServiceAccount
+  annotations: {}
+  # Automount service account token
+  automountServiceAccountToken: true

@@ -1,0 +1,201 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: mariejobs.marie.ai
+spec:
+  group: marie.ai
+  names:
+    kind: MarieJob
+    listKind: MarieJobList
+    plural: mariejobs
+    singular: mariejob
+    shortNames:
+      - mj
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - clusterRef
+              properties:
+                # Reference to MarieCluster
+                clusterRef:
+                  type: string
+                  description: "Name of the MarieCluster to submit job to"
+
+                # Job type
+                jobType:
+                  type: string
+                  enum:
+                    - extract
+                    - classify
+                    - ocr
+                    - ner
+                    - transform
+                    - pipeline
+                  default: pipeline
+
+                # Input configuration
+                input:
+                  type: object
+                  properties:
+                    # S3/storage input
+                    uri:
+                      type: string
+                      description: "s3://bucket/path or file path"
+                    # Inline data (base64 encoded for binary)
+                    data:
+                      type: string
+                    # ConfigMap reference for input
+                    configMapRef:
+                      type: string
+                    # Content type
+                    contentType:
+                      type: string
+                      default: "application/pdf"
+
+                # Output configuration
+                output:
+                  type: object
+                  properties:
+                    uri:
+                      type: string
+                      description: "Output location (s3://bucket/output/)"
+                    format:
+                      type: string
+                      enum: [json, xml, csv]
+                      default: json
+
+                # Processing options
+                options:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  description: "Job-specific options passed to processors"
+
+                # Priority (higher = more urgent)
+                priority:
+                  type: integer
+                  default: 0
+                  minimum: -100
+                  maximum: 100
+
+                # SLA configuration
+                sla:
+                  type: object
+                  properties:
+                    softDeadline:
+                      type: string
+                      description: "Duration like 5m, 1h"
+                    hardDeadline:
+                      type: string
+                      description: "Duration like 10m, 2h"
+
+                # Retry configuration
+                retry:
+                  type: object
+                  properties:
+                    maxRetries:
+                      type: integer
+                      default: 3
+                    backoffMultiplier:
+                      type: number
+                      default: 2.0
+
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Submitted
+                    - Running
+                    - Completed
+                    - Failed
+                    - Cancelled
+                dagId:
+                  type: string
+                  description: "Internal DAG ID from Marie scheduler"
+                jobId:
+                  type: string
+                  description: "Internal Job ID"
+                startTime:
+                  type: string
+                  format: date-time
+                completionTime:
+                  type: string
+                  format: date-time
+                duration:
+                  type: string
+                  description: "Job duration"
+                progress:
+                  type: integer
+                  minimum: 0
+                  maximum: 100
+                  description: "Progress percentage"
+                result:
+                  type: object
+                  properties:
+                    outputUri:
+                      type: string
+                    summary:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                error:
+                  type: object
+                  properties:
+                    code:
+                      type: string
+                    message:
+                      type: string
+                    details:
+                      type: string
+                retryCount:
+                  type: integer
+                  default: 0
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Cluster
+          type: string
+          jsonPath: .spec.clusterRef
+        - name: Type
+          type: string
+          jsonPath: .spec.jobType
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Progress
+          type: integer
+          jsonPath: .status.progress
+        - name: Duration
+          type: string
+          jsonPath: .status.duration
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

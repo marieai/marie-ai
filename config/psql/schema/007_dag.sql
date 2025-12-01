@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS {schema}.dag (
     soft_sla TIMESTAMP WITH TIME ZONE,
     hard_sla TIMESTAMP WITH TIME ZONE,
     sla_miss_logged BOOLEAN NOT NULL DEFAULT FALSE,
+    planner VARCHAR(250),  -- Name of the planner that created this DAG
     PRIMARY KEY (id)
 );
 

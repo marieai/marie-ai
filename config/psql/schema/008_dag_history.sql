@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS {schema}.dag_history (
     soft_sla TIMESTAMP WITH TIME ZONE,
     hard_sla TIMESTAMP WITH TIME ZONE,
     sla_miss_logged BOOLEAN,
+    planner VARCHAR(250),  -- Name of the planner that created this DAG
     history_created_on TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 

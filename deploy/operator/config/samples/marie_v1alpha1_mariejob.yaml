@@ -1,0 +1,115 @@
+---
+apiVersion: marie.ai/v1alpha1
+kind: MarieJob
+metadata:
+  name: ocr-job-sample
+  namespace: default
+spec:
+  # Reference the cluster to run on
+  clusterRef: marie-sample
+
+  # Job configuration
+  jobType: ocr
+  submissionMode: HTTPSubmission
+  priority: 0
+
+  # Input configuration
+  input:
+    uri: "s3://my-bucket/documents/batch-001/"
+    contentType: "application/pdf"
+
+  # Output configuration
+  output:
+    uri: "s3://my-bucket/results/batch-001/"
+    format: json
+
+  # Job options
+  options:
+    pages: "all"
+    language: "eng"
+    deskew: "true"
+
+  # SLA settings
+  sla:
+    softDeadline: "30m"
+    hardDeadline: "1h"
+
+  # Retry and timeout
+  backoffLimit: 3
+  activeDeadlineSeconds: 3600
+
+  # Cleanup
+  ttlSecondsAfterFinished: 3600
+---
+apiVersion: marie.ai/v1alpha1
+kind: MarieJob
+metadata:
+  name: pipeline-job-sample
+  namespace: default
+spec:
+  # Use cluster selector to find a cluster
+  clusterSelector:
+    environment: production
+
+  # Pipeline job
+  jobType: pipeline
+  entrypoint: "classify -> ocr -> ner -> index"
+
+  # Input
+  input:
+    uri: "s3://my-bucket/documents/invoice-batch/"
+    contentType: "application/pdf"
+
+  # Output
+  output:
+    uri: "s3://my-bucket/results/invoice-batch/"
+    format: json
+
+  # Options
+  options:
+    extract_tables: "true"
+    extract_key_values: "true"
+
+  # Priority: higher priority jobs get processed first
+  priority: 10
+
+  # SLA
+  sla:
+    softDeadline: "15m"
+    hardDeadline: "30m"
+---
+# Example with K8s Job submission mode
+apiVersion: marie.ai/v1alpha1
+kind: MarieJob
+metadata:
+  name: k8s-job-sample
+  namespace: default
+spec:
+  clusterRef: marie-sample
+  jobType: extract
+  submissionMode: K8sJobSubmission
+
+  input:
+    uri: "s3://my-bucket/documents/single-doc.pdf"
+    contentType: "application/pdf"
+
+  output:
+    uri: "s3://my-bucket/results/single-doc/"
+    format: json
+
+  # Custom submitter pod template
+  submitterPodTemplate:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: submitter
+          image: marieai/marie-cli:3.0
+          command:
+            - marie-cli
+            - submit
+            - --job-type=extract
+            - --input=s3://my-bucket/documents/single-doc.pdf
+            - --output=s3://my-bucket/results/single-doc/
+          env:
+            - name: MARIE_SERVER_URL
+              value: "http://marie-sample-server-svc:8080"

@@ -1,0 +1,211 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: marieclusters.marie.ai
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+spec:
+  group: marie.ai
+  names:
+    kind: MarieCluster
+    listKind: MarieClusterList
+    plural: marieclusters
+    singular: mariecluster
+    shortNames:
+      - mc
+      - marie
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              properties:
+                # Server configuration (combined gateway + scheduler)
+                server:
+                  type: object
+                  properties:
+                    replicas:
+                      type: integer
+                      default: 1
+                      minimum: 1
+                    image:
+                      type: string
+                      default: "marieai/marie:3.0-cuda"
+                    resources:
+                      type: object
+                      properties:
+                        requests:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                        limits:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                    serviceType:
+                      type: string
+                      enum: [ClusterIP, NodePort, LoadBalancer]
+                      default: ClusterIP
+                    config:
+                      type: string
+                      description: "Path to marie.yml config or inline YAML"
+
+                # Executor pools
+                executorPools:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - name
+                    properties:
+                      name:
+                        type: string
+                      replicas:
+                        type: integer
+                        default: 1
+                        minimum: 0
+                      image:
+                        type: string
+                      gpu:
+                        type: boolean
+                        default: false
+                      resources:
+                        type: object
+                        properties:
+                          requests:
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+                          limits:
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+                      nodeSelector:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                      tolerations:
+                        type: array
+                        items:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                      scaleToZero:
+                        type: boolean
+                        default: false
+
+                # Infrastructure references
+                postgresql:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: true
+                    external:
+                      type: object
+                      properties:
+                        host:
+                          type: string
+                        port:
+                          type: integer
+                          default: 5432
+                        database:
+                          type: string
+                        secretRef:
+                          type: string
+
+                etcd:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: true
+                    external:
+                      type: object
+                      properties:
+                        endpoints:
+                          type: array
+                          items:
+                            type: string
+
+                rabbitmq:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: true
+                    external:
+                      type: object
+                      properties:
+                        host:
+                          type: string
+                        port:
+                          type: integer
+                          default: 5672
+
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Creating
+                    - Running
+                    - Updating
+                    - Failed
+                    - Terminating
+                ready:
+                  type: boolean
+                  default: false
+                serverReady:
+                  type: boolean
+                  default: false
+                executorPoolsReady:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                endpoints:
+                  type: object
+                  properties:
+                    grpc:
+                      type: string
+                    http:
+                      type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                observedGeneration:
+                  type: integer
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Ready
+          type: boolean
+          jsonPath: .status.ready
+        - name: Server
+          type: boolean
+          jsonPath: .status.serverReady
+        - name: gRPC
+          type: string
+          jsonPath: .status.endpoints.grpc
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

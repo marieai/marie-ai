@@ -1,0 +1,15 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: marie-system
+
+resources:
+  - ../crd
+  - ../rbac
+  - ../manager
+
+images:
+  - name: marieai/marie-operator
+    newName: marieai/marie-operator
+    newTag: latest

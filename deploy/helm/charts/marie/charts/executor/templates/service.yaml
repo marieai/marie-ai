@@ -1,0 +1,44 @@
+{{- if .Values.enabled }}
+{{- range $pool := .Values.pools }}
+{{- if $pool.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "executor.poolFullname" (list $pool $.Release.Name) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "executor.poolLabels" (list $pool $) | nindent 4 }}
+spec:
+  type: {{ $pool.service.type | default "ClusterIP" }}
+  ports:
+    - port: {{ $pool.service.port }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+  selector:
+    {{- include "executor.poolSelectorLabels" (list $pool $.Release.Name) | nindent 4 }}
+{{- if $pool.stateful }}
+---
+# Headless service for StatefulSet
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "executor.poolFullname" (list $pool $.Release.Name) }}-headless
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "executor.poolLabels" (list $pool $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: {{ $pool.service.port }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+  selector:
+    {{- include "executor.poolSelectorLabels" (list $pool $.Release.Name) | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

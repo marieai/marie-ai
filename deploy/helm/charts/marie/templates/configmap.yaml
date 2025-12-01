@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "marie.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marie.labels" . | nindent 4 }}
+data:
+  # Marie-AI configuration
+  MARIE_PROTOCOL: {{ .Values.marie.config.protocol | quote }}
+  MARIE_PORT: {{ .Values.marie.config.port | quote }}
+  MARIE_HTTP_PORT: {{ .Values.marie.config.httpPort | quote }}
+
+  # Logging configuration
+  LOG_LEVEL: {{ .Values.marie.logging.level | quote }}
+  LOG_FORMAT: {{ .Values.marie.logging.format | quote }}
+
+  # Service discovery
+  DISCOVERY_MECHANISM: {{ .Values.marie.discovery.mechanism | quote }}
+  {{- if .Values.marie.discovery.etcdEndpoints }}
+  ETCD_ENDPOINTS: {{ join "," .Values.marie.discovery.etcdEndpoints | quote }}
+  {{- end }}
+
+  # Tracing configuration
+  TRACING_ENABLED: {{ .Values.marie.tracing.enabled | quote }}
+  {{- if .Values.marie.tracing.enabled }}
+  TRACING_EXPORTER: {{ .Values.marie.tracing.exporterType | quote }}
+  {{- if .Values.marie.tracing.jaegerEndpoint }}
+  JAEGER_ENDPOINT: {{ .Values.marie.tracing.jaegerEndpoint | quote }}
+  {{- end }}
+  {{- end }}

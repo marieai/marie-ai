@@ -1,0 +1,90 @@
+--------------------------------------------------------------------------------
+                           Marie-AI Deployment
+--------------------------------------------------------------------------------
+
+Thank you for installing {{ .Chart.Name }}!
+
+Your release is named: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+{{ if .Values.server.enabled -}}
+## Server (Gateway + Scheduler)
+
+{{- if .Values.server.ingress.enabled }}
+The Marie-AI Server is accessible via Ingress:
+{{- range $host := .Values.server.ingress.hosts }}
+  http{{ if $.Values.server.ingress.tls }}s{{ end }}://{{ $host.host }}{{ (first $host.paths).path }}
+{{- end }}
+{{- else if contains "NodePort" .Values.server.service.type }}
+Get the Server URL by running:
+  export NODE_PORT=$(kubectl get -n {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ .Release.Name }}-server)
+  export NODE_IP=$(kubectl get nodes -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo "Server URL: http://${NODE_IP}:${NODE_PORT}"
+{{- else if contains "LoadBalancer" .Values.server.service.type }}
+Get the Server URL by running:
+  export SERVICE_IP=$(kubectl get svc -n {{ .Release.Namespace }} {{ .Release.Name }}-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+  echo "Server URL: http://${SERVICE_IP}:{{ .Values.server.service.port }}"
+{{- else if contains "ClusterIP" .Values.server.service.type }}
+Forward the Server port to your local machine:
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ .Release.Name }}-server {{ .Values.server.service.port }}:{{ .Values.server.service.port }}
+
+Then access:
+  gRPC: localhost:{{ .Values.server.service.port }}
+  HTTP: localhost:{{ .Values.server.service.httpPort }}
+{{- end }}
+{{- end }}
+
+{{ if .Values.executor.enabled -}}
+## Executors
+
+Executor pools:
+{{- range .Values.executor.pools }}
+{{- if .enabled }}
+  - {{ .name }}: {{ .replicas }} replica(s) {{ if .gpu }}(GPU enabled){{ end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{ if .Values.postgresql.enabled -}}
+## PostgreSQL
+
+Database is running within the cluster.
+  Host: {{ .Release.Name }}-postgresql
+  Port: 5432
+  Database: {{ .Values.postgresql.auth.database }}
+{{- end }}
+
+{{ if .Values.rabbitmq.enabled -}}
+## RabbitMQ
+
+Message queue is running within the cluster.
+  Host: {{ .Release.Name }}-rabbitmq
+  Port: 5672
+  Management UI: kubectl port-forward -n {{ .Release.Namespace }} svc/{{ .Release.Name }}-rabbitmq 15672:15672
+{{- end }}
+
+{{ if .Values.minio.enabled -}}
+## MinIO (S3-compatible storage)
+
+Object storage is running within the cluster.
+  API: {{ .Release.Name }}-minio:9000
+  Console: kubectl port-forward -n {{ .Release.Namespace }} svc/{{ .Release.Name }}-minio 9001:9001
+{{- end }}
+
+## Useful Commands
+
+# Check pod status
+kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+# View logs
+kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} -f
+
+# Check services
+kubectl get svc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+## Documentation
+
+For more information, visit:
+  https://docs.marieai.co
+
+--------------------------------------------------------------------------------

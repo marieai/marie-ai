@@ -1,0 +1,83 @@
+# Marie-AI Server subchart values
+# Runs `marie server --start` which combines gateway and scheduler
+
+enabled: true
+replicas: 1
+
+image:
+  repository: marieai/marie
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Service configuration
+service:
+  type: ClusterIP
+  # gRPC port
+  port: 52000
+  # HTTP port for REST API
+  httpPort: 8080
+  annotations: {}
+
+# Marie server configuration
+config:
+  # Path to marie.yml config file (mounted via ConfigMap)
+  configFile: /config/marie.yml
+  # Additional CLI arguments
+  args: []
+
+resources:
+  requests:
+    cpu: "1"
+    memory: "2Gi"
+  limits:
+    cpu: "4"
+    memory: "8Gi"
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: marie.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Autoscaling (disabled by default per user requirement)
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+# Persistence for server state
+persistence:
+  enabled: false
+  storageClass: ""
+  size: 10Gi
+  accessModes:
+    - ReadWriteOnce
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podSecurityContext: {}
+securityContext: {}
+
+# Health check configuration
+probes:
+  startup:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 30
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 10
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 5

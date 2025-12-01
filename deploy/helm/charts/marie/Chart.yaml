@@ -1,0 +1,59 @@
+apiVersion: v2
+name: marie
+description: Marie-AI - Agentic Document Intelligence Platform
+
+type: application
+version: 0.1.0
+appVersion: "3.0.0"
+
+keywords:
+  - document-processing
+  - ocr
+  - ai
+  - machine-learning
+  - nlp
+
+home: https://marieai.co
+sources:
+  - https://github.com/marieai/marie-ai
+
+maintainers:
+  - name: Marie-AI Team
+    email: support@marieai.co
+
+dependencies:
+  # Marie-AI Server (combined gateway + scheduler)
+  - name: server
+    version: "0.1.0"
+    repository: "file://charts/server"
+    condition: server.enabled
+
+  # Executor workers
+  - name: executor
+    version: "0.1.0"
+    repository: "file://charts/executor"
+    condition: executor.enabled
+
+  # Optional: Bitnami PostgreSQL
+  - name: postgresql
+    version: "13.2.24"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: postgresql.enabled
+
+  # Optional: Bitnami RabbitMQ
+  - name: rabbitmq
+    version: "12.5.6"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: rabbitmq.enabled
+
+  # Optional: Bitnami etcd
+  - name: etcd
+    version: "9.10.0"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: etcd.enabled
+
+  # Optional: Bitnami MinIO
+  - name: minio
+    version: "14.1.0"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: minio.enabled

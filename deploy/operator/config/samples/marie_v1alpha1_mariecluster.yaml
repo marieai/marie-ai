@@ -1,0 +1,128 @@
+---
+apiVersion: marie.ai/v1alpha1
+kind: MarieCluster
+metadata:
+  name: marie-sample
+  namespace: default
+spec:
+  # Server configuration (combined gateway + scheduler)
+  serverSpec:
+    replicas: 1
+    configFile: "/config/marie.yml"
+    template:
+      spec:
+        containers:
+          - name: marie
+            image: marieai/marie:3.0-cuda
+            imagePullPolicy: IfNotPresent
+            ports:
+              - containerPort: 52000
+                name: grpc
+              - containerPort: 8080
+                name: http
+              - containerPort: 9090
+                name: metrics
+            resources:
+              requests:
+                cpu: "1"
+                memory: "2Gi"
+              limits:
+                cpu: "2"
+                memory: "4Gi"
+            env:
+              - name: MARIE_LOG_LEVEL
+                value: "INFO"
+            volumeMounts:
+              - name: config
+                mountPath: /config
+        volumes:
+          - name: config
+            configMap:
+              name: marie-config
+
+  # Executor pools
+  executorGroupSpecs:
+    # OCR executors with GPU
+    - groupName: ocr-gpu
+      replicas: 2
+      minReplicas: 0
+      maxReplicas: 10
+      executorType: ocr
+      gpu: true
+      template:
+        spec:
+          containers:
+            - name: marie
+              image: marieai/marie:3.0-cuda
+              imagePullPolicy: IfNotPresent
+              command: ["marie", "executor", "--start"]
+              ports:
+                - containerPort: 52001
+                  name: grpc
+              resources:
+                requests:
+                  cpu: "2"
+                  memory: "4Gi"
+                  nvidia.com/gpu: "1"
+                limits:
+                  cpu: "4"
+                  memory: "8Gi"
+                  nvidia.com/gpu: "1"
+          tolerations:
+            - key: "nvidia.com/gpu"
+              operator: "Exists"
+              effect: "NoSchedule"
+          nodeSelector:
+            accelerator: nvidia-gpu
+
+    # Classification executors (CPU)
+    - groupName: classifier
+      replicas: 2
+      executorType: classifier
+      gpu: false
+      template:
+        spec:
+          containers:
+            - name: marie
+              image: marieai/marie:3.0
+              imagePullPolicy: IfNotPresent
+              command: ["marie", "executor", "--start", "--type", "classifier"]
+              ports:
+                - containerPort: 52001
+                  name: grpc
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: "2Gi"
+                limits:
+                  cpu: "2"
+                  memory: "4Gi"
+
+    # NER executors (CPU)
+    - groupName: ner
+      replicas: 1
+      executorType: ner
+      gpu: false
+      template:
+        spec:
+          containers:
+            - name: marie
+              image: marieai/marie:3.0
+              imagePullPolicy: IfNotPresent
+              command: ["marie", "executor", "--start", "--type", "ner"]
+              ports:
+                - containerPort: 52001
+                  name: grpc
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: "2Gi"
+                limits:
+                  cpu: "2"
+                  memory: "4Gi"
+
+  # Cluster-level settings
+  serviceType: ClusterIP
+  enableIngress: false
+  suspend: false
+  marieVersion: "3.0"

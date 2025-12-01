@@ -1,0 +1,153 @@
+{{- if .Values.enabled }}
+{{- range $pool := .Values.pools }}
+{{- if and $pool.enabled (not $pool.stateful) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "executor.poolFullname" (list $pool $.Release.Name) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "executor.poolLabels" (list $pool $) | nindent 4 }}
+  {{- if and $pool.scaleToZero $pool.scaleToZero.enabled }}
+  annotations:
+    {{- toYaml $pool.scaleToZero.annotations | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ $pool.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "executor.poolSelectorLabels" (list $pool $.Release.Name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "executor.poolSelectorLabels" (list $pool $.Release.Name) | nindent 8 }}
+        app.kubernetes.io/component: executor
+        pod_type: executor
+        {{- if $pool.gpu }}
+        marie.ai/gpu: "true"
+        {{- end }}
+      annotations:
+        {{- if and $pool.scaleToZero $pool.scaleToZero.enabled }}
+        {{- toYaml $pool.scaleToZero.annotations | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with $.Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "executor.serviceAccountName" $ }}
+      {{- with $.Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: executor
+          image: {{ include "executor.poolImage" (list $pool $.Values.global $.Chart.AppVersion) }}
+          imagePullPolicy: {{ $pool.image.pullPolicy | default "IfNotPresent" }}
+          command:
+            - marie
+          args:
+            - executor
+            - --name
+            - {{ $pool.name | quote }}
+            - --port
+            - {{ $pool.service.port | quote }}
+            {{- if $pool.gpu }}
+            - --gpu
+            {{- end }}
+          ports:
+            - name: grpc
+              containerPort: {{ $pool.service.port }}
+              protocol: TCP
+          {{- with $.Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ $.Release.Name }}-config
+          env:
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: K8S_DEPLOYMENT_NAME
+              value: {{ include "executor.poolFullname" (list $pool $.Release.Name) }}
+            - name: K8S_NAMESPACE_NAME
+              value: {{ $.Release.Namespace }}
+            - name: K8S_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: MARIE_COMPONENT
+              value: executor
+            - name: EXECUTOR_POOL
+              value: {{ $pool.name | quote }}
+            {{- if $pool.gpu }}
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+            - name: CUDA_VISIBLE_DEVICES
+              value: "0"
+            {{- end }}
+            {{- if $.Values.global.postgresql }}
+            - name: DATABASE_HOST
+              value: {{ printf "%s-postgresql" $.Release.Name | quote }}
+            - name: DATABASE_PORT
+              value: "5432"
+            {{- end }}
+            {{- if $.Values.global.etcd }}
+            - name: ETCD_ENDPOINTS
+              value: {{ printf "http://%s-etcd:2379" $.Release.Name | quote }}
+            {{- end }}
+            {{- with $pool.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: grpc
+            initialDelaySeconds: {{ $pool.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ $pool.probes.startup.periodSeconds }}
+            failureThreshold: {{ $pool.probes.startup.failureThreshold }}
+            timeoutSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: grpc
+            initialDelaySeconds: {{ $pool.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ $pool.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ $pool.probes.liveness.timeoutSeconds }}
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: grpc
+            initialDelaySeconds: {{ $pool.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ $pool.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ $pool.probes.readiness.timeoutSeconds }}
+          resources:
+            {{- toYaml $pool.resources | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+      {{- with $pool.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $pool.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $pool.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

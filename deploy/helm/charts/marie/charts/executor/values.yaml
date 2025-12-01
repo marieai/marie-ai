@@ -1,0 +1,122 @@
+# Executor subchart default values
+
+enabled: true
+
+# Define executor pools (can have multiple CPU and GPU pools)
+pools:
+  # CPU executor pool for general workloads
+  - name: cpu-general
+    enabled: true
+    replicas: 2
+    gpu: false
+    stateful: false
+
+    image:
+      repository: marieai/marie
+      tag: ""
+      pullPolicy: IfNotPresent
+
+    service:
+      type: ClusterIP
+      port: 52010
+
+    resources:
+      requests:
+        cpu: "2"
+        memory: "4Gi"
+      limits:
+        cpu: "4"
+        memory: "8Gi"
+
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+
+    env: []
+
+    probes:
+      startup:
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 30
+      liveness:
+        initialDelaySeconds: 30
+        periodSeconds: 5
+        timeoutSeconds: 10
+      readiness:
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 5
+
+  # GPU executor pool for ML workloads (OCR, Classification, etc.)
+  - name: gpu-ocr
+    enabled: true
+    replicas: 1
+    gpu: true
+    stateful: false
+
+    image:
+      repository: marieai/marie
+      tag: ""
+      pullPolicy: IfNotPresent
+
+    service:
+      type: ClusterIP
+      port: 52020
+
+    resources:
+      requests:
+        cpu: "4"
+        memory: "16Gi"
+        nvidia.com/gpu: 1
+      limits:
+        cpu: "8"
+        memory: "32Gi"
+        nvidia.com/gpu: 1
+
+    # GPU-specific node selection
+    nodeSelector: {}
+    # Example for GKE:
+    # nodeSelector:
+    #   cloud.google.com/gke-accelerator: nvidia-tesla-t4
+
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+
+    affinity: {}
+
+    # Scale-to-zero support
+    scaleToZero:
+      enabled: true
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "true"
+
+    env: []
+
+    probes:
+      startup:
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        failureThreshold: 60
+      liveness:
+        initialDelaySeconds: 60
+        periodSeconds: 10
+        timeoutSeconds: 15
+      readiness:
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 10
+
+# Stateful executor settings (for executors needing persistent storage)
+stateful:
+  enabled: false
+  persistence:
+    storageClass: ""
+    size: 50Gi
+    accessModes:
+      - ReadWriteOnce
+
+podSecurityContext: {}
+securityContext: {}

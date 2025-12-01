@@ -1,0 +1,101 @@
+{{- if .Values.enabled }}
+# Environment variables ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "server.fullname" . }}-env
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "server.labels" . | nindent 4 }}
+data:
+  MARIE_PORT: {{ .Values.service.port | quote }}
+  MARIE_HTTP_PORT: {{ .Values.service.httpPort | quote }}
+  LOG_LEVEL: {{ .Values.global.marie.logging.level | default "INFO" | quote }}
+---
+# Marie configuration file ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "server.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "server.labels" . | nindent 4 }}
+data:
+  marie.yml: |
+    jtype: Flow
+    version: '1'
+    protocol: grpc
+    port: {{ .Values.service.port }}
+
+    shared_config:
+      storage:
+        psql:
+          {{- if .Values.global.postgresql }}
+          enabled: true
+          hostname: {{ printf "%s-postgresql" .Release.Name }}
+          port: 5432
+          database: {{ .Values.global.postgresql.auth.database | default "marie_scheduler" }}
+          username: {{ .Values.global.postgresql.auth.username | default "postgres" }}
+          {{- else }}
+          enabled: false
+          {{- end }}
+
+        s3:
+          {{- if .Values.global.minio }}
+          {{- if .Values.global.minio.enabled }}
+          enabled: true
+          endpoint_url: http://{{ printf "%s-minio" .Release.Name }}:9000
+          bucket_name: {{ .Values.global.minio.defaultBuckets | default "marie" }}
+          region: us-east-1
+          insecure: true
+          addressing_style: path
+          {{- else if .Values.global.storage }}
+          enabled: {{ eq .Values.global.storage.type "s3" }}
+          {{- if eq .Values.global.storage.type "s3" }}
+          bucket_name: {{ .Values.global.storage.s3.bucket | default "marie" }}
+          region: {{ .Values.global.storage.s3.region | default "us-east-1" }}
+          {{- if .Values.global.storage.s3.endpoint }}
+          endpoint_url: {{ .Values.global.storage.s3.endpoint }}
+          {{- end }}
+          {{- end }}
+          {{- end }}
+          {{- else if .Values.global.storage }}
+          enabled: {{ eq .Values.global.storage.type "s3" }}
+          {{- if eq .Values.global.storage.type "s3" }}
+          bucket_name: {{ .Values.global.storage.s3.bucket | default "marie" }}
+          region: {{ .Values.global.storage.s3.region | default "us-east-1" }}
+          {{- end }}
+          {{- else }}
+          enabled: false
+          {{- end }}
+
+      discovery:
+        {{- if .Values.global.etcd }}
+        etcd:
+          enabled: true
+          endpoints:
+            - {{ printf "http://%s-etcd:2379" .Release.Name }}
+        {{- else }}
+        etcd:
+          enabled: false
+        {{- end }}
+
+      messaging:
+        {{- if .Values.global.rabbitmq }}
+        rabbitmq:
+          enabled: true
+          hostname: {{ printf "%s-rabbitmq" .Release.Name }}
+          port: 5672
+        {{- else }}
+        rabbitmq:
+          enabled: false
+        {{- end }}
+
+    toast:
+      native:
+        enabled: true
+      {{- if .Values.global.rabbitmq }}
+      rabbitmq:
+        enabled: true
+      {{- end }}
+{{- end }}

@@ -1,0 +1,99 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: marie-system
+  labels:
+    app.kubernetes.io/name: marie-operator
+    app.kubernetes.io/managed-by: kustomize
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: marie-operator
+  namespace: marie-system
+  labels:
+    app.kubernetes.io/name: marie-operator
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: marie-operator
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: marie-operator
+        app.kubernetes.io/component: controller
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+    spec:
+      serviceAccountName: marie-operator-controller-manager
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: manager
+          image: marieai/marie-operator:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --leader-elect
+            - --health-probe-bind-address=:8081
+            - --metrics-bind-address=:8080
+          ports:
+            - containerPort: 8080
+              name: metrics
+              protocol: TCP
+            - containerPort: 8081
+              name: health
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+      terminationGracePeriodSeconds: 10
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: marie-operator-controller-manager
+  namespace: marie-system
+  labels:
+    app.kubernetes.io/name: marie-operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: marie-operator-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: marie-operator-manager-role
+subjects:
+  - kind: ServiceAccount
+    name: marie-operator-controller-manager
+    namespace: marie-system
