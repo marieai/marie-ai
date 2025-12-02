@@ -1,0 +1,8 @@
+{
+  "label": "Asset Tracking",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "description": "Strategic asset tracking for DAG-aware observability, lineage, and trust in your document intelligence workflows."
+  }
+}

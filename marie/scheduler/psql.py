@@ -180,6 +180,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             QueryPlannersConf.from_dict(config.get("query_planners", {}))
         )
 
+        # Asset mapper kept for static utility methods (e.g., get_upstream_assets_for_node)
+        # No longer used for pre-registration
+        from marie.assets import DAGAssetMapper
+
+        self.asset_mapper = DAGAssetMapper()
+        self.logger.debug(
+            "Initialized asset mapper (used for upstream asset queries only)"
+        )
+
         dag_config = config.get("dag_manager", {})
         min_concurrent_dags = int(dag_config.get("min_concurrent_dags", 1))
         max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
