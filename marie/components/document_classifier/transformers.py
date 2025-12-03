@@ -60,6 +60,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         show_error: Optional[Union[str, bool]] = True,
         id2label: Optional[dict[int, str]] = None,
         max_token_length=None,
+        chunk_input: bool = False,
         **kwargs,
     ):
         """
@@ -108,6 +109,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         self.progress_bar = False
         self.id2label = id2label
         self.max_token_length = max_token_length
+        self.chunk_input = chunk_input
         # Keys are always strings in JSON/YAML so convert ids to int here.
         if id2label is not None:
             self.id2label = {int(key): value for key, value in self.id2label.items()}
@@ -305,6 +307,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                             words=doc.words,
                             boxes=doc.boxes,
                             top_k=self.top_k,
+                            chunk_input=self.chunk_input,
                         )
                     )
 
@@ -333,6 +336,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         words: List[List[str]],
         boxes: List[List[int]],
         top_k: int = 1,
+        chunk_input: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Predicts the label of a document image
@@ -363,6 +367,8 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             padding="max_length",
             truncation=True,
             return_tensors="pt",
+            return_overflowing_tokens=chunk_input,
+            stride=self.max_token_length // 10 if chunk_input else 0,
         )
 
         # https://github.com/pytorch/pytorch/tree/main/torch/csrc/jit/codegen/onednn#example-with-bfloat16
@@ -375,13 +381,24 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 input_ids=encoding["input_ids"].to(self.device),
                 attention_mask=encoding["attention_mask"].to(self.device),
                 bbox=encoding["bbox"].to(self.device),
-                pixel_values=encoding["pixel_values"].to(self.device),
+                pixel_values=(
+                    torch.stack(encoding["pixel_values"]).to(self.device)
+                    if isinstance(encoding["pixel_values"], list)
+                    else encoding["pixel_values"].to(self.device)
+                ),
             )
         # TODO: add top_k support
 
         logits = output.logits
-        predicted_class = logits.argmax(-1)
-        probabilities = F.softmax(logits, dim=-1).squeeze().tolist()
+        chunks = logits.shape[0]
+        if chunks == 1:
+            predicted_class = logits.argmax(-1)
+            probabilities = F.softmax(logits, dim=-1).squeeze().tolist()
+        else:
+            self.logger.info(f"Chunk count: {chunks}")
+            doc_logits = logits.mean(dim=0, keepdim=True)  # or max()
+            predicted_class = doc_logits.argmax(-1)
+            probabilities = F.softmax(doc_logits, dim=-1).squeeze().tolist()
 
         return [
             {

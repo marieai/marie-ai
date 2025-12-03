@@ -205,6 +205,7 @@ def setup_classifiers(
         max_token_length = (
             config["max_token_length"] if "max_token_length" in config else None
         )
+        chunk_input = config["chunk_input"] if "chunk_input" in config else False
 
         if "group" not in config:
             raise BadConfigSource(f"Missing group in classifier config : {config}")
@@ -233,6 +234,7 @@ def setup_classifiers(
                 task=task,
                 id2label=id2label,
                 max_token_length=max_token_length,
+                chunk_input=chunk_input,
             )
 
             document_classifiers[group][name] = {
