@@ -5,7 +5,6 @@
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
     <envs>
-      <env name="PYTHONUNBUFFERED" value="1" />
       <env name="COLUMNS" value="180" />
       <env name="CUDA_VISIBLE_DEVICES" value="0" />
       <env name="GRPC_VERBOSITY" value="debug" />
@@ -14,8 +13,9 @@
       <env name="MARIE_DEBUG" value="0" />
       <env name="MARIE_DEBUG_PORT" value="5678" />
       <env name="MARIE_DEFAULT_MOUNT" value="/mnt/data/marie-ai" />
+      <env name="OPENAI_API_BASE" value="http://192.222.48.192" />
       <env name="OPENAI_API_KEY" value="EMPTY" />
-      <env name="OPENAI_API_BASE" value="http://0.0.0.0:4000" />
+      <env name="PYTHONUNBUFFERED" value="1" />
     </envs>
     <option name="SDK_HOME" value="" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/" />
@@ -23,6 +23,7 @@
     <option name="ADD_CONTENT_ROOTS" value="false" />
     <option name="ADD_SOURCE_ROOTS" value="false" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+    <option name="RUN_TOOL" value="" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/marie/__main__.py" />
     <option name="PARAMETERS" value="server --start --uses /mnt/data/marie-ai/config/service/g5/marie-g5-annotator_table.yml" />
     <option name="SHOW_COMMAND_LINE" value="false" />
