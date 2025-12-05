@@ -5,7 +5,7 @@ from typing import Any, List, Optional, Sequence
 
 from pydantic import BaseModel, Field
 
-from marie.core.async_utils import asyncio_run
+from marie.helper import run_async
 
 
 class EvaluationResult(BaseModel):
@@ -59,7 +59,7 @@ class BaseEvaluator(ABC):
         Subclasses can override this method to provide custom evaluation logic and
         take in additional arguments.
         """
-        return asyncio_run(
+        return run_async(
             self.aevaluate(
                 query=query,
                 response=response,

@@ -1,7 +1,7 @@
 """Base tool interface for Marie agent framework.
 
-This module provides tool abstractions compatible with Qwen-Agent patterns
-while bridging to the existing marie.core.tools infrastructure.
+This module provides tool abstractions compatible with Qwen-Agent patterns,
+fully native to the marie.agent framework without external dependencies.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import traceback
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import (
-    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -23,9 +22,6 @@ from typing import (
     Union,
     get_type_hints,
 )
-
-if TYPE_CHECKING:
-    from marie.core.tools.types import BaseTool as CoreBaseTool
 
 from pydantic import BaseModel, Field
 
@@ -551,67 +547,22 @@ def adapt_tool(tool: Any) -> AgentTool:
 
     Supports:
         - AgentTool instances (returned as-is)
-        - marie.core.tools.types.BaseTool instances
-        - Callable functions
+        - Callable functions (wrapped as FunctionTool)
 
     Args:
         tool: The tool to adapt
 
     Returns:
         An AgentTool instance
+
+    Raises:
+        TypeError: If the tool type cannot be adapted
     """
     if isinstance(tool, AgentTool):
         return tool
-
-    # Adapt from marie.core.tools.types.BaseTool
-    from marie.core.tools.types import BaseTool as CoreBaseTool
-
-    if isinstance(tool, CoreBaseTool):
-        return _adapt_core_tool(tool)
 
     # Adapt from callable
     if callable(tool):
         return FunctionTool.from_defaults(fn=tool)
 
     raise TypeError(f"Cannot adapt {type(tool)} to AgentTool")
-
-
-def _adapt_core_tool(core_tool: "CoreBaseTool") -> AgentTool:
-    """Adapt a marie.core.tools.types.BaseTool to AgentTool."""
-    from marie.core.tools.types import BaseTool as CoreBaseTool
-
-    class CoreToolAdapter(AgentTool):
-        """Adapter for marie.core.tools.types.BaseTool."""
-
-        def __init__(self, tool: CoreBaseTool):
-            self._tool = tool
-
-        @property
-        def metadata(self) -> ToolMetadata:
-            core_meta = self._tool.metadata
-            return ToolMetadata(
-                name=core_meta.name or "unknown",
-                description=core_meta.description,
-                fn_schema=core_meta.fn_schema,
-                return_direct=core_meta.return_direct,
-            )
-
-        def call(self, *args: Any, **kwargs: Any) -> ToolOutput:
-            result = self._tool(*args, **kwargs)
-            # Convert from core ToolOutput if needed
-            if hasattr(result, "content"):
-                return ToolOutput(
-                    content=result.content,
-                    tool_name=result.tool_name,
-                    raw_input=result.raw_input,
-                    raw_output=result.raw_output,
-                    is_error=getattr(result, "is_error", False),
-                )
-            return ToolOutput(
-                content=str(result),
-                tool_name=self.name,
-                raw_input=kwargs,
-                raw_output=result,
-            )
-
-    return CoreToolAdapter(core_tool)

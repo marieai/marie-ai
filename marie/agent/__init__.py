@@ -106,6 +106,15 @@ from marie.agent.config import (
     load_config,
 )
 from marie.agent.executor import AgentExecutor
+from marie.agent.llm_types import (
+    ChatMessage,
+    ChatResponse,
+    CompletionResponse,
+    ContentBlock,
+    ImageBlock,
+    MessageRole,
+    TextBlock,
+)
 from marie.agent.llm_wrapper import (
     BaseLLMWrapper,
     MarieEngineLLMWrapper,
@@ -148,6 +157,7 @@ from marie.agent.tools import (
     register_tool,
     resolve_tools,
 )
+from marie.agent.utils import asyncio_run, get_or_reuse_loop, run_async
 
 __all__ = [
     # Base classes
@@ -228,6 +238,18 @@ __all__ = [
     "MemoryConfig",
     "ToolConfig",
     "load_config",
+    # LLM types (native)
+    "MessageRole",
+    "TextBlock",
+    "ImageBlock",
+    "ContentBlock",
+    "ChatMessage",
+    "ChatResponse",
+    "CompletionResponse",
+    # Utilities
+    "run_async",
+    "asyncio_run",
+    "get_or_reuse_loop",
 ]
 
 __version__ = "0.1.0"

@@ -1,7 +1,7 @@
 """Unified message schema for Marie agent framework.
 
-This module provides a Qwen-Agent compatible message format that bridges
-with marie.core.base.llms.types.ChatMessage.
+This module provides a Qwen-Agent compatible message format with native
+LLM types that are independent of marie.core.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 if TYPE_CHECKING:
-    from marie.core.base.llms.types import ChatMessage
+    from marie.agent.llm_types import ChatMessage
 
 from pydantic import (
     BaseModel,
@@ -212,8 +212,8 @@ class Message(BaseModel):
         return "\n".join(text_parts)
 
     def to_chat_message(self) -> "ChatMessage":
-        """Convert to marie.core.base.llms.types.ChatMessage."""
-        from marie.core.base.llms.types import (
+        """Convert to marie.agent.llm_types.ChatMessage."""
+        from marie.agent.llm_types import (
             ChatMessage,
             ImageBlock,
             MessageRole,
@@ -267,8 +267,8 @@ class Message(BaseModel):
 
     @classmethod
     def from_chat_message(cls, chat_msg: "ChatMessage") -> "Message":
-        """Create from marie.core.base.llms.types.ChatMessage."""
-        from marie.core.base.llms.types import ImageBlock, TextBlock
+        """Create from marie.agent.llm_types.ChatMessage."""
+        from marie.agent.llm_types import ImageBlock, TextBlock
 
         # Convert role
         role = chat_msg.role.value
