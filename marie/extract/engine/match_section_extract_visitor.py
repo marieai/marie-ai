@@ -1262,36 +1262,39 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 if isinstance(mapping, dict):
                     map_value = mapping.get(derived_key, None)
 
-                # derived fields can be None if the parsing did not find a value for it
-                # we are skipping those fields
-                if map_value is None:
-                    self.logger.warning(f"Derived key '{derived_key}' has no value")
-                    continue
+                map_values = map_value if isinstance(map_value, list) else [map_value]
 
-                child_field = Field(
-                    field_name=derived_value_name,
-                    field_type=None,
-                    is_required=False,
-                    value=stringify(map_value),
-                    value_original=None,
-                    composite_field=False,
-                    x=0,
-                    y=0,
-                    width=0,
-                    height=0,
-                    date_format=None,
-                    name_format=None,
-                    column_name=derived_value_name,
-                    page=page_id,
-                    xdpi=300,
-                    ydpi=300,
-                    confidence=1,
-                    scrubbed=True,
-                    uuid=None,
-                    reference_uuid=reference_uuid,
-                    layer_name="main-layer",
-                )
-                fields.append(child_field)
+                for map_value in map_values:
+                    # derived fields can be None if the parsing did not find a value for it
+                    # we are skipping those fields
+                    if map_value is None:
+                        self.logger.warning(f"Derived key '{derived_key}' has no value")
+                        continue
+
+                    child_field = Field(
+                        field_name=derived_value_name,
+                        field_type=None,
+                        is_required=False,
+                        value=stringify(map_value),
+                        value_original=None,
+                        composite_field=False,
+                        x=0,
+                        y=0,
+                        width=0,
+                        height=0,
+                        date_format=None,
+                        name_format=None,
+                        column_name=derived_value_name,
+                        page=page_id,
+                        xdpi=300,
+                        ydpi=300,
+                        confidence=1,
+                        scrubbed=True,
+                        uuid=None,
+                        reference_uuid=reference_uuid,
+                        layer_name="main-layer",
+                    )
+                    fields.append(child_field)
 
         # Handle TransformReturnType which can be Dict[str, str|None] or List[Dict[str, str|None]]
         if derived_fields:
