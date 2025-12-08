@@ -150,7 +150,13 @@ class MarieLogger:
     :return:: an executor object.
     """
 
-    supported = {"FileHandler", "StreamHandler", "SysLogHandler", "RichHandler"}
+    supported = {
+        "FileHandler",
+        "StreamHandler",
+        "SysLogHandler",
+        "RichHandler",
+        "JobLogSink",
+    }
 
     def __init__(
         self,
@@ -371,6 +377,15 @@ class MarieLogger:
                 os.makedirs(os.path.dirname(filename), exist_ok=True)
                 handler = logging.FileHandler(filename, delay=True)
                 handler.setFormatter(fmt(cfg["format"].format_map(kwargs)))
+
+            elif h == "JobLogSink":
+                from marie.logging_core.job_log_sink import JobLogSink
+
+                log_dir = cfg.get(
+                    "log_dir", os.getenv("MARIE_JOB_LOGS_DIR", "/var/log/marie/jobs")
+                )
+                max_handles = cfg.get("max_handles", JobLogSink.DEFAULT_MAX_HANDLES)
+                handler = JobLogSink(log_dir=log_dir, max_handles=max_handles)
 
             if handler:
                 target_handlers.append(handler)

@@ -2,6 +2,7 @@ handlers:
 #  - StreamHandler
 #  - FileHandler
   - RichHandler
+  - JobLogSink
 level: INFO
 configs:
   FileHandler:
@@ -28,3 +29,8 @@ configs:
     rich_tracebacks: false
     show_path: false
     log_time_format: '[%x %X]'
+
+  JobLogSink:
+    # Per-job log files for UI retrieval
+    log_dir: '/var/log/marie/jobs'
+    max_handles: 100
