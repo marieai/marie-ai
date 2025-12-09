@@ -9,7 +9,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from math import inf
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import psycopg2
 
@@ -757,6 +757,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         queue_name: str,
         skip_reason: SkipReason,
         dag_plan: QueryPlan,
+        visited: Optional[set[str]] = None,
     ) -> None:
         """
         Recursively mark all descendants of skipped nodes as SKIPPED.
@@ -765,26 +766,29 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param queue_name: Queue name
         :param skip_reason: Original skip reason
         :param dag_plan: DAG plan to traverse
+        :param visited: Nodes already processed (to avoid cycles)
         """
         if not skipped_node_ids:
             return
 
+        visited = visited or set()
+        frontier = list(skipped_node_ids)
         descendants = set()
 
-        # Find all descendants using the DAG structure
-        for node_id in skipped_node_ids:
-            node = get_node_from_dag(node_id, dag_plan)
-            if not node:
+        # Traverse DAG to find downstream nodes using dependencies
+        while frontier:
+            current = frontier.pop()
+            if current in visited:
                 continue
+            visited.add(current)
 
-            # Traverse the DAG to find all downstream nodes
-            # This is a simplified traversal - in production, use topology cache
-            for query in dag_plan.queries:
-                if node_id in query.depends_on:
-                    descendants.add(query.query)
+            for query in dag_plan.nodes:
+                if current in query.dependencies:
+                    if query.task_id not in visited:
+                        descendants.add(query.task_id)
+                        frontier.append(query.task_id)
 
         if descendants:
-            # Create cascaded skip reason
             cascaded_reason = SkipReason(
                 branch_node_id=skip_reason.branch_node_id,
                 reason=f"Ancestor node(s) skipped: {skipped_node_ids}",
@@ -793,7 +797,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 timestamp=datetime.now(timezone.utc),
             )
 
-            # Mark descendants as skipped
             await self._mark_nodes_skipped(
                 list(descendants), queue_name, cascaded_reason, dag_plan
             )
