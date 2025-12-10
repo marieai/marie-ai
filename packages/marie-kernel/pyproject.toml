@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marie-kernel"
+version = "0.1.0"
+description = "State management kernel for Marie AI DAG execution"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Marie AI", email = "support@marieai.co"}
+]
+keywords = ["marie", "state", "dag", "workflow", "task-state"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[pool]>=3.1.0", "psycopg[binary]>=3.1.0"]
+s3 = ["boto3>=1.28.0"]
+all = ["marie-kernel[postgres]", "marie-kernel[s3]"]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.0.0",
+    "moto[s3]>=4.0.0",  # For S3 mocking in tests
+]
+
+[project.urls]
+Homepage = "https://github.com/marieai/marie-ai"
+Documentation = "https://docs.marieai.co"
+Repository = "https://github.com/marieai/marie-ai"
+Issues = "https://github.com/marieai/marie-ai/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/marie_kernel"]
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

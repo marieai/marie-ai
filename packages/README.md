@@ -20,6 +20,22 @@ A Model Context Protocol (MCP) server that enables AI assistants like Claude to 
 - OpenAI Agents SDK
 - Custom AI assistant integrations
 
+### 📦 marie-kernel
+**State management kernel for DAG task execution**
+
+A state passing system that enables tasks within a DAG run to share state via simple key-value operations.
+
+- **Purpose**: Cross-task state management for workflow orchestration
+- **Install**: `pip install marie-kernel` or `pip install marie-kernel[postgres]`
+- **Docs**: [packages/marie-kernel/README.md](./marie-kernel/README.md)
+
+**Features**:
+- Simple `ctx.set()`/`ctx.get()` API
+- Multi-tenant isolation
+- PostgreSQL backend for production
+- In-memory backend for testing
+- Retry-safe with try_number scoping
+
 ## Monorepo Structure
 
 ```
@@ -30,8 +46,12 @@ marie-ai/
 │   └── Gateway & scheduler
 │
 └── packages/                   # Additional packages (client-side)
-    └── marie-mcp/              # MCP server for AI assistants
-        ├── src/marie_mcp/
+    ├── marie-mcp/              # MCP server for AI assistants
+    │   ├── src/marie_mcp/
+    │   ├── pyproject.toml      # Separate PyPI package
+    │   └── README.md
+    └── marie-kernel/           # State management kernel
+        ├── src/marie_kernel/
         ├── pyproject.toml      # Separate PyPI package
         └── README.md
 ```
@@ -47,6 +67,10 @@ pip install -e .
 # Install MCP package
 cd packages/marie-mcp
 pip install -e .
+
+# Install State Kernel package
+cd packages/marie-kernel
+pip install -e ".[dev]"  # Include test dependencies
 ```
 
 ### Publishing
@@ -60,6 +84,11 @@ twine upload dist/*
 
 # Publish MCP package
 cd packages/marie-mcp
+python -m build
+twine upload dist/*
+
+# Publish State Kernel package
+cd packages/marie-kernel
 python -m build
 twine upload dist/*
 ```
@@ -111,6 +140,10 @@ Maintain compatibility matrix in each package README:
 | marie-mcp | marie-ai | Status |
 |-----------|----------|--------|
 | 0.1.x     | 3.0.x    | ✅ Stable |
+
+| marie-kernel | marie-ai | Status |
+|--------------|----------|--------|
+| 0.1.x        | 3.0.x    | 🚧 Development |
 
 ## Future Packages
 
