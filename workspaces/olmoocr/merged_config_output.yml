@@ -1,0 +1,656 @@
+fields:
+  repeating:
+    ALLOWED_AMOUNT:
+      text: Allowed
+      type: MONEY
+    ALTERNATE_PROC_CODE:
+      text: Alternate Procedure Code
+      type: ALPHA_NUMERIC
+    BILLED_AMOUNT:
+      text: Billed
+      type: MONEY
+    COB:
+      text: COB
+      type: MONEY
+    COINSURANCE:
+      text: Co-insurance
+      type: MONEY
+    COPAY:
+      text: Copay
+      type: MONEY
+    DRG_AMOUNT:
+      text: DRG
+      type: MONEY
+    DATE_OF_SERVICE:
+      text: Date of Service
+      type: DATE
+      format: MM/dd/yy - MM/dd/yy
+      validation_regex: ^(?P<begin>\d{2}/\d{2}/\d{2})\s*-\s*(?P<end>\d{2}/\d{2}/\d{2})$
+      split: '-'
+      derived_fields:
+        begin: BEGIN_DATE_OF_SERVICE
+        end: END_DATE_OF_SERVICE
+    BEGIN_DATE_OF_SERVICE:
+      text: Begin Date Of Service
+      type: DATE
+      format: MM/DD/YYYY
+    END_DATE_OF_SERVICE:
+      text: End Date Of Service
+      type: DATE
+      format: MM/DD/YYYY
+    DEDUCTIBLE:
+      text: Deductible
+      type: MONEY
+    DISALLOWED:
+      text: Disallowed
+      type: MONEY
+    DISCOUNT:
+      text: Discount
+      type: MONEY
+    INTEREST:
+      text: Interest
+      type: MONEY
+    INELIGIBLE_AMOUNT_MEMBER:
+      text: Member Ineligible Amount
+      type: MONEY
+    PLAN_COVERAGE:
+      text: Plan Coverage
+      type: NUMERIC
+    PREPAID:
+      text: Pre-Paid
+      type: MONEY
+    PROCEDURE_CODE:
+      text: Procedure Code
+      type: ALPHA_NUMERIC
+    PROCEDURE_CODE_MODIFIER:
+      text: Procedure Code Modifier
+      type: ALPHA_NUMERIC
+    QUANTITY:
+      text: Quantity
+      type: NUMERIC
+    REMARK_CODE:
+      text: Remark Code
+      type: ALPHA_NUMERIC
+    REMARK_CODE_DESCRIPTION:
+      text: Remark Description
+      type: ALPHA_NUMERIC
+    REVENUE_CODE:
+      text: Revenue Code
+      type: ALPHA_NUMERIC
+    TOOTH_NUMBER:
+      text: Tooth Number
+      type: ALPHA_NUMERIC
+    WITHHOLDING:
+      text: Withholding
+      type: MONEY
+    WRITEOFF:
+      text: Write-off
+      type: MONEY
+    PAID_AMOUNT:
+      text: Paid
+      type: MONEY
+    SERVICE_LINE_NUMBER:
+      text: Line Number
+      type: NUMERIC
+    NDC:
+      text: NDC
+      type: ALPHA_NUMERIC
+    LATE_PAYMENT_AMOUNT:
+      text: Late Payment Amount
+      type: MONEY
+    OVER_RNC:
+      text: Over RNC
+      type: MONEY
+    OFFSET_AMOUNT:
+      text: Offset
+      type: MONEY
+    HIGHER_ALLOWABLE:
+      text: Higher Allowable
+      type: MONEY
+    MEDICARE_PAID:
+      text: Medicare Paid
+      type: MONEY
+    MEDICARE_ALLOWED:
+      text: Medicare Allowed
+      type: MONEY
+    PATIENT_RESPONSIBILITY:
+      text: Patient Responsibility
+      type: MONEY
+    CLAIM_NUMBER:
+      text: Claim
+      type: ALPHA_NUMERIC
+    PATIENT_ACCOUNT_NUMBER:
+      text: Patient Account Number
+      type: ALPHA_NUMERIC
+    PATIENT_NAME:
+      text: Patient Name
+      type: NAME
+      format: '{title} {first} {middle} {last} {suffix} ({nickname})'
+      derived_fields:
+        first: PATIENT_FIRST_NAME
+        last: PATIENT_LAST_NAME
+        middle: PATIENT_MIDDLE_NAME
+    PATIENT_FIRST_NAME:
+      text: Patient First Name
+      type: ALPHA
+    PATIENT_LAST_NAME:
+      text: Patient Last Name
+      type: ALPHA
+    PATIENT_MIDDLE_NAME:
+      text: Patient Middle Name
+      type: ALPHA
+    MEMBER_NAME:
+      text: Member Name
+      type: NAME
+      format: '{title} {first} {middle} {last} {suffix} ({nickname})'
+      derived_fields:
+        first: MEMBER_FIRST_NAME
+        last: MEMBER_LAST_NAME
+        middle: MEMBER_MIDDLE_NAME
+    MEMBER_FIRST_NAME:
+      text: Member First Name
+      type: ALPHA
+    MEMBER_LAST_NAME:
+      text: Member Last Name
+      type: ALPHA
+    MEMBER_MIDDLE_NAME:
+      text: Member Middle Name
+      type: ALPHA
+    TOOTH_SURFACE:
+      text: Tooth Surface
+      type: ALPHA_NUMERIC
+    MEMBER_NUMBER:
+      text: Member ID
+      type: ALPHA_NUMERIC
+    NDC_CODE:
+      text: NDCcode
+      type: ALPHA_NUMERIC
+    SERVICING_PROVIDER_NUMBER:
+      text: Servicing Provider Number
+      type: ALPHA_NUMERIC
+    DENIED:
+      text: Denied
+      type: MONEY
+    RX_NUMBER:
+      text: RX Number
+      type: ALPHA_NUMERIC
+    CLAIM_STATUS:
+      text: Claim Status
+      type: ALPHA_NUMERIC
+    DENTAL_DESCRIPTION:
+      text: Dental Description
+      type: ALPHA_NUMERIC
+    DENTAL_TOOTH_CODE:
+      text: Dental Tooth Code
+      type: ALPHA_NUMERIC
+    DENTAL_QUADRANT:
+      text: Dental Quadrant
+      type: ALPHA_NUMERIC
+    DENTAL_CAVITY_DESIGNATION_CODE:
+      text: Cavity Designation
+      type: ALPHA_NUMERIC
+    INJURY_DATE:
+      text: Injury Date
+      type: DATE
+      format: MM/DD/YYYY
+  non_repeating:
+    ALLOWED_AMOUNT:
+      text: Total Allowed Amount
+      type: MONEY
+      level: DOCUMENT
+    TOTAL_BILLED_AMOUNT:
+      text: Total Billed Amount
+      type: MONEY
+      level: DOCUMENT
+    TOTAL_PAID_AMOUNT:
+      text: Total Paid
+      type: MONEY
+      level: DOCUMENT
+    CHECK_AMOUNT:
+      text: Check Amount
+      type: MONEY
+      level: DOCUMENT
+    CHECK_NUMBER:
+      text: Check
+      type: ALPHA_NUMERIC
+      level: DOCUMENT
+    INSURANCE_COMPANY_NAME:
+      text: Insurance Company Name
+      type: ALPHA_NUMERIC
+      level: DOCUMENT
+    INSURANCE_COMPANY_ADDRESS:
+      text: Insurance Company Address
+      type: ALPHA_NUMERIC
+      level: DOCUMENT
+    INSURANCE_COMPANY_CITY:
+      text: Insurance Company City
+      type: ALPHA
+      level: DOCUMENT
+    INSURANCE_COMPANY_STATE:
+      text: Insurance Company State
+      type: ALPHA
+      level: DOCUMENT
+    INSURANCE_COMPANY_ZIP:
+      text: Insurance Company Zip
+      type: NUMERIC
+      level: DOCUMENT
+    CLAIM_NUMBER:
+      text: Claim
+      type: ALPHA_NUMERIC
+    INTEREST:
+      text: Claim Interest
+      type: MONEY
+    GROUP_NUMBER:
+      text: Group
+      type: ALPHA_NUMERIC
+    MEMBER_NUMBER:
+      text: Member ID
+      type: ALPHA_NUMERIC
+    OVERPAYMENTS_RECOVERY:
+      text: Overpayment Recovery
+      type: MONEY
+    PATIENT_ACCOUNT_NUMBER:
+      text: Patient Account Number
+      type: ALPHA_NUMERIC
+    PATIENT_NAME:
+      text: Patient Name
+      type: NAME
+      format: '{title} {first} {middle} {last} {suffix} ({nickname})'
+      derived_fields:
+        first: PATIENT_FIRST_NAME
+        last: PATIENT_LAST_NAME
+        middle: PATIENT_MIDDLE_NAME
+    PATIENT_FIRST_NAME:
+      text: Patient First Name
+      type: ALPHA
+    PATIENT_LAST_NAME:
+      text: Patient Last Name
+      type: ALPHA
+    PATIENT_MIDDLE_NAME:
+      text: Patient Middle Name
+      type: ALPHA
+    MEMBER_NAME:
+      text: Member Name
+      type: NAME
+      format: '{title} {first} {middle} {last} {suffix} ({nickname})'
+      derived_fields:
+        first: MEMBER_FIRST_NAME
+        last: MEMBER_LAST_NAME
+        middle: MEMBER_MIDDLE_NAME
+    MEMBER_FIRST_NAME:
+      text: Member First Name
+      type: ALPHA
+    MEMBER_LAST_NAME:
+      text: Member Last Name
+      type: ALPHA
+    MEMBER_MIDDLE_NAME:
+      text: Member Middle Name
+      type: ALPHA
+    PATIENT_RESPONSIBILITY:
+      text: Patient Responsibility total
+      type: MONEY
+    PAYMENT_ADJUSTMENT:
+      text: Payment Adjustment
+      type: MONEY
+    PAGE_NUMBER:
+      text: Page Number
+      type: NUMERIC
+    PROVIDER_NAME:
+      text: Provider Name
+      type: NAME
+      level: DOCUMENT
+    PROVIDER_ADDRESS:
+      text: Provider Address
+      type: ALPHA_NUMERIC
+      level: DOCUMENT
+    PROVIDER_CITY:
+      text: Provider City
+      type: ALPHA
+      level: DOCUMENT
+    PROVIDER_STATE:
+      text: Provider State
+      type: ALPHA
+      level: DOCUMENT
+    PROVIDER_ZIP:
+      text: Provider ZIP
+      type: ALPHA_NUMERIC
+      level: DOCUMENT
+    PROVIDER_TAX_ID:
+      text: Provider Tax ID
+      type: ALPHA_NUMERIC
+      level: DOCUMENT
+    CHECK_DATE:
+      text: Check Date
+      type: DATE
+      format: MM/DD/YYYY
+      level: DOCUMENT
+    DOCUMENT_DOCUMENT_ID:
+      text: Document ID
+      type: ALPHA_NUMERIC
+      level: DOCUMENT
+    PAYER_NAME:
+      text: Payer Name
+      type: NAME
+      level: DOCUMENT
+    PAYER_ADDRESS:
+      text: Payer Address
+      type: ALPHA_NUMERIC
+      level: DOCUMENT
+    PAYER_CITY:
+      text: Payer City
+      type: ALPHA
+      level: DOCUMENT
+    PAYER_STATE:
+      text: Payer State
+      type: ALPHA
+      level: DOCUMENT
+    PAYER_ZIP:
+      text: Payer ZIP
+      type: ALPHA_NUMERIC
+      level: DOCUMENT
+    NATIONAL_PROVIDER_ID:
+      text: NPI
+      type: ALPHA_NUMERIC
+      level: DOCUMENT
+    NPID:
+      text: NPID
+      type: ALPHA_NUMERIC
+      level: DOCUMENT
+    COB:
+      text: Total COB
+      type: MONEY
+      level: DOCUMENT
+    COINSURANCE:
+      text: Total Coinsurance
+      type: MONEY
+      level: DOCUMENT
+    COPAY:
+      text: Total Copay
+      type: MONEY
+      level: DOCUMENT
+    DEDUCTIBLE_TOTAL:
+      text: Total Deductible
+      type: MONEY
+      level: DOCUMENT
+    DISCOUNT_TOTAL:
+      text: Total Discount
+      type: MONEY
+      level: DOCUMENT
+    DISALLOWED_TOTAL:
+      text: Total Discount
+      type: MONEY
+      level: DOCUMENT
+    ALPHA_NUMERIC_VAR_ONE:
+      text: Variable Field 1
+      type: ALPHA_NUMERIC
+    ALPHA_NUMERIC_VAR_TWO:
+      text: Variable Field 2
+      type: ALPHA_NUMERIC
+    MONEY_VAR_ONE:
+      text: Money Variable 1
+      type: MONEY
+    MONEY_VAR_TWO:
+      text: Money Variable 2
+      type: MONEY
+    WITHHOLDING:
+      text: Withholding
+      type: MONEY
+processing:
+  render_markdown: true
+annotators:
+  key-values:
+    annotator_type: llm
+    model_config:
+      model_name: deepseek_r1_32
+      prompt_path: ./key-value.j2
+      system_prompt_text: '### Task You are a helpful assistant that extracts claims
+        from the given text.
+
+        '
+      top_p: 1.0
+      frequency_penalty: 0
+      presence_penalty: 0
+      expect_output: json
+  claims:
+    annotator_type: llm
+    model_config:
+      model_name: deepseek_r1_32
+      prompt_path: ./claims.j2
+      system_prompt_text: '### Task You are a helpful assistant that extracts claims
+        from the given text.
+
+        '
+      top_p: 1.0
+      frequency_penalty: 0
+      presence_penalty: 0
+      expect_output: json
+  tables:
+    annotator_type: llm
+    model_config:
+      model_name: deepseek_r1_32
+      prompt_path: ./tables.j2
+      system_prompt_text: '### Task You are a helpful assistant that extracts claims
+        from the given text.
+
+        '
+      top_p: 1.0
+      frequency_penalty: 0
+      presence_penalty: 0
+      expect_output: json
+  remarks:
+    annotator_type: llm
+    model_config:
+      model_name: deepseek_r1_32
+      prompt_path: ./remarks.j2
+      system_prompt_text: '### Task You are a helpful assistant that extracts claims
+        from the given text.
+
+        '
+      top_p: 1.0
+      frequency_penalty: 0
+      presence_penalty: 0
+      expect_output: json
+  table-extract:
+    annotator_type: llm
+    parser: noop
+    model_config:
+      model_name: qwen_v2_5_vl
+      prompt_path: ./table-extract.j2
+      multimodal: true
+      system_prompt_text: '### Task You are a helpful assistant that extracts claims
+        from the given text.
+
+        '
+      top_p: 1.0
+      frequency_penalty: 0
+      presence_penalty: 0
+      expect_output: markdown
+  claim-hybrid:
+    annotator_type: embedding
+    parser: annotations
+    critical_field_boost: 0.1
+    critical_fields:
+    - CLAIM NUMBER
+    - PATIENT ACCT
+    - CHECK NUMBER
+    deduplicate_fields: false
+    embedding_threshold: 0.85
+    embedding_weight: 0.7
+    fuzzy_threshold: 0.9
+    fuzzy_weight: 0.3
+    memory_enabled: true
+    memory_fields:
+    - CLAIM NUMBER
+    - PATIENT ACCT
+    - PATIENT NAME
+    - MEMBER NUMBER
+    - CHECK NUMBER
+    - CHECK DATE
+    - PROVIDER NPI
+    - PATIENT ID
+    min_acceptance_score: 0.7
+    min_final_score: 0.7
+    model_name: jinaai/jina-embeddings-v2-base-en
+    name: key-value-faiss-hybrid
+    target_labels:
+    - TAX ID
+    - PATIENT ACCT
+    - PATIENT ID
+    - CLAIM NUMBER
+    - PROVIDER NPI
+    - PATIENT NAME
+    - MEMBER NUMBER
+    - CHECK NUMBER
+    - CHECK DATE
+    top_k_candidates: 3
+    multiline_enabled: true
+    multiline_threshold: 0.85
+    multiline_window: 2
+    multiline_reference_blocks:
+      PatternPatient:
+      - 'TAX ID : 12345ABC PATIENT ACCT : 12345ABC CLAIM NUMBER : 12345ABC PROVIDER
+        NPI : 12345ABC'
+      - 'PATIENT NAME : JOHN SMITH MEMBER NUMBER : 12345ABC CHECK NUMBER : 123456789
+        CHECK DATE : 04/01/2024'
+grounding:
+  claim:
+  - TAX_ID
+  - PATIENT_ACCT
+  - CLAIM_NUMBER
+  - PATIENT_NAME
+  - MEMBER_NUMBER
+  - CHECK_NUMBER
+  - CHECK_DATE
+  - ERROR
+  key-value:
+  - INTEREST
+  - FEDERAL_BACKUP_WITHOLDING
+  - TOTAL_CLAIM_PAYMENT
+  - ERROR
+  remark:
+  - REMARK_HEADER
+  - REMARK_DATA
+  - ERROR
+  table: []
+layout_id: 117183
+layers:
+  layer-main:
+    name: layer-main
+    tables:
+      service_lines_table:
+        name: Service Lines Table
+        tag: SERVICE_LINE
+        body:
+          grouping:
+            strategy: PRIMARY_COLUMN_VARIABLE
+          columns:
+            DATE_OF_SERVICE:
+              primary: true
+              annotation_selectors:
+              - SERVICE DATE
+            PROCEDURE_CODE:
+              annotation_selectors:
+              - PROCEDURE CODE
+            REMARK_CODE:
+              annotation_selectors:
+              - REMARK CODE
+            BILLED_AMOUNT:
+              annotation_selectors:
+              - TOTAL CHARGE
+            ALLOWED_AMOUNT:
+              annotation_selectors:
+              - CONTRACTUAL OBLIGATION
+            COB:
+              annotation_selectors:
+              - OTHER PAYER
+            COINSURANCE:
+              annotation_selectors:
+              - CO-INS
+            COPAY:
+              annotation_selectors:
+              - CO-PAY
+            DEDUCTIBLE:
+              annotation_selectors:
+              - DEDUCTIBLE
+            DISALLOWED:
+              annotation_selectors:
+              - NON COVERED
+            PATIENT_RESPONSIBILITY:
+              annotation_selectors:
+              - PATIENT MAY BE BILLED
+            PAID_AMOUNT:
+              annotation_selectors:
+              - NET PAYMENT
+        footer:
+          detect_by:
+            field_match:
+            - column: REMARK CODE
+              pattern: TOTAL:?$
+            - column: SERVICE DATE
+              pattern: TOTAL:?$
+            - column: PROCEDURE CODE
+              pattern: TOTAL:?$
+            match_type: any
+            always_present: false
+            flexible_match:
+              enabled: true
+              strategy: default
+              pattern: TOTAL:?$
+          columns:
+            COINSURANCE:
+              annotation_selectors:
+              - CO-INS
+            DEDUCTIBLE:
+              annotation_selectors:
+              - DEDUCTIBLE
+            COB:
+              annotation_selectors:
+              - OTHER PAYER
+            COPAY:
+              annotation_selectors:
+              - CO-PAY
+            DISALLOWED:
+              annotation_selectors:
+              - NON COVERED
+            TOTAL_BILLED_AMOUNT:
+              annotation_selectors:
+              - TOTAL CHARGE
+            ALLOWED_AMOUNT:
+              annotation_selectors:
+              - CONTRACTUAL OBLIGATION
+            PATIENT_RESPONSIBILITY:
+              annotation_selectors:
+              - PATIENT MAY BE BILLED
+            TOTAL_PAID_AMOUNT:
+              annotation_selectors:
+              - NET PAYMENT
+    non_repeating_fields:
+      PATIENT_NAME:
+        tag: REMIT
+        annotation_selectors:
+        - PATIENT NAME
+        - PATIENT
+      CLAIM_NUMBER:
+        tag: REMIT
+        annotation_selectors:
+        - CLAIM NUMBER
+      MEMBER_NUMBER:
+        tag: REMIT
+        annotation_selectors:
+        - MEMBER NUMBER
+      PATIENT_ACCOUNT_NUMBER:
+        tag: REMIT
+        annotation_selectors:
+        - PATIENT ACCT
+      INTEREST:
+        tag: REMIT
+        annotation_selectors:
+        - INTEREST
+      WITHHOLDING:
+        tag: REMIT
+        annotation_selectors:
+        - FEDERAL BACKUP WITHOLDING
+      CHECK_AMOUNT:
+        tag: REMIT
+        annotation_selectors:
+        - TOTAL CLAIM PAYMENT

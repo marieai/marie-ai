@@ -1,116 +1,128 @@
 # Marie AI Packages
 
-This directory contains lightweight packages that are part of the Marie AI monorepo.
+This directory contains separately installable packages that are part of the Marie AI ecosystem.
 
 ## Available Packages
 
-### marie-mcp
+### 📦 marie-mcp
+**Lightweight MCP server for AI assistant integration**
 
-MCP (Model Context Protocol) server for the Marie AI document intelligence platform.
+A Model Context Protocol (MCP) server that enables AI assistants like Claude to interact with Marie AI's document intelligence capabilities.
 
-- **Location**: `packages/marie-mcp/`
-- **PyPI**: [`marie-mcp`](https://pypi.org/project/marie-mcp/)
-- **Size**: ~5MB (lightweight, no ML models)
-- **Purpose**: AI assistant integration for document processing
-- **Documentation**: [packages/marie-mcp/README.md](marie-mcp/README.md)
+- **Size**: ~5MB (vs 2-5GB for main marie-ai package)
+- **Purpose**: Client-side integration for AI assistants
+- **Install**: `pip install marie-mcp`
+- **Docs**: [packages/marie-mcp/README.md](./marie-mcp/README.md)
 
-**Installation**:
-```bash
-pip install marie-mcp
+**Use cases**:
+- Claude Desktop integration
+- LangChain agents
+- OpenAI Agents SDK
+- Custom AI assistant integrations
+
+## Monorepo Structure
+
 ```
-
-**Development**:
-```bash
-cd packages/marie-mcp
-pip install -e .
-```
-
-## Package Structure
-
-Each package follows this structure:
-```
-packages/your-package/
-├── src/
-│   └── your_package/
-│       ├── __init__.py
-│       └── ...
-├── tests/
-│   ├── __init__.py
-│   └── test_*.py
-├── examples/
-│   └── *.py
-├── pyproject.toml
-├── README.md
-├── LICENSE
-└── CHANGELOG.md
+marie-ai/
+├── marie/                      # Main Marie AI package (server-side)
+│   ├── Core processing
+│   ├── ML models & executors
+│   └── Gateway & scheduler
+│
+└── packages/                   # Additional packages (client-side)
+    └── marie-mcp/              # MCP server for AI assistants
+        ├── src/marie_mcp/
+        ├── pyproject.toml      # Separate PyPI package
+        └── README.md
 ```
 
 ## Development
 
-### Installing All Packages
+### Installing from Source
 
-From the root of the monorepo:
 ```bash
-# Install main package
+# Install main Marie AI package
 pip install -e .
 
-# Install all packages
-for pkg in packages/*/; do
-    (cd "$pkg" && pip install -e .)
-done
-```
-
-### Running Tests
-
-```bash
-# Test specific package
+# Install MCP package
 cd packages/marie-mcp
-pytest tests/
-
-# Test all packages from root
-pytest packages/*/tests/
+pip install -e .
 ```
 
-### Code Quality
+### Publishing
 
-All packages share the same code quality tools configured in the root `pyproject.toml`:
+Each package is published independently to PyPI:
+
 ```bash
-# Format code
-black packages/
-isort packages/
+# Publish main package
+python -m build
+twine upload dist/*
 
-# Type check
-mypy packages/
-
-# Lint
-flake8 packages/
-```
-
-## Adding a New Package
-
-See [MONOREPO.md](../MONOREPO.md#adding-new-packages) for instructions on adding new packages.
-
-## Versioning
-
-Each package has independent versioning:
-- Packages follow [Semantic Versioning](https://semver.org/)
-- Version numbers are managed in each package's `pyproject.toml`
-- Releases are tagged with `<package-name>-v<version>` (e.g., `marie-mcp-v0.1.0`)
-
-## Publishing
-
-Packages are published independently to PyPI:
-```bash
-# Build package
+# Publish MCP package
 cd packages/marie-mcp
 python -m build
-
-# Publish (done automatically via GitHub Actions)
-python -m twine upload dist/*
+twine upload dist/*
 ```
 
-## Resources
+### Shared Tooling
 
-- [Monorepo Guide](../MONOREPO.md)
-- [Main Package Documentation](../README.md)
-- [Contributing Guidelines](../CONTRIBUTING.md)
+All packages share:
+- Code formatting (black, isort)
+- Type checking (mypy)
+- Testing (pytest)
+- CI/CD pipelines
+
+Configuration in root:
+- `.github/workflows/` - CI/CD for all packages
+- `pyproject.toml` - Root tooling config
+- `.pre-commit-config.yaml` - Shared hooks
+
+## Adding New Packages
+
+To add a new package to the monorepo:
+
+1. Create directory: `packages/your-package/`
+2. Add `pyproject.toml` with package metadata
+3. Create `src/your_package/` structure
+4. Add README.md with documentation
+5. Update this README.md
+6. Add CI workflow in `.github/workflows/`
+
+## Package Guidelines
+
+Each package should:
+- ✅ Be independently installable
+- ✅ Have its own `pyproject.toml`
+- ✅ Use semantic versioning
+- ✅ Include comprehensive README
+- ✅ Have its own tests in `tests/`
+- ✅ Follow Marie AI code standards
+- ✅ Document compatibility with marie-ai versions
+
+## Package Naming Convention
+
+- Main package: `marie-ai` (contains core platform)
+- Sub-packages: `marie-{name}` (e.g., `marie-mcp`, `marie-sdk`, `marie-cli`)
+
+## Version Compatibility
+
+Maintain compatibility matrix in each package README:
+
+| marie-mcp | marie-ai | Status |
+|-----------|----------|--------|
+| 0.1.x     | 3.0.x    | ✅ Stable |
+
+## Future Packages
+
+Potential packages to add:
+- `marie-sdk` - Python SDK for application developers
+- `marie-cli` - Enhanced CLI tools
+- `marie-storage` - Storage adapters (S3, GCS, Azure)
+- `marie-monitoring` - Observability tools
+- `marie-plugins` - Plugin system
+
+## Questions?
+
+- Main docs: https://docs.marieai.co
+- Issues: https://github.com/marieai/marie-ai/issues
+- Discussions: https://github.com/marieai/marie-ai/discussions

@@ -100,9 +100,28 @@ echo "$metadata"
 # mock_with_subgraphs
 # mock_parallel_subgraphs 
 
+# ("mock_simple", "Simple Mock Plan"),
+# ("mock_medium", "Medium Mock Plan"),
+# ("mock_complex", "Complex Mock Plan"),
+# ("mock_with_subgraphs", "Mock Plan with Subgraphs"),
+# ("mock_parallel_subgraphs", "Mock Plan with Parallel Subgraphs"),
+# ("mock_branch_simple", "Simple Branching Mock Plan (JSONPath)"),
+# ("mock_switch_complexity", "SWITCH-based Complexity Routing"),
+# ("mock_branch_multi_condition", "Multi-Condition Branching (AND/OR)"),
+# ("mock_nested_branches", "Nested Branching (Branch within Branch)"),
+# ("mock_branch_python_function", "Python Function Branching"),
+# ("mock_branch_jsonpath_advanced", "Advanced JSONPath Expressions"),
+# ("mock_branch_all_match", "ALL_MATCH Evaluation Mode"),
+# ("mock_branch_regex_matching", "Regex Pattern Matching"),
+
+# ("mock_hitl_approval", "HITL Approval Workflow"),
+# ("mock_hitl_correction", "HITL Data Correction Workflow"),
+# ("mock_hitl_router", "HITL Confidence Router Workflow"),
+# ("mock_hitl_complete_workflow", "Complete HITL Workflow (All Node Types)"),
+
 for i in $(seq 1 "$2"); do
     echo "Submitting job $i"
-    python ./send_request_to_gateway.py job submit mock_parallel_subgraphs --metadata-json "$metadata" --address "$host" --protocol "$protocol" --api_key "$api_key" &
+    python ./send_request_to_gateway.py job submit mock_branch_jsonpath_advanced --metadata-json "$metadata" --address "$host" --protocol "$protocol" --api_key "$api_key" &
     echo "Job $i submitted"
     sleep 1
 done
