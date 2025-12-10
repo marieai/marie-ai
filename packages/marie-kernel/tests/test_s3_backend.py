@@ -30,8 +30,8 @@ def task_ref():
     """Create a standard TaskInstanceRef for testing."""
     return TaskInstanceRef(
         tenant_id="test_tenant",
-        dag_id="test_dag",
-        dag_run_id="run_001",
+        dag_name="test_dag",
+        dag_id="run_001",
         task_id="task_1",
         try_number=1,
     )
@@ -329,15 +329,15 @@ class TestS3BackendWithMoto:
         """Test pulling from upstream task with moto."""
         upstream_ti = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="upstream",
             try_number=1,
         )
         downstream_ti = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="downstream",
             try_number=1,
         )

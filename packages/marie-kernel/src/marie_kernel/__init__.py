@@ -12,8 +12,8 @@ Example:
     # Create task instance reference
     ti = TaskInstanceRef(
         tenant_id="default",
-        dag_id="my_dag",
-        dag_run_id="run_123",
+        dag_name="my_dag",
+        dag_id="run_123",
         task_id="extract_text",
         try_number=1,
     )

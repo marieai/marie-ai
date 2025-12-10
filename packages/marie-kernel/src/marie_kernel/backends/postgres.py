@@ -35,8 +35,8 @@ class PostgresStateBackend:
 
         ti = TaskInstanceRef(
             tenant_id="acme",
-            dag_id="document_pipeline",
-            dag_run_id="run_2024_001",
+            dag_name="document_pipeline",
+            dag_id="run_2024_001",
             task_id="extract_text",
             try_number=1,
         )
@@ -92,11 +92,11 @@ class PostgresStateBackend:
                 cur.execute(
                     """
                     INSERT INTO task_state (
-                        tenant_id, dag_id, dag_run_id, task_id, try_number,
+                        tenant_id, dag_name, dag_id, task_id, try_number,
                         key, value_json, metadata, created_at
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, now())
-                    ON CONFLICT (tenant_id, dag_id, dag_run_id, task_id, try_number, key)
+                    ON CONFLICT (tenant_id, dag_name, dag_id, task_id, try_number, key)
                     DO UPDATE SET
                         value_json = EXCLUDED.value_json,
                         metadata = EXCLUDED.metadata,
@@ -104,8 +104,8 @@ class PostgresStateBackend:
                     """,
                     (
                         ti.tenant_id,
+                        ti.dag_name,
                         ti.dag_id,
-                        ti.dag_run_id,
                         ti.task_id,
                         ti.try_number,
                         key,
@@ -147,8 +147,8 @@ class PostgresStateBackend:
                     SELECT value_json
                     FROM task_state
                     WHERE tenant_id = %s
+                      AND dag_name = %s
                       AND dag_id = %s
-                      AND dag_run_id = %s
                       AND task_id = ANY(%s)
                       AND try_number = %s
                       AND key = %s
@@ -157,8 +157,8 @@ class PostgresStateBackend:
                     """,
                     (
                         ti.tenant_id,
+                        ti.dag_name,
                         ti.dag_id,
-                        ti.dag_run_id,
                         task_ids,
                         ti.try_number,
                         key,
@@ -179,7 +179,7 @@ class PostgresStateBackend:
         """
         Clear all state for a task instance.
 
-        Removes ALL state for the given (tenant, dag, run, task) regardless
+        Removes ALL state for the given (tenant, dag_name, dag_id, task) regardless
         of try_number. This is called BEFORE retry to ensure clean slate.
 
         Args:
@@ -191,11 +191,11 @@ class PostgresStateBackend:
                     """
                     DELETE FROM task_state
                     WHERE tenant_id = %s
+                      AND dag_name = %s
                       AND dag_id = %s
-                      AND dag_run_id = %s
                       AND task_id = %s
                     """,
-                    (ti.tenant_id, ti.dag_id, ti.dag_run_id, ti.task_id),
+                    (ti.tenant_id, ti.dag_name, ti.dag_id, ti.task_id),
                 )
             conn.commit()
 
@@ -217,15 +217,15 @@ class PostgresStateBackend:
                     SELECT key, value_json
                     FROM task_state
                     WHERE tenant_id = %s
+                      AND dag_name = %s
                       AND dag_id = %s
-                      AND dag_run_id = %s
                       AND task_id = %s
                       AND try_number = %s
                     """,
                     (
                         ti.tenant_id,
+                        ti.dag_name,
                         ti.dag_id,
-                        ti.dag_run_id,
                         ti.task_id,
                         ti.try_number,
                     ),

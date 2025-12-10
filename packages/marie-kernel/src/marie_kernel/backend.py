@@ -98,7 +98,7 @@ class StateBackend(Protocol):
 
         IMPORTANT: This must be called BEFORE retrying a task to ensure
         the new attempt starts with a clean slate. Clears all keys for
-        the given (tenant, dag, run, task) regardless of try_number.
+        the given (tenant, dag_name, dag_id, task) regardless of try_number.
 
         Args:
             ti: Task instance reference identifying the task to clear

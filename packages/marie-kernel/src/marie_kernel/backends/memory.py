@@ -23,8 +23,8 @@ class InMemoryStateBackend:
         backend = InMemoryStateBackend()
         ti = TaskInstanceRef(
             tenant_id="test",
-            dag_id="my_dag",
-            dag_run_id="run_1",
+            dag_name="my_dag",
+            dag_id="run_1",
             task_id="task_1",
             try_number=1,
         )
@@ -57,7 +57,7 @@ class InMemoryStateBackend:
             value: Value to store (should be JSON-serializable for consistency)
             metadata: Optional metadata dict
         """
-        pk = (ti.tenant_id, ti.dag_id, ti.dag_run_id, ti.task_id, ti.try_number, key)
+        pk = (ti.tenant_id, ti.dag_name, ti.dag_id, ti.task_id, ti.try_number, key)
         with self._lock:
             self._store[pk] = {"value": value, "metadata": metadata or {}}
 
@@ -91,8 +91,8 @@ class InMemoryStateBackend:
             for task_id in task_ids:
                 pk = (
                     ti.tenant_id,
+                    ti.dag_name,
                     ti.dag_id,
-                    ti.dag_run_id,
                     task_id,
                     ti.try_number,
                     key,
@@ -118,8 +118,8 @@ class InMemoryStateBackend:
                 for k in self._store
                 if (
                     k[0] == ti.tenant_id
-                    and k[1] == ti.dag_id
-                    and k[2] == ti.dag_run_id
+                    and k[1] == ti.dag_name
+                    and k[2] == ti.dag_id
                     and k[3] == ti.task_id
                 )
             ]
@@ -141,8 +141,8 @@ class InMemoryStateBackend:
             for pk, data in self._store.items():
                 if (
                     pk[0] == ti.tenant_id
-                    and pk[1] == ti.dag_id
-                    and pk[2] == ti.dag_run_id
+                    and pk[1] == ti.dag_name
+                    and pk[2] == ti.dag_id
                     and pk[3] == ti.task_id
                     and pk[4] == ti.try_number
                 ):

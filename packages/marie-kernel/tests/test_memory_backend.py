@@ -57,15 +57,15 @@ class TestInMemoryBackendFromTasks:
         """Test pulling from a single upstream task."""
         upstream = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="upstream",
             try_number=1,
         )
         downstream = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="downstream",
             try_number=1,
         )
@@ -78,8 +78,8 @@ class TestInMemoryBackendFromTasks:
         """Test pulling from multiple tasks returns first match."""
         ti_base = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="base",
             try_number=1,
         )
@@ -87,8 +87,8 @@ class TestInMemoryBackendFromTasks:
         # Only task_b has the key
         task_b = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="task_b",
             try_number=1,
         )
@@ -102,8 +102,8 @@ class TestInMemoryBackendFromTasks:
         for task_id in ["first", "second"]:
             ti = TaskInstanceRef(
                 tenant_id="test",
-                dag_id="dag",
-                dag_run_id="run",
+                dag_name="dag",
+                dag_id="run",
                 task_id=task_id,
                 try_number=1,
             )
@@ -111,8 +111,8 @@ class TestInMemoryBackendFromTasks:
 
         base = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="base",
             try_number=1,
         )
@@ -133,8 +133,8 @@ class TestInMemoryBackendClearForTask:
         """Test that clear removes all keys for a task."""
         ti = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="task",
             try_number=1,
         )
@@ -153,8 +153,8 @@ class TestInMemoryBackendClearForTask:
         """Test that clear removes state for all try_numbers."""
         ti1 = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="task",
             try_number=1,
         )
@@ -176,15 +176,15 @@ class TestInMemoryBackendClearForTask:
         """Test that clear doesn't affect other tasks in the same run."""
         ti1 = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="task_1",
             try_number=1,
         )
         ti2 = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="task_2",
             try_number=1,
         )
@@ -201,15 +201,15 @@ class TestInMemoryBackendClearForTask:
         """Test that clear doesn't affect other DAG runs."""
         ti1 = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run_1",
+            dag_name="dag",
+            dag_id="run_1",
             task_id="task",
             try_number=1,
         )
         ti2 = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run_2",
+            dag_name="dag",
+            dag_id="run_2",
             task_id="task",
             try_number=1,
         )
@@ -245,8 +245,8 @@ class TestInMemoryBackendHelpers:
         for i in range(5):
             ti = TaskInstanceRef(
                 tenant_id="test",
-                dag_id="dag",
-                dag_run_id=f"run_{i}",
+                dag_name="dag",
+                dag_id=f"run_{i}",
                 task_id="task",
                 try_number=1,
             )
@@ -262,8 +262,8 @@ class TestInMemoryBackendHelpers:
         """Test get_all_for_task returns all state for a task."""
         ti = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="task",
             try_number=1,
         )
@@ -284,8 +284,8 @@ class TestInMemoryBackendHelpers:
         """Test get_all_for_task only returns state for specific try_number."""
         ti1 = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="task",
             try_number=1,
         )

@@ -19,8 +19,8 @@ class TaskInstanceRef:
 
     Attributes:
         tenant_id: Tenant identifier for multi-tenant isolation
-        dag_id: DAG identifier grouping related tasks
-        dag_run_id: Unique identifier for this DAG execution run
+        dag_name: DAG name/type grouping related tasks (e.g., "document_processing")
+        dag_id: Unique identifier for this DAG execution run (the actual run ID)
         task_id: Unique identifier for the task within the DAG
         try_number: Retry attempt number (1-indexed)
 
@@ -28,8 +28,8 @@ class TaskInstanceRef:
         ```python
         ti = TaskInstanceRef(
             tenant_id="acme_corp",
-            dag_id="document_processing",
-            dag_run_id="run_2024_001",
+            dag_name="document_processing",
+            dag_id="run_2024_001",
             task_id="extract_text",
             try_number=1,
         )
@@ -37,8 +37,8 @@ class TaskInstanceRef:
     """
 
     tenant_id: str
+    dag_name: str
     dag_id: str
-    dag_run_id: str
     task_id: str
     try_number: int = 1
 
@@ -62,18 +62,21 @@ class TaskInstanceRef:
             ```python
             ti = TaskInstanceRef.from_dict(
                 {
-                    "dag_id": "my_dag",
-                    "dag_run_id": "run_123",
+                    "dag_name": "my_dag",
+                    "dag_id": "run_123",
                     "task_id": "task_1",
                     "try_number": 1,
                 }
             )
             ```
         """
+        dag_name = data.get("dag_name", "")
+        dag_id = data.get("dag_id", dag_name)
+
         return cls(
             tenant_id=data.get("tenant_id", tenant_id),
-            dag_id=data.get("dag_id", ""),
-            dag_run_id=data.get("dag_run_id", data.get("dag_id", "")),
+            dag_name=dag_name,
+            dag_id=dag_id,
             task_id=data.get("task_id", data.get("id", "")),
             try_number=data.get("try_number", 1),
         )
@@ -102,10 +105,15 @@ class TaskInstanceRef:
             ```
         """
         data = work_info.data if work_info.data else {}
+        # work_info.dag_id in marie-ai is the dag name/type
+        dag_name = work_info.dag_id or ""
+        # The actual run ID comes from data, falling back to dag_name
+        dag_id = data.get("dag_id", dag_name)
+
         return cls(
             tenant_id=data.get("tenant_id", tenant_id),
-            dag_id=work_info.dag_id or "",
-            dag_run_id=data.get("dag_run_id", work_info.dag_id or ""),
+            dag_name=dag_name,
+            dag_id=dag_id,
             task_id=work_info.id,
             try_number=data.get("try_number", 1),
         )
@@ -130,8 +138,8 @@ class TaskInstanceRef:
         """
         return TaskInstanceRef(
             tenant_id=self.tenant_id,
+            dag_name=self.dag_name,
             dag_id=self.dag_id,
-            dag_run_id=self.dag_run_id,
             task_id=self.task_id,
             try_number=try_number,
         )
@@ -139,6 +147,6 @@ class TaskInstanceRef:
     def __str__(self) -> str:
         """Human-readable representation."""
         return (
-            f"TaskInstanceRef(tenant={self.tenant_id}, dag={self.dag_id}, "
-            f"run={self.dag_run_id}, task={self.task_id}, try={self.try_number})"
+            f"TaskInstanceRef(tenant={self.tenant_id}, dag_name={self.dag_name}, "
+            f"dag_id={self.dag_id}, task={self.task_id}, try={self.try_number})"
         )

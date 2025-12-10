@@ -89,8 +89,8 @@ class TestRunContextFromTask:
         # Upstream task stores a value
         upstream_ti = TaskInstanceRef(
             tenant_id="test_tenant",
-            dag_id="test_dag",
-            dag_run_id="run_001",
+            dag_name="test_dag",
+            dag_id="run_001",
             task_id="upstream",
             try_number=1,
         )
@@ -100,8 +100,8 @@ class TestRunContextFromTask:
         # Downstream task retrieves it
         downstream_ti = TaskInstanceRef(
             tenant_id="test_tenant",
-            dag_id="test_dag",
-            dag_run_id="run_001",
+            dag_name="test_dag",
+            dag_id="run_001",
             task_id="downstream",
             try_number=1,
         )
@@ -136,8 +136,8 @@ class TestRunContextPushPull:
         for task_id in ["task_a", "task_b", "task_c"]:
             ti = TaskInstanceRef(
                 tenant_id="test",
-                dag_id="dag",
-                dag_run_id="run",
+                dag_name="dag",
+                dag_id="run",
                 task_id=task_id,
                 try_number=1,
             )
@@ -148,8 +148,8 @@ class TestRunContextPushPull:
         # Downstream pulls from list - should find task_b's value
         downstream_ti = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="downstream",
             try_number=1,
         )
@@ -165,8 +165,8 @@ class TestRunContextPushPull:
         for task_id, value in [("first", "first_value"), ("second", "second_value")]:
             ti = TaskInstanceRef(
                 tenant_id="test",
-                dag_id="dag",
-                dag_run_id="run",
+                dag_name="dag",
+                dag_id="run",
                 task_id=task_id,
                 try_number=1,
             )
@@ -175,8 +175,8 @@ class TestRunContextPushPull:
         # Pull should return first match
         downstream_ti = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="downstream",
             try_number=1,
         )
@@ -203,15 +203,15 @@ class TestRunContextIsolation:
         """Test that different tasks don't see each other's state."""
         ti1 = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="task_1",
             try_number=1,
         )
         ti2 = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="task_2",
             try_number=1,
         )
@@ -229,15 +229,15 @@ class TestRunContextIsolation:
         """Test that different DAG runs don't see each other's state."""
         ti1 = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run_1",
+            dag_name="dag",
+            dag_id="run_1",
             task_id="task",
             try_number=1,
         )
         ti2 = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run_2",
+            dag_name="dag",
+            dag_id="run_2",
             task_id="task",
             try_number=1,
         )
@@ -254,15 +254,15 @@ class TestRunContextIsolation:
         """Test that different tenants don't see each other's state."""
         ti1 = TaskInstanceRef(
             tenant_id="tenant_a",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="task",
             try_number=1,
         )
         ti2 = TaskInstanceRef(
             tenant_id="tenant_b",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="task",
             try_number=1,
         )
@@ -279,8 +279,8 @@ class TestRunContextIsolation:
         """Test that different retry attempts have isolated state."""
         ti1 = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="task",
             try_number=1,
         )

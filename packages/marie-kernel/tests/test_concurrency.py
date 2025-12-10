@@ -24,8 +24,8 @@ def base_task_ref():
     """Create a base TaskInstanceRef for generating test refs."""
     return TaskInstanceRef(
         tenant_id="test",
-        dag_id="dag",
-        dag_run_id="run",
+        dag_name="dag",
+        dag_id="run",
         task_id="task",
         try_number=1,
     )
@@ -81,8 +81,8 @@ class TestConcurrentPush:
         def push_value(thread_id):
             ti = TaskInstanceRef(
                 tenant_id="test",
-                dag_id="dag",
-                dag_run_id="run",
+                dag_name="dag",
+                dag_id="run",
                 task_id=f"task_{thread_id}",
                 try_number=1,
             )
@@ -127,8 +127,8 @@ class TestConcurrentPull:
         for i in range(5):
             ti = TaskInstanceRef(
                 tenant_id="test",
-                dag_id="dag",
-                dag_run_id="run",
+                dag_name="dag",
+                dag_id="run",
                 task_id=f"upstream_{i}",
                 try_number=1,
             )
@@ -137,8 +137,8 @@ class TestConcurrentPull:
         # Downstream task pulls from multiple upstreams concurrently
         downstream = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="downstream",
             try_number=1,
         )
@@ -215,8 +215,8 @@ class TestConcurrentClear:
         task_refs = [
             TaskInstanceRef(
                 tenant_id="test",
-                dag_id="dag",
-                dag_run_id="run",
+                dag_name="dag",
+                dag_id="run",
                 task_id=f"task_{i}",
                 try_number=1,
             )
@@ -274,8 +274,8 @@ class TestConcurrentRunContext:
         def task_work(task_id):
             ti = TaskInstanceRef(
                 tenant_id="test",
-                dag_id="dag",
-                dag_run_id="run",
+                dag_name="dag",
+                dag_id="run",
                 task_id=f"task_{task_id}",
                 try_number=1,
             )
@@ -308,8 +308,8 @@ class TestConcurrentRunContext:
         def upstream_task(task_id):
             ti = TaskInstanceRef(
                 tenant_id="test",
-                dag_id="dag",
-                dag_run_id="run",
+                dag_name="dag",
+                dag_id="run",
                 task_id=f"upstream_{task_id}",
                 try_number=1,
             )
@@ -324,8 +324,8 @@ class TestConcurrentRunContext:
         # Downstream task reads all upstream results
         downstream_ti = TaskInstanceRef(
             tenant_id="test",
-            dag_id="dag",
-            dag_run_id="run",
+            dag_name="dag",
+            dag_id="run",
             task_id="downstream",
             try_number=1,
         )

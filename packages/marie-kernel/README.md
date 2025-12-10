@@ -29,8 +29,8 @@ backend = create_backend("memory")
 # Create task instance reference
 ti = TaskInstanceRef(
     tenant_id="acme_corp",
-    dag_id="document_pipeline",
-    dag_run_id="run_2024_001",
+    dag_name="document_pipeline",
+    dag_id="run_2024_001",
     task_id="extract_text",
     try_number=1,
 )
@@ -101,8 +101,8 @@ Immutable dataclass identifying a task execution attempt:
 @dataclass(frozen=True)
 class TaskInstanceRef:
     tenant_id: str  # Multi-tenant isolation
-    dag_id: str  # DAG identifier
-    dag_run_id: str  # Unique run identifier
+    dag_name: str  # DAG name/type (e.g., "document_processing")
+    dag_id: str  # Unique run identifier for this DAG execution
     task_id: str  # Task identifier within DAG
     try_number: int  # Retry attempt (1-indexed)
 ```
@@ -169,7 +169,7 @@ backend = S3StateBackend(s3_client, bucket="my-state-bucket", prefix="marie-stat
 
 Object keys follow the pattern:
 ```
-{prefix}/{tenant_id}/{dag_id}/{dag_run_id}/{task_id}/{try_number}/{key}.json
+{prefix}/{tenant_id}/{dag_name}/{dag_id}/{task_id}/{try_number}/{key}.json
 ```
 
 **Note**: S3 provides eventual consistency. Use PostgreSQL if strong consistency is required.
@@ -198,15 +198,15 @@ For PostgreSQL, create the required table:
 -- See migrations/001_task_state.sql
 CREATE TABLE task_state (
     tenant_id     TEXT NOT NULL,
+    dag_name      TEXT NOT NULL,
     dag_id        TEXT NOT NULL,
-    dag_run_id    TEXT NOT NULL,
     task_id       TEXT NOT NULL,
     try_number    INT NOT NULL,
     key           TEXT NOT NULL,
     value_json    JSONB NOT NULL,
     metadata      JSONB,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (tenant_id, dag_id, dag_run_id, task_id, try_number, key)
+    PRIMARY KEY (tenant_id, dag_name, dag_id, task_id, try_number, key)
 );
 ```
 

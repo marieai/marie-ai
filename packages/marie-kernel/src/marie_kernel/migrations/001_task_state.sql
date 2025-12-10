@@ -7,8 +7,8 @@
 CREATE TABLE IF NOT EXISTS task_state (
     -- Identity columns (composite primary key)
     tenant_id     TEXT NOT NULL,
+    dag_name      TEXT NOT NULL,
     dag_id        TEXT NOT NULL,
-    dag_run_id    TEXT NOT NULL,
     task_id       TEXT NOT NULL,
     try_number    INT NOT NULL,
     key           TEXT NOT NULL,
@@ -18,19 +18,19 @@ CREATE TABLE IF NOT EXISTS task_state (
     metadata      JSONB,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    -- Primary key ensures uniqueness per (tenant, dag, run, task, try, key)
-    PRIMARY KEY (tenant_id, dag_id, dag_run_id, task_id, try_number, key)
+    -- Primary key ensures uniqueness per (tenant, dag_name, dag_id, task, try, key)
+    PRIMARY KEY (tenant_id, dag_name, dag_id, task_id, try_number, key)
 );
 
 -- Index: Fast lookup by task (most common query pattern)
 -- Used when pulling state for a specific task
 CREATE INDEX IF NOT EXISTS idx_task_state_lookup
-    ON task_state (tenant_id, dag_id, dag_run_id, task_id, key);
+    ON task_state (tenant_id, dag_name, dag_id, task_id, key);
 
 -- Index: DAG-level queries (cleanup, debugging)
 -- Used for clearing all state for a DAG run
 CREATE INDEX IF NOT EXISTS idx_task_state_dag_run
-    ON task_state (tenant_id, dag_id, dag_run_id);
+    ON task_state (tenant_id, dag_name, dag_id);
 
 -- Index: TTL cleanup (for scheduled cleanup jobs)
 -- Used by maintenance jobs to delete old state
@@ -40,8 +40,8 @@ CREATE INDEX IF NOT EXISTS idx_task_state_created
 -- Documentation
 COMMENT ON TABLE task_state IS 'Per-task-instance state storage for Marie State Kernel';
 COMMENT ON COLUMN task_state.tenant_id IS 'Tenant identifier for multi-tenant isolation';
-COMMENT ON COLUMN task_state.dag_id IS 'DAG identifier grouping related tasks';
-COMMENT ON COLUMN task_state.dag_run_id IS 'Unique identifier for this DAG execution run';
+COMMENT ON COLUMN task_state.dag_name IS 'DAG name/type grouping related tasks (e.g., document_processing)';
+COMMENT ON COLUMN task_state.dag_id IS 'Unique identifier for this DAG execution run';
 COMMENT ON COLUMN task_state.task_id IS 'Unique identifier for the task within the DAG';
 COMMENT ON COLUMN task_state.try_number IS 'Retry attempt number (1-indexed)';
 COMMENT ON COLUMN task_state.key IS 'State key (e.g., EXTRACTED_TEXT, TABLE_DATA)';

@@ -19,8 +19,8 @@ def task_ref():
     """Create a standard TaskInstanceRef for testing."""
     return TaskInstanceRef(
         tenant_id="test_tenant",
-        dag_id="test_dag",
-        dag_run_id="run_001",
+        dag_name="test_dag",
+        dag_id="run_001",
         task_id="task_1",
         try_number=1,
     )
@@ -31,8 +31,8 @@ def upstream_task_ref():
     """Create an upstream TaskInstanceRef for cross-task tests."""
     return TaskInstanceRef(
         tenant_id="test_tenant",
-        dag_id="test_dag",
-        dag_run_id="run_001",
+        dag_name="test_dag",
+        dag_id="run_001",
         task_id="upstream_task",
         try_number=1,
     )

@@ -27,7 +27,7 @@ class S3StateBackend:
     Amazon S3 backend for task state storage.
 
     Stores each state entry as a JSON object in S3. Object keys follow
-    the pattern: {prefix}/{tenant_id}/{dag_id}/{dag_run_id}/{task_id}/{try_number}/{key}.json
+    the pattern: {prefix}/{tenant_id}/{dag_name}/{dag_id}/{task_id}/{try_number}/{key}.json
 
     This backend is eventually consistent (S3 standard behavior) and
     suitable for workflows where strong consistency is not required.
@@ -43,8 +43,8 @@ class S3StateBackend:
 
         ti = TaskInstanceRef(
             tenant_id="acme",
-            dag_id="document_pipeline",
-            dag_run_id="run_2024_001",
+            dag_name="document_pipeline",
+            dag_id="run_2024_001",
             task_id="extract_text",
             try_number=1,
         )
@@ -59,8 +59,8 @@ class S3StateBackend:
             "metadata": {<optional metadata>},
             "task_instance": {
                 "tenant_id": "...",
+                "dag_name": "...",
                 "dag_id": "...",
-                "dag_run_id": "...",
                 "task_id": "...",
                 "try_number": 1
             }
@@ -101,8 +101,8 @@ class S3StateBackend:
         """Build S3 object key for a state entry."""
         task_id = task_id_override or ti.task_id
         return (
-            f"{self._prefix}/{ti.tenant_id}/{ti.dag_id}/"
-            f"{ti.dag_run_id}/{task_id}/{ti.try_number}/{key}.json"
+            f"{self._prefix}/{ti.tenant_id}/{ti.dag_name}/"
+            f"{ti.dag_id}/{task_id}/{ti.try_number}/{key}.json"
         )
 
     def _build_task_prefix(
@@ -113,8 +113,7 @@ class S3StateBackend:
     ) -> str:
         """Build S3 prefix for listing task state."""
         base = (
-            f"{self._prefix}/{ti.tenant_id}/{ti.dag_id}/"
-            f"{ti.dag_run_id}/{ti.task_id}/"
+            f"{self._prefix}/{ti.tenant_id}/{ti.dag_name}/" f"{ti.dag_id}/{ti.task_id}/"
         )
         if include_try_number:
             return f"{base}{ti.try_number}/"
@@ -150,8 +149,8 @@ class S3StateBackend:
             "metadata": metadata or {},
             "task_instance": {
                 "tenant_id": ti.tenant_id,
+                "dag_name": ti.dag_name,
                 "dag_id": ti.dag_id,
-                "dag_run_id": ti.dag_run_id,
                 "task_id": ti.task_id,
                 "try_number": ti.try_number,
             },
@@ -211,7 +210,7 @@ class S3StateBackend:
         """
         Clear all state for a task instance.
 
-        Deletes ALL objects for the given (tenant, dag, run, task)
+        Deletes ALL objects for the given (tenant, dag_name, dag_id, task)
         regardless of try_number. This is called BEFORE retry to
         ensure clean slate.
 
@@ -260,7 +259,7 @@ class S3StateBackend:
             for obj in page.get("Contents", []):
                 s3_key = obj["Key"]
                 # Extract the state key from the object key
-                # Format: prefix/tenant/dag/run/task/try/KEY.json
+                # Format: prefix/tenant/dag_name/dag_id/task/try/KEY.json
                 key_name = s3_key.rsplit("/", 1)[-1]
                 if key_name.endswith(".json"):
                     key_name = key_name[:-5]
