@@ -349,7 +349,6 @@ class EtcdClient(object):
                         self._set_connection_state(ConnectionState.DISCONNECTED)
 
                 try:
-                    # CRITICAL FIX: Health check with explicit timeout to prevent blocking
                     run_with_timeout(
                         lambda: self.get("__health_check__"),
                         timeout=health_check_timeout,
@@ -359,7 +358,6 @@ class EtcdClient(object):
                     consecutive_successes += 1
                     consecutive_failures = 0
                     last_ok_monotonic = now_mono
-                    # Keep the old wall-clock field updated for external observers
                     self._last_successful_operation = time.time()
 
                     cur = self.get_connection_state()

@@ -2,7 +2,7 @@ import traceback
 from collections import defaultdict, deque
 from io import StringIO
 from pprint import pprint
-from typing import Callable
+from typing import Callable, Dict, List, Optional
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -14,9 +14,18 @@ from marie.query_planner.base import (
     NoopQueryDefinition,
     PlannerInfo,
     Query,
+    QueryDefinition,
     QueryPlan,
     QueryPlanRegistry,
     QueryType,
+)
+from marie.query_planner.branching import (
+    BranchEvaluationMode,
+    BranchPath,
+    BranchQueryDefinition,
+    EnhancedMergerQueryDefinition,
+    MergerStrategy,
+    SwitchQueryDefinition,
 )
 from marie.query_planner.mapper import JobMetadata
 
@@ -492,6 +501,182 @@ def print_query_plan(plan: QueryPlan, layout: str) -> None:
     print("Executors:", executors)
     for exec in executors:
         print(f"Executor: {exec}")
+
+
+class ConditionalQueryPlanBuilder:
+    """
+    Builder for creating query plans with conditional branching.
+    Supports BRANCH, SWITCH, and enhanced MERGER nodes.
+
+    Usage:
+        builder = ConditionalQueryPlanBuilder(planner_info)
+        start_id = builder.add_node("START", QueryType.COMPUTE, NoopQueryDefinition())
+        branch_id = builder.add_branch("Route Documents", paths=[...])
+        merger_id = builder.add_merger("Merge Results", MergerStrategy.WAIT_ALL_ACTIVE)
+        plan = builder.build()
+    """
+
+    def __init__(self, planner_info: PlannerInfo):
+        self.planner_info = planner_info
+        self.nodes: List[Query] = []
+        self.node_map: Dict[str, Query] = {}
+        self.current_id = planner_info.current_id
+
+    def add_node(
+        self,
+        query_str: str,
+        node_type: QueryType,
+        definition: QueryDefinition,
+        dependencies: Optional[List[str]] = None,
+    ) -> str:
+        """Add a regular node to the plan. Returns node ID."""
+        task_id = increment_uuid7str(self.planner_info.base_id, self.current_id)
+        self.current_id += 1
+
+        node = Query(
+            task_id=task_id,
+            query_str=query_str,
+            node_type=node_type,
+            definition=definition,
+            dependencies=dependencies or [],
+        )
+
+        self.nodes.append(node)
+        self.node_map[task_id] = node
+        return task_id
+
+    def add_branch(
+        self,
+        query_str: str,
+        paths: List[BranchPath],
+        default_path_id: Optional[str] = None,
+        evaluation_mode: BranchEvaluationMode = BranchEvaluationMode.FIRST_MATCH,
+        dependencies: Optional[List[str]] = None,
+    ) -> str:
+        """Add a BRANCH node with conditional paths. Returns branch node ID."""
+        branch_def = BranchQueryDefinition(
+            method="BRANCH",
+            endpoint="branch",
+            paths=paths,
+            default_path_id=default_path_id,
+            evaluation_mode=evaluation_mode,
+            params={},
+        )
+
+        task_id = increment_uuid7str(self.planner_info.base_id, self.current_id)
+        self.current_id += 1
+
+        branch_node = Query(
+            task_id=task_id,
+            query_str=query_str,
+            node_type=QueryType.BRANCH,
+            definition=branch_def,
+            dependencies=dependencies or [],
+        )
+
+        self.nodes.append(branch_node)
+        self.node_map[task_id] = branch_node
+        return task_id
+
+    def add_switch(
+        self,
+        query_str: str,
+        switch_field: str,
+        cases: Dict,
+        default_case: Optional[List[str]] = None,
+        dependencies: Optional[List[str]] = None,
+    ) -> str:
+        """Add a SWITCH node for value-based routing. Returns switch node ID."""
+        switch_def = SwitchQueryDefinition(
+            method="SWITCH",
+            endpoint="switch",
+            switch_field=switch_field,
+            cases=cases,
+            default_case=default_case,
+            params={},
+        )
+
+        task_id = increment_uuid7str(self.planner_info.base_id, self.current_id)
+        self.current_id += 1
+
+        switch_node = Query(
+            task_id=task_id,
+            query_str=query_str,
+            node_type=QueryType.SWITCH,
+            definition=switch_def,
+            dependencies=dependencies or [],
+        )
+
+        self.nodes.append(switch_node)
+        self.node_map[task_id] = switch_node
+        return task_id
+
+    def add_merger(
+        self,
+        query_str: str,
+        merge_strategy: MergerStrategy = MergerStrategy.WAIT_ALL_ACTIVE,
+        min_required: Optional[int] = None,
+        merge_function: Optional[str] = None,
+        dependencies: Optional[List[str]] = None,
+    ) -> str:
+        """Add an enhanced MERGER node. Returns merger node ID."""
+        merger_def = EnhancedMergerQueryDefinition(
+            method="NOOP",
+            endpoint="noop",
+            merge_strategy=merge_strategy,
+            min_required=min_required,
+            merge_function=merge_function,
+            params={"layout": None},
+        )
+
+        task_id = increment_uuid7str(self.planner_info.base_id, self.current_id)
+        self.current_id += 1
+
+        merger_node = Query(
+            task_id=task_id,
+            query_str=query_str,
+            node_type=QueryType.MERGER,
+            definition=merger_def,
+            dependencies=dependencies or [],
+        )
+
+        self.nodes.append(merger_node)
+        self.node_map[task_id] = merger_node
+        return task_id
+
+    def connect(
+        self, from_node_id: str, to_node_id: str
+    ) -> 'ConditionalQueryPlanBuilder':
+        """Create a dependency between two nodes. Returns self for chaining."""
+        if to_node_id not in self.node_map:
+            raise ValueError(f"Target node {to_node_id} not found in plan")
+
+        to_node = self.node_map[to_node_id]
+        if from_node_id not in to_node.dependencies:
+            to_node.dependencies.append(from_node_id)
+
+        return self
+
+    def mark_as_conditional(
+        self, node_id: str, branch_parent_id: str, path_id: str
+    ) -> 'ConditionalQueryPlanBuilder':
+        """Mark a node as belonging to a specific branch path. Returns self for chaining."""
+        if node_id not in self.node_map:
+            raise ValueError(f"Node {node_id} not found in plan")
+
+        node = self.node_map[node_id]
+        if not hasattr(node.definition, 'params') or node.definition.params is None:
+            node.definition.params = {}
+
+        node.definition.params['conditional_parent'] = branch_parent_id
+        node.definition.params['conditional_path'] = path_id
+
+        return self
+
+    def build(self) -> QueryPlan:
+        """Build and return the final QueryPlan."""
+        self.planner_info.current_id = self.current_id
+        return QueryPlan(nodes=self.nodes)
 
 
 if __name__ == "__main__":

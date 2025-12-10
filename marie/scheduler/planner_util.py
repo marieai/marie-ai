@@ -62,6 +62,32 @@ def _is_noop_query_definition(node: QueryDefinition) -> bool:
         )
 
 
+def _is_branch_query_definition(node: Query) -> bool:
+    """
+    Checks if the given node is a BRANCH or SWITCH query definition.
+    These are control flow nodes that evaluate conditions and route execution.
+    """
+    from marie.query_planner.branching import (
+        BranchQueryDefinition,
+        PythonBranchQueryDefinition,
+        SwitchQueryDefinition,
+    )
+
+    try:
+        return isinstance(
+            node.definition,
+            (BranchQueryDefinition, SwitchQueryDefinition, PythonBranchQueryDefinition),
+        )
+    except ImportError:
+        # Fallback to class name check
+        class_name = node.definition.__class__.__name__
+        return class_name in (
+            "BranchQueryDefinition",
+            "SwitchQueryDefinition",
+            "PythonBranchQueryDefinition",
+        )
+
+
 def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo]]:
     """
     Generates a query plan and associated work items by processing the provided

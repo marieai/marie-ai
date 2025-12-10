@@ -341,6 +341,61 @@ class JobRepository(PostgresqlMixin):
 
         return await self._loop.run_in_executor(self._db_executor, db_call)
 
+    async def update_job_metadata(
+        self,
+        job_id: str,
+        queue_name: str,
+        metadata_updates: Dict[str, Any],
+    ) -> bool:
+        """
+        Update specific metadata fields for a job (e.g., branch_metadata).
+
+        :param job_id: Job ID
+        :param queue_name: Queue/partition name
+        :param metadata_updates: Dict of fields to update (e.g., {"branch_metadata": {...}})
+        :return: True if updated, False otherwise
+        """
+
+        def db_call():
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+
+                # Build dynamic UPDATE fields for JSONB columns
+                update_fields = []
+                params = []
+
+                for field_name, field_value in metadata_updates.items():
+                    update_fields.append(f"{field_name} = %s")
+                    params.append(Json(field_value))
+
+                params.extend([queue_name, job_id])  # WHERE clause parameters
+
+                cursor.execute(
+                    f"""
+                    UPDATE {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                    SET {', '.join(update_fields)}
+                    WHERE name = %s AND id = %s
+                    """,
+                    tuple(params),
+                )
+
+                updated = cursor.rowcount > 0
+                conn.commit()
+                return updated
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error updating job metadata: {error}")
+                if conn:
+                    conn.rollback()
+                return False
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
     async def mark_jobs_as_active(self, job_ids: List[str], job_name: str) -> int:
         """
         Mark multiple jobs as active.
@@ -1461,6 +1516,73 @@ class JobRepository(PostgresqlMixin):
                 return counts
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error completing failed job: {error}")
+                return 0
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
+    async def mark_jobs_as_skipped(
+        self,
+        job_ids: list[str],
+        queue_name: str,
+        output_metadata: dict = None,
+        schema: str = DEFAULT_SCHEMA,
+    ) -> int:
+        """
+        Mark jobs as SKIPPED. This is used for branch paths that were not selected.
+
+        :param job_ids: List of job IDs to mark as skipped
+        :param queue_name: The name of the queue
+        :param output_metadata: Optional metadata to store (e.g., skip_reason)
+        :param schema: The database schema (default: marie_scheduler)
+        :return: Number of jobs marked as skipped
+        """
+        if not job_ids:
+            return 0
+
+        self.logger.info(f"Marking {len(job_ids)} jobs as SKIPPED: {job_ids}")
+
+        def db_call():
+            cursor = None
+            conn = None
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+
+                # Update jobs to SKIPPED state
+                cursor.execute(
+                    f"""
+                    UPDATE {schema}.{queue_name}
+                    SET state = 'skipped',
+                        completed_on = NOW(),
+                        output = %s
+                    WHERE id = ANY(%s)
+                      AND state NOT IN ('completed', 'failed', 'cancelled', 'skipped')
+                    """,
+                    (
+                        Json({"on_skip": "skipped", **(output_metadata or {})}),
+                        job_ids,
+                    ),
+                )
+
+                count = cursor.rowcount
+                conn.commit()
+
+                if count > 0:
+                    self.logger.info(f"Marked {count} jobs as SKIPPED")
+                else:
+                    self.logger.warning(
+                        f"No jobs were marked as SKIPPED (may already be in terminal state)"
+                    )
+
+                return count
+
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error marking jobs as skipped: {error}")
+                if conn:
+                    conn.rollback()
                 return 0
             finally:
                 self._close_cursor(cursor)

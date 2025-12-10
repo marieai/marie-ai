@@ -23,9 +23,16 @@ from marie.messaging import mark_as_complete as mark_as_complete_toast
 from marie.messaging import mark_as_started as mark_as_started_toast
 from marie.query_planner.base import (
     QueryPlan,
+    QueryType,
+)
+from marie.query_planner.branching import (
+    BranchQueryDefinition,
+    SkipReason,
+    SwitchQueryDefinition,
 )
 from marie.query_planner.builtin import register_all_known_planners
 from marie.query_planner.model import QueryPlannersConf
+from marie.scheduler.branch_evaluator import BranchEvaluationContext, BranchEvaluator
 from marie.scheduler.dag_topology_cache import DagTopologyCache
 from marie.scheduler.fixtures import *
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
@@ -34,6 +41,7 @@ from marie.scheduler.job_scheduler import JobScheduler, JobSubmissionRequest
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import ExistingWorkPolicy, HeartbeatConfig, WorkInfo
 from marie.scheduler.planner_util import (
+    _is_branch_query_definition,
     _is_noop_query_definition,
     debug_candidates_and_plan,
     get_node_from_dag,
@@ -180,6 +188,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             QueryPlannersConf.from_dict(config.get("query_planners", {}))
         )
 
+        # Initialize BranchEvaluator for conditional branching
+        self.branch_evaluator = BranchEvaluator()
+
         # Asset mapper kept for static utility methods (e.g., get_upstream_assets_for_node)
         # No longer used for pre-registration
         from marie.assets import DAGAssetMapper
@@ -282,6 +293,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             elif status == JobStatus.SUCCEEDED:
                 await self.complete(job_id, work_item)
                 await self.frontier.on_job_completed(job_id)
+
+                # Check if this is a branch node and evaluate paths if so
+                dag_plan = await self.get_dag_by_id(work_item.dag_id)
+                if dag_plan:
+                    node = get_node_from_dag(job_id, dag_plan)
+                    if node and self._is_branch_node(node):
+                        self.logger.info(
+                            f"Completed branch node detected: {job_id}. Evaluating paths..."
+                        )
+                        await self._evaluate_and_mark_branch_paths(
+                            job_id, work_item, dag_plan
+                        )
             elif status == JobStatus.FAILED:
                 await self.fail(job_id, work_item)
                 await self.frontier.on_job_failed(job_id)
@@ -304,6 +327,484 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         except Exception as e:
             self.logger.error(
                 f"Error handling job event {event_type} for job {job_id}: {e}"
+            )
+
+    def _is_branch_node(self, node) -> bool:
+        """Check if a node is a BRANCH or SWITCH node."""
+        if not node or not hasattr(node, 'definition'):
+            return False
+
+        # Check if it's a BRANCH or SWITCH query type
+        return isinstance(
+            node.definition, (BranchQueryDefinition, SwitchQueryDefinition)
+        )
+
+    async def _process_control_flow_node(self, wi: WorkInfo) -> None:
+        """
+        Process a control flow node (NOOP, BRANCH, SWITCH, or MERGER).
+        These nodes don't execute on executors - they're completed locally.
+
+        :param wi: WorkInfo for the control flow node
+        """
+        try:
+            dag_id = wi.dag_id
+            ep = wi.data.get("metadata", {}).get("on", "")
+            node_type = ep.split("://", 1)[0].lower()
+
+            self.logger.info(
+                f"[CONTROL_FLOW] Processing {node_type} node: {wi.id} in DAG {dag_id}"
+            )
+
+            # Ensure DAG is in active_dags
+            if dag_id not in self.active_dags:
+                dag = await self.get_dag_by_id(dag_id)
+                if not dag:
+                    self.logger.error(
+                        f"[CONTROL_FLOW] Missing DAG {dag_id} for {node_type} node {wi.id}"
+                    )
+                    await self._release_lease_db([wi.id])
+                    await self.frontier.release_lease_local(wi.id)
+                    return
+
+                await self.mark_as_active_dag(wi)
+                self.active_dags[dag_id] = dag
+
+            # Get the node from the DAG
+            node = get_node_from_dag(wi.id, self.active_dags[dag_id])
+
+            # Get job levels for root/leaf detection
+            sorted_nodes, job_levels = self._topology_cache.get_sorted_nodes_and_levels(
+                self.active_dags[dag_id], dag_id
+            )
+
+            # Check if this is a root node (emit DAG start event)
+            is_root = wi.job_level == max(job_levels.values())
+            if is_root:
+                event_name = wi.data.get("name", wi.name)
+                api_key = wi.data.get("api_key", None)
+                metadata = wi.data.get("metadata", {})
+                ref_type = metadata.get("ref_type")
+
+                await mark_as_started_toast(
+                    api_key=api_key,
+                    job_id=wi.dag_id,
+                    event_name=event_name,
+                    job_tag=ref_type,
+                    status="OK",
+                    timestamp=int(time.time()),
+                    payload=metadata,
+                )
+
+            # Handle based on node type
+            if node_type in ("branch", "switch"):
+                # BRANCH/SWITCH nodes need evaluation
+                self.logger.info(
+                    f"[CONTROL_FLOW] Evaluating {node_type} paths for {wi.id}"
+                )
+
+                # Complete the branch node first
+                await self.complete(wi.id, wi, {}, force=True)
+
+                # Evaluate and mark paths
+                await self._evaluate_and_mark_branch_paths(
+                    wi.id, wi, self.active_dags[dag_id]
+                )
+
+            elif node_type == "noop":
+                # NOOP nodes just complete
+                self.logger.info(f"[CONTROL_FLOW] Completing NOOP node {wi.id}")
+                await self.complete(wi.id, wi, {}, force=True)
+
+            elif node_type == "merger":
+                # MERGER nodes wait for branches to complete via dependencies
+                # The actual merge logic is handled by the dependency system
+                # MERGER can complete immediately - dependencies prevent it from
+                # running until all required branches are done
+                self.logger.info(
+                    f"[CONTROL_FLOW] Completing MERGER node {wi.id} "
+                    "(merge logic handled by dependencies)"
+                )
+                await self.complete(wi.id, wi, {}, force=True)
+
+            else:
+                self.logger.warning(
+                    f"[CONTROL_FLOW] Unknown control flow type: {node_type} for {wi.id}"
+                )
+                await self.complete(wi.id, wi, {}, force=True)
+
+            # Clean up
+            self.frontier.leased_until.pop(wi.id, None)
+            await self.frontier.on_job_completed(wi.id)
+
+            # Check if DAG is complete (leaf node check)
+            if job_levels.get(wi.id, -1) == min(job_levels.values()):
+                await self.resolve_dag_status(wi.id, wi)
+
+            self.logger.info(
+                f"[CONTROL_FLOW] Successfully processed {node_type} node {wi.id}"
+            )
+
+        except Exception as e:
+            self.logger.error(
+                f"[CONTROL_FLOW] Error processing control flow node {wi.id}: {e}",
+                exc_info=True,
+            )
+            # Release leases on error
+            try:
+                await self._release_lease_db([wi.id])
+                await self.frontier.release_lease_local(wi.id)
+            except Exception as cleanup_error:
+                self.logger.error(
+                    f"[CONTROL_FLOW] Error during cleanup for {wi.id}: {cleanup_error}"
+                )
+
+    async def _evaluate_and_mark_branch_paths(
+        self, branch_node_id: str, work_item: WorkInfo, dag_plan: QueryPlan
+    ) -> None:
+        """
+        Evaluate a branch node and mark its child paths as READY or SKIPPED.
+        Stores branch_metadata for tracking and debugging.
+
+        :param branch_node_id: ID of the completed branch node
+        :param work_item: WorkInfo of the branch node
+        :param dag_plan: The DAG plan containing the branch
+        """
+        try:
+            self.logger.info(f"Evaluating branch paths for node: {branch_node_id}")
+
+            # Get the branch node from the DAG
+            branch_node = get_node_from_dag(branch_node_id, dag_plan)
+            if not branch_node or not self._is_branch_node(branch_node):
+                self.logger.warning(
+                    f"Node {branch_node_id} is not a branch node, skipping evaluation"
+                )
+                return
+
+            branch_def = branch_node.definition
+
+            # Build evaluation context
+            # TODO: Gather execution results from previous nodes if needed
+            execution_results = {}
+            context = BranchEvaluationContext(
+                work_info=work_item,
+                dag_plan=dag_plan,
+                branch_node=branch_node,
+                execution_results=execution_results,
+            )
+
+            # Evaluate the branch to determine active paths
+            active_path_ids = []
+            branch_metadata = {}
+
+            if isinstance(branch_def, BranchQueryDefinition):
+                active_path_ids = await self.branch_evaluator.evaluate_branch(
+                    branch_def, context
+                )
+                # Store BRANCH metadata for tracking
+                branch_metadata = {
+                    "node_type": "BRANCH",
+                    "selected_path_ids": active_path_ids,
+                    "evaluation_mode": (
+                        branch_def.evaluation_mode.value
+                        if hasattr(branch_def.evaluation_mode, 'value')
+                        else branch_def.evaluation_mode
+                    ),
+                    "default_path_id": branch_def.default_path_id,
+                    "all_paths": [p.path_id for p in branch_def.paths],
+                    "evaluated_at": datetime.now(timezone.utc).isoformat(),
+                }
+                self.logger.info(
+                    f"BRANCH evaluation: selected_path_ids={active_path_ids}, "
+                    f"evaluation_mode={branch_metadata['evaluation_mode']}"
+                )
+
+            elif isinstance(branch_def, SwitchQueryDefinition):
+                active_path_ids = await self.branch_evaluator.evaluate_switch(
+                    branch_def, context
+                )
+                # Get the evaluated switch value
+                switch_value = self.branch_evaluator.jsonpath_evaluator.evaluate(
+                    branch_def.switch_field, context.context
+                )
+                # Store SWITCH metadata for tracking
+                branch_metadata = {
+                    "node_type": "SWITCH",
+                    "switch_field": branch_def.switch_field,
+                    "switch_value": switch_value,
+                    "selected_case": active_path_ids,
+                    "all_cases": list(branch_def.cases.keys()),
+                    "evaluated_at": datetime.now(timezone.utc).isoformat(),
+                }
+                self.logger.info(
+                    f"SWITCH evaluation: switch_value={switch_value}, "
+                    f"selected_case={active_path_ids}"
+                )
+            else:
+                self.logger.error(f"Unknown branch definition type: {type(branch_def)}")
+                return
+
+            # Store branch_metadata on the BRANCH/SWITCH node itself
+            await self._update_job_branch_metadata(
+                job_id=branch_node_id,
+                queue_name=work_item.name,
+                branch_metadata=branch_metadata,
+            )
+
+            self.logger.info(
+                f"Branch evaluation complete. Active paths: {active_path_ids}"
+            )
+
+            # Mark active paths' target nodes as READY
+            # Mark inactive paths' target nodes as SKIPPED
+            all_target_nodes = set()
+            active_target_nodes = set()
+            path_to_nodes = {}  # Track which path leads to which nodes
+
+            # Collect all target nodes based on branch type
+            if isinstance(branch_def, BranchQueryDefinition):
+                # BRANCH nodes have paths
+                for path in branch_def.paths:
+                    path_to_nodes[path.path_id] = path.target_node_ids
+                    all_target_nodes.update(path.target_node_ids)
+                    if path.path_id in active_path_ids:
+                        active_target_nodes.update(path.target_node_ids)
+
+            elif isinstance(branch_def, SwitchQueryDefinition):
+                # SWITCH nodes have cases (Dict[value, List[node_ids]])
+                for case_value, node_ids in branch_def.cases.items():
+                    path_to_nodes[str(case_value)] = node_ids
+                    all_target_nodes.update(node_ids)
+
+                # Check if active_path_ids contains the selected nodes
+                # For SWITCH, active_path_ids is a list of node IDs to activate
+                if active_path_ids:
+                    active_target_nodes.update(active_path_ids)
+
+                # Add default case nodes to all targets
+                if branch_def.default_case:
+                    path_to_nodes['default'] = branch_def.default_case
+                    all_target_nodes.update(branch_def.default_case)
+
+            # Nodes to skip are all targets minus active targets
+            skipped_target_nodes = all_target_nodes - active_target_nodes
+
+            # Mark active nodes as READY and store branch_metadata
+            if active_target_nodes:
+                # Store metadata on active path nodes
+                if isinstance(branch_def, BranchQueryDefinition):
+                    # For BRANCH: active_path_ids are path IDs
+                    for path_id in active_path_ids:
+                        for node_id in path_to_nodes.get(path_id, []):
+                            active_path_metadata = {
+                                "selected_by_branch": branch_node_id,
+                                "selected_path_id": path_id,
+                                "selected_at": datetime.now(timezone.utc).isoformat(),
+                            }
+                            await self._update_job_branch_metadata(
+                                job_id=node_id,
+                                queue_name=work_item.name,
+                                branch_metadata=active_path_metadata,
+                            )
+                elif isinstance(branch_def, SwitchQueryDefinition):
+                    # For SWITCH: active_path_ids are the actual node IDs
+                    for node_id in active_target_nodes:
+                        # Find which case this node belongs to
+                        selected_case = None
+                        for case_value, node_ids in branch_def.cases.items():
+                            if node_id in node_ids:
+                                selected_case = str(case_value)
+                                break
+                        if (
+                            not selected_case
+                            and branch_def.default_case
+                            and node_id in branch_def.default_case
+                        ):
+                            selected_case = "default"
+
+                        active_path_metadata = {
+                            "selected_by_switch": branch_node_id,
+                            "selected_case": selected_case,
+                            "selected_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                        await self._update_job_branch_metadata(
+                            job_id=node_id,
+                            queue_name=work_item.name,
+                            branch_metadata=active_path_metadata,
+                        )
+
+                await self._mark_nodes_ready(list(active_target_nodes), work_item.name)
+                self.logger.info(
+                    f"Marked {len(active_target_nodes)} nodes as READY with branch_metadata: {active_target_nodes}"
+                )
+
+            # Mark skipped nodes as SKIPPED and cascade to descendants
+            if skipped_target_nodes:
+                skip_reason = SkipReason(
+                    branch_node_id=branch_node_id,
+                    reason=f"Branch condition not met. Active paths: {active_path_ids}",
+                    evaluated_condition={"active_paths": active_path_ids},
+                    selected_paths=active_path_ids,
+                    timestamp=datetime.now(timezone.utc),
+                )
+                await self._mark_nodes_skipped(
+                    list(skipped_target_nodes),
+                    work_item.name,
+                    skip_reason,
+                    dag_plan,
+                )
+                self.logger.info(
+                    f"Marked {len(skipped_target_nodes)} nodes as SKIPPED with skip_reason: {skipped_target_nodes}"
+                )
+
+        except Exception as e:
+            self.logger.error(
+                f"Error evaluating branch paths for {branch_node_id}: {e}",
+                exc_info=True,
+            )
+
+    async def _update_job_branch_metadata(
+        self, job_id: str, queue_name: str, branch_metadata: Dict[str, Any]
+    ) -> None:
+        """
+        Update job's branch_metadata field for tracking and debugging.
+
+        :param job_id: Job ID to update
+        :param queue_name: Queue name for the job
+        :param branch_metadata: Metadata about branch evaluation/selection
+        """
+        try:
+            # Update in repository (database is source of truth)
+            await self.repository.update_job_metadata(
+                job_id=job_id,
+                queue_name=queue_name,
+                metadata_updates={"branch_metadata": branch_metadata},
+            )
+
+            self.logger.debug(
+                f"Updated branch_metadata for job {job_id}: {branch_metadata}"
+            )
+        except Exception as e:
+            self.logger.error(
+                f"Error updating branch_metadata for job {job_id}: {e}",
+                exc_info=True,
+            )
+
+    async def _mark_nodes_ready(self, node_ids: list[str], queue_name: str) -> None:
+        """Mark nodes as READY (keep them in CREATED state)."""
+        # Nodes that should be executed remain in CREATED state
+        # The scheduler will pick them up once their dependencies are met
+        self.logger.debug(f"Nodes marked as ready: {node_ids}")
+        # No database update needed - they're already in CREATED state
+
+    async def _mark_nodes_skipped(
+        self,
+        node_ids: list[str],
+        queue_name: str,
+        skip_reason: SkipReason,
+        dag_plan: QueryPlan,
+    ) -> None:
+        """
+        Mark nodes as SKIPPED and cascade to descendants.
+        Stores branch_metadata with skip_reason for tracking.
+
+        :param node_ids: List of node IDs to mark as skipped
+        :param queue_name: Queue name for the jobs
+        :param skip_reason: Reason for skipping
+        :param dag_plan: DAG plan to find descendants
+        """
+        if not node_ids:
+            return
+
+        try:
+            # Mark nodes as SKIPPED in database
+            skip_metadata = {
+                "skip_reason": skip_reason.dict(),
+                "skipped_at": skip_reason.timestamp.isoformat(),
+            }
+
+            await self.repository.mark_jobs_as_skipped(
+                job_ids=node_ids,
+                queue_name=queue_name,
+                output_metadata=skip_metadata,
+            )
+
+            # Store branch_metadata with skip_reason for each skipped node
+            for node_id in node_ids:
+                # Store comprehensive skip information as branch_metadata
+                skip_branch_metadata = {
+                    "skip_reason": {
+                        "branch_node_id": skip_reason.branch_node_id,
+                        "reason": skip_reason.reason,
+                        "selected_paths": skip_reason.selected_paths,
+                        "evaluated_condition": skip_reason.evaluated_condition,
+                        "timestamp": skip_reason.timestamp.isoformat(),
+                    },
+                    "skipped": True,
+                }
+                await self._update_job_branch_metadata(
+                    job_id=node_id,
+                    queue_name=queue_name,
+                    branch_metadata=skip_branch_metadata,
+                )
+
+            # Update frontier to mark these as skipped
+            for node_id in node_ids:
+                await self.frontier.update_job_state(node_id, WorkState.SKIPPED)
+                await self.frontier.on_job_completed(node_id)  # Remove from ready queue
+
+            # Cascade skip to all descendants
+            await self._cascade_skip_to_descendants(
+                node_ids, queue_name, skip_reason, dag_plan
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error marking nodes as skipped: {e}", exc_info=True)
+
+    async def _cascade_skip_to_descendants(
+        self,
+        skipped_node_ids: list[str],
+        queue_name: str,
+        skip_reason: SkipReason,
+        dag_plan: QueryPlan,
+    ) -> None:
+        """
+        Recursively mark all descendants of skipped nodes as SKIPPED.
+
+        :param skipped_node_ids: List of skipped node IDs
+        :param queue_name: Queue name
+        :param skip_reason: Original skip reason
+        :param dag_plan: DAG plan to traverse
+        """
+        if not skipped_node_ids:
+            return
+
+        descendants = set()
+
+        # Find all descendants using the DAG structure
+        for node_id in skipped_node_ids:
+            node = get_node_from_dag(node_id, dag_plan)
+            if not node:
+                continue
+
+            # Traverse the DAG to find all downstream nodes
+            # This is a simplified traversal - in production, use topology cache
+            for query in dag_plan.queries:
+                if node_id in query.depends_on:
+                    descendants.add(query.query)
+
+        if descendants:
+            # Create cascaded skip reason
+            cascaded_reason = SkipReason(
+                branch_node_id=skip_reason.branch_node_id,
+                reason=f"Ancestor node(s) skipped: {skipped_node_ids}",
+                evaluated_condition=skip_reason.evaluated_condition,
+                selected_paths=skip_reason.selected_paths,
+                timestamp=datetime.now(timezone.utc),
+            )
+
+            # Mark descendants as skipped
+            await self._mark_nodes_skipped(
+                list(descendants), queue_name, cascaded_reason, dag_plan
             )
 
     async def _handle_dag_state_notification(self, payload: dict):
@@ -685,8 +1186,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     f"[WORK_DIST] Fetched {len(candidates_wi)} candidates from frontier. "
                 )
 
-                # Build (entrypoint, wi) tuples for planner input
-                planner_candidates: list[tuple[str, WorkInfo]] = []
+                # Separate control flow nodes (NOOP/BRANCH/SWITCH) from regular jobs
+                # Control flow nodes don't need executor slots and should be processed immediately
+                control_flow_jobs: list[WorkInfo] = []
+                regular_candidates: list[WorkInfo] = []
+
                 for wi in candidates_wi:
                     ep = wi.data.get("metadata", {}).get("on", "")
                     if not ep:
@@ -694,12 +1198,70 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             f"[WORK_DIST] Job without entrypoint 'on': {wi.id}"
                         )
                         continue
+
+                    # Check if this is a control flow node (noop, branch, switch, merger)
+                    exe = ep.split("://", 1)[0].lower()
+                    if exe in ("noop", "branch", "switch", "merger"):
+                        control_flow_jobs.append(wi)
+                    else:
+                        regular_candidates.append(wi)
+
+                # Process control flow nodes immediately (they don't need slots)
+                if control_flow_jobs:
+                    self.logger.info(
+                        f"[WORK_DIST] Processing {len(control_flow_jobs)} control flow nodes immediately"
+                    )
+                    for wi in control_flow_jobs:
+                        # Take from frontier and lease in DB
+                        taken_wis = await self.frontier.take([wi.id])
+                        if not taken_wis:
+                            self.logger.warning(
+                                f"[WORK_DIST] Failed to take control flow node {wi.id} from frontier"
+                            )
+                            continue
+
+                        # Try to lease in DB
+                        try:
+                            leased_ids = await self._lease_jobs_db(wi.name, [wi.id])
+                            if not leased_ids:
+                                self.logger.warning(
+                                    f"[WORK_DIST] Failed to lease control flow node {wi.id} in DB"
+                                )
+                                await self.frontier.release_lease_local(wi.id)
+                                continue
+                        except Exception as e:
+                            self.logger.error(
+                                f"[WORK_DIST] Error leasing control flow node {wi.id}: {e}"
+                            )
+                            await self.frontier.release_lease_local(wi.id)
+                            continue
+
+                        # Process the control flow node
+                        asyncio.create_task(self._process_control_flow_node(wi))
+                        scheduled_any = True
+
+                # Build (entrypoint, wi) tuples for planner input (only regular jobs)
+                planner_candidates: list[tuple[str, WorkInfo]] = []
+                for wi in regular_candidates:
+                    ep = wi.data.get("metadata", {}).get("on", "")
                     planner_candidates.append((ep, wi))
 
                 self.logger.info(
-                    f"[WORK_DIST] Built {len(planner_candidates)} planner candidates from {len(candidates_wi)} candidates. "
+                    f"[WORK_DIST] Built {len(planner_candidates)} planner candidates from {len(regular_candidates)} regular jobs "
+                    f"(+{len(control_flow_jobs)} control flow nodes processed). "
                     f"Executors needed: {set(ep for ep, _ in planner_candidates)}"
                 )
+
+                # If all candidates were control flow nodes, skip planner and continue
+                if not planner_candidates:
+                    if scheduled_any:
+                        # We processed control flow nodes, reset idle streak
+                        idle_streak = 0
+                        wait_time = MIN_POLL_PERIOD
+                    self.logger.debug(
+                        f"[WORK_DIST] No regular jobs to plan (processed {len(control_flow_jobs)} control flow nodes)"
+                    )
+                    continue
 
                 # Give the planner: candidates + a COPY of slots + active_dags
                 pick_slots = slots_by_executor.copy()
@@ -865,53 +1427,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         await self.mark_as_active_dag(wi)
                         self.active_dags[dag_id] = dag
 
-                    # NOOP vs normal
-                    node = get_node_from_dag(wi.id, self.active_dags[dag_id])
-                    if _is_noop_query_definition(node):
-                        # Complete locally while we still hold the DB lease
-                        self.logger.info('[WORK_DIST] NOOP query definition detected.')
-                        try:
-                            # Get job levels for this DAG (needed for root/leaf detection)
-                            sorted_nodes, job_levels = (
-                                self._topology_cache.get_sorted_nodes_and_levels(
-                                    self.active_dags[dag_id], dag_id
-                                )
-                            )
-
-                            # With new leveling: root nodes have MAX level, leaf nodes have MIN level (0)
-                            # if we are a root node we have to emit a DAG-level event for job start aka activation
-                            is_root = wi.job_level == max(job_levels.values())
-                            if is_root:
-                                # toast notification
-                                event_name = wi.data.get("name", wi.name)
-                                api_key = wi.data.get("api_key", None)
-                                metadata = wi.data.get("metadata", {})
-                                ref_type = metadata.get("ref_type")
-
-                                await mark_as_started_toast(
-                                    api_key=api_key,
-                                    job_id=wi.dag_id,
-                                    event_name=event_name,
-                                    job_tag=ref_type,
-                                    status="OK",
-                                    timestamp=int(time.time()),
-                                    payload=metadata,
-                                )
-
-                            await self.complete(wi.id, wi, {}, force=True)
-
-                            self.frontier.leased_until.pop(wi.id, None)
-                            await self.frontier.on_job_completed(wi.id)
-                            scheduled_any = True
-                            # Leaf nodes have minimum job_level, only resolve DAG when leaf completes
-                            if job_levels.get(wi.id, -1) == min(job_levels.values()):
-                                await self.resolve_dag_status(wi.id, wi)
-
-                        except Exception as e:
-                            self.logger.error(f"Completing NOOP {wi.id} failed: {e}")
-                            await self._release_lease_db([wi.id])
-                            await self.frontier.release_lease_local(wi.id)
-                        continue
+                    # NOTE: NOOP/BRANCH/SWITCH nodes are handled earlier in the pipeline
+                    # (before planner) and should never reach this point.
+                    # If they do, it's a bug - but we'll handle gracefully
 
                     # Normal job: check slots then dispatch
                     exe = entrypoint.split("://", 1)[0]
@@ -1290,10 +1808,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             return False
 
         try:
+            # Inject DAG tracking parameters into metadata for asset tracking
+            # These are needed by executors to record asset materializations
+            job_metadata = work_info.data.copy()
+            if work_info.dag_id:
+                job_metadata['dag_id'] = work_info.dag_id
+                job_metadata['node_task_id'] = (
+                    work_info.id
+                )  # job ID serves as node task ID
+
             await self.job_manager.submit_job(
                 entrypoint=entrypoint,
                 submission_id=submission_id,
-                metadata=work_info.data,
+                metadata=job_metadata,
                 confirmation_event=confirmation_event,
             )
 

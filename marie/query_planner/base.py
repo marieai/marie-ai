@@ -1,8 +1,11 @@
 import enum
 import importlib
+import json
 import warnings
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import wraps
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field, field_validator
@@ -35,6 +38,37 @@ Type of question we are asking, either a single question or a multi question mer
 """
 
 
+class PlannerMetadata(BaseModel):
+    """Metadata for a registered query planner"""
+
+    planner_id: str = Field(
+        ..., description="Unique identifier for the planner (same as name)"
+    )
+    name: str = Field(..., description="Unique name of the planner")
+    description: Optional[str] = Field(None, description="Description of the planner")
+    version: str = Field(default="1.0.0", description="Version of the planner")
+    tags: List[str] = Field(default_factory=list, description="Tags for categorization")
+    category: Optional[str] = Field(None, description="Category of the planner")
+    source_type: str = Field(..., description="Source type: 'code', 'json', 'wheel'")
+    source_module: Optional[str] = Field(
+        None, description="Python module path (for code-based planners)"
+    )
+    plan_definition: Optional[Dict[str, Any]] = Field(
+        None, description="JSON plan definition (for JSON-based planners)"
+    )
+    created_at: str = Field(
+        default_factory=lambda: datetime.utcnow().isoformat(),
+        description="Creation timestamp",
+    )
+    updated_at: str = Field(
+        default_factory=lambda: datetime.utcnow().isoformat(),
+        description="Last update timestamp",
+    )
+
+    class Config:
+        json_encoders = {datetime: lambda v: v.isoformat()}
+
+
 class QueryPlanRegistryWheelCallback:
     """Callback handler for wheel installation events in QueryPlanRegistry"""
 
@@ -59,10 +93,15 @@ class QueryPlanRegistryWheelCallback:
 
 
 class QueryPlanRegistry:
-    """Registry for query planner functions with wheel support."""
+    """Registry for query planner functions with wheel support and JSON-based planners."""
 
     _plans: Dict[str, Callable] = {}
+    _metadata: Dict[str, PlannerMetadata] = (
+        {}
+    )  # Store metadata for each planner (keyed by name)
+    _id_to_name: Dict[str, str] = {}  # Mapping from planner_id to name
     _external_modules_loaded: bool = False
+    _storage_path: Optional[Path] = None  # Path to store JSON planners
 
     # Wheel management components (class-level)
     _wheel_manager: Optional[PipWheelManager] = None
@@ -116,6 +155,62 @@ class QueryPlanRegistry:
                 )
 
             cls._plans[planner_name] = wrapper
+
+            # Create metadata for code-based planners
+            module_name = func.__module__ if hasattr(func, '__module__') else None
+            description = func.__doc__.strip() if func.__doc__ else None
+
+            # Try to extract plan definition by calling the planner with dummy PlannerInfo
+            plan_definition = None
+            try:
+                from marie.job.job_manager import generate_job_id
+                from marie.query_planner.base import PlannerInfo
+
+                # Create dummy PlannerInfo to extract plan structure
+                # Use proper UUID7 format for base_id (required by increment_uuid7str)
+                dummy_info = PlannerInfo(
+                    name=planner_name,
+                    base_id=generate_job_id(),
+                    current_id=0,
+                    steps=[],
+                    metadata=None,
+                )
+
+                # Call the planner to get its QueryPlan
+                query_plan = wrapper(dummy_info)
+
+                # Convert QueryPlan to dict for storage
+                if hasattr(query_plan, 'model_dump'):
+                    plan_definition = query_plan.model_dump()
+                elif hasattr(query_plan, 'dict'):
+                    plan_definition = query_plan.dict()
+
+                logger.debug(
+                    f"Extracted plan definition for '{planner_name}' with {len(plan_definition.get('nodes', []))} nodes"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Could not extract plan definition for '{planner_name}': {e}"
+                )
+                plan_definition = None
+
+            metadata = PlannerMetadata(
+                planner_id=planner_name,  # Use name as ID
+                name=planner_name,
+                description=description,
+                version="1.0.0",
+                tags=[],
+                category=None,
+                source_type="code",
+                source_module=module_name,
+                plan_definition=plan_definition,
+            )
+            cls._metadata[planner_name] = metadata
+            cls._id_to_name[planner_name] = planner_name  # ID = name
+
+            logger.info(
+                f"Registered planner '{planner_name}' (ID: {planner_name}, has_definition: {plan_definition is not None})"
+            )
             return wrapper
 
         if function is not None:
@@ -292,6 +387,251 @@ class QueryPlanRegistry:
         return cls._wheel_watcher
 
     @classmethod
+    def set_storage_path(cls, path: str):
+        """
+        Set the storage path for JSON planners.
+
+        :param path: Directory path to store JSON planner definitions
+        """
+        cls._storage_path = Path(path)
+        cls._storage_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"JSON planner storage path set to: {cls._storage_path}")
+
+    @classmethod
+    def register_from_json(
+        cls,
+        name: str,
+        plan_definition: Dict[str, Any],
+        description: Optional[str] = None,
+        version: str = "1.0.0",
+        tags: Optional[List[str]] = None,
+        category: Optional[str] = None,
+    ) -> bool:
+        """
+        Register a query planner from a JSON plan definition.
+
+        This allows Marie Studio to publish query plan templates directly to the gateway
+        without requiring Python code.
+
+        :param name: Unique name for the planner
+        :param plan_definition: JSON dict containing the QueryPlan structure
+        :param description: Optional description of the planner
+        :param version: Version of the planner (default: "1.0.0")
+        :param tags: Optional list of tags for categorization
+        :param category: Optional category for the planner
+        :return: True if successful, False if failed
+        """
+        try:
+            if name in cls._plans:
+                raise ValueError(f"Planner '{name}' is already registered")
+
+            # Validate plan definition by attempting to parse it
+            from marie.query_planner.base import QueryPlan
+
+            query_plan = QueryPlan(**plan_definition)
+
+            # Create a function that returns this plan
+            def json_planner_function(
+                planner_info: 'PlannerInfo', **kwargs
+            ) -> 'QueryPlan':
+                """Dynamically created planner from JSON definition"""
+                # Return a copy of the plan with updated task IDs based on planner_info
+                return query_plan
+
+            # Register the function
+            cls._plans[name] = json_planner_function
+
+            # Store metadata
+            metadata = PlannerMetadata(
+                planner_id=name,  # Use name as ID
+                name=name,
+                description=description,
+                version=version,
+                tags=tags or [],
+                category=category,
+                source_type="json",
+                plan_definition=plan_definition,
+            )
+            cls._metadata[name] = metadata
+
+            # Maintain ID to name mapping (both are same now)
+            cls._id_to_name[name] = name
+
+            # Persist to storage if path is set
+            if cls._storage_path:
+                cls._save_json_planner(name, metadata)
+
+            logger.info(f"Successfully registered JSON planner: {name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to register JSON planner '{name}': {e}")
+            return False
+
+    @classmethod
+    def _save_json_planner(cls, name: str, metadata: PlannerMetadata):
+        """Save JSON planner metadata to storage"""
+        if not cls._storage_path:
+            return
+
+        planner_file = cls._storage_path / f"{name}.json"
+        with open(planner_file, 'w') as f:
+            json.dump(metadata.model_dump(), f, indent=2)
+        logger.debug(f"Saved JSON planner to: {planner_file}")
+
+    @classmethod
+    def load_json_planners_from_storage(cls) -> Dict[str, Any]:
+        """
+        Load all JSON planners from the storage directory.
+
+        :return: Dictionary with loaded/failed counts
+        """
+        if not cls._storage_path or not cls._storage_path.exists():
+            logger.warning("JSON planner storage path not set or doesn't exist")
+            return {'loaded': 0, 'failed': 0}
+
+        result = {'loaded': 0, 'failed': 0, 'planners': []}
+
+        for planner_file in cls._storage_path.glob("*.json"):
+            try:
+                with open(planner_file, 'r') as f:
+                    metadata_dict = json.load(f)
+
+                metadata = PlannerMetadata(**metadata_dict)
+
+                # Register the planner
+                if metadata.plan_definition:
+                    success = cls.register_from_json(
+                        name=metadata.name,
+                        plan_definition=metadata.plan_definition,
+                        description=metadata.description,
+                        version=metadata.version,
+                        tags=metadata.tags,
+                        category=metadata.category,
+                    )
+
+                    if success:
+                        result['loaded'] += 1
+                        result['planners'].append(metadata.name)
+                    else:
+                        result['failed'] += 1
+
+            except Exception as e:
+                logger.error(f"Failed to load JSON planner from {planner_file}: {e}")
+                result['failed'] += 1
+
+        logger.info(
+            f"Loaded {result['loaded']} JSON planners, {result['failed']} failed"
+        )
+        return result
+
+    @classmethod
+    def unregister(cls, name: str) -> bool:
+        """
+        Unregister a planner by name.
+
+        :param name: Name of the planner to unregister
+        :return: True if successful, False if not found
+        """
+        if name not in cls._plans:
+            logger.warning(f"Planner '{name}' not found in registry")
+            return False
+
+        # Remove from registry
+        del cls._plans[name]
+
+        # Remove metadata
+        metadata = cls._metadata.pop(name, None)
+
+        # Remove ID mapping
+        if metadata and metadata.planner_id in cls._id_to_name:
+            del cls._id_to_name[metadata.planner_id]
+
+        # Remove from storage if it's a JSON planner
+        if metadata and metadata.source_type == "json" and cls._storage_path:
+            planner_file = cls._storage_path / f"{name}.json"
+            if planner_file.exists():
+                planner_file.unlink()
+                logger.debug(f"Deleted JSON planner file: {planner_file}")
+
+        logger.info(f"Unregistered planner: {name}")
+        return True
+
+    @classmethod
+    def get_metadata(cls, name: str) -> Optional[PlannerMetadata]:
+        """
+        Get metadata for a specific planner by name.
+
+        :param name: Name of the planner
+        :return: PlannerMetadata if found, None otherwise
+        """
+        return cls._metadata.get(name)
+
+    @classmethod
+    def get_metadata_by_id(cls, planner_id: str) -> Optional[PlannerMetadata]:
+        """
+        Get metadata for a specific planner by ID.
+
+        :param planner_id: ID of the planner
+        :return: PlannerMetadata if found, None otherwise
+        """
+        name = cls._id_to_name.get(planner_id)
+        if name:
+            return cls._metadata.get(name)
+        return None
+
+    @classmethod
+    def unregister_by_id(cls, planner_id: str) -> bool:
+        """
+        Unregister a planner by ID.
+
+        :param planner_id: ID of the planner to unregister
+        :return: True if successful, False if not found
+        """
+        name = cls._id_to_name.get(planner_id)
+        if name:
+            return cls.unregister(name)
+        logger.warning(f"Planner with ID '{planner_id}' not found in registry")
+        return False
+
+    @classmethod
+    def list_planners_with_metadata(cls) -> List[Dict[str, Any]]:
+        """
+        List all registered planners with their metadata.
+
+        :return: List of dictionaries containing planner info
+        """
+        result = []
+
+        for name in cls._plans.keys():
+            metadata = cls._metadata.get(name)
+
+            if metadata:
+                result.append(metadata.model_dump())
+            else:
+                # Fallback for legacy planners without metadata (shouldn't happen anymore)
+                logger.warning(
+                    f"Planner '{name}' has no metadata - this shouldn't happen"
+                )
+                result.append(
+                    {
+                        'planner_id': None,
+                        'name': name,
+                        'description': None,
+                        'version': '1.0.0',
+                        'tags': [],
+                        'category': None,
+                        'source_type': 'code',
+                        'source_module': None,
+                        'plan_definition': None,
+                        'created_at': None,
+                        'updated_at': None,
+                    }
+                )
+
+        return result
+
+    @classmethod
     def cleanup(cls):
         """Clean up all resources"""
         if cls._wheel_watcher:
@@ -432,6 +772,8 @@ class QueryType(str, enum.Enum):
     SEGMENTER = "SEGMENTER"
     COMPUTE = "COMPUTE"
     MERGER = "MERGER"
+    BRANCH = "BRANCH"  # Conditional branching node
+    SWITCH = "SWITCH"  # Multi-way switch node
 
 
 class ComputeQuery(BaseModel):
