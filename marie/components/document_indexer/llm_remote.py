@@ -1,11 +1,13 @@
+import asyncio
 import os
 from collections import defaultdict
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 from docarray import DocList
 
 from marie.api.docs import DOC_KEY_INDEXER, MarieDoc
+from marie.common.file_io import get_cache_dir
 from marie.components.document_indexer.base import BaseDocumentIndexer
 from marie.components.document_indexer.llm_task import (
     PROMPT_STRATEGIES,
@@ -15,18 +17,21 @@ from marie.components.document_indexer.llm_task import (
     initialize_tasks,
     md_wrap,
     modify_outputs,
-    parse_task_output,
 )
 from marie.constants import __model_path__
-from marie.engine import check_if_multimodal, get_engine
-from marie.engine.multimodal_ops import MultimodalLLMCall
+from marie.engine import EngineLM
+from marie.extract.annotators.util import process_batch, route_llm_engine
+from marie.helper import run_async
 from marie.logging_core.logger import MarieLogger
+from marie.logging_core.predefined import default_logger as logger
 from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import convert_frames, frames_from_docs
+from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import load_json_file
+from marie.utils.utils import batchify
 
 
-class MMLLMDocumentIndexer(BaseDocumentIndexer):
+class RemoteLLMDocumentIndexer(BaseDocumentIndexer):
     """
     Multi-Modal LLM based model for image-text -> text output.
     """
@@ -87,11 +92,11 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
         config: LLMConfig = LLMConfig(**load_json_file(config_path))
         self.engine_provider = config.engine_provider
         self.model_name = config.name_or_path
-        if not check_if_multimodal(self.model_name):
-            raise ValueError(f"The engine requested is not multimodal.")
+        self.multimodal = config.multimodal
+        if not self.multimodal:
+            raise ValueError(f"Model {self.model_name} is not a multimodal model")
 
-        engine_instance = get_engine(self.model_name, self.engine_provider)
-        self.model_inference = MultimodalLLMCall(engine_instance, system_prompt=None)
+        self.engine = route_llm_engine(self.model_name, self.multimodal)
 
         self.tasks = config.tasks
         initialize_tasks(self.tasks, model_path)
@@ -110,6 +115,16 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
 
         if len(documents) == 0:
             return documents
+
+        root_asset_path = kwargs.get("root_asset_path", None)
+        if root_asset_path is None:
+            frames = frames_from_docs(documents)
+            root_asset_path = os.path.join(
+                get_cache_dir(),
+                "agent-cache",
+                self.task,
+                hash_frames_fast(frames=frames),
+            )
 
         doc_map = {i: doc for i, doc in enumerate(documents)}
         task_outputs = defaultdict(dict)  # {"task_name": {0: "page_output", ...}, ...}
@@ -145,40 +160,21 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
                     pf.pattern, task_outputs[pf.task], page_subset=filtered_pages_idx
                 )
 
-            prompt_strategy_name = task.prompt_mod_strategy
-            prompt_strategy_fn = PROMPT_STRATEGIES[prompt_strategy_name]
-
-            # Build prompts using the chosen strategy and chained inputs if available
-            prompts = [
-                prompt_strategy_fn(
-                    task.prompt,
-                    document=doc,
-                    words=words[i],
-                    lines=lines[i],
-                    append_text=chained_inputs.get(i, None),
+            task_outputs[task_name] = run_async(
+                allm_task_inference(
+                    documents=documents,
+                    words=words,
+                    lines=lines,
+                    page_idxs=filtered_pages_idx,
+                    engine=self.engine,
+                    task=task,
+                    batch_size=batch_size or self.batch_size,
+                    root_output_path=root_asset_path,
+                    chained_inputs=chained_inputs,
+                    is_multimodal=self.multimodal,
                     **kwargs,
                 )
-                for i, doc in enumerate(documents)
-                if i in filtered_pages_idx
-            ]
-            docs = DocList([documents[i] for i in filtered_pages_idx])
-            frames = frames_from_docs(docs)
-            frames = convert_frames(frames, img_format="pil")
-            batch = list(list(mm_prompt) for mm_prompt in zip(frames, prompts))
-
-            if len(batch) == 0:
-                self.logger.warning(f"No pages to process for task {task_name}")
-                continue
-            # TODO: Add support for system prompts
-            self.logger.info(
-                f"Running '{task_name}' with strategy '{prompt_strategy_name}'"
             )
-            model_output = self.model_inference(batch)
-            parsed_output = parse_task_output(model_output, task.output_type)
-            mod_output = modify_outputs(parsed_output, task.output_mod)
-            task_outputs[task_name] = {
-                i: page_output for i, page_output in zip(filtered_pages_idx, mod_output)
-            }
 
         for document in documents:
             document.tags[DOC_KEY_INDEXER] = dict()
@@ -251,3 +247,96 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
                 requested_tasks.append(task)
 
         return requested_tasks
+
+
+async def allm_task_inference(
+    documents: DocList[MarieDoc],
+    words: List[List[str]],
+    lines: List[List[int]],
+    page_idxs: List[int],
+    engine: EngineLM,
+    task: LLMTask,
+    batch_size: int,
+    root_output_path: str,
+    chained_inputs: Optional[Dict[int, str]] = None,
+    is_multimodal: bool = True,
+    **kwargs,
+) -> Dict[int, str]:
+
+    task_name = task.name
+    indexed_outputs = dict()
+    batches = list(batchify(page_idxs, batch_size))
+    prompt_strategy_name = task.prompt_mod_strategy
+    prompt_strategy_fn = PROMPT_STRATEGIES[prompt_strategy_name]
+    output_path = os.path.join(root_output_path, "agent-output", task_name)
+    os.makedirs(output_path, exist_ok=True)
+
+    logger.info(f"Running '{task_name}' with strategy '{prompt_strategy_name}'")
+    logger.info(
+        f"Batching {len(page_idxs)} into {batches} batches of size {batch_size}"
+    )
+
+    async def _worker(batch) -> Tuple[Optional[List], List[int]]:
+        docs, prompts, image_paths = [], [], []
+        for i in batch:
+            image_paths.append(os.path.join(output_path, f"{i + 1:05}.png"))
+            docs.append(documents[i])
+            # Build prompts using the chosen strategy and chained inputs if available
+            prompts.append(
+                prompt_strategy_fn(
+                    task.prompt,
+                    document=documents[i],
+                    words=words[i],
+                    lines=lines[i],
+                    append_text=chained_inputs.get(i, None),
+                    **kwargs,
+                )
+            )
+
+        docs = DocList(docs)
+        images = convert_frames(frames_from_docs(docs), img_format="pil")
+        # TODO : resizing should be configured and done here (min/max image size)
+        inp = list(list(mm_prompt) for mm_prompt in zip(images, prompts, image_paths))
+
+        if len(inp) == 0:
+            logger.warning(f"No pages to process for task {task_name}")
+            return None, batch
+
+        batch_results = await process_batch(
+            inp,
+            engine,
+            output_path,
+            is_multimodal=is_multimodal,
+            expect_output=task.output_type,
+        )
+        return batch_results, batch
+
+    workers = [asyncio.create_task(_worker(batch)) for batch in batches]
+    error_file_path = os.path.join("/tmp/marie/llm-engine", task_name, "error.log")
+    if not os.path.exists(os.path.dirname(error_file_path)):
+        os.makedirs(os.path.dirname(error_file_path), exist_ok=True)
+
+    try:
+        results = await asyncio.gather(*workers, return_exceptions=True)
+        for r in results:
+            if isinstance(r, asyncio.CancelledError):
+                logger.warning(f"One of the tasks was cancelled : {r}")
+            elif isinstance(r, Exception):
+                logger.error("Task failed:", exc_info=r)
+            else:
+                model_output, batch = r
+                logger.info(f"Processing completed Batch: pages - {batch}")
+                logger.info(f"Results - {model_output}")
+                mod_output = modify_outputs(model_output, task.output_mod)
+                indexed_outputs.update(
+                    {i: page_output for i, page_output in zip(batch, mod_output)}
+                )
+
+    except asyncio.CancelledError as cancel_error:
+        logger.warning("One or more tasks were cancelled.")
+        # DUMP FOR DEBUGGING
+        with open(error_file_path, "a", encoding="utf-8") as error_file:
+            error_message = f"Task(s) cancelled due to: {repr(cancel_error)}\n"
+            error_file.write(error_message)
+
+    return indexed_outputs

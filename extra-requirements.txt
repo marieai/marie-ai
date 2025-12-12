@@ -49,7 +49,7 @@ uvloop:                     perf,standard,devel
 
 opentelemetry-instrumentation-grpc: perf,standard,devel
 prometheus_client>=0.12.0:          perf,standard,devel
-opentelemetry-sdk>=1.14.0,<1.20.0:  perf,standard,devel
+opentelemetry-sdk>=1.14.0,<=1.26.0:  perf,standard,devel
 opentelemetry-exporter-otlp>=1.12.0:  perf,standard,devel
 opentelemetry-exporter-prometheus>=0.33b0:  perf,standard,devel
 opentelemetry-semantic-conventions>=0.33b0:    perf,standard,devel
@@ -65,7 +65,7 @@ filelock:                   standard,devel
 requests:                   standard,devel
 websockets:                 standard,devel
 # very important that we pin this to 2.10.0, otherwise it will cause issues  in models.CustomConfig
-pydantic==2.10.0:           core
+pydantic==2.11.7:           core
 python-multipart:           standard,devel
 aiofiles:                   standard,devel
 aiohttp:                    standard,devel
@@ -93,8 +93,8 @@ strawberry-graphql>=0.96.0: cicd,devel
 
 watchfiles>=0.18.0:           devel
 urllib3>=1.25.9,<2.0.0:       core
-transformers==4.49:           standard,core
-#flash-attn==2.7.2.post1:      standard,core
+transformers==4.57.3:           standard,core
+# flash-attn==2.7.3:      standard,core
 anyconfig:                    standard,core
 
 # python-consul2:               standard,devel
@@ -173,7 +173,7 @@ textual_fastdatatable:        standard,core
 
 typing_extensions>=4.12.2:    standard,core
 # DIRECTLY INSTALLED IN container
-vllm==0.7.3:                  standard,core
+vllm==0.11.0:                  standard,core
 rtree:                        standard,core
 scikit-image:                  standard,core
 filetype:                      standard,core
@@ -183,7 +183,7 @@ faiss-gpu-cu12:                standard,core
 sentence-transformers==5.1.0:  standard,core
 watchdog:                      standard,core
 
-qwen-vl-utils:                 standard,core
+qwen-vl-utils==0.0.14:                 standard,core
 portalocker==3.2.0:            standard,core
 peft==0.17.1:                  standard,core
 ruamel.yaml:                   standard,core

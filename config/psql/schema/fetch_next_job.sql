@@ -97,7 +97,7 @@ pick_new AS MATERIALIZED (
   SELECT id, dag_id, job_level, priority, dag_state
   FROM candidate
   WHERE dag_state = 'created'
-  ORDER BY job_level DESC, priority DESC, id
+  ORDER BY job_level DESC,  priority DESC, id
   LIMIT (SELECT new_total FROM final_caps)
 ),
 
@@ -114,4 +114,4 @@ JOIN marie_scheduler.job j ON j.id = p.id
 ORDER BY p.job_level DESC, p.priority DESC, j.id;
 $$;
 
-ALTER FUNCTION fetch_next_job(text, integer, numeric) OWNER TO postgres;
+ALTER FUNCTION marie_scheduler.fetch_next_job(text, integer, numeric) OWNER TO postgres;
