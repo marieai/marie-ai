@@ -2,7 +2,7 @@ import json
 import os
 import re
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -124,6 +124,7 @@ class LLMTask(BaseModel):
 class LLMConfig(BaseModel):
     name_or_path: str = Field(alias="_name_or_path")
     engine_provider: Optional[str] = "vllm"
+    multimodal: bool = True
     tasks: List[LLMTask]
     debug: Optional[Dict] = None
 
@@ -187,7 +188,7 @@ def modify_task(task, pattern, substitute):
                 return None
             return re.sub(pattern, substitute, task, re.DOTALL)
         return task
-    logger.warning(f"Unable to modify {task} with type {type(task)}")
+    logger.debug(f"Unable to modify {task} with type {type(task)}")
     return task
 
 
@@ -207,10 +208,19 @@ def modify_outputs(
     if task_output_mod is None:
         return task_outputs
     pattern, substitute = task_output_mod.pattern, task_output_mod.substitute
-    return [
-        (modify_task(task_output, pattern, substitute), error_data)
-        for task_output, error_data in task_outputs
-    ]
+
+    mod_results = []
+    for task_output in task_outputs:
+        error = None
+        if isinstance(task_output, tuple):
+            task_output, error = task_output
+        mod_result = modify_task(task_output, pattern, substitute)
+        if error is not None:
+            mod_results.append((mod_result, error))
+        else:
+            mod_results.append(mod_result)
+
+    return mod_results
 
 
 def filter_pages(pattern: Any, page_output: dict[int, Any], page_subset=None):

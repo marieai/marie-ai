@@ -398,16 +398,18 @@ class VLLMEngine(EngineLM):
         guided_json_object: Optional[bool] = None,
         guided_backend: Optional[str] = None,
         guided_whitespace_pattern: Optional[str] = None,
-    ) -> GuidedDecodingParams:
+    ) -> Optional[GuidedDecodingParams]:
         """Constructs GuidedDecodingParams based on guided_mode."""
         # ref : vllm/model_executor/guided_decoding/__init__.py
 
-        return GuidedDecodingParams.from_optional(
-            json=guided_json,
-            regex=guided_regex,
-            choice=guided_choice,
-            grammar=guided_grammar,
-            json_object=guided_json_object,
-            backend=guided_backend,
-            whitespace_pattern=guided_whitespace_pattern,
-        )
+        # TODO: Remove as GuidedDecodingParams is deprecated
+        # return GuidedDecodingParams.from_optional(
+        #     json=guided_json,
+        #     regex=guided_regex,
+        #     choice=guided_choice,
+        #     grammar=guided_grammar,
+        #     json_object=guided_json_object,
+        #     backend=guided_backend,
+        #     whitespace_pattern=guided_whitespace_pattern,
+        # )
+        return None

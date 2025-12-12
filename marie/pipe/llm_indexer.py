@@ -16,6 +16,7 @@ class LLMIndexerPipelineComponent(PipelineComponent):
         llm_tasks: list,
         logger: MarieLogger = None,
         silence_exceptions: bool = False,
+        root_asset_path: str = None,
     ) -> None:
         """
         Initialize the IndexerPipelineComponent.
@@ -31,6 +32,7 @@ class LLMIndexerPipelineComponent(PipelineComponent):
             raise ValueError("document_indexers must be a dictionary")
         self.document_indexers = document_indexers
         self.llm_tasks = llm_tasks
+        self.root_asset_path = root_asset_path
 
     def predict(
         self,
@@ -92,6 +94,7 @@ class LLMIndexerPipelineComponent(PipelineComponent):
                     boxes=boxes,
                     lines=lines,
                     tasks=self.llm_tasks,
+                    root_asset_path=self.root_asset_path,
                 )
 
                 task_meta = defaultdict(list)
@@ -99,20 +102,19 @@ class LLMIndexerPipelineComponent(PipelineComponent):
                     assert DOC_KEY_INDEXER in document.tags
 
                     indexed_values_by_task = document.tags[DOC_KEY_INDEXER]
-                    for task_name, (
-                        indexed_values,
-                        error_data,
-                    ) in indexed_values_by_task.items():
+                    for task_name, indexed_values in indexed_values_by_task.items():
                         if task_name not in self.llm_tasks:
                             continue
-
+                        error_status = False
+                        if isinstance(indexed_values, tuple):
+                            indexed_values, error_status = indexed_values
                         page_task_meta = {
                             "page": str(idx),
                             "indexing": indexed_values,
                             "indexer": key,
                         }
-                        if error_data:
-                            page_task_meta["error"] = error_data
+                        if error_status:
+                            page_task_meta["error"] = error_status
                         task_meta[task_name].append(page_task_meta)
 
                 for task_name, meta in task_meta.items():

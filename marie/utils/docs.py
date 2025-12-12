@@ -188,12 +188,14 @@ def convert_frames(frames, img_format):
     for frame in frames:
         # cv to pil
         if isinstance(frame, np.ndarray):
+            # Convert Color Space (BGR/Gray -> RGB)
             if len(frame.shape) == 2:
                 conv = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
             else:
                 conv = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # Convert to PIL (using the RGB 'conv', not original 'frame')
             if img_format == "pil":
-                conv = Image.fromarray(frame.copy())
+                conv = Image.fromarray(conv)
             converted.append(conv)
         else:
             converted.append(frame.copy())
