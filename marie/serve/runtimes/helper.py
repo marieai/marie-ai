@@ -195,7 +195,10 @@ if docarray_v2:
         elif field_type == 'object' or field_type is None or field_type == 'null':
             if 'additionalProperties' in field_schema:  # handle Dictionaries
                 additional_props = field_schema['additionalProperties']
-                if additional_props.get('type') == 'object':
+                if (
+                    hasattr(additional_props, 'get')
+                    and additional_props.get('type') == 'object'
+                ):
                     ret = Dict[
                         str,
                         _create_pydantic_model_from_schema(
