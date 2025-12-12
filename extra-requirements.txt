@@ -94,7 +94,7 @@ strawberry-graphql>=0.96.0: cicd,devel
 watchfiles>=0.18.0:           devel
 urllib3>=1.25.9,<2.0.0:       core
 transformers==4.57.3:           standard,core
-# flash-attn==2.7.3:      standard,core
+# flash-attn==2.7.4.post1:      standard,core
 anyconfig:                    standard,core
 
 # python-consul2:               standard,devel

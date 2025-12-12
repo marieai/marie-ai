@@ -128,7 +128,7 @@ RUN python3 -m pip install torch==2.5.1 torchvision torchaudio --index-url https
 
 # Installing VLLM independently to avoid issues with torch version, down the road we will use as  --constraint constraints.txt
 RUN python3 -m pip install psutil
-RUN python3 -m pip install flash-attn==2.7.3 --no-build-isolation
+RUN python3 -m pip install flash-attn==2.7.4.post1 --no-build-isolation
 RUN python3 -m pip install vllm==0.11.0
 # ISSUE https://github.com/marieai/marie-ai/issues/136
 RUN python3 -m pip install pillow==9.5.0
