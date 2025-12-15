@@ -120,6 +120,9 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
             if task_request is not None
             else self.tasks
         )
+        if not tasks:
+            self.logger.warning(f"No Task requested. Skipping prediction.")
+
         for task in tasks:
             task_name = task.name
             filtered_pages_idx = sorted(doc_map.keys())
