@@ -121,7 +121,7 @@ echo "$metadata"
 
 for i in $(seq 1 "$2"); do
     echo "Submitting job $i"
-    python ./send_request_to_gateway.py job submit mock_branch_jsonpath_advanced --metadata-json "$metadata" --address "$host" --protocol "$protocol" --api_key "$api_key" &
+    python ./send_request_to_gateway.py job submit extract --metadata-json "$metadata" --address "$host" --protocol "$protocol" --api_key "$api_key" &
     echo "Job $i submitted"
     sleep 1
 done
