@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS {schema}.job_history (
     dag_id UUID NOT NULL,
     job_level INTEGER NOT NULL DEFAULT 0,
     dependencies JSONB DEFAULT '[]'::JSONB,
+    branch_metadata JSONB,
     history_created_on TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
