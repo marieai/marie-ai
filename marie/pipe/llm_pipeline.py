@@ -202,17 +202,22 @@ class LLMPipeline(BasePipeline):
             self.logger.info(
                 f"Processing llm pipeline/group :  {self.pipeline_name}, {group}"
             )
+            group_llm_tasks = []
+            for task, enabled in indexer_group.get("llm_tasks", {}).items():
+                runtime_task = llm_task_config.get(task, {})
+                if not runtime_task and enabled:
+                    self.logger.info(f"Using Default Task {task}")
+                    group_llm_tasks.append(task)
+                elif runtime_task.get("enabled", enabled):
+                    group_llm_tasks.append(task)
+                else:
+                    self.logger.info(f"Skipping Task {task} as it is disabled")
+
             processing_group_pipeline[group].append(
                 LLMIndexerPipelineComponent(
                     name="mmllm_pipeline_component",
                     document_indexers=indexer_group["indexers"],
-                    llm_tasks=[
-                        task
-                        for task in indexer_group.get("llm_tasks", [])
-                        if llm_task_config.get(task, {"enabled": True}).get(
-                            "enabled", True
-                        )
-                    ],
+                    llm_tasks=group_llm_tasks,
                     root_asset_path=root_asset_dir,
                 )
             )
