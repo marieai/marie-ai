@@ -102,6 +102,8 @@ class LLMTask(BaseModel):
 class LLMConfig(BaseModel):
     name_or_path: str = Field(alias="_name_or_path")
     engine_provider: Optional[str] = "vllm"
+    max_tokens: Optional[int] = 4096 * 2
+    multimodal: bool = True
     tasks: List[LLMTask]
     debug: Optional[Dict] = None
 
