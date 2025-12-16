@@ -692,13 +692,14 @@ def setup_llm_tasks(pipeline_config, document_indexers):
 
     tasks = pipeline_config["llm_tasks"]
 
-    document_llm_tasks = defaultdict(list)
+    document_llm_tasks = defaultdict(dict)
     for task in tasks:
         if "name" not in task:
             raise BadConfigSource(f"Missing name in llm_tasks config : {task}")
 
         name = task["name"]
         group = task.get("group", "default")
+        enabled = task.get("enabled", True)
 
         if group not in document_indexers:
             raise BadConfigSource(f"Unknown Group: {group}")
@@ -714,7 +715,7 @@ def setup_llm_tasks(pipeline_config, document_indexers):
                     f"Model path: {indexer.model_path}"
                 )
 
-        document_llm_tasks[group].append(name)
+        document_llm_tasks[group][name] = enabled
 
     return document_llm_tasks
 

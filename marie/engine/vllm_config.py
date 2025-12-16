@@ -151,6 +151,7 @@ def config_qwen3_vl(model_name: str, modality: str = "image"):
         supports_quantization=False,
         dtype="bfloat16",
         mm_processor_kwargs=mm_processor_kwargs,
+        max_model_len=4096 * 4,
     )
 
     prompt = "<|im_start|>system\nSYSTEM_PROMPT_PLACEHOLDER<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>\n<|im_start|>assistant\n"
