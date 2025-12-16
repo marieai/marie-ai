@@ -1,0 +1,7 @@
+# Annotator configuration for TID-123
+annotators: {}
+
+validation:
+  enabled: true
+  fail_on_errors: false
+  fail_on_critical: true

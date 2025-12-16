@@ -61,6 +61,7 @@ with:
   # Key Value Store
   kv_store_kwargs:
     <<: *psql_conf_shared
+    schema: marie_scheduler
     default_table: kv_store_worker
     max_pool_size: 5
     max_connections: 5
@@ -114,6 +115,7 @@ with:
       enabled : True
     psql:
       <<: *psql_conf_shared
+      schema: marie_scheduler
       default_table: event_tracking
       enabled : True
 
