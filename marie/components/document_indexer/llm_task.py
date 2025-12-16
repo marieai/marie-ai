@@ -4,11 +4,11 @@ import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
+from json_repair import repair_json
 from pydantic import BaseModel, Field
 
 from marie.logging_core.predefined import default_logger as logger
-
-from ...utils.json import deserialize_value, load_json_file, to_json
+from marie.utils.json import load_json_file
 
 
 def identity(x, *args, **kwargs) -> str:
@@ -76,8 +76,17 @@ def parse_markdown_json(markdown_json_str: str):
     try:
         return json.loads(json_content), False
     except json.JSONDecodeError:
-        logger.warning(f"Cannot Convert to JSON:\n{json_content}")
-        return {"value": "ERROR", "reason": "JSON CONVERSION FAILURE"}, True
+        try:
+            logger.warning("JSON parsing failed. Attempting repair...")
+            repaired_data = repair_json(json_content, return_objects=True)
+            logger.info("JSON truncated but successfully repaired.")
+            return repaired_data, False
+
+        except Exception as e:
+            logger.warning(
+                f"Repair failed: {e}\nContent: {json_content[:50]}...{json_content[-50:]}"
+            )
+            return {"value": "ERROR", "reason": "JSON CONVERSION FAILURE"}, True
 
 
 def parse_json_output(json_output: str):
@@ -124,6 +133,7 @@ class LLMTask(BaseModel):
 class LLMConfig(BaseModel):
     name_or_path: str = Field(alias="_name_or_path")
     engine_provider: Optional[str] = "vllm"
+    max_tokens: Optional[int] = 4096 * 2
     multimodal: bool = True
     tasks: List[LLMTask]
     debug: Optional[Dict] = None

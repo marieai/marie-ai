@@ -90,7 +90,9 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
         if not check_if_multimodal(self.model_name):
             raise ValueError(f"The engine requested is not multimodal.")
 
-        engine_instance = get_engine(self.model_name, self.engine_provider)
+        engine_instance = get_engine(
+            self.model_name, self.engine_provider, max_tokens=config.max_tokens
+        )
         self.model_inference = MultimodalLLMCall(engine_instance, system_prompt=None)
 
         self.tasks = config.tasks

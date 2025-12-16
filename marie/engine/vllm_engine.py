@@ -91,6 +91,7 @@ class VLLMEngine(EngineLM):
             engine_config(model_name, "image" if is_multimodal else "text")
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.max_tokens = kwargs.get("max_tokens") or 4096
 
     # @cached
     # @retry(wait=wait_random_exponential(min=1, max=5), stop=stop_after_attempt(3))
@@ -301,7 +302,7 @@ class VLLMEngine(EngineLM):
             temperature=kwargs.get("temperature", 0),  # 0 = GREEDY
             top_p=kwargs.get("top_p", 1.0),
             top_k=kwargs.get("top_k", -1),
-            max_tokens=kwargs.get("max_tokens", 4096),
+            max_tokens=kwargs.get("max_tokens", self.max_tokens),
             stop_token_ids=None,  # No specific stop tokens enforced
             n=1,
         )
