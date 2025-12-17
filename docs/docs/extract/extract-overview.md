@@ -1,3 +1,7 @@
+---
+sidebar_position: 1
+---
+
 # Extract Engine — Entry Point
 
 Use this page as your single-stop overview of how the Extract engine fits together and how to build on it. It connects the concepts, the runtime lifecycle, and the configuration-driven patterns so you can confidently add new layouts, annotators, processors, and validators.

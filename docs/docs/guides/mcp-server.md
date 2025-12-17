@@ -1,5 +1,5 @@
 ---
-sidebar_position: 5
+sidebar_position: 12
 title: MCP Server
 description: Integrate Marie AI with AI assistants using Model Context Protocol
 ---

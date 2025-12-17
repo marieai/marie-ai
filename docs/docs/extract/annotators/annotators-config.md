@@ -1,3 +1,7 @@
+---
+sidebar_position: 2
+---
+
 # Configuration: directory structure, prompt resolution, and examples
 
 This section describes how annotators are configured, where prompts live, and how the system locates and loads them at runtime.

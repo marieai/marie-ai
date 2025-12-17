@@ -2170,8 +2170,8 @@ postgresql:
 
 ---
 
-## Next Steps
+## Next steps
 
-- [Production Configuration](./production.md) - Production best practices
-- [Monitoring & Observability](./observability.md) - Set up monitoring
-- [Auto-scaling](./autoscaling.md) - Configure KEDA for auto-scaling
+- [Monitoring and observability](./observability.md) - Set up monitoring
+- [Docker deployment](./docker.md) - Single-node Docker setup
+- [Control plane](./control-plane.md) - Control plane configuration

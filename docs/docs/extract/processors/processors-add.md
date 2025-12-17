@@ -1,3 +1,7 @@
+---
+sidebar_position: 2
+---
+
 # How to Create a New Region Processor (Hello World)
 
 This page walks you through creating a minimal “Hello World” region processor that plugs into the extraction pipeline, registers itself, and produces a simple structured output.

@@ -1,3 +1,7 @@
+---
+sidebar_position: 3
+---
+
 # How to add a new annotator
 
 This section walks you through designing, configuring, and validating a new annotator. It applies to all annotator types (LLM, LLM Table, rule-based, embedding/hybrid) and follows the configuration and prompt layout described earlier.

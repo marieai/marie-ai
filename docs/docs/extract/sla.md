@@ -1,3 +1,7 @@
+---
+sidebar_position: 7
+---
+
 # Marie Scheduler: SLA-Based Job Priority Design
 
 ## Overview

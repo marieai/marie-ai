@@ -1,5 +1,5 @@
 ---
-sidebar_position: 6
+sidebar_position: 9
 ---
 
 # Human-in-the-Loop (HITL)
@@ -736,8 +736,7 @@ pytest tests/integration/scheduler/ -k hitl -v
 - Bulk approval operations
 - SLA tracking and alerts
 
-## See Also
+## See also
 
 - [Query Planners](./query-planners.md) - Overview of Marie-AI's query planning system
 - [Branching and Conditional Execution](./query-planners.md#branching) - Detailed branching documentation
-- [Executor README](../../marie/executor/hitl/README.md) - Technical implementation details

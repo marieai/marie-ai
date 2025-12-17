@@ -1,8 +1,8 @@
 {
-  "label": "Extract/Parsing",
-  "position": 2,
+  "label": "Document extraction",
+  "position": 4,
   "link": {
     "type": "generated-index",
-    "description": "Document parsing and extraction",
+    "description": "Document parsing and extraction"
   }
 }

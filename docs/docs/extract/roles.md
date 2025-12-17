@@ -1,3 +1,7 @@
+---
+sidebar_position: 5
+---
+
 # Role Hints
 
 Role hints bridge static configuration with dynamic business logic, allowing the extraction system to apply different processing rules to sections based on their semantic purpose.

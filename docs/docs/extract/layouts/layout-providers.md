@@ -1,3 +1,7 @@
+---
+sidebar_position: 1
+---
+
 # Layout Providers (Template Builders) — Developer Guide
 
 This guide explains how to design, register, and maintain Layout Providers (aka Template Builders). It focuses on the conceptual model, configuration patterns, and lifecycle so you can add new layouts confidently and consistently.

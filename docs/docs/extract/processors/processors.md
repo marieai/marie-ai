@@ -1,3 +1,7 @@
+---
+sidebar_position: 1
+---
+
 # Processor Purpose and Role in the Extraction Pipeline
 
 This document explains what “processors” are in the extraction pipeline, why they exist, and how they transform intermediate document representations into structured outputs.

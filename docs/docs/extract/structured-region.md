@@ -1,3 +1,7 @@
+---
+sidebar_position: 4
+---
+
 # Documentation: Structured Region System for Document Processing
 
 This document provides comprehensive training material for understanding the structured region system used in document processing, covering roles, role hints, and key data structures.

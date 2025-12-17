@@ -1,3 +1,7 @@
+---
+sidebar_position: 1
+---
+
 ## Validators
 
 Validators are pluggable checks that verify inputs, intermediate artifacts, and final outputs at specific points in the annotation pipeline. They help you enforce schema conformance, file/artifact completeness, and domain constraints, and they surface actionable diagnostics early.

@@ -1,3 +1,7 @@
+---
+sidebar_position: 3
+---
+
 # Component Registry
 
 This guide explains how to use, extend, and operate the ComponentRegistry responsible for discovery and orchestration of extraction components. 
