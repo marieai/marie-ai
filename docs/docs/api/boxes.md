@@ -2,9 +2,9 @@
 
 | [`BoxProcessorUlimDit`](generated/marie.boxes.BoxProcessorUlimDit.md#marie.boxes.BoxProcessorUlimDit)   | Document text box processor using DIT model from ULIM.   |
 |---------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
-| [`PSMode`](#marie.boxes.PSMode)                                                                         | Page Segmentation Modes                                  |
+| [`PSMode`](generated/marie.boxes.PSMode.md#marie.boxes.PSMode)                                          | Page Segmentation Modes                                  |
 
-### *class* marie.boxes.PSMode(value)
+### *class* marie.boxes.PSMode(\*values)
 
 Page Segmentation Modes
 
@@ -14,7 +14,7 @@ Page Segmentation Modes
 * RAW_LINE =  Raw line. Treat the image as a single text line, NO bounding box detection performed.
 * MULTI_LINE = Multiline. Treat the image as multiple text lines, NO bounding box detection performed.
 
-### *class* marie.boxes.BoxProcessorUlimDit(work_dir: str = '/tmp/boxes', models_dir: str = '/mnt/marie/model_zoo', cuda: bool = False)
+### *class* marie.boxes.BoxProcessorUlimDit(work_dir: str = '/tmp/boxes', models_dir: str = '/mnt/marie/model_zoo', cuda: bool = False, refinement: bool = True)
 
 Document text box processor using DIT model from ULIM.
 

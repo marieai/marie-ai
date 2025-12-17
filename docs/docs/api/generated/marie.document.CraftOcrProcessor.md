@@ -2,7 +2,7 @@
 
 ### *class* marie.document.CraftOcrProcessor(work_dir: str = '/tmp/icr', models_dir: str = '/mnt/marie/model_zoo/icr', cuda: bool = True, \*\*kwargs)
 
-#### \_\_init_\_(work_dir: str = '/tmp/icr', models_dir: str = '/mnt/marie/model_zoo/icr', cuda: bool = True, \*\*kwargs)
+#### \_\_init_\_(work_dir: str = '/tmp/icr', models_dir: str = '/mnt/marie/model_zoo/icr', cuda: bool = True, \*\*kwargs) → None
 
 ### Methods
 
