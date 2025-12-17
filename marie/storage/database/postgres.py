@@ -61,9 +61,14 @@ class PostgresqlMixin:
                 self.logger.info(f"Connected to postgresql database: {config}")
                 return
 
+            self.schema = config.get("schema")  # Optional schema name
             self.table = config["default_table"]
             if self.table is None or self.table == "":
                 raise ValueError("default_table cannot be empty")
+
+            # Create schema if specified and doesn't exist
+            if self.schema:
+                self._ensure_schema_exists()
 
             self._init_table(create_table_callback, reset_table_callback)
 
@@ -183,6 +188,22 @@ class PostgresqlMixin:
 
         raise psycopg2.OperationalError("Failed to get clean connection after maximum retries")
 
+    @property
+    def qualified_table(self) -> str:
+        """Return the fully qualified table name (schema.table or just table)."""
+        if hasattr(self, 'schema') and self.schema:
+            return f"{self.schema}.{self.table}"
+        return self.table
+
+    def _ensure_schema_exists(self) -> None:
+        """Create the schema if it doesn't exist."""
+        if not hasattr(self, 'schema') or not self.schema:
+            return
+        self._execute_sql_gracefully(
+            f"CREATE SCHEMA IF NOT EXISTS {self.schema}"
+        )
+        self.logger.info(f"Ensured schema exists: {self.schema}")
+
     def _init_table(
             self,
             create_table_callback: Optional[Callable] = None,
@@ -192,11 +213,11 @@ class PostgresqlMixin:
         Use table if exists or create one if it doesn't.
         """
         if reset_table_callback:
-            self.logger.info(f"Resetting table : {self.table}")
+            self.logger.info(f"Resetting table : {self.qualified_table}")
             reset_table_callback()
 
         if self._table_exists():
-            self.logger.info(f"Using existing table : {self.table}")
+            self.logger.info(f"Using existing table : {self.qualified_table}")
         else:
             self._create_table_with_callback(create_table_callback)
 
@@ -293,12 +314,21 @@ class PostgresqlMixin:
         conn = None
         try:
             conn = self._get_connection()
-            cursor = self._execute_sql_gracefully(
-                "SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name=%s)",
-                (self.table,),
-                return_cursor=True,
-                connection=conn
-            )
+            # Check with schema if specified, otherwise just table name
+            if hasattr(self, 'schema') and self.schema:
+                cursor = self._execute_sql_gracefully(
+                    "SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_schema=%s AND table_name=%s)",
+                    (self.schema, self.table),
+                    return_cursor=True,
+                    connection=conn
+                )
+            else:
+                cursor = self._execute_sql_gracefully(
+                    "SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name=%s)",
+                    (self.table,),
+                    return_cursor=True,
+                    connection=conn
+                )
             return cursor.fetchall()[0][0]
         finally:
             self._close_cursor(cursor)

@@ -82,6 +82,10 @@ class PostgreSQLHandler(PostgresqlMixin):
         self.virtual_shards = virtual_shards
         self.snapshot_table = f"snapshot_{table}"
 
+        # Track vector type registration state
+        self._vector_registered = False
+        self._vector_registration_attempted = False
+
         if not dry_run:
             config = {
                 "hostname": hostname,
@@ -151,6 +155,18 @@ class PostgreSQLHandler(PostgresqlMixin):
             INSERT INTO {META_TABLE_NAME} (table_name, schema_version) VALUES ('{self.table}', {SCHEMA_VERSION});
             INSERT INTO {MODEL_TABLE_NAME} (table_name) VALUES ('{self.table}');"""
         )
+
+        # Now that the extension is created, re-attempt vector type registration
+        if not self._vector_registered:
+            conn = super()._get_connection()
+            try:
+                self._vector_registered = register_vector(conn)
+                if self._vector_registered:
+                    self.logger.info(
+                        "pgvector type registered after extension creation"
+                    )
+            finally:
+                self._close_connection(conn)
 
     def _assert_table_schema_version(self):
         result = self._execute_sql_gracefully(
@@ -324,6 +340,15 @@ class PostgreSQLHandler(PostgresqlMixin):
         """
         # Get a standard connection from the mixin
         conn = super()._get_connection()
-        # Register the vector type adapter for this specific connection
-        register_vector(conn)
+
+        # Only attempt vector registration once per handler instance
+        # This avoids repeated failures if pgvector isn't installed
+        if not self._vector_registration_attempted:
+            self._vector_registration_attempted = True
+            self._vector_registered = register_vector(conn)
+            if not self._vector_registered:
+                self.logger.warning(
+                    "pgvector extension not available; vector operations will not work"
+                )
+
         return conn

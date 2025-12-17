@@ -39,11 +39,14 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         :param table_name: Name of the table to be created.
         :return: None
         """
-        self.logger.info(f"Creating table : {table_name}")
+        qualified = self.qualified_table
+        # Use just table name for function/trigger names (no dots allowed)
+        safe_name = self.table.replace(".", "_")
+        self.logger.info(f"Creating table : {qualified}")
 
         self._execute_sql_gracefully(
             f"""
-            CREATE TABLE IF NOT EXISTS {self.table} (
+            CREATE TABLE IF NOT EXISTS {qualified} (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 namespace VARCHAR(1024) NULL,
                 key VARCHAR(1024) NOT NULL,
@@ -53,9 +56,9 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
                 updated_at timestamp with time zone DEFAULT NULL,
                 is_deleted BOOL DEFAULT FALSE
             );
-            CREATE UNIQUE INDEX idx_{self.table}_ns_key ON {self.table} (namespace, key);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_{safe_name}_ns_key ON {qualified} (namespace, key);
 
-            CREATE TABLE IF NOT EXISTS {self.table}_history (
+            CREATE TABLE IF NOT EXISTS {qualified}_history (
                 history_id SERIAL PRIMARY KEY,
                 id UUID,
                 namespace VARCHAR(1024),
@@ -69,18 +72,18 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
                 operation CHAR(1) CHECK (operation IN ('I', 'U', 'D'))
             );
 
-            CREATE OR REPLACE FUNCTION log_changes_{self.table}() RETURNS TRIGGER AS $$
+            CREATE OR REPLACE FUNCTION log_changes_{safe_name}() RETURNS TRIGGER AS $$
             BEGIN
                 IF (TG_OP = 'INSERT') THEN
-                    INSERT INTO {self.table}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
+                    INSERT INTO {qualified}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
                     VALUES (NEW.id, NEW.namespace, NEW.key, NEW.value, NEW.shard, NEW.created_at, NEW.updated_at, NEW.is_deleted, 'I');
                     RETURN NEW;
                 ELSIF (TG_OP = 'UPDATE') THEN
-                    INSERT INTO {self.table}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
+                    INSERT INTO {qualified}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
                     VALUES (NEW.id, NEW.namespace, NEW.key, NEW.value, NEW.shard, NEW.created_at, NEW.updated_at, NEW.is_deleted, 'U');
                     RETURN NEW;
                 ELSIF (TG_OP = 'DELETE') THEN
-                    INSERT INTO {self.table}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
+                    INSERT INTO {qualified}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
                     VALUES (OLD.id, OLD.namespace, OLD.key, OLD.value, OLD.shard, OLD.created_at, OLD.updated_at, OLD.is_deleted, 'D');
                     RETURN OLD;
                 END IF;
@@ -88,9 +91,9 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             END;
             $$ LANGUAGE plpgsql;
 
-            CREATE TRIGGER log_changes_{self.table}_trigger
-            AFTER INSERT OR UPDATE OR DELETE ON {self.table}
-            FOR EACH ROW EXECUTE FUNCTION log_changes_{self.table}();
+            CREATE TRIGGER log_changes_{safe_name}_trigger
+            AFTER INSERT OR UPDATE OR DELETE ON {qualified}
+            FOR EACH ROW EXECUTE FUNCTION log_changes_{safe_name}();
             """
         )
 
@@ -107,7 +110,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             conn = None
             try:
                 conn = self._get_connection()
-                query = f"SELECT key, value FROM {self.table} WHERE key = '{key.decode()}'  AND namespace = '{namespace.decode()}' AND is_deleted = FALSE"
+                query = f"SELECT key, value FROM {self.qualified_table} WHERE key = '{key.decode()}'  AND namespace = '{namespace.decode()}' AND is_deleted = FALSE"
                 cursor = self._execute_sql_gracefully(
                     query, data=(), return_cursor=True, connection=conn
                 )
@@ -152,7 +155,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             shard = 0
 
             insert_q = f"""
-                INSERT INTO {self.table} (id, namespace, key, value, shard, created_at, updated_at)
+                INSERT INTO {self.qualified_table} (id, namespace, key, value, shard, created_at, updated_at)
                 VALUES ('{uid}', '{namespace.decode()}', '{key.decode()}', '{value.decode()}', {shard},current_timestamp,current_timestamp )
             """
 
@@ -197,7 +200,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         else:
 
             def _del_blocking():
-                query = f"DELETE FROM {self.table} WHERE key = '{key.decode()}' AND namespace = '{namespace.decode()}'"
+                query = f"DELETE FROM {self.qualified_table} WHERE key = '{key.decode()}' AND namespace = '{namespace.decode()}'"
                 cursor = None
                 conn = None
 
@@ -232,7 +235,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             conn = None
             try:
                 conn = self._get_connection()
-                query = f"SELECT key  FROM {self.table} WHERE  namespace = '{namespace.decode()}' AND is_deleted = FALSE"
+                query = f"SELECT key FROM {self.qualified_table} WHERE namespace = '{namespace.decode()}' AND is_deleted = FALSE"
                 cursor = self._execute_sql_gracefully(
                     query, data=(), return_cursor=True, connection=conn
                 )
@@ -250,18 +253,20 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         return await loop.run_in_executor(self._db_executor, _keys_blocking)
 
     def internal_kv_reset(self) -> None:
-        self.logger.info(f"internal_kv_reset : {self.table}")
+        qualified = self.qualified_table
+        safe_name = self.table.replace(".", "_")
+        self.logger.info(f"internal_kv_reset : {qualified}")
         conn = None
         try:
             conn = self._get_connection()
             self._execute_sql_gracefully(
-                f"DROP TABLE IF EXISTS {self.table}", connection=conn
+                f"DROP TABLE IF EXISTS {qualified}", connection=conn
             )
             self._execute_sql_gracefully(
-                f"DROP TABLE IF EXISTS {self.table}_history", connection=conn
+                f"DROP TABLE IF EXISTS {qualified}_history", connection=conn
             )
             self._execute_sql_gracefully(
-                f"DROP FUNCTION IF EXISTS log_changes_{self.table} CASCADE",
+                f"DROP FUNCTION IF EXISTS log_changes_{safe_name} CASCADE",
                 connection=conn,
             )
         finally:
