@@ -158,7 +158,8 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
             pipeline_meta = load_json_file(pipeline_meta_path, True)
             metadata = update_existing_meta(metadata, pipeline_meta)
         metadata["pipeline"] = ",".join(meta_folders)
-
+        metadata["features"] = features
+        metadata["planner"] = payload.get("planner", None)
         self.logger.info(f"Storing merged metadata : {meta_path}")
         store_json_object(metadata, meta_path)
         stored_assets = store_assets(
