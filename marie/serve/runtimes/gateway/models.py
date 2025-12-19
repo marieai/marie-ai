@@ -2,10 +2,10 @@ from collections import defaultdict
 from datetime import datetime
 from enum import Enum
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from google.protobuf.descriptor import Descriptor, FieldDescriptor
-from pydantic import BaseModel, ConfigDict, Field, create_model, root_validator
+from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from marie._docarray import docarray_v2
 from marie.proto.jina_pb2 import (
@@ -50,76 +50,105 @@ DESCRIPTION_EXEC_ENDPOINT = (
 )
 
 
-class CustomConfig(ConfigDict):
-    """Pydantic config for Camel case and enum handling"""
-
-    def __init__(self):
-        super().__init__()
-        self.use_enum_values = True
-        self.populate_by_name = True
-
-
-def _get_oneof_validator(oneof_fields: List, oneof_key: str) -> Callable:
+def _get_oneof_validator(oneof_fields: List[str], oneof_key: str) -> Callable:
     """
-    Pydantic root validator (pre) classmethod generator to confirm only one oneof field is passed
+    Generate a callable one-of validator for specified fields.
 
-    :param oneof_fields: list of field names for oneof
-    :type oneof_fields: List
-    :param oneof_key: oneof key
-    :type oneof_key: str
-    :return: classmethod for validating oneof fields
+    This function creates a Pydantic model validator that ensures only one field
+    from a specified list of fields (`oneof_fields`) is set for the given
+    `oneof_key`. If multiple fields from the specified group are present in a
+    dict-like input, a `ValueError` is raised.
+
+    Parameters:
+        oneof_fields: List[str] - A list of field names that belong to the one-of group.
+        oneof_key: A unique identifier used to name the validator function.
+
+    Returns:
+        A callable Pydantic `before` model validator that validates the one-of group.
+
+    Raises:
+        ValueError: If more than one field in the `oneof_fields` list is present.
     """
 
-    def oneof_validator(cls, values):
-        if len(set(oneof_fields).intersection(set(values))) > 1:
+    @model_validator(mode='before')
+    def oneof_validator(cls, values: Any) -> Any:
+        if not isinstance(values, dict):
+            return values
+
+        # Check intersection of keys present in values vs the oneof group
+        present_fields = set(oneof_fields).intersection(set(values.keys()))
+        if len(present_fields) > 1:
             raise ValueError(
                 f'only one field among {oneof_fields} can be set for key {oneof_key}!'
             )
         return values
 
     oneof_validator.__qualname__ = 'validate_' + oneof_key
-    return root_validator(pre=True, allow_reuse=True)(oneof_validator)
+    return oneof_validator
 
 
-def _get_oneof_setter(oneof_fields: List, oneof_key: str) -> Callable:
+def _get_oneof_setter(oneof_fields: List[str], oneof_key: str) -> Callable:
     """
-    Pydantic root validator (post) classmethod generator to set the oneof key
+    Creates a setter function for managing mutually exclusive fields in a model (Oneof fields).
 
-    :param oneof_fields: list of field names for oneof
-    :type oneof_fields: List
-    :param oneof_key: oneof key
-    :type oneof_key: str
-    :return: classmethod for setting oneof fields in Pydantic models
+    This function generates a "Oneof" setter using a Pydantic validator. The setter ensures
+    that only one field in a mutually exclusive set (Oneof fields) is set at any time in a
+    Pydantic model instance. If a field in the given set is found with its default value,
+    it will be unset (removed) from the instance, mimicking protocol buffers' Oneof
+    behavior.
+
+    Parameters:
+        oneof_fields: List[str] of mutually exclusive field names to be managed by the setter.
+        oneof_key: A unique key representing the Oneof field group.
+
+    Returns:
+        A callable function that serves as a validator for the specified Oneof fields.
     """
 
-    def oneof_setter(cls, values):
+    @model_validator(mode='after')
+    def oneof_setter(self):
+        # In an 'after' validator, 'self' is the model instance
         for oneof_field in oneof_fields:
-            if (
-                oneof_field in values
-                and values[oneof_field] == cls.__fields__[oneof_field].default
-            ):
-                values.pop(oneof_field)
-        return values
+            if hasattr(self, oneof_field):
+                val = getattr(self, oneof_field)
+                # Check against the field's default value
+                field_info = self.model_fields.get(oneof_field)
+                if field_info and val == field_info.default:
+                    # We want to unset it if it matches default (Proto behavior) instead of "pop"
+                    delattr(self, oneof_field)
+        return self
 
     oneof_setter.__qualname__ = 'set_' + oneof_key
-    return root_validator(pre=False, allow_reuse=True)(oneof_setter)
+    return oneof_setter
 
 
 def protobuf_to_pydantic_model(
     protobuf_model: Union[Descriptor, 'GeneratedProtocolMessageType']
 ) -> BaseModel:
     """
-    Converts Protobuf messages to Pydantic model for jsonschema creation/validattion
+    Converts a Protocol Buffer model to a Pydantic model.
+
+    This function takes a Protocol Buffer model (or its descriptor) and generates a
+    corresponding Pydantic model. The generated model includes fields and their
+    respective types as defined in the input Protocol Buffer model. It also handles
+    special Protocol Buffer field types such as enums, oneof, and nested message types.
 
     ..note:: Model gets assigned in the global Namespace :data:PROTO_TO_PYDANTIC_MODELS
 
-    :param protobuf_model: message from marie.proto file
-    :type protobuf_model: Union[Descriptor, GeneratedProtocolMessageType]
-    :return: Pydantic model
+    Parameters:
+        protobuf_model: The Protocol Buffer model or descriptor to be converted to a Pydantic model.
+            If a descriptor, it must be an instance of Descriptor. If a model, it must define the
+            `DESCRIPTOR` attribute.
+
+    Returns:
+        The generated Pydantic model corresponding to the input Protocol Buffer model.
+
+    Raises:
+        ValueError: If the provided protobuf_model is not a valid Protocol Buffer model or lacks a
+            `DESCRIPTOR` attribute.
     """
 
     all_fields = {}
-    camel_case_fields = {}  # {"random_string": {"alias": "randomString"}}
     oneof_fields = defaultdict(list)
     oneof_field_validators = {}
 
@@ -141,8 +170,6 @@ def protobuf_to_pydantic_model(
 
     for f in protobuf_fields:
         field_name = f.name
-        camel_case_fields[field_name] = {'alias': f.camelcase_name}
-
         field_type = PROTOBUF_TO_PYTHON_TYPE[f.type]
         default_value = f.default_value
         default_factory = None
@@ -183,25 +210,27 @@ def protobuf_to_pydantic_model(
         if f.label == FieldDescriptor.LABEL_REPEATED:
             field_type = List[field_type]
 
-        all_fields[field_name] = (
-            field_type,
-            (
-                Field(default_factory=default_factory)
-                if default_factory
-                else Field(default=default_value)
-            ),
-        )
+        # Construct Field with alias and default
+        field_args = {'alias': f.camelcase_name}
+        if default_factory:
+            field_args['default_factory'] = default_factory
+        else:
+            field_args['default'] = default_value
+
+        all_fields[field_name] = (field_type, Field(**field_args))
 
     # Post-processing (Handle oneof fields)
     for oneof_k, oneof_v_list in oneof_fields.items():
+        # Add generated validators to the dict (passed to create_model)
         oneof_field_validators[f'oneof_validator_{oneof_k}'] = _get_oneof_validator(
             oneof_fields=oneof_v_list, oneof_key=oneof_k
         )
+        # Note: Setters that modify the instance after creation are trickier with
+        # immutable models, but assuming standard models, this works.
         oneof_field_validators[f'oneof_setter_{oneof_k}'] = _get_oneof_setter(
             oneof_fields=oneof_v_list, oneof_key=oneof_k
         )
 
-    CustomConfig.fields = camel_case_fields
     if model_name == 'DocumentProto':
         from docarray.document.pydantic_model import PydanticDocument
 
@@ -214,7 +243,7 @@ def protobuf_to_pydantic_model(
         model = create_model(
             model_name,
             **all_fields,
-            __config__=CustomConfig,
+            __config__=ConfigDict(use_enum_values=True, populate_by_name=True),
             __validators__=oneof_field_validators,
         )
         model.model_rebuild()

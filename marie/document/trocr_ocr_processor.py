@@ -1,3 +1,4 @@
+import argparse
 import math
 import os
 import time
@@ -6,11 +7,10 @@ import typing
 from collections import namedtuple
 from typing import Any, Dict, List, Tuple, Union
 
-import fairseq
 import torch
 import torch.utils.data
 import torchvision.transforms as transforms
-from fairseq import utils
+from fairseq import checkpoint_utils, utils
 from fairseq_cli import generate
 from PIL import Image
 from torchvision.transforms import Compose, InterpolationMode
@@ -30,6 +30,9 @@ from marie.utils.utils import batchify
 
 faux_t = TextRecognitionTask
 logger = default_logger
+
+# FIX: Register argparse.Namespace for fairseq model loading bug
+torch.serialization.add_safe_globals([argparse.Namespace])
 
 
 # @Timer(text="init in {:.4f} seconds")
@@ -56,7 +59,7 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
 
     # FileNotFoundError: [Errno 2] No such file or directory when using decoder_pretrained
     # decoder_pretrained = None
-    model, cfg, inference_task = fairseq.checkpoint_utils.load_model_ensemble_and_task(
+    model, cfg, inference_task = checkpoint_utils.load_model_ensemble_and_task(
         [model_path],
         arg_overrides={
             "beam": beam,
