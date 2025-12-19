@@ -796,7 +796,12 @@ def update_existing_meta(existing_meta: dict, metadata: dict):
 
     # List elements are overridden on dict.update, so they need to be merged independently
     # New metadata lists take priority when handling duplicate elements with the same identifier value
-    meta_lists = [("classifications", "group"), ("indexers", "group")]
+    # TODO why are there indexers and indexes? Standardize to one name
+    meta_lists = [
+        ("classifications", "group"),
+        ("indexers", "group"),
+        ("indexes", "group"),
+    ]
     merged_meta_lists = dict()
     for category, identifier in meta_lists:
         existing_list = existing_meta.get(category, [])

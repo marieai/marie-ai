@@ -184,7 +184,7 @@ class LLMPipeline(BasePipeline):
             if "classifications" not in metadata:
                 metadata["classifications"] = []
         if self.indexer_groups:
-            if "indexers" not in metadata:
+            if "indexes" not in metadata:
                 metadata["indexes"] = []
 
         processing_group_pipeline = defaultdict(list)
