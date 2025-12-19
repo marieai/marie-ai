@@ -135,7 +135,7 @@ RUN if [ -f /tmp/wheels/flash_attn-2.8.3+cu12torch2.8cxx11abiFALSE-cp312-cp312-l
         python3 -m pip install /tmp/wheels/flash_attn-2.8.3+cu12torch2.8cxx11abiFALSE-cp312-cp312-linux_x86_64.whl; \
     else \
         echo "Pre-built wheel not found, building flash-attn from source..." && \
-        python3 -m pip install flash-attn==2.8.3.post1 --no-build-isolation; \
+        python3 -m pip install flash-attn==2.8.3 --no-build-isolation; \
     fi
 
 # Verify installation

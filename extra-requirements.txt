@@ -192,4 +192,4 @@ pydantic-settings:2.8.1        standard,core
 pydantic-settings:2.8.1        standard,core
 graphviz:                      standard,core
 networkx:                      standard,core
-json_repair:                   standard,core
+json-repair:                   standard,core
