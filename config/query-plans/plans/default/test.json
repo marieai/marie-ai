@@ -1,0 +1,16 @@
+{
+  "id": "36921efd-4281-463b-97ce-f9943b6be981",
+  "name": "test",
+  "description": "test",
+  "version": "1.0.0",
+  "tags": [],
+  "category": "default",
+  "planDefinition": {
+    "nodes": []
+  },
+  "metadata": {
+    "author": "359a3c02-c944-4e13-938d-6dff79f12b98",
+    "lastModified": "2025-12-20T14:33:09.633Z",
+    "changeLog": "tests"
+  }
+}
