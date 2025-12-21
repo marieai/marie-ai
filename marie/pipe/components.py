@@ -202,6 +202,10 @@ def setup_classifiers(
         task = config["task"] if "task" in config else "text-classification"
         batch_size = config["batch_size"] if "batch_size" in config else 1
         model_filter = config["filter"] if "filter" in config else {}
+        max_token_length = (
+            config["max_token_length"] if "max_token_length" in config else None
+        )
+        chunk_input = config["chunk_input"] if "chunk_input" in config else False
 
         if "group" not in config:
             raise BadConfigSource(f"Missing group in classifier config : {config}")
@@ -229,6 +233,8 @@ def setup_classifiers(
                 use_gpu=use_cuda,
                 task=task,
                 id2label=id2label,
+                max_token_length=max_token_length,
+                chunk_input=chunk_input,
             )
 
             document_classifiers[group][name] = {

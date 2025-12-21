@@ -15,6 +15,9 @@ from transformers import (
     AutoTokenizer,
     LayoutLMv3ImageProcessor,
     LayoutLMv3Processor,
+    Pipeline,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
     pipeline,
 )
 
@@ -36,6 +39,11 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
     (https://github.com/huggingface/transformers).
     """
 
+    pipeline: Optional[Pipeline]
+    processor: Optional[LayoutLMv3Processor]
+    model: Optional[PreTrainedModel | Module]
+    tokenizer: PreTrainedTokenizerBase
+
     def __init__(
         self,
         model_name_or_path: Union[str, os.PathLike],
@@ -51,6 +59,8 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         devices: Optional[List[Union[str, "torch.device"]]] = None,
         show_error: Optional[Union[str, bool]] = True,
         id2label: Optional[dict[int, str]] = None,
+        max_token_length=None,
+        chunk_input: bool = False,
         **kwargs,
     ):
         """
@@ -98,6 +108,8 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         self.top_k = top_k
         self.progress_bar = False
         self.id2label = id2label
+        self.max_token_length = max_token_length
+        self.chunk_input = chunk_input
         # Keys are always strings in JSON/YAML so convert ids to int here.
         if id2label is not None:
             self.id2label = {int(key): value for key, value in self.id2label.items()}
@@ -138,36 +150,53 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             tokenizer = model_name_or_path
 
         if task == "zero-shot-classification":
-            self.model = pipeline(
+            self.pipeline = pipeline(
                 task=task,
                 model=model_name_or_path,
                 tokenizer=tokenizer,
                 revision=model_version,
                 use_auth_token=use_auth_token,
                 device=resolved_devices[0],
+                truncation=True,
             )
+            if self.max_token_length:
+                self.pipeline.tokenizer.model_max_length = self.max_token_length
+            self.tokenizer = self.pipeline.tokenizer
         elif task == "text-classification":
-            self.model = pipeline(
+            self.pipeline = pipeline(
                 task=task,
                 model=model_name_or_path,
                 tokenizer=tokenizer,
                 device=resolved_devices[0],
                 revision=model_version,
                 top_k=top_k,
-                # use_auth_token=use_auth_token,
+                truncation=True,
             )
+            if self.max_token_length:
+                self.pipeline.tokenizer.model_max_length = self.max_token_length
+            self.tokenizer = self.pipeline.tokenizer
         elif task == "text-classification-multimodal":
             # Eventually, will need to use safetensors for security reason.
             # https://github.com/pytorch/pytorch/security/advisories/GHSA-53q9-r3pm-6pq6
-
-            use_safetensors = any(f.endswith(".safetensors") for f in os.listdir(model_name_or_path))
+            use_safetensors = any(
+                f.endswith(".safetensors") for f in os.listdir(model_name_or_path)
+            )
             self.model = AutoModelForSequenceClassification.from_pretrained(
-                    model_name_or_path,
-                    use_safetensors=use_safetensors
+                model_name_or_path, use_safetensors=use_safetensors
             )
             self.model = self.optimize_model(self.model)
             self.model = self.model.eval().to(resolved_devices[0])
             self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+            if max_token_length:
+                # Override default tokenizer config
+                self.tokenizer.model_max_length = self.max_token_length
+            else:
+                # Set max_token_length to default from tokenizer or 512 if not specified
+                self.max_token_length = (
+                    self.tokenizer.model_max_length
+                    if self.tokenizer.model_max_length
+                    else 512
+                )
 
             feature_extractor = LayoutLMv3ImageProcessor(
                 apply_ocr=False, do_resize=True, resample=Image.BILINEAR
@@ -220,7 +249,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         for batch in batches:
             batch_results = []
             if self.task == "zero-shot-classification":
-                batch_results = self.model(
+                batch_results = self.pipeline(
                     batch,
                     candidate_labels=self.labels,
                     truncation=True,
@@ -241,9 +270,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                             text = " ".join(doc.words)
                             return text
 
-                    pipe_batched_results = self.model(
-                        IterableData(batch), top_k=self.top_k, truncation=True
-                    )
+                    pipe_batched_results = self.pipeline(IterableData(batch))
                     k_results = []
 
                     for results in pipe_batched_results:
@@ -280,6 +307,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                             words=doc.words,
                             boxes=doc.boxes,
                             top_k=self.top_k,
+                            chunk_input=self.chunk_input,
                         )
                     )
 
@@ -308,6 +336,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         words: List[List[str]],
         boxes: List[List[int]],
         top_k: int = 1,
+        chunk_input: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Predicts the label of a document image
@@ -334,10 +363,12 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             image,
             words,
             boxes=boxes_normalized,
-            max_length=512,
+            max_length=self.max_token_length,  # overrides tokenizer.model_max_length
             padding="max_length",
             truncation=True,
             return_tensors="pt",
+            return_overflowing_tokens=chunk_input,
+            stride=self.max_token_length // 10 if chunk_input else 0,
         )
 
         # https://github.com/pytorch/pytorch/tree/main/torch/csrc/jit/codegen/onednn#example-with-bfloat16
@@ -350,13 +381,24 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 input_ids=encoding["input_ids"].to(self.device),
                 attention_mask=encoding["attention_mask"].to(self.device),
                 bbox=encoding["bbox"].to(self.device),
-                pixel_values=encoding["pixel_values"].to(self.device),
+                pixel_values=(
+                    torch.stack(encoding["pixel_values"]).to(self.device)
+                    if isinstance(encoding["pixel_values"], list)
+                    else encoding["pixel_values"].to(self.device)
+                ),
             )
         # TODO: add top_k support
 
         logits = output.logits
-        predicted_class = logits.argmax(-1)
-        probabilities = F.softmax(logits, dim=-1).squeeze().tolist()
+        chunks = logits.shape[0]
+        if chunks == 1:
+            predicted_class = logits.argmax(-1)
+            probabilities = F.softmax(logits, dim=-1).squeeze().tolist()
+        else:
+            self.logger.info(f"Chunk count: {chunks}")
+            doc_logits = logits.mean(dim=0, keepdim=True)  # or max()
+            predicted_class = doc_logits.argmax(-1)
+            probabilities = F.softmax(doc_logits, dim=-1).squeeze().tolist()
 
         return [
             {
@@ -365,11 +407,8 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             }
         ]
 
-    def optimize_model(self, model: nn.Module) -> Callable | Module:
+    def optimize_model(self, model: nn.Module) -> Module:
         """Optimizes the model for inference. This method is called by the __init__ method."""
-        if False:
-            return model
-
         try:
             with TimeContext("Compiling model", logger=self.logger):
                 import torch._dynamo as dynamo
