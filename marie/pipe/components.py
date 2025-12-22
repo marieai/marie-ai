@@ -20,10 +20,9 @@ from marie.components.template_matching import (
     MetaTemplateMatcher,
     VQNNFTemplateMatcher,
 )
-from marie.constants import __config_dir__, __model_path__
+from marie.constants import __model_path__
 from marie.excepts import BadConfigSource
 from marie.logging_core.predefined import default_logger as logger
-from marie.logging_core.profile import TimeContext
 from marie.ocr import CoordinateFormat, OcrEngine
 from marie.overlay.overlay import NoopOverlayProcessor, OverlayProcessor
 from marie.storage import StorageManager
@@ -101,17 +100,6 @@ def s3_asset_path(
         ret_path = f"s3://{marie_bucket}/{ref_type.lower()}/{prefix.lower()}/{filename}"
 
     return ret_path
-
-
-def is_component_enabled(conf: Any, default: bool) -> bool:
-    if conf is None:
-        return default
-
-    # List of items ─ enable if ANY is enabled.
-    if isinstance(conf, list):
-        return any(item.get("enabled", True) for item in conf)
-
-    return conf.get("enabled", default)
 
 
 def setup_overlay(
@@ -788,6 +776,25 @@ def load_pipeline(
 
 
 def update_existing_meta(existing_meta: dict, metadata: dict):
+    """
+    Updates an existing metadata dictionary by merging it with a new metadata dictionary.
+
+    This function handles typical dictionary updates but takes special care of merging lists of metadata
+    where list elements are identified using a unique identifier. In cases of duplicates, the elements
+    from the new metadata take precedence. The function also ensures stale elements are removed
+    from the lists based on the presence in the new metadata.
+
+    Parameters:
+        existing_meta: dict
+            The original metadata dictionary to be updated. Can be empty.
+        metadata: dict
+            The new metadata dictionary to merge with the original. Can be empty.
+
+    Returns:
+        dict
+            The updated metadata dictionary, which is the result of merging the original
+            and new metadata, with new metadata taking precedence in cases of duplicate list elements.
+    """
     if not existing_meta:
         return metadata
     if not metadata:
@@ -824,3 +831,89 @@ def update_existing_meta(existing_meta: dict, metadata: dict):
     existing_meta.update(merged_meta_lists)
 
     return existing_meta
+
+
+def get_config_from_name(pipeline_name: str, pipelines_config: list[dict] = None):
+    """
+    Fetch the configuration for a specific pipeline from the list of pipeline configurations.
+
+    This function searches through a list of pipeline configurations to find the
+    configuration dictionary that corresponds to the given pipeline name. If no
+    configuration is found or no pipeline configurations are provided, it logs
+    a warning and returns an empty dictionary.
+
+    Parameters:
+        pipeline_name: str
+            The name of the pipeline for which the configuration is being searched.
+        pipelines_config: list[dict], optional
+            A list of pipeline configuration dictionaries. Each dictionary should
+            contain at least the key 'pipeline', which itself should include a key
+            named 'name'.
+
+    Returns:
+        dict
+            The dictionary containing the configuration for the specified pipeline name.
+            If no matching configuration is found, an empty dictionary is returned.
+
+    Raises:
+        None
+    """
+    if pipelines_config is None:
+        logger.warning("No pipelines config provided")
+        return {}
+    for conf in pipelines_config:
+        conf = conf["pipeline"]
+        if conf.get("name") == pipeline_name:
+            return conf
+
+    logger.warning("No pipelines config found")
+    return {}
+
+
+def is_component_enabled(
+    component: str,
+    pipeline_config: dict,
+    runtime_config: dict = None,
+    default: bool = False,
+):
+    """
+    Determines if a specified component is enabled based on pipeline and runtime configurations.
+
+    This function evaluates whether a given component should be enabled or not
+    by checking its status in the provided pipeline configuration. Additionally,
+    a runtime configuration can override the status. If a component is not present
+    in the pipeline configuration, it defaults to the provided default value.
+
+    Parameters:
+        component : str
+            The name of the component to check.
+        pipeline_config : dict
+            The pipeline configuration detailing the components and their settings.
+        runtime_config : dict, optional
+            The runtime configuration that may override pipeline settings. Defaults to None.
+        default : bool, optional
+            The default enablement status if the component is not configured
+            in the pipeline. Defaults to False.
+
+    Returns:
+        bool
+            True if the component is enabled, False otherwise.
+    """
+    is_enabled = default
+    if component in pipeline_config:
+        if isinstance(pipeline_config[component], list):
+            for conf in pipeline_config[component]:
+                if conf.get("enabled", default) is True:
+                    is_enabled = True
+                    break
+        elif isinstance(pipeline_config[component], dict):
+            is_enabled = pipeline_config[component].get("enabled", default)
+    elif default:
+        logger.warning(
+            f"Component `{component}` not configured for this pipeline but enabled by default."
+        )
+
+    # Runtime config can override the disabled component
+    if component in runtime_config and not is_enabled:
+        return runtime_config[component].get("enabled", default)
+    return is_enabled
