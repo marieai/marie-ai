@@ -27,6 +27,8 @@ DEPLOY_GATEWAY=${DEPLOY_GATEWAY:-true}
 DEPLOY_EXTRACT=${DEPLOY_EXTRACT:-true}
 DEPLOY_INFRASTRUCTURE=${DEPLOY_INFRASTRUCTURE:-true}
 DEPLOY_LITELLM=${DEPLOY_LITELLM:-true}
+DEPLOY_CLICKHOUSE=${DEPLOY_CLICKHOUSE:-true}
+DEPLOY_GITEA=${DEPLOY_GITEA:-true}
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}    Marie-AI System Bootstrap${NC}"
@@ -60,7 +62,7 @@ get_running_services() {
     case "$service_type" in
         "infrastructure")
             # Only check for infrastructure containers
-            docker ps --format "table {{.Names}}\t{{.Status}}" --filter "name=marie-s3-server" --filter "name=marie-psql-server" --filter "name=marie-rabbitmq" --filter "name=etcd-single" --filter "name=marie-litellm" --filter "name=marie-mc-setup" 2>/dev/null | tail -n +2
+            docker ps --format "table {{.Names}}\t{{.Status}}" --filter "name=marie-s3-server" --filter "name=marie-psql-server" --filter "name=marie-rabbitmq" --filter "name=etcd-single" --filter "name=marie-litellm" --filter "name=marie-mc-setup" --filter "name=marie-clickhouse" --filter "name=marie-gitea" 2>/dev/null | tail -n +2
             ;;
         "application")
             # Only check for application containers (gateway, extract, etc.)
@@ -172,12 +174,14 @@ stop_infrastructure_services() {
         -f ./Dockerfiles/docker-compose.rabbitmq.yml \
         -f ./Dockerfiles/docker-compose.etcd.yml \
         -f ./Dockerfiles/docker-compose.litellm.yml \
+        -f ./Dockerfiles/docker-compose.clickhouse.yml \
+        -f ./Dockerfiles/docker-compose.gitea.yml \
         --project-directory . \
         down --volumes $orphan_flag 2>/dev/null || echo "No infrastructure services to stop"
 
     # Stop any remaining infrastructure containers
     local containers
-    containers=$(docker ps -q --filter "name=marie-s3-server" --filter "name=marie-psql-server" --filter "name=marie-rabbitmq" --filter "name=etcd-single" --filter "name=marie-litellm" --filter "name=marie-mc-setup" 2>/dev/null || true)
+    containers=$(docker ps -q --filter "name=marie-s3-server" --filter "name=marie-psql-server" --filter "name=marie-rabbitmq" --filter "name=etcd-single" --filter "name=marie-litellm" --filter "name=marie-mc-setup" --filter "name=marie-clickhouse" --filter "name=marie-gitea" 2>/dev/null || true)
     if [ -n "$containers" ]; then
         echo "Stopping remaining infrastructure containers..."
         docker stop $containers 2>/dev/null || true
@@ -227,6 +231,8 @@ stop_infrastructure_compose_services() {
         -f ./Dockerfiles/docker-compose.rabbitmq.yml \
         -f ./Dockerfiles/docker-compose.etcd.yml \
         -f ./Dockerfiles/docker-compose.litellm.yml \
+        -f ./Dockerfiles/docker-compose.clickhouse.yml \
+        -f ./Dockerfiles/docker-compose.gitea.yml \
         --project-directory . \
         down $orphan_flag 2>/dev/null || echo "No infrastructure services to stop"
 
@@ -271,6 +277,8 @@ stop_all_services() {
         -f ./Dockerfiles/docker-compose.rabbitmq.yml \
         -f ./Dockerfiles/docker-compose.etcd.yml \
         -f ./Dockerfiles/docker-compose.litellm.yml \
+        -f ./Dockerfiles/docker-compose.clickhouse.yml \
+        -f ./Dockerfiles/docker-compose.gitea.yml \
         --project-directory . \
         down --volumes $orphan_flag 2>/dev/null || echo "No infrastructure services to stop"
 
@@ -313,7 +321,9 @@ show_deployment_config() {
     echo -e "    ├── Storage (MinIO): ${DEPLOY_INFRASTRUCTURE}"
     echo -e "    ├── Message Queue (RabbitMQ): ${DEPLOY_INFRASTRUCTURE}"
     echo -e "    ├── Service Discovery (etcd): ${DEPLOY_INFRASTRUCTURE}"
-    echo -e "    └── LLM Proxy (LiteLLM): ${DEPLOY_LITELLM}"
+    echo -e "    ├── LLM Proxy (LiteLLM): ${DEPLOY_LITELLM}"
+    echo -e "    ├── Analytics DB (ClickHouse): ${DEPLOY_CLICKHOUSE}"
+    echo -e "    └── Git Service (Gitea): ${DEPLOY_GITEA}"
     echo -e "  Application Services:"
     echo -e "    ├── Gateway: ${DEPLOY_GATEWAY}"
     echo -e "    └── Extract Executors: ${DEPLOY_EXTRACT}"
@@ -392,6 +402,14 @@ bootstrap_system() {
             infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.litellm.yml"
         fi
 
+        if [ "$DEPLOY_CLICKHOUSE" = "true" ] && [ -f "./Dockerfiles/docker-compose.clickhouse.yml" ]; then
+            infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
+        fi
+
+        if [ "$DEPLOY_GITEA" = "true" ] && [ -f "./Dockerfiles/docker-compose.gitea.yml" ]; then
+            infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.gitea.yml"
+        fi
+
         infra_compose_cmd="$infra_compose_cmd --project-directory ."
 
         echo "Starting infrastructure services with host networking..."
@@ -407,16 +425,36 @@ bootstrap_system() {
             services_to_wait+=("litellm")
         fi
 
+        if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
+            services_to_wait+=("clickhouse")
+        fi
+
+        if [ "$DEPLOY_GITEA" = "true" ]; then
+            services_to_wait+=("gitea")
+        fi
+
         # Wait only for specific services, excluding setup containers
-        COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE \
-            --project-name marie-infrastructure \
-            -f ./Dockerfiles/docker-compose.storage.yml \
-            -f ./Dockerfiles/docker-compose.s3.yml \
-            -f ./Dockerfiles/docker-compose.rabbitmq.yml \
-            -f ./Dockerfiles/docker-compose.etcd.yml \
-            $([ "$DEPLOY_LITELLM" = "true" ] && echo "-f ./Dockerfiles/docker-compose.litellm.yml") \
-            --project-directory . \
-            up --wait ${services_to_wait[@]}
+        local wait_compose_cmd="COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE"
+        wait_compose_cmd="$wait_compose_cmd --project-name marie-infrastructure"
+        wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.storage.yml"
+        wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.s3.yml"
+        wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+        wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
+
+        if [ "$DEPLOY_LITELLM" = "true" ]; then
+            wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.litellm.yml"
+        fi
+
+        if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
+            wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
+        fi
+
+        if [ "$DEPLOY_GITEA" = "true" ]; then
+            wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.gitea.yml"
+        fi
+
+        wait_compose_cmd="$wait_compose_cmd --project-directory . up --wait ${services_to_wait[@]}"
+        eval "$wait_compose_cmd"
 
         # Check if mc-setup completed successfully
         echo -e "${YELLOW}Checking MinIO setup completion...${NC}"
@@ -496,15 +534,27 @@ bootstrap_system() {
 show_all_services_status() {
     if [ "$DEPLOY_INFRASTRUCTURE" = "true" ]; then
         echo -e "${BLUE}Infrastructure Services:${NC}"
-        COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE \
-            --project-name marie-infrastructure \
-            -f ./Dockerfiles/docker-compose.storage.yml \
-            -f ./Dockerfiles/docker-compose.s3.yml \
-            -f ./Dockerfiles/docker-compose.rabbitmq.yml \
-            -f ./Dockerfiles/docker-compose.etcd.yml \
-            -f ./Dockerfiles/docker-compose.litellm.yml \
-            --project-directory . \
-            ps 2>/dev/null || echo "No infrastructure services"
+        local status_compose_cmd="COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE"
+        status_compose_cmd="$status_compose_cmd --project-name marie-infrastructure"
+        status_compose_cmd="$status_compose_cmd -f ./Dockerfiles/docker-compose.storage.yml"
+        status_compose_cmd="$status_compose_cmd -f ./Dockerfiles/docker-compose.s3.yml"
+        status_compose_cmd="$status_compose_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+        status_compose_cmd="$status_compose_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
+
+        if [ "$DEPLOY_LITELLM" = "true" ]; then
+            status_compose_cmd="$status_compose_cmd -f ./Dockerfiles/docker-compose.litellm.yml"
+        fi
+
+        if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
+            status_compose_cmd="$status_compose_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
+        fi
+
+        if [ "$DEPLOY_GITEA" = "true" ]; then
+            status_compose_cmd="$status_compose_cmd -f ./Dockerfiles/docker-compose.gitea.yml"
+        fi
+
+        status_compose_cmd="$status_compose_cmd --project-directory . ps"
+        eval "$status_compose_cmd" 2>/dev/null || echo "No infrastructure services"
     fi
 
     if [ "$DEPLOY_GATEWAY" = "true" ] || [ "$DEPLOY_EXTRACT" = "true" ]; then
@@ -535,6 +585,17 @@ show_service_endpoints() {
             echo "  🤖 LiteLLM Proxy: http://localhost:4000"
             echo "  📊 LiteLLM Admin UI: http://localhost:4000/ui"
             echo "  🔧 LiteLLM Health: http://localhost:4000/health"
+        fi
+
+        if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
+            echo "  📈 ClickHouse HTTP: http://localhost:8123"
+            echo "  📈 ClickHouse Play: http://localhost:8123/play"
+            echo "  📈 ClickHouse Native: localhost:9000"
+        fi
+
+        if [ "$DEPLOY_GITEA" = "true" ]; then
+            echo "  🐙 Gitea Web UI: http://localhost:3001"
+            echo "  🐙 Gitea SSH: ssh://git@localhost:2222"
         fi
     fi
 
@@ -581,6 +642,14 @@ parse_args() {
                 DEPLOY_LITELLM=false
                 shift
                 ;;
+            --no-clickhouse)
+                DEPLOY_CLICKHOUSE=false
+                shift
+                ;;
+            --no-gitea)
+                DEPLOY_GITEA=false
+                shift
+                ;;
             --infrastructure-only)
                 DEPLOY_GATEWAY=false
                 DEPLOY_EXTRACT=false
@@ -617,27 +686,31 @@ show_help() {
     echo ""
     echo "Options:"
     echo "  --env-file PATH       Path to .env file (default: ./config/.env.dev)"
-    echo "  --additional-files    FILE1.yml[,FILE2.yml]  Extra docker‑compose files to include"
+    echo "  --additional-files    FILE1.yml[,FILE2.yml]  Extra docker-compose files to include"
     echo "  --stop-all            Stop and remove all Marie-AI services and containers"
     echo "  --no-gateway          Skip gateway deployment"
     echo "  --no-extract          Skip extract executor deployment"
-    echo "  --no-infrastructure   Skip infrastructure services (includes LiteLLM)"
+    echo "  --no-infrastructure   Skip infrastructure services (includes LiteLLM, ClickHouse, Gitea)"
     echo "  --no-litellm          Skip LiteLLM proxy deployment"
-    echo "  --infrastructure-only Deploy only infrastructure services (includes LiteLLM)"
+    echo "  --no-clickhouse       Skip ClickHouse analytics database deployment"
+    echo "  --no-gitea            Skip Gitea Git service deployment"
+    echo "  --infrastructure-only Deploy only infrastructure services"
     echo "  --services-only       Deploy only Marie application services (gateway + extract)"
     echo "  --litellm-only        Deploy only LiteLLM proxy (with required infrastructure)"
     echo "  -h, --help           Show this help message"
     echo ""
     echo "Service Categories:"
-    echo "  Infrastructure: Storage, Message Queue, Service Discovery, LLM Proxy"
+    echo "  Infrastructure: Storage (MinIO), Message Queue (RabbitMQ), Service Discovery (etcd),"
+    echo "                  LLM Proxy (LiteLLM), Analytics DB (ClickHouse), Git Service (Gitea)"
     echo "  Application:    Gateway, Extract Executors"
     echo ""
     echo "Examples:"
-    echo "  $0                    # Deploy everything"
-    echo "  $0 --stop-all         # Stop all services and cleanup"
-    echo "  $0 --infrastructure-only  # Deploy infrastructure + LiteLLM"
+    echo "  $0                        # Deploy everything"
+    echo "  $0 --stop-all             # Stop all services and cleanup"
+    echo "  $0 --infrastructure-only  # Deploy infrastructure only"
     echo "  $0 --services-only        # Deploy only gateway + extract"
     echo "  $0 --no-extract           # Deploy infrastructure + gateway only"
+    echo "  $0 --no-clickhouse --no-gitea  # Deploy without analytics and Git"
     echo "  $0 --litellm-only         # Deploy minimal infrastructure + LiteLLM"
 }
 

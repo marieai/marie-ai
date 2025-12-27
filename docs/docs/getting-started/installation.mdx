@@ -624,5 +624,79 @@ Debugging code with multiprocessing manager with Python 3.12
 
 [https://youtrack.jetbrains.com/issue/PY-66008/SystemError-debugging-code-with-multiprocessing-manager-with-Python-3.12#steps-to-reproduce] (https://youtrack.jetbrains.com/issue/PY-66008/SystemError-debugging-code-with-multiprocessing-manager-with-Python-3.12#steps-to-reproduce)
 
+## Infrastructure Services
+
+Marie-AI uses several infrastructure services for analytics, storage, and integrations. These services can be deployed via Docker Compose or Kubernetes.
+
+### ClickHouse
+
+[ClickHouse](https://clickhouse.com/) is a column-oriented database used by marie-ai for high-performance analytics and job metrics.
+
+**Quick Start with Docker Compose:**
+```bash
+docker compose --env-file ./config/.env \
+  -f ./Dockerfiles/docker-compose.clickhouse.yml \
+  --project-directory . up -d
+```
+
+**Default Ports:**
+| Port | Protocol | Description |
+|------|----------|-------------|
+| 8123 | HTTP | HTTP API and Play UI |
+| 9000 | TCP | Native protocol |
+| 9004 | TCP | MySQL wire protocol |
+
+**Verify Installation:**
+```bash
+# Test HTTP API
+curl 'http://localhost:8123/?query=SELECT%20version()'
+
+# Connect via CLI
+docker exec -it marie-clickhouse clickhouse-client
+```
+
+### Gitea
+
+[Gitea](https://gitea.com/) is a self-hosted Git service used by marie-studio for repository management and version control.
+
+**Quick Start with Docker Compose:**
+```bash
+# Requires PostgreSQL running first
+docker compose --env-file ./config/.env \
+  -f ./Dockerfiles/docker-compose.storage.yml \
+  -f ./Dockerfiles/docker-compose.gitea.yml \
+  --project-directory . up -d
+```
+
+**Default Ports:**
+| Port | Protocol | Description |
+|------|----------|-------------|
+| 3001 | HTTP | Web UI |
+| 2222 | SSH | Git SSH access |
+
+:::note First-time Setup
+On first access to `http://localhost:3001`, Gitea displays an installation wizard. The database connection is pre-configured via environment variables to use shared PostgreSQL.
+:::
+
+### Full Stack Deployment
+
+Deploy all infrastructure services together:
+
+```bash
+# Create network
+docker network create --driver=bridge marie_default
+
+# Start all services
+docker compose --env-file ./config/.env \
+  -f ./Dockerfiles/docker-compose.storage.yml \
+  -f ./Dockerfiles/docker-compose.s3.yml \
+  -f ./Dockerfiles/docker-compose.rabbitmq.yml \
+  -f ./Dockerfiles/docker-compose.clickhouse.yml \
+  -f ./Dockerfiles/docker-compose.gitea.yml \
+  --project-directory . up -d
+```
+
+For Kubernetes deployment, see the [Kubernetes deployment guide](/docs/getting-started/deployment/kubernetes).
+
 ### References
 [Docker overview](https://docs.docker.com/get-started/overview/)

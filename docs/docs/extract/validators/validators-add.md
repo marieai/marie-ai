@@ -1,3 +1,7 @@
+---
+sidebar_position: 2
+---
+
 ## Hello World Validator
 
 This minimal example shows how to create, register, and use a simple validator. It demonstrates:

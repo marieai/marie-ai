@@ -1,5 +1,5 @@
 ---
-sidebar_position: 1
+sidebar_position: 2
 ---
 
 # Docker - Single node
@@ -304,6 +304,156 @@ docker run --gpus all --name=marieai -d --network=host \
   marieai/marie:4.0.0-cuda server --uses /etc/marie/config/service/marie.yml
 ```
 
+## Docker Compose Deployments
+
+Marie-AI provides modular Docker Compose files for running infrastructure services. These are located in `Dockerfiles/` directory.
+
+### Available Compose Files
+
+| File | Services | Description |
+|------|----------|-------------|
+| `docker-compose.yml` | Prometheus, Grafana, Loki, RabbitMQ | Core monitoring stack |
+| `docker-compose.storage.yml` | PostgreSQL | Document database (FerretDB) |
+| `docker-compose.s3.yml` | MinIO | S3-compatible storage |
+| `docker-compose.etcd.yml` | etcd | Service discovery |
+| `docker-compose.clickhouse.yml` | ClickHouse | Analytics database (marie-ai) |
+| `docker-compose.gitea.yml` | Gitea | Git service (marie-studio) |
+
+### Quick Start
+
+```bash
+# Create the docker network (required for all services)
+docker network create --driver=bridge marie_default
+
+# Start PostgreSQL (shared by all services)
+docker compose --env-file ./config/.env \
+  -f ./Dockerfiles/docker-compose.storage.yml \
+  --project-directory . up -d
+
+# Start ClickHouse (analytics)
+docker compose --env-file ./config/.env \
+  -f ./Dockerfiles/docker-compose.clickhouse.yml \
+  --project-directory . up -d
+
+# Start Gitea (Git service)
+docker compose --env-file ./config/.env \
+  -f ./Dockerfiles/docker-compose.gitea.yml \
+  --project-directory . up -d
+```
+
+### ClickHouse
+
+ClickHouse provides high-performance columnar analytics for marie-ai metrics and job analytics.
+
+```bash
+# Start ClickHouse
+docker compose --env-file ./config/.env \
+  -f ./Dockerfiles/docker-compose.clickhouse.yml \
+  --project-directory . up -d
+
+# View logs
+docker logs -f marie-clickhouse
+
+# Connect via CLI
+docker exec -it marie-clickhouse clickhouse-client
+
+# Test HTTP API
+curl 'http://localhost:8123/?query=SELECT%20version()'
+
+# Access Play UI
+# Open http://localhost:8123/play
+```
+
+| Port | Protocol | Description |
+|------|----------|-------------|
+| 8123 | HTTP | HTTP API and Play UI |
+| 9000 | TCP | Native protocol |
+| 9004 | TCP | MySQL wire protocol |
+
+### Gitea
+
+Gitea provides self-hosted Git service for marie-studio integration.
+
+```bash
+# Start Gitea (requires PostgreSQL running)
+docker compose --env-file ./config/.env \
+  -f ./Dockerfiles/docker-compose.storage.yml \
+  -f ./Dockerfiles/docker-compose.gitea.yml \
+  --project-directory . up -d
+
+# View logs
+docker logs -f marie-gitea
+
+# Access Web UI
+# Open http://localhost:3001
+# Complete installation wizard on first access
+```
+
+| Port | Protocol | Description |
+|------|----------|-------------|
+| 3001 | HTTP | Web UI |
+| 2222 | SSH | Git SSH access |
+
+:::note First-time Setup
+On first access, Gitea displays an installation wizard. Configure the database connection (PostgreSQL is pre-configured via environment variables) and create an admin account.
+:::
+
+### Full Stack Deployment
+
+Start all services together:
+
+```bash
+# Create network
+docker network create --driver=bridge marie_default
+
+# Start all infrastructure
+docker compose --env-file ./config/.env \
+  -f ./Dockerfiles/docker-compose.storage.yml \
+  -f ./Dockerfiles/docker-compose.s3.yml \
+  -f ./Dockerfiles/docker-compose.rabbitmq.yml \
+  -f ./Dockerfiles/docker-compose.clickhouse.yml \
+  -f ./Dockerfiles/docker-compose.gitea.yml \
+  --project-directory . up -d
+
+# Check all services
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+```
+
+### Environment Variables
+
+Key environment variables in `config/.env.dev`:
+
+```bash
+# PostgreSQL (shared)
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=123456
+
+# ClickHouse
+CLICKHOUSE_HTTP_PORT=8123
+CLICKHOUSE_NATIVE_PORT=9000
+CLICKHOUSE_DB=marie
+
+# Gitea
+GITEA_HTTP_PORT=3001
+GITEA_SSH_PORT=2222
+GITEA_DB_NAME=gitea
+```
+
+### Stopping Services
+
+```bash
+# Stop individual service
+docker compose -f ./Dockerfiles/docker-compose.clickhouse.yml down
+
+# Stop and remove volumes (full reset)
+docker compose -f ./Dockerfiles/docker-compose.clickhouse.yml down --volumes
+docker volume rm marie_clickhouse_data marie_clickhouse_logs --force
+```
+
+---
+
 ### References
 [Docker volumes](https://docs.docker.com/storage/volumes/)
 [Bind Mounts](https://docs.docker.com/storage/bind-mounts/)
+[ClickHouse Docker](https://hub.docker.com/r/clickhouse/clickhouse-server/)
+[Gitea Docker Installation](https://docs.gitea.com/installation/install-with-docker)

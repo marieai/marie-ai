@@ -1,3 +1,7 @@
+---
+sidebar_position: 10
+---
+
 # Service Discovery
 
 Service discovery is a mechanism that allows services to find and communicate with each other. 

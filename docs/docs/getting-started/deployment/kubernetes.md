@@ -170,6 +170,22 @@ nodes:
       - containerPort: 30090
         hostPort: 9090
         protocol: TCP
+      # ClickHouse HTTP API
+      - containerPort: 30123
+        hostPort: 8123
+        protocol: TCP
+      # ClickHouse Native
+      - containerPort: 30900
+        hostPort: 9001
+        protocol: TCP
+      # Gitea Web UI
+      - containerPort: 30300
+        hostPort: 3001
+        protocol: TCP
+      # Gitea SSH
+      - containerPort: 30222
+        hostPort: 2222
+        protocol: TCP
   # Worker nodes for executor pools
   - role: worker
   - role: worker
@@ -2133,25 +2149,40 @@ deploy/helm/charts/marie/
     │   │   ├── ingress.yaml
     │   │   └── hpa.yaml
     │   └── values.yaml
-    └── executor/           # Executor subchart
+    ├── executor/           # Executor subchart
+    │   ├── templates/
+    │   │   ├── configmap.yaml
+    │   │   ├── deployment.yaml
+    │   │   ├── statefulset.yaml
+    │   │   └── service.yaml
+    │   └── values.yaml
+    ├── clickhouse/         # ClickHouse analytics database
+    │   ├── templates/
+    │   │   ├── statefulset.yaml
+    │   │   ├── service.yaml
+    │   │   └── configmap.yaml
+    │   └── values.yaml
+    └── gitea/              # Gitea Git service (marie-studio)
         ├── templates/
-        │   ├── configmap.yaml
         │   ├── deployment.yaml
-        │   ├── statefulset.yaml
-        │   └── service.yaml
+        │   ├── service.yaml
+        │   ├── pvc.yaml
+        │   └── ingress.yaml
         └── values.yaml
 ```
 
 ### Dependencies
 
-The chart includes these Bitnami dependencies:
+The chart includes these dependencies:
 
-| Dependency | Version | Condition |
-|------------|---------|-----------|
-| postgresql | 13.2.24 | `postgresql.enabled` |
-| rabbitmq | 12.5.6 | `rabbitmq.enabled` |
-| etcd | 9.10.0 | `etcd.enabled` |
-| minio | 14.1.0 | `minio.enabled` |
+| Dependency | Version | Type | Condition | Description |
+|------------|---------|------|-----------|-------------|
+| postgresql | 13.2.24 | Bitnami | `postgresql.enabled` | Document/job database |
+| rabbitmq | 12.5.6 | Bitnami | `rabbitmq.enabled` | Message queue |
+| etcd | 9.10.0 | Bitnami | `etcd.enabled` | Service discovery |
+| minio | 14.1.0 | Bitnami | `minio.enabled` | S3-compatible storage |
+| clickhouse | 0.1.0 | Custom | `clickhouse.enabled` | Analytics database (marie-ai) |
+| gitea | 0.1.0 | Custom | `gitea.enabled` | Git service (marie-studio) |
 
 To use external services instead of bundled ones:
 
@@ -2168,10 +2199,155 @@ postgresql:
     existingSecretPasswordKey: password
 ```
 
+### ClickHouse Configuration
+
+ClickHouse provides high-performance analytics and metrics storage for marie-ai.
+
+```yaml
+# Enable ClickHouse for analytics
+clickhouse:
+  enabled: true
+
+  image:
+    repository: clickhouse/clickhouse-server
+    tag: "latest"
+
+  service:
+    type: ClusterIP
+    httpPort: 8123      # HTTP API
+    nativePort: 9000    # Native protocol
+    mysqlPort: 9004     # MySQL wire protocol
+
+  config:
+    defaultDatabase: marie
+    defaultUser: default
+    defaultPassword: ""
+    accessManagement: true
+    maxMemoryUsage: "4000000000"
+    logLevel: information
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "2Gi"
+    limits:
+      cpu: "4"
+      memory: "8Gi"
+
+  persistence:
+    enabled: true
+    size: 50Gi
+```
+
+Access ClickHouse after deployment:
+
+```bash
+# Port-forward to ClickHouse HTTP API
+kubectl port-forward -n marie svc/marie-clickhouse 8123:8123 &
+
+# Test connection
+curl 'http://localhost:8123/?query=SELECT%20version()'
+
+# Connect via CLI
+kubectl exec -it -n marie statefulset/marie-clickhouse -- clickhouse-client
+
+# Access Play UI
+# Open http://localhost:8123/play
+```
+
+### Gitea Configuration
+
+Gitea provides self-hosted Git service for marie-studio integration.
+
+```yaml
+# Enable Gitea for source code management
+gitea:
+  enabled: true
+
+  image:
+    repository: gitea/gitea
+    tag: "latest"
+
+  service:
+    type: ClusterIP
+    httpPort: 3000    # Web UI
+    sshPort: 22       # SSH access
+
+  config:
+    appName: "Marie Studio Git"
+    runMode: prod
+    domain: localhost
+    rootURL: "http://localhost:3000"
+    sshDomain: localhost
+    sshPort: 2222
+    installLock: false
+    disableRegistration: false
+    logLevel: info
+
+  # Uses shared PostgreSQL
+  database:
+    type: postgres
+    name: gitea
+    sslMode: disable
+
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
+  persistence:
+    enabled: true
+    size: 10Gi
+
+  ingress:
+    enabled: false
+    className: nginx
+    hosts:
+      - host: git.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+```
+
+Access Gitea after deployment:
+
+```bash
+# Port-forward to Gitea Web UI
+kubectl port-forward -n marie svc/marie-gitea 3001:3000 &
+
+# Open http://localhost:3001 in browser
+# Complete initial setup wizard on first access
+
+# Port-forward SSH (optional)
+kubectl port-forward -n marie svc/marie-gitea 2222:22 &
+
+# Clone via SSH
+git clone ssh://git@localhost:2222/user/repo.git
+```
+
+:::note Shared PostgreSQL
+Both Gitea and Marie-AI share the PostgreSQL instance. Gitea creates its own database (`gitea`) within the shared PostgreSQL server.
+:::
+
+### Service Port Reference
+
+| Service | Port | NodePort | Description |
+|---------|------|----------|-------------|
+| Marie HTTP | 8080 | 30080 | REST API |
+| Marie gRPC | 52000 | 30052 | gRPC API |
+| Prometheus | 9090 | 30090 | Metrics |
+| ClickHouse HTTP | 8123 | 30123 | HTTP API & Play UI |
+| ClickHouse Native | 9000 | 30900 | Native protocol |
+| Gitea Web | 3000 | 30300 | Web UI |
+| Gitea SSH | 22 | 30222 | Git SSH |
+
 ---
 
-## Next Steps
+## Next steps
 
-- [Production Configuration](./production.md) - Production best practices
-- [Monitoring & Observability](./observability.md) - Set up monitoring
-- [Auto-scaling](./autoscaling.md) - Configure KEDA for auto-scaling
+- [Monitoring and observability](./observability.md) - Set up monitoring
+- [Docker deployment](./docker.md) - Single-node Docker setup
+- [Control plane](./control-plane.md) - Control plane configuration

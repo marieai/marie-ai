@@ -1,3 +1,7 @@
+---
+sidebar_position: 1
+---
+
 # Purpose and How They Fit Into the System
 
 This document explains what “annotators” are in the extraction pipeline, why they exist, and how to choose and use them effectively.
