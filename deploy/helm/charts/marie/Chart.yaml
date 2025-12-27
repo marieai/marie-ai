@@ -57,3 +57,15 @@ dependencies:
     version: "14.1.0"
     repository: "https://charts.bitnami.com/bitnami"
     condition: minio.enabled
+
+  # Optional: ClickHouse (analytics database for marie-ai)
+  - name: clickhouse
+    version: "0.1.0"
+    repository: "file://charts/clickhouse"
+    condition: clickhouse.enabled
+
+  # Optional: Gitea (Git service for marie-studio)
+  - name: gitea
+    version: "0.1.0"
+    repository: "file://charts/gitea"
+    condition: gitea.enabled

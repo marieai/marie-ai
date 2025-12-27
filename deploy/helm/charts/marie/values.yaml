@@ -311,6 +311,122 @@ minio:
     bucket: marie
 
 # -----------------------------------------------------------------------------
+# ClickHouse Configuration (Analytics Database)
+# Used by: marie-ai for metrics and analytics
+# -----------------------------------------------------------------------------
+clickhouse:
+  enabled: false
+
+  image:
+    repository: clickhouse/clickhouse-server
+    tag: "latest"
+
+  service:
+    type: ClusterIP
+    httpPort: 8123
+    nativePort: 9000
+    mysqlPort: 9004
+
+  config:
+    defaultDatabase: marie
+    defaultUser: default
+    defaultPassword: ""
+    accessManagement: true
+    maxMemoryUsage: "4000000000"
+    maxMemoryUsageForUser: "3000000000"
+    logLevel: information
+
+  resources:
+    requests:
+      cpu: "2"
+      memory: "4Gi"
+    limits:
+      cpu: "8"
+      memory: "16Gi"
+
+  persistence:
+    enabled: true
+    storageClass: ""
+    size: 100Gi
+    logs:
+      enabled: false
+      size: 10Gi
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -----------------------------------------------------------------------------
+# Gitea Configuration (Git Service)
+# Used by: marie-studio for source code management
+# -----------------------------------------------------------------------------
+gitea:
+  enabled: false
+
+  image:
+    repository: gitea/gitea
+    tag: "latest"
+
+  service:
+    type: ClusterIP
+    httpPort: 3000
+    sshPort: 22
+
+  config:
+    appName: "Marie Studio Git"
+    runMode: prod
+    domain: localhost
+    rootURL: "http://localhost:3000"
+    sshDomain: localhost
+    sshPort: 22
+    sshListenPort: 22
+    userUID: 1000
+    userGID: 1000
+    installLock: false
+    secretKey: ""
+    disableRegistration: false
+    requireSignInView: false
+    logLevel: info
+
+  # Uses shared PostgreSQL by default
+  database:
+    type: postgres
+    host: ""
+    port: 5432
+    name: gitea
+    user: ""
+    password: ""
+    sslMode: disable
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
+  persistence:
+    enabled: true
+    storageClass: ""
+    size: 20Gi
+
+  ingress:
+    enabled: false
+    className: nginx
+    annotations: {}
+    hosts:
+      - host: git.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -----------------------------------------------------------------------------
 # Storage Configuration
 # -----------------------------------------------------------------------------
 storage:

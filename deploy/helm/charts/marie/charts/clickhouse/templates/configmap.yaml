@@ -1,0 +1,94 @@
+{{- if .Values.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clickhouse.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "clickhouse.labels" . | nindent 4 }}
+data:
+  custom.xml: |
+    <?xml version="1.0"?>
+    <clickhouse>
+        <!-- Logging configuration -->
+        <logger>
+            <level>{{ .Values.config.logLevel }}</level>
+            <console>1</console>
+        </logger>
+
+        <!-- Listen on all interfaces -->
+        <listen_host>::</listen_host>
+        <listen_host>0.0.0.0</listen_host>
+
+        <!-- HTTP interface -->
+        <http_port>{{ .Values.service.httpPort }}</http_port>
+
+        <!-- Native protocol -->
+        <tcp_port>{{ .Values.service.nativePort }}</tcp_port>
+
+        <!-- MySQL wire protocol -->
+        <mysql_port>{{ .Values.service.mysqlPort }}</mysql_port>
+
+        <!-- Memory limits -->
+        <max_memory_usage>{{ .Values.config.maxMemoryUsage }}</max_memory_usage>
+        <max_memory_usage_for_user>{{ .Values.config.maxMemoryUsageForUser }}</max_memory_usage_for_user>
+
+        <!-- Data paths -->
+        <path>/var/lib/clickhouse/</path>
+        <tmp_path>/var/lib/clickhouse/tmp/</tmp_path>
+        <user_files_path>/var/lib/clickhouse/user_files/</user_files_path>
+        <format_schema_path>/var/lib/clickhouse/format_schemas/</format_schema_path>
+
+        <!-- Prometheus metrics -->
+        <prometheus>
+            <endpoint>/metrics</endpoint>
+            <port>{{ .Values.service.httpPort }}</port>
+            <metrics>true</metrics>
+            <events>true</events>
+            <asynchronous_metrics>true</asynchronous_metrics>
+        </prometheus>
+    </clickhouse>
+
+  users.xml: |
+    <?xml version="1.0"?>
+    <clickhouse>
+        <users>
+            <{{ .Values.config.defaultUser }}>
+                {{- if .Values.config.defaultPassword }}
+                <password>{{ .Values.config.defaultPassword }}</password>
+                {{- else }}
+                <password></password>
+                {{- end }}
+                <networks>
+                    <ip>::/0</ip>
+                </networks>
+                <profile>default</profile>
+                <quota>default</quota>
+                {{- if .Values.config.accessManagement }}
+                <access_management>1</access_management>
+                {{- end }}
+            </{{ .Values.config.defaultUser }}>
+        </users>
+
+        <profiles>
+            <default>
+                <max_memory_usage>{{ .Values.config.maxMemoryUsage }}</max_memory_usage>
+                <max_memory_usage_for_user>{{ .Values.config.maxMemoryUsageForUser }}</max_memory_usage_for_user>
+                <load_balancing>random</load_balancing>
+            </default>
+        </profiles>
+
+        <quotas>
+            <default>
+                <interval>
+                    <duration>3600</duration>
+                    <queries>0</queries>
+                    <errors>0</errors>
+                    <result_rows>0</result_rows>
+                    <read_rows>0</read_rows>
+                    <execution_time>0</execution_time>
+                </interval>
+            </default>
+        </quotas>
+    </clickhouse>
+{{- end }}

@@ -1,0 +1,18 @@
+{{- if .Values.enabled }}
+# ConfigMap for Gitea environment variables reference
+# Most configuration is done via environment variables in deployment.yaml
+# This ConfigMap can be extended for custom app.ini snippets if needed
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gitea.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gitea.labels" . | nindent 4 }}
+data:
+  # Gitea configuration reference
+  # Full documentation: https://docs.gitea.com/administration/config-cheat-sheet
+  GITEA_APP_NAME: {{ .Values.config.appName | quote }}
+  GITEA_RUN_MODE: {{ .Values.config.runMode | quote }}
+  GITEA_DOMAIN: {{ .Values.config.domain | quote }}
+{{- end }}

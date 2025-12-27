@@ -1,0 +1,88 @@
+# ClickHouse subchart values
+# Column-oriented analytics database for OLAP workloads
+# Used by: marie-ai, marie-studio
+
+enabled: false
+replicas: 1
+
+image:
+  repository: clickhouse/clickhouse-server
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# Service configuration
+service:
+  type: ClusterIP
+  # HTTP interface
+  httpPort: 8123
+  # Native TCP protocol
+  nativePort: 9000
+  # MySQL wire protocol
+  mysqlPort: 9004
+  annotations: {}
+
+# ClickHouse configuration
+config:
+  # Default database to create
+  defaultDatabase: marie
+  # Default user
+  defaultUser: default
+  # Default password (empty for local dev, set in production)
+  defaultPassword: ""
+  # Enable SQL-driven access management
+  accessManagement: true
+  # Maximum memory usage (bytes)
+  maxMemoryUsage: "4000000000"
+  # Maximum memory per user (bytes)
+  maxMemoryUsageForUser: "3000000000"
+  # Log level: trace, debug, information, warning, error
+  logLevel: information
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "2Gi"
+  limits:
+    cpu: "4"
+    memory: "8Gi"
+
+# Persistence for ClickHouse data
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 50Gi
+  accessModes:
+    - ReadWriteOnce
+  # Separate volume for logs (optional)
+  logs:
+    enabled: false
+    size: 10Gi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podSecurityContext:
+  fsGroup: 101
+
+securityContext:
+  runAsUser: 101
+  runAsGroup: 101
+
+# Health check configuration
+probes:
+  startup:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 30
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 10
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 5
+
+# Pod annotations
+podAnnotations: {}

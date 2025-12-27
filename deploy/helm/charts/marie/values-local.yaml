@@ -130,6 +130,81 @@ rabbitmq:
 etcd:
   enabled: false
 
+# ClickHouse - analytics database (used by marie-ai)
+clickhouse:
+  enabled: true
+
+  image:
+    repository: clickhouse/clickhouse-server
+    tag: "latest"
+
+  service:
+    type: NodePort
+    httpPort: 8123
+    nativePort: 9000
+
+  config:
+    defaultDatabase: marie
+    defaultUser: default
+    defaultPassword: ""
+    logLevel: information
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "2Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+
+  persistence:
+    enabled: true
+    size: 10Gi
+    logs:
+      enabled: false
+
+# Gitea - Git service (used by marie-studio)
+gitea:
+  enabled: true
+
+  image:
+    repository: gitea/gitea
+    tag: "latest"
+
+  service:
+    type: NodePort
+    httpPort: 3000
+    sshPort: 2222
+
+  config:
+    appName: "Marie Studio Git"
+    runMode: dev
+    domain: localhost
+    rootURL: "http://localhost:3000"
+    sshDomain: localhost
+    sshPort: 2222
+    installLock: false
+    disableRegistration: false
+    logLevel: info
+
+  # Uses shared PostgreSQL
+  database:
+    type: postgres
+    name: gitea
+    sslMode: disable
+
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+  persistence:
+    enabled: true
+    size: 5Gi
+
 # Storage configuration
 storage:
   type: minio

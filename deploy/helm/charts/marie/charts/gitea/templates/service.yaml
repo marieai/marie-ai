@@ -1,0 +1,26 @@
+{{- if .Values.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gitea.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gitea.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.httpPort }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.service.sshPort }}
+      targetPort: ssh
+      protocol: TCP
+      name: ssh
+  selector:
+    {{- include "gitea.selectorLabels" . | nindent 4 }}
+{{- end }}

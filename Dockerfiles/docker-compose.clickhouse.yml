@@ -1,0 +1,114 @@
+# ############### ClickHouse - Column-Oriented Analytics Database ###############
+#
+# Used by: marie-ai, marie-studio
+#
+# ClickHouse is a high-performance columnar database for OLAP workloads.
+# Ideal for analytics, metrics storage, and log aggregation.
+#
+# Prerequisites:
+#   - Network created: docker network create --driver=bridge marie_default
+#
+# Usage:
+#   docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.clickhouse.yml --project-directory . up -d
+#
+# Access:
+#   - HTTP API: http://localhost:8123
+#   - Native Protocol: localhost:9000
+#   - Play UI: http://localhost:8123/play
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: marie-clickhouse
+    restart: unless-stopped
+    environment:
+      # Default user configuration
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=${CLICKHOUSE_ACCESS_MANAGEMENT:-1}
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB:-marie}
+      # Performance tuning
+      - CLICKHOUSE_MAX_MEMORY_USAGE=${CLICKHOUSE_MAX_MEMORY:-4000000000}
+      - CLICKHOUSE_MAX_MEMORY_USAGE_FOR_USER=${CLICKHOUSE_MAX_MEMORY_USER:-3000000000}
+    ports:
+      - "${CLICKHOUSE_HTTP_PORT:-8123}:8123"     # HTTP interface
+      - "${CLICKHOUSE_NATIVE_PORT:-9000}:9000"   # Native TCP protocol
+      - "${CLICKHOUSE_MYSQL_PORT:-9004}:9004"    # MySQL wire protocol (optional)
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+      # Optional: custom configuration
+      # - ./config/clickhouse/config.xml:/etc/clickhouse-server/config.d/custom.xml:ro
+      # - ./config/clickhouse/users.xml:/etc/clickhouse-server/users.d/custom.xml:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+      nproc:
+        soft: 65535
+        hard: 65535
+    networks:
+      - marie_default
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # ClickHouse requires at least 2GB RAM for initialization
+    deploy:
+      resources:
+        limits:
+          memory: ${CLICKHOUSE_MEMORY_LIMIT:-8G}
+        reservations:
+          memory: ${CLICKHOUSE_MEMORY_RESERVATION:-2G}
+
+volumes:
+  clickhouse_data:
+    driver: local
+  clickhouse_logs:
+    driver: local
+
+networks:
+  marie_default:
+    external: true
+
+# ############### Docker Compose Commands ###############
+#
+# Start ClickHouse:
+#   docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.clickhouse.yml --project-directory . up -d
+#
+# View logs:
+#   docker logs -f marie-clickhouse
+#
+# Connect via CLI:
+#   docker exec -it marie-clickhouse clickhouse-client
+#
+# Test HTTP API:
+#   curl 'http://localhost:8123/?query=SELECT%20version()'
+#
+# Stop ClickHouse:
+#   docker compose -f ./Dockerfiles/docker-compose.clickhouse.yml down
+#
+# Full reset (removes all data):
+#   docker compose -f ./Dockerfiles/docker-compose.clickhouse.yml down --volumes
+#   docker volume rm marie_clickhouse_data marie_clickhouse_logs --force
+#
+# ############### Quick Start Examples ###############
+#
+# Create a database:
+#   echo "CREATE DATABASE IF NOT EXISTS marie" | curl 'http://localhost:8123/' --data-binary @-
+#
+# Create a sample table:
+#   echo "CREATE TABLE marie.events (
+#     timestamp DateTime,
+#     event_type String,
+#     payload String
+#   ) ENGINE = MergeTree()
+#   ORDER BY timestamp" | curl 'http://localhost:8123/' --data-binary @-
+#
+# Insert data:
+#   echo "INSERT INTO marie.events VALUES (now(), 'test', 'hello')" | curl 'http://localhost:8123/' --data-binary @-
+#
+# Query data:
+#   curl 'http://localhost:8123/?query=SELECT%20*%20FROM%20marie.events'

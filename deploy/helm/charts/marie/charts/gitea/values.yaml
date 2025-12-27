@@ -1,0 +1,120 @@
+# Gitea subchart values
+# Self-hosted Git service with issue tracking and code review
+# Used by: marie-studio
+
+enabled: false
+replicas: 1
+
+image:
+  repository: gitea/gitea
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# Service configuration
+service:
+  type: ClusterIP
+  # HTTP web interface
+  httpPort: 3000
+  # SSH access
+  sshPort: 22
+  annotations: {}
+
+# Gitea configuration
+config:
+  # App name displayed in UI
+  appName: "Marie Studio Git"
+  # Run mode: dev, prod, test
+  runMode: prod
+  # Domain for Gitea instance
+  domain: localhost
+  # Root URL for Gitea (include port if non-standard)
+  rootURL: "http://localhost:3000"
+  # SSH configuration
+  sshDomain: localhost
+  sshPort: 22
+  sshListenPort: 22
+  # User/Group IDs
+  userUID: 1000
+  userGID: 1000
+  # Security settings
+  installLock: false
+  secretKey: ""
+  # Service settings
+  disableRegistration: false
+  requireSignInView: false
+  # Logging
+  logLevel: info
+
+# Database configuration (uses shared PostgreSQL)
+database:
+  # DB type: postgres, mysql, sqlite3
+  type: postgres
+  # Host (defaults to release-postgresql if using shared)
+  host: ""
+  # Port
+  port: 5432
+  # Database name
+  name: gitea
+  # Username (defaults to postgres)
+  user: ""
+  # Password (from secret if using shared PostgreSQL)
+  password: ""
+  # SSL mode: disable, require, verify-ca, verify-full
+  sslMode: disable
+
+resources:
+  requests:
+    cpu: "250m"
+    memory: "256Mi"
+  limits:
+    cpu: "2"
+    memory: "2Gi"
+
+# Persistence for Gitea data
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 10Gi
+  accessModes:
+    - ReadWriteOnce
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: git.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Health check configuration
+probes:
+  startup:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    failureThreshold: 30
+  liveness:
+    initialDelaySeconds: 60
+    periodSeconds: 10
+    timeoutSeconds: 10
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 5
+
+# Pod annotations
+podAnnotations: {}

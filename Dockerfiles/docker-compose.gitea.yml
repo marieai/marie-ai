@@ -1,0 +1,92 @@
+# ############### Gitea - Self-hosted Git Service ###############
+#
+# Used by: marie-studio
+#
+# Gitea provides lightweight Git hosting with issue tracking, code review,
+# and CI/CD integration. Uses shared PostgreSQL from docker-compose.storage.yml.
+#
+# Prerequisites:
+#   - PostgreSQL running (docker-compose.storage.yml)
+#   - Network created: docker network create --driver=bridge marie_default
+#
+# Usage:
+#   docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.gitea.yml --project-directory . up -d
+#
+# Access:
+#   - Web UI: http://localhost:3001
+#   - SSH: ssh://git@localhost:2222
+
+services:
+  gitea:
+    image: gitea/gitea:latest
+    container_name: marie-gitea
+    restart: unless-stopped
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      # Database configuration (shared PostgreSQL)
+      - GITEA__database__DB_TYPE=postgres
+      - GITEA__database__HOST=${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}
+      - GITEA__database__NAME=${GITEA_DB_NAME:-gitea}
+      - GITEA__database__USER=${POSTGRES_USER:-postgres}
+      - GITEA__database__PASSWD=${POSTGRES_PASSWORD:-postgres}
+      - GITEA__database__SSL_MODE=disable
+      # Server configuration
+      - GITEA__server__DOMAIN=${GITEA_DOMAIN:-localhost}
+      - GITEA__server__SSH_DOMAIN=${GITEA_DOMAIN:-localhost}
+      - GITEA__server__ROOT_URL=${GITEA_ROOT_URL:-http://localhost:3001}
+      - GITEA__server__SSH_PORT=2222
+      - GITEA__server__SSH_LISTEN_PORT=22
+      - GITEA__server__HTTP_PORT=3000
+      # Security
+      - GITEA__security__INSTALL_LOCK=${GITEA_INSTALL_LOCK:-false}
+      - GITEA__security__SECRET_KEY=${GITEA_SECRET_KEY:-}
+      # Service configuration
+      - GITEA__service__DISABLE_REGISTRATION=${GITEA_DISABLE_REGISTRATION:-false}
+      - GITEA__service__REQUIRE_SIGNIN_VIEW=${GITEA_REQUIRE_SIGNIN:-false}
+      # Logging
+      - GITEA__log__MODE=console
+      - GITEA__log__LEVEL=${GITEA_LOG_LEVEL:-info}
+    ports:
+      - "${GITEA_HTTP_PORT:-3001}:3000"   # Web UI (3001 to avoid Grafana conflict)
+      - "${GITEA_SSH_PORT:-2222}:22"      # SSH
+    volumes:
+      - gitea_data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - marie_default
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  gitea_data:
+    driver: local
+
+networks:
+  marie_default:
+    external: true
+
+# ############### Docker Compose Commands ###############
+#
+# Start Gitea (requires PostgreSQL running):
+#   docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.storage.yml -f ./Dockerfiles/docker-compose.gitea.yml --project-directory . up -d
+#
+# View logs:
+#   docker logs -f marie-gitea
+#
+# Stop Gitea:
+#   docker compose -f ./Dockerfiles/docker-compose.gitea.yml down
+#
+# Full reset (removes all data):
+#   docker compose -f ./Dockerfiles/docker-compose.gitea.yml down --volumes
+#   docker volume rm marie_gitea_data --force
+#
+# First-time setup:
+#   1. Navigate to http://localhost:3001
+#   2. Complete the installation wizard
+#   3. Set GITEA_INSTALL_LOCK=true in .env after setup

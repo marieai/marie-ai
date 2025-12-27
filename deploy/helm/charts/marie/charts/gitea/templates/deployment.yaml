@@ -1,0 +1,163 @@
+{{- if .Values.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gitea.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gitea.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "gitea.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "gitea.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: gitea
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "gitea.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gitea
+          image: {{ include "gitea.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.httpPort }}
+              protocol: TCP
+            - name: ssh
+              containerPort: {{ .Values.service.sshPort }}
+              protocol: TCP
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            # User configuration
+            - name: USER_UID
+              value: {{ .Values.config.userUID | quote }}
+            - name: USER_GID
+              value: {{ .Values.config.userGID | quote }}
+            # Database configuration
+            - name: GITEA__database__DB_TYPE
+              value: {{ .Values.database.type | quote }}
+            - name: GITEA__database__HOST
+              value: "{{ include "gitea.databaseHost" . }}:{{ .Values.database.port }}"
+            - name: GITEA__database__NAME
+              value: {{ .Values.database.name | quote }}
+            - name: GITEA__database__USER
+              value: {{ include "gitea.databaseUser" . | quote }}
+            {{- if .Values.database.password }}
+            - name: GITEA__database__PASSWD
+              value: {{ .Values.database.password | quote }}
+            {{- else if .Values.global.postgresql }}
+            - name: GITEA__database__PASSWD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "%s-postgresql" .Release.Name }}
+                  key: postgres-password
+            {{- end }}
+            - name: GITEA__database__SSL_MODE
+              value: {{ .Values.database.sslMode | quote }}
+            # Server configuration
+            - name: GITEA__server__DOMAIN
+              value: {{ .Values.config.domain | quote }}
+            - name: GITEA__server__SSH_DOMAIN
+              value: {{ .Values.config.sshDomain | quote }}
+            - name: GITEA__server__ROOT_URL
+              value: {{ .Values.config.rootURL | quote }}
+            - name: GITEA__server__SSH_PORT
+              value: {{ .Values.config.sshPort | quote }}
+            - name: GITEA__server__SSH_LISTEN_PORT
+              value: {{ .Values.config.sshListenPort | quote }}
+            - name: GITEA__server__HTTP_PORT
+              value: {{ .Values.service.httpPort | quote }}
+            - name: GITEA__server__APP_NAME
+              value: {{ .Values.config.appName | quote }}
+            # Security configuration
+            - name: GITEA__security__INSTALL_LOCK
+              value: {{ .Values.config.installLock | quote }}
+            {{- if .Values.config.secretKey }}
+            - name: GITEA__security__SECRET_KEY
+              value: {{ .Values.config.secretKey | quote }}
+            {{- end }}
+            # Service configuration
+            - name: GITEA__service__DISABLE_REGISTRATION
+              value: {{ .Values.config.disableRegistration | quote }}
+            - name: GITEA__service__REQUIRE_SIGNIN_VIEW
+              value: {{ .Values.config.requireSignInView | quote }}
+            # Logging
+            - name: GITEA__log__MODE
+              value: console
+            - name: GITEA__log__LEVEL
+              value: {{ .Values.config.logLevel | quote }}
+          startupProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+            timeoutSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+          readinessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "gitea.fullname" . }}-data
+        {{- else }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

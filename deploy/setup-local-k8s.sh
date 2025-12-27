@@ -128,6 +128,22 @@ nodes:
       - containerPort: 30090
         hostPort: 9090
         protocol: TCP
+      # ClickHouse HTTP API (NodePort 30123 -> localhost:8123)
+      - containerPort: 30123
+        hostPort: 8123
+        protocol: TCP
+      # ClickHouse Native (NodePort 30900 -> localhost:9001)
+      - containerPort: 30900
+        hostPort: 9001
+        protocol: TCP
+      # Gitea Web UI (NodePort 30300 -> localhost:3001)
+      - containerPort: 30300
+        hostPort: 3001
+        protocol: TCP
+      # Gitea SSH (NodePort 30222 -> localhost:2222)
+      - containerPort: 30222
+        hostPort: 2222
+        protocol: TCP
   # Worker nodes for executor pools
   - role: worker
   - role: worker
@@ -170,6 +186,10 @@ setup_k3d() {
         --port "8080:30080@server:0" \
         --port "52000:30052@server:0" \
         --port "9090:30090@server:0" \
+        --port "8123:30123@server:0" \
+        --port "9001:30900@server:0" \
+        --port "3001:30300@server:0" \
+        --port "2222:30222@server:0" \
         --k3s-arg "--disable=traefik@server:0" \
         --wait
 
