@@ -171,6 +171,20 @@ with:
       default_table: store_metadata
       enabled : False
 
+  llm_tracking:
+    enabled: true
+    exporter: rabbitmq
+    project_id: my-project
+    worker:
+      enabled: true
+    rabbitmq:
+      url: amqp://guest:guest@localhost:5672/
+      exchange: llm-events
+    clickhouse:
+      host: localhost
+      port: 9000
+      database: marie_llm
+
   # Authentication and Authorization configuration
   auth:
     keys:
