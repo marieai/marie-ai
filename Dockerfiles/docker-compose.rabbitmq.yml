@@ -1,11 +1,18 @@
-# ############### Networks ###############
-
-# Container networking setup
-# docker network create --driver=bridge marie_default
-# sysctl net.ipv4.conf.all.forwarding=1
-
-# Dashboard accessible via `http://localhost:7777/dashboard/#/'
-# Consul accessible via `http://localhost:8500/`
+# ############### RabbitMQ - Message Broker ###############
+#
+# Used by: marie-ai for async task processing
+#
+# RabbitMQ provides message queuing for distributed task execution.
+#
+# Prerequisites:
+#   - Network created: docker network create --driver=bridge marie_default
+#
+# Usage:
+#   docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.rabbitmq.yml --project-directory . up -d
+#
+# Access:
+#   - AMQP: localhost:5672
+#   - Management UI: http://localhost:15672 (guest/guest)
 
 services:
   rabbitmq:
@@ -22,9 +29,8 @@ services:
     volumes:
         - rabbitmq_data:/var/lib/rabbitmq
         - rabbitmq_log:/var/log/rabbitmq
-    network_mode: host
-#    networks:
-#        - marie_default
+    networks:
+        - marie_default
 
 volumes:
   rabbitmq_data:

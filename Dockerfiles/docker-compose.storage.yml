@@ -1,8 +1,17 @@
-# ############### Networks ###############
-
-# Container networking setup
-# docker network create --driver=bridge public
-# sysctl net.ipv4.conf.all.forwarding=1
+# ############### PostgreSQL - DocumentDB Compatible ###############
+#
+# Used by: marie-ai, gitea, litellm
+#
+# PostgreSQL with DocumentDB extensions for document storage and querying.
+#
+# Prerequisites:
+#   - Network created: docker network create --driver=bridge marie_default
+#
+# Usage:
+#   docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.storage.yml --project-directory . up -d
+#
+# Access:
+#   - PostgreSQL: localhost:5432
 
 services:
   psql:
@@ -30,9 +39,8 @@ services:
     volumes:
       - psql_data:/var/lib/postgresql/data
       - /mnt/data/marie-ai/config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql
-    network_mode: host
-#    networks:
-#      - marie_default
+    networks:
+      - marie_default
 volumes:
   psql_data:
     driver: local

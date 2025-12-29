@@ -1,10 +1,26 @@
+# ############### MinIO S3 - Object Storage ###############
+#
+# Used by: marie-ai for document storage
+#
+# MinIO provides S3-compatible object storage for documents and artifacts.
+#
+# Prerequisites:
+#   - Network created: docker network create --driver=bridge marie_default
+#
+# Usage:
+#   docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.s3.yml --project-directory . up -d
+#
+# Access:
+#   - S3 API: http://localhost:8000
+#   - Console UI: http://localhost:8001
+
 services:
   s3server:
     image: minio/minio:latest
     container_name: marie-s3-server
     restart: unless-stopped
-    ports: # NOte: Using host network mode, so ports are not mapped to the container
-      - "8000:9000"        # S3 API port (MinIO default)
+    ports:
+      - "8000:8000"        # S3 API port
       - "8001:9001"        # MinIO Console UI
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
@@ -13,16 +29,12 @@ services:
       SERVER_SIDE_ENCRYPTION: "off"
       # Explicitly disable all encryption features
       MINIO_KMS_AUTO_ENCRYPTION: "off"
-#    command: server /data --console-address ":9001"
     command: server /data --address ":8000" --console-address ":9001"
     volumes:
       - /mnt/data/s3:/data
-    network_mode: host
-#    networks:
-#      - marie_default
+    networks:
+      - marie_default
     healthcheck:
-
-#      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"] # NO port 9000 in host mode (remapped to be backward compatible with zenko s3)
       test: ["CMD", "curl", "-f", "http://localhost:8000/minio/health/live"]
       interval: 10s
       timeout: 20s
@@ -35,12 +47,11 @@ services:
       s3server:
         condition: service_healthy
     environment:
-      MC_HOST_localminio: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@localhost:8000
+      MC_HOST_localminio: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@marie-s3-server:8000
     volumes:
       - mc-config:/root/.mc
-    network_mode: host
-#    networks:
-#      - marie_default
+    networks:
+      - marie_default
     restart: "no"
     healthcheck:
       test: ["CMD", "mc", "alias", "list", "localminio"]
@@ -51,7 +62,7 @@ services:
     entrypoint: >
       /bin/sh -c "
       echo 'Starting MinIO setup...';
-      mc alias set localminio http://localhost:8000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
+      mc alias set localminio http://marie-s3-server:8000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
       mc admin user add localminio ${MARIE_ACCESS_KEY} ${MARIE_SECRET_ACCESS_KEY} || echo 'User may already exist';
       mc admin policy attach localminio readwrite --user ${MARIE_ACCESS_KEY} || echo 'Policy may already be attached';
       mc mb localminio/marie --ignore-existing;
@@ -68,9 +79,8 @@ services:
       - mc-setup
     volumes:
       - mc-config:/root/.mc
-    network_mode: host
-#    networks:
-#      - marie_default
+    networks:
+      - marie_default
     profiles:
       - tools
     entrypoint: /bin/sh

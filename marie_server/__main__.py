@@ -22,7 +22,12 @@ from marie.messaging import Toast
 from marie.messaging.events import EngineEventData, MarieEvent
 from marie.messaging.publisher import event_builder
 from marie.utils.device import gpu_device_count
-from marie.utils.server_runtime import setup_auth, setup_storage, setup_toast_events
+from marie.utils.server_runtime import (
+    setup_auth,
+    setup_llm_tracking,
+    setup_storage,
+    setup_toast_events,
+)
 from marie.utils.types import strtobool
 
 DEFAULT_TERM_COLUMNS = 120
@@ -261,6 +266,7 @@ def setup_server(config: Dict[str, Any]) -> None:
     setup_toast_events(config.get("toast", {}))
     setup_storage(config.get("storage", {}))
     setup_auth(config.get("auth", {}))
+    setup_llm_tracking(config.get("llm_tracking", {}))
 
 
 def filter_endpoint() -> None:

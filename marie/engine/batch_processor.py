@@ -5,6 +5,23 @@ from openai.types.chat import ChatCompletion
 from marie.engine.async_helper import run_coroutine_in_current_loop
 from marie.excepts import MaxTokensExceededError, RepetitionError
 
+# LLM Tracking imports (lazy loaded to avoid circular imports)
+_llm_tracker = None
+
+
+def _get_llm_tracker():
+    """Lazy load LLM tracker to avoid import issues."""
+    global _llm_tracker
+    if _llm_tracker is None:
+        try:
+            from marie.llm_tracking import get_tracker
+
+            _llm_tracker = get_tracker()
+        except ImportError:
+            _llm_tracker = None
+    return _llm_tracker
+
+
 try:
     from openai import (
         APIConnectionError,
@@ -163,6 +180,7 @@ class BatchProcessor:
         task_id,
         request_id,
         guided_json: Optional[Union[Dict, BaseModel, str]],
+        trace_id: Optional[str] = None,
     ):
         """
         Asynchronously performs inference for a single request,
@@ -174,6 +192,24 @@ class BatchProcessor:
 
         start = time.time()
         self.logger.info(f"Request {request_id} - Task {task_id} - Starting inference.")
+
+        # LLM Tracking: Start generation observation
+        observation_id = None
+        tracker = _get_llm_tracker()
+        if tracker and tracker.enabled:
+            try:
+                observation_id = tracker.generation(
+                    trace_id=trace_id or request_id,
+                    name=f"openai_completion_{task_id}",
+                    model=self.model_string,
+                    input=messages,
+                    metadata={
+                        "task_id": task_id,
+                        "request_id": request_id,
+                    },
+                )
+            except Exception as tracking_error:
+                self.logger.debug(f"LLM tracking error (start): {tracking_error}")
         try:
             # estimate/max tokens
             estimated_tokens = 4096 * 4
@@ -248,16 +284,42 @@ class BatchProcessor:
                 full_response
             )
 
+            # LLM Tracking: End generation observation with success
+            if tracker and tracker.enabled and observation_id:
+                try:
+                    tracker.end(
+                        observation_id,
+                        output=extracted_text,
+                        metadata={
+                            "latency_seconds": total_time,
+                            "has_reasoning": reasoning_content is not None,
+                        },
+                    )
+                except Exception as tracking_error:
+                    self.logger.debug(f"LLM tracking error (end): {tracking_error}")
+
             return task_id, extracted_text
         except (RepetitionError, MaxTokensExceededError) as e:
             self.logger.error(
                 f"Request {request_id} - Task {task_id} - Error in completion_non_streaming: {e}, retrying..."
             )
+            # LLM Tracking: Track retryable errors
+            if tracker and tracker.enabled and observation_id:
+                try:
+                    tracker.error(observation_id, e)
+                except Exception as tracking_error:
+                    self.logger.debug(f"LLM tracking error (retry): {tracking_error}")
             raise e
         except Exception as e:  # swallow all other exceptions for now
             self.logger.error(
                 f"Request {request_id} - Task {task_id} - Error in completion_non_streaming: {e}"
             )
+            # LLM Tracking: Track non-retryable errors
+            if tracker and tracker.enabled and observation_id:
+                try:
+                    tracker.error(observation_id, e)
+                except Exception as tracking_error:
+                    self.logger.debug(f"LLM tracking error (error): {tracking_error}")
             return task_id, None
 
     async def save_debug_msg(self, full_response: str, task_id: str, tag: str):
@@ -266,7 +328,13 @@ class BatchProcessor:
             f.write(full_response)
 
     async def acompletion_with_retry(
-        self, max_retries: int, messages, task_id, request_id, guided_json
+        self,
+        max_retries: int,
+        messages,
+        task_id,
+        request_id,
+        guided_json,
+        trace_id: Optional[str] = None,
     ):
         try:
             """Use tenacity to retry the completion call."""
@@ -278,12 +346,15 @@ class BatchProcessor:
                 task_id=task_id,
                 request_id=request_id,
                 guided_json=guided_json,
+                trace_id=trace_id,
             )
         except Exception as e:
             self.logger.error(f"Request {request_id} – Task {task_id} failed: {e!r}")
             return task_id, None
 
-    async def load_batched_request(self, messages_list, request_id, guided_json):
+    async def load_batched_request(
+        self, messages_list, request_id, guided_json, trace_id: Optional[str] = None
+    ):
         """
         Processes the batch of requests, returning exactly:
           ordered_responses: List[Optional[str]]
@@ -299,6 +370,7 @@ class BatchProcessor:
                     task_id=tid,
                     request_id=request_id,
                     guided_json=guided_json,
+                    trace_id=trace_id,
                 )
                 return BatchResult(tid, resp, None)
             except asyncio.CancelledError:
@@ -342,28 +414,73 @@ class BatchProcessor:
             f"Request {request_id} - Initiating batch inference with {len(messages_list)} requests."
         )
         start_time = time.time()
-        # batch_outputs, task_results = asyncio.run(
-        #     self.load_batched_request(messages_list, request_id, guided_json)
-        # )
+
+        # LLM Tracking: Create trace for batch request
+        trace_id = None
+        tracker = _get_llm_tracker()
+        if tracker and tracker.enabled:
+            try:
+                trace_id = tracker.create_trace(
+                    name=f"batch_generate_{self.model_string}",
+                    metadata={
+                        "request_id": request_id,
+                        "model": self.model_string,
+                        "batch_size": len(messages_list),
+                    },
+                )
+            except Exception as tracking_error:
+                self.logger.debug(
+                    f"LLM tracking error (trace create): {tracking_error}"
+                )
 
         batch_outputs, task_results = run_coroutine_in_current_loop(
-            self.load_batched_request(messages_list, request_id, guided_json)
+            self.load_batched_request(
+                messages_list, request_id, guided_json, trace_id=trace_id
+            )
         )
 
+        successful_count = 0
+        failed_count = 0
         for task_id, response in task_results:
             if response:
                 self.logger.info(
                     f"Request {request_id} - Task {task_id} - Response received."
                 )
+                successful_count += 1
             else:
                 self.logger.error(
                     f"Request {request_id} - Task {task_id} - Response failed."
                 )
                 self.logger.error(response)
+                failed_count += 1
 
         elapsed_time = time.time() - start_time
         self.logger.info(
             f"Request {request_id} - Batch inference completed in {elapsed_time:.2f} sec"
         )
+
+        # LLM Tracking: Update trace with results
+        if tracker and tracker.enabled and trace_id:
+            try:
+                tracker.update_trace(
+                    trace_id,
+                    output={
+                        "successful_count": successful_count,
+                        "failed_count": failed_count,
+                        "total_count": len(messages_list),
+                    },
+                    metadata={
+                        "latency_seconds": elapsed_time,
+                        "success_rate": (
+                            successful_count / len(messages_list)
+                            if messages_list
+                            else 0
+                        ),
+                    },
+                )
+            except Exception as tracking_error:
+                self.logger.debug(
+                    f"LLM tracking error (trace update): {tracking_error}"
+                )
 
         return batch_outputs
