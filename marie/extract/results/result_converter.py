@@ -14,6 +14,7 @@ from marie.extract.models.definition import (
     Template,
 )
 from marie.extract.models.exec_context import ExecutionContext
+from marie.extract.models.match import SubzeroResult
 from marie.extract.registry import component_registry
 from marie.extract.results.annotation_merger import AnnotationMerger
 from marie.extract.schema import ExtractionResult
@@ -128,7 +129,7 @@ def build_template(config: OmegaConf) -> Template:
 
 def convert_document_to_structure(
     doc: UnstructuredDocument, conf: OmegaConf, output_dir: Union[Path, str]
-) -> ExtractionResult:
+) -> SubzeroResult:
     """
     Converts an `UnstructuredDocument` into a structured format using the provided template configuration.
 
@@ -184,8 +185,12 @@ def convert_document_to_structure(
         doc_id=doc_id, template=template, document=doc, output_dir=output_dir
     )
 
+    visitors = conf.get("processing", {}).get("visitors", None)
+    if not visitors:
+        logger.warning("No visitors specified in configuration. Using core visitors.")
+
     try:
-        results = DocumentExtractEngine().match(context)
+        results = DocumentExtractEngine(processing_visitors=visitors).match(context)
     except Exception as e:
         logger.exception(f"Document extraction failed for document {doc_id}: {e}")
         raise

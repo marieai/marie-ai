@@ -10,6 +10,7 @@ def import_submodules(
         "parsers",
         "validators",
         "template_builders",
+        "processing_visitors",
     ),
     seen: Optional[Set[str]] = None,
 ) -> Tuple[List[str], List[Tuple[str, str]]]:
