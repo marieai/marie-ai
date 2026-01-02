@@ -9,10 +9,10 @@ from marie.extract.engine.match_section_region_processor_visitor import (
     MatchSectionRegionProcessorVisitor,
 )
 from marie.extract.engine.processing_visitor import ProcessingVisitor
-from marie.extract.engine.rendering_visitor import MatchSectionRenderingVisitor
 from marie.extract.engine.template_validator_visitor import TemplateValidatorVisitor
 from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import SubzeroResult
+from marie.extract.registry import component_registry
 
 LOGGER = logging.getLogger(__name__)
 
@@ -20,14 +20,33 @@ LOGGER = logging.getLogger(__name__)
 class DocumentExtractEngine:
     """Subzero Engine"""
 
-    def __init__(self):
+    def __init__(self, processing_visitors: List[str] = None):
+        """
+        Initializes the class instance, preparing it for use and optionally bootstrapping
+        processing visitors. This includes setting up initial configurations and initializing
+        visitors if a list is provided during instantiation.
+
+        Parameters:
+            processing_visitors: Optional[List[str]]
+                An ORDERED list of REGISTERED processing visitors. Defaults to None..
+        """
         self.cleanup_on_shutdown = True
         self.visitors: List[ProcessingVisitor] = []
-        self.bootstrap()
+        self.bootstrap(processing_visitors)
 
-    def bootstrap(self):
+    def bootstrap(self, visitor_names: List[str] = None):
         """
-        Initializes the bootstrap process for the engine.
+        Bootstraps a series of processing visitors to be applied in a specific order. Visitors include
+        the core set (defined internally) and a custom list from the user. The method ensures that
+        essential visitors are added, and the provided custom visitors are validated  through the
+        component registry.
+
+        Parameters:
+            visitor_names: Optional[List[str]]
+                A list of visitor class names to add to the processing pipeline. If not provided, the method
+                will use the default core visitors.
+        Raises:
+            ValueError: If a visitor specified in the `visitors` list is not registered in the component registry.
         """
         # Order of these visitors is important
         # TODO : This should be configurable so the client can add change/visitors
@@ -35,8 +54,22 @@ class DocumentExtractEngine:
         self.visitors.append(CutpointProcessingVisitor())
         self.visitors.append(MatchSectionRegionProcessorVisitor(True))
         self.visitors.append(MatchSectionExtractionProcessingVisitor(True))
-        self.visitors.append(MatchSectionRenderingVisitor(True))
+        # self.visitors.append(MatchSectionRenderingVisitor(True))
         # self.visitors.append(PrintVisitor(True))
+
+        if visitor_names is None:
+            LOGGER.warning(
+                "No additional visitors specified. Using core visitors only."
+            )
+            return
+
+        LOGGER.info(f"Bootstrapping visitors: {visitor_names}")
+        for name in visitor_names:
+            visitor_cls = component_registry.get_processing_visitor(name)
+            if visitor_cls is None:
+                LOGGER.error(f"Visitor '{name}' not found in registry.")
+                raise ValueError(f"Visitor '{name}' not found in registry.")
+            self.visitors.append(visitor_cls(enabled=True))
 
     def match(self, context: ExecutionContext) -> SubzeroResult:
         """
