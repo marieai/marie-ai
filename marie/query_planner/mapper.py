@@ -78,6 +78,15 @@ class SwitchOperatorConfig(BaseOperator):
     pass
 
 
+class GuardrailOperatorConfig(BaseOperator):
+    """
+    Operator structure for GUARDRAIL tasks.
+    Quality validation node that evaluates outputs against metrics.
+    """
+
+    pass
+
+
 def has_mapper_config(base_dir: str, layout_name: str) -> bool:
     """
     Check if the mapper configuration file exists for a given layout.
@@ -226,6 +235,10 @@ class JobMetadata(BaseModel):
         elif method == "MERGER_ENHANCED":
             # Enhanced merger that handles skipped branches
             executor_endpoint = endpoint if has_executor else "merger://control"
+        elif method == "GUARDRAIL":
+            # GUARDRAIL nodes are quality validation nodes that evaluate outputs
+            # They don't execute on an executor, evaluation happens in scheduler
+            executor_endpoint = "guardrail://control"
         else:
             raise ValueError(f"Unsupported method type: {method}")
 
@@ -261,6 +274,7 @@ class JobMetadataFactory:
             "MERGER": MergerOperatorConfig,
             "BRANCH": BranchOperatorConfig,
             "SWITCH": SwitchOperatorConfig,
+            "GUARDRAIL": GuardrailOperatorConfig,
         }
         return type_mapping.get(node_type, BaseOperator)
 

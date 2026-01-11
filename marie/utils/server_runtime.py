@@ -94,25 +94,34 @@ def setup_storage(storage_config: Dict[str, Any]) -> None:
         StorageManager.mkdir("s3://marie")
 
 
-def setup_llm_tracking(llm_tracking_config: Dict[str, Any]) -> None:
+def setup_llm_tracking(
+    llm_tracking_config: Dict[str, Any],
+    storage_config: Optional[Dict[str, Any]] = None,
+) -> None:
     """
     Setup the LLM tracking worker for observability.
 
     This starts a background thread that consumes LLM events from RabbitMQ
     and writes them to ClickHouse for analytics.
 
-    Config example:
+    Config example (YAML):
         llm_tracking:
           enabled: true
+          exporter: rabbitmq
+          project_id: marie-ai
           worker:
-            enabled: true  # Start the ingestion worker
+            enabled: true
+          rabbitmq:
+            <<: *rabbitmq_conf_shared
+            exchange: llm_tracking
+            queue: llm_events
+          clickhouse:
+            host: localhost
+            port: 8123
+            database: marie
 
-    Environment variables (can override config):
-        MARIE_LLM_TRACKING_ENABLED: Enable/disable tracking
-        MARIE_LLM_TRACKING_EXPORTER: console or rabbitmq
-        MARIE_LLM_TRACKING_PROJECT_ID: Project identifier
-
-    :param llm_tracking_config: The llm_tracking section from config
+    :param llm_tracking_config: The llm_tracking section from YAML config
+    :param storage_config: Optional storage section for shared S3 config
     """
     global _llm_tracking_worker, _llm_tracking_thread
 
@@ -125,8 +134,11 @@ def setup_llm_tracking(llm_tracking_config: Dict[str, Any]) -> None:
         logger.info("LLM tracking is disabled")
         return
 
-    # Set environment variables from config (if not already set)
-    _apply_llm_tracking_env(llm_tracking_config)
+    # Configure settings from YAML (single source of truth)
+    from marie.llm_tracking.config import configure_from_yaml
+
+    configure_from_yaml(llm_tracking_config, storage_config)
+    logger.info("LLM tracking configured from YAML config")
 
     # Check if worker should be started
     worker_config = llm_tracking_config.get("worker", {})
@@ -159,73 +171,6 @@ def setup_llm_tracking(llm_tracking_config: Dict[str, Any]) -> None:
         logger.warning(f"LLM tracking dependencies not available: {e}")
     except Exception as e:
         logger.error(f"Failed to start LLM tracking worker: {e}")
-
-
-def _apply_llm_tracking_env(config: Dict[str, Any]) -> None:
-    """
-    Apply LLM tracking config to environment variables.
-
-    Config values are only applied if the env var is not already set.
-    """
-    env_mappings = {
-        "enabled": "MARIE_LLM_TRACKING_ENABLED",
-        "exporter": "MARIE_LLM_TRACKING_EXPORTER",
-        "project_id": "MARIE_LLM_TRACKING_PROJECT_ID",
-        "debug": "MARIE_LLM_TRACKING_DEBUG",
-        "sampling_rate": "MARIE_LLM_TRACKING_SAMPLING_RATE",
-    }
-
-    for config_key, env_var in env_mappings.items():
-        if config_key in config and env_var not in os.environ:
-            os.environ[env_var] = str(config[config_key])
-
-    # Nested configs
-    if "rabbitmq" in config:
-        rabbitmq = config["rabbitmq"]
-        if "url" in rabbitmq and "MARIE_LLM_TRACKING_RABBITMQ_URL" not in os.environ:
-            os.environ["MARIE_LLM_TRACKING_RABBITMQ_URL"] = rabbitmq["url"]
-        if (
-            "exchange" in rabbitmq
-            and "MARIE_LLM_TRACKING_RABBITMQ_EXCHANGE" not in os.environ
-        ):
-            os.environ["MARIE_LLM_TRACKING_RABBITMQ_EXCHANGE"] = rabbitmq["exchange"]
-        if (
-            "queue" in rabbitmq
-            and "MARIE_LLM_TRACKING_RABBITMQ_QUEUE" not in os.environ
-        ):
-            os.environ["MARIE_LLM_TRACKING_RABBITMQ_QUEUE"] = rabbitmq["queue"]
-
-    if "clickhouse" in config:
-        clickhouse = config["clickhouse"]
-        if (
-            "host" in clickhouse
-            and "MARIE_LLM_TRACKING_CLICKHOUSE_HOST" not in os.environ
-        ):
-            os.environ["MARIE_LLM_TRACKING_CLICKHOUSE_HOST"] = clickhouse["host"]
-        if (
-            "port" in clickhouse
-            and "MARIE_LLM_TRACKING_CLICKHOUSE_PORT" not in os.environ
-        ):
-            os.environ["MARIE_LLM_TRACKING_CLICKHOUSE_PORT"] = str(clickhouse["port"])
-        if (
-            "database" in clickhouse
-            and "MARIE_LLM_TRACKING_CLICKHOUSE_DATABASE" not in os.environ
-        ):
-            os.environ["MARIE_LLM_TRACKING_CLICKHOUSE_DATABASE"] = clickhouse[
-                "database"
-            ]
-
-    if "postgres" in config:
-        postgres = config["postgres"]
-        if "url" in postgres and "MARIE_LLM_TRACKING_POSTGRES_URL" not in os.environ:
-            os.environ["MARIE_LLM_TRACKING_POSTGRES_URL"] = postgres["url"]
-
-    if "s3" in config:
-        s3 = config["s3"]
-        if "bucket" in s3 and "MARIE_LLM_TRACKING_S3_BUCKET" not in os.environ:
-            os.environ["MARIE_LLM_TRACKING_S3_BUCKET"] = s3["bucket"]
-        if "endpoint" in s3 and "MARIE_LLM_TRACKING_S3_ENDPOINT" not in os.environ:
-            os.environ["MARIE_LLM_TRACKING_S3_ENDPOINT"] = s3["endpoint"]
 
 
 def _run_llm_tracking_worker() -> None:

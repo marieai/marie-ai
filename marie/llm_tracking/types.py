@@ -296,17 +296,43 @@ class Score:
 @dataclass
 class RawEvent:
     """
-    Raw event stored in Postgres before processing.
+    Raw event metadata stored in Postgres before processing.
 
     This represents the initial capture of an LLM event before it's
     normalized and written to ClickHouse.
+
+    NOTE: All payload data (prompts, responses) is stored in S3.
+    PostgreSQL stores only tracking metadata for analytics.
     """
 
+    # Core identifiers
     id: str = field(default_factory=lambda: str(uuid4()))
     trace_id: str = ""
     event_type: EventType = EventType.TRACE_CREATE
-    s3_key: Optional[str] = None  # If payload stored in S3
-    payload: Optional[Dict[str, Any]] = None  # If payload is small, stored inline
+    s3_key: str = ""  # Required - all payloads go to S3
+
+    # Model & Provider (for analytics)
+    model_name: Optional[str] = None
+    model_provider: Optional[str] = None
+
+    # Token metrics (for usage/cost analytics)
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+
+    # Performance metrics (for latency analytics)
+    duration_ms: Optional[int] = None
+    time_to_first_token_ms: Optional[int] = None
+
+    # Cost tracking
+    cost_usd: Optional[Decimal] = None
+
+    # Context
+    user_id: Optional[str] = None
+    session_id: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+    # Status & timestamps
     status: Literal["pending", "processed", "failed"] = "pending"
     error_message: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.utcnow)
@@ -319,7 +345,17 @@ class RawEvent:
             "trace_id": self.trace_id,
             "event_type": self.event_type.value,
             "s3_key": self.s3_key,
-            "payload": json.dumps(self.payload) if self.payload else None,
+            "model_name": self.model_name,
+            "model_provider": self.model_provider,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "duration_ms": self.duration_ms,
+            "time_to_first_token_ms": self.time_to_first_token_ms,
+            "cost_usd": float(self.cost_usd) if self.cost_usd else None,
+            "user_id": self.user_id,
+            "session_id": self.session_id,
+            "tags": self.tags,
             "status": self.status,
             "error_message": self.error_message,
             "created_at": self.created_at.isoformat(),

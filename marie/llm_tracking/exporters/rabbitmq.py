@@ -7,6 +7,7 @@ Uses the existing marie-ai RabbitMQ infrastructure.
 
 import json
 import logging
+import urllib.parse
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -57,6 +58,11 @@ class RabbitMQExporter(AbstractExporter):
     def _parse_url(self) -> Dict[str, Any]:
         """Parse RabbitMQ URL into connection config."""
         parsed = urlparse(self._rabbitmq_url)
+        # Extract vhost from URL path (URL-decode it)
+        # Empty path or "/" means default vhost "/"
+        # "/marie" means vhost "marie"
+        vhost_path = parsed.path.lstrip("/")
+        vhost = urllib.parse.unquote(vhost_path) if vhost_path else "/"
 
         return {
             "provider": "rabbitmq",
@@ -65,6 +71,7 @@ class RabbitMQExporter(AbstractExporter):
             "username": parsed.username or "guest",
             "password": parsed.password or "guest",
             "tls": parsed.scheme == "amqps",
+            "vhost": vhost,
         }
 
     def start(self) -> None:
@@ -122,10 +129,16 @@ class RabbitMQExporter(AbstractExporter):
             event_id: ID of the raw event in Postgres
             trace_id: Associated trace ID
             project_id: Project ID
+
+        Raises:
+            RuntimeError: If exporter is not started
+            Exception: If publish fails (re-raised for caller to handle)
         """
         if not self._started or self._client is None:
-            logger.warning("RabbitMQ exporter not started, skipping publish")
-            return
+            # Raise instead of silently skipping - caller should handle with DLQ
+            raise RuntimeError(
+                f"RabbitMQ exporter not started, cannot publish event {event_id}"
+            )
 
         message = QueueMessage(
             event_id=event_id,
@@ -142,7 +155,9 @@ class RabbitMQExporter(AbstractExporter):
             )
             logger.debug(f"Published {event_type.value} event: {event_id}")
         except Exception as e:
-            logger.error(f"Failed to publish event {event_id}: {e}")
+            # Re-raise so caller can handle with DLQ
+            logger.exception(f"Failed to publish event {event_id}")
+            raise
 
     def export_trace(self, trace: Trace) -> None:
         """
@@ -237,6 +252,11 @@ class AsyncRabbitMQExporter(AbstractExporter):
     def _parse_url(self) -> Dict[str, Any]:
         """Parse RabbitMQ URL into connection config."""
         parsed = urlparse(self._rabbitmq_url)
+        # Extract vhost from URL path (URL-decode it)
+        # Empty path or "/" means default vhost "/"
+        # "/marie" means vhost "marie"
+        vhost_path = parsed.path.lstrip("/")
+        vhost = urllib.parse.unquote(vhost_path) if vhost_path else "/"
 
         return {
             "provider": "rabbitmq",
@@ -245,6 +265,7 @@ class AsyncRabbitMQExporter(AbstractExporter):
             "username": parsed.username or "guest",
             "password": parsed.password or "guest",
             "tls": parsed.scheme == "amqps",
+            "vhost": vhost,
         }
 
     async def start_async(self) -> None:
@@ -340,47 +361,66 @@ class AsyncRabbitMQExporter(AbstractExporter):
         except Exception as e:
             logger.error(f"Failed to publish event {event_id}: {e}")
 
-    def export_trace(self, trace: Trace) -> None:
-        """Sync wrapper for trace export."""
+    def _run_async_publish(
+        self,
+        event_type: EventType,
+        event_id: str,
+        trace_id: str,
+        project_id: str,
+    ) -> None:
+        """
+        Run async publish handling both sync and async contexts.
+
+        Uses create_task in async context, asyncio.run in sync context.
+        """
         import asyncio
 
-        asyncio.create_task(
-            self._publish_async(
-                event_type=EventType.TRACE_CREATE,
-                event_id=trace.id,
-                trace_id=trace.id,
-                project_id=trace.project_id,
-            )
+        coro = self._publish_async(
+            event_type=event_type,
+            event_id=event_id,
+            trace_id=trace_id,
+            project_id=project_id,
+        )
+
+        try:
+            # Check if there's a running event loop
+            loop = asyncio.get_running_loop()
+            # We're in async context - schedule as task
+            loop.create_task(coro)
+        except RuntimeError:
+            # No running loop - we're in sync context
+            # Use asyncio.run() to run in a new loop
+            asyncio.run(coro)
+
+    def export_trace(self, trace: Trace) -> None:
+        """Sync wrapper for trace export."""
+        self._run_async_publish(
+            event_type=EventType.TRACE_CREATE,
+            event_id=trace.id,
+            trace_id=trace.id,
+            project_id=trace.project_id,
         )
 
     def export_observation(self, observation: Observation) -> None:
         """Sync wrapper for observation export."""
-        import asyncio
-
         event_type = EventType.GENERATION_CREATE
         if observation.type.value == "SPAN":
             event_type = EventType.SPAN_CREATE
         elif observation.type.value == "EVENT":
             event_type = EventType.EVENT_CREATE
 
-        asyncio.create_task(
-            self._publish_async(
-                event_type=event_type,
-                event_id=observation.id,
-                trace_id=observation.trace_id,
-                project_id=observation.project_id,
-            )
+        self._run_async_publish(
+            event_type=event_type,
+            event_id=observation.id,
+            trace_id=observation.trace_id,
+            project_id=observation.project_id,
         )
 
     def export_score(self, score: Score) -> None:
         """Sync wrapper for score export."""
-        import asyncio
-
-        asyncio.create_task(
-            self._publish_async(
-                event_type=EventType.SCORE_CREATE,
-                event_id=score.id,
-                trace_id=score.trace_id,
-                project_id=score.project_id,
-            )
+        self._run_async_publish(
+            event_type=EventType.SCORE_CREATE,
+            event_id=score.id,
+            trace_id=score.trace_id,
+            project_id=score.project_id,
         )

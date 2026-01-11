@@ -1,4 +1,3 @@
-from pathlib import Path
 import io
 import os
 import time
@@ -332,8 +331,14 @@ class S3StorageHandler(PathHandler):
         handler: Optional["PathHandler"] = None,
         **kwargs: Any,
     ) -> bool:
-        if os.path.isdir(src_path):
-            raise Exception(f"Cannot upload directory {src_path} to s3")
+        # Handle file-like objects (BytesIO, etc.)
+        file_like = is_file_like(src_path)
+        if file_like:
+            body = src_path
+        else:
+            if os.path.isdir(src_path):
+                raise Exception(f"Cannot upload directory {src_path} to s3")
+            body = open(src_path, "rb")
 
         s = S3Url(dst_path)
         bucket = s.bucket
@@ -347,16 +352,19 @@ class S3StorageHandler(PathHandler):
             # extra_args = {"ServerSideEncryption": "AES256"}
             extra_args = {}
             # If S3 object_name was not specified, use file_name
-            if key == "":
+            if key == "" and not file_like:
                 key = os.path.basename(src_path)
-            logger.debug(f"Uploading {src_path} to {bucket}/{key}")
+            logger.debug(f"Uploading to {bucket}/{key}")
             # Upload the file
-            with open(src_path, "rb") as data:
-                self.s3.Bucket(bucket).put_object(Key=key, Body=data, **extra_args)
+            self.s3.Bucket(bucket).put_object(Key=key, Body=body, **extra_args)
         except Exception as e:
             logger.error(f"Unable to upload to bucket '{bucket}' : {e}")
             if not self.suppress_errors:
                 raise e
+        finally:
+            # Close file handle if we opened it
+            if not file_like and hasattr(body, 'close'):
+                body.close()
         return True
 
     def _read(

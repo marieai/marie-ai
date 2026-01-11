@@ -325,8 +325,49 @@ with:
   port: [54321, 54322, 54323]
 ```
 
+## Observability
+
+Marie-AI provides comprehensive observability for monitoring, debugging, and cost management.
+
+### LLM tracking
+
+Track LLM calls across your document processing pipelines:
+
+```text
+┌─────────┐     ┌─────────┐     ┌─────────────┐     ┌────────────┐
+│ Tracker │────▶│   S3    │────▶│  PostgreSQL │────▶│ ClickHouse │
+│         │     │(payload)│     │ (metadata)  │     │ (analytics)│
+└─────────┘     └─────────┘     └─────────────┘     └────────────┘
+      │                               │
+      └───────────► RabbitMQ ─────────┘
+                    (async)
+```
+
+The tracking system captures:
+
+- **Traces**: End-to-end request tracking
+- **Observations**: Individual LLM generations
+- **Metrics**: Token usage, latency, costs
+- **Errors**: Failure tracking with context
+
+See the [LLM tracking guide](./llm-tracking.md) for configuration and usage.
+
+### Toast events
+
+Real-time event notifications via Server-Sent Events (SSE):
+
+```yaml
+toast:
+  sse:
+    enabled: true
+    broker:
+      replay_size: 200
+      heartbeat_interval_s: 15.0
+```
+
 ## Next steps
 
 - Build your first [Executor](./executor.md)
 - Orchestrate with [Flows](./flow.md)
+- Configure [LLM tracking](./llm-tracking.md) for observability
 - Deploy to [Docker](../getting-started/deployment/docker.md) or [Kubernetes](../getting-started/deployment/kubernetes.md)

@@ -339,6 +339,78 @@ validate_environment() {
     echo -e "${GREEN}✅ Environment file found: $ENV_FILE${NC}"
 }
 
+initialize_databases() {
+    echo -e "${BLUE}🗄️  Initializing databases...${NC}"
+
+    # Wait for PostgreSQL to accept connections
+    local max_attempts=30
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        if docker exec marie-psql-server pg_isready -U "${POSTGRES_USER:-postgres}" >/dev/null 2>&1; then
+            break
+        fi
+        echo "  Waiting for PostgreSQL to be ready (attempt $attempt/$max_attempts)..."
+        sleep 2
+        ((attempt++))
+    done
+
+    if [ $attempt -gt $max_attempts ]; then
+        echo -e "${RED}❌ PostgreSQL did not become ready in time${NC}"
+        return 1
+    fi
+
+    # Create Gitea database if it doesn't exist
+    if [ "$DEPLOY_GITEA" = "true" ]; then
+        local gitea_db="${GITEA_DB_NAME:-gitea}"
+        echo "  Creating database '$gitea_db' for Gitea..."
+        docker exec marie-psql-server psql -U "${POSTGRES_USER:-postgres}" -tc \
+            "SELECT 1 FROM pg_database WHERE datname = '$gitea_db'" | grep -q 1 || \
+            docker exec marie-psql-server psql -U "${POSTGRES_USER:-postgres}" -c \
+            "CREATE DATABASE $gitea_db" >/dev/null 2>&1
+        echo -e "${GREEN}  ✅ Database '$gitea_db' ready${NC}"
+    fi
+
+    # Create LiteLLM database if needed (for future use)
+    if [ "$DEPLOY_LITELLM" = "true" ]; then
+        echo "  Creating database 'litellm' for LiteLLM..."
+        docker exec marie-psql-server psql -U "${POSTGRES_USER:-postgres}" -tc \
+            "SELECT 1 FROM pg_database WHERE datname = 'litellm'" | grep -q 1 || \
+            docker exec marie-psql-server psql -U "${POSTGRES_USER:-postgres}" -c \
+            "CREATE DATABASE litellm" >/dev/null 2>&1
+        echo -e "${GREEN}  ✅ Database 'litellm' ready${NC}"
+    fi
+
+    # Initialize ClickHouse databases
+    if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
+        echo "  Initializing ClickHouse databases..."
+
+        # Wait for ClickHouse to be ready
+        local ch_attempts=20
+        local ch_attempt=1
+        while [ $ch_attempt -le $ch_attempts ]; do
+            if docker exec marie-clickhouse clickhouse-client --query "SELECT 1" >/dev/null 2>&1; then
+                break
+            fi
+            echo "  Waiting for ClickHouse to be ready (attempt $ch_attempt/$ch_attempts)..."
+            sleep 2
+            ((ch_attempt++))
+        done
+
+        if [ $ch_attempt -gt $ch_attempts ]; then
+            echo -e "${YELLOW}⚠️  ClickHouse not ready, skipping database creation${NC}"
+        else
+            # Create marie database for LLM tracking and analytics
+            local ch_db="${CLICKHOUSE_DB:-marie}"
+            echo "  Creating ClickHouse database '$ch_db'..."
+            docker exec marie-clickhouse clickhouse-client --query \
+                "CREATE DATABASE IF NOT EXISTS $ch_db" >/dev/null 2>&1
+            echo -e "${GREEN}  ✅ ClickHouse database '$ch_db' ready${NC}"
+        fi
+    fi
+
+    echo -e "${GREEN}✅ Database initialization complete${NC}"
+}
+
 validate_compose_files() {
     local missing_files=()
     local optional_files=(
@@ -416,24 +488,20 @@ bootstrap_system() {
         # Use host networking for all services
         COMPOSE_NETWORK_MODE=host eval "$infra_compose_cmd up -d --build $orphan_flag"
 
-        echo -e "${YELLOW}⏳ Waiting for infrastructure services to be healthy (excluding setup containers)...${NC}"
+        echo -e "${YELLOW}⏳ Waiting for core infrastructure services to be healthy...${NC}"
 
-        # Build list of services to wait for (excluding setup containers)
-        local services_to_wait=("s3server" "psql" "rabbitmq" "etcd-single")
+        # First wait for core services (PostgreSQL must be ready before we can create databases)
+        local core_services_to_wait=("s3server" "psql" "rabbitmq" "etcd-single")
 
         if [ "$DEPLOY_LITELLM" = "true" ]; then
-            services_to_wait+=("litellm")
+            core_services_to_wait+=("litellm")
         fi
 
         if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
-            services_to_wait+=("clickhouse")
+            core_services_to_wait+=("clickhouse")
         fi
 
-        if [ "$DEPLOY_GITEA" = "true" ]; then
-            services_to_wait+=("gitea")
-        fi
-
-        # Wait only for specific services, excluding setup containers
+        # Wait for core services first (excluding Gitea which needs DB setup)
         local wait_compose_cmd="COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE"
         wait_compose_cmd="$wait_compose_cmd --project-name marie-infrastructure"
         wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.storage.yml"
@@ -453,8 +521,22 @@ bootstrap_system() {
             wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.gitea.yml"
         fi
 
-        wait_compose_cmd="$wait_compose_cmd --project-directory . up --wait ${services_to_wait[@]}"
+        wait_compose_cmd="$wait_compose_cmd --project-directory . up --wait ${core_services_to_wait[@]}"
         eval "$wait_compose_cmd"
+
+        # Initialize databases after PostgreSQL is ready
+        initialize_databases
+
+        # Now wait for Gitea if deployed (it should start successfully now that DB exists)
+        if [ "$DEPLOY_GITEA" = "true" ]; then
+            echo -e "${YELLOW}⏳ Waiting for Gitea to be healthy...${NC}"
+            local gitea_wait_cmd="COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE"
+            gitea_wait_cmd="$gitea_wait_cmd --project-name marie-infrastructure"
+            gitea_wait_cmd="$gitea_wait_cmd -f ./Dockerfiles/docker-compose.gitea.yml"
+            gitea_wait_cmd="$gitea_wait_cmd --project-directory . up --wait gitea"
+            eval "$gitea_wait_cmd"
+            echo -e "${GREEN}✅ Gitea is ready${NC}"
+        fi
 
         # Check if mc-setup completed successfully
         echo -e "${YELLOW}Checking MinIO setup completion...${NC}"
@@ -575,10 +657,9 @@ show_service_endpoints() {
 
     if [ "$DEPLOY_INFRASTRUCTURE" = "true" ]; then
         echo -e "${GREEN}Infrastructure Services:${NC}"
-        echo "  🐰 RabbitMQ Management: http://localhost:15672 (guest/guest)"
+        echo "  🐰 RabbitMQ Management: http://localhost:15672 (${RABBIT_MQ_USERNAME}/${RABBIT_MQ_PASSWORD})"
         echo "  💾 MinIO S3 API: http://localhost:9000 (marieadmin/marietopsecret)"
         echo "  💾 MinIO Console: http://localhost:9001 (marieadmin/marietopsecret)"
-        echo "  📊 Monitoring: http://localhost:3000"
         echo "  🗄️  etcd: http://localhost:2379"
 
         if [ "$DEPLOY_LITELLM" = "true" ]; then

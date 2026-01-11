@@ -1,7 +1,9 @@
 import asyncio
 import random
 import ssl
+import urllib.parse
 from typing import Any, Dict, Optional, Set, Tuple
+from urllib.parse import urlparse
 
 import pika
 from pika.adapters.asyncio_connection import AsyncioConnection
@@ -21,12 +23,21 @@ class BlockingPikaClient:
         username = conf.get("username", "guest")
         password = conf.get("password", "guest")
         tls_enabled = conf.get("tls", False)
+        vhost = conf.get("vhost", "/")
+
+        # URL-encode vhost for inclusion in URL
+        # Default "/" becomes "/" (trailing slash)
+        # Non-default "marie" becomes "/marie"
+        if vhost == "/":
+            vhost_part = "/"
+        else:
+            vhost_part = "/" + urllib.parse.quote(vhost, safe="")
 
         # b-ff3d0999-a25b-4a5a-9775-e7ba76f8fa3d.mq.us-east-1.amazonaws.com
         if tls_enabled:
-            url = f"amqps://{username}:{password}@{hostname}:{port}?connection_attempts=3&heartbeat=3600"
+            url = f"amqps://{username}:{password}@{hostname}:{port}{vhost_part}?connection_attempts=3&heartbeat=3600"
         else:
-            url = f"amqp://{username}:{password}@{hostname}:{port}?connection_attempts=3&heartbeat=3600"
+            url = f"amqp://{username}:{password}@{hostname}:{port}{vhost_part}?connection_attempts=3&heartbeat=3600"
 
         parameters = pika.URLParameters(url)
         if provider == "amazon-rabbitmq":
@@ -109,6 +120,55 @@ class BlockingPikaClient:
         except pika.exceptions.UnroutableError as e:
             self.logger.error(e)
 
+    def queue_bind(self, queue: str, exchange: str, routing_key: str) -> None:
+        """
+        Bind a queue to an exchange with a routing key.
+
+        :param queue: Queue name
+        :param exchange: Exchange name
+        :param routing_key: Routing key pattern
+        """
+        self.channel.queue_bind(
+            queue=queue,
+            exchange=exchange,
+            routing_key=routing_key,
+        )
+
+    def basic_qos(self, prefetch_count: int = 10) -> None:
+        """
+        Set QoS/prefetch count for fair dispatch.
+
+        :param prefetch_count: Number of messages to prefetch
+        """
+        self.channel.basic_qos(prefetch_count=prefetch_count)
+
+    @classmethod
+    def from_url(cls, url: str, provider: str = "rabbitmq") -> "BlockingPikaClient":
+        """
+        Create client from AMQP URL string.
+
+        :param url: AMQP URL (e.g., amqp://user:pass@localhost:5672/vhost)
+        :param provider: Provider type ('rabbitmq' or 'amazon-rabbitmq')
+        :return: BlockingPikaClient instance
+        """
+        parsed = urlparse(url)
+        # Extract vhost from URL path (URL-decode it)
+        # Empty path or "/" means default vhost "/"
+        # "/marie" means vhost "marie"
+        # "/%2F" means vhost "/" (URL-encoded)
+        vhost_path = parsed.path.lstrip("/")
+        vhost = urllib.parse.unquote(vhost_path) if vhost_path else "/"
+        config = {
+            "provider": provider,
+            "hostname": parsed.hostname or "localhost",
+            "port": parsed.port or 5672,
+            "username": parsed.username or "guest",
+            "password": parsed.password or "guest",
+            "tls": parsed.scheme == "amqps",
+            "vhost": vhost,
+        }
+        return cls(config)
+
 
 class AsyncPikaClient:
     """
@@ -155,11 +215,20 @@ class AsyncPikaClient:
         username = self._conf.get("username", "guest")
         password = self._conf.get("password", "guest")
         tls_enabled = self._conf.get("tls", False)
+        vhost = self._conf.get("vhost", "/")
+
+        # URL-encode vhost for inclusion in URL
+        # Default "/" becomes "/" (trailing slash)
+        # Non-default "marie" becomes "/marie"
+        if vhost == "/":
+            vhost_part = "/"
+        else:
+            vhost_part = "/" + urllib.parse.quote(vhost, safe="")
 
         if tls_enabled:
-            url = f"amqps://{username}:{password}@{hostname}:{port}?connection_attempts=3&heartbeat=3600"
+            url = f"amqps://{username}:{password}@{hostname}:{port}{vhost_part}?connection_attempts=3&heartbeat=3600"
         else:
-            url = f"amqp://{username}:{password}@{hostname}:{port}?connection_attempts=3&heartbeat=3600"
+            url = f"amqp://{username}:{password}@{hostname}:{port}{vhost_part}?connection_attempts=3&heartbeat=3600"
 
         parameters = pika.URLParameters(url)
         if provider == "amazon-rabbitmq":

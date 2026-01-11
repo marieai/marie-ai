@@ -12,7 +12,7 @@
 #
 # Access:
 #   - AMQP: localhost:5672
-#   - Management UI: http://localhost:15672 (guest/guest)
+#   - Management UI: http://localhost:15672 (use RABBIT_MQ_USERNAME/RABBIT_MQ_PASSWORD from .env)
 
 services:
   rabbitmq:
@@ -23,8 +23,8 @@ services:
         - 5672:5672 # AMQP
         - 15672:15672 # HTTP
     environment:
-        - RABBITMQ_DEFAULT_USER=guest
-        - RABBITMQ_DEFAULT_PASS=guest
+        - RABBITMQ_DEFAULT_USER=${RABBIT_MQ_USERNAME:-marie}
+        - RABBITMQ_DEFAULT_PASS=${RABBIT_MQ_PASSWORD:-mariepassword}
         - RABBITMQ_DEFAULT_VHOST=/
     volumes:
         - rabbitmq_data:/var/lib/rabbitmq

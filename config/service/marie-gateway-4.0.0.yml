@@ -177,6 +177,9 @@ with:
     project_id: my-project
     worker:
       enabled: true
+    # Postgres is REQUIRED for rabbitmq exporter (stores event metadata)
+    postgres:
+      <<: *psql_conf_shared
     rabbitmq:
       url: amqp://guest:guest@localhost:5672/
       exchange: llm-events

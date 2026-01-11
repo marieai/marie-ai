@@ -1,40 +1,44 @@
 """
-S3 Storage - Large payload storage for LLM tracking.
+S3 Storage - Payload storage for ALL LLM tracking data.
 
-Stores large payloads (input/output data) in S3/MinIO when they exceed
-the inline storage threshold for PostgreSQL.
+ALL payloads (prompts, responses, raw LLM data) are stored in S3.
+PostgreSQL stores only metadata for analytics.
+
+Delegates to StorageManager for actual S3 operations.
 """
 
 import gzip
 import io
 import json
 import logging
-import uuid
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from marie.llm_tracking.config import get_settings
+from marie.storage import StorageManager
 
 logger = logging.getLogger(__name__)
 
 
+class S3StorageError(Exception):
+    """Exception raised when S3 storage operations fail."""
+
+    pass
+
+
 class S3Storage:
     """
-    S3/MinIO storage for large LLM tracking payloads.
+    S3/MinIO storage for ALL LLM tracking payloads.
 
-    Features:
-    - Automatic compression (gzip)
-    - Key generation with timestamp-based partitioning
-    - Configurable endpoint (for MinIO compatibility)
+    ALL payloads are stored in S3.
+    Delegates to StorageManager for actual S3 operations while providing:
+    - Automatic gzip compression
+    - Time-based key partitioning
     """
 
     def __init__(
         self,
         bucket: Optional[str] = None,
-        endpoint_url: Optional[str] = None,
-        region: Optional[str] = None,
-        access_key: Optional[str] = None,
-        secret_key: Optional[str] = None,
         compress: bool = True,
     ):
         """
@@ -42,25 +46,15 @@ class S3Storage:
 
         Args:
             bucket: S3 bucket name (or from config)
-            endpoint_url: S3 endpoint URL (for MinIO)
-            region: AWS region
-            access_key: AWS access key (or from env)
-            secret_key: AWS secret key (or from env)
             compress: Whether to gzip compress payloads
         """
         settings = get_settings()
         self._bucket = bucket or settings.S3_BUCKET
-        self._endpoint_url = endpoint_url or settings.S3_ENDPOINT
-        self._region = region or settings.S3_REGION
-        self._access_key = access_key or settings.S3_ACCESS_KEY
-        self._secret_key = secret_key or settings.S3_SECRET_KEY
         self._compress = compress
-
-        self._client: Optional[Any] = None
         self._started = False
 
     def start(self) -> None:
-        """Initialize S3 client."""
+        """Verify S3 bucket is accessible via StorageManager."""
         if self._started:
             return
 
@@ -71,49 +65,18 @@ class S3Storage:
             )
 
         try:
-            import boto3
-            from botocore.config import Config
-
-            config = Config(
-                signature_version="s3v4",
-                s3={"addressing_style": "path"},
-                retries={"max_attempts": 3, "mode": "standard"},
-            )
-
-            client_kwargs = {
-                "service_name": "s3",
-                "region_name": self._region,
-                "config": config,
-            }
-
-            if self._endpoint_url:
-                client_kwargs["endpoint_url"] = self._endpoint_url
-
-            if self._access_key and self._secret_key:
-                client_kwargs["aws_access_key_id"] = self._access_key
-                client_kwargs["aws_secret_access_key"] = self._secret_key
-
-            self._client = boto3.client(**client_kwargs)
-
-            # Verify bucket exists
-            self._client.head_bucket(Bucket=self._bucket)
-
+            # Verify StorageManager can access the bucket
+            StorageManager.ensure_connection(f"s3://{self._bucket}")
             self._started = True
-            logger.info(
-                f"S3 storage started: bucket={self._bucket}, "
-                f"endpoint={self._endpoint_url or 'AWS'}"
-            )
-        except ImportError:
-            raise ImportError("boto3 is required for S3 storage")
+            logger.info(f"S3 storage verified: bucket={self._bucket}")
         except Exception as e:
-            logger.error(f"Failed to start S3 storage: {e}")
+            logger.error(f"Failed to verify S3 bucket: {e}")
             raise
 
     def stop(self) -> None:
-        """Close S3 client."""
-        self._client = None
+        """No-op - StorageManager manages S3 client lifecycle."""
         self._started = False
-        logger.debug("S3 storage stopped")
+        logger.debug("S3 storage stopped (managed by StorageManager)")
 
     def _generate_key(
         self,
@@ -151,7 +114,7 @@ class S3Storage:
         event_type: str,
     ) -> str:
         """
-        Save a payload to S3.
+        Save a payload to S3 via StorageManager.
 
         Args:
             payload: Payload data to store
@@ -162,38 +125,25 @@ class S3Storage:
         Returns:
             S3 key of saved object
         """
-        if not self._started or self._client is None:
+        if not self._started:
             raise RuntimeError("S3 storage not started")
 
         key = self._generate_key(trace_id, event_id, event_type)
+        s3_path = f"s3://{self._bucket}/{key}"
 
         try:
             # Serialize to JSON
             data = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
 
             # Compress if enabled
-            content_type = "application/json"
-            content_encoding = None
             if self._compress:
                 buffer = io.BytesIO()
                 with gzip.GzipFile(fileobj=buffer, mode="wb") as gz:
                     gz.write(data)
                 data = buffer.getvalue()
-                content_encoding = "gzip"
 
-            # Upload to S3
-            extra_args = {
-                "ContentType": content_type,
-            }
-            if content_encoding:
-                extra_args["ContentEncoding"] = content_encoding
-
-            self._client.put_object(
-                Bucket=self._bucket,
-                Key=key,
-                Body=data,
-                **extra_args,
-            )
+            # Write via StorageManager (supports BytesIO after S3StorageHandler enhancement)
+            StorageManager.write(io.BytesIO(data), s3_path, overwrite=True)
 
             logger.debug(f"Saved payload to S3: {key} ({len(data)} bytes)")
             return key
@@ -204,82 +154,64 @@ class S3Storage:
 
     def get_payload(self, key: str) -> Optional[Dict[str, Any]]:
         """
-        Get a payload from S3.
+        Get a payload from S3 via StorageManager.
 
         Args:
             key: S3 object key
 
         Returns:
-            Payload data or None if not found
+            Payload data or None if not found (legitimate 404)
+
+        Raises:
+            S3StorageError: If S3 operation fails (non-404 errors)
         """
-        if not self._started or self._client is None:
+        if not self._started:
             raise RuntimeError("S3 storage not started")
 
+        s3_path = f"s3://{self._bucket}/{key}"
+
         try:
-            response = self._client.get_object(Bucket=self._bucket, Key=key)
-            data = response["Body"].read()
+            # Read via StorageManager
+            data = StorageManager.read(s3_path)
 
             # Decompress if needed
-            content_encoding = response.get("ContentEncoding", "")
-            if content_encoding == "gzip" or key.endswith(".gz"):
+            if self._compress or key.endswith(".gz"):
                 buffer = io.BytesIO(data)
                 with gzip.GzipFile(fileobj=buffer, mode="rb") as gz:
                     data = gz.read()
 
             return json.loads(data.decode("utf-8"))
 
-        except self._client.exceptions.NoSuchKey:
-            logger.warning(f"S3 object not found: {key}")
+        except FileNotFoundError:
+            # Legitimate "not found" - return None
+            logger.warning(f"Payload not found in S3: {key}")
             return None
         except Exception as e:
-            logger.error(f"Failed to get payload from S3: {e}")
-            raise
+            # Other errors should be raised for caller to handle
+            logger.exception(f"Failed to get payload from S3: {key}")
+            raise S3StorageError(f"Failed to get payload from S3: {key}") from e
 
     def delete_payload(self, key: str) -> bool:
         """
         Delete a payload from S3.
 
+        Note: StorageManager doesn't have delete method.
+        Use S3 lifecycle policies for cleanup instead.
+
         Args:
             key: S3 object key
 
         Returns:
-            True if deleted, False if not found
+            False (not implemented via StorageManager)
         """
-        if not self._started or self._client is None:
-            raise RuntimeError("S3 storage not started")
-
-        try:
-            self._client.delete_object(Bucket=self._bucket, Key=key)
-            logger.debug(f"Deleted payload from S3: {key}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to delete payload from S3: {e}")
-            return False
-
-    def should_use_s3(self, payload: Dict[str, Any]) -> bool:
-        """
-        Determine if a payload should be stored in S3 vs inline in Postgres.
-
-        Args:
-            payload: Payload to check
-
-        Returns:
-            True if payload is large enough for S3
-        """
-        settings = get_settings()
-        try:
-            size = len(
-                json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
-            )
-            return size > settings.PAYLOAD_SIZE_THRESHOLD_BYTES
-        except Exception:
-            return False
+        logger.warning(f"Delete not implemented via StorageManager: {key}")
+        return False
 
     def list_keys(
         self,
         prefix: str = "llm-events/",
         max_keys: int = 1000,
-    ) -> list:
+    ) -> List[str]:
         """
         List objects in the bucket with a prefix.
 
@@ -290,58 +222,13 @@ class S3Storage:
         Returns:
             List of object keys
         """
-        if not self._started or self._client is None:
+        if not self._started:
             raise RuntimeError("S3 storage not started")
 
+        s3_path = f"s3://{self._bucket}/{prefix}"
         try:
-            response = self._client.list_objects_v2(
-                Bucket=self._bucket,
-                Prefix=prefix,
-                MaxKeys=max_keys,
-            )
-
-            contents = response.get("Contents", [])
-            return [obj["Key"] for obj in contents]
+            keys = StorageManager.list(s3_path)
+            return keys[:max_keys]
         except Exception as e:
             logger.error(f"Failed to list S3 objects: {e}")
-            raise
-
-    def cleanup_old_payloads(self, days: int = 30) -> int:
-        """
-        Delete payloads older than specified days.
-
-        Note: This is a best-effort cleanup. For large buckets,
-        consider using S3 lifecycle rules instead.
-
-        Args:
-            days: Delete payloads older than this many days
-
-        Returns:
-            Number of deleted objects
-        """
-        if not self._started or self._client is None:
-            raise RuntimeError("S3 storage not started")
-
-        from datetime import timedelta
-
-        cutoff = datetime.utcnow() - timedelta(days=days)
-        deleted_count = 0
-
-        try:
-            paginator = self._client.get_paginator("list_objects_v2")
-            pages = paginator.paginate(Bucket=self._bucket, Prefix="llm-events/")
-
-            for page in pages:
-                for obj in page.get("Contents", []):
-                    if obj["LastModified"].replace(tzinfo=None) < cutoff:
-                        self._client.delete_object(
-                            Bucket=self._bucket,
-                            Key=obj["Key"],
-                        )
-                        deleted_count += 1
-
-            logger.info(f"Cleaned up {deleted_count} old S3 payloads")
-            return deleted_count
-        except Exception as e:
-            logger.error(f"Failed to cleanup S3 payloads: {e}")
             raise

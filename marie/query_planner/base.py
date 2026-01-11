@@ -774,6 +774,7 @@ class QueryType(str, enum.Enum):
     MERGER = "MERGER"
     BRANCH = "BRANCH"  # Conditional branching node
     SWITCH = "SWITCH"  # Multi-way switch node
+    GUARDRAIL = "GUARDRAIL"  # Quality validation node
 
 
 class ComputeQuery(BaseModel):

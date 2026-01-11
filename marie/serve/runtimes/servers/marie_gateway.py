@@ -67,7 +67,12 @@ from marie.state.state_store import (
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, Response
 from marie.types_core.request.status import StatusMessage
-from marie.utils.server_runtime import setup_auth, setup_storage, setup_toast_events
+from marie.utils.server_runtime import (
+    setup_auth,
+    setup_llm_tracking,
+    setup_storage,
+    setup_toast_events,
+)
 from marie.utils.types import strtobool
 
 ROOT = "deployments/"
@@ -1243,8 +1248,10 @@ class MarieServerGateway(CompositeServer):
         await super().setup_server()
 
         self.sse_broker: SseBroker = setup_toast_events(self.args.get("toast", {}))
-        setup_storage(self.args.get("storage", {}))
+        storage_config = self.args.get("storage", {})
+        setup_storage(storage_config)
         setup_auth(self.args.get("auth", {}))
+        setup_llm_tracking(self.args.get("llm_tracking", {}), storage_config)
 
         await self.setup_service_discovery(
             etcd_host=self.args["discovery_host"],

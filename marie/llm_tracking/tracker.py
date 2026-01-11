@@ -138,6 +138,20 @@ class LLMTracker:
             logger.info("LLM tracking is disabled")
             return
 
+        # Guard: If using RabbitMQ exporter, storage MUST be configured
+        # RabbitMQ messages only contain event_id - worker needs Postgres/S3
+        if self._settings.EXPORTER == ExporterType.RABBITMQ:
+            if not self._settings.POSTGRES_URL:
+                raise ValueError(
+                    "RabbitMQ exporter requires Postgres storage. "
+                    "Configure postgres.url in llm_tracking config."
+                )
+            if not self._settings.S3_BUCKET:
+                raise ValueError(
+                    "RabbitMQ exporter requires S3 storage. "
+                    "Configure s3.bucket (or use shared storage.s3) in llm_tracking config."
+                )
+
         try:
             # Initialize exporter
             self._exporter = self._create_exporter()
@@ -174,7 +188,28 @@ class LLMTracker:
             raise ValueError(f"Unknown exporter type: {self._settings.EXPORTER}")
 
     def _init_storage(self) -> None:
-        """Initialize Postgres and S3 storage."""
+        """Initialize S3 and Postgres storage.
+
+        S3 is required - all payloads are stored there.
+        PostgreSQL stores metadata only.
+        """
+        # S3 is required - all payloads go to S3
+        if not self._settings.S3_BUCKET:
+            raise ValueError(
+                "S3 bucket not configured. All payloads are stored in S3. "
+                "Set MARIE_LLM_TRACKING_S3_BUCKET environment variable."
+            )
+
+        try:
+            from marie.llm_tracking.storage.s3 import S3Storage
+
+            self._s3 = S3Storage()
+            self._s3.start()
+        except Exception as e:
+            logger.error(f"Failed to initialize S3 storage: {e}")
+            raise
+
+        # PostgreSQL stores metadata only
         try:
             from marie.llm_tracking.storage.postgres import PostgresStorage
 
@@ -182,15 +217,6 @@ class LLMTracker:
             self._postgres.start()
         except Exception as e:
             logger.warning(f"Postgres storage not available: {e}")
-
-        try:
-            if self._settings.S3_BUCKET:
-                from marie.llm_tracking.storage.s3 import S3Storage
-
-                self._s3 = S3Storage()
-                self._s3.start()
-        except Exception as e:
-            logger.warning(f"S3 storage not available: {e}")
 
     def stop(self) -> None:
         """Shutdown the tracker and flush pending data."""
@@ -280,13 +306,16 @@ class LLMTracker:
             input=input,
         )
 
+        ctx = TraceContext(self, trace)
+        exc_info = (None, None, None)
         try:
-            yield TraceContext(self, trace)
-        except Exception:
+            yield ctx
+        except Exception as e:
+            exc_info = (type(e), e, e.__traceback__)
             raise
         finally:
-            # Trace is finalized in TraceContext.__exit__
-            pass
+            # Finalize the trace
+            ctx.__exit__(*exc_info)
 
     def create_trace(
         self,
@@ -321,6 +350,43 @@ class LLMTracker:
         self._finalize_trace(trace)
         return trace.id
 
+    def _store_failed_event(
+        self,
+        event_id: Optional[str],
+        trace_id: Optional[str],
+        event_type: str,
+        error: Exception,
+        payload: Dict[str, Any],
+    ) -> None:
+        """Store a failed event to the DLQ for later retry/investigation."""
+        import traceback
+
+        if not self._postgres:
+            # If postgres isn't available, we can't save to DLQ - log and return
+            logger.error(
+                f"Cannot save to DLQ (postgres unavailable): "
+                f"event_id={event_id}, type={event_type}, error={error}"
+            )
+            return
+
+        try:
+            self._postgres.save_failed_event(
+                event_id=event_id,
+                trace_id=trace_id,
+                event_type=event_type,
+                error_message=str(error),
+                payload=payload,
+                error_type=type(error).__name__,
+                stack_trace=traceback.format_exc(),
+            )
+        except Exception as dlq_error:
+            # Last resort - log everything we can
+            logger.critical(
+                f"CRITICAL: Failed to save to DLQ, event data may be lost! "
+                f"event_id={event_id}, trace_id={trace_id}, type={event_type}, "
+                f"original_error={error}, dlq_error={dlq_error}"
+            )
+
     def _finalize_trace(self, trace: Trace) -> None:
         """Export and store a trace."""
         if not self._started:
@@ -338,34 +404,45 @@ class LLMTracker:
                 self._exporter.export_trace(trace)
 
         except Exception as e:
-            logger.error(f"Failed to finalize trace {trace.id}: {e}")
+            logger.exception(f"Failed to finalize trace {trace.id}")
+            # Store to DLQ instead of silently losing the event
+            self._store_failed_event(
+                event_id=trace.id,
+                trace_id=trace.id,
+                event_type="trace-create",
+                error=e,
+                payload=trace.to_dict(),
+            )
 
     def _store_trace_event(self, trace: Trace) -> None:
-        """Store trace as raw event in Postgres/S3."""
+        """Store trace: payload to S3, metadata to PostgreSQL."""
+        if not self._s3:
+            logger.error("S3 not initialized - cannot store trace payload")
+            return
+
         payload = trace.to_dict()
 
-        s3_key = None
-        inline_payload = payload
-
-        # Store large payloads in S3
-        if self._s3 and self._s3.should_use_s3(payload):
-            s3_key = self._s3.save_payload(
-                payload=payload,
-                trace_id=trace.id,
-                event_id=trace.id,
-                event_type="trace",
-            )
-            inline_payload = None
-
-        event = RawEvent(
-            id=trace.id,
+        # 1. Always save payload to S3
+        s3_key = self._s3.save_payload(
+            payload=payload,
             trace_id=trace.id,
-            event_type=EventType.TRACE_CREATE,
-            s3_key=s3_key,
-            payload=inline_payload,
+            event_id=trace.id,
+            event_type="trace",
         )
 
-        self._postgres.save_event(event)
+        # 2. Save metadata to PostgreSQL
+        if self._postgres:
+            event = RawEvent(
+                id=trace.id,
+                trace_id=trace.id,
+                event_type=EventType.TRACE_CREATE,
+                s3_key=s3_key,
+                # Metadata from trace
+                user_id=trace.user_id,
+                session_id=trace.session_id,
+                tags=trace.tags,
+            )
+            self._postgres.save_event(event)
 
     # ========== Observation API ==========
 
@@ -639,40 +716,79 @@ class LLMTracker:
                 self._exporter.export_observation(obs)
 
         except Exception as e:
-            logger.error(f"Failed to finalize observation {obs.id}: {e}")
+            logger.exception(f"Failed to finalize observation {obs.id}")
+            # Store to DLQ instead of silently losing the event
+            event_type = f"{obs.type.value.lower()}-create"
+            self._store_failed_event(
+                event_id=obs.id,
+                trace_id=obs.trace_id,
+                event_type=event_type,
+                error=e,
+                payload=obs.to_dict(),
+            )
 
     def _store_observation_event(self, obs: Observation) -> None:
-        """Store observation as raw event in Postgres/S3."""
+        """Store observation: payload to S3, metadata to PostgreSQL."""
+        if not self._s3:
+            logger.error("S3 not initialized - cannot store observation payload")
+            return
+
         payload = obs.to_dict()
 
-        s3_key = None
-        inline_payload = payload
+        # 1. Always save payload to S3
+        s3_key = self._s3.save_payload(
+            payload=payload,
+            trace_id=obs.trace_id,
+            event_id=obs.id,
+            event_type=obs.type.value.lower(),
+        )
 
-        # Store large payloads in S3
-        if self._s3 and self._s3.should_use_s3(payload):
-            s3_key = self._s3.save_payload(
-                payload=payload,
-                trace_id=obs.trace_id,
-                event_id=obs.id,
-                event_type=obs.type.value.lower(),
-            )
-            inline_payload = None
-
+        # 2. Determine event type
         event_type = EventType.GENERATION_CREATE
         if obs.type == ObservationType.SPAN:
             event_type = EventType.SPAN_CREATE
         elif obs.type == ObservationType.EVENT:
             event_type = EventType.EVENT_CREATE
 
-        event = RawEvent(
-            id=obs.id,
-            trace_id=obs.trace_id,
-            event_type=event_type,
-            s3_key=s3_key,
-            payload=inline_payload,
-        )
+        # 3. Extract metadata for PostgreSQL
+        # Calculate duration in ms
+        duration_ms = None
+        if obs.end_time and obs.start_time:
+            delta = obs.end_time - obs.start_time
+            duration_ms = int(delta.total_seconds() * 1000)
 
-        self._postgres.save_event(event)
+        # Calculate time to first token
+        time_to_first_token_ms = None
+        if obs.completion_start_time and obs.start_time:
+            delta = obs.completion_start_time - obs.start_time
+            time_to_first_token_ms = int(delta.total_seconds() * 1000)
+
+        # Extract cost
+        cost_usd = None
+        if obs.cost and obs.cost.total_cost:
+            cost_usd = obs.cost.total_cost
+
+        # 4. Save metadata to PostgreSQL
+        if self._postgres:
+            event = RawEvent(
+                id=obs.id,
+                trace_id=obs.trace_id,
+                event_type=event_type,
+                s3_key=s3_key,
+                # Model info
+                model_name=obs.model,
+                model_provider=obs.metadata.get("provider") if obs.metadata else None,
+                # Token metrics
+                prompt_tokens=obs.usage.input_tokens if obs.usage else None,
+                completion_tokens=obs.usage.output_tokens if obs.usage else None,
+                total_tokens=obs.usage.total_tokens if obs.usage else None,
+                # Performance metrics
+                duration_ms=duration_ms,
+                time_to_first_token_ms=time_to_first_token_ms,
+                # Cost
+                cost_usd=cost_usd,
+            )
+            self._postgres.save_event(event)
 
     # ========== Score API ==========
 
@@ -742,7 +858,15 @@ class LLMTracker:
             if self._exporter:
                 self._exporter.export_score(score)
         except Exception as e:
-            logger.error(f"Failed to finalize score {score.id}: {e}")
+            logger.exception(f"Failed to finalize score {score.id}")
+            # Store to DLQ instead of silently losing the event
+            self._store_failed_event(
+                event_id=score.id,
+                trace_id=score.trace_id,
+                event_type="score-create",
+                error=e,
+                payload=score.to_dict(),
+            )
 
     # ========== Utility methods ==========
 
@@ -761,6 +885,9 @@ class LLMTracker:
         """
         Update a trace with additional data.
 
+        This method persists to S3/Postgres before publishing to RabbitMQ,
+        ensuring updates are durable and can be processed by the worker.
+
         Args:
             trace_id: Trace ID
             output: Output data
@@ -770,20 +897,20 @@ class LLMTracker:
         if not self._ensure_started():
             return
 
-        # Create update trace
+        # Create trace object for update (name required for storage)
         trace = Trace(
             id=trace_id,
+            name=f"trace_update_{trace_id}",
             project_id=self._settings.PROJECT_ID,
             output=output,
             metadata=metadata or {},
             tags=tags or [],
         )
 
-        try:
-            if self._exporter:
-                self._exporter.export_trace(trace)
-        except Exception as e:
-            logger.error(f"Failed to update trace {trace_id}: {e}")
+        # Use _finalize_trace which:
+        # 1. Stores to S3 and Postgres via _store_trace_event()
+        # 2. Exports to RabbitMQ via export_trace()
+        self._finalize_trace(trace)
 
 
 # Singleton access

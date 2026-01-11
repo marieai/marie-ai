@@ -337,6 +337,109 @@ logging:
     max_files: 10
 ```
 
+## LLM tracking configuration
+
+Track LLM calls across your document processing pipelines for observability, cost management, and debugging.
+
+### Basic configuration
+
+```yaml
+llm_tracking:
+  enabled: true
+  exporter: rabbitmq
+  project_id: my-project
+```
+
+### Full configuration
+
+```yaml
+llm_tracking:
+  enabled: true
+  exporter: rabbitmq  # or "console" for development
+  project_id: ${{ ENV.PROJECT_ID | default: marie-ai }}
+
+  # Worker configuration
+  worker:
+    enabled: true  # Set to false if running worker separately
+
+  # RabbitMQ configuration
+  rabbitmq:
+    hostname: ${{ ENV.RABBITMQ_HOST | default: localhost }}
+    port: ${{ ENV.RABBITMQ_PORT | default: 5672 }}
+    username: ${{ ENV.RABBITMQ_USER | default: guest }}
+    password: ${{ ENV.RABBITMQ_PASSWORD }}
+    vhost: ${{ ENV.RABBITMQ_VHOST | default: / }}
+    exchange: llm-events
+    queue: llm-ingestion
+    routing_key: llm.event
+
+  # PostgreSQL configuration (metadata storage)
+  postgres:
+    url: ${{ ENV.LLM_TRACKING_POSTGRES_URL }}
+    # Or use individual fields:
+    # hostname: ${{ ENV.POSTGRES_HOST }}
+    # port: ${{ ENV.POSTGRES_PORT }}
+    # username: ${{ ENV.POSTGRES_USER }}
+    # password: ${{ ENV.POSTGRES_PASSWORD }}
+    # database: marie
+
+  # S3 configuration (payload storage)
+  s3:
+    bucket: ${{ ENV.LLM_TRACKING_S3_BUCKET | default: marie-llm-tracking }}
+
+  # ClickHouse configuration (analytics)
+  clickhouse:
+    host: ${{ ENV.CLICKHOUSE_HOST | default: localhost }}
+    port: ${{ ENV.CLICKHOUSE_HTTP_PORT | default: 8123 }}
+    native_port: ${{ ENV.CLICKHOUSE_NATIVE_PORT | default: 9000 }}
+    database: ${{ ENV.CLICKHOUSE_DB | default: marie_llm }}
+    user: ${{ ENV.CLICKHOUSE_USER | default: default }}
+    password: ${{ ENV.CLICKHOUSE_PASSWORD }}
+    batch_size: 1000
+    flush_interval_s: 5.0
+```
+
+### Exporter options
+
+| Exporter | Use case |
+|----------|----------|
+| `console` | Development and debugging |
+| `rabbitmq` | Production with full durability |
+
+:::warning
+The `rabbitmq` exporter requires both PostgreSQL and S3 to be configured. The tracker will fail to start if storage is not properly configured.
+:::
+
+### Minimal production setup
+
+```yaml
+llm_tracking:
+  enabled: true
+  exporter: rabbitmq
+  project_id: production
+
+  rabbitmq:
+    hostname: ${{ ENV.RABBITMQ_HOST }}
+    port: 5672
+    username: ${{ ENV.RABBITMQ_USER }}
+    password: ${{ ENV.RABBITMQ_PASSWORD }}
+    exchange: llm-events
+    queue: llm-ingestion
+    routing_key: llm.event
+
+  postgres:
+    url: ${{ ENV.LLM_TRACKING_POSTGRES_URL }}
+
+  s3:
+    bucket: ${{ ENV.LLM_TRACKING_S3_BUCKET }}
+
+  clickhouse:
+    host: ${{ ENV.CLICKHOUSE_HOST }}
+    database: marie_llm
+```
+
+For detailed usage, see the [LLM tracking guide](../../guides/llm-tracking.md).
+
 ## Complete example
 
 ```yaml
@@ -405,6 +508,30 @@ auth:
 logging:
   level: ${{ ENV.LOG_LEVEL | default: INFO }}
   format: json
+
+llm_tracking:
+  enabled: true
+  exporter: rabbitmq
+  project_id: production
+
+  rabbitmq:
+    hostname: ${{ ENV.RABBITMQ_HOST | default: localhost }}
+    port: 5672
+    username: ${{ ENV.RABBITMQ_USER | default: guest }}
+    password: ${{ ENV.RABBITMQ_PASSWORD }}
+    exchange: llm-events
+    queue: llm-ingestion
+    routing_key: llm.event
+
+  postgres:
+    url: ${{ ENV.LLM_TRACKING_POSTGRES_URL }}
+
+  s3:
+    bucket: ${{ ENV.LLM_TRACKING_S3_BUCKET }}
+
+  clickhouse:
+    host: ${{ ENV.CLICKHOUSE_HOST | default: localhost }}
+    database: marie_llm
 ```
 
 ## Validation
@@ -483,5 +610,6 @@ config/
 ## Next steps
 
 - [Basic config](./config.md) - Service configuration overview
+- [LLM tracking guide](../../guides/llm-tracking.md) - Track LLM calls for observability
 - [Error handling](../../guides/error-handling.md) - Exception handling
 - [Gateway guide](../../guides/gateway.md) - Gateway configuration details

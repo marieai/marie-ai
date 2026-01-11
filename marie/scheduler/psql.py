@@ -31,11 +31,16 @@ from marie.query_planner.branching import (
     SwitchQueryDefinition,
 )
 from marie.query_planner.builtin import register_all_known_planners
+from marie.query_planner.guardrail import GuardrailQueryDefinition
 from marie.query_planner.model import QueryPlannersConf
 from marie.scheduler.branch_evaluator import BranchEvaluationContext, BranchEvaluator
 from marie.scheduler.dag_topology_cache import DagTopologyCache
 from marie.scheduler.fixtures import *
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
+from marie.scheduler.guardrail_evaluator import (
+    GuardrailEvaluationContext,
+    GuardrailEvaluator,
+)
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.job_scheduler import JobScheduler, JobSubmissionRequest
 from marie.scheduler.memory_frontier import MemoryFrontier
@@ -191,6 +196,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         # Initialize BranchEvaluator for conditional branching
         self.branch_evaluator = BranchEvaluator()
 
+        # Initialize GuardrailEvaluator for quality validation
+        self.guardrail_evaluator = GuardrailEvaluator()
+
         # Asset mapper kept for static utility methods (e.g., get_upstream_assets_for_node)
         # No longer used for pre-registration
         from marie.assets import DAGAssetMapper
@@ -294,7 +302,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 await self.complete(job_id, work_item)
                 await self.frontier.on_job_completed(job_id)
 
-                # Check if this is a branch node and evaluate paths if so
+                # Check if this is a branch or guardrail node and evaluate paths if so
                 dag_plan = await self.get_dag_by_id(work_item.dag_id)
                 if dag_plan:
                     node = get_node_from_dag(job_id, dag_plan)
@@ -303,6 +311,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             f"Completed branch node detected: {job_id}. Evaluating paths..."
                         )
                         await self._evaluate_and_mark_branch_paths(
+                            job_id, work_item, dag_plan
+                        )
+                    elif node and self._is_guardrail_node(node):
+                        self.logger.info(
+                            f"Completed guardrail node detected: {job_id}. Evaluating metrics..."
+                        )
+                        await self._evaluate_and_mark_guardrail_paths(
                             job_id, work_item, dag_plan
                         )
             elif status == JobStatus.FAILED:
@@ -338,6 +353,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         return isinstance(
             node.definition, (BranchQueryDefinition, SwitchQueryDefinition)
         )
+
+    def _is_guardrail_node(self, node) -> bool:
+        """Check if a node is a GUARDRAIL node."""
+        if not node or not hasattr(node, 'definition'):
+            return False
+
+        return isinstance(node.definition, GuardrailQueryDefinition)
 
     async def _process_control_flow_node(self, wi: WorkInfo) -> None:
         """
@@ -407,6 +429,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                 # Evaluate and mark paths
                 await self._evaluate_and_mark_branch_paths(
+                    wi.id, wi, self.active_dags[dag_id]
+                )
+
+            elif node_type == "guardrail":
+                # GUARDRAIL nodes need quality validation evaluation
+                self.logger.info(
+                    f"[CONTROL_FLOW] Evaluating guardrail metrics for {wi.id}"
+                )
+
+                # Complete the guardrail node first
+                await self.complete(wi.id, wi, {}, force=True)
+
+                # Evaluate and mark paths based on pass/fail
+                await self._evaluate_and_mark_guardrail_paths(
                     wi.id, wi, self.active_dags[dag_id]
                 )
 
@@ -805,6 +841,142 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             # Mark descendants as skipped
             await self._mark_nodes_skipped(
                 list(descendants), queue_name, cascaded_reason, dag_plan
+            )
+
+    async def _evaluate_and_mark_guardrail_paths(
+        self, guardrail_node_id: str, work_item: WorkInfo, dag_plan: QueryPlan
+    ) -> None:
+        """
+        Evaluate a guardrail node and mark its paths as READY or SKIPPED.
+        Stores guardrail_metadata for tracking and debugging.
+
+        :param guardrail_node_id: ID of the completed guardrail node
+        :param work_item: WorkInfo of the guardrail node
+        :param dag_plan: The DAG plan containing the guardrail
+        """
+        try:
+            self.logger.info(
+                f"Evaluating guardrail metrics for node: {guardrail_node_id}"
+            )
+
+            # Get the guardrail node from the DAG
+            guardrail_node = get_node_from_dag(guardrail_node_id, dag_plan)
+            if not guardrail_node or not self._is_guardrail_node(guardrail_node):
+                self.logger.warning(
+                    f"Node {guardrail_node_id} is not a guardrail node, skipping evaluation"
+                )
+                return
+
+            guardrail_def = guardrail_node.definition
+
+            # Build evaluation context
+            # TODO: Gather execution results from previous nodes if needed
+            execution_results = {}
+            context = GuardrailEvaluationContext(
+                work_info=work_item,
+                dag_plan=dag_plan,
+                guardrail_node=guardrail_node,
+                execution_results=execution_results,
+            )
+
+            # Evaluate guardrail metrics with timeout protection
+            try:
+                result = await asyncio.wait_for(
+                    self.guardrail_evaluator.evaluate(guardrail_def, context),
+                    timeout=guardrail_def.evaluation_timeout,
+                )
+            except asyncio.TimeoutError:
+                self.logger.error(
+                    f"Guardrail evaluation timed out for {guardrail_node_id} "
+                    f"after {guardrail_def.evaluation_timeout}s"
+                )
+                # Default to fail path on timeout
+                pass_path = guardrail_def.get_pass_path()
+                fail_path = guardrail_def.get_fail_path()
+
+                from marie.query_planner.guardrail import GuardrailEvaluationResult
+
+                result = GuardrailEvaluationResult(
+                    overall_passed=False,
+                    overall_score=0.0,
+                    individual_results=[],
+                    selected_path_id="fail",
+                    active_target_nodes=fail_path.target_node_ids if fail_path else [],
+                    skipped_target_nodes=pass_path.target_node_ids if pass_path else [],
+                    total_execution_time_ms=guardrail_def.evaluation_timeout * 1000,
+                    error=f"Evaluation timed out after {guardrail_def.evaluation_timeout}s",
+                )
+
+            # Store guardrail metadata for audit
+            guardrail_metadata = {
+                "node_type": "GUARDRAIL",
+                "overall_passed": result.overall_passed,
+                "overall_score": result.overall_score,
+                "selected_path_id": result.selected_path_id,
+                "individual_results": [r.dict() for r in result.individual_results],
+                "evaluated_at": datetime.now(timezone.utc).isoformat(),
+                "error": result.error,
+            }
+
+            await self._update_job_branch_metadata(
+                job_id=guardrail_node_id,
+                queue_name=work_item.name,
+                branch_metadata=guardrail_metadata,
+            )
+
+            self.logger.info(
+                f"Guardrail evaluation complete: passed={result.overall_passed}, "
+                f"score={result.overall_score:.2f}, path={result.selected_path_id}"
+            )
+
+            # Mark active paths' target nodes as READY
+            if result.active_target_nodes:
+                active_path_metadata = {
+                    "selected_by_guardrail": guardrail_node_id,
+                    "selected_path_id": result.selected_path_id,
+                    "guardrail_score": result.overall_score,
+                    "selected_at": datetime.now(timezone.utc).isoformat(),
+                }
+                for node_id in result.active_target_nodes:
+                    await self._update_job_branch_metadata(
+                        job_id=node_id,
+                        queue_name=work_item.name,
+                        branch_metadata=active_path_metadata,
+                    )
+
+                await self._mark_nodes_ready(result.active_target_nodes, work_item.name)
+                self.logger.info(
+                    f"Marked {len(result.active_target_nodes)} nodes as READY: "
+                    f"{result.active_target_nodes}"
+                )
+
+            # Mark skipped nodes as SKIPPED and cascade to descendants
+            if result.skipped_target_nodes:
+                skip_reason = SkipReason(
+                    branch_node_id=guardrail_node_id,
+                    reason=f"Guardrail {'passed' if result.overall_passed else 'failed'} "
+                    f"(score: {result.overall_score:.2f})",
+                    evaluated_condition={
+                        "metrics": [r.metric_name for r in result.individual_results]
+                    },
+                    selected_paths=[result.selected_path_id],
+                    timestamp=datetime.now(timezone.utc),
+                )
+                await self._mark_nodes_skipped(
+                    result.skipped_target_nodes,
+                    work_item.name,
+                    skip_reason,
+                    dag_plan,
+                )
+                self.logger.info(
+                    f"Marked {len(result.skipped_target_nodes)} nodes as SKIPPED: "
+                    f"{result.skipped_target_nodes}"
+                )
+
+        except Exception as e:
+            self.logger.error(
+                f"Error evaluating guardrail metrics for {guardrail_node_id}: {e}",
+                exc_info=True,
             )
 
     async def _handle_dag_state_notification(self, payload: dict):
