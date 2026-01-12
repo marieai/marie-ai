@@ -1,0 +1,73 @@
+# Health/metrics (one block only)
+<source>
+  @type monitor_agent
+  bind 0.0.0.0
+  port 24220
+</source>
+
+# Tail Docker local-driver logs for the target container (FIXED PATH)
+<source>
+  @type tail
+  path /var/lib/docker/containers/${TARGET_CONTAINER_ID}/local-logs/container.log
+  # (Optional) also pick up rotations:
+  # path /var/lib/docker/containers/${TARGET_CONTAINER_ID}/local-logs/container.log*
+  pos_file /fluentd/state-local.pos
+  tag app.docker.local
+  read_from_head false
+  refresh_interval 5
+  <parse>
+    @type none
+  </parse>
+</source>
+
+# Fan out to 2 pipelines
+<match app.docker.local>
+  @type copy
+  <store>
+    @type relabel
+    @label @CUDA_HEAL
+  </store>
+  <store>
+    @type relabel
+    @label @ASSERT_HEAL
+  </store>
+</match>
+
+<label @CUDA_HEAL>
+  <filter **>
+    @type grep
+    <regexp>
+      key message
+      pattern /(?i)(?:runtimeerror:\s*)?cuda\s+out\s+of\s+memory|cudaerrormemoryallocation|cublas_status_alloc_failed|cudnn.*alloc|failed\s+to\s+alloc(?:ate)?\s+.*device\s+memory/
+    </regexp>
+  </filter>
+  <match **>
+    @type exec
+    command /etc/marie/config/extract/observability/fluentd/trigger_restart.sh
+    format json
+    <buffer>
+      @type memory
+      flush_interval 1s
+    </buffer>
+  </match>
+</label>
+
+<label @ASSERT_HEAL>
+  <filter **>
+    @type grep
+    <regexp>
+      key message
+      pattern /(?i)assertion\s+failed/
+    </regexp>
+  </filter>
+  <match **>
+    @type exec
+    command /etc/marie/config/extract/observability/fluentd/trigger_restart.sh
+    format json
+    <buffer>
+      @type memory
+      flush_interval 1s
+    </buffer>
+  </match>
+</label>
+

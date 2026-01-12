@@ -1,0 +1,67 @@
+# Health
+<source>
+  @type monitor_agent
+  bind 0.0.0.0
+  port 24220
+</source>
+
+# Receive logs from Docker fluentd driver
+<source>
+  @type forward
+  bind 0.0.0.0
+  port 24224
+</source>
+
+# Fan out
+<match app.**>
+  @type copy
+  <store>
+    @type relabel
+    @label @CUDA_HEAL
+  </store>
+  <store>
+    @type relabel
+    @label @ASSERT_HEAL
+  </store>
+</match>
+
+# CUDA / GPU OOM
+<label @CUDA_HEAL>
+  <filter **>
+    @type grep
+    <regexp>
+      key log
+      pattern /(?i)(?:runtimeerror:\s*)?cuda\s+out\s+of\s+memory|cudaerrormemoryallocation|cublas_status_alloc_failed|cudnn.*alloc|failed\s+to\s+alloc(?:ate)?\s+.*device\s+memory/
+    </regexp>
+  </filter>
+  <match **>
+    @type exec
+    command /etc/marie/config/extract/observability/fluentd/trigger_restart.sh
+    format json
+    <buffer>
+      @type memory
+      flush_interval 1s
+    </buffer>
+  </match>
+</label>
+
+# Generic "Assertion failed"
+<label @ASSERT_HEAL>
+  <filter **>
+    @type grep
+    <regexp>
+      key log
+      pattern /(?i)assertion\s+failed/
+    </regexp>
+  </filter>
+  <match **>
+    @type exec
+    command /etc/marie/config/extract/observability/fluentd/trigger_restart.sh
+    format json
+    <buffer>
+      @type memory
+      flush_interval 1s
+    </buffer>
+  </match>
+</label>
+
