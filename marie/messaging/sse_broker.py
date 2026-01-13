@@ -180,8 +180,6 @@ class SseBroker:
             for q in dead_all:
                 self._subs_all.pop(q, None)
 
-    # ---------- Topic Subscription ----------
-
     async def subscribe(
         self, *, topic: str, last_event_id: Optional[int] = None, retry_ms: int = 20000
     ) -> AsyncIterator[str]:
