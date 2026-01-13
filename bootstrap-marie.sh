@@ -26,7 +26,7 @@ ENV_FILE="${ENV_FILE:-./config/.env.dev}"
 DEPLOY_GATEWAY=${DEPLOY_GATEWAY:-true}
 DEPLOY_EXTRACT=${DEPLOY_EXTRACT:-true}
 DEPLOY_INFRASTRUCTURE=${DEPLOY_INFRASTRUCTURE:-true}
-DEPLOY_LITELLM=${DEPLOY_LITELLM:-true}
+DEPLOY_LITELLM=${DEPLOY_LITELLM:-false}
 DEPLOY_CLICKHOUSE=${DEPLOY_CLICKHOUSE:-true}
 DEPLOY_GITEA=${DEPLOY_GITEA:-true}
 
@@ -339,6 +339,144 @@ validate_environment() {
     echo -e "${GREEN}✅ Environment file found: $ENV_FILE${NC}"
 }
 
+create_docker_network() {
+    local network_name="marie_default"
+    if ! docker network inspect "$network_name" >/dev/null 2>&1; then
+        echo -e "${BLUE}🔗 Creating Docker network: $network_name${NC}"
+        docker network create --driver=bridge "$network_name"
+        echo -e "${GREEN}✅ Network '$network_name' created${NC}"
+    else
+        echo -e "${GREEN}✅ Network '$network_name' already exists${NC}"
+    fi
+}
+
+setup_gitea_admin() {
+    local admin_user="${GITEA_ADMIN_USER:-marie}"
+    local admin_password="${GITEA_ADMIN_PASSWORD:-rycerz}"
+    local admin_email="${GITEA_ADMIN_EMAIL:-marie@marie.local}"
+
+    echo -e "${BLUE}👤 Setting up Gitea admin user...${NC}"
+
+    # Check if admin user already exists (run as git user)
+    if docker exec -u git marie-gitea gitea admin user list 2>/dev/null | grep -q "$admin_user"; then
+        echo -e "${GREEN}  ✅ Admin user '$admin_user' already exists${NC}"
+        return 0
+    fi
+
+    # Create admin user (run as git user)
+    if docker exec -u git marie-gitea gitea admin user create \
+        --admin \
+        --username "$admin_user" \
+        --password "$admin_password" \
+        --email "$admin_email" \
+        --must-change-password=false 2>&1; then
+        echo -e "${GREEN}  ✅ Admin user '$admin_user' created${NC}"
+        echo -e "${YELLOW}     Username: $admin_user${NC}"
+        echo -e "${YELLOW}     Password: $admin_password${NC}"
+    else
+        echo -e "${YELLOW}  ⚠️  Could not create admin user (may already exist)${NC}"
+    fi
+}
+
+setup_gitea_oauth_app() {
+    local admin_user="${GITEA_ADMIN_USER:-marie}"
+    local admin_password="${GITEA_ADMIN_PASSWORD:-rycerz}"
+    local gitea_url="http://localhost:${GITEA_HTTP_PORT:-3001}"
+    local app_name="${GITEA_OAUTH_APP_NAME:-marie-studio}"
+    local redirect_uri="${GITEA_OAUTH_REDIRECT_URI:-http://localhost:5173/api/auth/gitea/connect/callback}"
+
+    echo -e "${BLUE}🔐 Setting up Gitea OAuth2 application...${NC}"
+
+    # Check if OAuth app already exists
+    local existing_apps
+    existing_apps=$(curl -s -u "$admin_user:$admin_password" \
+        "$gitea_url/api/v1/user/applications/oauth2")
+
+    if echo "$existing_apps" | grep -q "\"name\":\"$app_name\""; then
+        echo -e "${GREEN}  ✅ OAuth2 app '$app_name' already exists${NC}"
+        # Extract and display existing credentials
+        local client_id
+        client_id=$(echo "$existing_apps" | grep -o "\"client_id\":\"[^\"]*\"" | head -1 | cut -d'"' -f4)
+        if [ -n "$client_id" ]; then
+            echo -e "${YELLOW}     Client ID: $client_id${NC}"
+            echo -e "${YELLOW}     (Client Secret was shown only at creation time)${NC}"
+        fi
+        return 0
+    fi
+
+    # Create OAuth2 application
+    local create_response
+    create_response=$(curl -s -X POST \
+        -u "$admin_user:$admin_password" \
+        -H "Content-Type: application/json" \
+        -d "{\"name\": \"$app_name\", \"redirect_uris\": [\"$redirect_uri\"], \"confidential_client\": true}" \
+        "$gitea_url/api/v1/user/applications/oauth2")
+
+    local client_id
+    local client_secret
+    client_id=$(echo "$create_response" | grep -o '"client_id":"[^"]*"' | cut -d'"' -f4)
+    client_secret=$(echo "$create_response" | grep -o '"client_secret":"[^"]*"' | cut -d'"' -f4)
+
+    if [ -n "$client_id" ] && [ -n "$client_secret" ]; then
+        echo -e "${GREEN}  ✅ OAuth2 app '$app_name' created${NC}"
+        echo -e "${YELLOW}     ┌─────────────────────────────────────────────────────────┐${NC}"
+        echo -e "${YELLOW}     │ SAVE THESE CREDENTIALS - Secret shown only once!        │${NC}"
+        echo -e "${YELLOW}     ├─────────────────────────────────────────────────────────┤${NC}"
+        echo -e "${YELLOW}     │ Gitea URL:     $gitea_url${NC}"
+        echo -e "${YELLOW}     │ Client ID:     $client_id${NC}"
+        echo -e "${YELLOW}     │ Client Secret: $client_secret${NC}"
+        echo -e "${YELLOW}     │ Redirect URI:  $redirect_uri${NC}"
+        echo -e "${YELLOW}     └─────────────────────────────────────────────────────────┘${NC}"
+    else
+        echo -e "${YELLOW}  ⚠️  Could not create OAuth2 app (may already exist)${NC}"
+    fi
+}
+
+setup_gitea_repos() {
+    local admin_user="${GITEA_ADMIN_USER:-marie}"
+    local admin_password="${GITEA_ADMIN_PASSWORD:-rycerz}"
+    local gitea_url="http://localhost:${GITEA_HTTP_PORT:-3001}"
+    local repos="${GITEA_DEFAULT_REPOS:-planners:Query planners,prompts:Prompt templates,deployments:Deployment configs}"
+
+    echo -e "${BLUE}📦 Setting up Gitea repositories...${NC}"
+
+    # Parse and create each repository
+    IFS=',' read -ra REPO_LIST <<< "$repos"
+    for repo_entry in "${REPO_LIST[@]}"; do
+        local repo_name="${repo_entry%%:*}"
+        local repo_desc="${repo_entry#*:}"
+
+        # Check if repo exists using API
+        local check_response
+        check_response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -u "$admin_user:$admin_password" \
+            "$gitea_url/api/v1/repos/$admin_user/$repo_name")
+
+        if [ "$check_response" = "200" ]; then
+            echo -e "${GREEN}  ✅ Repository '$repo_name' already exists${NC}"
+            continue
+        fi
+
+        # Create repository using API
+        local create_response
+        create_response=$(curl -s -w "\n%{http_code}" \
+            -X POST \
+            -u "$admin_user:$admin_password" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\": \"$repo_name\", \"description\": \"$repo_desc\", \"private\": false, \"auto_init\": true}" \
+            "$gitea_url/api/v1/user/repos")
+
+        local http_code
+        http_code=$(echo "$create_response" | tail -n1)
+
+        if [ "$http_code" = "201" ]; then
+            echo -e "${GREEN}  ✅ Repository '$repo_name' created${NC}"
+        else
+            echo -e "${YELLOW}  ⚠️  Could not create repository '$repo_name' (may already exist)${NC}"
+        fi
+    done
+}
+
 initialize_databases() {
     echo -e "${BLUE}🗄️  Initializing databases...${NC}"
 
@@ -456,6 +594,9 @@ bootstrap_system() {
     source "$ENV_FILE"
     echo -e "${GREEN}✅ Environment loaded from $ENV_FILE${NC}"
 
+    # Create Docker network if it doesn't exist
+    create_docker_network
+
     local orphan_flag
     orphan_flag=$(get_orphan_flag)
 
@@ -470,17 +611,15 @@ bootstrap_system() {
         infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
         infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
 
-        if [ "$DEPLOY_LITELLM" = "true" ] && [ -f "./Dockerfiles/docker-compose.litellm.yml" ]; then
-            infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.litellm.yml"
-        fi
+        # Note: LiteLLM is NOT included here - it will be started after database initialization
+        # because it requires the 'litellm' database to exist before starting
 
         if [ "$DEPLOY_CLICKHOUSE" = "true" ] && [ -f "./Dockerfiles/docker-compose.clickhouse.yml" ]; then
             infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
         fi
 
-        if [ "$DEPLOY_GITEA" = "true" ] && [ -f "./Dockerfiles/docker-compose.gitea.yml" ]; then
-            infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.gitea.yml"
-        fi
+        # Note: Gitea is NOT included here - it will be started after database initialization
+        # because it requires the 'gitea' database to exist before starting
 
         infra_compose_cmd="$infra_compose_cmd --project-directory ."
 
@@ -491,17 +630,14 @@ bootstrap_system() {
         echo -e "${YELLOW}⏳ Waiting for core infrastructure services to be healthy...${NC}"
 
         # First wait for core services (PostgreSQL must be ready before we can create databases)
+        # Note: LiteLLM and Gitea are NOT included - they need their databases created first
         local core_services_to_wait=("s3server" "psql" "rabbitmq" "etcd-single")
-
-        if [ "$DEPLOY_LITELLM" = "true" ]; then
-            core_services_to_wait+=("litellm")
-        fi
 
         if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
             core_services_to_wait+=("clickhouse")
         fi
 
-        # Wait for core services first (excluding Gitea which needs DB setup)
+        # Wait for core services first (excluding LiteLLM and Gitea which need DB setup)
         local wait_compose_cmd="COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE"
         wait_compose_cmd="$wait_compose_cmd --project-name marie-infrastructure"
         wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.storage.yml"
@@ -509,33 +645,71 @@ bootstrap_system() {
         wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
         wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
 
-        if [ "$DEPLOY_LITELLM" = "true" ]; then
-            wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.litellm.yml"
-        fi
-
         if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
             wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
         fi
 
-        if [ "$DEPLOY_GITEA" = "true" ]; then
-            wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.gitea.yml"
-        fi
+        # Note: LiteLLM and Gitea are not included in wait - they haven't been started yet
 
-        wait_compose_cmd="$wait_compose_cmd --project-directory . up --wait ${core_services_to_wait[@]}"
+        wait_compose_cmd="$wait_compose_cmd --project-directory . up --wait ${core_services_to_wait[*]}"
         eval "$wait_compose_cmd"
 
         # Initialize databases after PostgreSQL is ready
         initialize_databases
 
-        # Now wait for Gitea if deployed (it should start successfully now that DB exists)
-        if [ "$DEPLOY_GITEA" = "true" ]; then
+        # Now start and wait for LiteLLM (after database is created)
+        # Important: Include all infra compose files to avoid orphan removal
+        if [ "$DEPLOY_LITELLM" = "true" ] && [ -f "./Dockerfiles/docker-compose.litellm.yml" ]; then
+            echo -e "${YELLOW}⏳ Starting LiteLLM (database is now ready)...${NC}"
+            local litellm_cmd="COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE"
+            litellm_cmd="$litellm_cmd --project-name marie-infrastructure"
+            litellm_cmd="$litellm_cmd -f ./Dockerfiles/docker-compose.storage.yml"
+            litellm_cmd="$litellm_cmd -f ./Dockerfiles/docker-compose.s3.yml"
+            litellm_cmd="$litellm_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+            litellm_cmd="$litellm_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
+            if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
+                litellm_cmd="$litellm_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
+            fi
+            litellm_cmd="$litellm_cmd -f ./Dockerfiles/docker-compose.litellm.yml"
+            litellm_cmd="$litellm_cmd --project-directory ."
+            # Start LiteLLM (no orphan flag to be safe)
+            eval "$litellm_cmd up -d litellm"
+            # Wait for it to be healthy
+            echo -e "${YELLOW}⏳ Waiting for LiteLLM to be healthy...${NC}"
+            eval "$litellm_cmd up --wait litellm"
+            echo -e "${GREEN}✅ LiteLLM is ready${NC}"
+        fi
+
+        # Now start and wait for Gitea (after database is created)
+        # Important: Include all infra compose files to avoid orphan removal
+        if [ "$DEPLOY_GITEA" = "true" ] && [ -f "./Dockerfiles/docker-compose.gitea.yml" ]; then
+            echo -e "${YELLOW}⏳ Starting Gitea (database is now ready)...${NC}"
+            local gitea_cmd="COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE"
+            gitea_cmd="$gitea_cmd --project-name marie-infrastructure"
+            gitea_cmd="$gitea_cmd -f ./Dockerfiles/docker-compose.storage.yml"
+            gitea_cmd="$gitea_cmd -f ./Dockerfiles/docker-compose.s3.yml"
+            gitea_cmd="$gitea_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+            gitea_cmd="$gitea_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
+            if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
+                gitea_cmd="$gitea_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
+            fi
+            gitea_cmd="$gitea_cmd -f ./Dockerfiles/docker-compose.gitea.yml"
+            gitea_cmd="$gitea_cmd --project-directory ."
+            # Start Gitea (no orphan flag to be safe)
+            eval "$gitea_cmd up -d gitea"
+            # Wait for it to be healthy
             echo -e "${YELLOW}⏳ Waiting for Gitea to be healthy...${NC}"
-            local gitea_wait_cmd="COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE"
-            gitea_wait_cmd="$gitea_wait_cmd --project-name marie-infrastructure"
-            gitea_wait_cmd="$gitea_wait_cmd -f ./Dockerfiles/docker-compose.gitea.yml"
-            gitea_wait_cmd="$gitea_wait_cmd --project-directory . up --wait gitea"
-            eval "$gitea_wait_cmd"
+            eval "$gitea_cmd up --wait gitea"
             echo -e "${GREEN}✅ Gitea is ready${NC}"
+
+            # Create default admin user
+            setup_gitea_admin
+
+            # Create default repositories
+            setup_gitea_repos
+
+            # Create OAuth2 application for Marie Studio
+            setup_gitea_oauth_app
         fi
 
         # Check if mc-setup completed successfully
@@ -675,7 +849,7 @@ show_service_endpoints() {
         fi
 
         if [ "$DEPLOY_GITEA" = "true" ]; then
-            echo "  🐙 Gitea Web UI: http://localhost:3001"
+            echo "  🐙 Gitea Web UI: http://localhost:3001 (${GITEA_ADMIN_USER:-marie}/${GITEA_ADMIN_PASSWORD:-rycerz})"
             echo "  🐙 Gitea SSH: ssh://git@localhost:2222"
         fi
     fi

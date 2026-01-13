@@ -181,7 +181,7 @@ with:
     postgres:
       <<: *psql_conf_shared
     rabbitmq:
-      url: amqp://guest:guest@localhost:5672/
+      <<: *rabbitmq_conf_shared
       exchange: llm-events
     clickhouse:
       host: localhost

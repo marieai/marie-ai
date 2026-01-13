@@ -9,8 +9,9 @@ services:
     environment:
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-1234}
       - LITELLM_SALT_KEY=${LITELLM_SALT_KEY:-sk-1234}
+      # Database-free mode by default. Set LITELLM_DATABASE_URL to enable DB storage.
       - DATABASE_URL=${LITELLM_DATABASE_URL:-}
-      - STORE_MODEL_IN_DB=${LITELLM_STORE_MODEL_IN_DB:-true}
+      - STORE_MODEL_IN_DB=${LITELLM_STORE_MODEL_IN_DB:-false}
       - LITELLM_LOG=${LITELLM_LOG:-INFO}
       - LITELLM_PORT=${LITELLM_PORT:-4000}
       - LITELLM_PROXY_CONFIG_PATH=${LITELLM_PROXY_CONFIG_PATH:-/app/config.yaml}

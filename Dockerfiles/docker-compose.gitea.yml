@@ -57,11 +57,13 @@ services:
     networks:
       - marie_default
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/healthz"]
+      # Note: Gitea needs a long start_period for database migrations on first run
+      # See: https://github.com/go-gitea/gitea/pull/35513
+      test: ["CMD", "/usr/bin/wget", "-q", "--spider", "http://localhost:3000/api/healthz"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 30s
+      retries: 5
+      start_period: 120s
 
 volumes:
   gitea_data:
