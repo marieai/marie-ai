@@ -537,12 +537,24 @@ initialize_databases() {
         if [ $ch_attempt -gt $ch_attempts ]; then
             echo -e "${YELLOW}⚠️  ClickHouse not ready, skipping database creation${NC}"
         else
-            # Create marie database for LLM tracking and analytics
-            local ch_db="${CLICKHOUSE_DB:-marie}"
+            # Create marie_llm database for LLM tracking and analytics
+            local ch_db="${CLICKHOUSE_DB:-marie_llm}"
             echo "  Creating ClickHouse database '$ch_db'..."
             docker exec marie-clickhouse clickhouse-client --query \
                 "CREATE DATABASE IF NOT EXISTS $ch_db" >/dev/null 2>&1
             echo -e "${GREEN}  ✅ ClickHouse database '$ch_db' ready${NC}"
+
+            # Initialize schema (tables)
+            local schema_file="./config/clickhouse/schema/llm_tracking.sql"
+            if [ -f "$schema_file" ]; then
+                echo "  Initializing ClickHouse schema..."
+                docker exec -i marie-clickhouse clickhouse-client \
+                    --database "$ch_db" \
+                    < "$schema_file" >/dev/null 2>&1
+                echo -e "${GREEN}  ✅ ClickHouse schema initialized (traces, observations, scores)${NC}"
+            else
+                echo -e "${YELLOW}  ⚠️  Schema file not found: $schema_file${NC}"
+            fi
         fi
     fi
 
@@ -702,6 +714,12 @@ bootstrap_system() {
             eval "$gitea_cmd up --wait gitea"
             echo -e "${GREEN}✅ Gitea is ready${NC}"
 
+            # Gitea Setup Section - make output more visible
+            echo ""
+            echo -e "${BLUE}========================================${NC}"
+            echo -e "${BLUE}    Gitea Configuration${NC}"
+            echo -e "${BLUE}========================================${NC}"
+
             # Create default admin user
             setup_gitea_admin
 
@@ -710,6 +728,9 @@ bootstrap_system() {
 
             # Create OAuth2 application for Marie Studio
             setup_gitea_oauth_app
+
+            echo -e "${BLUE}========================================${NC}"
+            echo ""
         fi
 
         # Check if mc-setup completed successfully

@@ -1,5 +1,37 @@
 # Build proto
 
+## Event Stream Proto (gRPC Events)
+
+The `event_stream.proto` defines the bidirectional streaming service for real-time events.
+
+### Build with grpcio-tools
+
+```bash
+source ~/environment/marie-3.12/bin/activate
+cd /path/to/marie-ai
+
+python -m grpc_tools.protoc \
+    -I marie/proto \
+    -I $(python -c "import grpc_tools; import os; print(os.path.dirname(grpc_tools.__file__) + '/_proto')") \
+    --python_out=marie/proto \
+    --grpc_python_out=marie/proto \
+    marie/proto/event_stream.proto
+
+# Fix the import in the generated grpc file
+sed -i 's/import event_stream_pb2/from marie.proto import event_stream_pb2/' marie/proto/event_stream_pb2_grpc.py
+```
+
+### Dependencies
+
+```
+grpcio>=1.60.0
+grpcio-tools>=1.60.0
+```
+
+---
+
+## Jina/DocArray Proto
+
 Jina support two versions of protobuf, before 3.19 and after (which is a breaking change for python), therefore we have
 duplicate python file generation from proto based on the installed protobuf version.
 

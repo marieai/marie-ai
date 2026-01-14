@@ -37,7 +37,7 @@ from marie.job.job_manager import JobManager
 from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import Toast, mark_as_failed, mark_as_scheduled
 from marie.messaging.events import EngineEventData, MarieEvent, MarieEventType
-from marie.messaging.sse_broker import SseBroker
+from marie.messaging.grpc_event_broker import GrpcEventBroker
 from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.scheduler import PostgreSQLJobScheduler
 from marie.scheduler.models import DEFAULT_RETRY_POLICY, JobSubmissionModel, WorkInfo
@@ -238,7 +238,7 @@ class MarieServerGateway(CompositeServer):
             ready_event=self.ready_event,
         )
 
-        self.sse_broker = None
+        self.grpc_broker: Optional[GrpcEventBroker] = None
         # FIXME : We need to get etcd host and port from the config
         # we should start job scheduler after the gateway server is started
         storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
@@ -549,77 +549,8 @@ class MarieServerGateway(CompositeServer):
                 # # ['header', 'parameters', 'routes', 'data'
                 # return {"header": {}, "parameters": {}, "data": None}
 
-            async def _sse_auth(authorization: str | None):
-                if not authorization:
-                    raise HTTPException(status_code=401, detail="Missing Authorization")
-
-            @app.get("/sse/all")
-            async def sse_all(
-                response: Response,
-                last_event_id: str | None = Header(
-                    default=None, convert_underscores=False
-                ),
-                named: bool = Query(
-                    True,
-                    description="False => single default 'message' with {type,topic,payload}",
-                ),
-                authorization: str | None = Header(default=None),
-            ):
-                print('http/sse sse_all')
-                await _sse_auth(authorization)
-                response.headers["Content-Type"] = "text/event-stream"
-                response.headers["Cache-Control"] = "no-cache"
-                response.headers["Connection"] = "keep-alive"
-                response.headers["X-Accel-Buffering"] = "no"
-                try:
-                    lei = (
-                        int(last_event_id)
-                        if last_event_id and last_event_id.isdigit()
-                        else None
-                    )
-                except Exception:
-                    lei = None
-
-                async def gen():
-                    async for frame in self.sse_broker.subscribe_all(
-                        last_event_id=lei, named=named, retry_ms=20000
-                    ):
-                        print("Yielding frame : ", frame)
-                        yield frame
-
-                return StreamingResponse(gen(), media_type="text/event-stream")
-
-            @app.get("/sse/{api_key}")
-            async def sse_tenant(
-                api_key: str,
-                response: Response,
-                last_event_id: str | None = Header(
-                    default=None, convert_underscores=False
-                ),
-                authorization: str | None = Header(default=None),
-            ):
-                print('http/sse sse_tenant')
-                await _sse_auth(authorization)
-                response.headers["Content-Type"] = "text/event-stream"
-                response.headers["Cache-Control"] = "no-cache"
-                response.headers["Connection"] = "keep-alive"
-                response.headers["X-Accel-Buffering"] = "no"
-                try:
-                    lei = (
-                        int(last_event_id)
-                        if last_event_id and last_event_id.isdigit()
-                        else None
-                    )
-                except Exception:
-                    lei = None
-
-                async def gen():
-                    async for frame in self.sse_broker.subscribe(
-                        topic=api_key, last_event_id=lei, retry_ms=20000
-                    ):
-                        yield frame
-
-                return StreamingResponse(gen(), media_type="text/event-stream")
+            # SSE endpoints removed - use gRPC EventStreamService instead
+            # Clients should connect via gRPC bidirectional streaming for real-time events
 
             @app.api_route(
                 path="/api/deployments",
@@ -1247,7 +1178,15 @@ class MarieServerGateway(CompositeServer):
         self.logger.debug(f"Setting up MarieGateway server")
         await super().setup_server()
 
-        self.sse_broker: SseBroker = setup_toast_events(self.args.get("toast", {}))
+        self.grpc_broker = setup_toast_events(self.args.get("toast", {}))
+
+        # Register EventStreamService on the gRPC server if broker is configured
+        if self.grpc_broker:
+            for server in self.servers:
+                if hasattr(server, 'register_event_service'):
+                    await server.register_event_service(self.grpc_broker)
+                    await self.grpc_broker.start()
+                    break
         storage_config = self.args.get("storage", {})
         setup_storage(storage_config)
         setup_auth(self.args.get("auth", {}))

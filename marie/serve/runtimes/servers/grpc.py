@@ -1,7 +1,10 @@
 import os
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import grpc
+
+if TYPE_CHECKING:
+    from marie.messaging.grpc_event_broker import GrpcEventBroker
 from grpc import RpcError
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 from grpc_reflection.v1alpha import reflection
@@ -159,6 +162,34 @@ class GRPCServer(BaseServer):
                 service, health_pb2.HealthCheckResponse.SERVING
             )
         self.logger.debug(f'GRPC server setup successful : {bind_addr}')
+
+    async def register_event_service(self, broker: "GrpcEventBroker") -> None:
+        """
+        Register the EventStreamService with the gRPC server.
+
+        This method should be called after setup_server() but before the server
+        starts accepting connections. It enables real-time event streaming
+        via gRPC bidirectional streaming.
+
+        :param broker: The GrpcEventBroker instance for event management
+        """
+        from marie.messaging.grpc_event_service import EventStreamServicer
+        from marie.proto import event_stream_pb2, event_stream_pb2_grpc
+
+        event_servicer = EventStreamServicer(broker=broker)
+        event_stream_pb2_grpc.add_EventStreamServiceServicer_to_server(
+            event_servicer, self.server
+        )
+
+        # Register health check for EventStreamService
+        service_name = event_stream_pb2.DESCRIPTOR.services_by_name[
+            'EventStreamService'
+        ].full_name
+        await self.health_servicer.set(
+            service_name, health_pb2.HealthCheckResponse.SERVING
+        )
+
+        self.logger.info(f'EventStreamService registered: {service_name}')
 
     async def shutdown(self):
         """Free other resources allocated with the server, e.g, gateway object, ..."""
