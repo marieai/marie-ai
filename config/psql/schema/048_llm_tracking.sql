@@ -89,11 +89,8 @@ CREATE TABLE IF NOT EXISTS {schema}.llm_failed_events (
     resolution_notes TEXT,
 
     -- Timestamps
-    created_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
 
-ll
-    ld
-    reboot
     );
 
 -- Indexes for failed events

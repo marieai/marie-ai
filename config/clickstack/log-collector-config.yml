@@ -1,0 +1,277 @@
+# ############### Log Collector Sidecar Configuration ###############
+#
+# Collects Docker container logs and forwards to ClickStack/HyperDX
+# Optimized for marie-ai log format:
+#   INFO   2026-01-12 14:59:55,272:            : PostgreSQLJobScheduler[]@ 7 Message here
+#
+# Data flow:
+#   Docker containers -> JSON logs -> OTel Collector -> HyperDX -> ClickHouse
+
+receivers:
+  # Docker container logs (JSON format from Docker daemon)
+  filelog/docker:
+    include:
+      - /var/lib/docker/containers/*/*.log
+    exclude:
+      # Exclude noisy containers
+      - /var/lib/docker/containers/*/*hyperdx*.log
+      - /var/lib/docker/containers/*/*otel*.log
+    start_at: end
+    include_file_path: true
+    include_file_name: true
+    multiline:
+      line_start_pattern: '^(INFO|WARN|ERROR|DEBUG|CRITICAL|FATAL|WARNI)'
+
+    operators:
+      # Parse Docker JSON log format first
+      - type: json_parser
+        id: docker_parser
+        timestamp:
+          parse_from: attributes.time
+          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+        on_error: send
+
+      # Extract container ID from file path
+      - type: regex_parser
+        id: extract_container_id
+        parse_from: attributes["log.file.path"]
+        regex: '/var/lib/docker/containers/(?P<container_id>[a-f0-9]{64})/'
+        on_error: send
+
+      # Move Docker 'log' field to body
+      - type: move
+        from: attributes.log
+        to: body
+        on_error: send
+
+      # ############### Marie-AI Log Format Parser ###############
+      # Format: LEVEL   TIMESTAMP:            : COMPONENT[]@ THREAD MESSAGE
+      - type: regex_parser
+        id: marie_log_parser
+        parse_from: body
+        regex: '^(?P<log_level>INFO|WARN|ERROR|DEBUG|CRITICAL|FATAL|WARNI[^\s]*)\s+(?P<log_timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3}):\s*:\s*(?P<component>\w+)\[\]@\s*(?P<thread_id>\d+)\s+(?P<message>.*)$'
+        on_error: send
+
+      # ############### Extract Job Information ###############
+      # Extract job_id (UUID format used by marie-ai)
+      - type: regex_parser
+        id: extract_job_id
+        if: 'body matches "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"'
+        parse_from: body
+        regex: "(?P<job_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+        on_error: send
+
+      # Extract submission_id
+      - type: regex_parser
+        id: extract_submission_id
+        if: 'body matches "submission_id"'
+        parse_from: body
+        regex: 'submission_id[:\s]+(?P<submission_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
+        on_error: send
+
+      # Extract job status from various message patterns
+      - type: regex_parser
+        id: extract_job_status
+        if: 'body matches "(?i)(completed|scheduled|started|succeeded|enqueued|failed|processed|SUCCEEDED|FAILED)"'
+        parse_from: body
+        regex: '(?i)(?:Job\s+)?(?P<job_status>completed|scheduled|started|succeeded|enqueued|failed|processed successfully|SUCCEEDED|FAILED)'
+        on_error: send
+
+      # Extract executor name
+      - type: regex_parser
+        id: extract_executor
+        if: 'body matches "_executor"'
+        parse_from: body
+        regex: '(?P<executor_name>\w+_executor)'
+        on_error: send
+
+      # Extract entrypoint (executor://path format)
+      - type: regex_parser
+        id: extract_entrypoint
+        if: 'body matches "://document/"'
+        parse_from: body
+        regex: '(?P<entrypoint>\w+://document/\w+)'
+        on_error: send
+
+      # ############### Extract Timing Information ###############
+      # Extract duration in seconds (0.26s, 2.65s format)
+      - type: regex_parser
+        id: extract_duration_seconds
+        if: 'body matches "[\d.]+s\s"'
+        parse_from: body
+        regex: '(?:in\s+)?(?P<duration_seconds>[\d.]+)s(?:\s|$|,)'
+        on_error: send
+
+      # Extract timing breakdown (signal=0.011s, post-signal=0.010s)
+      - type: regex_parser
+        id: extract_timing_breakdown
+        if: 'body matches "signal="'
+        parse_from: body
+        regex: 'signal=(?P<signal_time>[\d.]+)s.*?post-signal=(?P<post_signal_time>[\d.]+)s'
+        on_error: send
+
+      # Extract etcd timing
+      - type: regex_parser
+        id: extract_etcd_timing
+        if: 'body matches "Etcd update"'
+        parse_from: body
+        regex: 'lease=(?P<etcd_lease_time>[\d.]+)s\s+put=(?P<etcd_put_time>[\d.]+)s\s+total=(?P<etcd_total_time>[\d.]+)s'
+        on_error: send
+
+      # ############### Extract Scheduler Information ###############
+      # Extract DAG status
+      - type: regex_parser
+        id: extract_dag_status
+        if: 'body matches "DAG status"'
+        parse_from: body
+        regex: 'DAG status:\s*(?P<dag_id>[0-9a-f-]+),\s*status=(?P<dag_status>\w+)'
+        on_error: send
+
+      # Extract scheduling metrics
+      - type: regex_parser
+        id: extract_scheduled_count
+        if: 'body matches "scheduled /"'
+        parse_from: body
+        regex: '(?P<scheduled_count>\d+)\s+scheduled\s*/\s*(?P<candidate_count>\d+)\s+candidates'
+        on_error: send
+
+      # Extract available slots
+      - type: regex_parser
+        id: extract_available_slots
+        if: 'body matches "Available slots"'
+        parse_from: body
+        regex: 'Available slots\s*\((?P<used_slots>\d+)/(?P<total_slots>\d+)\)'
+        on_error: send
+
+      # ############### Extract Network/Deployment Info ###############
+      # Extract deployment target (IP:port)
+      - type: regex_parser
+        id: extract_deployment_target
+        if: 'body matches "Sent request to"'
+        parse_from: body
+        regex: 'Sent request to (?P<target_host>[\d.]+):(?P<target_port>\d+) on deployment (?P<target_deployment>\w+)'
+        on_error: send
+
+      # ############### Extract Event Information ###############
+      # Extract event type from native_handler logs
+      - type: regex_parser
+        id: extract_event_type
+        if: 'body matches "\"event\":"'
+        parse_from: body
+        regex: '"event":\s*"(?P<event_type>[^"]+)"'
+        on_error: send
+
+      # Extract api_key (first 10 chars for identification)
+      - type: regex_parser
+        id: extract_api_key
+        if: 'body matches "\"api_key\":"'
+        parse_from: body
+        regex: '"api_key":\s*"(?P<api_key>[^"]{10})'
+        on_error: send
+
+      # Extract planner name
+      - type: regex_parser
+        id: extract_planner
+        if: 'body matches "planner"'
+        parse_from: body
+        regex: "(?:planner['\"]?[:\\s]+['\"]?)(?P<planner_name>\\w+)"
+        on_error: send
+
+      # ############### Severity Mapping ###############
+      - type: severity_parser
+        if: 'attributes.log_level != nil'
+        parse_from: attributes.log_level
+        preset: none
+        mapping:
+          fatal: ["FATAL", "CRITICAL"]
+          error: ["ERROR"]
+          warn: ["WARN", "WARNI", "WARNING"]
+          info: ["INFO"]
+          debug: ["DEBUG"]
+
+  # OTLP receiver for applications sending logs directly
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Batch logs for efficient export
+  batch:
+    send_batch_size: 500
+    send_batch_max_size: 1000
+    timeout: 5s
+
+  # Memory limiter
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # Add resource attributes
+  resource:
+    attributes:
+      - key: service.namespace
+        value: marie-ai
+        action: upsert
+      - key: deployment.environment
+        value: ${env:DEPLOYMENT_ENV}
+        action: upsert
+
+  # Transform to enrich logs
+  transform:
+    log_statements:
+      - context: log
+        statements:
+          # Set service name from component if available
+          - set(resource.attributes["service.name"], attributes["component"]) where attributes["component"] != nil
+          # Copy job_id to resource for correlation
+          - set(resource.attributes["job.id"], attributes["job_id"]) where attributes["job_id"] != nil
+          # Copy executor to resource
+          - set(resource.attributes["executor.name"], attributes["executor_name"]) where attributes["executor_name"] != nil
+
+  # Optional: Filter to reduce noise (uncomment to enable)
+  # filter/important:
+  #   logs:
+  #     include:
+  #       match_type: regexp
+  #       bodies:
+  #         - ".*Job.*"
+  #         - ".*ERROR.*"
+  #         - ".*WARN.*"
+  #         - ".*failed.*"
+  #         - ".*scheduled.*"
+
+exporters:
+  # Export to HyperDX via OTLP
+  otlphttp:
+    endpoint: http://marie-hyperdx:4318
+    tls:
+      insecure: true
+
+  # Debug exporter (for troubleshooting)
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+    sampling_thereafter: 500
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+
+  pipelines:
+    logs:
+      receivers: [filelog/docker, otlp]
+      processors: [memory_limiter, resource, transform, batch]
+      exporters: [otlphttp, debug]
+
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      address: 0.0.0.0:8888
