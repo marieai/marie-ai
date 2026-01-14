@@ -29,7 +29,10 @@ max_pixels = 2048 * 28 * 28
 import requests
 
 # Default model list fallback
-DEFAULT_MODEL_LIST = ["table_extractionXXX", "deepseek_r1_32", "qwen_v2_5_vlXXX"]
+DEFAULT_MODEL_LIST = [
+    "table_extractionXXX-NOT-AVAILABLE",
+    "qwen_v2_5_vlXXX-NOT-AVAILABLE",
+]
 
 
 def get_model_list():

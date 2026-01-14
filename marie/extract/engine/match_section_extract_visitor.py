@@ -192,8 +192,11 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
         for span in spans:
             page_id = span.page
-            start_line = span.y
-            end_line = start_line + span.h
+            start_line = span.start_line_id
+            end_line = span.end_line_id
+            # Make sure to include the last line only if our span extends to the end of the page
+            if end_line == len(document.lines_for_page(page_id)):
+                end_line += 1
 
             regions_by_page = document.regions_for_page(page_id)
             for region in regions_by_page:
@@ -217,7 +220,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     region_start = min(mins)
                     region_end = max(maxs)
                     # Fully-contained check
-                    if region_start > start_line and region_end < end_line:
+                    if region_start >= start_line and region_end <= end_line:
                         regions_in_scope.add(region)
                 except Exception:
                     raise
@@ -675,7 +678,10 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 template_fields_repeating=template_fields_repeating,
             )
 
-            match_section_to_populate.matched_field_rows = matched_field_rows
+            if not match_section_to_populate.matched_field_rows:
+                match_section_to_populate.matched_field_rows = matched_field_rows
+            else:  # MatchSection has collected rows from a previous region in scope
+                match_section_to_populate.matched_field_rows.extend(matched_field_rows)
 
     def _build_matched_field_rows(
         self,
@@ -819,8 +825,8 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
                 page_id = span.page
                 tables_by_page: List[Table] = document.tables_for_page(page_id)
-                start_line = span.y
-                end_line = start_line + span.h
+                start_line = span.start_line_id
+                end_line = span.end_line_id
 
                 for table in tables_by_page:
                     rows = table.cells
@@ -1256,36 +1262,39 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 if isinstance(mapping, dict):
                     map_value = mapping.get(derived_key, None)
 
-                # derived fields can be None if the parsing did not find a value for it
-                # we are skipping those fields
-                if map_value is None:
-                    self.logger.warning(f"Derived key '{derived_key}' has no value")
-                    continue
+                map_values = map_value if isinstance(map_value, list) else [map_value]
 
-                child_field = Field(
-                    field_name=derived_value_name,
-                    field_type=None,
-                    is_required=False,
-                    value=stringify(map_value),
-                    value_original=None,
-                    composite_field=False,
-                    x=0,
-                    y=0,
-                    width=0,
-                    height=0,
-                    date_format=None,
-                    name_format=None,
-                    column_name=derived_value_name,
-                    page=page_id,
-                    xdpi=300,
-                    ydpi=300,
-                    confidence=1,
-                    scrubbed=True,
-                    uuid=None,
-                    reference_uuid=reference_uuid,
-                    layer_name="main-layer",
-                )
-                fields.append(child_field)
+                for map_value in map_values:
+                    # derived fields can be None if the parsing did not find a value for it
+                    # we are skipping those fields
+                    if map_value is None:
+                        self.logger.warning(f"Derived key '{derived_key}' has no value")
+                        continue
+
+                    child_field = Field(
+                        field_name=derived_value_name,
+                        field_type=None,
+                        is_required=False,
+                        value=stringify(map_value),
+                        value_original=None,
+                        composite_field=False,
+                        x=0,
+                        y=0,
+                        width=0,
+                        height=0,
+                        date_format=None,
+                        name_format=None,
+                        column_name=derived_value_name,
+                        page=page_id,
+                        xdpi=300,
+                        ydpi=300,
+                        confidence=1,
+                        scrubbed=True,
+                        uuid=None,
+                        reference_uuid=reference_uuid,
+                        layer_name="main-layer",
+                    )
+                    fields.append(child_field)
 
         # Handle TransformReturnType which can be Dict[str, str|None] or List[Dict[str, str|None]]
         if derived_fields:

@@ -3,6 +3,7 @@ import threading
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from marie.excepts import BadConfigSource
+from marie.extract.engine.processing_visitor import ProcessingVisitor
 from marie.extract.validator.base import BaseValidator, ValidationStage
 from marie.logging_core.predefined import default_logger as logger
 from marie.wheel_manager import PipWheelManager, WheelDirectoryWatcher
@@ -16,19 +17,22 @@ from .region_processor_coercer import coerce_region_processor_fn
 from .region_processor_types import RegionProcessorFn, TRegionProcessor
 from .validator_coercer import coerce_validator_instance
 from .validator_types import TValidator
+from .visitor_coercer import coerce_visitor_instance
+from .visitor_types import TVisitor
 from .wheel_callback import RegistryWheelCallback
 
 
 class ComponentRegistry:
-    """Thin facade that composes parsers, validators, and template builders."""
+    """Thin facade that composes parsers, validators, template builders, and visitors."""
 
     def __init__(self):
         self._parsers: Dict[str, ParserFn] = {}
         self._validators: Dict[str, BaseValidator] = {}
         self._template_builders: Dict[str, TemplateBuilderFn] = {}
-        self._region_processors: Dict[str, RegionProcessorFn] = (
-            {}
-        )  # New registry for region processors
+        self._region_processors: Dict[str, RegionProcessorFn] = {}
+        # TODO: add or convert to a linked dict for pre/post insertion and preserved order
+        self._processing_visitors: Dict[str, ProcessingVisitor] = {}
+
         self._core_initialized = False
         self._external_modules_loaded = False
         self._auto_load_core = True
@@ -93,6 +97,22 @@ class ComponentRegistry:
 
         return decorator
 
+    # TODO: add pre and post processing visitor register functions
+    def register_processing_visitor(self, name: str) -> Callable[[TVisitor], TVisitor]:
+        """Register a processing visitor class or instance."""
+
+        def decorator(obj: TVisitor) -> TVisitor:
+            with self._lock:
+                if name in self._processing_visitors:
+                    logger.warning(
+                        f"Processing visitor '{name}' already registered; overwriting."
+                    )
+                self._processing_visitors[name] = coerce_visitor_instance(obj)
+            logger.info(f"Registered processing_visitor: {name} ({type(obj).__name__})")
+            return obj
+
+        return decorator
+
     def register_validator_instance(self, validator: BaseValidator):
         with self._lock:
             self._validators[validator.name] = validator
@@ -103,14 +123,20 @@ class ComponentRegistry:
             try:
                 # import for side effects/registration
                 import marie.extract.results.core.core_parsers  # noqa: F401
+                import marie.extract.results.core.core_processing_visitors  # noqa: F401
                 import marie.extract.results.core.core_regions_processors  # noqa: F401
                 import marie.extract.results.core.core_template_builders  # noqa: F401
                 import marie.extract.results.core.core_validators  # noqa: F401
 
                 self._core_initialized = True
-                p, v, b, rp = self._counts()
+                p, v, b, rp, pv = self._counts()
                 logger.info(
-                    f"Initialized {p} core parsers, {v} core validators, {b} core template_builders, {rp} core regions processors"
+                    f"Initialized Core: "
+                    f"{p} parsers, "
+                    f"{v} validators, "
+                    f"{b} template builders, "
+                    f"{rp} region processors, "
+                    f"{pv} processing visitors"
                 )
             except ImportError as e:
                 logger.error(f"Failed to initialize core components: {e}")
@@ -121,7 +147,7 @@ class ComponentRegistry:
     ) -> Dict[str, object]:
         if self._external_modules_loaded:
             logger.debug("External components already loaded")
-            p, v, b, rp = self._counts()
+            p, v, b, rp, pv = self._counts()
             return {
                 "loaded": [],
                 "failed": [],
@@ -129,6 +155,7 @@ class ComponentRegistry:
                 "total_validators": v,
                 "total_template_builders": b,
                 "total_region_processors": rp,
+                "total_processing_visitors": pv,
             }
 
         importlib.invalidate_caches()
@@ -150,7 +177,7 @@ class ComponentRegistry:
                 )
 
         self._external_modules_loaded = True
-        p, v, b, rp = self._counts()
+        p, v, b, rp, pv = self._counts()
         return {
             "loaded": all_loaded,
             "failed": all_failed,
@@ -158,6 +185,7 @@ class ComponentRegistry:
             "total_validators": v,
             "total_template_builders": b,
             "total_region_processors": rp,
+            "total_processing_visitors": pv,
         }
 
     def initialize_from_config(self, config: Dict[str, Any]):
@@ -165,7 +193,7 @@ class ComponentRegistry:
         if self._auto_load_core:
             self.initialize_core_components()
 
-        p, v, b, rp = self._counts()
+        p, v, b, rp, pv = self._counts()
         result = {
             "loaded": [],
             "failed": [],
@@ -173,6 +201,7 @@ class ComponentRegistry:
             "total_validators": v,
             "total_template_builders": b,
             "total_region_processors": rp,
+            "total_processing_visitors": pv,
         }
 
         # wheels
@@ -236,6 +265,18 @@ class ComponentRegistry:
             )
         return processor
 
+    def get_processing_visitor(self, name: str) -> Optional[ProcessingVisitor]:
+        """Get a processing visitor by name."""
+        self.__init_core_components()
+        with self._lock:
+            visitor = self._processing_visitors.get(name)
+        if visitor is None:
+            available = list(self.list_processing_visitors()) or "none"
+            logger.warning(
+                f"Processing visitor '{name}' not found. Available: {available}"
+            )
+        return visitor
+
     def list_parsers(self) -> List[str]:
         self.__init_core_components()
         with self._lock:
@@ -266,6 +307,12 @@ class ComponentRegistry:
                 if validator.supports_stage(stage)
             ]
 
+    def list_processing_visitors(self) -> List[str]:
+        """List all registered processing visitor names."""
+        self.__init_core_components()
+        with self._lock:
+            return list(self._processing_visitors.keys())
+
     def validators(self):
         self.__init_core_components()
         with self._lock:
@@ -274,16 +321,18 @@ class ComponentRegistry:
     def get_registry_info(self) -> Dict[str, Any]:
         self.__init_core_components()
         installed_wheels = self._wheel_manager.get_installed_wheels()
-        p, v, b, rp = self._counts()
+        p, v, b, rp, pv = self._counts()
         info = {
             "total_parsers": p,
             "total_validators": v,
             "total_template_builders": b,
             "total_region_processors": rp,
+            "total_processing_visitors": pv,
             "parser_names": self.list_parsers(),
             "validator_names": self.list_validators(),
             "template_builder_names": self.list_template_builders(),
             "region_processor_names": self.list_region_processors(),
+            "processing_visitor_names": self.list_processing_visitors(),
             "core_initialized": self._core_initialized,
             "external_loaded": self._external_modules_loaded,
             "auto_load_core": self._auto_load_core,
@@ -299,13 +348,14 @@ class ComponentRegistry:
         }
         return info
 
-    def _counts(self) -> Tuple[int, int, int, int]:
+    def _counts(self) -> Tuple[int, int, int, int, int]:
         with self._lock:
             return (
                 len(self._parsers),
                 len(self._validators),
                 len(self._template_builders),
                 len(self._region_processors),
+                len(self._processing_visitors),
             )
 
     def get_wheel_manager(self) -> PipWheelManager:
@@ -325,3 +375,4 @@ register_parser = component_registry.register_parser
 register_validator = component_registry.register_validator
 register_template_builder = component_registry.register_template_builder
 register_region_processor = component_registry.register_region_processor
+register_processing_visitor = component_registry.register_processing_visitor
