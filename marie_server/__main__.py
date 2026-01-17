@@ -193,6 +193,19 @@ def __main__(
     config = load_yaml(yml_config, substitute=True, context=context)
     prefetch = config.get("prefetch", 1)
 
+    # DEBUG: Print kv_store_kwargs right after loading YAML
+    with_section = config.get("with", {})
+    kv_kwargs = with_section.get("kv_store_kwargs", {})
+    logger.info(f"[DEBUG __main__] YAML config loaded from: {yml_config}")
+    logger.info(f"[DEBUG __main__] kv_store_kwargs = {kv_kwargs}")
+    logger.info(
+        f"[DEBUG __main__] kv_store_kwargs.hostname = {kv_kwargs.get('hostname')}"
+    )
+    logger.info(f"[DEBUG __main__] kv_store_kwargs.schema = {kv_kwargs.get('schema')}")
+    logger.info(
+        f"[DEBUG __main__] discovery_host = {with_section.get('discovery_host')}"
+    )
+
     # flow or deployment
     if True:
         f = Flow.load_config(
@@ -207,6 +220,19 @@ def __main__(
             prefetch=prefetch,
             external=False,
         ).config_gateway(prefetch=prefetch)
+
+        # DEBUG: Print Flow's _common_kwargs and _gateway_kwargs after creation
+        logger.info(
+            f"[DEBUG __main__] Flow._common_kwargs keys = {list(f._common_kwargs.keys())}"
+        )
+        if 'kv_store_kwargs' in f._common_kwargs:
+            logger.info(
+                f"[DEBUG __main__] Flow._common_kwargs['kv_store_kwargs'] = {f._common_kwargs['kv_store_kwargs']}"
+            )
+        if 'kv_store_kwargs' in f._gateway_kwargs:
+            logger.info(
+                f"[DEBUG __main__] Flow._gateway_kwargs['kv_store_kwargs'] = {f._gateway_kwargs['kv_store_kwargs']}"
+            )
 
     if False:
         f = Deployment.load_config(

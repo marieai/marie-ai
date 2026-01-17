@@ -55,6 +55,16 @@ class GrpcToastHandler(ToastHandler):
         self._worker_task: Optional[asyncio.Task] = None
         self._shutdown_event = asyncio.Event()
 
+        logger.info("GrpcToastHandler initialized")
+        # Try to start worker if event loop is already running
+        try:
+            loop = asyncio.get_running_loop()
+            self._worker_task = loop.create_task(self._worker())
+            logger.info("GrpcToastHandler worker started in __init__")
+        except RuntimeError:
+            # No running loop yet; worker will start on first notify()
+            pass
+
     def get_supported_events(self) -> List[str]:
         """Returns list of supported event patterns."""
         return ["*"]
@@ -67,6 +77,16 @@ class GrpcToastHandler(ToastHandler):
     async def notify(self, notification: EventMessage, **kwargs: Any) -> bool:
         """Enqueue event for async processing."""
         self._check_kwargs(kwargs)
+
+        # Start worker if we were constructed before loop was running
+        if self._worker_task is None:
+            try:
+                loop = asyncio.get_running_loop()
+                self._worker_task = loop.create_task(self._worker())
+                logger.info("GrpcToastHandler worker started lazily in notify()")
+            except RuntimeError:
+                logger.warning("notify() called without a running loop")
+                raise
 
         try:
             if self._enqueue_timeout_s > 0:
@@ -132,6 +152,7 @@ class GrpcToastHandler(ToastHandler):
 
     async def _publish_once(self, msg: EventMessage) -> None:
         """Single publish attempt."""
+        print(f"Publishing event {msg.id} to gRPC broker")
         await self.broker.publish_event_message(msg)
 
     async def close(self, drain: bool = True, timeout: float = 5.0) -> None:

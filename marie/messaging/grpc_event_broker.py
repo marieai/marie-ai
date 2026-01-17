@@ -222,7 +222,9 @@ class GrpcEventBroker:
 
             logger.info(
                 f"Subscription created: {subscription_id} "
-                f"topics={sub.topics} events={sub.events}"
+                f"topics={sub.topics} events={sub.events} "
+                f"connection_id={connection_id} "
+                f"total_topic_subscribers={dict((t, len(s)) for t, s in self._topic_subscribers.items())}"
             )
             return replay_from, current_head
 
@@ -317,6 +319,15 @@ class GrpcEventBroker:
             stored = StoredEvent(sequence_num=seq, event=msg)
             ts.events.append(stored)
 
+            # Debug: log subscription state before dispatch
+            topic_subs = self._topic_subscribers.get(topic, set())
+            wildcard_subs = self._topic_subscribers.get("*", set())
+            logger.info(
+                f"Publishing event: topic={topic}, event={msg.event}, seq={seq}, "
+                f"topic_subs={len(topic_subs)}, wildcard_subs={len(wildcard_subs)}, "
+                f"total_connections={len(self._connections)}"
+            )
+
             # Dispatch to matching subscriptions
             await self._dispatch_event(topic, seq, msg)
 
@@ -329,25 +340,35 @@ class GrpcEventBroker:
             topic, set()
         ) | self._topic_subscribers.get("*", set())
 
+        dispatched_count = 0
         for sub_id in sub_ids:
             conn_id = self._subscription_to_connection.get(sub_id)
             if not conn_id:
+                logger.debug(f"No connection for subscription {sub_id}")
                 continue
 
             conn = self._connections.get(conn_id)
             if not conn:
+                logger.debug(
+                    f"Connection {conn_id} not found for subscription {sub_id}"
+                )
                 continue
 
             sub = conn.subscriptions.get(sub_id)
             if not sub:
+                logger.debug(f"Subscription {sub_id} not in connection {conn_id}")
                 continue
 
             # Check event name filter
             if sub.events and msg.event not in sub.events:
+                logger.debug(
+                    f"Event {msg.event} filtered out by event filter for {sub_id}"
+                )
                 continue
 
             # Check advanced filters
             if not self._matches_filter(msg, sub.filter_config):
+                logger.debug(f"Event filtered out by advanced filter for {sub_id}")
                 continue
 
             # Check backpressure
@@ -357,8 +378,17 @@ class GrpcEventBroker:
             envelope = self._create_envelope(sub, topic, StoredEvent(seq, msg))
             try:
                 conn.event_queue.put_nowait(envelope)
+                dispatched_count += 1
+                logger.debug(f"Event dispatched to subscription {sub_id}")
             except asyncio.QueueFull:
                 logger.warning(f"Queue full for subscription {sub_id}, event dropped")
+
+        if dispatched_count == 0 and len(sub_ids) > 0:
+            logger.warning(
+                f"Event not dispatched to any of {len(sub_ids)} potential subscribers"
+            )
+        elif dispatched_count > 0:
+            logger.info(f"Event dispatched to {dispatched_count} subscriber(s)")
 
     def _matches_filter(self, msg: EventMessage, filter_config: Dict[str, Any]) -> bool:
         """Check if event matches subscription filter."""
@@ -506,10 +536,6 @@ class GrpcEventBroker:
             has_more = len(events) == max_events
             return events, ts.next_seq - 1, has_more
 
-    # =================
-    # Background tasks
-    # =================
-
     async def start(self) -> None:
         """Start background workers."""
         self._shutdown = False
@@ -577,10 +603,6 @@ class GrpcEventBroker:
                                         f"Event {ack_id} dropped after "
                                         f"{self._max_redelivery_attempts} attempts"
                                     )
-
-    # =====
-    # Stats
-    # =====
 
     def stats(self) -> Dict[str, Any]:
         """Get broker statistics."""

@@ -578,6 +578,16 @@ class Flow(
         known_keys = list(vars(args).keys())
         self._common_kwargs = {k: v for k, v in kwargs.items() if k not in known_keys}
 
+        # DEBUG: Log kv_store_kwargs to trace the issue
+        if 'kv_store_kwargs' in kwargs:
+            print(
+                f"[DEBUG Flow] kwargs['kv_store_kwargs'] = {kwargs['kv_store_kwargs']}"
+            )
+        if 'kv_store_kwargs' in self._common_kwargs:
+            print(
+                f"[DEBUG Flow] _common_kwargs['kv_store_kwargs'] = {self._common_kwargs['kv_store_kwargs']}"
+            )
+
         # gateway args inherit from flow args
         self._gateway_kwargs = {
             k: v

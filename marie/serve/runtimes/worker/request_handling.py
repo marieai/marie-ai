@@ -1582,6 +1582,9 @@ class WorkerRequestHandler:
         )
 
     def _init_job_info_client(self, kv_store_kwargs: Dict):
+        self.logger.info(
+            f"[DEBUG] _init_job_info_client called with kv_store_kwargs: {kv_store_kwargs}"
+        )
         if kv_store_kwargs is None:
             self.logger.warning(
                 "kv_store_kwargs is not provided, job info client will not be initialized"
@@ -1599,6 +1602,10 @@ class WorkerRequestHandler:
             raise ValueError(
                 f"kv_store_kwargs must contain the following keys: {expected_keys}"
             )
+        self.logger.info(f"[DEBUG] kv_store_kwargs config: {kv_store_kwargs}")
+        self.logger.info(
+            f"[DEBUG] kv_store_kwargs schema: {kv_store_kwargs.get('schema')}"
+        )
         storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
         return JobInfoStorageClient(storage)
 

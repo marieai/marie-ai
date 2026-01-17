@@ -283,7 +283,6 @@ class JAML:
         :param resolve_passes: number of rounds to resolve internal reference.
         :return: expanded dict.
         """
-
         from marie.helper import parse_arg
 
         expand_map = SimpleNamespace()
@@ -803,8 +802,23 @@ class JAMLCompatible(metaclass=JAMLCompatibleType):
     def _override_yml_params(cls, raw_yaml, field_name, override_field):
         if override_field:
             field_params = raw_yaml.get(field_name, {})
-            field_params.update(**override_field)
+            cls._deep_merge(field_params, override_field)
             raw_yaml[field_name] = field_params
+
+    @staticmethod
+    def _deep_merge(base: Dict, override: Dict) -> None:
+        """
+        Deep merge override into base dict.
+        For nested dicts, recursively merge so that keys in base are preserved
+        if they don't exist in override. For non-dict values, override replaces base.
+        """
+        for key, value in override.items():
+            if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+                # Recursively merge nested dicts
+                JAML._deep_merge(base[key], value)
+            else:
+                # Direct assignment for non-dict values or new keys
+                base[key] = value
 
     @staticmethod
     def is_valid_jaml(obj: Dict) -> bool:
