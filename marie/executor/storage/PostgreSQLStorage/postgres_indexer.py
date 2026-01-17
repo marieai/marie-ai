@@ -20,6 +20,7 @@ class PostgreSQLStorage:
         password: str = "123456",
         database: str = "postgres",
         table: str = "default_table",
+        schema: str = None,
         min_connections=1,
         max_connections=5,
         traversal_paths: str = "@r",
@@ -52,6 +53,7 @@ class PostgreSQLStorage:
         self.password = password
         self.database = database
         self.table = table
+        self.schema = schema
         self.logger = MarieLogger(self.__class__.__name__)
         self.virtual_shards = virtual_shards
         self.dry_run = dry_run
@@ -62,6 +64,7 @@ class PostgreSQLStorage:
             password=self.password,
             database=self.database,
             table=self.table,
+            schema=self.schema,
             min_connections=min_connections,
             max_connections=max_connections,
             dry_run=dry_run,

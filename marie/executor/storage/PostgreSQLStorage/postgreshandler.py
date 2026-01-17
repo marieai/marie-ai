@@ -68,6 +68,7 @@ class PostgreSQLHandler(PostgresqlMixin):
         password: str = "default_pwd",
         database: str = "postgres",
         table: Optional[str] = "default_table",
+        schema: Optional[str] = None,
         min_connections: int = 1,
         max_connections: int = 5,
         dump_dtype: type = np.float64,
@@ -94,6 +95,7 @@ class PostgreSQLHandler(PostgresqlMixin):
                 "password": password,
                 "database": database,
                 "default_table": table,
+                "schema": schema,
                 "max_connections": max_connections,
                 "min_connections": min_connections,
             }
@@ -136,7 +138,7 @@ class PostgreSQLHandler(PostgresqlMixin):
             f"""
             CREATE EXTENSION IF NOT EXISTS vector;
 
-            CREATE TABLE IF NOT EXISTS {self.table} (
+            CREATE TABLE IF NOT EXISTS {self.qualified_table} (
                 event_id SERIAL PRIMARY KEY,
                 doc_id VARCHAR NOT NULL,
                 ref_id VARCHAR(64) not null,
@@ -152,8 +154,8 @@ class PostgreSQLHandler(PostgresqlMixin):
                 updated_at timestamp with time zone default current_timestamp,
                 is_deleted BOOL DEFAULT FALSE
             );
-            INSERT INTO {META_TABLE_NAME} (table_name, schema_version) VALUES ('{self.table}', {SCHEMA_VERSION});
-            INSERT INTO {MODEL_TABLE_NAME} (table_name) VALUES ('{self.table}');"""
+            INSERT INTO {META_TABLE_NAME} (table_name, schema_version) VALUES ('{self.qualified_table}', {SCHEMA_VERSION});
+            INSERT INTO {MODEL_TABLE_NAME} (table_name) VALUES ('{self.qualified_table}');"""
         )
 
         # Now that the extension is created, re-attempt vector type registration
@@ -179,7 +181,9 @@ class PostgreSQLHandler(PostgresqlMixin):
                     f"DB schema version {result[0][0]} does not match Executor version {SCHEMA_VERSION}."
                 )
         else:
-            raise RuntimeError(f"No schema version found for table {self.table}.")
+            raise RuntimeError(
+                f"No schema version found for table {self.qualified_table}."
+            )
 
     def add(self, docs: DocumentArray, store_mode="content", *args, **kwargs):
         """Insert the documents into the database."""
@@ -219,7 +223,7 @@ class PostgreSQLHandler(PostgresqlMixin):
             with conn.cursor() as cursor:
                 psycopg2.extras.execute_batch(
                     cursor,
-                    f"INSERT INTO {self.table} (doc_id, ref_id, ref_type, store_mode,tags, embedding, blob, "
+                    f"INSERT INTO {self.qualified_table} (doc_id, ref_id, ref_type, store_mode,tags, embedding, blob, "
                     " content, doc, shard, created_at, updated_at) VALUES (%s, %s, %s, %s, %s,"
                     " %s, %s, %s, %s,%s, current_timestamp, current_timestamp)",
                     query_obj,
@@ -243,7 +247,7 @@ class PostgreSQLHandler(PostgresqlMixin):
             with conn.cursor() as cursor:
                 psycopg2.extras.execute_batch(
                     cursor,
-                    f"UPDATE {self.table} SET embedding = %s, doc = %s,"
+                    f"UPDATE {self.qualified_table} SET embedding = %s, doc = %s,"
                     " is_deleted = false, updated_at = current_timestamp WHERE doc_id = %s",
                     [
                         (
@@ -261,12 +265,12 @@ class PostgreSQLHandler(PostgresqlMixin):
     def prune(self):
         """Hard-delete entries marked for soft-deletion."""
         self._execute_sql_gracefully(
-            f"DELETE FROM {self.table} WHERE is_deleted = true"
+            f"DELETE FROM {self.qualified_table} WHERE is_deleted = true"
         )
 
     def clear(self):
         """Full hard-deletion of all entries."""
-        self._execute_sql_gracefully(f"DELETE FROM {self.table}")
+        self._execute_sql_gracefully(f"DELETE FROM {self.qualified_table}")
 
     def delete(self, docs: DocumentArray, soft_delete=False, *args, **kwargs):
         """Delete documents from the database."""
@@ -277,13 +281,13 @@ class PostgreSQLHandler(PostgresqlMixin):
                 if soft_delete:
                     psycopg2.extras.execute_batch(
                         cursor,
-                        f"UPDATE {self.table} SET is_deleted = true, updated_at = current_timestamp WHERE doc_id = %s;",
+                        f"UPDATE {self.qualified_table} SET is_deleted = true, updated_at = current_timestamp WHERE doc_id = %s;",
                         [(doc.id,) for doc in docs],
                     )
                 else:
                     psycopg2.extras.execute_batch(
                         cursor,
-                        f"DELETE FROM {self.table} WHERE doc_id = %s;",
+                        f"DELETE FROM {self.qualified_table} WHERE doc_id = %s;",
                         [(doc.id,) for doc in docs],
                     )
             conn.commit()
@@ -304,7 +308,7 @@ class PostgreSQLHandler(PostgresqlMixin):
                 for doc in docs:
                     embeddings_field = ", embedding" if return_embeddings else ""
                     cursor.execute(
-                        f"SELECT doc {embeddings_field} FROM {self.table} WHERE doc_id = %s and is_deleted = false;",
+                        f"SELECT doc {embeddings_field} FROM {self.qualified_table} WHERE doc_id = %s and is_deleted = false;",
                         (doc.id,),
                     )
                     result = cursor.fetchone()
@@ -325,7 +329,7 @@ class PostgreSQLHandler(PostgresqlMixin):
     def get_size(self):
         """Get the number of non-deleted documents."""
         results = self._execute_sql_gracefully(
-            f"SELECT count(*) FROM {self.table} WHERE is_deleted = false"
+            f"SELECT count(*) FROM {self.qualified_table} WHERE is_deleted = false"
         )
         return results[0][0] if results else 0
 

@@ -28,6 +28,7 @@ DEPLOY_EXTRACT=${DEPLOY_EXTRACT:-true}
 DEPLOY_INFRASTRUCTURE=${DEPLOY_INFRASTRUCTURE:-true}
 DEPLOY_LITELLM=${DEPLOY_LITELLM:-false}
 DEPLOY_CLICKHOUSE=${DEPLOY_CLICKHOUSE:-true}
+DEPLOY_CLICKSTACK=${DEPLOY_CLICKSTACK:-false}
 DEPLOY_GITEA=${DEPLOY_GITEA:-true}
 
 echo -e "${BLUE}========================================${NC}"
@@ -62,7 +63,7 @@ get_running_services() {
     case "$service_type" in
         "infrastructure")
             # Only check for infrastructure containers
-            docker ps --format "table {{.Names}}\t{{.Status}}" --filter "name=marie-s3-server" --filter "name=marie-psql-server" --filter "name=marie-rabbitmq" --filter "name=etcd-single" --filter "name=marie-litellm" --filter "name=marie-mc-setup" --filter "name=marie-clickhouse" --filter "name=marie-gitea" 2>/dev/null | tail -n +2
+            docker ps --format "table {{.Names}}\t{{.Status}}" --filter "name=marie-s3-server" --filter "name=marie-psql-server" --filter "name=marie-rabbitmq" --filter "name=etcd-single" --filter "name=marie-litellm" --filter "name=marie-mc-setup" --filter "name=marie-clickhouse" --filter "name=marie-hyperdx" --filter "name=marie-log-collector" --filter "name=marie-gitea" 2>/dev/null | tail -n +2
             ;;
         "application")
             # Only check for application containers (gateway, extract, etc.)
@@ -165,23 +166,26 @@ stop_infrastructure_services() {
     local orphan_flag
     orphan_flag=$(get_orphan_flag)
 
-    # Stop infrastructure services
+    # Stop infrastructure services (includes ClickStack if compose file exists)
     echo -e "${BLUE}🔧 Stopping infrastructure services...${NC}"
-    COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE \
-        --project-name marie-infrastructure \
-        -f ./Dockerfiles/docker-compose.storage.yml \
-        -f ./Dockerfiles/docker-compose.s3.yml \
-        -f ./Dockerfiles/docker-compose.rabbitmq.yml \
-        -f ./Dockerfiles/docker-compose.etcd.yml \
-        -f ./Dockerfiles/docker-compose.litellm.yml \
-        -f ./Dockerfiles/docker-compose.clickhouse.yml \
-        -f ./Dockerfiles/docker-compose.gitea.yml \
-        --project-directory . \
-        down --volumes $orphan_flag 2>/dev/null || echo "No infrastructure services to stop"
+    local stop_cmd="COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE"
+    stop_cmd="$stop_cmd --project-name marie-infrastructure"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.storage.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.s3.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.litellm.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.gitea.yml"
+    if [ -f "./Dockerfiles/docker-compose.clickstack.yml" ]; then
+        stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.clickstack.yml"
+    fi
+    stop_cmd="$stop_cmd --project-directory ."
+    eval "$stop_cmd down --volumes $orphan_flag" 2>/dev/null || echo "No infrastructure services to stop"
 
     # Stop any remaining infrastructure containers
     local containers
-    containers=$(docker ps -q --filter "name=marie-s3-server" --filter "name=marie-psql-server" --filter "name=marie-rabbitmq" --filter "name=etcd-single" --filter "name=marie-litellm" --filter "name=marie-mc-setup" --filter "name=marie-clickhouse" --filter "name=marie-gitea" 2>/dev/null || true)
+    containers=$(docker ps -q --filter "name=marie-s3-server" --filter "name=marie-psql-server" --filter "name=marie-rabbitmq" --filter "name=etcd-single" --filter "name=marie-litellm" --filter "name=marie-mc-setup" --filter "name=marie-clickhouse" --filter "name=marie-hyperdx" --filter "name=marie-log-collector" --filter "name=marie-gitea" 2>/dev/null || true)
     if [ -n "$containers" ]; then
         echo "Stopping remaining infrastructure containers..."
         docker stop $containers 2>/dev/null || true
@@ -224,17 +228,20 @@ stop_infrastructure_compose_services() {
     local orphan_flag
     orphan_flag=$(get_orphan_flag)
 
-    COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE \
-        --project-name marie-infrastructure \
-        -f ./Dockerfiles/docker-compose.storage.yml \
-        -f ./Dockerfiles/docker-compose.s3.yml \
-        -f ./Dockerfiles/docker-compose.rabbitmq.yml \
-        -f ./Dockerfiles/docker-compose.etcd.yml \
-        -f ./Dockerfiles/docker-compose.litellm.yml \
-        -f ./Dockerfiles/docker-compose.clickhouse.yml \
-        -f ./Dockerfiles/docker-compose.gitea.yml \
-        --project-directory . \
-        down $orphan_flag 2>/dev/null || echo "No infrastructure services to stop"
+    local stop_cmd="COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE"
+    stop_cmd="$stop_cmd --project-name marie-infrastructure"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.storage.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.s3.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.litellm.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.gitea.yml"
+    if [ -f "./Dockerfiles/docker-compose.clickstack.yml" ]; then
+        stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.clickstack.yml"
+    fi
+    stop_cmd="$stop_cmd --project-directory ."
+    eval "$stop_cmd down $orphan_flag" 2>/dev/null || echo "No infrastructure services to stop"
 
     echo -e "${GREEN}✅ Infrastructure compose services stopped!${NC}"
 }
@@ -268,19 +275,22 @@ stop_all_services() {
     local orphan_flag
     orphan_flag=$(get_orphan_flag)
 
-    # Stop infrastructure services
+    # Stop infrastructure services (includes ClickStack)
     echo -e "${BLUE}🔧 Stopping infrastructure services...${NC}"
-    COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE \
-        --project-name marie-infrastructure \
-        -f ./Dockerfiles/docker-compose.storage.yml \
-        -f ./Dockerfiles/docker-compose.s3.yml \
-        -f ./Dockerfiles/docker-compose.rabbitmq.yml \
-        -f ./Dockerfiles/docker-compose.etcd.yml \
-        -f ./Dockerfiles/docker-compose.litellm.yml \
-        -f ./Dockerfiles/docker-compose.clickhouse.yml \
-        -f ./Dockerfiles/docker-compose.gitea.yml \
-        --project-directory . \
-        down --volumes $orphan_flag 2>/dev/null || echo "No infrastructure services to stop"
+    local stop_cmd="COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE"
+    stop_cmd="$stop_cmd --project-name marie-infrastructure"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.storage.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.s3.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.litellm.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.gitea.yml"
+    if [ -f "./Dockerfiles/docker-compose.clickstack.yml" ]; then
+        stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.clickstack.yml"
+    fi
+    stop_cmd="$stop_cmd --project-directory ."
+    eval "$stop_cmd down --volumes $orphan_flag" 2>/dev/null || echo "No infrastructure services to stop"
 
     # Stop application services
     echo -e "${BLUE}🚀 Stopping application services...${NC}"
@@ -323,6 +333,7 @@ show_deployment_config() {
     echo -e "    ├── Service Discovery (etcd): ${DEPLOY_INFRASTRUCTURE}"
     echo -e "    ├── LLM Proxy (LiteLLM): ${DEPLOY_LITELLM}"
     echo -e "    ├── Analytics DB (ClickHouse): ${DEPLOY_CLICKHOUSE}"
+    echo -e "    ├── Observability (ClickStack): ${DEPLOY_CLICKSTACK}"
     echo -e "    └── Git Service (Gitea): ${DEPLOY_GITEA}"
     echo -e "  Application Services:"
     echo -e "    ├── Gateway: ${DEPLOY_GATEWAY}"
@@ -475,6 +486,63 @@ setup_gitea_repos() {
             echo -e "${YELLOW}  ⚠️  Could not create repository '$repo_name' (may already exist)${NC}"
         fi
     done
+}
+
+setup_hyperdx_admin() {
+    local admin_email="${HYPERDX_ADMIN_EMAIL:-marie@marie.local}"
+    local admin_password="${HYPERDX_ADMIN_PASSWORD:-MarieAI@2026!}"
+    local hyperdx_url="http://localhost:${HYPERDX_UI_PORT:-8080}"
+
+    echo -e "${BLUE}👤 Setting up HyperDX admin user...${NC}"
+
+    # Check if HyperDX is accessible
+    if ! curl -sf "$hyperdx_url/" -o /dev/null 2>&1; then
+        echo -e "${YELLOW}  ⚠️  HyperDX not ready, skipping user setup${NC}"
+        return 1
+    fi
+
+    # Try to register user via API
+    # HyperDX uses /api/register endpoint for user registration
+    local register_response
+    register_response=$(curl -s -w "\n%{http_code}" \
+        -X POST \
+        -H "Content-Type: application/json" \
+        -d "{\"email\": \"$admin_email\", \"password\": \"$admin_password\"}" \
+        "$hyperdx_url/api/register" 2>/dev/null)
+
+    local http_code
+    http_code=$(echo "$register_response" | tail -n1)
+    local response_body
+    response_body=$(echo "$register_response" | head -n -1)
+
+    if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+        echo -e "${GREEN}  ✅ HyperDX admin user created${NC}"
+        echo -e "${YELLOW}     Email: $admin_email${NC}"
+        echo -e "${YELLOW}     Password: $admin_password${NC}"
+    elif echo "$response_body" | grep -qi "already exists\|already registered\|email.*taken"; then
+        echo -e "${GREEN}  ✅ HyperDX admin user already exists${NC}"
+    else
+        # Try alternative endpoint (some versions use different paths)
+        register_response=$(curl -s -w "\n%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": \"$admin_email\", \"password\": \"$admin_password\", \"confirmPassword\": \"$admin_password\"}" \
+            "$hyperdx_url/register" 2>/dev/null)
+
+        http_code=$(echo "$register_response" | tail -n1)
+
+        if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+            echo -e "${GREEN}  ✅ HyperDX admin user created${NC}"
+            echo -e "${YELLOW}     Email: $admin_email${NC}"
+            echo -e "${YELLOW}     Password: $admin_password${NC}"
+        else
+            echo -e "${YELLOW}  ⚠️  Could not auto-create HyperDX user${NC}"
+            echo -e "${YELLOW}     Please create manually at: $hyperdx_url${NC}"
+            echo -e "${YELLOW}     Suggested credentials:${NC}"
+            echo -e "${YELLOW}       Email: $admin_email${NC}"
+            echo -e "${YELLOW}       Password: $admin_password${NC}"
+        fi
+    fi
 }
 
 initialize_databases() {
@@ -733,6 +801,78 @@ bootstrap_system() {
             echo ""
         fi
 
+        # Start ClickStack (requires ClickHouse to be ready)
+        if [ "$DEPLOY_CLICKSTACK" = "true" ] && [ "$DEPLOY_CLICKHOUSE" = "true" ] && [ -f "./Dockerfiles/docker-compose.clickstack.yml" ]; then
+            echo -e "${YELLOW}⏳ Starting ClickStack (observability stack)...${NC}"
+
+            # Initialize observability schema in ClickHouse
+            local otel_schema_file="./config/clickstack/schema/observability.sql"
+            if [ -f "$otel_schema_file" ]; then
+                echo "  Initializing ClickHouse observability schema..."
+                docker exec -i marie-clickhouse clickhouse-client \
+                    < "$otel_schema_file" >/dev/null 2>&1 || true
+                echo -e "${GREEN}  ✅ Observability schema initialized (otel_logs, otel_traces, otel_metrics)${NC}"
+            fi
+
+            # Start ClickStack services as part of infrastructure
+            local clickstack_cmd="COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE"
+            clickstack_cmd="$clickstack_cmd --project-name marie-infrastructure"
+            clickstack_cmd="$clickstack_cmd -f ./Dockerfiles/docker-compose.storage.yml"
+            clickstack_cmd="$clickstack_cmd -f ./Dockerfiles/docker-compose.s3.yml"
+            clickstack_cmd="$clickstack_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+            clickstack_cmd="$clickstack_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
+            clickstack_cmd="$clickstack_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
+            if [ "$DEPLOY_LITELLM" = "true" ]; then
+                clickstack_cmd="$clickstack_cmd -f ./Dockerfiles/docker-compose.litellm.yml"
+            fi
+            if [ "$DEPLOY_GITEA" = "true" ]; then
+                clickstack_cmd="$clickstack_cmd -f ./Dockerfiles/docker-compose.gitea.yml"
+            fi
+            clickstack_cmd="$clickstack_cmd -f ./Dockerfiles/docker-compose.clickstack.yml"
+            clickstack_cmd="$clickstack_cmd --project-directory ."
+
+            # Start ClickStack services
+            eval "$clickstack_cmd up -d hyperdx log-collector"
+
+            # Wait for HyperDX to be healthy (check container health status)
+            echo -e "${YELLOW}⏳ Waiting for HyperDX to be healthy...${NC}"
+            local hdx_attempts=30
+            local hdx_attempt=1
+            while [ $hdx_attempt -le $hdx_attempts ]; do
+                # Check container health status
+                local hdx_health
+                hdx_health=$(docker inspect marie-hyperdx --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
+                if [ "$hdx_health" = "healthy" ]; then
+                    break
+                fi
+                # Also try checking if the UI responds (fallback)
+                if curl -sf http://localhost:${HYPERDX_UI_PORT:-8080}/ -o /dev/null 2>&1; then
+                    break
+                fi
+                echo "  Waiting for HyperDX (attempt $hdx_attempt/$hdx_attempts, status: $hdx_health)..."
+                sleep 3
+                ((hdx_attempt++))
+            done
+
+            if [ $hdx_attempt -gt $hdx_attempts ]; then
+                echo -e "${YELLOW}⚠️  HyperDX may still be starting up (check: docker logs marie-hyperdx)${NC}"
+            else
+                echo -e "${GREEN}✅ ClickStack is ready${NC}"
+            fi
+
+            # ClickStack Setup Section (using hyperdx-local, no auth required)
+            echo ""
+            echo -e "${BLUE}========================================${NC}"
+            echo -e "${BLUE}    ClickStack Configuration${NC}"
+            echo -e "${BLUE}========================================${NC}"
+            echo -e "${GREEN}  ✅ HyperDX Local mode - no authentication required${NC}"
+            echo -e "${YELLOW}     UI: http://localhost:${HYPERDX_UI_PORT:-8080}${NC}"
+            echo -e "${YELLOW}     OTLP HTTP: http://localhost:${OTEL_HTTP_PORT:-4318}${NC}"
+            echo -e "${YELLOW}     OTLP gRPC: localhost:${OTEL_GRPC_PORT:-4317}${NC}"
+            echo -e "${BLUE}========================================${NC}"
+            echo ""
+        fi
+
         # Check if mc-setup completed successfully
         echo -e "${YELLOW}Checking MinIO setup completion...${NC}"
         local setup_attempts=30
@@ -830,6 +970,10 @@ show_all_services_status() {
             status_compose_cmd="$status_compose_cmd -f ./Dockerfiles/docker-compose.gitea.yml"
         fi
 
+        if [ "$DEPLOY_CLICKSTACK" = "true" ] && [ -f "./Dockerfiles/docker-compose.clickstack.yml" ]; then
+            status_compose_cmd="$status_compose_cmd -f ./Dockerfiles/docker-compose.clickstack.yml"
+        fi
+
         status_compose_cmd="$status_compose_cmd --project-directory . ps"
         eval "$status_compose_cmd" 2>/dev/null || echo "No infrastructure services"
     fi
@@ -872,6 +1016,12 @@ show_service_endpoints() {
         if [ "$DEPLOY_GITEA" = "true" ]; then
             echo "  🐙 Gitea Web UI: http://localhost:3001 (${GITEA_ADMIN_USER:-marie}/${GITEA_ADMIN_PASSWORD:-rycerz})"
             echo "  🐙 Gitea SSH: ssh://git@localhost:2222"
+        fi
+
+        if [ "$DEPLOY_CLICKSTACK" = "true" ]; then
+            echo "  📊 HyperDX UI: http://localhost:${HYPERDX_UI_PORT:-8080} (no auth required)"
+            echo "  📊 OTLP gRPC: localhost:${OTEL_GRPC_PORT:-4317}"
+            echo "  📊 OTLP HTTP: localhost:${OTEL_HTTP_PORT:-4318}"
         fi
     fi
 
@@ -920,6 +1070,15 @@ parse_args() {
                 ;;
             --no-clickhouse)
                 DEPLOY_CLICKHOUSE=false
+                DEPLOY_CLICKSTACK=false  # ClickStack requires ClickHouse
+                shift
+                ;;
+            --no-clickstack)
+                DEPLOY_CLICKSTACK=false
+                shift
+                ;;
+            --with-clickstack)
+                DEPLOY_CLICKSTACK=true
                 shift
                 ;;
             --no-gitea)
@@ -969,6 +1128,8 @@ show_help() {
     echo "  --no-infrastructure   Skip infrastructure services (includes LiteLLM, ClickHouse, Gitea)"
     echo "  --no-litellm          Skip LiteLLM proxy deployment"
     echo "  --no-clickhouse       Skip ClickHouse analytics database deployment"
+    echo "  --no-clickstack       Skip ClickStack observability stack (HyperDX + log collector)"
+    echo "  --with-clickstack     Enable ClickStack observability stack (disabled by default)"
     echo "  --no-gitea            Skip Gitea Git service deployment"
     echo "  --infrastructure-only Deploy only infrastructure services"
     echo "  --services-only       Deploy only Marie application services (gateway + extract)"
@@ -977,17 +1138,19 @@ show_help() {
     echo ""
     echo "Service Categories:"
     echo "  Infrastructure: Storage (MinIO), Message Queue (RabbitMQ), Service Discovery (etcd),"
-    echo "                  LLM Proxy (LiteLLM), Analytics DB (ClickHouse), Git Service (Gitea)"
+    echo "                  LLM Proxy (LiteLLM), Analytics DB (ClickHouse), Observability (ClickStack),"
+    echo "                  Git Service (Gitea)"
     echo "  Application:    Gateway, Extract Executors"
     echo ""
     echo "Examples:"
-    echo "  $0                        # Deploy everything"
-    echo "  $0 --stop-all             # Stop all services and cleanup"
-    echo "  $0 --infrastructure-only  # Deploy infrastructure only"
-    echo "  $0 --services-only        # Deploy only gateway + extract"
-    echo "  $0 --no-extract           # Deploy infrastructure + gateway only"
-    echo "  $0 --no-clickhouse --no-gitea  # Deploy without analytics and Git"
-    echo "  $0 --litellm-only         # Deploy minimal infrastructure + LiteLLM"
+    echo "  $0                              # Deploy everything (ClickStack disabled by default)"
+    echo "  $0 --with-clickstack            # Deploy everything including observability"
+    echo "  $0 --stop-all                   # Stop all services and cleanup"
+    echo "  $0 --infrastructure-only        # Deploy infrastructure only"
+    echo "  $0 --services-only              # Deploy only gateway + extract"
+    echo "  $0 --no-extract                 # Deploy infrastructure + gateway only"
+    echo "  $0 --no-clickhouse --no-gitea   # Deploy without analytics and Git"
+    echo "  $0 --litellm-only               # Deploy minimal infrastructure + LiteLLM"
 }
 
 main() {
@@ -1015,6 +1178,11 @@ main() {
     if [ "$DEPLOY_LITELLM" = "true" ]; then
         echo "  View LiteLLM logs: docker compose logs -f litellm"
         echo "  LiteLLM health check: curl http://localhost:4000/health"
+    fi
+    if [ "$DEPLOY_CLICKSTACK" = "true" ]; then
+        echo "  View HyperDX logs: docker logs -f marie-hyperdx"
+        echo "  View Log Collector logs: docker logs -f marie-log-collector"
+        echo "  HyperDX UI: http://localhost:8080"
     fi
 }
 

@@ -208,7 +208,7 @@ class MarieServerGateway(CompositeServer):
         if "kv_store_kwargs" not in self.args:
             raise BadConfigSource("Missing kv_store_kwargs in config")
 
-        kv_store_kwargs = kwargs["kv_store_kwargs"]
+        kv_store_kwargs = self.args["kv_store_kwargs"]
         expected_keys = [
             "provider",
             "hostname",
@@ -1217,8 +1217,51 @@ class MarieServerGateway(CompositeServer):
         run_server_tasks.append(
             asyncio.create_task(self._reconcile_loop(interval_s=10))
         )
+        run_server_tasks.append(
+            asyncio.create_task(self._capacity_broadcast_loop(interval_s=5))
+        )
 
         await asyncio.gather(*run_server_tasks)
+
+    async def _publish_capacity_event(self) -> None:
+        """Publish current capacity state as an event."""
+        try:
+            capacity_stats = self.capacity_manager.refresh_from_nodes(
+                self.deployment_nodes
+            )
+
+            self.logger.debug(f"Publishing capacity stats: {capacity_stats}")
+            event = MarieEvent.engine_event(
+                "gateway://control-plane",
+                "Cluster capacity updated",
+                EngineEventData(
+                    metadata={
+                        "stats": JsonMetadataValue(capacity_stats),
+                        "capacity": JsonMetadataValue(capacity_stats),
+                    },
+                    marker_start=MarieEventType.RESOURCE_EXECUTOR_UPDATED,
+                ),
+            )
+            await Toast.notify(
+                event,
+                api_key="system:gateway",
+                node="gateway",
+            )
+        except Exception as ex:
+            self.logger.error(f"Failed to publish capacity event: {ex}", exc_info=True)
+
+    async def _capacity_broadcast_loop(self, interval_s: float = 5.0) -> None:
+        """Periodically broadcast capacity state to connected clients."""
+        self.logger.info(f"Starting capacity broadcast loop (interval={interval_s}s)")
+        # Wait for gateway to be ready before starting broadcasts
+        await asyncio.sleep(interval_s)
+
+        while True:
+            try:
+                await self._publish_capacity_event()
+            except Exception as ex:
+                self.logger.error(f"Capacity broadcast error: {ex}", exc_info=True)
+            await asyncio.sleep(interval_s)
 
     async def wait_and_start_scheduler(self, timeout: int = 5):
         """Waits for the service discovery to start and then starts the job scheduler."""
@@ -1401,27 +1444,8 @@ class MarieServerGateway(CompositeServer):
 
                 # Always schedule a (debounced) rebuild
                 self._schedule_rebuild(True)
-                capacity_stats = self.capacity_manager.refresh_from_nodes(
-                    self.deployment_nodes
-                )
-
-                self.logger.debug(f"Capacity stats : {capacity_stats}")
-                event = MarieEvent.engine_event(
-                    "gateway://control-plane",
-                    "Cluster capacity updated",
-                    EngineEventData(
-                        metadata={
-                            "stats": JsonMetadataValue(capacity_stats),
-                            "capacity": JsonMetadataValue(capacity_stats),
-                        },
-                        marker_start=MarieEventType.RESOURCE_EXECUTOR_UPDATED,
-                    ),
-                )
-                await Toast.notify(
-                    event,
-                    api_key="system:gateway",
-                    node="gateway",
-                )
+                # Publish capacity update immediately on service change
+                await self._publish_capacity_event()
                 error_counter = 0
             except Exception as ex:
                 self.logger.error(f"Service event error: {ex}", exc_info=True)

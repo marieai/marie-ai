@@ -6,10 +6,10 @@ shared_config:
   storage: &storage
     psql: &psql_conf_shared
       provider: postgresql
-      hostname: 127.0.0.1
+      hostname: ${{ ENV.POSTGRES_HOSTNAME }}
       port: 5432
-      username: postgres
-      password: 123456
+      username: ${{ ENV.POSTGRES_USER }}
+      password: ${{ ENV.POSTGRES_PASSWORD }}
       database: postgres
       default_table: shared_docs
 
@@ -44,6 +44,7 @@ toast:
     enabled : True
   psql:
     <<: *psql_conf_shared
+    schema: marie_scheduler
     default_table: event_tracking
     enabled : True
 
@@ -79,6 +80,7 @@ storage:
   # postgresql configuration. Will be used only if value of backend is "psql"
   psql:
     <<: *psql_conf_shared
+    schema: marie_scheduler
     default_table: store_metadata
     enabled: False
 
@@ -86,6 +88,7 @@ storage:
 scheduler:
   psql:
     <<: *psql_conf_shared
+    schema: marie_scheduler
     default_table: job_queue
     enabled : True
 
@@ -97,7 +100,7 @@ with:
 #    - http
 
   discovery: true
-  discovery_host: 127.0.0.1 # SINGLE HOST OR A LIST OF HOSTS
+  discovery_host: 0.0.0.0 # SINGLE HOST OR A LIST OF HOSTS
   discovery_port: 2379
   discovery_watchdog_interval: 5 # DEPRECATED replace by discovery_heartbeat_sec
   discovery_service_name: gateway/marie
@@ -124,11 +127,16 @@ with:
     username: postgres
     password: '123456'
     database: postgres
+    schema: marie_scheduler
     default_table: kv_store_worker
     max_pool_size: 5
     max_connections: 5
 
+  discovery_kwargs:
+    endpoints: 127.0.0.1:2379,192.168.1.1:2379
 
+
+#  host: 127.0.0.1
   host: 0.0.0.0
 
 # monitoring done by grafana/prometheus has been deprecated in favor of open-telemetry
@@ -201,6 +209,7 @@ executors:
            # postgresql configuration. Will be used only if value of backend is "psql"
            psql:
              <<: *psql_conf_shared
+             schema: marie_scheduler
              default_table: extract_metadata
              enabled: True
            s3:

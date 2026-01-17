@@ -296,22 +296,47 @@ class EventStreamServicer(event_stream_pb2_grpc.EventStreamServiceServicer):
 
     def _build_event_message(self, envelope: EventEnvelope) -> pb2.ServerMessage:
         """Convert internal envelope to protobuf message."""
+        import json
+
+        def make_json_safe(obj):
+            """Recursively convert objects to JSON-safe types."""
+            if obj is None:
+                return None
+            if isinstance(obj, (bool, int, float, str)):
+                return obj
+            if isinstance(obj, (list, tuple)):
+                return [make_json_safe(item) for item in obj]
+            if isinstance(obj, dict):
+                return {str(k): make_json_safe(v) for k, v in obj.items()}
+            # For any other type, convert to string
+            return str(obj)
+
         # Convert payload to Struct
         payload_struct = struct_pb2.Struct()
         if envelope.event.payload:
-            if isinstance(envelope.event.payload, dict):
-                payload_struct.update(envelope.event.payload)
-            elif isinstance(envelope.event.payload, str):
-                # Try to parse as JSON if it's a string
-                import json
-
-                try:
-                    data = json.loads(envelope.event.payload)
-                    if isinstance(data, dict):
-                        payload_struct.update(data)
-                except (json.JSONDecodeError, TypeError):
-                    # Store as a single "value" field
-                    payload_struct.update({"value": envelope.event.payload})
+            try:
+                if isinstance(envelope.event.payload, dict):
+                    # Convert to JSON-safe format first
+                    safe_payload = make_json_safe(envelope.event.payload)
+                    payload_struct.update(safe_payload)
+                elif isinstance(envelope.event.payload, str):
+                    # Try to parse as JSON if it's a string
+                    try:
+                        data = json.loads(envelope.event.payload)
+                        if isinstance(data, dict):
+                            safe_data = make_json_safe(data)
+                            payload_struct.update(safe_data)
+                    except (json.JSONDecodeError, TypeError):
+                        # Store as a single "value" field
+                        payload_struct.update({"value": envelope.event.payload})
+                else:
+                    # For other types, try to convert to dict
+                    payload_struct.update({"value": str(envelope.event.payload)})
+            except Exception as e:
+                logger.warning(
+                    f"Failed to convert payload to Struct: {e}, using string fallback"
+                )
+                payload_struct.update({"raw": str(envelope.event.payload)})
 
         # Build timestamp
         ts = Timestamp()

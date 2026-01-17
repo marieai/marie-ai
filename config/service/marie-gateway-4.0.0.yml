@@ -121,7 +121,7 @@ with:
 
     # SSE backend for real-time UI via /sse/{api_key}
     sse:
-      enabled: true
+      enabled: False
       broker:
         replay_size: 200            # per-topic (api_key) replay buffer used for Last-Event-ID
         subscriber_q_max: 1024      # bound per client; drops oldest on overflow

@@ -63,6 +63,8 @@ class PostgresqlMixin:
 
             self.schema = config.get("schema")  # Optional schema name
             self.table = config["default_table"]
+            self.logger.info(f"[DEBUG] PostgresqlMixin config: {config}")
+            self.logger.info(f"[DEBUG] PostgresqlMixin schema={self.schema}, table={self.table}, qualified_table={self.schema}.{self.table if self.schema else self.table}")
             if self.table is None or self.table == "":
                 raise ValueError("default_table cannot be empty")
 

@@ -40,6 +40,7 @@ class StorageMixin:
                     password=storage_conf["password"],
                     database=storage_conf["database"],
                     table=storage_conf["default_table"],
+                    schema=storage_conf.get("schema"),
                 )
                 self.storage_handler = self.storage
             except Exception as e:

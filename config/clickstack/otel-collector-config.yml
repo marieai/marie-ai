@@ -1,0 +1,155 @@
+# ############### OpenTelemetry Collector Configuration for ClickStack ###############
+#
+# This collector receives OTLP data and exports to ClickHouse for observability.
+# Used with docker-compose.clickstack.yml when running with --profile collector
+#
+# Data flow:
+#   Application -> OTLP -> OTel Collector -> ClickHouse -> HyperDX UI
+
+receivers:
+  # OTLP receiver for logs, traces, and metrics
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # File log receiver for host system logs
+  filelog:
+    include:
+      - /var/log/host/syslog
+      - /var/log/host/messages
+      - /var/log/host/*.log
+    exclude:
+      - /var/log/host/btmp
+      - /var/log/host/wtmp
+      - /var/log/host/lastlog
+    start_at: end
+    include_file_path: true
+    operators:
+      - type: regex_parser
+        if: 'body matches "^(?P<timestamp>\\w{3}\\s+\\d{1,2}\\s+\\d{2}:\\d{2}:\\d{2})"'
+        regex: '^(?P<timestamp>\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(?P<hostname>\S+)\s+(?P<process>\S+?)(\[(?P<pid>\d+)\])?:\s+(?P<message>.*)'
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '%b %d %H:%M:%S'
+
+  # Host metrics receiver
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
+      memory:
+        metrics:
+          system.memory.utilization:
+            enabled: true
+      disk:
+      filesystem:
+      network:
+      load:
+      processes:
+
+processors:
+  # Batch processor for efficient exports
+  batch:
+    send_batch_size: 1000
+    send_batch_max_size: 1500
+    timeout: 5s
+
+  # Memory limiter to prevent OOM
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  # Resource detection for host metadata
+  resourcedetection:
+    detectors: [env, system]
+    system:
+      hostname_sources: ["os"]
+      resource_attributes:
+        host.name:
+          enabled: true
+        os.type:
+          enabled: true
+
+  # Add service name attribute
+  resource:
+    attributes:
+      - key: service.namespace
+        value: marie-ai
+        action: upsert
+
+exporters:
+  # ClickHouse exporter for all telemetry data
+  clickhouse:
+    endpoint: ${CLICKHOUSE_ENDPOINT}
+    database: otel
+    logs_table_name: otel_logs
+    traces_table_name: otel_traces
+    metrics_table_name: otel_metrics
+    ttl: 72h
+    create_schema: true
+    timeout: 10s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  # Debug exporter for troubleshooting
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+  # Prometheus exporter for metrics scraping
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+
+extensions:
+  # Health check extension
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+  # Performance profiler
+  pprof:
+    endpoint: 0.0.0.0:1777
+
+  # zPages for debugging
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+service:
+  extensions: [health_check, pprof, zpages]
+
+  pipelines:
+    # Logs pipeline
+    logs:
+      receivers: [otlp, filelog]
+      processors: [memory_limiter, resourcedetection, resource, batch]
+      exporters: [clickhouse, debug]
+
+    # Traces pipeline
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, resource, batch]
+      exporters: [clickhouse, debug]
+
+    # Metrics pipeline
+    metrics:
+      receivers: [otlp, hostmetrics]
+      processors: [memory_limiter, resourcedetection, resource, batch]
+      exporters: [clickhouse, prometheus]
+
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      address: 0.0.0.0:8888

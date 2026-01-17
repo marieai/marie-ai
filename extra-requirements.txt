@@ -159,3 +159,5 @@ watchdog:                      standard,core
 cachetools==5.5.0:             standard,core
 jsonpath-ng:                   standard,core
 clickhouse-driver==0.2.10:     standard,core
+
+#grpcio-tools 1.59.5

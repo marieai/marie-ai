@@ -1,0 +1,178 @@
+# ############### ClickStack - Observability Stack powered by ClickHouse ###############
+#
+# Used by: marie-ai monitoring and error tracking
+#
+# ClickStack provides unified observability (logs, traces, metrics) using:
+# - ClickHouse for storage (uses existing marie-clickhouse)
+# - HyperDX for visualization UI
+# - OpenTelemetry Collector for data ingestion
+#
+# Prerequisites:
+#   - Network created: docker network create --driver=bridge marie_default
+#   - ClickHouse running: docker-compose.clickhouse.yml
+#
+# Usage:
+#   docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.clickstack.yml --project-directory . up -d
+#
+# Access:
+#   - HyperDX UI: http://localhost:8080
+#   - OTLP gRPC: localhost:4317
+#   - OTLP HTTP: localhost:4318
+
+services:
+  # ############### HyperDX - Observability UI ###############
+  # Using hyperdx-local image for development (no authentication required)
+  hyperdx:
+    image: docker.hyperdx.io/hyperdx/hyperdx-local:latest
+    container_name: marie-hyperdx
+    restart: unless-stopped
+    environment:
+      # HyperDX configuration
+      - HYPERDX_LOG_LEVEL=${HYPERDX_LOG_LEVEL:-info}
+      - HYPERDX_API_KEY=${HYPERDX_API_KEY:-}
+      # Note: hyperdx-local includes its own ClickHouse and MongoDB
+      # It doesn't require authentication for local development
+    ports:
+      - "${HYPERDX_UI_PORT:-8080}:8080"       # HyperDX Web UI
+      - "${HYPERDX_API_PORT:-8002}:8000"      # HyperDX API (internal 8000 -> external 8002)
+      - "${OTEL_GRPC_PORT:-4317}:4317"        # OTLP gRPC receiver
+      - "${OTEL_HTTP_PORT:-4318}:4318"        # OTLP HTTP receiver
+      - "${FLUENTD_PORT:-24225}:24225"        # Fluentd forward receiver
+    volumes:
+      - hyperdx_data:/var/lib/hyperdx
+    networks:
+      - marie_default
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: ${HYPERDX_MEMORY_LIMIT:-4G}
+        reservations:
+          memory: ${HYPERDX_MEMORY_RESERVATION:-1G}
+
+  # ############### Log Collector Sidecar ###############
+  # Collects Docker container logs and forwards to HyperDX
+  # Extracts: job_id, status, errors, trace_id, duration, and more
+  log-collector:
+    image: otel/opentelemetry-collector-contrib:0.114.0
+    container_name: marie-log-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otel/config.yml"]
+    user: "0:0"  # Run as root (UID:GID) to read Docker logs
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://marie-hyperdx:4318
+      - DEPLOYMENT_ENV=${STACK_NAME:-dev}
+    volumes:
+      - ./config/clickstack/log-collector-config.yml:/etc/otel/config.yml:ro
+      # Docker container logs (JSON format)
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      # Docker socket for container metadata (optional)
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - marie_default
+    depends_on:
+      - hyperdx
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${LOG_COLLECTOR_MEMORY_LIMIT:-512M}
+        reservations:
+          memory: ${LOG_COLLECTOR_MEMORY_RESERVATION:-128M}
+
+volumes:
+  hyperdx_data:
+    driver: local
+
+networks:
+  marie_default:
+    external: true
+
+# ############### Docker Compose Commands ###############
+#
+# Start ClickStack (requires ClickHouse running):
+#   docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.clickstack.yml --project-directory . up -d
+#
+# View logs:
+#   docker logs -f marie-hyperdx
+#   docker logs -f marie-log-collector
+#
+# Access HyperDX UI:
+#   Open http://localhost:8080 in browser
+#
+# Stop ClickStack:
+#   docker compose -f ./Dockerfiles/docker-compose.clickstack.yml down
+#
+# ############### Marie-AI Log Fields Extracted ###############
+#
+# The log-collector parses marie-ai log format:
+#   INFO   2026-01-12 14:59:55,272:            : PostgreSQLJobScheduler[]@ 7 Message
+#
+# Extracted fields:
+#   Core:
+#     - log_level (INFO/WARN/ERROR/DEBUG)
+#     - log_timestamp
+#     - component (PostgreSQLJobScheduler, JobManager, JobSupervisor, gateway, etc.)
+#     - thread_id
+#     - message
+#
+#   Job tracking:
+#     - job_id (UUID)
+#     - submission_id
+#     - job_status (completed/scheduled/started/succeeded/enqueued/failed)
+#     - executor_name (corr_routing_executor, patient_indexing_executor, etc.)
+#     - entrypoint (corr_routing_executor://document/classify)
+#
+#   Performance:
+#     - duration_seconds (0.26, 2.65)
+#     - signal_time, post_signal_time
+#     - etcd_lease_time, etcd_put_time, etcd_total_time
+#
+#   Scheduler:
+#     - dag_id, dag_status
+#     - scheduled_count, candidate_count
+#     - used_slots, total_slots
+#
+#   Network:
+#     - target_host, target_port, target_deployment
+#
+#   Events:
+#     - event_type (corr.completed, etc.)
+#     - api_key (first 10 chars)
+#     - planner_name
+#
+# ############### HyperDX Search Examples ###############
+#
+# Find all errors:
+#   severity:error
+#
+# Find job failures:
+#   job_status:failed OR job_status:FAILED
+#
+# Find specific job (by UUID):
+#   job_id:069650b6-360c-7d34-8000-d565715a63a1
+#
+# Find by component:
+#   component:PostgreSQLJobScheduler
+#   component:JobManager
+#
+# Find by executor:
+#   executor_name:corr_routing_executor
+#
+# Find slow jobs (>1 second):
+#   duration_seconds:>1
+#
+# Find DAG completions:
+#   dag_status:completed
+#
+# Find scheduler summaries:
+#   message:"Scheduling summary"
