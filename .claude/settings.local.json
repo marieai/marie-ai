@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "WebFetch(domain:medium.com)",
+      "WebSearch",
+      "WebFetch(domain:docs.dagster.io)",
+      "Bash(python -m pytest:*)",
+      "Bash(python3 -m pytest:*)",
+      "Bash(source ~/environment/marie-3.12/bin/activate)",
+      "Bash(python3:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(du:*)",
+      "WebFetch(domain:docs.gitea.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(tree:*)",
+      "Bash(curl:*)",
+      "Bash(docker exec:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
