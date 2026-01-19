@@ -421,11 +421,13 @@ class JobSupervisor:
                         # Failure path
                         exception_proto = response.status.exception
                         error_name = str(exception_proto.name)
-                        self.logger.error(
-                            f"Job {self._job_id} failed but already marked terminal: {current_status}. error_name = {error_name} \n{exception_proto}"
-                        )
 
                         if current_status.is_terminal():
+                            # Job is already in terminal state - this is unexpected
+                            self.logger.error(
+                                f"Job {self._job_id} failed but already marked terminal: {current_status}. "
+                                f"error_name = {error_name} \n{exception_proto}"
+                            )
                             await self._event_publisher.publish(
                                 current_status,
                                 {
@@ -436,6 +438,11 @@ class JobSupervisor:
                                 },
                             )
                         else:
+                            # Normal failure - update status to FAILED
+                            self.logger.error(
+                                f"Job {self._job_id} failed (status was {current_status}). "
+                                f"error_name = {error_name} \n{exception_proto}"
+                            )
                             await self._job_info_client.put_status(
                                 self._job_id, JobStatus.FAILED, message=error_name
                             )

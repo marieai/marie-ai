@@ -409,7 +409,7 @@ def fail_jobs(schema: str, where: str, output: dict):
           ELSE {schema}.exponential_backoff(retry_delay, retry_count)
           END,
         output = {Json(output)}::jsonb,
-        -- clear leases / run ownership 
+        -- clear leases / run ownership
         lease_owner          = NULL,
         lease_expires_at     = NULL,
         run_owner            = NULL,
@@ -429,7 +429,7 @@ def fail_jobs(schema: str, where: str, output: dict):
         AND dead_letter IS NOT NULL
         AND NOT name = dead_letter
     )
-    SELECT COUNT(*) FROM results
+    SELECT COUNT(*), (SELECT state::text FROM results LIMIT 1) as final_state FROM results
     """
     return query
 
