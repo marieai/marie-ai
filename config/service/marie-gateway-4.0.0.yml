@@ -94,15 +94,21 @@ with:
 
     # Planners have to be available in the python path.
     # When running in a container, the planners should be available in the container's python path.
+    # Planners are auto-discovered by scanning packages for @register_query_plan decorator
     query_planners:
       watch_wheels: True
       wheel_directories:
         - /mnt/data/marie-ai/config/wheels
+      # Auto-discover planners from packages
+      discover_packages:
+        - package: project_a.extract.providers
+          pattern: "tid_*"
+        - package: project_b.extract.providers.gen
+          pattern: "tid_*"
+      # Explicit planners (mock planners for testing)
       planners:
         - name: mock_planners
           py_module: tests.integration.scheduler.mock_query_plans
-#        - name: tid_121880
-#          py_module: grapnel_g5.query.tid_121880.query
 
   # Toast event tracking system
   # It can be backed by Message Queue or Database backed

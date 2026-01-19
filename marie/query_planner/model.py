@@ -21,10 +21,35 @@ class PlannerConf:
 
 
 @dataclass
+class DiscoverPackageConf:
+    """Configuration for auto-discovering planners from a package.
+
+    Scans a Python package for subdirectories matching a pattern and
+    imports any .py files that contain @register_query_plan decorator.
+
+    Example:
+        package: grapnel_g5.extract.providers
+        pattern: "tid_*"
+
+        This will scan grapnel_g5/extract/providers/ for directories
+        like tid_121880/, tid_122169/ and import any files containing
+        @register_query_plan.
+    """
+
+    package: str
+    pattern: str = "*"
+
+    def __post_init__(self):
+        if not self.package:
+            raise ValueError("Package name cannot be empty")
+
+
+@dataclass
 class QueryPlannersConf:
     """Represents the query planners configuration."""
 
     planners: List[PlannerConf]
+    discover_packages: List[DiscoverPackageConf] = None
     watch_wheels: bool = False
     wheel_directories: List[str] = None
 
@@ -54,12 +79,29 @@ class QueryPlannersConf:
             watch_wheels = query_planners_data.get('watch_wheels', False)
             wheel_directories = query_planners_data.get('wheel_directories', [])
 
-            if 'planners' not in query_planners_data:
-                raise ValueError("Missing 'planners' in query_planners")
+            # Parse discover_packages
+            discover_packages_list = query_planners_data.get('discover_packages', [])
+            discover_packages = []
+            if discover_packages_list:
+                for i, dp_data in enumerate(discover_packages_list):
+                    if not isinstance(dp_data, dict):
+                        raise ValueError(
+                            f"discover_packages entry at index {i} must be a dictionary"
+                        )
+                    if 'package' not in dp_data:
+                        raise ValueError(
+                            f"discover_packages entry at index {i} missing 'package' field"
+                        )
+                    discover_packages.append(
+                        DiscoverPackageConf(
+                            package=dp_data['package'],
+                            pattern=dp_data.get('pattern', '*'),
+                        )
+                    )
 
-            planners_list = query_planners_data['planners']
+            # Parse planners (optional if discover_packages is provided)
+            planners_list = query_planners_data.get('planners', [])
             if planners_list is None:
-                logger.warning("Missing 'planners' in query_planners")
                 planners_list = []
 
             if not isinstance(planners_list, list):
@@ -84,6 +126,7 @@ class QueryPlannersConf:
 
             return cls(
                 planners=planners,
+                discover_packages=discover_packages if discover_packages else None,
                 watch_wheels=watch_wheels,
                 wheel_directories=wheel_directories,
             )
@@ -94,13 +137,22 @@ class QueryPlannersConf:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'QueryPlannersConf':
         """Create QueryPlannersConf from dictionary."""
-        if 'planners' not in data:
-            raise ValueError("Missing 'planners' in data")
+        # Parse discover_packages
+        discover_packages_list = data.get('discover_packages', [])
+        discover_packages = []
+        if discover_packages_list:
+            for dp_data in discover_packages_list:
+                discover_packages.append(
+                    DiscoverPackageConf(
+                        package=dp_data['package'],
+                        pattern=dp_data.get('pattern', '*'),
+                    )
+                )
 
-        planners_list = data['planners']
+        # Parse planners (optional if discover_packages is provided)
+        planners_list = data.get('planners', [])
 
         if planners_list is None:
-            logger.warning("Missing 'planners' in query_planners")
             planners_list = []
 
         if not isinstance(planners_list, list):
@@ -119,6 +171,7 @@ class QueryPlannersConf:
 
         return cls(
             planners=planners,
+            discover_packages=discover_packages if discover_packages else None,
             watch_wheels=watch_wheels,
             wheel_directories=wheel_directories,
         )
@@ -140,13 +193,19 @@ class QueryPlannersConf:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format."""
-        return {
+        result = {
             'watch_wheels': self.watch_wheels,
             'wheel_directories': self.wheel_directories or [],
             'planners': [
                 {'name': p.name, 'py_module': p.py_module} for p in self.planners
             ],
         }
+        if self.discover_packages:
+            result['discover_packages'] = [
+                {'package': dp.package, 'pattern': dp.pattern}
+                for dp in self.discover_packages
+            ]
+        return result
 
 
 # Example usage:
