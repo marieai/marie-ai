@@ -230,6 +230,7 @@ executors:
              schema: marie_scheduler
              default_table: extract_metadata
              enabled: True
+             asset_tracking_enabled: True
            s3:
              <<: *s3_conf_shared
              enabled: True
