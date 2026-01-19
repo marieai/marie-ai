@@ -42,6 +42,7 @@ from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.scheduler import PostgreSQLJobScheduler
 from marie.scheduler.models import DEFAULT_RETRY_POLICY, JobSubmissionModel, WorkInfo
 from marie.scheduler.state import WorkState
+from marie.scheduler.util import available_slots_by_executor
 from marie.serve.discovery import JsonAddress
 from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
 from marie.serve.discovery.resolver import EtcdServiceResolver
@@ -1226,10 +1227,12 @@ class MarieServerGateway(CompositeServer):
     async def _publish_capacity_event(self) -> None:
         """Publish current capacity state as an event."""
         try:
-            capacity_stats = self.capacity_manager.refresh_from_nodes(
+            rows, totals, summary = self.capacity_manager.refresh_from_nodes(
                 self.deployment_nodes
             )
+            self.logger.info(summary)
 
+            capacity_stats = (rows, totals)
             self.logger.debug(f"Publishing capacity stats: {capacity_stats}")
             event = MarieEvent.engine_event(
                 "gateway://control-plane",
@@ -2060,9 +2063,6 @@ class MarieServerGateway(CompositeServer):
         # Atomic swap to preserve old behavior
         self.deployments = new_deployments
         ClusterState.deployments = new_deployments
-
-        from marie.scheduler.util import available_slots_by_executor
-
         slots = available_slots_by_executor(self.semaphore_store)
         self.logger.debug(f"Rebuilt deployments; slot summary: {slots}")
 

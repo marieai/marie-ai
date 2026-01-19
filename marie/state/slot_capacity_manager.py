@@ -50,14 +50,15 @@ class SlotCapacityManager:
     def refresh_from_nodes(
         self,
         deployment_nodes: Mapping[str, List[dict]],
-    ) -> tuple[list[tuple], dict[str, int]]:
+    ) -> tuple[list[tuple], dict[str, int], str]:
         """
         Reconcile capacities for all executors present in `deployment_nodes`.
         Idempotent. Safe to call frequently.
 
         deployment_nodes: { executor: [ { "address": "...", "gateway": "...", ... }, ... ] }
         Returns:
-          (rows, totals) computed from the current store snapshot after reconciliation.
+          (rows, totals, summary) computed from the current store snapshot after reconciliation.
+          Caller is responsible for logging the summary if desired.
         """
         targets = self._capacity_targets_from_nodes(deployment_nodes)
 
@@ -73,8 +74,9 @@ class SlotCapacityManager:
                 used = max(0, int(self.sem.read_count(slot_type)))
                 self._safe_set_capacity(slot_type, used)
 
-        self.print_summary(targets=targets)
-        return self.compute_summary_rows_and_totals(targets)
+        rows, totals = self.compute_summary_rows_and_totals(targets)
+        summary = self.format_summary(targets=targets)
+        return rows, totals, summary
 
     def compute_summary_rows_and_totals(
         self, targets: Optional[Dict[str, int]] = None
@@ -121,15 +123,16 @@ class SlotCapacityManager:
 
         return rows, totals
 
-    def print_summary(self, targets: Optional[Dict[str, int]] = None) -> None:
+    def format_summary(self, targets: Optional[Dict[str, int]] = None) -> str:
         """
-        Log a table of current slot state: SLOT | CAPACITY | TARGET | USED | AVAIL | HOLDERS | NOTES
+        Format a table of current slot state: SLOT | CAPACITY | TARGET | USED | AVAIL | HOLDERS | NOTES
+
+        Returns the formatted string. Caller is responsible for logging/printing.
         """
         rows, totals = self.compute_summary_rows_and_totals(targets)
 
         if not rows:
-            self.log.info("[capacity] No slots discovered.")
-            return
+            return "[capacity] No slots discovered."
 
         headers = self.SUMMARY_HEADERS
         widths = [
@@ -154,8 +157,8 @@ class SlotCapacityManager:
             )
         )
 
-        self.log.info(
-            "\n".join(["[capacity] Slot summary:", header, sep, body, sep, total_row])
+        return "\n".join(
+            ["[capacity] Slot summary:", header, sep, body, sep, total_row]
         )
 
     def _zero_absent_enabled(self) -> bool:
