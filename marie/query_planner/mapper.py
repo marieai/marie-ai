@@ -216,9 +216,19 @@ class JobMetadata(BaseModel):
             else:
                 executor = layout_conf.model_executors.get(model_name)
                 if not executor:
+                    available = (
+                        list(layout_conf.model_executors.keys())
+                        if layout_conf.model_executors
+                        else []
+                    )
                     raise ValueError(
-                        f"Executor not found for model: {model_name}. "
-                        f"Available executors: {layout_conf.model_executors}"
+                        f"Executor not found for model '{model_name}' in layout '{layout}'.\n"
+                        f"  Available model executors: {available}\n"
+                        f"  Task: {task.task_id} ({task.query_str})\n"
+                        f"  Config directory: {__default_extract_dir__}\n"
+                        f"  To fix: Add '{model_name}' to 'model_executors' in your mapper config, e.g.:\n"
+                        f"    model_executors:\n"
+                        f"      {model_name}: exec_annotator_{model_name}_default"
                     )
                 endpoint_path = endpoint.lstrip('/')
                 executor_endpoint = f"{executor}://{endpoint_path}"

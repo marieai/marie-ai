@@ -2175,11 +2175,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
 
                 except ValueError as e:
-                    self.logger.warning(
-                        f"Job submission issue for {request.work_info.id}: {e}"
+                    self.logger.error(
+                        f"Job submission failed for {request.work_info.id}: {e}"
                     )
                     if not request.result_future.done():
-                        request.result_future.set_result(request.work_info.id)
+                        request.result_future.set_exception(e)
                 except Exception as e:
                     if not request.result_future.done():
                         request.result_future.set_exception(e)
