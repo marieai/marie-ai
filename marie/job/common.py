@@ -223,8 +223,13 @@ class JobInfoStorageClient:
         status: JobStatus,
         message: Optional[str] = None,
         jobinfo_replace_kwargs: Optional[Dict[str, Any]] = None,
+        force: bool = False,
     ):
-        """Puts or updates job status.  Sets end_time if status is terminal."""
+        """Puts or updates job status.  Sets end_time if status is terminal.
+
+        Args:
+            force: If True, allows overriding a terminal status (e.g., for infrastructure errors)
+        """
 
         old_info = await self.get_info(job_id)
 
@@ -232,7 +237,11 @@ class JobInfoStorageClient:
             jobinfo_replace_kwargs = dict()
         jobinfo_replace_kwargs.update(status=status, message=message)
         if old_info is not None:
-            if status != old_info.status and old_info.status.is_terminal():
+            if (
+                status != old_info.status
+                and old_info.status.is_terminal()
+                and not force
+            ):
                 assert False, "Attempted to change job status from a terminal state."
             new_info = replace(old_info, **jobinfo_replace_kwargs)
         else:
