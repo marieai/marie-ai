@@ -198,7 +198,7 @@ with:
     clickhouse:
       host: localhost
       port: 9000
-      database: marie_llm
+      database: marie
 
   # Authentication and Authorization configuration
   auth:

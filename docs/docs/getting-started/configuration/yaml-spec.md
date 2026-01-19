@@ -392,7 +392,7 @@ llm_tracking:
     host: ${{ ENV.CLICKHOUSE_HOST | default: localhost }}
     port: ${{ ENV.CLICKHOUSE_HTTP_PORT | default: 8123 }}
     native_port: ${{ ENV.CLICKHOUSE_NATIVE_PORT | default: 9000 }}
-    database: ${{ ENV.CLICKHOUSE_DB | default: marie_llm }}
+    database: ${{ ENV.CLICKHOUSE_DB | default: marie }}
     user: ${{ ENV.CLICKHOUSE_USER | default: default }}
     password: ${{ ENV.CLICKHOUSE_PASSWORD }}
     batch_size: 1000
@@ -435,7 +435,7 @@ llm_tracking:
 
   clickhouse:
     host: ${{ ENV.CLICKHOUSE_HOST }}
-    database: marie_llm
+    database: marie
 ```
 
 For detailed usage, see the [LLM tracking guide](../../guides/llm-tracking.md).
@@ -531,7 +531,7 @@ llm_tracking:
 
   clickhouse:
     host: ${{ ENV.CLICKHOUSE_HOST | default: localhost }}
-    database: marie_llm
+    database: marie
 ```
 
 ## Validation

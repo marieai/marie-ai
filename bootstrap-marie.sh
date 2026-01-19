@@ -605,8 +605,8 @@ initialize_databases() {
         if [ $ch_attempt -gt $ch_attempts ]; then
             echo -e "${YELLOW}⚠️  ClickHouse not ready, skipping database creation${NC}"
         else
-            # Create marie_llm database for LLM tracking and analytics
-            local ch_db="${CLICKHOUSE_DB:-marie_llm}"
+            # Create marie database for LLM tracking and analytics
+            local ch_db="${CLICKHOUSE_DB:-marie}"
             echo "  Creating ClickHouse database '$ch_db'..."
             docker exec marie-clickhouse clickhouse-client --query \
                 "CREATE DATABASE IF NOT EXISTS $ch_db" >/dev/null 2>&1

@@ -6,7 +6,7 @@
 -- - scores: Evaluation scores for traces or observations
 --
 -- Usage:
---   docker exec -i marie-clickhouse clickhouse-client --database marie_llm < config/clickhouse/schema/llm_tracking.sql
+--   docker exec -i marie-clickhouse clickhouse-client --database marie < config/clickhouse/schema/llm_tracking.sql
 
 -- Traces table - Root container for LLM interactions
 CREATE TABLE IF NOT EXISTS traces (
