@@ -14,12 +14,12 @@ class SlotCapacityManager:
     - Derive capacity targets from {executor -> [nodes]} with per-node policy
     - Safely set capacities (CAS; never below current usage)
     - Print a compact summary
-    - Optionally clamp absent executors down to current usage
+    - Clamp absent executors down to current usage (default behavior)
 
     Env overrides:
       MARIE_SLOTS_PER_NODE=<int>                 (default=1)
       MARIE_SLOTS_<EXECUTOR>_PER_NODE=<int>      (per-executor)
-      MARIE_CAPACITY_ZERO_ON_ABSENT=true|false   (default=false)
+      MARIE_CAPACITY_ZERO_ON_ABSENT=true|false   (default=true)
     """
 
     SUMMARY_HEADERS: tuple[str, ...] = (
@@ -159,8 +159,10 @@ class SlotCapacityManager:
         )
 
     def _zero_absent_enabled(self) -> bool:
-        v = os.environ.get(self.zero_absent_env, "false").lower()
-        return v in ("1", "true", "yes", "y")
+        # Default to true: absent executors should have their capacity zeroed
+        # Set MARIE_CAPACITY_ZERO_ON_ABSENT=false to disable (not recommended)
+        v = os.environ.get(self.zero_absent_env, "true").lower()
+        return v not in ("0", "false", "no", "n")
 
     def _slots_per_node(self, executor: str) -> int:
         # global default
