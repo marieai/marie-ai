@@ -296,6 +296,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self._job_cache[job_id] = work_item
             await self.frontier.update_job_state(job_id, work_state)
 
+            # Track actual work state for failures (may be 'retry' or 'failed')
+            actual_work_state: Optional[str] = None
+
             if status == JobStatus.PENDING:
                 self.logger.debug(f"Job pending : {job_id}")
             elif status == JobStatus.SUCCEEDED:
@@ -321,24 +324,46 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             job_id, work_item, dag_plan
                         )
             elif status == JobStatus.FAILED:
-                await self.fail(job_id, work_item)
-                await self.frontier.on_job_failed(job_id)
+                actual_work_state = await self.fail(job_id, work_item)
+                if actual_work_state == WorkState.RETRY.value:
+                    await self.frontier.on_job_retry(job_id, work_item)
+                else:
+                    await self.frontier.on_job_failed(job_id)
             elif status == JobStatus.RUNNING:
                 self.logger.debug(f"Job running : {job_id}")
                 await self.put_status(job_id, work_state, now, None)
             else:
                 self.logger.error(f"Unhandled job status: {status}. Marking as FAILED.")
-                await self.fail(job_id, work_item)  # Fail-safe
-                await self.frontier.on_job_failed(job_id)
+                actual_work_state = await self.fail(job_id, work_item)  # Fail-safe
+                if actual_work_state == WorkState.RETRY.value:
+                    await self.frontier.on_job_retry(job_id, work_item)
+                else:
+                    await self.frontier.on_job_failed(job_id)
 
-            if status.is_terminal():
+            # Only resolve DAG status for truly terminal states
+            # For FAILED jobs, check if they went to 'failed' (not 'retry')
+            is_truly_terminal = (
+                status == JobStatus.SUCCEEDED
+                or status == JobStatus.STOPPED
+                or (
+                    status == JobStatus.FAILED
+                    and actual_work_state == WorkState.FAILED.value
+                )
+            )
+
+            if is_truly_terminal:
                 self.logger.debug(
-                    f"Job is in terminal state {status}, job_id: {job_id}"
+                    f"Job is in terminal state {status} (work_state={actual_work_state}), job_id: {job_id}"
                 )
 
                 self._status_update_lock.release(job_id)
                 await self.resolve_dag_status(job_id, work_item, now, now)
                 await self.notify_event()
+            elif (
+                status == JobStatus.FAILED
+                and actual_work_state == WorkState.RETRY.value
+            ):
+                self.logger.info(f"Job {job_id} will be retried, DAG remains active")
         except Exception as e:
             self.logger.error(
                 f"Error handling job event {event_type} for job {job_id}: {e}"
@@ -1989,11 +2014,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     work_info.id
                 )  # job ID serves as node task ID
 
+            # Detect if this is a retry (job was previously run and failed)
+            is_retry = work_info.state == WorkState.RETRY
+
             await self.job_manager.submit_job(
                 entrypoint=entrypoint,
                 submission_id=submission_id,
                 metadata=job_metadata,
                 confirmation_event=confirmation_event,
+                is_retry=is_retry,
             )
 
             # Wait for the supervisor to confirm it has received the job and is running.
@@ -2175,11 +2204,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
 
                 except ValueError as e:
-                    self.logger.warning(
-                        f"Job submission issue for {request.work_info.id}: {e}"
+                    self.logger.error(
+                        f"Job submission failed for {request.work_info.id}: {e}"
                     )
                     if not request.result_future.done():
-                        request.result_future.set_result(request.work_info.id)
+                        request.result_future.set_exception(e)
                 except Exception as e:
                     if not request.result_future.done():
                         request.result_future.set_exception(e)
@@ -2526,23 +2555,25 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def fail(
         self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
-    ):
+    ) -> Optional[str]:
         """
-        Mark a job as failed.
+        Mark a job as failed or for retry.
         Delegates to JobRepository.
 
         :param job_id: The ID of the job to mark as failed
         :param work_item: The work item containing queue name
         :param output_metadata: Optional metadata to store with failure
+        :return: The actual final state ('retry' or 'failed'), or None on error
         """
         async with self._status_update_lock[job_id]:
-            await self.repository.fail_job(
+            count, final_state = await self.repository.fail_job(
                 job_id=job_id,
                 queue_name=work_item.name,
                 output_metadata=output_metadata,
                 schema=DEFAULT_SCHEMA,
             )
             # self._job_cache.pop(job_id, None) # invalidate cache
+            return final_state
 
     async def _sync(self):
         """
@@ -2616,22 +2647,51 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             continue
 
                         meta = {"synced": True}
+                        actual_work_state: Optional[str] = None
+
                         if job_info.status == JobStatus.SUCCEEDED:
                             await self.complete(job_id, work_item, meta, force=True)
                         elif job_info.status == JobStatus.FAILED:
-                            await self.fail(job_id, work_item, meta)
+                            actual_work_state = await self.fail(job_id, work_item, meta)
+                            if actual_work_state == WorkState.RETRY.value:
+                                await self.frontier.on_job_retry(job_id, work_item)
+                            else:
+                                await self.frontier.on_job_failed(job_id)
                         elif job_info.status == JobStatus.STOPPED:
                             await self.cancel_job(job_id, work_item)
                         else:
                             self.logger.error(
                                 f"Unhandled job status: {job_info.status}. Marking as FAILED."
                             )
-                            await self.fail(job_id, work_item)
+                            actual_work_state = await self.fail(job_id, work_item)
+                            if actual_work_state == WorkState.RETRY.value:
+                                await self.frontier.on_job_retry(job_id, work_item)
+                            else:
+                                await self.frontier.on_job_failed(job_id)
 
-                        self.logger.info(
-                            f"Synchronized job {job_id} is in terminal state {job_info.status}"
+                        # Only resolve DAG for truly terminal states
+                        # For FAILED jobs, check if they went to 'failed' (not 'retry')
+                        is_truly_terminal = (
+                            job_info.status == JobStatus.SUCCEEDED
+                            or job_info.status == JobStatus.STOPPED
+                            or (
+                                job_info.status == JobStatus.FAILED
+                                and actual_work_state == WorkState.FAILED.value
+                            )
                         )
-                        await self.resolve_dag_status(job_id, work_item, now, now)
+
+                        if is_truly_terminal:
+                            self.logger.info(
+                                f"Synchronized job {job_id} is in terminal state {job_info.status}"
+                            )
+                            await self.resolve_dag_status(job_id, work_item, now, now)
+                        elif (
+                            job_info.status == JobStatus.FAILED
+                            and actual_work_state == WorkState.RETRY.value
+                        ):
+                            self.logger.info(
+                                f"Synchronized job {job_id} marked for retry, DAG remains active"
+                            )
 
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error syncing jobs: {error}")

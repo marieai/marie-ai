@@ -421,21 +421,27 @@ class JobSupervisor:
                         # Failure path
                         exception_proto = response.status.exception
                         error_name = str(exception_proto.name)
-                        self.logger.error(
-                            f"Job {self._job_id} failed but already marked terminal: {current_status}. error_name = {error_name} \n{exception_proto}"
-                        )
 
                         if current_status.is_terminal():
-                            await self._event_publisher.publish(
-                                current_status,
-                                {
-                                    "job_id": self._job_id,
-                                    "status": current_status,
-                                    "message": f"Job {self._job_id} failed but already marked terminal: {current_status}.",
-                                    "jobinfo_replace_kwargs": False,
-                                },
+                            # Job is already in terminal state but infrastructure failed
+                            # Override to FAILED since the overall operation failed
+                            self.logger.error(
+                                f"Job {self._job_id} failed after being marked {current_status} "
+                                f"(infrastructure error). Overriding to FAILED. "
+                                f"error_name = {error_name} \n{exception_proto}"
+                            )
+                            await self._job_info_client.put_status(
+                                self._job_id,
+                                JobStatus.FAILED,
+                                message=error_name,
+                                force=True,
                             )
                         else:
+                            # Normal failure - update status to FAILED
+                            self.logger.error(
+                                f"Job {self._job_id} failed (status was {current_status}). "
+                                f"error_name = {error_name} \n{exception_proto}"
+                            )
                             await self._job_info_client.put_status(
                                 self._job_id, JobStatus.FAILED, message=error_name
                             )

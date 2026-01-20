@@ -338,6 +338,7 @@ class JobManager:
         runtime_env: Optional[Dict[str, Any]] = None,
         _start_signal_actor: Optional[ActorHandle] = None,
         confirmation_event: Optional[asyncio.Event] = None,
+        is_retry: bool = False,
     ) -> str:
         """
         Job execution happens asynchronously.
@@ -366,9 +367,9 @@ class JobManager:
             entrypoint_resources=entrypoint_resources,
         )
         new_key_added = await self._job_info_client.put_info(
-            submission_id, job_info, overwrite=False
+            submission_id, job_info, overwrite=is_retry
         )
-        if not new_key_added:
+        if not new_key_added and not is_retry:
             raise ValueError(
                 f"Job with submission_id {submission_id} already exists. "
                 "Please use a different submission_id."

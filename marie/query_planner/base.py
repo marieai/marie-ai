@@ -240,6 +240,97 @@ class QueryPlanRegistry:
             return False
 
     @classmethod
+    def discover_from_package(
+        cls,
+        package_name: str,
+        pattern: str = "*",
+    ) -> Dict[str, Any]:
+        """
+        Auto-discover and register planners from a Python package.
+
+        Scans the package directory for subdirectories matching the given pattern
+        and imports any .py files that contain the @register_query_plan decorator.
+
+        :param package_name: The fully qualified package name (e.g., 'grapnel_g5.extract.providers')
+        :param pattern: Glob pattern for matching subdirectory names (default: '*')
+        :return: Dictionary with 'loaded', 'failed', and 'skipped' lists
+        """
+        from fnmatch import fnmatch
+        from pathlib import Path
+
+        result: Dict[str, Any] = {'loaded': [], 'failed': [], 'skipped': []}
+
+        logger.info(
+            f"Discovering planners from package '{package_name}' (pattern: {pattern})"
+        )
+
+        try:
+            # Import the base package to get its path
+            pkg = importlib.import_module(package_name)
+            if not hasattr(pkg, '__file__') or pkg.__file__ is None:
+                logger.warning(f"Package '{package_name}' has no __file__ attribute")
+                result['error'] = (
+                    f"Package '{package_name}' is a namespace package without __file__"
+                )
+                return result
+
+            pkg_path = Path(pkg.__file__).parent
+
+            # Scan for subdirectories matching the pattern
+            discovered_count = 0
+            for item in sorted(pkg_path.iterdir()):
+                # Skip non-directories and private/dunder directories
+                if not item.is_dir() or item.name.startswith('_'):
+                    continue
+
+                # Check if directory matches the pattern
+                if not fnmatch(item.name, pattern):
+                    result['skipped'].append(item.name)
+                    continue
+
+                # Scan all .py files in the directory for @register_query_plan
+                found_planner = False
+                for py_file in item.glob("*.py"):
+                    if py_file.name.startswith('_'):
+                        continue
+
+                    # Check if file contains the decorator
+                    try:
+                        content = py_file.read_text(encoding='utf-8')
+                        if '@register_query_plan' not in content:
+                            continue
+                    except Exception as e:
+                        logger.debug(f"Could not read {py_file}: {e}")
+                        continue
+
+                    # Build the full module path and try to import
+                    module_name = py_file.stem
+                    full_module_path = f"{package_name}.{item.name}.{module_name}"
+                    if cls.register_from_module(full_module_path):
+                        result['loaded'].append(full_module_path)
+                        discovered_count += 1
+                        found_planner = True
+                    else:
+                        result['failed'].append(full_module_path)
+
+                if not found_planner:
+                    result['skipped'].append(f"{item.name} (no @register_query_plan)")
+
+            logger.info(
+                f"Discovered {discovered_count} planners from '{package_name}' "
+                f"(skipped: {len(result['skipped'])}, failed: {len(result['failed'])})"
+            )
+
+        except ImportError as e:
+            logger.error(f"Failed to import package '{package_name}': {e}")
+            result['error'] = str(e)
+        except Exception as e:
+            logger.error(f"Error discovering planners from '{package_name}': {e}")
+            result['error'] = str(e)
+
+        return result
+
+    @classmethod
     def initialize_from_config(
         cls, query_planners_conf: QueryPlannersConf
     ) -> Dict[str, Any]:
@@ -256,6 +347,7 @@ class QueryPlanRegistry:
         result = {
             'loaded': [],
             'failed': [],
+            'discovered': {},
             'total_planners': len(cls._plans),
             'wheel_results': {},
         }
@@ -286,6 +378,21 @@ class QueryPlanRegistry:
                 except Exception as e:
                     logger.error(f"Failed to handle wheels from {wheel_dir}: {e}")
                     result['failed'].append((wheel_dir, f"Wheel error: {e}"))
+
+        # Auto-discover planners from packages
+        if query_planners_conf.discover_packages:
+            for disc_pkg in query_planners_conf.discover_packages:
+                disc_result = cls.discover_from_package(
+                    package_name=disc_pkg.package,
+                    pattern=disc_pkg.pattern,
+                )
+                result['discovered'][disc_pkg.package] = disc_result
+                # Add discovered modules to the overall loaded/failed lists
+                result['loaded'].extend(disc_result.get('loaded', []))
+                if disc_result.get('failed'):
+                    result['failed'].extend(
+                        [(m, "Discovery import failed") for m in disc_result['failed']]
+                    )
 
         # Register planners from external modules
         loaded_modules = []

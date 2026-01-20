@@ -14,12 +14,12 @@ class SlotCapacityManager:
     - Derive capacity targets from {executor -> [nodes]} with per-node policy
     - Safely set capacities (CAS; never below current usage)
     - Print a compact summary
-    - Optionally clamp absent executors down to current usage
+    - Clamp absent executors down to current usage (default behavior)
 
     Env overrides:
       MARIE_SLOTS_PER_NODE=<int>                 (default=1)
       MARIE_SLOTS_<EXECUTOR>_PER_NODE=<int>      (per-executor)
-      MARIE_CAPACITY_ZERO_ON_ABSENT=true|false   (default=false)
+      MARIE_CAPACITY_ZERO_ON_ABSENT=true|false   (default=true)
     """
 
     SUMMARY_HEADERS: tuple[str, ...] = (
@@ -50,14 +50,15 @@ class SlotCapacityManager:
     def refresh_from_nodes(
         self,
         deployment_nodes: Mapping[str, List[dict]],
-    ) -> tuple[list[tuple], dict[str, int]]:
+    ) -> tuple[list[tuple], dict[str, int], str]:
         """
         Reconcile capacities for all executors present in `deployment_nodes`.
         Idempotent. Safe to call frequently.
 
         deployment_nodes: { executor: [ { "address": "...", "gateway": "...", ... }, ... ] }
         Returns:
-          (rows, totals) computed from the current store snapshot after reconciliation.
+          (rows, totals, summary) computed from the current store snapshot after reconciliation.
+          Caller is responsible for logging the summary if desired.
         """
         targets = self._capacity_targets_from_nodes(deployment_nodes)
 
@@ -73,8 +74,9 @@ class SlotCapacityManager:
                 used = max(0, int(self.sem.read_count(slot_type)))
                 self._safe_set_capacity(slot_type, used)
 
-        self.print_summary(targets=targets)
-        return self.compute_summary_rows_and_totals(targets)
+        rows, totals = self.compute_summary_rows_and_totals(targets)
+        summary = self.format_summary(targets=targets)
+        return rows, totals, summary
 
     def compute_summary_rows_and_totals(
         self, targets: Optional[Dict[str, int]] = None
@@ -121,15 +123,16 @@ class SlotCapacityManager:
 
         return rows, totals
 
-    def print_summary(self, targets: Optional[Dict[str, int]] = None) -> None:
+    def format_summary(self, targets: Optional[Dict[str, int]] = None) -> str:
         """
-        Log a table of current slot state: SLOT | CAPACITY | TARGET | USED | AVAIL | HOLDERS | NOTES
+        Format a table of current slot state: SLOT | CAPACITY | TARGET | USED | AVAIL | HOLDERS | NOTES
+
+        Returns the formatted string. Caller is responsible for logging/printing.
         """
         rows, totals = self.compute_summary_rows_and_totals(targets)
 
         if not rows:
-            self.log.info("[capacity] No slots discovered.")
-            return
+            return "[capacity] No slots discovered."
 
         headers = self.SUMMARY_HEADERS
         widths = [
@@ -154,13 +157,15 @@ class SlotCapacityManager:
             )
         )
 
-        self.log.info(
-            "\n".join(["[capacity] Slot summary:", header, sep, body, sep, total_row])
+        return "\n".join(
+            ["[capacity] Slot summary:", header, sep, body, sep, total_row]
         )
 
     def _zero_absent_enabled(self) -> bool:
-        v = os.environ.get(self.zero_absent_env, "false").lower()
-        return v in ("1", "true", "yes", "y")
+        # Default to true: absent executors should have their capacity zeroed
+        # Set MARIE_CAPACITY_ZERO_ON_ABSENT=false to disable (not recommended)
+        v = os.environ.get(self.zero_absent_env, "true").lower()
+        return v not in ("0", "false", "no", "n")
 
     def _slots_per_node(self, executor: str) -> int:
         # global default

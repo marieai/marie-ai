@@ -62,7 +62,6 @@ def available_slots_by_executor(sem: SemaphoreStore) -> dict[str, int]:
     Snapshot available slots for all executors from the semaphore store.
     Equivalent to: capacities - used_count, based on holders/count keys.
     """
-    # multi-slot snapshot (single pass over etcd keys)
     return sem.available_count_all()
 
 

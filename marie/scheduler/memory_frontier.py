@@ -2,6 +2,7 @@ import asyncio
 import heapq
 import time
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, NamedTuple, Optional
 
 from marie.logging_core.predefined import default_logger as logger
@@ -81,12 +82,16 @@ class MemoryFrontier:
         self._ready_set.discard(job_id)
 
     def _still_ready(self, job_id: str) -> bool:
-        # Ready if: exists, unmet deps == 0, not soft-leased, and in ready_set
+        # Ready if: exists, unmet deps == 0, not soft-leased, in ready_set, and past start_after
         if job_id not in self.jobs_by_id:
             return False
+        wi = self.jobs_by_id[job_id]
         if self.unmet_count.get(job_id, 1) != 0:
             return False
         if job_id not in self._ready_set:
+            return False
+        # Check start_after time (for retry delays)
+        if wi.start_after and wi.start_after > datetime.now(timezone.utc):
             return False
         # if soft-leased and not expired, don't expose it
         if job_id in self.leased_until and self.leased_until[job_id] > self._now():
@@ -178,20 +183,52 @@ class MemoryFrontier:
 
     async def on_job_failed(self, job_id: str) -> list[WorkInfo]:
         """
-        Handles job failure. Currently, it's conservative and does not automatically
-        enqueue descendants.
+        Handles permanent job failure. Updates state to FAILED and does not
+        re-add to ready queue.
         """
         async with self._lock:
             # Conservative: don't enqueue descendants automatically
             # Update the job's state to FAILED
             if job_id in self.jobs_by_id:
                 self.jobs_by_id[job_id].state = WorkState.FAILED
+                self._remove_from_ready_set(job_id)
             else:
                 logger.warning(
                     f"Job with id {job_id} not found in memory frontier for failure."
                 )
 
             return []
+
+    async def on_job_retry(self, job_id: str, work_item: WorkInfo) -> None:
+        """
+        Handles job marked for retry. Updates state to RETRY, calculates
+        start_after from retry_delay, and re-adds to ready queue.
+
+        :param job_id: The ID of the job to retry
+        :param work_item: The WorkInfo containing retry configuration
+        """
+        async with self._lock:
+            if job_id not in self.jobs_by_id:
+                logger.warning(f"Job {job_id} not found in memory frontier for retry")
+                return
+
+            wi = self.jobs_by_id[job_id]
+            wi.state = WorkState.RETRY
+
+            # Calculate start_after based on retry_delay
+            # Default to 2 seconds if retry_delay is not set
+            retry_delay_seconds = work_item.retry_delay if work_item.retry_delay else 2
+            wi.start_after = datetime.now(timezone.utc) + timedelta(
+                seconds=retry_delay_seconds
+            )
+
+            # Re-add to ready queue
+            # The _still_ready check will handle the start_after delay
+            self._push_ready(wi)
+            logger.info(
+                f"Job {job_id} re-added to ready queue for retry "
+                f"(retry_delay={retry_delay_seconds}s, start_after={wi.start_after})"
+            )
 
     async def mark_leased(self, job_id: str, ttl_s: Optional[float] = None) -> None:
         """Applies a soft lease to a job to prevent re-scheduling."""

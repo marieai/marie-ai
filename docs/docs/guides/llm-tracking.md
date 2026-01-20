@@ -102,7 +102,7 @@ llm_tracking:
     host: localhost
     port: 8123
     native_port: 9000
-    database: marie_llm
+    database: marie
     user: default
     password: ""
     batch_size: 1000

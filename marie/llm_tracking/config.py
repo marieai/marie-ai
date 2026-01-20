@@ -57,7 +57,7 @@ class LLMTrackingSettings:
     CLICKHOUSE_HOST: str = "localhost"
     CLICKHOUSE_PORT: int = 8123
     CLICKHOUSE_NATIVE_PORT: int = 9000
-    CLICKHOUSE_DATABASE: str = "marie_llm"
+    CLICKHOUSE_DATABASE: str = "marie"
     CLICKHOUSE_USER: str = "default"
     CLICKHOUSE_PASSWORD: str = ""
 

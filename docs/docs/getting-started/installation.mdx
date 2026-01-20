@@ -655,6 +655,24 @@ curl 'http://localhost:8123/?query=SELECT%20version()'
 docker exec -it marie-clickhouse clickhouse-client
 ```
 
+**Database Setup:**
+
+The `marie` database is required for LLM tracking and analytics. If using the bootstrap script, it will be created automatically:
+
+```bash
+./bootstrap-marie.sh --start
+```
+
+To create the database manually:
+```bash
+docker exec marie-clickhouse clickhouse-client --query "CREATE DATABASE IF NOT EXISTS marie"
+```
+
+Verify the database exists:
+```bash
+docker exec marie-clickhouse clickhouse-client --query "SHOW DATABASES"
+```
+
 ### Gitea
 
 [Gitea](https://gitea.com/) is a self-hosted Git service used by marie-studio for repository management and version control.

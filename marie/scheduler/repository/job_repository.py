@@ -1481,19 +1481,19 @@ class JobRepository(PostgresqlMixin):
         queue_name: str,
         output_metadata: dict = None,
         schema: str = DEFAULT_SCHEMA,
-    ) -> int:
+    ) -> Tuple[int, Optional[str]]:
         """
-        Mark a job as failed.
+        Mark a job as failed or for retry.
 
         :param job_id: The ID of the job to mark as failed
         :param queue_name: The name of the queue
         :param output_metadata: Optional metadata to store with failure
         :param schema: The database schema (default: marie_scheduler)
-        :return: Number of jobs marked as failed (0 or 1)
+        :return: Tuple of (count, final_state) where final_state is 'retry' or 'failed'
         """
-        self.logger.info(f"Marking job as failed: {job_id}")
+        self.logger.info(f"Processing job failure: {job_id}")
 
-        def db_call():
+        def db_call() -> Tuple[int, Optional[str]]:
             cursor = None
             conn = None
             try:
@@ -1508,15 +1508,26 @@ class JobRepository(PostgresqlMixin):
                     return_cursor=True,
                     connection=conn,
                 )
-                counts = cursor.fetchone()[0]
-                if counts > 0:
-                    self.logger.info(f"Completed failed job: {job_id}")
+                result = cursor.fetchone()
+                count = result[0]
+                final_state = result[1] if len(result) > 1 else None
+
+                if count > 0:
+                    if final_state == 'retry':
+                        self.logger.info(
+                            f"Job {job_id} marked for retry (will be retried)"
+                        )
+                    else:
+                        self.logger.info(
+                            f"Job {job_id} failed permanently (no retries remaining)"
+                        )
                 else:
-                    self.logger.error(f"Error completing failed job: {job_id}")
-                return counts
+                    self.logger.error(f"Failed to update job state: {job_id}")
+
+                return (count, final_state)
             except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error completing failed job: {error}")
-                return 0
+                self.logger.error(f"Error processing job failure: {error}")
+                return (0, None)
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)
