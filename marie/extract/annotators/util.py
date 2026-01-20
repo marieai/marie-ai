@@ -167,11 +167,20 @@ async def process_batch(
                 task_id = responses[i][0]
                 response = responses[i][1]
 
-                output_filename_base = b_image_path.split("/")[-1]
+                output_filename_base = os.path.splitext(b_image_path.split("/")[-1])[0]
                 output_filename = os.path.join(
                     output_path, f"{output_filename_base}.png"
                 )
                 b_image.save(output_filename)
+
+                # Handle None response (LLM call failed for this task)
+                if response is None:
+                    logger.error(
+                        f"LLM response is None for task {task_id} (image {i}: {output_filename_base}). "
+                        "This usually indicates an API error or timeout during inference."
+                    )
+                    converted.append(None)
+                    continue
 
                 try:
                     with open(f"{output_filename}_prompt.txt", "w") as f:
@@ -313,8 +322,9 @@ def prepare_batch_with_meta(
                     decorated_lines.append(decorated_line)
                 content = "\n".join(decorated_lines)
 
-                updated_prompt = updated_prompt.replace("OCR_DATA", content)
-                # updated_prompt = updated_prompt.replace("OUTPUT_SCHEME", SCHEMA)
+                updated_prompt = updated_prompt.replace("OCR_DATA", content).replace(
+                    "OCR_TEXT", content
+                )
                 prompts.append(updated_prompt)
             except ValueError:
                 print(f"Unable to extract page number from filename: {name}")
@@ -322,7 +332,7 @@ def prepare_batch_with_meta(
         # TODO : this needs to be configured via the config file
         # 2048
         images = preprocess_images_for_inference(
-            image_paths, min_pixels=512 * 28 * 28, max_pixels=4096 * 28 * 28
+            image_paths, min_pixels=512 * 28 * 28, max_pixels=2048 * 28 * 28
         )
         batch_input = [
             [img, prt, img_path]

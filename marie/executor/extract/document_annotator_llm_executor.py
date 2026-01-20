@@ -20,11 +20,13 @@ class DocumentAnnotatorLLMExecutor(DocumentAnnotatorExecutor):
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
         storage: dict[str, any] = None,
+        llm_tracking: dict[str, any] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ) -> None:
 
         kwargs['storage'] = storage
+        kwargs['llm_tracking'] = llm_tracking
         super().__init__(**kwargs)
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
@@ -62,5 +64,8 @@ class DocumentAnnotatorLLMExecutor(DocumentAnnotatorExecutor):
             return {'status': 'success', 'message': 'Documents annotated successfully'}
 
         except Exception as e:
+            # Sinc we are not throwing an exception the job will be marked as successful
+            # we log the error and return an error message, later we can improve this to mark the job as failed
+            # by introducing an improved error handling mechanism
             self.logger.error(f"Error during annotation: {e}")
             return {'status': 'error', 'message': str(e)}

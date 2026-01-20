@@ -165,6 +165,8 @@ class PostgresStorage(PostgresqlMixin):
         """
         Save event metadata to PostgreSQL (payload already in S3).
 
+        Uses UPSERT to handle updates to existing events (e.g., trace updates).
+
         Args:
             event: RawEvent with metadata to save
 
@@ -195,6 +197,21 @@ class PostgresStorage(PostgresqlMixin):
                         %s, %s, %s,
                         %s
                     )
+                    ON CONFLICT (id) DO UPDATE SET
+                        event_type = EXCLUDED.event_type,
+                        s3_key = EXCLUDED.s3_key,
+                        model_name = COALESCE(EXCLUDED.model_name, {self._table_name}.model_name),
+                        model_provider = COALESCE(EXCLUDED.model_provider, {self._table_name}.model_provider),
+                        prompt_tokens = COALESCE(EXCLUDED.prompt_tokens, {self._table_name}.prompt_tokens),
+                        completion_tokens = COALESCE(EXCLUDED.completion_tokens, {self._table_name}.completion_tokens),
+                        total_tokens = COALESCE(EXCLUDED.total_tokens, {self._table_name}.total_tokens),
+                        duration_ms = COALESCE(EXCLUDED.duration_ms, {self._table_name}.duration_ms),
+                        time_to_first_token_ms = COALESCE(EXCLUDED.time_to_first_token_ms, {self._table_name}.time_to_first_token_ms),
+                        cost_usd = COALESCE(EXCLUDED.cost_usd, {self._table_name}.cost_usd),
+                        user_id = COALESCE(EXCLUDED.user_id, {self._table_name}.user_id),
+                        session_id = COALESCE(EXCLUDED.session_id, {self._table_name}.session_id),
+                        tags = COALESCE(EXCLUDED.tags, {self._table_name}.tags),
+                        status = COALESCE(EXCLUDED.status, {self._table_name}.status)
                     RETURNING id
                     """,
                     (
@@ -225,6 +242,8 @@ class PostgresStorage(PostgresqlMixin):
     def save_events(self, events: List[RawEvent]) -> List[str]:
         """
         Save multiple event metadata records in a batch.
+
+        Uses UPSERT to handle updates to existing events.
 
         Args:
             events: List of RawEvents to save
@@ -284,6 +303,21 @@ class PostgresStorage(PostgresqlMixin):
                         %s, %s, %s,
                         %s
                     )
+                    ON CONFLICT (id) DO UPDATE SET
+                        event_type = EXCLUDED.event_type,
+                        s3_key = EXCLUDED.s3_key,
+                        model_name = COALESCE(EXCLUDED.model_name, {self._table_name}.model_name),
+                        model_provider = COALESCE(EXCLUDED.model_provider, {self._table_name}.model_provider),
+                        prompt_tokens = COALESCE(EXCLUDED.prompt_tokens, {self._table_name}.prompt_tokens),
+                        completion_tokens = COALESCE(EXCLUDED.completion_tokens, {self._table_name}.completion_tokens),
+                        total_tokens = COALESCE(EXCLUDED.total_tokens, {self._table_name}.total_tokens),
+                        duration_ms = COALESCE(EXCLUDED.duration_ms, {self._table_name}.duration_ms),
+                        time_to_first_token_ms = COALESCE(EXCLUDED.time_to_first_token_ms, {self._table_name}.time_to_first_token_ms),
+                        cost_usd = COALESCE(EXCLUDED.cost_usd, {self._table_name}.cost_usd),
+                        user_id = COALESCE(EXCLUDED.user_id, {self._table_name}.user_id),
+                        session_id = COALESCE(EXCLUDED.session_id, {self._table_name}.session_id),
+                        tags = COALESCE(EXCLUDED.tags, {self._table_name}.tags),
+                        status = COALESCE(EXCLUDED.status, {self._table_name}.status)
                     """,
                     values,
                 )

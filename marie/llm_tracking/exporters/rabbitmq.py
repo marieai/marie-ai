@@ -38,6 +38,7 @@ class RabbitMQExporter(AbstractExporter):
         rabbitmq_url: Optional[str] = None,
         exchange: Optional[str] = None,
         routing_key: Optional[str] = None,
+        queue: Optional[str] = None,
     ):
         """
         Initialize the RabbitMQ exporter.
@@ -46,11 +47,13 @@ class RabbitMQExporter(AbstractExporter):
             rabbitmq_url: RabbitMQ connection URL (or from config)
             exchange: Exchange name (or from config)
             routing_key: Routing key (or from config)
+            queue: Queue name (or from config)
         """
         settings = get_settings()
         self._rabbitmq_url = rabbitmq_url or settings.RABBITMQ_URL
         self._exchange = exchange or settings.RABBITMQ_EXCHANGE
         self._routing_key = routing_key or settings.RABBITMQ_ROUTING_KEY
+        self._queue = queue or settings.RABBITMQ_QUEUE
 
         self._client: Optional[Any] = None
         self._started = False
@@ -75,7 +78,7 @@ class RabbitMQExporter(AbstractExporter):
         }
 
     def start(self) -> None:
-        """Initialize RabbitMQ connection."""
+        """Initialize RabbitMQ connection and setup topology."""
         if self._started:
             return
 
@@ -94,10 +97,19 @@ class RabbitMQExporter(AbstractExporter):
                 durable=True,
             )
 
+            # Declare queue and bind to exchange so messages are queued
+            # even when the worker isn't consuming yet
+            self._client.declare_queue(queue_name=self._queue, durable=True)
+            self._client.queue_bind(
+                queue=self._queue,
+                exchange=self._exchange,
+                routing_key=self._routing_key,
+            )
+
             self._started = True
             logger.info(
                 f"RabbitMQ exporter started: exchange={self._exchange}, "
-                f"routing_key={self._routing_key}"
+                f"queue={self._queue}, routing_key={self._routing_key}"
             )
         except ImportError as e:
             logger.error(f"Failed to import RabbitMQ client: {e}")
