@@ -2,7 +2,7 @@
 
 This directory contains stress testing tools for testing the Marie gateway and networking components.
 
-## Toolsgit 
+## Tools
 
 ### 1. `gateway_stresser.py`
 
