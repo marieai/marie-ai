@@ -1,35 +1,80 @@
-"""Simple Agent Example - Starter Template.
+"""Simple Agent Example - Tutorial / Starter Template.
 
-This is the simplest possible agent example. Use it as a starting point
-for building your own agent tools.
+PURPOSE: Learn how to build agents. This is a minimal, well-commented example
+designed for learning. Copy this file as a starting point for your own agents.
 
-Shows:
+For a production-ready example with full features, see: agent_assistant.py
+
+What You'll Learn:
 - Function-based tools using @register_tool (easiest approach)
-- Class-based tools using AgentTool (more control)
+- Class-based tools using AgentTool (for stateful tools)
+- How to create and run an agent
+- Multimodal messages (text + images)
 - Minimal boilerplate to get started
 
-Usage:
+Available Tools:
+    - add: Add two numbers
+    - multiply: Multiply two numbers
+    - get_time: Get current date and time
+    - list_files: List files in a directory with glob patterns
+    - read_file: Read contents of a text file
+    - counter: Stateful counter (increment, decrement, reset, get)
+    - image_info: Get image metadata (size, format, etc.)
+
+Usage Examples:
+    # Math operations
     python agent_simple.py --task "Add 5 and 3"
+    python agent_simple.py --task "Multiply 7 by 8"
+    python agent_simple.py --task "What is 12 plus 45?"
+
+    # Time queries
     python agent_simple.py --task "What time is it?"
+    python agent_simple.py --task "What day is today?"
+
+    # File operations
+    python agent_simple.py --task "List Python files in current directory"
+    python agent_simple.py --task "List all .py files"
+    python agent_simple.py --task "Read the file agent_simple.py"
+
+    # Counter (stateful)
+    python agent_simple.py --task "Increment the counter 3 times"
+    python agent_simple.py --task "What is the counter value?"
+
+    # Image analysis (multimodal)
+    python agent_simple.py --image photo.jpg --task "Describe this image"
+    python agent_simple.py --image document.png --task "What text is in this image?"
+    python agent_simple.py --image chart.png --task "Get info about this image"
+
+    # Interactive mode
     python agent_simple.py --tui
+
+    # With OpenAI backend
+    python agent_simple.py --backend openai --task "Add 5 and 3"
+
+    # Debug mode - show raw LLM responses
+    python agent_simple.py --task "Add 5 and 3" --debug
 """
 
 import argparse
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
+
 from marie.agent import (
     AgentTool,
-    AssistantAgent,
-    MarieEngineLLMWrapper,
-    OpenAICompatibleWrapper,
+    ReactAgent,
     ToolMetadata,
     ToolOutput,
     register_tool,
 )
+from utils import create_llm, print_debug_response
+
+# Load environment variables from .env file
+load_dotenv()
+
 
 # =============================================================================
 # FUNCTION-BASED TOOLS (using @register_tool)
@@ -141,6 +186,42 @@ def read_file(path: str) -> str:
         return json.dumps({"error": str(e)})
 
 
+@register_tool("image_info")
+def image_info(image_path: str) -> str:
+    """Get metadata about an image file.
+
+    Args:
+        image_path: Path to the image file
+
+    Returns:
+        JSON with image information (size, format, dimensions).
+    """
+    try:
+        from PIL import Image
+
+        path = Path(image_path)
+        if not path.exists():
+            return json.dumps({"error": f"File not found: {image_path}"})
+
+        with Image.open(path) as img:
+            info = {
+                "file_name": path.name,
+                "format": img.format,
+                "mode": img.mode,
+                "width": img.width,
+                "height": img.height,
+                "file_size_kb": round(path.stat().st_size / 1024, 2),
+            }
+        return json.dumps(info)
+
+    except ImportError:
+        return json.dumps(
+            {"error": "PIL/Pillow not installed. Run: pip install Pillow"}
+        )
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
 # =============================================================================
 # CLASS-BASED TOOL (using AgentTool)
 #
@@ -205,26 +286,9 @@ class CounterTool(AgentTool):
         )
 
 
-# =============================================================================
-# AGENT SETUP
-# =============================================================================
-
-
-def create_agent(backend: str = "marie", model: Optional[str] = None) -> AssistantAgent:
+def create_agent(backend: str = "marie", model: Optional[str] = None) -> ReactAgent:
     """Create an agent with our tools."""
-
-    # Setup LLM
-    if backend == "marie":
-        llm = MarieEngineLLMWrapper(engine_name=model or "qwen2_5_vl_7b")
-    else:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("Set OPENAI_API_KEY environment variable")
-        llm = OpenAICompatibleWrapper(
-            model=model or "gpt-4o-mini",
-            api_key=api_key,
-            api_base="https://api.openai.com/v1",
-        )
+    llm = create_llm(backend=backend, model=model)
 
     # List tools - function names (strings) and class instances
     tools = [
@@ -233,10 +297,11 @@ def create_agent(backend: str = "marie", model: Optional[str] = None) -> Assista
         "get_time",
         "list_files",
         "read_file",
+        "image_info",
         CounterTool(start=0),
     ]
 
-    return AssistantAgent(
+    return ReactAgent(
         llm=llm,
         function_list=tools,
         name="Simple Agent",
@@ -247,41 +312,104 @@ def create_agent(backend: str = "marie", model: Optional[str] = None) -> Assista
 - get_time: Get current date/time
 - list_files: List files in a directory
 - read_file: Read a file
+- image_info: Get image metadata (size, format, dimensions)
 - counter: Increment/decrement a counter
+
+You can see and analyze images directly. When an image is provided,
+describe what you see. Use image_info to get technical details.
 
 Use the appropriate tool to help the user.""",
     )
 
 
-# =============================================================================
-# RUNNING THE AGENT
-# =============================================================================
-
-
-def run_task(task: str, backend: str = "marie"):
+def run_task(task: str, backend: str = "marie", debug: bool = False):
     """Run a single task."""
     print(f"Task: {task}")
+    if debug:
+        print(f"Backend: {backend}")
+        print(f"Debug: ON")
     print("-" * 40)
 
     agent = create_agent(backend=backend)
     messages = [{"role": "user", "content": task}]
 
+    iteration = 0
     for responses in agent.run(messages=messages):
         if responses:
+            iteration += 1
+            for resp in responses:
+                if debug:
+                    print_debug_response(resp, iteration)
+
             last = responses[-1]
             content = (
                 last.get("content", "") if isinstance(last, dict) else last.content
             )
             if content:
-                print(f"Agent: {content}")
+                print(f"\nAgent: {content}")
 
 
-def run_interactive():
+def run_image_task(
+    image_path: str, task: str, backend: str = "marie", debug: bool = False
+):
+    """Run a task with an image (multimodal).
+
+    Args:
+        image_path: Path to the image file
+        task: The query/task about the image
+        backend: LLM backend to use
+        debug: Show raw LLM responses
+    """
+    print(f"Image: {image_path}")
+    print(f"Task: {task}")
+    if debug:
+        print(f"Backend: {backend}")
+        print(f"Debug: ON")
+    print("-" * 40)
+
+    # Check if image exists
+    if not Path(image_path).exists():
+        print(f"Error: Image not found: {image_path}")
+        return
+
+    agent = create_agent(backend=backend)
+
+    # Create multimodal message with image + text
+    # The format uses {"image": path} and {"text": query} content items
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"image": image_path},
+                {"text": task},
+            ],
+        }
+    ]
+
+    iteration = 0
+    for responses in agent.run(messages=messages):
+        if responses:
+            iteration += 1
+            for resp in responses:
+                if debug:
+                    print_debug_response(resp, iteration)
+
+            last = responses[-1]
+            content = (
+                last.get("content", "") if isinstance(last, dict) else last.content
+            )
+            if content:
+                print(f"\nAgent: {content}")
+
+
+def run_interactive(backend: str = "marie", debug: bool = False):
     """Interactive mode."""
     print("Simple Agent - Interactive Mode")
+    if debug:
+        print("Debug: ON")
     print("Type 'quit' to exit\n")
 
-    agent = create_agent()
+    agent = create_agent(backend=backend)
     messages = []
 
     while True:
@@ -297,9 +425,15 @@ def run_interactive():
 
         messages.append({"role": "user", "content": user_input})
 
+        iteration = 0
         response_list = []
         for response_list in agent.run(messages=messages):
             if response_list:
+                iteration += 1
+                if debug:
+                    for resp in response_list:
+                        print_debug_response(resp, iteration)
+
                 last = response_list[-1]
                 content = (
                     last.get("content", "") if isinstance(last, dict) else last.content
@@ -314,42 +448,60 @@ def run_interactive():
     print("Goodbye!")
 
 
-# =============================================================================
-# MAIN
-# =============================================================================
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simple Agent Example")
     parser.add_argument("--task", "-t", help="Task to run")
+    parser.add_argument("--image", "-i", help="Image file for multimodal analysis")
     parser.add_argument("--tui", action="store_true", help="Interactive mode")
     parser.add_argument("--backend", default="marie", choices=["marie", "openai"])
+    parser.add_argument(
+        "--debug", "-d", action="store_true", help="Show raw LLM responses"
+    )
 
     args = parser.parse_args()
 
     if args.tui:
-        run_interactive()
+        run_interactive(backend=args.backend, debug=args.debug)
+    elif args.image and args.task:
+        run_image_task(args.image, args.task, backend=args.backend, debug=args.debug)
+    elif args.image:
+        # Image provided without task - use default description task
+        run_image_task(
+            args.image,
+            "Describe this image in detail.",
+            backend=args.backend,
+            debug=args.debug,
+        )
     elif args.task:
-        run_task(args.task, backend=args.backend)
+        run_task(args.task, backend=args.backend, debug=args.debug)
     else:
-        print("Simple Agent - Starter Template")
-        print("=" * 40)
+        print("Simple Agent - Tutorial / Starter Template")
+        print("=" * 60)
         print()
-        print("This is the simplest agent example.")
-        print("Use it as a starting point for your own agents.")
+        print("This is a LEARNING example. Copy this file to start your own agent.")
+        print("For production features, see: agent_assistant.py")
         print()
-        print("TWO WAYS TO CREATE TOOLS:")
+        print("TOOLS (simple implementations):")
+        print("  add        - Add two numbers")
+        print("  multiply   - Multiply two numbers")
+        print("  get_time   - Get current date and time")
+        print("  list_files - List files in a directory")
+        print("  read_file  - Read a text file")
+        print("  image_info - Get image metadata (size, format, etc.)")
+        print("  counter    - Stateful counter (shows AgentTool class)")
         print()
-        print("1. @register_tool decorator (easiest)")
-        print("   - Just write a function that returns JSON")
-        print("   - See: add(), multiply(), get_time()")
-        print()
-        print("2. AgentTool class (more control)")
-        print("   - For stateful tools or custom schemas")
-        print("   - See: CounterTool")
-        print()
-        print("USAGE:")
+        print("EXAMPLES:")
+        print("  # Text tasks")
         print("  python agent_simple.py --task 'Add 5 and 3'")
         print("  python agent_simple.py --task 'What time is it?'")
         print("  python agent_simple.py --task 'List Python files'")
+        print("  python agent_simple.py --task 'Increment counter 3 times'")
+        print()
+        print("  # Image analysis (multimodal)")
+        print("  python agent_simple.py --image photo.jpg")
+        print("  python agent_simple.py --image doc.png --task 'What text is here?'")
+        print()
+        print("  # Other options")
         print("  python agent_simple.py --tui")
+        print("  python agent_simple.py --backend openai --task 'Add 5 and 3'")
+        print("  python agent_simple.py --task 'Add 5 and 3' --debug")

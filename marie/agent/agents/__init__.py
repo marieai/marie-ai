@@ -1,11 +1,12 @@
 """Agent implementations for Marie agent framework."""
 
 from marie.agent.agents.assistant import (
-    AssistantAgent,
     ChatAgent,
     FunctionCallingAgent,
-    PlanningAgent,
+    PlanAndExecuteAgent,
+    ReactAgent,
 )
+from marie.agent.agents.router import MultiAgentHub, Router
 from marie.agent.agents.vision_document_agent import (
     DocumentExtractionAgent,
     DocumentQAAgent,
@@ -13,10 +14,15 @@ from marie.agent.agents.vision_document_agent import (
 )
 
 __all__ = [
-    "AssistantAgent",
+    # ReAct and Plan-and-Execute agents
+    "ReactAgent",
+    "PlanAndExecuteAgent",
+    # Other agents
     "ChatAgent",
     "FunctionCallingAgent",
-    "PlanningAgent",
+    # Router
+    "Router",
+    "MultiAgentHub",
     # Vision Document Agents
     "VisionDocumentAgent",
     "DocumentExtractionAgent",

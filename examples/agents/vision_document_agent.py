@@ -33,18 +33,20 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
+from dotenv import load_dotenv
 
 from marie.agent import (
     AgentTool,
     DocumentExtractionAgent,
     DocumentQAAgent,
-    MarieEngineLLMWrapper,
-    OpenAICompatibleWrapper,
     ToolMetadata,
     ToolOutput,
     VisionDocumentAgent,
     register_tool,
 )
+
+# Load environment variables from .env file
+load_dotenv()
 
 # =============================================================================
 # Configuration
@@ -850,17 +852,9 @@ def init_vision_document_agent(
     Returns:
         Configured agent instance.
     """
-    if backend == "marie":
-        llm = MarieEngineLLMWrapper(engine_name=model or "qwen2_5_vl_7b")
-    else:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY required for OpenAI backend")
-        llm = OpenAICompatibleWrapper(
-            model=model or "gpt-4o",
-            api_key=api_key,
-            api_base="https://api.openai.com/v1",
-        )
+    from utils import create_llm
+
+    llm = create_llm(backend=backend, model=model)
 
     # Document processing tools (all use Marie API)
     tools = [

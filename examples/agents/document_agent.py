@@ -29,20 +29,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
+from dotenv import load_dotenv
 
 from marie.agent import (
     AgentTool,
-    AssistantAgent,
-    MarieEngineLLMWrapper,
-    PlanningAgent,
+    PlanAndExecuteAgent,
+    ReactAgent,
     ToolMetadata,
     ToolOutput,
     register_tool,
 )
 
-# =============================================================================
-# Configuration
-# =============================================================================
+# Load environment variables from .env file
+load_dotenv()
 
 
 class MarieAPIConfig:
@@ -981,23 +980,18 @@ def check_marie_status() -> str:
         )
 
 
-# =============================================================================
-# Agent Initialization
-# =============================================================================
-
-
 def init_document_agent(
     backend: str = "marie",
     model: Optional[str] = None,
     use_planning: bool = False,
     api_config: Optional[MarieAPIConfig] = None,
-) -> AssistantAgent:
+) -> ReactAgent:
     """Initialize the document processing agent.
 
     Args:
         backend: LLM backend to use ("marie" or "openai")
         model: Model name
-        use_planning: If True, use PlanningAgent for multi-step tasks
+        use_planning: If True, use PlanAndExecuteAgent for multi-step tasks
         api_config: Optional Marie API configuration override
 
     Returns:
@@ -1006,21 +1000,9 @@ def init_document_agent(
     if api_config:
         set_api_config(api_config.api_base_url, api_config.api_key, api_config.queue_id)
 
-    if backend == "marie":
-        llm = MarieEngineLLMWrapper(engine_name=model or "qwen2_5_vl_7b")
-    else:
-        from marie.agent import OpenAICompatibleWrapper
+    from utils import create_llm
 
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "OPENAI_API_KEY environment variable required for OpenAI backend"
-            )
-        llm = OpenAICompatibleWrapper(
-            model=model or "gpt-4o",
-            api_key=api_key,
-            api_base="https://api.openai.com/v1",
-        )
+    llm = create_llm(backend=backend, model=model)
 
     # Initialize document processing tools (using Marie API)
     tools = [
@@ -1070,7 +1052,7 @@ For complex requests, break down the task into steps and execute them systematic
 Note: All document processing is done via Marie's API endpoints. Ensure the Marie server
 is running before processing documents."""
 
-    AgentClass = PlanningAgent if use_planning else AssistantAgent
+    AgentClass = PlanAndExecuteAgent if use_planning else ReactAgent
 
     return AgentClass(
         llm=llm,

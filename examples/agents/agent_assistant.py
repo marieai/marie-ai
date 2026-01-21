@@ -1,24 +1,62 @@
-"""Basic Assistant Agent Example.
+"""Assistant Agent Example - Production Ready.
 
-This example demonstrates how to create an assistant agent with tools
-that perform actual work - not mock implementations.
+PURPOSE: Production-quality agent with real-world tools. Use this as a reference
+for building robust, full-featured agents with proper error handling.
 
-Shows:
-- Function-based tools with @register_tool decorator
-- Class-based tools extending AgentTool
-- Real operations (time, calculations, file I/O, shell commands)
-- Proper error handling in tools
-- Configuration via environment variables
+For a simpler tutorial example, see: agent_simple.py
 
-Usage:
+Features:
+- Real tools that perform actual work (not mock implementations)
+- Comprehensive error handling and input validation
+- Security considerations (safe shell commands, path restrictions)
+- Timezone support, math expressions, web fetching
+- Production patterns you can adapt for your use case
+
+Available Tools:
+    - get_current_time: Get time in any timezone (IANA names)
+    - calculator: Math expressions, percentages, scientific functions
+    - run_shell_command: Safe shell commands (ls, pwd, cat, etc.)
+    - read_file: Read file contents
+    - write_file: Write to files (relative paths or /tmp)
+    - web_fetch: Fetch and extract text from URLs
+    - system_info: Get system/environment information
+
+Usage Examples:
+    # Time queries (supports IANA timezone names)
+    python agent_assistant.py --task "What time is it in Tokyo?"
+    python agent_assistant.py --task "What time is it in America/New_York?"
+    python agent_assistant.py --task "What time is it in UTC?"
+
+    # Calculator (supports percentages and math functions)
+    python agent_assistant.py --task "Calculate 15% tip on $85"
+    python agent_assistant.py --task "What is 20% of 150?"
+    python agent_assistant.py --task "Calculate sqrt(144) + 25"
+    python agent_assistant.py --task "What is sin(pi/2)?"
+
+    # Shell commands (safe subset only)
+    python agent_assistant.py --task "List files in current directory"
+    python agent_assistant.py --task "Show current working directory"
+    python agent_assistant.py --task "Run 'ls -la' command"
+
+    # File operations
+    python agent_assistant.py --task "Read the file agent_assistant.py"
+    python agent_assistant.py --task "Write 'hello' to /tmp/test.txt"
+
+    # System info
+    python agent_assistant.py --task "What system am I running on?"
+    python agent_assistant.py --task "What Python version is installed?"
+
+    # Multiple tools in one query
+    python agent_assistant.py --task "List Python files and tell me the time"
+
     # Interactive mode
-    python assistant_basic.py --tui
+    python agent_assistant.py --tui
 
-    # Single query
-    python assistant_basic.py --query "What time is it in Tokyo?"
+    # With OpenAI backend
+    python agent_assistant.py --backend openai --task "Calculate 15% tip on $85"
 
-    # With specific backend
-    python assistant_basic.py --backend openai --query "Calculate 15% tip on $85"
+    # Debug mode - show raw LLM responses
+    python agent_assistant.py --task "Calculate 15% tip on $85" --debug
 """
 
 import argparse
@@ -28,15 +66,19 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Optional
 
+from dotenv import load_dotenv
+
 from marie.agent import (
     AgentTool,
-    AssistantAgent,
-    MarieEngineLLMWrapper,
-    OpenAICompatibleWrapper,
+    ReactAgent,
     ToolMetadata,
     ToolOutput,
     register_tool,
 )
+from utils import print_debug_response
+
+# Load environment variables from .env file
+load_dotenv()
 
 # =============================================================================
 # Function-Based Tools (using @register_tool decorator)
@@ -455,9 +497,7 @@ class SystemInfoTool(AgentTool):
 # =============================================================================
 
 
-def create_assistant(
-    backend: str = "marie", model: Optional[str] = None
-) -> AssistantAgent:
+def create_assistant(backend: str = "marie", model: Optional[str] = None) -> ReactAgent:
     """Create an assistant agent with real tools.
 
     Args:
@@ -465,21 +505,11 @@ def create_assistant(
         model: Model name to use
 
     Returns:
-        Configured AssistantAgent instance.
+        Configured ReactAgent instance.
     """
-    if backend == "marie":
-        llm = MarieEngineLLMWrapper(engine_name=model or "qwen2_5_vl_7b")
-    elif backend == "openai":
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable required")
-        llm = OpenAICompatibleWrapper(
-            model=model or "gpt-4o-mini",
-            api_key=api_key,
-            api_base="https://api.openai.com/v1",
-        )
-    else:
-        raise ValueError(f"Unknown backend: {backend}")
+    from utils import create_llm
+
+    llm = create_llm(backend=backend, model=model)
 
     tools = [
         "get_current_time",
@@ -491,7 +521,7 @@ def create_assistant(
         SystemInfoTool(),
     ]
 
-    return AssistantAgent(
+    return ReactAgent(
         llm=llm,
         function_list=tools,
         name="Basic Assistant",
@@ -511,38 +541,46 @@ Use the appropriate tool for each task. Handle errors gracefully.""",
     )
 
 
-# =============================================================================
-# Running Modes
-# =============================================================================
-
-
-def run_single_query(query: str, backend: str = "marie", model: Optional[str] = None):
+def run_single_query(
+    query: str, backend: str = "marie", model: Optional[str] = None, debug: bool = False
+):
     """Run a single query."""
     print(f"Query: {query}")
+    if debug:
+        print(f"Backend: {backend}")
+        print(f"Debug: ON")
     print("-" * 60)
 
     agent = create_assistant(backend=backend, model=model)
     messages = [{"role": "user", "content": query}]
 
+    iteration = 0
     for responses in agent.run(messages=messages):
         if responses:
+            iteration += 1
+            if debug:
+                for resp in responses:
+                    print_debug_response(resp, iteration)
+
             last = responses[-1]
             content = (
                 last.get("content", "") if isinstance(last, dict) else last.content
             )
             if content:
-                print(content)
+                print(f"\n{content}")
 
 
-def run_interactive():
+def run_interactive(backend: str = "marie", debug: bool = False):
     """Run in interactive mode."""
     print("=" * 60)
     print("Basic Assistant - Interactive Mode")
     print("=" * 60)
+    if debug:
+        print("Debug: ON")
     print("Commands: 'quit', 'exit', 'clear'")
     print()
 
-    agent = create_assistant()
+    agent = create_assistant(backend=backend)
     messages = []
 
     while True:
@@ -564,9 +602,15 @@ def run_interactive():
         messages.append({"role": "user", "content": user_input})
         print("\nAssistant: ", end="", flush=True)
 
+        iteration = 0
         response_list = []
         for response_list in agent.run(messages=messages):
             if response_list:
+                iteration += 1
+                if debug:
+                    for resp in response_list:
+                        print_debug_response(resp, iteration)
+
                 last = response_list[-1]
                 content = (
                     last.get("content", "") if isinstance(last, dict) else last.content
@@ -581,20 +625,43 @@ def run_interactive():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Basic Assistant Agent")
-    parser.add_argument("--query", "-q", type=str, help="Single query to run")
+    parser.add_argument("--task", "-t", type=str, help="Task to run")
     parser.add_argument("--tui", action="store_true", help="Interactive mode")
     parser.add_argument("--backend", default="marie", choices=["marie", "openai"])
     parser.add_argument("--model", type=str, help="Model name")
+    parser.add_argument(
+        "--debug", "-d", action="store_true", help="Show raw LLM responses"
+    )
 
     args = parser.parse_args()
 
     if args.tui:
-        run_interactive()
-    elif args.query:
-        run_single_query(args.query, backend=args.backend, model=args.model)
+        run_interactive(backend=args.backend, debug=args.debug)
+    elif args.task:
+        run_single_query(
+            args.task, backend=args.backend, model=args.model, debug=args.debug
+        )
     else:
-        print("Examples:")
-        print("  python assistant_basic.py --query 'What time is it in Tokyo?'")
-        print("  python assistant_basic.py --query 'Calculate 15% tip on $85.50'")
-        print("  python assistant_basic.py --query 'List files in current directory'")
-        print("  python assistant_basic.py --tui")
+        print("Assistant Agent - Production Ready")
+        print("=" * 60)
+        print()
+        print("Production-quality agent with robust tools and error handling.")
+        print("For a simpler tutorial, see: agent_simple.py")
+        print()
+        print("TOOLS (production implementations):")
+        print("  get_current_time  - Timezone-aware time (IANA names)")
+        print("  calculator        - Math, percentages, scientific functions")
+        print("  run_shell_command - Safe shell commands with whitelist")
+        print("  read_file         - Read with size limits and error handling")
+        print("  write_file        - Write with path restrictions")
+        print("  web_fetch         - HTTP fetch with timeout and error handling")
+        print("  system_info       - System/environment info")
+        print()
+        print("EXAMPLES:")
+        print("  python agent_assistant.py --task 'What time is it in Tokyo?'")
+        print("  python agent_assistant.py --task 'Calculate 15% tip on $85'")
+        print("  python agent_assistant.py --task 'List files here'")
+        print("  python agent_assistant.py --task 'List files and show time'")
+        print("  python agent_assistant.py --tui")
+        print("  python agent_assistant.py --backend openai --task '...'")
+        print("  python agent_assistant.py --task '...' --debug")

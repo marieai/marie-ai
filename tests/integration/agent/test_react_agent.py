@@ -1,4 +1,4 @@
-"""Integration tests for AssistantAgent.
+"""Integration tests for ReactAgent.
 
 Tests the ReAct-style agent with tool calling capabilities.
 """
@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from marie.agent import AssistantAgent, FunctionCall, Message, register_tool
+from marie.agent import FunctionCall, Message, ReactAgent, register_tool
 from tests.integration.agent.conftest import (
     FailingTool,
     MockCalculatorTool,
@@ -19,12 +19,12 @@ from tests.integration.agent.conftest import (
 )
 
 
-class TestAssistantAgentCreation:
-    """Test AssistantAgent instantiation."""
+class TestReactAgentCreation:
+    """Test ReactAgent creation and configuration."""
 
     def test_create_assistant_agent(self, mock_llm, mock_search_tool):
-        """Test creating an assistant agent."""
-        agent = AssistantAgent(
+        """Test creating a ReactAgent."""
+        agent = ReactAgent(
             llm=mock_llm,
             function_list=[mock_search_tool],
             system_message="You are a helpful assistant.",
@@ -35,7 +35,7 @@ class TestAssistantAgentCreation:
 
     def test_create_with_multiple_tools(self, mock_llm, mock_search_tool, mock_calculator_tool):
         """Test creating agent with multiple tools."""
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=mock_llm,
             function_list=[mock_search_tool, mock_calculator_tool],
         )
@@ -46,7 +46,7 @@ class TestAssistantAgentCreation:
 
     def test_create_with_max_iterations(self, mock_llm):
         """Test creating agent with custom max iterations."""
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=mock_llm,
             max_iterations=20,
         )
@@ -55,14 +55,14 @@ class TestAssistantAgentCreation:
 
     def test_default_react_prompt(self, mock_llm):
         """Test default ReAct prompt is used."""
-        agent = AssistantAgent(llm=mock_llm)
+        agent = ReactAgent(llm=mock_llm)
 
         # Should have default ReAct prompt
         assert "tool" in agent.system_message.lower()
 
     def test_custom_system_message(self, mock_llm):
         """Test custom system message overrides default."""
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=mock_llm,
             system_message="Custom message",
         )
@@ -70,12 +70,12 @@ class TestAssistantAgentCreation:
         assert agent.system_message == "Custom message"
 
 
-class TestAssistantAgentToolManagement:
+class TestReactAgentToolManagement:
     """Test dynamic tool management."""
 
     def test_add_tool(self, mock_llm, mock_search_tool, mock_calculator_tool):
         """Test adding a tool dynamically."""
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=mock_llm,
             function_list=[mock_search_tool],
         )
@@ -87,7 +87,7 @@ class TestAssistantAgentToolManagement:
 
     def test_remove_tool(self, mock_llm, mock_search_tool, mock_calculator_tool):
         """Test removing a tool."""
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=mock_llm,
             function_list=[mock_search_tool, mock_calculator_tool],
         )
@@ -98,7 +98,7 @@ class TestAssistantAgentToolManagement:
 
     def test_remove_nonexistent_tool(self, mock_llm, mock_search_tool):
         """Test removing a tool that doesn't exist."""
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=mock_llm,
             function_list=[mock_search_tool],
         )
@@ -108,7 +108,7 @@ class TestAssistantAgentToolManagement:
 
     def test_get_tool_definitions(self, mock_llm, mock_search_tool):
         """Test getting tool definitions."""
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=mock_llm,
             function_list=[mock_search_tool],
         )
@@ -119,12 +119,12 @@ class TestAssistantAgentToolManagement:
         assert definitions[0]["name"] == "mock_search"
 
 
-class TestAssistantAgentWithoutTools:
-    """Test AssistantAgent behavior without tools."""
+class TestReactAgentWithoutTools:
+    """Test ReactAgent behavior without tools."""
 
     def test_run_without_tools(self, mock_llm):
         """Test running agent without any tools."""
-        agent = AssistantAgent(llm=mock_llm)
+        agent = ReactAgent(llm=mock_llm)
         messages = [{"role": "user", "content": "Hello"}]
 
         responses = run_agent_to_completion(agent, messages)
@@ -139,7 +139,7 @@ class TestAssistantAgentWithoutTools:
 
     def test_no_tool_calling_when_no_tools(self, mock_llm):
         """Test that tool calling is skipped when no tools available."""
-        agent = AssistantAgent(llm=mock_llm)
+        agent = ReactAgent(llm=mock_llm)
         messages = [{"role": "user", "content": "Search for something"}]
 
         # Should complete without trying to call tools
@@ -147,12 +147,12 @@ class TestAssistantAgentWithoutTools:
         assert len(responses) > 0
 
 
-class TestAssistantAgentToolCalling:
+class TestReactAgentToolCalling:
     """Test tool calling workflow."""
 
     def test_detect_tool_call(self, mock_llm, mock_search_tool):
         """Test tool call detection from message."""
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=mock_llm,
             function_list=[mock_search_tool],
         )
@@ -170,7 +170,7 @@ class TestAssistantAgentToolCalling:
 
     def test_detect_no_tool_call(self, mock_llm, mock_search_tool):
         """Test detection when no tool call present."""
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=mock_llm,
             function_list=[mock_search_tool],
         )
@@ -183,7 +183,7 @@ class TestAssistantAgentToolCalling:
 
     def test_call_tool(self, mock_llm, mock_search_tool):
         """Test calling a tool directly."""
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=mock_llm,
             function_list=[mock_search_tool],
         )
@@ -197,7 +197,7 @@ class TestAssistantAgentToolCalling:
 
     def test_call_nonexistent_tool(self, mock_llm, mock_search_tool):
         """Test calling a tool that doesn't exist."""
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=mock_llm,
             function_list=[mock_search_tool],
         )
@@ -207,7 +207,7 @@ class TestAssistantAgentToolCalling:
         assert "does not exist" in result
 
 
-class TestAssistantAgentReActLoop:
+class TestReactAgentReActLoop:
     """Test the ReAct reasoning loop."""
 
     def test_single_tool_call_loop(self, sequence_llm_factory, mock_search_tool):
@@ -218,7 +218,7 @@ class TestAssistantAgentReActLoop:
             "Based on my search, AI is artificial intelligence.",
         ])
 
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=llm,
             function_list=[mock_search_tool],
             max_iterations=5,
@@ -243,7 +243,7 @@ class TestAssistantAgentReActLoop:
             "The answer is 4.",
         ])
 
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=llm,
             function_list=[mock_search_tool, mock_calculator_tool],
             max_iterations=10,
@@ -269,7 +269,7 @@ class TestAssistantAgentReActLoop:
             {"name": "mock_search", "arguments": {"query": "5"}, "content": ""},
         ])
 
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=llm,
             function_list=[mock_search_tool],
             max_iterations=3,
@@ -287,7 +287,7 @@ class TestAssistantAgentReActLoop:
             "I don't need to use any tools for this.",
         ])
 
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=llm,
             function_list=[mock_search_tool],
             max_iterations=10,
@@ -303,7 +303,7 @@ class TestAssistantAgentReActLoop:
         assert "don't need" in content
 
 
-class TestAssistantAgentToolErrorHandling:
+class TestReactAgentToolErrorHandling:
     """Test error handling with tools."""
 
     def test_tool_failure_recovery(self, sequence_llm_factory, failing_tool):
@@ -313,7 +313,7 @@ class TestAssistantAgentToolErrorHandling:
             "The tool failed, but I can still help.",
         ])
 
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=llm,
             function_list=[failing_tool],
             max_iterations=5,
@@ -332,7 +332,7 @@ class TestAssistantAgentToolErrorHandling:
             "I couldn't calculate that.",
         ])
 
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=llm,
             function_list=[mock_calculator_tool],
             max_iterations=5,
@@ -345,7 +345,7 @@ class TestAssistantAgentToolErrorHandling:
         assert len(responses) > 0
 
 
-class TestAssistantAgentConversationHistory:
+class TestReactAgentConversationHistory:
     """Test conversation history handling."""
 
     def test_tool_results_in_conversation(self, sequence_llm_factory, mock_search_tool):
@@ -355,7 +355,7 @@ class TestAssistantAgentConversationHistory:
             "Based on the search results, I found...",
         ])
 
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=llm,
             function_list=[mock_search_tool],
         )
@@ -379,7 +379,7 @@ class TestAssistantAgentConversationHistory:
             "I found results for the second query.",
         ])
 
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=llm,
             function_list=[mock_search_tool],
         )
@@ -400,7 +400,7 @@ class TestAssistantAgentConversationHistory:
         assert len(responses2) > 0
 
 
-class TestAssistantAgentReturnDirect:
+class TestReactAgentReturnDirect:
     """Test return_direct tool behavior."""
 
     def test_return_direct_tool(self, sequence_llm_factory):
@@ -433,7 +433,7 @@ class TestAssistantAgentReturnDirect:
             {"name": "direct_tool", "arguments": {}, "content": ""},
         ])
 
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=llm,
             function_list=[DirectReturnTool()],
             return_direct_tool_results=True,
@@ -448,13 +448,13 @@ class TestAssistantAgentReturnDirect:
         assert "Direct result" in content
 
 
-class TestAssistantAgentAsync:
+class TestReactAgentAsync:
     """Test async tool calling."""
 
     @pytest.mark.asyncio
     async def test_async_tool_call(self, mock_llm, mock_search_tool):
         """Test async tool call method."""
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=mock_llm,
             function_list=[mock_search_tool],
         )
@@ -468,7 +468,7 @@ class TestAssistantAgentAsync:
     @pytest.mark.asyncio
     async def test_async_nonexistent_tool(self, mock_llm, mock_search_tool):
         """Test async call to nonexistent tool."""
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=mock_llm,
             function_list=[mock_search_tool],
         )

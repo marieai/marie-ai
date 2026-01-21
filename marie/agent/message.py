@@ -373,20 +373,3 @@ def format_messages(messages: List[Union[Dict[str, Any], Message]]) -> List[Mess
         else:
             raise TypeError(f"Expected dict or Message, got {type(msg)}")
     return result
-
-
-def has_chinese_content(messages: List[Message]) -> bool:
-    """Check if any message contains Chinese characters.
-
-    Args:
-        messages: List of messages to check
-
-    Returns:
-        True if any message contains Chinese characters
-    """
-    for msg in messages:
-        text = msg.text_content
-        for char in text:
-            if "\u4e00" <= char <= "\u9fff":
-                return True
-    return False

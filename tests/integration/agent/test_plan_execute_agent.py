@@ -1,4 +1,4 @@
-"""Integration tests for PlanningAgent.
+"""Integration tests for PlanAndExecuteAgent.
 
 Tests the multi-step planning agent with tool orchestration capabilities.
 """
@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from marie.agent import Message, PlanningAgent, register_tool
+from marie.agent import Message, PlanAndExecuteAgent, register_tool
 from tests.integration.agent.conftest import (
     MockCalculatorTool,
     MockLLMWrapper,
@@ -18,12 +18,12 @@ from tests.integration.agent.conftest import (
 )
 
 
-class TestPlanningAgentCreation:
-    """Test PlanningAgent instantiation."""
+class TestPlanAndExecuteAgentCreation:
+    """Test PlanAndExecuteAgent instantiation."""
 
     def test_create_planning_agent(self, mock_llm):
         """Test creating a planning agent."""
-        agent = PlanningAgent(
+        agent = PlanAndExecuteAgent(
             llm=mock_llm,
             system_message="You are a planning assistant.",
         )
@@ -33,7 +33,7 @@ class TestPlanningAgentCreation:
 
     def test_create_with_tools(self, mock_llm, mock_search_tool, mock_calculator_tool):
         """Test creating planning agent with tools."""
-        agent = PlanningAgent(
+        agent = PlanAndExecuteAgent(
             llm=mock_llm,
             function_list=[mock_search_tool, mock_calculator_tool],
         )
@@ -44,7 +44,7 @@ class TestPlanningAgentCreation:
 
     def test_default_planning_prompt(self, mock_llm):
         """Test default planning prompt is used."""
-        agent = PlanningAgent(llm=mock_llm)
+        agent = PlanAndExecuteAgent(llm=mock_llm)
 
         # Should have planning-related content in system message
         assert "plan" in agent.system_message.lower()
@@ -52,7 +52,7 @@ class TestPlanningAgentCreation:
 
     def test_custom_max_iterations(self, mock_llm):
         """Test custom max iterations."""
-        agent = PlanningAgent(
+        agent = PlanAndExecuteAgent(
             llm=mock_llm,
             max_iterations=25,
         )
@@ -60,7 +60,7 @@ class TestPlanningAgentCreation:
         assert agent.max_iterations == 25
 
 
-class TestPlanningAgentPlanCreation:
+class TestPlanAndExecuteAgentPlanCreation:
     """Test plan creation functionality."""
 
     def test_plan_format_in_response(self, sequence_llm_factory, mock_search_tool):
@@ -75,7 +75,7 @@ FINAL ANSWER:
 Based on my analysis, here is the summary.""",
         ])
 
-        agent = PlanningAgent(
+        agent = PlanAndExecuteAgent(
             llm=llm,
             function_list=[mock_search_tool],
         )
@@ -101,7 +101,7 @@ FINAL ANSWER:
 Task completed.""",
         ])
 
-        agent = PlanningAgent(llm=llm)
+        agent = PlanAndExecuteAgent(llm=llm)
         messages = [{"role": "user", "content": "Plan a task"}]
         responses = run_agent_to_completion(agent, messages)
 
@@ -112,7 +112,7 @@ Task completed.""",
         assert "2." in content
 
 
-class TestPlanningAgentExecution:
+class TestPlanAndExecuteAgentExecution:
     """Test plan execution with tools."""
 
     def test_single_tool_in_plan(self, sequence_llm_factory, mock_search_tool):
@@ -124,7 +124,7 @@ class TestPlanningAgentExecution:
             "FINAL ANSWER:\nBased on the search results, AI research is progressing rapidly.",
         ])
 
-        agent = PlanningAgent(
+        agent = PlanAndExecuteAgent(
             llm=llm,
             function_list=[mock_search_tool],
             max_iterations=5,
@@ -147,7 +147,7 @@ class TestPlanningAgentExecution:
             "FINAL ANSWER:\nThe search found the problem and the calculation shows 50.",
         ])
 
-        agent = PlanningAgent(
+        agent = PlanAndExecuteAgent(
             llm=llm,
             function_list=[mock_search_tool, mock_calculator_tool],
             max_iterations=10,
@@ -166,7 +166,7 @@ class TestPlanningAgentExecution:
             "FINAL ANSWER:\nCompleted both searches.",
         ])
 
-        agent = PlanningAgent(
+        agent = PlanAndExecuteAgent(
             llm=llm,
             function_list=[mock_search_tool],
         )
@@ -182,7 +182,7 @@ class TestPlanningAgentExecution:
         assert "function" in roles
 
 
-class TestPlanningAgentFinalAnswer:
+class TestPlanAndExecuteAgentFinalAnswer:
     """Test final answer detection and handling."""
 
     def test_final_answer_stops_execution(self, sequence_llm_factory):
@@ -191,7 +191,7 @@ class TestPlanningAgentFinalAnswer:
             "FINAL ANSWER:\nHere is my immediate response without tools.",
         ])
 
-        agent = PlanningAgent(llm=llm)
+        agent = PlanAndExecuteAgent(llm=llm)
         messages = [{"role": "user", "content": "Quick question"}]
         responses = run_agent_to_completion(agent, messages)
 
@@ -207,14 +207,14 @@ class TestPlanningAgentFinalAnswer:
             "final answer:\nThe answer is 42.",
         ])
 
-        agent = PlanningAgent(llm=llm)
+        agent = PlanAndExecuteAgent(llm=llm)
         messages = [{"role": "user", "content": "What is the answer?"}]
         responses = run_agent_to_completion(agent, messages)
 
         assert llm.call_count == 1
 
 
-class TestPlanningAgentIterationLimits:
+class TestPlanAndExecuteAgentIterationLimits:
     """Test iteration limit handling."""
 
     def test_max_iterations_respected(self, sequence_llm_factory, mock_search_tool):
@@ -228,7 +228,7 @@ class TestPlanningAgentIterationLimits:
             {"name": "mock_search", "arguments": {"query": "5"}, "content": "Step 5"},
         ])
 
-        agent = PlanningAgent(
+        agent = PlanAndExecuteAgent(
             llm=llm,
             function_list=[mock_search_tool],
             max_iterations=3,
@@ -249,7 +249,7 @@ class TestPlanningAgentIterationLimits:
             "FINAL ANSWER:\nDone thinking.",
         ])
 
-        agent = PlanningAgent(
+        agent = PlanAndExecuteAgent(
             llm=llm,
             max_iterations=10,
         )
@@ -261,7 +261,7 @@ class TestPlanningAgentIterationLimits:
         assert llm.call_count == 4
 
 
-class TestPlanningAgentErrorHandling:
+class TestPlanAndExecuteAgentErrorHandling:
     """Test error handling in planning."""
 
     def test_tool_failure_continues_planning(self, sequence_llm_factory, failing_tool):
@@ -271,7 +271,7 @@ class TestPlanningAgentErrorHandling:
             "FINAL ANSWER:\nThe tool failed but I can still provide an answer.",
         ])
 
-        agent = PlanningAgent(
+        agent = PlanAndExecuteAgent(
             llm=llm,
             function_list=[failing_tool],
             max_iterations=5,
@@ -285,7 +285,7 @@ class TestPlanningAgentErrorHandling:
 
     def test_empty_plan_handled(self, mock_llm):
         """Test handling of empty or minimal responses."""
-        agent = PlanningAgent(llm=mock_llm)
+        agent = PlanAndExecuteAgent(llm=mock_llm)
         messages = [{"role": "user", "content": "Hello"}]
 
         # Should not crash with minimal response
@@ -293,7 +293,7 @@ class TestPlanningAgentErrorHandling:
         assert len(responses) >= 0
 
 
-class TestPlanningAgentConversationHistory:
+class TestPlanAndExecuteAgentConversationHistory:
     """Test conversation history in planning."""
 
     def test_tool_results_in_history(self, sequence_llm_factory, mock_search_tool):
@@ -303,7 +303,7 @@ class TestPlanningAgentConversationHistory:
             "FINAL ANSWER:\nFound the results.",
         ])
 
-        agent = PlanningAgent(
+        agent = PlanAndExecuteAgent(
             llm=llm,
             function_list=[mock_search_tool],
         )
@@ -324,7 +324,7 @@ class TestPlanningAgentConversationHistory:
             "FINAL ANSWER:\nSecond task complete.",
         ])
 
-        agent = PlanningAgent(
+        agent = PlanAndExecuteAgent(
             llm=llm,
             function_list=[mock_search_tool],
         )
@@ -345,7 +345,7 @@ class TestPlanningAgentConversationHistory:
         assert len(responses2) > 0
 
 
-class TestPlanningAgentWithDocumentTools:
+class TestPlanAndExecuteAgentWithDocumentTools:
     """Test planning agent with document processing tools."""
 
     @pytest.fixture
@@ -408,7 +408,7 @@ class TestPlanningAgentWithDocumentTools:
             "FINAL ANSWER:\nDocument is an invoice. Extracted text: 'Extracted text content'",
         ])
 
-        agent = PlanningAgent(
+        agent = PlanAndExecuteAgent(
             llm=llm,
             function_list=document_tools,
             max_iterations=10,
@@ -423,13 +423,13 @@ class TestPlanningAgentWithDocumentTools:
         assert "invoice" in content.lower() or "FINAL ANSWER" in content
 
 
-class TestPlanningAgentAsync:
-    """Test async functionality of PlanningAgent."""
+class TestPlanAndExecuteAgentAsync:
+    """Test async functionality of PlanAndExecuteAgent."""
 
     @pytest.mark.asyncio
     async def test_async_tool_calls_in_plan(self, mock_llm, mock_search_tool):
         """Test async tool calls work in planning context."""
-        agent = PlanningAgent(
+        agent = PlanAndExecuteAgent(
             llm=mock_llm,
             function_list=[mock_search_tool],
         )

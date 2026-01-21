@@ -1,8 +1,10 @@
-"""AssistantAgent - ReAct-style agent implementation.
+"""ReactAgent - ReAct-style agent implementation.
 
 This module provides the primary agent implementation following the
 ReAct (Reason + Act) paradigm where the agent reasons about the task,
 decides on actions (tool calls), and iterates until completion.
+
+Also provides PlanAndExecuteAgent for multi-step planning workflows.
 """
 
 from __future__ import annotations
@@ -35,10 +37,16 @@ if TYPE_CHECKING:
 logger = MarieLogger("marie.agent.agents.assistant")
 
 
-class AssistantAgent(BaseAgent):
-    """ReAct-style assistant agent with tool calling capabilities.
+class ReactAgent(BaseAgent):
+    """ReAct (Reason + Act) agent implementation.
 
-    This agent follows the ReAct paradigm:
+    Follows the ReAct pattern: Reason → Act (tool call) → Observe → Repeat
+    until the task is complete. This is the standard agent pattern for
+    tool-augmented LLM interactions.
+
+    Previously named AssistantAgent.
+
+    The agent follows this paradigm:
     1. Receive user input
     2. Reason about what to do (via LLM)
     3. Optionally call tools to gather information
@@ -54,7 +62,7 @@ class AssistantAgent(BaseAgent):
 
     Example:
         ```python
-        from marie.agent.agents import AssistantAgent
+        from marie.agent.agents import ReactAgent
         from marie.agent.llm_wrapper import MarieEngineLLMWrapper
         from marie.agent import register_tool
 
@@ -65,7 +73,7 @@ class AssistantAgent(BaseAgent):
             return json.dumps({"results": [...]})
 
 
-        agent = AssistantAgent(
+        agent = ReactAgent(
             llm=MarieEngineLLMWrapper(engine_name="qwen2_5_vl_7b"),
             function_list=["search"],
             system_message="You are a helpful research assistant.",
@@ -99,7 +107,7 @@ When you have enough information to answer, provide a clear and helpful response
         return_direct_tool_results: bool = False,
         **kwargs: Any,
     ):
-        """Initialize the AssistantAgent.
+        """Initialize the ReactAgent.
 
         Args:
             function_list: List of tools available to the agent
@@ -175,16 +183,54 @@ When you have enough information to answer, provide a clear and helpful response
             response = llm_responses[-1]
             conversation.append(response)
 
-            # Check for tool calls
-            has_call, tool_name, tool_args, text_content = self._detect_tool_call(
-                response
+            # Check for multiple tool_calls (OpenAI parallel tool calling)
+            if response.tool_calls and len(response.tool_calls) > 0:
+                # Execute ALL tool calls and collect results
+                tool_results = []
+                for tool_call in response.tool_calls:
+                    if isinstance(tool_call, dict):
+                        tc_id = tool_call.get("id")
+                        func_info = tool_call.get("function", {})
+                        tc_name = func_info.get("name")
+                        tc_args = func_info.get("arguments", "{}")
+                    else:
+                        tc_id = tool_call.id
+                        tc_name = tool_call.function.name
+                        tc_args = tool_call.function.arguments
+
+                    logger.debug(f"Calling tool '{tc_name}' with args: {tc_args}")
+                    tool_result = self._call_tool(tc_name, tc_args, **kwargs)
+
+                    # Check if tool wants direct return
+                    if self.return_direct_tool_results:
+                        tool = self.function_map.get(tc_name)
+                        if tool and tool.metadata.return_direct:
+                            final_msg = Message.assistant(content=str(tool_result))
+                            yield [final_msg]
+                            return
+
+                    tool_msg = Message.tool_result(
+                        tool_call_id=tc_id,
+                        content=str(tool_result),
+                        name=tc_name,
+                    )
+                    tool_results.append(tool_msg)
+                    conversation.append(tool_msg)
+
+                # Yield intermediate state showing all tool calls
+                yield [response] + tool_results
+                continue
+
+            # Fall back to single tool call detection (legacy/text-based format)
+            has_call, tool_name, tool_args, text_content, tool_call_id = (
+                self._detect_tool_call(response)
             )
 
             if not has_call:
                 # No tool call - this is the final response
                 break
 
-            # Execute tool
+            # Execute single tool
             logger.debug(f"Calling tool '{tool_name}' with args: {tool_args}")
             tool_result = self._call_tool(tool_name, tool_args, **kwargs)
 
@@ -197,10 +243,17 @@ When you have enough information to answer, provide a clear and helpful response
                     return
 
             # Add tool result to conversation
-            tool_msg = Message.function_result(
-                name=tool_name,
-                content=str(tool_result),
-            )
+            if tool_call_id:
+                tool_msg = Message.tool_result(
+                    tool_call_id=tool_call_id,
+                    content=str(tool_result),
+                    name=tool_name,
+                )
+            else:
+                tool_msg = Message.function_result(
+                    name=tool_name,
+                    content=str(tool_result),
+                )
             conversation.append(tool_msg)
 
             # Yield intermediate state showing tool was called
@@ -376,12 +429,13 @@ class ChatAgent(BaseAgent):
         return self._call_llm(messages, extra_generate_cfg=extra_cfg)
 
 
-class PlanningAgent(BaseAgent):
-    """Agent that creates and executes multi-step plans.
+class PlanAndExecuteAgent(BaseAgent):
+    """Plan-and-Execute agent implementation.
 
-    This agent first creates a plan for complex tasks, then executes
-    each step systematically. Useful for tasks requiring multiple
-    sequential operations.
+    Creates a plan for complex tasks, then executes each step systematically.
+    Follows the Plan-and-Execute pattern common in multi-step reasoning tasks.
+
+    Previously named PlanningAgent.
 
     The planning approach:
     1. Analyze the task and create a step-by-step plan
@@ -416,7 +470,7 @@ When all steps are complete, provide a FINAL ANSWER."""
         max_iterations: int = 20,
         **kwargs: Any,
     ):
-        """Initialize PlanningAgent."""
+        """Initialize PlanAndExecuteAgent."""
         if system_message is None:
             system_message = self.PLANNING_PROMPT
 
@@ -467,25 +521,61 @@ When all steps are complete, provide a FINAL ANSWER."""
             response = llm_responses[-1]
             conversation.append(response)
 
-            # Check for tool calls
-            has_call, tool_name, tool_args, text_content = self._detect_tool_call(
-                response
-            )
+            # Get text content for final answer check
+            text_content = response.text_content or ""
 
             # Check if we've reached final answer
-            if "FINAL ANSWER" in (text_content or "").upper():
+            if "FINAL ANSWER" in text_content.upper():
                 break
+
+            # Check for multiple tool_calls (OpenAI parallel tool calling)
+            if response.tool_calls and len(response.tool_calls) > 0:
+                tool_results = []
+                for tool_call in response.tool_calls:
+                    if isinstance(tool_call, dict):
+                        tc_id = tool_call.get("id")
+                        func_info = tool_call.get("function", {})
+                        tc_name = func_info.get("name")
+                        tc_args = func_info.get("arguments", "{}")
+                    else:
+                        tc_id = tool_call.id
+                        tc_name = tool_call.function.name
+                        tc_args = tool_call.function.arguments
+
+                    tool_result = self._call_tool(tc_name, tc_args, **kwargs)
+                    tool_msg = Message.tool_result(
+                        tool_call_id=tc_id,
+                        content=str(tool_result),
+                        name=tc_name,
+                    )
+                    tool_results.append(tool_msg)
+                    conversation.append(tool_msg)
+
+                yield [response] + tool_results
+                continue
+
+            # Fall back to single tool call detection (legacy/text-based format)
+            has_call, tool_name, tool_args, _, tool_call_id = self._detect_tool_call(
+                response
+            )
 
             if not has_call:
                 # No tool call and no final answer - continue planning
                 continue
 
-            # Execute tool
+            # Execute single tool
             tool_result = self._call_tool(tool_name, tool_args, **kwargs)
 
-            tool_msg = Message.function_result(
-                name=tool_name,
-                content=str(tool_result),
-            )
+            if tool_call_id:
+                tool_msg = Message.tool_result(
+                    tool_call_id=tool_call_id,
+                    content=str(tool_result),
+                    name=tool_name,
+                )
+            else:
+                tool_msg = Message.function_result(
+                    name=tool_name,
+                    content=str(tool_result),
+                )
             conversation.append(tool_msg)
             yield [response, tool_msg]

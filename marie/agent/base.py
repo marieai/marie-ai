@@ -30,7 +30,6 @@ from marie.agent.message import (
     FunctionCall,
     Message,
     format_messages,
-    has_chinese_content,
 )
 from marie.agent.tools.base import AgentTool, ToolOutput
 from marie.agent.tools.registry import resolve_tools
@@ -178,13 +177,6 @@ class BaseAgent(ABC):
                 else:
                     new_messages.append(msg)
                     _return_message_type = "message"
-
-        # Auto-detect language
-        if "lang" not in kwargs:
-            if has_chinese_content(new_messages):
-                kwargs["lang"] = "zh"
-            else:
-                kwargs["lang"] = "en"
 
         # Prepend system message
         if self.system_message:
@@ -366,25 +358,55 @@ class BaseAgent(ABC):
 
         return result.content
 
-    def _detect_tool_call(self, message: Message) -> Tuple[bool, str, str, str]:
+    def _detect_tool_call(
+        self, message: Message
+    ) -> Tuple[bool, str, str, str, Optional[str]]:
         """Detect if a message contains a tool/function call.
 
         Args:
             message: Message to analyze
 
         Returns:
-            Tuple of (has_call, tool_name, tool_args, text_content)
+            Tuple of (has_call, tool_name, tool_args, text_content, tool_call_id)
         """
         func_name: Optional[str] = None
         func_args: Optional[str] = None
+        tool_call_id: Optional[str] = None
 
+        # Check legacy function_call format
         if message.function_call:
             func_name = message.function_call.name
             func_args = message.function_call.get_arguments_str()
+        # Check newer tool_calls format (OpenAI)
+        elif message.tool_calls and len(message.tool_calls) > 0:
+            tool_call = message.tool_calls[0]
+            if isinstance(tool_call, dict):
+                tool_call_id = tool_call.get("id")
+                func_info = tool_call.get("function", {})
+                func_name = func_info.get("name")
+                args = func_info.get("arguments", {})
+                # arguments can be dict or string
+                if isinstance(args, dict):
+                    import json
+
+                    func_args = json.dumps(args)
+                else:
+                    func_args = str(args)
+            else:
+                # Handle object-style tool_call
+                tool_call_id = getattr(tool_call, "id", None)
+                func_name = getattr(tool_call.function, "name", None)
+                func_args = getattr(tool_call.function, "arguments", "{}")
 
         text = message.text_content or ""
 
-        return (func_name is not None), func_name or "", func_args or "{}", text
+        return (
+            (func_name is not None),
+            func_name or "",
+            func_args or "{}",
+            text,
+            tool_call_id,
+        )
 
     def _get_tool_definitions(self) -> List[Dict[str, Any]]:
         """Get OpenAI-compatible function definitions for all tools.

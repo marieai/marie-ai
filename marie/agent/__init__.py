@@ -31,7 +31,7 @@ Example Usage:
         def _run(self, messages, lang="en", **kwargs):
             for response in self._call_llm(messages, self._get_tool_definitions()):
                 # Check for tool calls
-                has_call, name, args, text = self._detect_tool_call(response[0])
+                has_call, name, args, text, tool_id = self._detect_tool_call(response[0])
                 if has_call:
                     result = self._call_tool(name, args)
                     # Continue conversation with tool result...
@@ -71,12 +71,14 @@ Configuration:
 """
 
 from marie.agent.agents import (
-    AssistantAgent,
     ChatAgent,
     DocumentExtractionAgent,
     DocumentQAAgent,
     FunctionCallingAgent,
-    PlanningAgent,
+    MultiAgentHub,
+    PlanAndExecuteAgent,
+    ReactAgent,
+    Router,
     VisionDocumentAgent,
 )
 from marie.agent.backends import (
@@ -140,7 +142,6 @@ from marie.agent.message import (
     Message,
     ToolCall,
     format_messages,
-    has_chinese_content,
 )
 from marie.agent.state import (
     AgentMemoryBridge,
@@ -167,10 +168,13 @@ __all__ = [
     "BaseAgent",
     "BasicAgent",
     # Agent implementations
-    "AssistantAgent",
+    "ReactAgent",
+    "PlanAndExecuteAgent",
     "ChatAgent",
     "FunctionCallingAgent",
-    "PlanningAgent",
+    # Router
+    "Router",
+    "MultiAgentHub",
     # Vision Document Agents
     "VisionDocumentAgent",
     "DocumentExtractionAgent",
@@ -209,7 +213,6 @@ __all__ = [
     "FunctionCall",
     "ToolCall",
     "format_messages",
-    "has_chinese_content",
     # Message constants
     "ROLE",
     "CONTENT",

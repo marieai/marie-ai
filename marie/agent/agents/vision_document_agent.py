@@ -372,8 +372,8 @@ Please follow the pattern structure to accomplish this task efficiently.
             conversation.append(response)
 
             # Check for tool calls
-            has_call, tool_name, tool_args, text_content = self._detect_tool_call(
-                response
+            has_call, tool_name, tool_args, text_content, tool_call_id = (
+                self._detect_tool_call(response)
             )
 
             # Check for final answer
@@ -394,10 +394,18 @@ Please follow the pattern structure to accomplish this task efficiently.
             tool_result = self._call_tool(tool_name, tool_args, **kwargs)
 
             # Add tool result to conversation
-            tool_msg = Message.function_result(
-                name=tool_name,
-                content=str(tool_result),
-            )
+            # Use tool_result format for OpenAI tool_calls, function_result for legacy
+            if tool_call_id:
+                tool_msg = Message.tool_result(
+                    tool_call_id=tool_call_id,
+                    content=str(tool_result),
+                    name=tool_name,
+                )
+            else:
+                tool_msg = Message.function_result(
+                    name=tool_name,
+                    content=str(tool_result),
+                )
             conversation.append(tool_msg)
 
             # Yield intermediate state

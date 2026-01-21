@@ -9,30 +9,76 @@ Shows:
 - Tool orchestration for complex workflows
 - Progress tracking and error handling
 
-Usage:
-    python planning_agent.py --task "Analyze Python files in current directory"
+Available Tools:
+    - list_files: List files with glob patterns, recursive option
+    - read_file: Read file contents (with size limits)
+    - write_file: Write content to files
+    - analyze_text: Text analysis (summary, words, patterns)
+    - analyze_code: Code metrics (functions, classes, imports)
+    - create_csv: Create CSV files from data
+    - read_csv: Read and parse CSV files
+    - generate_report: Generate formatted reports (markdown/text/html)
+    - run_calculation: Math expressions with variables
+
+Usage Examples:
+    # File listing and analysis
+    python planning_agent.py --task "List all Python files in current directory"
+    python planning_agent.py --task "Find all .py files recursively"
+    python planning_agent.py --task "List files matching *.txt"
+
+    # Code analysis
+    python planning_agent.py --task "Analyze the code structure of agent_simple.py"
+    python planning_agent.py --task "Count functions and classes in planning_agent.py"
+    python planning_agent.py --task "Find the largest Python file and analyze it"
+
+    # Text analysis
+    python planning_agent.py --task "Analyze word frequency in README.md"
+    python planning_agent.py --task "Find all email addresses in config files"
+
+    # Report generation
+    python planning_agent.py --task "Create a report about Python files here"
+    python planning_agent.py --task "Generate a markdown summary of the codebase"
+
+    # Multi-step complex tasks
+    python planning_agent.py --task "List Python files, analyze the largest one, and summarize"
+    python planning_agent.py --task "Find all TODO comments in Python files"
+    python planning_agent.py --task "Create a CSV of all Python files with their line counts"
+
+    # Calculations
+    python planning_agent.py --task "Calculate the average size of Python files"
+
+    # Interactive mode
     python planning_agent.py --tui
+
+    # With OpenAI backend
+    python planning_agent.py --backend openai --task "Analyze Python files"
+
+    # Debug mode
+    python planning_agent.py --task "List files" --debug
 """
 
 import argparse
 import csv
 import json
-import os
 import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
+
 from marie.agent import (
     AgentTool,
-    MarieEngineLLMWrapper,
-    OpenAICompatibleWrapper,
-    PlanningAgent,
+    PlanAndExecuteAgent,
     ToolMetadata,
     ToolOutput,
     register_tool,
 )
+from utils import print_debug_response
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 @register_tool("list_files")
@@ -442,14 +488,9 @@ def run_calculation(expression: str, variables: str = "{}") -> str:
         return json.dumps({"error": str(e), "expression": expression})
 
 
-# =============================================================================
-# Agent Initialization
-# =============================================================================
-
-
 def create_planning_agent(
     backend: str = "marie", model: Optional[str] = None
-) -> PlanningAgent:
+) -> PlanAndExecuteAgent:
     """Create a planning agent with real tools.
 
     Args:
@@ -457,21 +498,11 @@ def create_planning_agent(
         model: Model name
 
     Returns:
-        Configured PlanningAgent instance.
+        Configured PlanAndExecuteAgent instance.
     """
-    if backend == "marie":
-        llm = MarieEngineLLMWrapper(engine_name=model or "qwen2_5_vl_7b")
-    elif backend == "openai":
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY required")
-        llm = OpenAICompatibleWrapper(
-            model=model or "gpt-4o",
-            api_key=api_key,
-            api_base="https://api.openai.com/v1",
-        )
-    else:
-        raise ValueError(f"Unknown backend: {backend}")
+    from utils import create_llm
+
+    llm = create_llm(backend=backend, model=model)
 
     tools = [
         "list_files",
@@ -485,7 +516,7 @@ def create_planning_agent(
         "run_calculation",
     ]
 
-    return PlanningAgent(
+    return PlanAndExecuteAgent(
         llm=llm,
         function_list=tools,
         name="Planning Agent",
@@ -524,43 +555,49 @@ FINAL ANSWER:
     )
 
 
-# =============================================================================
-# Running Modes
-# =============================================================================
-
-
-def run_task(task: str, backend: str = "marie"):
+def run_task(task: str, backend: str = "marie", debug: bool = False):
     """Run a planning task."""
     print("=" * 60)
     print("PLANNING AGENT")
     print("=" * 60)
-    print(f"\nTask: {task}\n")
+    print(f"\nTask: {task}")
+    if debug:
+        print(f"Backend: {backend}")
+        print("Debug: ON")
     print("-" * 60)
 
     agent = create_planning_agent(backend=backend)
     messages = [{"role": "user", "content": task}]
 
+    iteration = 0
     for responses in agent.run(messages=messages):
         if responses:
+            iteration += 1
+            if debug:
+                for resp in responses:
+                    print_debug_response(resp, iteration)
+
             last = responses[-1]
             content = (
                 last.get("content", "") if isinstance(last, dict) else last.content
             )
             if content:
-                print(content)
+                print(f"\n{content}")
                 print()
 
 
-def run_interactive():
+def run_interactive(backend: str = "marie", debug: bool = False):
     """Run in interactive mode."""
     print("=" * 60)
     print("Planning Agent - Interactive Mode")
     print("=" * 60)
+    if debug:
+        print("Debug: ON")
     print("Enter complex tasks for the agent to plan and execute.")
     print("Commands: 'quit', 'clear'")
     print()
 
-    agent = create_planning_agent()
+    agent = create_planning_agent(backend=backend)
     messages = []
 
     while True:
@@ -582,9 +619,15 @@ def run_interactive():
         messages.append({"role": "user", "content": user_input})
         print("\n" + "-" * 40)
 
+        iteration = 0
         response_list = []
         for response_list in agent.run(messages=messages):
             if response_list:
+                iteration += 1
+                if debug:
+                    for resp in response_list:
+                        print_debug_response(resp, iteration)
+
                 last = response_list[-1]
                 content = (
                     last.get("content", "") if isinstance(last, dict) else last.content
@@ -604,19 +647,49 @@ if __name__ == "__main__":
     parser.add_argument("--task", "-t", type=str, help="Task to execute")
     parser.add_argument("--tui", action="store_true", help="Interactive mode")
     parser.add_argument("--backend", default="marie", choices=["marie", "openai"])
+    parser.add_argument(
+        "--debug", "-d", action="store_true", help="Show raw LLM responses"
+    )
 
     args = parser.parse_args()
 
     if args.tui:
-        run_interactive()
+        run_interactive(backend=args.backend, debug=args.debug)
     elif args.task:
-        run_task(args.task, backend=args.backend)
+        run_task(args.task, backend=args.backend, debug=args.debug)
     else:
-        print("Examples:")
-        print(
-            "  python planning_agent.py --task 'List all Python files and analyze the largest one'"
-        )
-        print(
-            "  python planning_agent.py --task 'Create a report of files in current directory'"
-        )
+        print("Planning Agent - Multi-step Task Execution")
+        print("=" * 60)
+        print()
+        print("AVAILABLE TOOLS:")
+        print("  list_files      - List files with glob patterns")
+        print("  read_file       - Read file contents")
+        print("  write_file      - Write to files")
+        print("  analyze_text    - Text analysis (words, patterns)")
+        print("  analyze_code    - Code metrics (functions, classes)")
+        print("  create_csv      - Create CSV files")
+        print("  read_csv        - Read CSV files")
+        print("  generate_report - Generate reports (md/txt/html)")
+        print("  run_calculation - Math with variables")
+        print()
+        print("USAGE EXAMPLES:")
+        print()
+        print("  # File operations")
+        print("  python planning_agent.py --task 'List Python files'")
+        print("  python planning_agent.py --task 'Find files matching *.txt'")
+        print()
+        print("  # Code analysis")
+        print("  python planning_agent.py --task 'Analyze agent_simple.py'")
+        print("  python planning_agent.py --task 'Find the largest Python file'")
+        print()
+        print("  # Report generation")
+        print("  python planning_agent.py --task 'Create a report about files here'")
+        print()
+        print("  # Multi-step tasks")
+        print("  python planning_agent.py --task 'List Python files, analyze largest'")
+        print("  python planning_agent.py --task 'Create CSV of file sizes'")
+        print()
+        print("  # Interactive / OpenAI / Debug")
         print("  python planning_agent.py --tui")
+        print("  python planning_agent.py --backend openai --task '...'")
+        print("  python planning_agent.py --task '...' --debug")

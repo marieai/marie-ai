@@ -21,21 +21,20 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
+from dotenv import load_dotenv
+
 from marie.agent import (
     AgentTool,
-    AssistantAgent,
     ContentItem,
-    MarieEngineLLMWrapper,
     Message,
-    OpenAICompatibleWrapper,
+    ReactAgent,
     ToolMetadata,
     ToolOutput,
     register_tool,
 )
 
-# =============================================================================
-# Image Processing Tools
-# =============================================================================
+# Load environment variables from .env file
+load_dotenv()
 
 
 @register_tool("image_info")
@@ -425,7 +424,7 @@ class ExecutorVisionTool(AgentTool):
 
 def create_vision_assistant(
     backend: str = "marie", model: Optional[str] = None
-) -> AssistantAgent:
+) -> ReactAgent:
     """Create a vision-language assistant agent.
 
     Args:
@@ -433,21 +432,11 @@ def create_vision_assistant(
         model: Model name (should support vision)
 
     Returns:
-        Configured AssistantAgent instance.
+        Configured ReactAgent instance.
     """
-    if backend == "marie":
-        llm = MarieEngineLLMWrapper(engine_name=model or "qwen2_5_vl_7b")
-    elif backend == "openai":
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY required for OpenAI backend")
-        llm = OpenAICompatibleWrapper(
-            model=model or "gpt-4o",
-            api_key=api_key,
-            api_base="https://api.openai.com/v1",
-        )
-    else:
-        raise ValueError(f"Unknown backend: {backend}")
+    from utils import create_llm
+
+    llm = create_llm(backend=backend, model=model)
 
     tools = [
         "image_info",
@@ -457,7 +446,7 @@ def create_vision_assistant(
         ExecutorVisionTool(executor_name="document_analysis"),
     ]
 
-    return AssistantAgent(
+    return ReactAgent(
         llm=llm,
         function_list=tools,
         name="Vision Assistant",

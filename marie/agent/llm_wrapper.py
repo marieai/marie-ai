@@ -529,24 +529,195 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         return self._openai_to_message(choice.message)
 
     def _message_to_openai(self, msg: Message) -> Dict[str, Any]:
-        """Convert Message to OpenAI format."""
+        """Convert Message to OpenAI format.
+
+        Handles the nuances of OpenAI's message format:
+        - 'name' is only valid for 'function' role (legacy), NOT for 'tool' role
+        - 'tool_call_id' is only valid for 'tool' role
+        - 'tool_calls' must be serialized for assistant messages
+        - Assistant content can be null when making tool calls
+        - Multimodal content (images) converted to OpenAI vision format
+        """
         result: Dict[str, Any] = {"role": msg.role}
 
-        if msg.content:
-            result["content"] = msg.text_content
+        # Handle content - may be text or multimodal
+        if msg.content is not None:
+            result["content"] = self._content_to_openai(msg.content)
+            print(
+                f"[DEBUG _message_to_openai] content type: {type(result['content'])}, value: {result['content'][:200] if isinstance(result['content'], str) else result['content']}"
+            )
+        elif msg.role == ASSISTANT:
+            # OpenAI requires explicit null for assistant messages with tool_calls
+            result["content"] = None
 
-        if msg.name:
+        # 'name' is only valid for 'function' role (legacy format), NOT for 'tool' role
+        # OpenAI rejects messages with role='tool' that have 'name' field
+        if msg.name and msg.role == FUNCTION:
             result["name"] = msg.name
 
-        if msg.tool_call_id:
+        # 'tool_call_id' is only valid for 'tool' role responses
+        if msg.tool_call_id and msg.role == TOOL:
             result["tool_call_id"] = msg.tool_call_id
 
-        if msg.function_call:
+        # Serialize tool_calls for assistant messages (current OpenAI format)
+        if msg.tool_calls and msg.role == ASSISTANT:
+            result["tool_calls"] = self._serialize_tool_calls(msg.tool_calls)
+
+        # Legacy function_call (deprecated, keep for backward compatibility)
+        if msg.function_call and msg.role == ASSISTANT:
             result["function_call"] = {
                 "name": msg.function_call.name,
                 "arguments": msg.function_call.get_arguments_str(),
             }
 
+        return result
+
+    def _content_to_openai(
+        self, content: Union[str, List[Union[ContentItem, Dict[str, Any]]]]
+    ) -> Union[str, List[Dict[str, Any]]]:
+        """Convert content to OpenAI format, handling multimodal content.
+
+        Args:
+            content: String content or list of content items (text/image)
+
+        Returns:
+            String for text-only, or list of content blocks for multimodal
+        """
+        print(
+            f"[DEBUG _content_to_openai] input type: {type(content)}, value: {content}"
+        )
+
+        # Simple string content
+        if isinstance(content, str):
+            return content
+
+        # Check if content has any images
+        has_images = False
+        for item in content:
+            if isinstance(item, ContentItem):
+                if item.image:
+                    has_images = True
+                    break
+            elif isinstance(item, dict):
+                if item.get("image"):
+                    has_images = True
+                    break
+
+        # Text-only content - return as simple string
+        if not has_images:
+            text_parts = []
+            for item in content:
+                if isinstance(item, ContentItem) and item.text:
+                    text_parts.append(item.text)
+                elif isinstance(item, dict) and item.get("text"):
+                    text_parts.append(item["text"])
+            return "\n".join(text_parts) if text_parts else ""
+
+        # Multimodal content - convert to OpenAI vision format
+        openai_content = []
+        for item in content:
+            if isinstance(item, ContentItem):
+                if item.text:
+                    openai_content.append({"type": "text", "text": item.text})
+                elif item.image:
+                    openai_content.append(self._image_to_openai(item.image))
+            elif isinstance(item, dict):
+                if item.get("text"):
+                    openai_content.append({"type": "text", "text": item["text"]})
+                elif item.get("image"):
+                    openai_content.append(self._image_to_openai(item["image"]))
+
+        return openai_content
+
+    def _image_to_openai(self, image_path: str) -> Dict[str, Any]:
+        """Convert image path to OpenAI vision format with base64 encoding.
+
+        Args:
+            image_path: Path to local image file or URL
+
+        Returns:
+            OpenAI image_url content block
+        """
+        import base64
+        import mimetypes
+        from pathlib import Path
+
+        # Check if it's a URL (http/https or data URI)
+        if image_path.startswith(("http://", "https://", "data:")):
+            return {"type": "image_url", "image_url": {"url": image_path}}
+
+        # Local file - read and base64 encode
+        path = Path(image_path)
+        if not path.exists():
+            logger.warning(f"Image file not found: {image_path}")
+            return {"type": "text", "text": f"[Image not found: {image_path}]"}
+
+        # Detect MIME type
+        mime_type, _ = mimetypes.guess_type(str(path))
+        if mime_type is None:
+            # Default to common image types based on extension
+            ext = path.suffix.lower()
+            mime_map = {
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".png": "image/png",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+                ".bmp": "image/bmp",
+            }
+            mime_type = mime_map.get(ext, "image/png")
+
+        # Read and encode
+        try:
+            with open(path, "rb") as f:
+                image_data = base64.b64encode(f.read()).decode("utf-8")
+
+            return {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime_type};base64,{image_data}"},
+            }
+        except Exception as e:
+            logger.error(f"Failed to read image {image_path}: {e}")
+            return {"type": "text", "text": f"[Failed to read image: {image_path}]"}
+
+    def _serialize_tool_calls(self, tool_calls: List) -> List[Dict[str, Any]]:
+        """Serialize tool_calls to OpenAI format.
+
+        Args:
+            tool_calls: List of ToolCall objects or dicts
+
+        Returns:
+            List of tool call dicts in OpenAI format
+        """
+        result = []
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                # Already a dict, normalize to OpenAI format
+                result.append(
+                    {
+                        "id": tc.get("id"),
+                        "type": "function",
+                        "function": {
+                            "name": tc.get("function", {}).get("name"),
+                            "arguments": tc.get("function", {}).get("arguments", "{}"),
+                        },
+                    }
+                )
+            else:
+                # ToolCall object
+                arguments = tc.function.arguments
+                if not isinstance(arguments, str):
+                    arguments = json.dumps(arguments)
+                result.append(
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": arguments,
+                        },
+                    }
+                )
         return result
 
     def _openai_to_message(self, openai_msg: Any) -> Message:

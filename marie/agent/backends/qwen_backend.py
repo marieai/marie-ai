@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 
-from marie.agent.agents.assistant import AssistantAgent
+from marie.agent.agents.assistant import ReactAgent
 from marie.agent.backends.base import (
     AgentBackend,
     AgentResult,
@@ -38,7 +38,7 @@ class QwenBackendConfig(BackendConfig):
 class QwenAgentBackend(AgentBackend):
     """Native Qwen-style agent backend using marie.engine.
 
-    This backend uses the AssistantAgent with MarieEngineLLMWrapper
+    This backend uses the ReactAgent with MarieEngineLLMWrapper
     to provide ReAct-style reasoning with tool calling.
 
     Example:
@@ -80,7 +80,7 @@ class QwenAgentBackend(AgentBackend):
         super().__init__(config=config)
 
         self._llm = llm
-        self._agent: Optional[AssistantAgent] = None
+        self._agent: Optional[ReactAgent] = None
         self._tools: Dict[str, AgentTool] = {}
         self._tool_call_history: List[ToolCallRecord] = []
 
@@ -101,18 +101,18 @@ class QwenAgentBackend(AgentBackend):
     def _create_agent(
         self,
         tools: Optional[Dict[str, AgentTool]] = None,
-    ) -> AssistantAgent:
-        """Create an AssistantAgent with current configuration.
+    ) -> ReactAgent:
+        """Create a ReactAgent with current configuration.
 
         Args:
             tools: Tools to make available to the agent
 
         Returns:
-            Configured AssistantAgent
+            Configured ReactAgent
         """
         function_list = list(tools.values()) if tools else None
 
-        return AssistantAgent(
+        return ReactAgent(
             llm=self._get_llm(),
             function_list=function_list,
             system_message=self.qwen_config.system_message,
