@@ -5,7 +5,7 @@ All state backends must implement this protocol to be compatible
 with the Marie State Kernel.
 """
 
-from typing import Any, Iterable, Optional, Protocol, runtime_checkable
+from typing import Any, Iterable, List, Optional, Protocol, runtime_checkable
 
 from marie_kernel.ref import TaskInstanceRef
 
@@ -102,5 +102,18 @@ class StateBackend(Protocol):
 
         Args:
             ti: Task instance reference identifying the task to clear
+        """
+        ...
+
+    def list_annotations(self) -> List[str]:
+        """
+        List available annotations.
+
+        For filesystem-based backends, this returns annotation names from the
+        agent-output directory. For other backends (memory, S3, Postgres),
+        this returns an empty list.
+
+        Returns:
+            List of annotation names available in the backend
         """
         ...

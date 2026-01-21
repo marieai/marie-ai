@@ -2,6 +2,10 @@
 Tests for RunContext API.
 """
 
+import json
+import os
+import tempfile
+
 import pytest
 from marie_kernel import RunContext, TaskInstanceRef
 from marie_kernel.backends.memory import InMemoryStateBackend
@@ -292,3 +296,177 @@ class TestRunContextIsolation:
 
         assert ctx1.get("KEY") == "try_1_value"
         assert ctx2.get("KEY") is None
+
+
+class TestRunContextFromAssetDir:
+    """Integration tests for RunContext.from_asset_dir() annotation query API."""
+
+    @pytest.fixture
+    def asset_dir(self):
+        """Create a temporary asset directory with test annotation data."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_output = os.path.join(tmpdir, "agent-output")
+
+            # Create annotation directories
+            os.makedirs(os.path.join(agent_output, "tables"))
+            os.makedirs(os.path.join(agent_output, "claims"))
+            os.makedirs(os.path.join(agent_output, "remarks"))
+
+            # Create test JSON files for tables
+            with open(os.path.join(agent_output, "tables", "00001.json"), "w") as f:
+                json.dump({"rows": [[1, 2, 3]], "cols": ["a", "b", "c"]}, f)
+            with open(os.path.join(agent_output, "tables", "00002.json"), "w") as f:
+                json.dump({"rows": [[4, 5, 6]], "cols": ["d", "e", "f"]}, f)
+
+            # Create test JSON files for claims
+            with open(os.path.join(agent_output, "claims", "00001.json"), "w") as f:
+                json.dump({"claim_id": "CLM001", "amount": 100.00}, f)
+
+            # Create test markdown file for remarks
+            with open(os.path.join(agent_output, "remarks", "00001.md"), "w") as f:
+                f.write("# Page 1 Remarks\n\nThis is a test remark.")
+
+            yield tmpdir
+
+    def test_from_asset_dir_creates_context(self, asset_dir):
+        """Test that from_asset_dir creates a valid RunContext."""
+        ctx = RunContext.from_asset_dir(asset_dir)
+
+        assert ctx is not None
+        assert ctx.ti.dag_name == "filesystem"
+        assert ctx.ti.dag_id == "direct"
+
+    def test_list_annotations(self, asset_dir):
+        """Test listing available annotations from asset directory."""
+        ctx = RunContext.from_asset_dir(asset_dir)
+
+        available = ctx.list_annotations()
+
+        assert isinstance(available, list)
+        assert "tables" in available
+        assert "claims" in available
+        assert "remarks" in available
+        # Should be sorted
+        assert available == sorted(available)
+
+    def test_list_annotations_empty_dir(self):
+        """Test list_annotations with no agent-output directory."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ctx = RunContext.from_asset_dir(tmpdir)
+            available = ctx.list_annotations()
+            assert available == []
+
+    def test_get_annotation_all_pages(self, asset_dir):
+        """Test getting all pages for an annotation."""
+        ctx = RunContext.from_asset_dir(asset_dir)
+
+        tables = ctx.get_annotation("tables")
+
+        assert tables is not None
+        assert tables["task_id"] == "tables"
+        assert "output_dir" in tables
+        assert "pages" in tables
+        assert "raw_files" in tables
+        assert 1 in tables["pages"]
+        assert 2 in tables["pages"]
+
+    def test_get_annotation_specific_page(self, asset_dir):
+        """Test getting a specific page from an annotation."""
+        ctx = RunContext.from_asset_dir(asset_dir)
+
+        page1 = ctx.get_annotation("tables", page=1)
+
+        assert page1 is not None
+        assert page1["type"] == "json"
+        assert page1["data"]["rows"] == [[1, 2, 3]]
+        assert page1["file"] == "00001.json"
+        assert "path" in page1
+        assert page1["path"].endswith("00001.json")
+
+    def test_get_annotation_includes_absolute_paths(self, asset_dir):
+        """Test that annotation results include absolute file paths."""
+        ctx = RunContext.from_asset_dir(asset_dir)
+
+        tables = ctx.get_annotation("tables")
+
+        # Check output_dir is absolute
+        assert os.path.isabs(tables["output_dir"])
+        assert os.path.exists(tables["output_dir"])
+
+        # Check page paths are absolute
+        for page_num, page_data in tables["pages"].items():
+            assert "path" in page_data
+            assert os.path.isabs(page_data["path"])
+            assert os.path.exists(page_data["path"])
+
+        # Check raw_files paths are absolute
+        for file_info in tables["raw_files"]:
+            assert "path" in file_info
+            assert os.path.isabs(file_info["path"])
+            assert os.path.exists(file_info["path"])
+
+    def test_get_annotation_can_read_files(self, asset_dir):
+        """Test that returned paths can be used to read file contents."""
+        ctx = RunContext.from_asset_dir(asset_dir)
+
+        page1 = ctx.get_annotation("tables", page=1)
+
+        # Read the file using the returned path
+        with open(page1["path"], "r") as f:
+            content = json.load(f)
+
+        assert content == page1["data"]
+
+    def test_get_annotation_markdown(self, asset_dir):
+        """Test getting markdown annotation results."""
+        ctx = RunContext.from_asset_dir(asset_dir)
+
+        remarks = ctx.get_annotation("remarks")
+
+        assert remarks is not None
+        assert 1 in remarks["pages"]
+        assert remarks["pages"][1]["type"] == "markdown"
+        assert "# Page 1 Remarks" in remarks["pages"][1]["data"]
+
+    def test_get_annotation_nonexistent_returns_default(self, asset_dir):
+        """Test that nonexistent annotation returns default value."""
+        ctx = RunContext.from_asset_dir(asset_dir)
+
+        result = ctx.get_annotation("nonexistent")
+        assert result is None
+
+        result_with_default = ctx.get_annotation("nonexistent", default={"empty": True})
+        assert result_with_default == {"empty": True}
+
+    def test_get_annotation_nonexistent_page_returns_default(self, asset_dir):
+        """Test that nonexistent page returns default value."""
+        ctx = RunContext.from_asset_dir(asset_dir)
+
+        result = ctx.get_annotation("tables", page=999)
+        assert result is None
+
+        result_with_default = ctx.get_annotation("tables", page=999, default={})
+        assert result_with_default == {}
+
+    def test_full_workflow(self, asset_dir):
+        """Integration test demonstrating the full annotation query workflow."""
+        # Create context from asset directory
+        ctx = RunContext.from_asset_dir(asset_dir)
+
+        # List available annotations
+        available = ctx.list_annotations()
+        assert len(available) >= 3
+
+        # Get all tables data
+        tables = ctx.get_annotation("tables")
+        assert tables["task_id"] == "tables"
+
+        # Process each page
+        for page_num in sorted(tables["pages"].keys()):
+            page_data = ctx.get_annotation("tables", page=page_num)
+            assert page_data["type"] == "json"
+
+            # Can read the actual file
+            with open(page_data["path"]) as f:
+                raw_content = json.load(f)
+            assert raw_content == page_data["data"]

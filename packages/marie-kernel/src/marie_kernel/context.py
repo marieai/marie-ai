@@ -6,7 +6,7 @@ state during DAG execution. It wraps a StateBackend and provides both
 simple (set/get) and advanced (push/pull) APIs.
 """
 
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, List, Optional
 
 from marie_kernel.backend import StateBackend
 from marie_kernel.ref import TaskInstanceRef
@@ -23,7 +23,7 @@ class RunContext:
         ```python
         def my_task(ctx: RunContext):
             # Read from upstream task
-            ocr_lines = ctx.get("CLAIM_OCR_LINES", from_task="ocr")
+            ocr_lines = ctx.get("OCR_LINES", from_task="ocr")
 
             # Process and store result
             tables = locate_tables(ocr_lines)
@@ -44,6 +44,40 @@ class RunContext:
         """
         self._ti = ti
         self._backend = backend
+
+    @classmethod
+    def from_asset_dir(cls, asset_dir: str) -> "RunContext":
+        """
+        Create RunContext from an asset directory for direct annotation access.
+
+        This factory method provides a simple way to query annotation results
+        without needing to construct a full TaskInstanceRef or backend manually.
+
+        Args:
+            asset_dir: Path to asset directory containing agent-output/
+
+        Returns:
+            RunContext configured for filesystem-based annotation queries
+
+        Example:
+            ```python
+            ctx = RunContext.from_asset_dir("/home/user/.marie/generators/abc123/")
+            tables = ctx.get_annotation("tables")
+            available = ctx.list_annotations()
+            ```
+        """
+        from marie_kernel.backends import FileSystemStateBackend
+
+        backend = FileSystemStateBackend(base_path=asset_dir)
+        # Create minimal TaskInstanceRef for compatibility
+        ti = TaskInstanceRef(
+            tenant_id="default",
+            dag_name="filesystem",
+            dag_id="direct",
+            task_id="query",
+            try_number=1,
+        )
+        return cls(ti, backend)
 
     @property
     def ti(self) -> TaskInstanceRef:
@@ -107,10 +141,6 @@ class RunContext:
             ```
         """
         return self.pull(key, from_task=from_task, default=default)
-
-    # ========================================================================
-    # Advanced API (with metadata, multi-task pulls)
-    # ========================================================================
 
     def push(
         self,
@@ -178,3 +208,70 @@ class RunContext:
     def __repr__(self) -> str:
         """Debug representation."""
         return f"RunContext(ti={self._ti})"
+
+    def list_annotations(self) -> List[str]:
+        """
+        List available annotations by scanning agent-output directory.
+
+        Returns:
+            List of annotation names (folder names under agent-output/)
+
+        Example:
+            ```python
+            ctx = RunContext.from_asset_dir("/path/to/asset")
+            available = ctx.list_annotations()
+            # ['claims', 'tables', ...]
+            ```
+        """
+        return self._backend.list_annotations()
+
+    def get_annotation(
+        self,
+        name: str,
+        *,
+        page: Optional[int] = None,
+        default: Any = None,
+    ) -> Any:
+        """
+        Get annotation results by name.
+
+        Args:
+            name: Annotation name (folder name under agent-output/)
+            page: Optional page number (1-indexed). If None, returns all pages.
+            default: Value to return if not found
+
+        Returns:
+            Annotation data for the specified page or all pages
+
+        Example:
+            ```python
+            ctx = RunContext.from_asset_dir("/path/to/asset")
+
+            # Get all pages
+            tables = ctx.get_annotation("tables")
+            # {
+            #     "task_id": "tables",
+            #     "pages": {1: {...}, 2: {...}},
+            #     "raw_files": [...]
+            # }
+
+            # Get specific page
+            tables_p1 = ctx.get_annotation("tables", page=1)
+            # {"type": "json", "data": {...}, "file": "00001.json"}
+            ```
+        """
+        from marie_kernel.backends import FileSystemStateBackend
+
+        result = self._backend.pull(
+            self._ti,
+            FileSystemStateBackend.ANNOTATOR_RESULTS_KEY,
+            from_tasks=[name],
+            default=default,
+        )
+
+        if result is None or page is None:
+            return result
+
+        # Extract specific page
+        pages = result.get("pages", {})
+        return pages.get(page, default)

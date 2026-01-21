@@ -1,14 +1,9 @@
 import os
 import os.path
-from typing import TYPE_CHECKING, Any, List, Optional, Set
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from marie.constants import __config_dir__
 from marie.extract.annotators.base import AnnotatorCapabilities, DocumentAnnotator
-from marie.extract.annotators.execution_context import (
-    ExecutionContext,
-    ExecutionContextConfig,
-    ExecutionContextEvaluator,
-)
 from marie.extract.annotators.util import (
     ascan_and_process_images,
     route_llm_engine,
@@ -96,23 +91,9 @@ class LLMAnnotator(DocumentAnnotator):
         self.frames_dir = os.path.join(working_dir, "frames")
         self.logger.info(f'Annotator output dir : {self.output_dir}')
 
-        # Parse execution context configuration - provides access to upstream task data
-        self.exec_ctx: Optional[ExecutionContext] = None
-        # Optional evaluator for determining eligible pages - can be set by subclasses
-        self.exec_ctx_evaluator: Optional[ExecutionContextEvaluator] = None
-        exec_ctx_conf = annotator_conf.get('execution_context')
-        if exec_ctx_conf and run_context:
-            config = ExecutionContextConfig.from_config(exec_ctx_conf)
-            self.exec_ctx = ExecutionContext(config, run_context)
-            self.logger.info(
-                f"Loaded execution context with {self.exec_ctx.dependency_count} dependencies "
-                f"({self.exec_ctx.loaded_count} loaded)"
-            )
-        elif exec_ctx_conf and not run_context:
-            self.logger.warning(
-                "Execution context configured but no RunContext provided - "
-                "execution context will be ignored"
-            )
+        # Store run_context for direct access to upstream data when needed
+        # Usage: self.run_context.get("ANNOTATOR_RESULTS", from_task="tables")
+        self.run_context = run_context
 
         if self.model_name is None:
             raise ValueError("Model name must be provided in the configuration.")
@@ -149,24 +130,10 @@ class LLMAnnotator(DocumentAnnotator):
         """
         Perform value extraction on the given document.
 
-        Upstream task data is available via self.exec_ctx if configured.
-        If self.exec_ctx_evaluator is set, it will be used to determine
-        eligible pages and whether to skip processing.
+        Upstream task data is available via self.run_context if provided.
+        Example: self.run_context.get("ANNOTATOR_RESULTS", from_task="tables")
         """
         self.logger.info(f"Annotating document with {self.name}...")
-
-        # Use evaluator if provided to determine eligible pages
-        eligible_pages: Optional[Set[int]] = None
-        if self.exec_ctx_evaluator:
-            if self.exec_ctx_evaluator.should_skip(document):
-                self.logger.info(
-                    f"Skipping {self.name} - evaluator determined no pages match"
-                )
-                return
-            eligible_pages = self.exec_ctx_evaluator.get_eligible_pages(document)
-            self.logger.info(
-                f"Evaluator returned {len(eligible_pages)} eligible pages: {sorted(eligible_pages)}"
-            )
 
         # Check if output directory contains results
         if os.listdir(self.output_dir):
@@ -183,7 +150,6 @@ class LLMAnnotator(DocumentAnnotator):
             engine=self.engine,
             is_multimodal=self.multimodal,
             expect_output=self.expect_output,
-            eligible_pages=eligible_pages,
         )
 
         # self.parse_output(raw_output)
@@ -192,24 +158,10 @@ class LLMAnnotator(DocumentAnnotator):
         """
         Perform value extraction on the given document.
 
-        Upstream task data is available via self.exec_ctx if configured.
-        If self.exec_ctx_evaluator is set, it will be used to determine
-        eligible pages and whether to skip processing.
+        Upstream task data is available via self.run_context if provided.
+        Example: self.run_context.get("ANNOTATOR_RESULTS", from_task="tables")
         """
         self.logger.info(f"Annotating document with {self.name}...")
-
-        # Use evaluator if provided to determine eligible pages
-        eligible_pages: Optional[Set[int]] = None
-        if self.exec_ctx_evaluator:
-            if self.exec_ctx_evaluator.should_skip(document):
-                self.logger.info(
-                    f"Skipping {self.name} - evaluator determined no pages match"
-                )
-                return
-            eligible_pages = self.exec_ctx_evaluator.get_eligible_pages(document)
-            self.logger.info(
-                f"Evaluator returned {len(eligible_pages)} eligible pages: {sorted(eligible_pages)}"
-            )
 
         # Check if output directory contains results
         if os.listdir(self.output_dir):
@@ -226,7 +178,6 @@ class LLMAnnotator(DocumentAnnotator):
             engine=self.engine,
             is_multimodal=self.multimodal,
             expect_output=self.expect_output,
-            eligible_pages=eligible_pages,
         )
 
         # self.parse_output(raw_output)

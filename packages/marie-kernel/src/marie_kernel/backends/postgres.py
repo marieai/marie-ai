@@ -9,7 +9,7 @@ Requires the 'postgres' optional dependency:
 """
 
 import json
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, List, Optional
 
 from marie_kernel.ref import TaskInstanceRef
 
@@ -237,3 +237,14 @@ class PostgresStateBackend:
                         value = json.loads(value)
                     result[key] = value
         return result
+
+    def list_annotations(self) -> List[str]:
+        """
+        List available annotations.
+
+        PostgresStateBackend does not support filesystem-based annotations.
+
+        Returns:
+            Empty list (no filesystem annotations available)
+        """
+        return []

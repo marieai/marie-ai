@@ -10,7 +10,7 @@ Requires the 's3' optional dependency:
 """
 
 import json
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, List, Optional
 
 from marie_kernel.ref import TaskInstanceRef
 
@@ -297,3 +297,14 @@ class S3StateBackend:
             if error_code in ("404", "NoSuchKey"):
                 return False
             raise
+
+    def list_annotations(self) -> List[str]:
+        """
+        List available annotations.
+
+        S3StateBackend does not support filesystem-based annotations.
+
+        Returns:
+            Empty list (no filesystem annotations available)
+        """
+        return []

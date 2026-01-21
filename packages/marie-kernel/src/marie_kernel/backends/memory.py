@@ -6,7 +6,7 @@ Data is stored in a dictionary and is lost when the process exits.
 """
 
 from threading import Lock
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from marie_kernel.ref import TaskInstanceRef
 
@@ -159,3 +159,14 @@ class InMemoryStateBackend:
         """Clear all stored state (useful for test cleanup)."""
         with self._lock:
             self._store.clear()
+
+    def list_annotations(self) -> List[str]:
+        """
+        List available annotations.
+
+        InMemoryStateBackend does not support filesystem-based annotations.
+
+        Returns:
+            Empty list (no filesystem annotations available)
+        """
+        return []

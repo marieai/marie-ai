@@ -207,6 +207,7 @@ class FileSystemStateBackend:
 
         results: Dict[str, Any] = {
             "task_id": task_id,
+            "output_dir": output_dir,
             "pages": {},
             "raw_files": [],
         }
@@ -237,9 +238,15 @@ class FileSystemStateBackend:
                             "type": "json",
                             "data": json_data,
                             "file": filename,
+                            "path": filepath,
                         }
                     results["raw_files"].append(
-                        {"file": filename, "type": "json", "page": page_number}
+                        {
+                            "file": filename,
+                            "path": filepath,
+                            "type": "json",
+                            "page": page_number,
+                        }
                     )
                 except (json.JSONDecodeError, IOError):
                     pass
@@ -253,9 +260,15 @@ class FileSystemStateBackend:
                             "type": "markdown",
                             "data": md_content,
                             "file": filename,
+                            "path": filepath,
                         }
                     results["raw_files"].append(
-                        {"file": filename, "type": "markdown", "page": page_number}
+                        {
+                            "file": filename,
+                            "path": filepath,
+                            "type": "markdown",
+                            "page": page_number,
+                        }
                     )
                 except IOError:
                     pass
@@ -305,3 +318,26 @@ class FileSystemStateBackend:
         """Clear all stored state in memory (useful for test cleanup)."""
         with self._lock:
             self._memory_store.clear()
+
+    def list_annotations(self) -> List[str]:
+        """
+        List available annotations by scanning agent-output directory.
+
+        Returns:
+            List of annotation names (subdirectory names under agent-output/)
+        """
+        agent_output_dir = os.path.join(self._base_path, "agent-output")
+
+        if not os.path.exists(agent_output_dir):
+            return []
+
+        annotations = []
+        try:
+            for entry in os.listdir(agent_output_dir):
+                entry_path = os.path.join(agent_output_dir, entry)
+                if os.path.isdir(entry_path):
+                    annotations.append(entry)
+        except OSError:
+            return []
+
+        return sorted(annotations)
