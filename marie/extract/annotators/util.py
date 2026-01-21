@@ -4,7 +4,7 @@ import logging
 import os
 import os.path
 import time
-from typing import Any, Generator, List, Optional
+from typing import Any, Generator, List, Optional, Set
 
 from numpy import ndarray
 from qwen_vl_utils import smart_resize
@@ -26,6 +26,38 @@ from marie.utils.docs import frames_from_file
 from marie.utils.utils import batchify
 
 SYSTEM_PROMPT = ""  # Placeholder for the system prompt
+
+
+def _extract_page_number_from_filename(filename: str) -> Optional[int]:
+    """
+    Extract page number from filename.
+
+    Expected patterns:
+    - frame_0001.png → 1
+    - frame_0001.tif → 1
+    - page_1.png → 1
+
+    Args:
+        filename: The filename to parse
+
+    Returns:
+        Page number (1-indexed) or None if not found
+    """
+    import re
+
+    # Remove known extensions
+    base = filename
+    for ext in [".png", ".tif", ".json", ".md", ".txt"]:
+        if base.lower().endswith(ext):
+            base = base[: -len(ext)]
+
+    # Try to extract number from the end
+    # Match patterns like: frame_0001, page_1, 0001, etc.
+    match = re.search(r"_?(\d+)$", base)
+    if match:
+        return int(match.group(1))
+
+    return None
 
 
 def load_prompt(prompt_file: str) -> str:
@@ -167,11 +199,20 @@ async def process_batch(
                 task_id = responses[i][0]
                 response = responses[i][1]
 
-                output_filename_base = b_image_path.split("/")[-1]
+                output_filename_base = os.path.splitext(b_image_path.split("/")[-1])[0]
                 output_filename = os.path.join(
                     output_path, f"{output_filename_base}.png"
                 )
                 b_image.save(output_filename)
+
+                # Handle None response (LLM call failed for this task)
+                if response is None:
+                    logger.error(
+                        f"LLM response is None for task {task_id} (image {i}: {output_filename_base}). "
+                        "This usually indicates an API error or timeout during inference."
+                    )
+                    converted.append(None)
+                    continue
 
                 try:
                     with open(f"{output_filename}_prompt.txt", "w") as f:
@@ -313,8 +354,9 @@ def prepare_batch_with_meta(
                     decorated_lines.append(decorated_line)
                 content = "\n".join(decorated_lines)
 
-                updated_prompt = updated_prompt.replace("OCR_DATA", content)
-                # updated_prompt = updated_prompt.replace("OUTPUT_SCHEME", SCHEMA)
+                updated_prompt = updated_prompt.replace("OCR_DATA", content).replace(
+                    "OCR_TEXT", content
+                )
                 prompts.append(updated_prompt)
             except ValueError:
                 print(f"Unable to extract page number from filename: {name}")
@@ -322,7 +364,7 @@ def prepare_batch_with_meta(
         # TODO : this needs to be configured via the config file
         # 2048
         images = preprocess_images_for_inference(
-            image_paths, min_pixels=512 * 28 * 28, max_pixels=4096 * 28 * 28
+            image_paths, min_pixels=512 * 28 * 28, max_pixels=2048 * 28 * 28
         )
         batch_input = [
             [img, prt, img_path]
@@ -339,6 +381,7 @@ def scan_and_process_images(
     engine: EngineLM = None,
     is_multimodal: bool = False,
     expect_output: str = None,  # "json", "markdown", "none"
+    eligible_pages: Optional[Set[int]] = None,
 ) -> None:
     """
     Synchronous wrapper for the ascan_and_process_images function.
@@ -355,6 +398,7 @@ def scan_and_process_images(
         engine (EngineLM): The inference engine to be used.
         is_multimodal: bool: Flag indicating if the processing is multimodal.
         expect_output (str): Expected output format ("json", "markdown", "none").
+        eligible_pages: Optional set of page indices (0-indexed) to process. If None, all pages are processed.
     Returns:
         None
     """
@@ -366,6 +410,7 @@ def scan_and_process_images(
         engine=engine,
         is_multimodal=is_multimodal,
         expect_output=expect_output,
+        eligible_pages=eligible_pages,
     )
 
     return run_async(coroutine)
@@ -379,20 +424,54 @@ async def ascan_and_process_images(
     engine: EngineLM = None,
     is_multimodal: bool = False,
     expect_output: Optional[str] = None,  # "json", "markdown", "none"
+    eligible_pages: Optional[Set[int]] = None,
 ) -> None:
     """
     Scans the source directory for image files, processes each image
     with the specified prompt, and writes outputs to output_dir.
+
+    Parameters:
+        source_dir: Directory containing the input image files.
+        output_dir: Directory where processed outputs will be saved.
+        prompt: The prompt to apply during image processing.
+        document: The document object containing metadata and OCR data.
+        engine: The inference engine to be used.
+        is_multimodal: Flag indicating if the processing is multimodal.
+        expect_output: Expected output format ("json", "markdown", "none").
+        eligible_pages: Optional set of page indices (0-indexed) to process.
+                       If None, all pages are processed. Page indices correspond
+                       to the file order (frame_0001 = page 0, frame_0002 = page 1, etc.)
     """
     if not os.path.exists(source_dir):
         raise FileNotFoundError(f"Source directory {source_dir} does not exist.")
 
-    files = sorted(
+    all_files = sorted(
         f for f in os.listdir(source_dir) if f.lower().endswith((".png", ".tif"))
     )
-    if not files:
+    if not all_files:
         logging.info("No images found in %s; nothing to do.", source_dir)
         return
+
+    # Filter files based on eligible_pages if specified
+    if eligible_pages is not None:
+        files = []
+        for idx, f in enumerate(all_files):
+            # Extract page number from filename (1-indexed) and convert to 0-indexed
+            page_num = _extract_page_number_from_filename(f)
+            page_index = page_num - 1 if page_num is not None else idx
+            if page_index in eligible_pages:
+                files.append(f)
+        logging.info(
+            "Filtered %d files to %d based on eligible_pages: %s",
+            len(all_files),
+            len(files),
+            sorted(eligible_pages),
+        )
+        if not files:
+            logging.info("No files match eligible_pages; nothing to do.")
+            return
+    else:
+        files = all_files
 
     frames = [frames_from_file(os.path.join(source_dir, f))[0] for f in files]
     mini_batch_size = 16

@@ -17,7 +17,9 @@ def _get_llm_tracker():
             from marie.llm_tracking import get_tracker
 
             _llm_tracker = get_tracker()
-        except ImportError:
+        except (ImportError, RuntimeError):
+            # ImportError: llm_tracking module not installed
+            # RuntimeError: llm_tracking not configured (executor process)
             _llm_tracker = None
     return _llm_tracker
 

@@ -25,6 +25,19 @@ from marie.utils.docs import docs_from_asset, frames_from_docs
 from marie.utils.json import load_json_file
 from marie.utils.network import get_ip_address
 
+# Import marie-kernel for execution context support
+try:
+    from marie_kernel import RunContext
+    from marie_kernel.backends import FileSystemStateBackend
+    from marie_kernel.ref import TaskInstanceRef
+
+    MARIE_KERNEL_AVAILABLE = True
+except ImportError:
+    MARIE_KERNEL_AVAILABLE = False
+    RunContext = None
+    FileSystemStateBackend = None
+    TaskInstanceRef = None
+
 
 class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
     """Executor for document annotation"""
@@ -35,10 +48,12 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
         storage: dict[str, any] = None,
+        llm_tracking: dict[str, any] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
         kwargs['storage'] = storage
+        kwargs['llm_tracking'] = llm_tracking
         super().__init__(**kwargs)
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
@@ -66,9 +81,20 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         }
 
         self.storage_enabled = False
+        self.asset_tracking_enabled = False
         if storage is not None and "psql" in storage:
             sconf = storage["psql"]
-            self.setup_storage(sconf.get("enabled", False), sconf)
+            # Check if asset tracking is enabled in config
+            asset_tracking = sconf.get("asset_tracking_enabled", False)
+            self.setup_storage(
+                storage_enabled=sconf.get("enabled", False),
+                storage_conf=sconf,
+                asset_tracking_enabled=asset_tracking,
+            )
+
+        # Setup LLM tracking if configured (for executor process)
+        if llm_tracking is not None and llm_tracking.get("enabled", False):
+            self._setup_llm_tracking(llm_tracking, storage)
 
         self.root_config_dir = os.path.join(__config_dir__, "extract")
         self.logger.info(f"root_config_dir: {self.root_config_dir}")
@@ -104,6 +130,28 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         self.logger.info("processing request parameters")
         for key, value in parameters.items():
             self.logger.info("The value of {} is {}".format(key, value))
+
+    def _setup_llm_tracking(
+        self, llm_tracking_config: dict, storage_config: dict = None
+    ) -> None:
+        """
+        Configure LLM tracking for this executor process.
+
+        Executors run in separate processes (via SPAWN) and don't inherit the
+        gateway's configuration. This method calls configure_from_yaml() to
+        initialize LLM tracking settings in the executor process.
+
+        Args:
+            llm_tracking_config: The llm_tracking section from YAML config
+            storage_config: Optional storage section for shared S3 config
+        """
+        try:
+            from marie.llm_tracking.config import configure_from_yaml
+
+            configure_from_yaml(llm_tracking_config, storage_config)
+            self.logger.info("LLM tracking configured for executor process")
+        except Exception as e:
+            self.logger.warning(f"Failed to configure LLM tracking: {e}")
 
     async def _process_annotation_request(
         self,
@@ -212,16 +260,57 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             self.logger.info(f"Doc : {doc}")
             self.logger.info(f"Doc page_count: {doc.page_count}")
 
+            # Create RunContext for execution context support
+            run_context = None
+            if MARIE_KERNEL_AVAILABLE:
+                try:
+                    backend = FileSystemStateBackend(base_path=root_asset_dir)
+                    ti = TaskInstanceRef(
+                        tenant_id="default",
+                        dag_name="annotation",
+                        dag_id=job_id,
+                        task_id=op_key,
+                        try_number=1,
+                    )
+                    run_context = RunContext(ti, backend)
+                    self.logger.info(
+                        f"Created RunContext for task '{op_key}' with FileSystemStateBackend"
+                    )
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to create RunContext: {e}. "
+                        "Execution context will not be available."
+                    )
+
             annotator = annotator_class(
                 working_dir=root_asset_dir,
                 annotator_conf=annotator_conf,
                 layout_conf={
                     "layout_id": op_layout,
                 },
+                run_context=run_context,
             )
 
             await annotator.aannotate(doc, frames)
             del annotator
+
+            # Extract DAG tracking parameters for asset tracking
+            dag_id = parameters.get("dag_id")
+            node_task_id = parameters.get("node_task_id")
+            partition_key = parameters.get("partition_key")
+
+            # Record asset materializations if enabled
+            self._record_annotation_assets(
+                job_id=job_id,
+                ref_id=ref_id,
+                ref_type=ref_type,
+                op_key=op_key,
+                op_layout=op_layout,
+                page_count=doc.page_count,
+                dag_id=dag_id,
+                node_task_id=node_task_id,
+                partition_key=partition_key,
+            )
 
             response = {
                 "status": "success",
@@ -254,3 +343,75 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         finally:
             torch_gc()
             MDC.remove("request_id")
+
+    def _record_annotation_assets(
+        self,
+        job_id: str,
+        ref_id: str,
+        ref_type: str,
+        op_key: str,
+        op_layout: str,
+        page_count: int,
+        dag_id: Optional[str] = None,
+        node_task_id: Optional[str] = None,
+        partition_key: Optional[str] = None,
+    ) -> None:
+        """Record asset materializations for annotation results"""
+
+        if not self.asset_tracking_enabled or not job_id:
+            return
+
+        try:
+            import hashlib
+            import json
+
+            from marie.assets import AssetTracker
+
+            # Create a fingerprint of the annotation operation
+            annotation_fingerprint = f"{op_key}:{op_layout}:{ref_id}:{page_count}"
+            fingerprint_bytes = annotation_fingerprint.encode("utf-8")
+
+            # Compute version based on operation parameters
+            upstream_versions = self._get_upstream_versions(dag_id, node_task_id)
+            version = AssetTracker.compute_asset_version(
+                payload_bytes=fingerprint_bytes,
+                code_fingerprint=getattr(self, "code_version", "unknown"),
+                prompt_fingerprint=f"{op_key}:{op_layout}",
+                upstream_versions=upstream_versions,
+            )
+
+            assets = [
+                {
+                    "asset_key": f"annotation/{op_key}",
+                    "version": version,
+                    "kind": "annotation",
+                    "size_bytes": len(fingerprint_bytes),
+                    "checksum": hashlib.sha256(fingerprint_bytes).hexdigest(),
+                    "metadata": {
+                        "op_key": op_key,
+                        "op_layout": op_layout,
+                        "ref_id": ref_id,
+                        "ref_type": ref_type,
+                        "page_count": page_count,
+                    },
+                }
+            ]
+
+            # Record materializations
+            upstream = self._get_upstream_asset_tuples(dag_id, node_task_id)
+            self.asset_tracker.record_materializations(
+                storage_event_id=None,
+                assets=assets,
+                job_id=job_id,
+                dag_id=dag_id,
+                node_task_id=node_task_id,
+                partition_key=partition_key,
+                upstream_assets=upstream,
+            )
+            self.logger.debug(
+                f"Recorded annotation asset materialization for job {job_id}"
+            )
+        except Exception as e:
+            self.logger.error(
+                f"Failed to record asset materializations: {e}", exc_info=True
+            )

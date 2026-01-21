@@ -559,15 +559,10 @@ class StateManagementStresser:
 
                 # Refresh capacities based on discovered nodes
                 try:
-                    rows, totals = self._capacity_mgr.refresh_from_nodes(
+                    rows, totals, summary = self._capacity_mgr.refresh_from_nodes(
                         deployment_nodes
                     )
-                    logger.info(
-                        f"[SLOT_MGR] Refreshed capacities: "
-                        f"total_cap={totals['capacity']}, "
-                        f"used={totals['used']}, "
-                        f"holders={totals['holder_count']}"
-                    )
+                    logger.info(summary)
                 except Exception as e:
                     logger.warning(f"[SLOT_MGR] Refresh failed: {e}")
 
