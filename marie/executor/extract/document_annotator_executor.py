@@ -25,6 +25,19 @@ from marie.utils.docs import docs_from_asset, frames_from_docs
 from marie.utils.json import load_json_file
 from marie.utils.network import get_ip_address
 
+# Import marie-kernel for execution context support
+try:
+    from marie_kernel import RunContext
+    from marie_kernel.backends import FileSystemStateBackend
+    from marie_kernel.ref import TaskInstanceRef
+
+    MARIE_KERNEL_AVAILABLE = True
+except ImportError:
+    MARIE_KERNEL_AVAILABLE = False
+    RunContext = None
+    FileSystemStateBackend = None
+    TaskInstanceRef = None
+
 
 class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
     """Executor for document annotation"""
@@ -247,12 +260,35 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             self.logger.info(f"Doc : {doc}")
             self.logger.info(f"Doc page_count: {doc.page_count}")
 
+            # Create RunContext for execution context support
+            run_context = None
+            if MARIE_KERNEL_AVAILABLE:
+                try:
+                    backend = FileSystemStateBackend(base_path=root_asset_dir)
+                    ti = TaskInstanceRef(
+                        tenant_id="default",
+                        dag_name="annotation",
+                        dag_id=job_id,
+                        task_id=op_key,
+                        try_number=1,
+                    )
+                    run_context = RunContext(ti, backend)
+                    self.logger.info(
+                        f"Created RunContext for task '{op_key}' with FileSystemStateBackend"
+                    )
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to create RunContext: {e}. "
+                        "Execution context will not be available."
+                    )
+
             annotator = annotator_class(
                 working_dir=root_asset_dir,
                 annotator_conf=annotator_conf,
                 layout_conf={
                     "layout_id": op_layout,
                 },
+                run_context=run_context,
             )
 
             await annotator.aannotate(doc, frames)
