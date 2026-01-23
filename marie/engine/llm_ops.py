@@ -1,6 +1,6 @@
 import asyncio
 import functools
-from typing import Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 from pydantic import BaseModel
 
@@ -33,6 +33,7 @@ class LLMCall(Function):
         guided_json_object: Optional[bool] = None,
         guided_backend: Optional[str] = None,
         guided_whitespace_pattern: Optional[str] = None,
+        on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         **kwargs,
     ) -> FunctionReturnType:
         """
@@ -46,6 +47,9 @@ class LLMCall(Function):
         :param guided_json_object: guided JSON object to use for the LLM call
         :param guided_backend: guided backend to use for the LLM call
         :param guided_whitespace_pattern: guided whitespace pattern to use for the LLM call
+        :param on_result: Optional callback invoked when each task completes.
+                         Signature: (task_id: str, response: Optional[str]) -> None
+                         This enables incremental result processing.
         :param kwargs: Additional parameters for generation.
         :return: response sampled from the LLM
 
@@ -75,6 +79,7 @@ class LLMCall(Function):
             guided_json_object=guided_json_object,
             guided_backend=guided_backend,
             guided_whitespace_pattern=guided_whitespace_pattern,
+            on_result=on_result,
             **kwargs,
         )
 
@@ -97,8 +102,26 @@ class LLMCall(Function):
         guided_json_object: Optional[bool] = None,
         guided_backend: Optional[str] = None,
         guided_whitespace_pattern: Optional[str] = None,
+        on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         **kwargs,
     ) -> FunctionReturnType:
+        """
+        Async version of forward. Calls the LLM with the input and returns the response.
+
+        :param prompt: The input variable (aka prompt) to use for the LLM call.
+        :param guided_json: guided parameters to use for the LLM call
+        :param guided_regex: guided regex pattern to use for the LLM call
+        :param guided_choice: guided choice to use for the LLM call
+        :param guided_grammar: guided grammar to use for the LLM call
+        :param guided_json_object: guided JSON object to use for the LLM call
+        :param guided_backend: guided backend to use for the LLM call
+        :param guided_whitespace_pattern: guided whitespace pattern to use for the LLM call
+        :param on_result: Optional callback invoked when each task completes.
+                         Signature: (task_id: str, response: Optional[str]) -> None
+                         This enables incremental result processing.
+        :param kwargs: Additional parameters for generation.
+        :return: response sampled from the LLM
+        """
         system_prompt_value = self.system_prompt
 
         # Check if engine has async call capability
@@ -115,6 +138,7 @@ class LLMCall(Function):
                 guided_json_object=guided_json_object,
                 guided_backend=guided_backend,
                 guided_whitespace_pattern=guided_whitespace_pattern,
+                on_result=on_result,
                 **kwargs,
             )
         else:
@@ -132,6 +156,7 @@ class LLMCall(Function):
                     guided_json_object=guided_json_object,
                     guided_backend=guided_backend,
                     guided_whitespace_pattern=guided_whitespace_pattern,
+                    on_result=on_result,
                     **kwargs,
                 ),
             )

@@ -45,6 +45,21 @@ class BaseLLMWrapper(ABC):
     with the Marie agent framework.
     """
 
+    @property
+    def supports_native_tool_calling(self) -> bool:
+        """Whether this LLM backend supports native tool/function calling.
+
+        When True, the LLM uses API-level tool definitions (like OpenAI's
+        `tools` parameter) and returns structured `tool_calls` in responses.
+
+        When False, tools are described in the system prompt and the model
+        outputs tool calls as text (e.g., <tool_call>...</tool_call>).
+
+        Returns:
+            bool: True if native tool calling is supported
+        """
+        return False
+
     @abstractmethod
     def chat(
         self,
@@ -90,6 +105,7 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
     """LLM wrapper using marie.engine.
 
     Bridges the agent framework with Marie's EngineLM backends (VLLM, OpenAI, etc).
+    Supports both text-only and multimodal (vision) inputs.
 
     Example:
         ```python
@@ -98,7 +114,20 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
             provider="vllm",
         )
 
+        # Text-only
         messages = [Message.user("What is 2+2?")]
+        for responses in wrapper.chat(messages):
+            print(responses[-1].content)
+
+        # Multimodal (vision)
+        messages = [
+            Message.user(
+                [
+                    ContentItem(image="/path/to/image.jpg"),
+                    ContentItem(text="What do you see in this image?"),
+                ]
+            )
+        ]
         for responses in wrapper.chat(messages):
             print(responses[-1].content)
         ```
@@ -142,6 +171,154 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
         self.system_prompt = system_prompt
         self.function_call_format = function_call_format
 
+    def _has_multimodal_content(self, messages: List[Message]) -> bool:
+        """Check if any message contains multimodal content (images, etc).
+
+        Args:
+            messages: List of messages to check
+
+        Returns:
+            True if any message contains non-text content
+        """
+        for msg in messages:
+            if msg.content is None:
+                continue
+            if isinstance(msg.content, str):
+                continue
+            # Content is a list - check for images/media
+            for item in msg.content:
+                if isinstance(item, ContentItem):
+                    if item.image or item.audio or item.video or item.file:
+                        return True
+                elif isinstance(item, dict):
+                    if any(item.get(k) for k in ("image", "audio", "video", "file")):
+                        return True
+        return False
+
+    def _build_multimodal_content(
+        self,
+        messages: List[Message],
+        functions: Optional[List[Dict]] = None,
+    ) -> tuple[List[Union[str, Any]], str]:
+        """Build multimodal content list for the engine.
+
+        Extracts images and text from messages in the format expected by
+        marie.engine (list of strings, bytes, or PIL Images).
+
+        Args:
+            messages: List of messages
+            functions: Optional function definitions
+
+        Returns:
+            Tuple of (content_list, system_prompt) where content_list contains
+            images (as paths/URLs) and text prompts for the engine.
+        """
+        from pathlib import Path
+
+        from PIL import Image
+
+        system_parts = []
+        content_items: List[Union[str, Image.Image]] = []
+        conversation_parts = []
+
+        for msg in messages:
+            role = msg.role
+
+            if role == SYSTEM:
+                system_parts.append(msg.text_content)
+                continue
+
+            if role == FUNCTION or role == TOOL:
+                # Function/tool results - add as text context
+                name = msg.name or "tool"
+                conversation_parts.append(f"[{name} result]: {msg.text_content}")
+                continue
+
+            # Handle user/assistant messages with potential multimodal content
+            role_prefix = "User" if role == USER else "Assistant"
+
+            if msg.content is None:
+                continue
+
+            if isinstance(msg.content, str):
+                conversation_parts.append(f"{role_prefix}: {msg.content}")
+                continue
+
+            # Multimodal content - extract images and text
+            msg_text_parts = []
+            for item in msg.content:
+                if isinstance(item, ContentItem):
+                    if item.image:
+                        # Load image from path/URL
+                        image_src = item.image
+                        try:
+                            if image_src.startswith(("http://", "https://", "data:")):
+                                # URL or data URI - pass as string for engine to handle
+                                content_items.append(image_src)
+                            else:
+                                # Local file path - load as PIL Image
+                                img_path = Path(image_src)
+                                if img_path.exists():
+                                    img = Image.open(img_path).convert("RGB")
+                                    content_items.append(img)
+                                else:
+                                    logger.warning(f"Image not found: {image_src}")
+                                    msg_text_parts.append(
+                                        f"[Image not found: {image_src}]"
+                                    )
+                        except Exception as e:
+                            logger.error(f"Failed to load image {image_src}: {e}")
+                            msg_text_parts.append(
+                                f"[Failed to load image: {image_src}]"
+                            )
+                    elif item.text:
+                        msg_text_parts.append(item.text)
+                elif isinstance(item, dict):
+                    if item.get("image"):
+                        image_src = item["image"]
+                        try:
+                            if image_src.startswith(("http://", "https://", "data:")):
+                                content_items.append(image_src)
+                            else:
+                                img_path = Path(image_src)
+                                if img_path.exists():
+                                    img = Image.open(img_path).convert("RGB")
+                                    content_items.append(img)
+                                else:
+                                    logger.warning(f"Image not found: {image_src}")
+                                    msg_text_parts.append(
+                                        f"[Image not found: {image_src}]"
+                                    )
+                        except Exception as e:
+                            logger.error(f"Failed to load image {image_src}: {e}")
+                            msg_text_parts.append(
+                                f"[Failed to load image: {image_src}]"
+                            )
+                    elif item.get("text"):
+                        msg_text_parts.append(item["text"])
+
+            if msg_text_parts:
+                conversation_parts.append(f"{role_prefix}: {' '.join(msg_text_parts)}")
+
+        # Add function definitions to system prompt if provided
+        if functions:
+            func_desc = self._format_functions(functions)
+            system_parts.append(func_desc)
+
+        system_prompt = (
+            "\n\n".join(system_parts) if system_parts else self.system_prompt or ""
+        )
+
+        # Build final prompt text
+        prompt_text = "\n".join(conversation_parts)
+        if conversation_parts and not conversation_parts[-1].startswith("Assistant:"):
+            prompt_text += "\nAssistant:"
+
+        # Add prompt text to content items
+        content_items.append(prompt_text)
+
+        return content_items, system_prompt
+
     def chat(
         self,
         messages: List[Message],
@@ -151,8 +328,12 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
     ) -> Iterator[List[Message]]:
         """Generate a chat response using marie.engine.
 
+        Supports both text-only and multimodal (vision) inputs. When messages
+        contain images, they are automatically extracted and passed to the
+        underlying engine for vision-language processing.
+
         Args:
-            messages: List of conversation messages
+            messages: List of conversation messages (can include images via ContentItem)
             functions: Optional function definitions for function calling
             stream: Whether to stream responses. NOTE: Streaming is not yet
                 implemented - this parameter is accepted for API compatibility
@@ -173,8 +354,8 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
                 "Returning complete response."
             )
 
-        # Build prompt from messages
-        prompt, system_prompt = self._build_prompt(messages, functions)
+        # Check for multimodal content
+        is_multimodal = self._has_multimodal_content(messages)
 
         # Prepare generation kwargs
         gen_kwargs = {}
@@ -185,9 +366,19 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
         guided_json = gen_kwargs.pop("guided_json", None)
         guided_regex = gen_kwargs.pop("guided_regex", None)
 
+        if is_multimodal:
+            # Build multimodal content (images + text)
+            content, system_prompt = self._build_multimodal_content(messages, functions)
+            logger.debug(
+                f"Using multimodal path with {sum(1 for c in content if not isinstance(c, str))} images"
+            )
+        else:
+            # Build text-only prompt
+            content, system_prompt = self._build_prompt(messages, functions)
+
         # Generate response
         response = self.engine.generate(
-            content=prompt,
+            content=content,
             system_prompt=system_prompt,
             guided_json=guided_json,
             guided_regex=guided_regex,
@@ -414,6 +605,11 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         ```
     """
 
+    @property
+    def supports_native_tool_calling(self) -> bool:
+        """OpenAI API supports native tool calling via the tools parameter."""
+        return True
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -543,8 +739,32 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         # Handle content - may be text or multimodal
         if msg.content is not None:
             result["content"] = self._content_to_openai(msg.content)
-            print(
-                f"[DEBUG _message_to_openai] content type: {type(result['content'])}, value: {result['content'][:200] if isinstance(result['content'], str) else result['content']}"
+            # Debug output with truncated base64 data
+            if isinstance(result['content'], str):
+                debug_content = result['content'][:200]
+            elif isinstance(result['content'], list):
+                # Truncate base64 data in image_url items
+                debug_content = []
+                for item in result['content']:
+                    if isinstance(item, dict) and item.get('type') == 'image_url':
+                        url = item.get('image_url', {}).get('url', '')
+                        if url.startswith('data:'):
+                            debug_content.append(
+                                {
+                                    'type': 'image_url',
+                                    'image_url': {
+                                        'url': f'{url[:50]}...[base64 truncated, {len(url)} chars]'
+                                    },
+                                }
+                            )
+                        else:
+                            debug_content.append(item)
+                    else:
+                        debug_content.append(item)
+            else:
+                debug_content = result['content']
+            logger.debug(
+                f"[_message_to_openai] content type: {type(result['content'])}, value: {debug_content}"
             )
         elif msg.role == ASSISTANT:
             # OpenAI requires explicit null for assistant messages with tool_calls

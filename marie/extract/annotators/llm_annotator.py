@@ -4,11 +4,13 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 from marie.constants import __config_dir__
 from marie.extract.annotators.base import AnnotatorCapabilities, DocumentAnnotator
+from marie.extract.annotators.context_provider import ContextProviderManager
 from marie.extract.annotators.util import (
     ascan_and_process_images,
     route_llm_engine,
     scan_and_process_images,
 )
+from marie.extract.results.result_parser import render_document_markdown
 from marie.extract.structures.unstructured_document import UnstructuredDocument
 from marie.logging_core.logger import MarieLogger
 from marie.utils.utils import ensure_exists
@@ -122,6 +124,18 @@ class LLMAnnotator(DocumentAnnotator):
         self.prompt_text = self.load_prompt(full_prompt_path)
         self.engine = route_llm_engine(self.model_name, self.multimodal)
 
+        self.context_manager: Optional[ContextProviderManager] = ContextProviderManager(
+            run_context=self.run_context, annotator_name=self.name
+        )
+
+        if self.context_manager is not None and self.context_manager.has_providers():
+            self.logger.info(
+                f"Context providers activated for '{self.name}': "
+                f"{[p.__class__.__name__ for p in self.context_manager.providers]}"
+            )
+        else:
+            self.context_manager = None
+
     @property
     def capabilities(self) -> list:
         return [AnnotatorCapabilities.EXTRACTOR, AnnotatorCapabilities.SEGMENTER]
@@ -150,9 +164,8 @@ class LLMAnnotator(DocumentAnnotator):
             engine=self.engine,
             is_multimodal=self.multimodal,
             expect_output=self.expect_output,
+            context_manager=self.context_manager,
         )
-
-        # self.parse_output(raw_output)
 
     async def aannotate(self, document: UnstructuredDocument, frames: List) -> None:
         """
@@ -162,6 +175,60 @@ class LLMAnnotator(DocumentAnnotator):
         Example: self.run_context.get("ANNOTATOR_RESULTS", from_task="tables")
         """
         self.logger.info(f"Annotating document with {self.name}...")
+
+        # Pre-parse claims into document if this is claim-extract
+        # This adds CLAIM annotations that ClaimContextProvider can read
+        if self.name == "claim-extract":
+            from marie.extract.results.result_parser import parse_claims_to_document
+
+            # Look for pre-existing claims in agent-output/claims/
+            claims_dir = os.path.join(
+                os.path.dirname(self.output_dir), "claims"  # agent-output/
+            )
+            if os.path.exists(claims_dir):
+                self.logger.info(f"Pre-parsing claims from {claims_dir} into document")
+                parse_claims_to_document(document, claims_dir)
+
+        render_document_markdown(
+            document, os.path.join(self.working_dir, "debug", f"{self.name}_input.md")
+        )
+
+        # Write context provider debug info to show what variables are being injected
+        if self.context_manager:
+            import json
+
+            debug_dir = ensure_exists(os.path.join(self.working_dir, "debug"))
+            debug_context_path = os.path.join(debug_dir, f"{self.name}_context.json")
+            # Get variables for each processing unit
+            units = self.context_manager.get_processing_units(document)
+            if units:
+                context_debug = {
+                    "annotator": self.name,
+                    "total_units": len(units),
+                    "providers": [
+                        p.__class__.__name__ for p in self.context_manager.providers
+                    ],
+                    "units": [],
+                }
+                for unit in units:
+                    unit_vars = {}
+                    for provider in self.context_manager.providers:
+                        unit_vars.update(
+                            provider.get_variables(document, unit.page_number, unit)
+                        )
+                    context_debug["units"].append(
+                        {
+                            "page": unit.page_number,
+                            "index": getattr(unit, "index", None),
+                            "variables": unit_vars,
+                        }
+                    )
+                try:
+                    with open(debug_context_path, 'w') as f:
+                        json.dump(context_debug, f, indent=2, default=str)
+                    self.logger.info(f"Context debug written to {debug_context_path}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to write context debug: {e}")
 
         # Check if output directory contains results
         if os.listdir(self.output_dir):
@@ -178,6 +245,7 @@ class LLMAnnotator(DocumentAnnotator):
             engine=self.engine,
             is_multimodal=self.multimodal,
             expect_output=self.expect_output,
+            context_manager=self.context_manager,
         )
 
         # self.parse_output(raw_output)

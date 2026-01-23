@@ -1,6 +1,6 @@
 import asyncio
 import functools
-from typing import Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 from PIL import Image
 from pydantic import BaseModel
@@ -37,6 +37,7 @@ class MultimodalLLMCall(Function):
         guided_json_object: Optional[bool] = None,
         guided_backend: Optional[str] = None,
         guided_whitespace_pattern: Optional[str] = None,
+        on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         **kwargs,
     ) -> FunctionReturnType:
         """
@@ -50,6 +51,9 @@ class MultimodalLLMCall(Function):
         :param guided_json_object: guided JSON object to use for the LLM call
         :param guided_backend: guided backend to use for the LLM call
         :param guided_whitespace_pattern: guided whitespace pattern to use for the LLM call
+        :param on_result: Optional callback invoked when each task completes.
+                         Signature: (task_id: str, response: Optional[str]) -> None
+                         This enables incremental result processing.
         :return: response sampled from the LLM
 
         :example:
@@ -83,6 +87,7 @@ class MultimodalLLMCall(Function):
             guided_grammar=guided_grammar,
             guided_json_object=guided_json_object,
             guided_backend=guided_backend,
+            on_result=on_result,
             **kwargs,
         )
 
@@ -108,8 +113,26 @@ class MultimodalLLMCall(Function):
         guided_json_object: Optional[bool] = None,
         guided_backend: Optional[str] = None,
         guided_whitespace_pattern: Optional[str] = None,
+        on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         **kwargs,
     ) -> FunctionReturnType:
+        """
+        Async version of forward. Calls the multimodal LLM with the input and returns the response.
+
+        :param inputs: list of input variables to the multimodal LLM call.
+        :param guided_json: guided parameters to use for the LLM call
+        :param guided_regex: guided regex pattern to use for the LLM call
+        :param guided_choice: guided choice to use for the LLM call
+        :param guided_grammar: guided grammar to use for the LLM call
+        :param guided_json_object: guided JSON object to use for the LLM call
+        :param guided_backend: guided backend to use for the LLM call
+        :param guided_whitespace_pattern: guided whitespace pattern to use for the LLM call
+        :param on_result: Optional callback invoked when each task completes.
+                         Signature: (task_id: str, response: Optional[str]) -> None
+                         This enables incremental result processing.
+        :return: response sampled from the LLM
+        """
+
         def validate_input(input_items: List[Union[str, bytes, Image.Image]]):
             for variable in input_items:
                 if not isinstance(variable, (str, bytes, Image.Image)):
@@ -138,6 +161,7 @@ class MultimodalLLMCall(Function):
                 guided_json_object=guided_json_object,
                 guided_backend=guided_backend,
                 guided_whitespace_pattern=guided_whitespace_pattern,
+                on_result=on_result,
                 **kwargs,
             )
         else:
@@ -154,6 +178,7 @@ class MultimodalLLMCall(Function):
                     guided_json_object=guided_json_object,
                     guided_backend=guided_backend,
                     guided_whitespace_pattern=guided_whitespace_pattern,
+                    on_result=on_result,
                     **kwargs,
                 ),
             )

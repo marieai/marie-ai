@@ -24,13 +24,32 @@ def locate_line(
 def extract_page_id(filename: str) -> int:
     """
     Extracts the page id from a filename.
+
+    Handles multiple formats:
+    - 00001.json (simple format)
+    - 00001_t0.json, 00001_t1.json (table index format)
+    - 00001.png.json or 00001.tif.json (standard format)
+
+    Returns:
+        1-indexed page number, or -1 if extraction fails.
     """
-    # match = re.match(r".*_?(\d+)\.(tif|png)\.json", filename)
+    # Try simple format: 00001.json
+    match = re.match(r"(\d+)\.json$", filename, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+
+    # Try table index format: 00001_t0.json, 00001_t1.json
+    match = re.match(r"(\d+)_t\d+\.json$", filename, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+
+    # Try standard format: 00001.png.json or 00001.tif.json
     match = re.match(r"(?:.*_)?(\d+)\.(tif|png)\.json", filename)
-    if not match:
-        logging.warning(f"Skipping file with unexpected format: {filename}")
-        return -1
-    return int(match.group(1))
+    if match:
+        return int(match.group(1))
+
+    logging.warning(f"Skipping file with unexpected format: {filename}")
+    return -1
 
 
 def _annotate_segment(

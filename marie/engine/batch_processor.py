@@ -355,12 +355,28 @@ class BatchProcessor:
             return task_id, None
 
     async def load_batched_request(
-        self, messages_list, request_id, guided_json, trace_id: Optional[str] = None
+        self,
+        messages_list,
+        request_id,
+        guided_json,
+        trace_id: Optional[str] = None,
+        on_result: Optional[Callable[[str, Optional[str]], None]] = None,
     ):
         """
-        Processes the batch of requests, returning exactly:
-          ordered_responses: List[Optional[str]]
-          raw_results: List[Tuple[task_id, Optional[str]]]
+        Processes the batch of requests, invoking on_result as each completes.
+
+        Args:
+            messages_list: List of message lists to process
+            request_id: Unique identifier for this batch request
+            guided_json: Optional JSON schema for guided generation
+            trace_id: Optional trace ID for tracking
+            on_result: Optional callback invoked when each task completes.
+                       Signature: (task_id: str, response: Optional[str]) -> None
+
+        Returns:
+            Tuple of (ordered_responses, raw_results):
+              ordered_responses: List[Optional[str]] - responses in original order
+              raw_results: List[Tuple[task_id, Optional[str]]] - (task_id, response) pairs
         """
 
         async def safe_call(i, msgs):
@@ -381,17 +397,44 @@ class BatchProcessor:
             except Exception as e:
                 return BatchResult(tid, None, e)
 
-        # build all coroutines, but do NOT wrap them in create_task()
-        coros = [safe_call(i, msgs) for i, msgs in enumerate(messages_list)]
+        # Create tasks so we can use as_completed for incremental processing
+        tasks = [
+            asyncio.create_task(safe_call(i, msgs))
+            for i, msgs in enumerate(messages_list)
+        ]
 
+        # Process as each completes, invoking callback immediately
+        results: List[Optional[BatchResult]] = [None] * len(messages_list)
         try:
-            batch_results: List[BatchResult] = await asyncio.gather(*coros)
+            for completed_future in asyncio.as_completed(tasks):
+                try:
+                    batch_result = await completed_future
+                    # Extract index from task_id (format: {request_id}_task_{index})
+                    idx = int(batch_result.task_id.rsplit("_", 1)[-1])
+                    results[idx] = batch_result
+
+                    # Invoke callback immediately when result is ready
+                    if on_result:
+                        # Extract just the response text from the tuple if needed
+                        response_text = (
+                            batch_result.response[1]
+                            if isinstance(batch_result.response, tuple)
+                            else batch_result.response
+                        )
+                        on_result(batch_result.task_id, response_text)
+                except asyncio.CancelledError:
+                    raise
         except asyncio.CancelledError:
+            # Cancel remaining tasks
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
             raise
 
-        # convert BatchResult (task_id, response)
+        # Convert BatchResult to (task_id, response) tuples
         raw_results: List[Tuple[str, Optional[str]]] = [
-            (br.task_id, br.response) for br in batch_results
+            (br.task_id, br.response) if br else (f"{request_id}_task_{i}", None)
+            for i, br in enumerate(results)
         ]
         ordered_responses: List[Optional[str]] = [resp for (_tid, resp) in raw_results]
 
@@ -402,10 +445,23 @@ class BatchProcessor:
         messages_list: Union[List[str], List[List[Union[Image.Image, bytes, str]]]],
         system_prompt=Optional[str],
         guided_json: Optional[Union[Dict, BaseModel, str]] = None,
+        on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         **kwargs,
     ) -> List[str]:
         """
         Performs batch inference for multiple inputs, supporting both text-only and multimodal content.
+
+        Args:
+            messages_list: List of message lists to process
+            system_prompt: Optional system prompt override
+            guided_json: Optional JSON schema for guided generation
+            on_result: Optional callback invoked when each task completes.
+                       Signature: (task_id: str, response: Optional[str]) -> None
+                       This enables incremental result processing.
+            **kwargs: Additional arguments
+
+        Returns:
+            List of generated responses in original order
         """
         request_id = str(uuid.uuid4())
         system_prompt = system_prompt or "Default system prompt"
@@ -437,7 +493,11 @@ class BatchProcessor:
 
         batch_outputs, task_results = run_coroutine_in_current_loop(
             self.load_batched_request(
-                messages_list, request_id, guided_json, trace_id=trace_id
+                messages_list,
+                request_id,
+                guided_json,
+                trace_id=trace_id,
+                on_result=on_result,
             )
         )
 

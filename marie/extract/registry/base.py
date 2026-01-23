@@ -1,6 +1,6 @@
 import importlib
 import threading
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
 
 from marie.excepts import BadConfigSource
 from marie.extract.engine.processing_visitor import ProcessingVisitor
@@ -21,6 +21,12 @@ from .visitor_coercer import coerce_visitor_instance
 from .visitor_types import TVisitor
 from .wheel_callback import RegistryWheelCallback
 
+if TYPE_CHECKING:
+    from marie.extract.annotators.context_provider import (
+        ContextProvider,
+        ContextProviderInfo,
+    )
+
 
 class ComponentRegistry:
     """Thin facade that composes parsers, validators, template builders, and visitors."""
@@ -32,6 +38,7 @@ class ComponentRegistry:
         self._region_processors: Dict[str, RegionProcessorFn] = {}
         # TODO: add or convert to a linked dict for pre/post insertion and preserved order
         self._processing_visitors: Dict[str, ProcessingVisitor] = {}
+        self._context_providers: Dict[str, "ContextProviderInfo"] = {}
 
         self._core_initialized = False
         self._external_modules_loaded = False
@@ -113,6 +120,58 @@ class ComponentRegistry:
 
         return decorator
 
+    def register_context_provider(
+        self,
+        name: str,
+        target_annotators: Optional[List[str]] = None,
+    ) -> Callable[[Type["ContextProvider"]], Type["ContextProvider"]]:
+        """
+        Register a context provider class that subscribes to specific annotators.
+
+        Context providers are used to inject upstream task data into prompt templates.
+        They determine which pages are eligible for processing and provide context
+        for each page.
+
+        Args:
+            name: Unique name for the context provider.
+            target_annotators: List of annotator names this provider injects into.
+                             If empty or None, provider won't auto-activate.
+
+        Returns:
+            Decorator function that registers the provider class.
+
+        Example:
+            @register_context_provider(
+                name="table_claims",
+                target_annotators=["claim-extract", "claim-validation"]
+            )
+            class TableClaimContextProvider(ContextProvider):
+                VARIABLE_NAME = "TABLE_CONTEXT_CLAIMS"
+                ...
+        """
+        from marie.extract.annotators.context_provider import ContextProviderInfo
+
+        def decorator(
+            cls: Type["ContextProvider"],
+        ) -> Type["ContextProvider"]:
+            with self._lock:
+                if name in self._context_providers:
+                    logger.warning(
+                        f"Context provider '{name}' already registered; overwriting."
+                    )
+                self._context_providers[name] = ContextProviderInfo(
+                    name=name,
+                    cls=cls,
+                    target_annotators=target_annotators or [],
+                )
+            logger.info(
+                f"Registered context_provider: {name} ({cls.__name__}) "
+                f"targeting: {target_annotators or []}"
+            )
+            return cls
+
+        return decorator
+
     def register_validator_instance(self, validator: BaseValidator):
         with self._lock:
             self._validators[validator.name] = validator
@@ -122,6 +181,8 @@ class ComponentRegistry:
         if not self._core_initialized:
             try:
                 # import for side effects/registration
+                # Import built-in context providers for registration
+                import marie.extract.annotators.context_providers  # noqa: F401
                 import marie.extract.results.core.core_parsers  # noqa: F401
                 import marie.extract.results.core.core_processing_visitors  # noqa: F401
                 import marie.extract.results.core.core_regions_processors  # noqa: F401
@@ -129,14 +190,15 @@ class ComponentRegistry:
                 import marie.extract.results.core.core_validators  # noqa: F401
 
                 self._core_initialized = True
-                p, v, b, rp, pv = self._counts()
+                p, v, b, rp, pv, cp = self._counts()
                 logger.info(
                     f"Initialized Core: "
                     f"{p} parsers, "
                     f"{v} validators, "
                     f"{b} template builders, "
                     f"{rp} region processors, "
-                    f"{pv} processing visitors"
+                    f"{pv} processing visitors, "
+                    f"{cp} context providers"
                 )
             except ImportError as e:
                 logger.error(f"Failed to initialize core components: {e}")
@@ -147,7 +209,7 @@ class ComponentRegistry:
     ) -> Dict[str, object]:
         if self._external_modules_loaded:
             logger.debug("External components already loaded")
-            p, v, b, rp, pv = self._counts()
+            p, v, b, rp, pv, cp = self._counts()
             return {
                 "loaded": [],
                 "failed": [],
@@ -156,6 +218,7 @@ class ComponentRegistry:
                 "total_template_builders": b,
                 "total_region_processors": rp,
                 "total_processing_visitors": pv,
+                "total_context_providers": cp,
             }
 
         importlib.invalidate_caches()
@@ -177,7 +240,7 @@ class ComponentRegistry:
                 )
 
         self._external_modules_loaded = True
-        p, v, b, rp, pv = self._counts()
+        p, v, b, rp, pv, cp = self._counts()
         return {
             "loaded": all_loaded,
             "failed": all_failed,
@@ -186,6 +249,7 @@ class ComponentRegistry:
             "total_template_builders": b,
             "total_region_processors": rp,
             "total_processing_visitors": pv,
+            "total_context_providers": cp,
         }
 
     def initialize_from_config(self, config: Dict[str, Any]):
@@ -193,7 +257,7 @@ class ComponentRegistry:
         if self._auto_load_core:
             self.initialize_core_components()
 
-        p, v, b, rp, pv = self._counts()
+        p, v, b, rp, pv, cp = self._counts()
         result = {
             "loaded": [],
             "failed": [],
@@ -202,6 +266,7 @@ class ComponentRegistry:
             "total_template_builders": b,
             "total_region_processors": rp,
             "total_processing_visitors": pv,
+            "total_context_providers": cp,
         }
 
         # wheels
@@ -277,6 +342,49 @@ class ComponentRegistry:
             )
         return visitor
 
+    def get_context_provider(self, name: str) -> Optional[Type["ContextProvider"]]:
+        """
+        Get a context provider class by name.
+
+        Args:
+            name: The registered name of the context provider.
+
+        Returns:
+            The context provider class, or None if not found.
+        """
+        self.__init_core_components()
+        with self._lock:
+            info = self._context_providers.get(name)
+        if info is None:
+            available = list(self.list_context_providers()) or "none"
+            logger.warning(
+                f"Context provider '{name}' not found. Available: {available}"
+            )
+            return None
+        return info.cls
+
+    def get_providers_for_annotator(
+        self, annotator_name: str
+    ) -> List["ContextProviderInfo"]:
+        """
+        Get all context providers that target a specific annotator.
+
+        Args:
+            annotator_name: The name of the annotator to find providers for.
+
+        Returns:
+            List of ContextProviderInfo for providers targeting this annotator.
+        """
+        from marie.extract.annotators.context_provider import ContextProviderInfo
+
+        self.__init_core_components()
+        with self._lock:
+            return [
+                info
+                for info in self._context_providers.values()
+                if annotator_name in info.target_annotators
+            ]
+
     def list_parsers(self) -> List[str]:
         self.__init_core_components()
         with self._lock:
@@ -313,6 +421,12 @@ class ComponentRegistry:
         with self._lock:
             return list(self._processing_visitors.keys())
 
+    def list_context_providers(self) -> List[str]:
+        """List all registered context provider names."""
+        self.__init_core_components()
+        with self._lock:
+            return list(self._context_providers.keys())
+
     def validators(self):
         self.__init_core_components()
         with self._lock:
@@ -321,18 +435,20 @@ class ComponentRegistry:
     def get_registry_info(self) -> Dict[str, Any]:
         self.__init_core_components()
         installed_wheels = self._wheel_manager.get_installed_wheels()
-        p, v, b, rp, pv = self._counts()
+        p, v, b, rp, pv, cp = self._counts()
         info = {
             "total_parsers": p,
             "total_validators": v,
             "total_template_builders": b,
             "total_region_processors": rp,
             "total_processing_visitors": pv,
+            "total_context_providers": cp,
             "parser_names": self.list_parsers(),
             "validator_names": self.list_validators(),
             "template_builder_names": self.list_template_builders(),
             "region_processor_names": self.list_region_processors(),
             "processing_visitor_names": self.list_processing_visitors(),
+            "context_provider_names": self.list_context_providers(),
             "core_initialized": self._core_initialized,
             "external_loaded": self._external_modules_loaded,
             "auto_load_core": self._auto_load_core,
@@ -348,7 +464,7 @@ class ComponentRegistry:
         }
         return info
 
-    def _counts(self) -> Tuple[int, int, int, int, int]:
+    def _counts(self) -> Tuple[int, int, int, int, int, int]:
         with self._lock:
             return (
                 len(self._parsers),
@@ -356,6 +472,7 @@ class ComponentRegistry:
                 len(self._template_builders),
                 len(self._region_processors),
                 len(self._processing_visitors),
+                len(self._context_providers),
             )
 
     def get_wheel_manager(self) -> PipWheelManager:
@@ -376,3 +493,4 @@ register_validator = component_registry.register_validator
 register_template_builder = component_registry.register_template_builder
 register_region_processor = component_registry.register_region_processor
 register_processing_visitor = component_registry.register_processing_visitor
+register_context_provider = component_registry.register_context_provider

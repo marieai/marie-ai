@@ -58,6 +58,76 @@ def check_directories_exist(directories: List[str]) -> None:
         )
 
 
+def parse_claims_to_document(
+    doc: UnstructuredDocument,
+    claims_dir: str,
+) -> None:
+    """
+    Load pre-extracted claims and add them as annotations to the document.
+
+    This follows the same pattern as process_extractions() but for pre-parsed claims.
+    Adds CLAIM annotations to the document's lines, making the document the
+    single source of truth for all annotations.
+
+    Args:
+        doc: The UnstructuredDocument to update
+        claims_dir: Path to claims output directory (agent-output/claims)
+    """
+    if not os.path.exists(claims_dir):
+        logger.debug(f"Claims directory does not exist: {claims_dir}")
+        return
+
+    files = sorted(f for f in os.listdir(claims_dir) if f.lower().endswith(".json"))
+
+    if not files:
+        logger.debug(f"No JSON files in claims directory: {claims_dir}")
+        return
+
+    logger.info(f"Parsing {len(files)} claim files to document")
+
+    for file in files:
+        try:
+            page_id = extract_page_id(file) - 1  # Convert to 0-indexed
+            if page_id < 0:
+                logger.warning(f"Could not extract page id from file: {file}")
+                continue
+
+            json_path = os.path.join(claims_dir, file)
+            json_result = load_json_file(json_path, safe_parse=True)
+
+            if not json_result or "extractions" not in json_result:
+                logger.debug(f"No extractions in claims file: {file}")
+                continue
+
+            # Create ExtractionResult and process like other parsers
+            extraction = ExtractionResult(**json_result)
+
+            # Get lines for this page
+            lines_for_page = sorted(
+                doc.lines_for_page(page_id), key=lambda ln: ln.metadata.line_id
+            )
+
+            # Add CLAIM annotations to lines
+            for segment in extraction.extractions:
+                row_number = int(segment.line_number)
+                meta_line = locate_line(lines_for_page, row_number)
+
+                if meta_line:
+                    _annotate_segment("CLAIM", meta_line, segment)
+                else:
+                    logger.warning(f"No line found for page {page_id} row {row_number}")
+
+            logger.debug(
+                f"Added {len(extraction.extractions)} CLAIM annotations to page {page_id + 1}"
+            )
+
+        except Exception as e:
+            logger.error(f"Error parsing claims file {file}: {e}")
+            continue
+
+    logger.info("Finished parsing claims to document")
+
+
 def create_unstructured_doc(frames: list, metadata: dict) -> UnstructuredDocument:
     """Create and return an UnstructuredDocument object."""
     ocr_meta = metadata.get("ocr", [])

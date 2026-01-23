@@ -85,7 +85,18 @@ class ReactAgent(BaseAgent):
         ```
     """
 
-    DEFAULT_REACT_PROMPT = """You are a helpful assistant that can use tools to accomplish tasks.
+    # Prompt for LLMs with native tool calling (OpenAI, Claude, etc.)
+    # These models use API-level tool definitions and return structured tool_calls
+    DEFAULT_NATIVE_TOOL_PROMPT = """You are a helpful assistant with access to tools.
+
+Use the available tools when needed to accomplish tasks.
+After receiving tool results, continue reasoning until you can provide a final answer.
+Always explain your reasoning before making tool calls.
+When you have enough information to answer, provide a clear and helpful response."""
+
+    # Prompt for LLMs that need text-based tool calling (local models, etc.)
+    # These models need explicit instructions on how to format tool calls
+    DEFAULT_TEXT_TOOL_PROMPT = """You are a helpful assistant that can use tools to accomplish tasks.
 
 When you need to use a tool, respond with a tool call in this format:
 <tool_call>
@@ -95,6 +106,9 @@ When you need to use a tool, respond with a tool call in this format:
 After receiving tool results, continue reasoning until you can provide a final answer.
 Always explain your reasoning before making tool calls.
 When you have enough information to answer, provide a clear and helpful response."""
+
+    # Legacy alias for backwards compatibility
+    DEFAULT_REACT_PROMPT = DEFAULT_TEXT_TOOL_PROMPT
 
     def __init__(
         self,
@@ -112,7 +126,8 @@ When you have enough information to answer, provide a clear and helpful response
         Args:
             function_list: List of tools available to the agent
             llm: LLM wrapper for generating responses
-            system_message: Custom system message (defaults to ReAct prompt)
+            system_message: Custom system message (defaults to appropriate
+                prompt based on LLM capabilities)
             name: Agent name
             description: Agent description
             max_iterations: Maximum reasoning iterations before stopping
@@ -120,9 +135,14 @@ When you have enough information to answer, provide a clear and helpful response
                 when tool.return_direct is True
             **kwargs: Additional configuration
         """
-        # Use ReAct prompt if no system message provided
+        # Choose appropriate default prompt based on LLM capabilities
+        # Native tool calling (OpenAI, Claude) doesn't need text-based instructions
+        # Text-based (local models) need explicit <tool_call> format instructions
         if system_message is None:
-            system_message = self.DEFAULT_REACT_PROMPT
+            if llm is not None and llm.supports_native_tool_calling:
+                system_message = self.DEFAULT_NATIVE_TOOL_PROMPT
+            else:
+                system_message = self.DEFAULT_TEXT_TOOL_PROMPT
 
         super().__init__(
             function_list=function_list,

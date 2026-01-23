@@ -19,7 +19,7 @@ except ImportError:
 
 import os
 import time
-from typing import Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 import diskcache as dc
 from PIL import Image
@@ -138,6 +138,7 @@ class OpenAIEngine(EngineLM):
         guided_json_object: Optional[bool] = None,
         guided_backend: Optional[str] = None,
         guided_whitespace_pattern: Optional[str] = None,
+        on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         **kwargs,
     ):
         return self.openai_generate(
@@ -150,6 +151,7 @@ class OpenAIEngine(EngineLM):
             guided_json_object=guided_json_object,
             guided_backend=guided_backend,
             guided_whitespace_pattern=guided_whitespace_pattern,
+            on_result=on_result,
             **kwargs,
         )
 
@@ -167,6 +169,7 @@ class OpenAIEngine(EngineLM):
         guided_json_object: Optional[bool] = None,
         guided_backend: Optional[str] = None,
         guided_whitespace_pattern: Optional[str] = None,
+        on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         **kwargs,
     ):
         return self.openai_generate(
@@ -179,6 +182,7 @@ class OpenAIEngine(EngineLM):
             guided_json_object=guided_json_object,
             guided_backend=guided_backend,
             guided_whitespace_pattern=guided_whitespace_pattern,
+            on_result=on_result,
             **kwargs,
         )
 
@@ -248,6 +252,7 @@ class OpenAIEngine(EngineLM):
         guided_json_object: Optional[bool] = None,
         guided_backend: Optional[str] = None,
         guided_whitespace_pattern: Optional[str] = None,
+        on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         **kwargs,
     ) -> List[str]:
         """
@@ -258,6 +263,9 @@ class OpenAIEngine(EngineLM):
 
         :param batch_content: A list of text prompts or multimodal inputs (image, text pairs).
         :param system_prompt: Optional system-level instructions for the model.
+        :param on_result: Optional callback invoked when each task completes.
+                         Signature: (task_id: str, response: Optional[str]) -> None
+                         This enables incremental result processing (e.g., writing to disk as each completes).
         :param kwargs: Additional inference parameters. This can include: reasoning_model (bool), mm_processor_kwargs (dict)
 
         :return: A list of generated outputs corresponding to each input in batch_content.
@@ -311,7 +319,7 @@ class OpenAIEngine(EngineLM):
         start_time = time.time()
         try:
             ordered_outputs = self.batch_processor.batch_generate(
-                messages_list, guided_json=guided_json
+                messages_list, guided_json=guided_json, on_result=on_result
             )
         except Exception as e:
             self.logger.error(f"Batch inference failed:\n" + get_exception_traceback())
@@ -333,9 +341,28 @@ class OpenAIEngine(EngineLM):
         guided_json_object: Optional[bool] = None,
         guided_backend: Optional[str] = None,
         guided_whitespace_pattern: Optional[str] = None,
+        on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         **kwargs,
     ) -> Union[str, List[str]]:
-        """Generate text using the  model."""
+        """Generate text using the model.
+
+        Args:
+            content: Input content (single or batch)
+            system_prompt: Optional system prompt
+            guided_json: Optional JSON schema for guided generation
+            guided_regex: Optional regex for guided generation
+            guided_choice: Optional choices for guided generation
+            guided_grammar: Optional grammar for guided generation
+            guided_json_object: Optional JSON object flag
+            guided_backend: Optional guided backend
+            guided_whitespace_pattern: Optional whitespace pattern
+            on_result: Optional callback invoked when each task completes.
+                      Signature: (task_id: str, response: Optional[str]) -> None
+            **kwargs: Additional arguments
+
+        Returns:
+            Generated text (single string or list of strings)
+        """
         batched = is_batched_request(content)
         if not batched:
             content = [content]
@@ -349,6 +376,7 @@ class OpenAIEngine(EngineLM):
             guided_json_object=guided_json_object,
             guided_backend=guided_backend,
             guided_whitespace_pattern=guided_whitespace_pattern,
+            on_result=on_result,
             **kwargs,
         )
         if not batched:

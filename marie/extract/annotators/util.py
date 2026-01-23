@@ -3,10 +3,23 @@ import json
 import logging
 import os
 import os.path
+import threading
 import time
-from typing import Any, Generator, List, Optional, Set
+from dataclasses import dataclass
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    List,
+    Optional,
+    Set,
+    Tuple,
+)
 
 from numpy import ndarray
+from PIL import Image
 from qwen_vl_utils import smart_resize
 
 from marie.components.document_taxonomy.verbalizers import verbalizers
@@ -24,6 +37,12 @@ from marie.helper import run_async
 from marie.logging_core.predefined import default_logger as logger
 from marie.utils.docs import frames_from_file
 from marie.utils.utils import batchify
+
+if TYPE_CHECKING:
+    from marie.extract.annotators.context_provider import (
+        ContextProviderManager,
+        ProcessingUnit,
+    )
 
 SYSTEM_PROMPT = ""  # Placeholder for the system prompt
 
@@ -119,8 +138,6 @@ def preprocess_images_for_inference(
     :param min_pixels: Minimum number of total pixels (default value is 4 * 28 * 28).
     :param max_pixels: Maximum number of total pixels (default value is 1280 * 28 * 28).
     """
-    from PIL import Image
-
     preprocess = []
 
     for image_path in image_paths:
@@ -144,6 +161,115 @@ def preprocess_images_for_inference(
     return preprocess
 
 
+def _write_single_result(
+    b_image: Image.Image,
+    b_prompt: str,
+    b_image_path: str,
+    task_id: str,
+    response: Optional[str],
+    output_path: str,
+    expect_output: str,
+    output_suffix: str = "",
+) -> Optional[Any]:
+    """
+    Write a single result to disk immediately when it completes.
+
+    Args:
+        b_image: The image to save
+        b_prompt: The prompt used
+        b_image_path: Original image path (for filename extraction)
+        task_id: The task ID from the batch processor
+        response: The LLM response text (may be None if failed)
+        output_path: Directory to write output files
+        expect_output: Expected output format ("json", "markdown", "none")
+        output_suffix: Suffix to append to output filename (e.g., "_t0" for per-table)
+
+    Returns:
+        The converted result (dict for json, str for markdown) or None if failed
+    """
+    output_filename_base = (
+        os.path.splitext(b_image_path.split("/")[-1])[0] + output_suffix
+    )
+    output_filename = os.path.join(output_path, f"{output_filename_base}.png")
+
+    # Save the image
+    try:
+        b_image.save(output_filename)
+    except Exception as e:
+        logger.error(f"Failed to save image {output_filename}: {e}")
+
+    # Handle None response (LLM call failed for this task)
+    if response is None:
+        logger.error(
+            f"LLM response is None for task {task_id} (image: {output_filename_base}). "
+            "This usually indicates an API error or timeout during inference."
+        )
+        return None
+
+    # Write prompt file
+    try:
+        with open(f"{output_filename}_prompt.txt", "w") as f:
+            f.write(b_prompt)
+            f.write("\n\n\n")
+            f.write(response)
+    except Exception as e:
+        logger.error(
+            f"Failed to write prompt to file {output_filename_base}_prompt.txt: {e}"
+        )
+
+    # Check and log content type
+    content_type = check_content_type(response)
+    logger.info(f"Task {task_id} - Detected content type: {content_type}")
+    logger.info(f"Task {task_id} - Expected content type: {expect_output}")
+
+    if expect_output is not None and content_type != expect_output:
+        logger.warning(
+            f"Expected content type {expect_output} but got {content_type}. "
+            "Proceeding with expected format."
+        )
+
+    # Write output based on expected format
+    if expect_output == "json":
+        try:
+            json_dict = parse_json_markdown(response)
+            with open(
+                os.path.join(output_path, f"{output_filename_base}.json"), "w"
+            ) as f:
+                json.dump(json_dict, f, indent=4)
+            logger.info(
+                f"Task {task_id} - Wrote JSON result to {output_filename_base}.json"
+            )
+            return json_dict
+        except Exception as e:
+            logger.error(
+                f"Failed to write response to file {output_filename_base}.json: {e}"
+            )
+            raise e
+    elif expect_output in ("markdown", "none"):
+        try:
+            if expect_output == "markdown":
+                output_text = parse_markdown_markdown(response)
+            else:
+                output_text = response
+            with open(
+                os.path.join(output_path, f"{output_filename_base}.md"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                f.write(output_text)
+            logger.info(
+                f"Task {task_id} - Wrote markdown result to {output_filename_base}.md"
+            )
+            return response
+        except Exception as e:
+            logger.error(
+                f"Failed to write response to file {output_filename_base}.md: {e}"
+            )
+            raise e
+    else:
+        raise ValueError(f"Unknown expect_output type: {expect_output}")
+
+
 async def process_batch(
     batch: List,
     engine: EngineLM,
@@ -153,9 +279,22 @@ async def process_batch(
 ) -> list[Any] | None:
     """
     Processes a batch of images using the specified engine.
+
+    Results are written to disk incrementally as each task completes,
+    rather than waiting for all tasks to finish.
+
+    Args:
+        batch: List of (image, prompt, image_path) tuples
+        engine: The LLM engine to use
+        output_path: Directory to write output files
+        is_multimodal: Whether to use multimodal LLM call
+        expect_output: Expected output format ("json", "markdown", "none")
+
+    Returns:
+        List of converted results in original order
     """
-    logger.info(f"Processing batch of images : {len(batch)}")
-    logger.info(f'expect_output : {expect_output}')
+    logger.info(f"Processing batch of images: {len(batch)}")
+    logger.info(f"expect_output: {expect_output}")
 
     if expect_output is None:
         raise ValueError("expect_output must be specified.")
@@ -166,113 +305,92 @@ async def process_batch(
     else:
         llm_call = LLMCall(engine, system_prompt=system_prompt)
 
+    # Build mapping from batch index to metadata
+    # batch is a list of tuples: (image, prompt, image_path) or (image, prompt, image_path, output_suffix)
+    batch_mapping: Dict[int, Tuple[Image.Image, str, str, str]] = {}
+    for i, item in enumerate(batch):
+        if len(item) == 4:
+            b_image, b_prompt, b_image_path, output_suffix = item
+        else:
+            b_image, b_prompt, b_image_path = item
+            output_suffix = ""
+        batch_mapping[i] = (b_image, b_prompt, b_image_path, output_suffix)
+
+    # Thread-safe storage for results
+    converted: List[Optional[Any]] = [None] * len(batch)
+    write_lock = threading.Lock()
+    write_errors: List[Exception] = []
+
+    def on_result(task_id: str, response: Optional[str]) -> None:
+        """
+        Callback invoked when each task completes.
+        Writes the result to disk immediately.
+        """
+        try:
+            # Extract index from task_id (format: {request_id}_task_{index})
+            idx = int(task_id.rsplit("_", 1)[-1])
+
+            if idx not in batch_mapping:
+                logger.error(f"Unknown task index {idx} from task_id {task_id}")
+                return
+
+            b_image, b_prompt, b_image_path, output_suffix = batch_mapping[idx]
+
+            logger.info(f"Task {task_id} completed - Writing result immediately")
+
+            # Write result to disk
+            result = _write_single_result(
+                b_image=b_image,
+                b_prompt=b_prompt,
+                b_image_path=b_image_path,
+                task_id=task_id,
+                response=response,
+                output_path=output_path,
+                expect_output=expect_output,
+                output_suffix=output_suffix,
+            )
+
+            # Store result in thread-safe manner
+            with write_lock:
+                converted[idx] = result
+
+        except Exception as e:
+            logger.error(f"Error in on_result callback for task {task_id}: {e}")
+            with write_lock:
+                write_errors.append(e)
+
     max_retries = 3
     retries = 0
-    # FIXME: The tokens limit is set to 4096 * 4, which is quite high, need to make this configurable per model
 
     while retries < max_retries:
         try:
-            # extract the image and prompt from the batch which is a list of tuples(image, prompt, image_path)
-            # responses = llm_call(batch_t, max_tokens=2048, guided_regex=GUIDED_REGEX_SEGMENT, guided_backend='outlines')
-            batch_t = [
-                [b[0], b[1]] for b in batch
-            ]  # batch_t is a list of tuples(image, prompt, image_path) but we only need image and prompt
+            # Prepare batch for LLM call
             if is_multimodal:
-                responses = await llm_call.acall(batch_t, max_tokens=4096 * 4)
+                batch_t = [[b[0], b[1]] for b in batch]
+                responses = await llm_call.acall(
+                    batch_t, max_tokens=4096 * 4, on_result=on_result
+                )
             else:
                 batch_t = [b[1] for b in batch]
                 responses = await llm_call.acall(
-                    batch_t,
-                    max_tokens=4096 * 4,
+                    batch_t, max_tokens=4096 * 4, on_result=on_result
                 )
 
+            # Check for any errors that occurred during incremental writes
+            if write_errors:
+                raise write_errors[0]
+
+            # Verify responses
             assert isinstance(responses, list), "Expected a list of responses."
-            assert len(responses) == len(
-                batch
-            ), f"Response count does not match the batch size. Expected {len(batch)}, got {len(responses)}"
+            assert len(responses) == len(batch), (
+                f"Response count does not match the batch size. "
+                f"Expected {len(batch)}, got {len(responses)}"
+            )
 
-            converted = []
-            for i, (b_image, b_prompt, b_image_path) in enumerate(batch):
-                logger.info("-----------  Processing image ------------")
-                logger.info(f"Processing image : {i}")
-                # response = responses[i]
-                task_id = responses[i][0]
-                response = responses[i][1]
-
-                output_filename_base = os.path.splitext(b_image_path.split("/")[-1])[0]
-                output_filename = os.path.join(
-                    output_path, f"{output_filename_base}.png"
-                )
-                b_image.save(output_filename)
-
-                # Handle None response (LLM call failed for this task)
-                if response is None:
-                    logger.error(
-                        f"LLM response is None for task {task_id} (image {i}: {output_filename_base}). "
-                        "This usually indicates an API error or timeout during inference."
-                    )
-                    converted.append(None)
-                    continue
-
-                try:
-                    with open(f"{output_filename}_prompt.txt", "w") as f:
-                        f.write(b_prompt)
-                        f.write("\n\n\n")
-                        f.write(response)
-                except Exception as e:
-                    logger.error(
-                        f"Failed to write prompt to file {output_filename_base}_prompt.txt. : {e}"
-                    )
-
-                content_type = check_content_type(response)
-                logger.info(f"Detected content type : {content_type}")
-                logger.info(f"Expected content type : {expect_output}")
-
-                if expect_output is not None and content_type != expect_output:
-                    logger.warning(
-                        f"Expected content type {expect_output} but got {content_type}. Skipping this response."
-                    )
-
-                if expect_output == "json":
-                    try:
-                        with open(
-                            os.path.join(output_path, f"{output_filename_base}.json"),
-                            "w",
-                        ) as f:
-                            json_dict = parse_json_markdown(response)
-                            json.dump(json_dict, f, indent=4)
-
-                            converted.append(json_dict)
-                    except Exception as e:
-                        print(
-                            f"Failed to write response to file {output_filename_base}.json. : {e}"
-                        )
-                        raise e
-                elif (
-                    expect_output == "markdown" or expect_output == "none"
-                ):  # some responses are just plain markdown without any ```markdown``` block
-                    try:
-                        with open(
-                            os.path.join(output_path, f"{output_filename_base}.md"),
-                            "w",
-                            encoding='utf-8',
-                        ) as f:
-                            if expect_output == "markdown":
-                                output_text = parse_markdown_markdown(response)
-                            else:
-                                output_text = response
-                            f.write(output_text)
-                            converted.append(response)
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to write response to file {output_filename_base}.md. : {e}"
-                        )
-                        raise e
-                else:
-                    raise Exception(
-                        f"Unknown content type {content_type} for response = {response}"
-                    )
+            # Results should already be written by the callback
+            # Return the converted list (populated by on_result callback)
             return converted
+
         except Exception as e:
             retries += 1
             logger.warning(
@@ -283,6 +401,9 @@ async def process_batch(
                 raise e
             else:
                 logger.warning("Retrying in 2 seconds...")
+                # Reset state for retry
+                converted = [None] * len(batch)
+                write_errors.clear()
                 time.sleep(2)
 
 
@@ -292,7 +413,25 @@ def prepare_batch_with_meta(
     doc: UnstructuredDocument,
     prompt: str,
     source_dir: str,
+    context_manager: Optional["ContextProviderManager"] = None,
+    units_by_file: Optional[Dict[str, "ProcessingUnit"]] = None,
 ) -> Generator:
+    """
+    Prepare batches of images with prompts for processing.
+
+    Args:
+        batched_files: List of file batches, where each batch is a list of filenames
+        frames: List of image frames (numpy arrays)
+        doc: The UnstructuredDocument being processed
+        prompt: The prompt template
+        source_dir: Directory containing the image files
+        context_manager: Optional ContextProviderManager for injecting context
+        units_by_file: Optional mapping from filename to ProcessingUnit for per-table processing.
+                      When provided, enables per-table context injection and output suffixes.
+
+    Yields:
+        Batches of [image, prompt, image_path, output_suffix] tuples
+    """
     # adding spatial context
     metadata_ocr = doc.source_metadata["ocr"]
     decorated_lines_by_page = {}
@@ -320,6 +459,7 @@ def prepare_batch_with_meta(
         image_paths = [os.path.join(source_dir, file_name) for file_name in file_batch]
         page_numbers = []
         prompts = []
+        output_suffixes = []
         # TODO : This needs to be refactored for better readability and maintainability
 
         for name in image_paths:
@@ -357,9 +497,29 @@ def prepare_batch_with_meta(
                 updated_prompt = updated_prompt.replace("OCR_DATA", content).replace(
                     "OCR_TEXT", content
                 )
+
+                # Get the ProcessingUnit for this file if in per-unit mode
+                file_name = os.path.basename(name)
+                unit = units_by_file.get(file_name) if units_by_file else None
+
+                # Inject context from providers (e.g., TABLE_CONTEXT_CLAIMS)
+                if context_manager:
+                    if unit:
+                        # Per-unit mode: inject with unit context
+                        updated_prompt = context_manager.inject_for_unit(
+                            updated_prompt, doc, unit
+                        )
+                    else:
+                        # Legacy mode: inject all context for page
+                        updated_prompt = context_manager.inject_all(
+                            updated_prompt, doc, page_number
+                        )
+
                 prompts.append(updated_prompt)
+                output_suffixes.append(unit.output_suffix if unit else "")
             except ValueError:
                 print(f"Unable to extract page number from filename: {name}")
+
         print(f"Extracted page numbers: {page_numbers}")
         # TODO : this needs to be configured via the config file
         # 2048
@@ -367,10 +527,128 @@ def prepare_batch_with_meta(
             image_paths, min_pixels=512 * 28 * 28, max_pixels=2048 * 28 * 28
         )
         batch_input = [
-            [img, prt, img_path]
-            for img, prt, img_path in zip(images, prompts, image_paths)
+            [img, prt, img_path, suffix]
+            for img, prt, img_path, suffix in zip(
+                images, prompts, image_paths, output_suffixes
+            )
         ]
         yield batch_input
+
+
+def prepare_batch_with_meta_units(
+    file_batch: List[str],
+    units_by_index: Dict[int, Optional["ProcessingUnit"]],
+    frames: list[ndarray],
+    doc: UnstructuredDocument,
+    prompt: str,
+    source_dir: str,
+    context_manager: Optional["ContextProviderManager"] = None,
+) -> Generator:
+    """
+    Prepare a batch of items with prompts for processing, with explicit unit tracking.
+
+    This function handles per-unit processing where each item in the batch
+    has an associated ProcessingUnit for table-specific context injection.
+
+    Args:
+        file_batch: List of filenames in the batch
+        units_by_index: Mapping from batch index to ProcessingUnit (None for legacy mode)
+        frames: List of image frames (numpy arrays)
+        doc: The UnstructuredDocument being processed
+        prompt: The prompt template
+        source_dir: Directory containing the image files
+        context_manager: Optional ContextProviderManager for injecting context
+
+    Yields:
+        Batches of [image, prompt, image_path, output_suffix] tuples
+    """
+    # adding spatial context
+    metadata_ocr = doc.source_metadata["ocr"]
+    decorated_lines_by_page = {}
+
+    for i, meta in enumerate(metadata_ocr):
+        page_number = meta["meta"]["page"]
+        lines = verbalizers("SPATIAL_FORMAT", meta)
+        decorated_lines_by_page[page_number] = lines
+
+    def decorator(text: str, line_id: int) -> str:
+        """Add line number to the text, Line ID are not necessarily row numbers"""
+        return f"{int(line_id)} | {text}"
+
+    logging.info("Processing batch of %d items with unit tracking", len(file_batch))
+    image_paths = [os.path.join(source_dir, file_name) for file_name in file_batch]
+    page_numbers = []
+    prompts = []
+    output_suffixes = []
+
+    for batch_idx, name in enumerate(image_paths):
+        try:
+            # Extract page number from filename
+            page_number = int(
+                os.path.splitext(os.path.basename(name))[0].split("_")[-1]
+            )
+            page_numbers.append(page_number)
+
+            # Handle injected text
+            INJECTED_TEXT = ""
+            injected_filename = os.path.join(
+                source_dir,
+                os.path.splitext(os.path.basename(name))[0] + "_INJECTED_TEXT.txt",
+            )
+            if os.path.exists(injected_filename):
+                with open(injected_filename, "r", encoding="utf-8") as injected_file:
+                    INJECTED_TEXT = "\n" + injected_file.read()
+            updated_prompt = prompt.replace("INJECTED_TEXT", INJECTED_TEXT)
+
+            # Build OCR content
+            lines_by_page = decorated_lines_by_page.get(page_number - 1, [])
+            decorated_lines = []
+            for line_id, line in enumerate(lines_by_page):
+                line_text = line['text']
+                decorated_line = decorator(line_text, line_id + 1)
+                decorated_lines.append(decorated_line)
+            content = "\n".join(decorated_lines)
+
+            updated_prompt = updated_prompt.replace("OCR_DATA", content).replace(
+                "OCR_TEXT", content
+            )
+
+            # Get the ProcessingUnit for this batch item
+            unit = units_by_index.get(batch_idx)
+
+            # Inject context from providers
+            if context_manager:
+                if unit:
+                    # Per-unit mode: inject with unit context
+                    updated_prompt = context_manager.inject_for_unit(
+                        updated_prompt, doc, unit
+                    )
+                else:
+                    # Legacy mode: inject all context for page
+                    updated_prompt = context_manager.inject_all(
+                        updated_prompt, doc, page_number
+                    )
+
+            prompts.append(updated_prompt)
+            output_suffixes.append(unit.output_suffix if unit else "")
+
+        except ValueError:
+            logging.warning(f"Unable to extract page number from filename: {name}")
+
+    logging.info(f"Extracted page numbers: {page_numbers}")
+
+    # Preprocess images
+    images = preprocess_images_for_inference(
+        image_paths, min_pixels=512 * 28 * 28, max_pixels=2048 * 28 * 28
+    )
+
+    batch_input = [
+        [img, prt, img_path, suffix]
+        for img, prt, img_path, suffix in zip(
+            images, prompts, image_paths, output_suffixes
+        )
+    ]
+    yield batch_input
 
 
 def scan_and_process_images(
@@ -381,7 +659,7 @@ def scan_and_process_images(
     engine: EngineLM = None,
     is_multimodal: bool = False,
     expect_output: str = None,  # "json", "markdown", "none"
-    eligible_pages: Optional[Set[int]] = None,
+    context_manager: Optional["ContextProviderManager"] = None,
 ) -> None:
     """
     Synchronous wrapper for the ascan_and_process_images function.
@@ -398,7 +676,8 @@ def scan_and_process_images(
         engine (EngineLM): The inference engine to be used.
         is_multimodal: bool: Flag indicating if the processing is multimodal.
         expect_output (str): Expected output format ("json", "markdown", "none").
-        eligible_pages: Optional set of page indices (0-indexed) to process. If None, all pages are processed.
+        context_manager: Optional ContextProviderManager for injecting context
+                        into prompts and determining eligible pages.
     Returns:
         None
     """
@@ -410,10 +689,28 @@ def scan_and_process_images(
         engine=engine,
         is_multimodal=is_multimodal,
         expect_output=expect_output,
-        eligible_pages=eligible_pages,
+        context_manager=context_manager,
     )
 
     return run_async(coroutine)
+
+
+@dataclass
+class ProcessingItem:
+    """
+    Represents an item to be processed - a file with optional unit context.
+
+    For per-unit processing, the same file may have multiple ProcessingItems
+    (one per table on that page).
+    """
+
+    file_name: str
+    unit: Optional["ProcessingUnit"] = None
+
+    @property
+    def output_suffix(self) -> str:
+        """Get output suffix from unit if available."""
+        return self.unit.output_suffix if self.unit else ""
 
 
 async def ascan_and_process_images(
@@ -424,11 +721,16 @@ async def ascan_and_process_images(
     engine: EngineLM = None,
     is_multimodal: bool = False,
     expect_output: Optional[str] = None,  # "json", "markdown", "none"
-    eligible_pages: Optional[Set[int]] = None,
+    context_manager: Optional["ContextProviderManager"] = None,
 ) -> None:
     """
     Scans the source directory for image files, processes each image
     with the specified prompt, and writes outputs to output_dir.
+
+    When context_manager has providers, operates in per-unit mode:
+    - Gets processing units (one per table) from the context manager
+    - Each unit gets its own LLM call with table-specific context
+    - Output files include table suffix (e.g., 00002_t0.json, 00002_t1.json)
 
     Parameters:
         source_dir: Directory containing the input image files.
@@ -438,9 +740,8 @@ async def ascan_and_process_images(
         engine: The inference engine to be used.
         is_multimodal: Flag indicating if the processing is multimodal.
         expect_output: Expected output format ("json", "markdown", "none").
-        eligible_pages: Optional set of page indices (0-indexed) to process.
-                       If None, all pages are processed. Page indices correspond
-                       to the file order (frame_0001 = page 0, frame_0002 = page 1, etc.)
+        context_manager: Optional ContextProviderManager for injecting context
+                        into prompts and determining eligible pages.
     """
     if not os.path.exists(source_dir):
         raise FileNotFoundError(f"Source directory {source_dir} does not exist.")
@@ -452,37 +753,112 @@ async def ascan_and_process_images(
         logging.info("No images found in %s; nothing to do.", source_dir)
         return
 
-    # Filter files based on eligible_pages if specified
-    if eligible_pages is not None:
-        files = []
-        for idx, f in enumerate(all_files):
-            # Extract page number from filename (1-indexed) and convert to 0-indexed
-            page_num = _extract_page_number_from_filename(f)
-            page_index = page_num - 1 if page_num is not None else idx
-            if page_index in eligible_pages:
-                files.append(f)
+    # Build a mapping from page number to filename for quick lookup
+    page_to_file: Dict[int, str] = {}
+    for idx, f in enumerate(all_files):
+        page_num = _extract_page_number_from_filename(f)
+        if page_num is None:
+            page_num = idx + 1  # Fallback to 1-indexed position
+        page_to_file[page_num] = f
+
+    # Determine processing mode: per-unit (per-table) or legacy (per-page)
+    processing_items: List[ProcessingItem] = []
+
+    if context_manager and context_manager.has_providers():
+        # Per-unit mode: get processing units and build item list from them
+        processing_units = context_manager.get_processing_units(document)
         logging.info(
-            "Filtered %d files to %d based on eligible_pages: %s",
-            len(all_files),
-            len(files),
-            sorted(eligible_pages),
+            "Per-unit processing mode: %d units from context providers",
+            len(processing_units),
         )
-        if not files:
-            logging.info("No files match eligible_pages; nothing to do.")
+
+        if not processing_units:
+            logging.info("No processing units from context providers; nothing to do.")
+            return
+
+        # Build processing items from units - may contain duplicates for multi-table pages
+        for unit in processing_units:
+            file_name = page_to_file.get(unit.page_number)
+            if file_name:
+                processing_items.append(ProcessingItem(file_name=file_name, unit=unit))
+            else:
+                logging.warning(
+                    "No file found for page %d (unit index=%s)",
+                    unit.page_number,
+                    unit.index,
+                )
+
+        logging.info(
+            "Built %d processing items from %d units",
+            len(processing_items),
+            len(processing_units),
+        )
+
+        if not processing_items:
+            logging.info("No processing items created; nothing to do.")
             return
     else:
-        files = all_files
+        # Legacy mode: filter by eligible pages if applicable
+        eligible_pages: Optional[Set[int]] = None
+        if context_manager:
+            eligible_pages = context_manager.get_eligible_pages(document)
+            if eligible_pages:
+                logging.info(
+                    "Eligible pages from context providers: %s", sorted(eligible_pages)
+                )
 
-    frames = [frames_from_file(os.path.join(source_dir, f))[0] for f in files]
+        # Build processing items from files
+        for idx, f in enumerate(all_files):
+            page_num = _extract_page_number_from_filename(f)
+            if page_num is None:
+                page_num = idx + 1
+
+            if eligible_pages is None or page_num in eligible_pages:
+                processing_items.append(ProcessingItem(file_name=f, unit=None))
+
+        if eligible_pages is not None:
+            logging.info(
+                "Filtered %d files to %d based on eligible_pages",
+                len(all_files),
+                len(processing_items),
+            )
+
+        if not processing_items:
+            logging.info("No processing items to process; nothing to do.")
+            return
+
+    # Load frames for unique files
+    unique_files = list(dict.fromkeys(item.file_name for item in processing_items))
+    file_to_frame = {
+        f: frames_from_file(os.path.join(source_dir, f))[0] for f in unique_files
+    }
+    frames = [file_to_frame[item.file_name] for item in processing_items]
+
     mini_batch_size = 16
-    batched_files = list(batchify(files, mini_batch_size))
-    logging.info("Batching %d images into %d batches.", len(files), len(batched_files))
+    batched_items = list(batchify(processing_items, mini_batch_size))
+    logging.info(
+        "Batching %d processing items into %d batches.",
+        len(processing_items),
+        len(batched_items),
+    )
 
-    async def _worker(batch):
-        gen = prepare_batch_with_meta([batch], frames, document, prompt, source_dir)
+    async def _worker(batch: List[ProcessingItem]):
+        # Extract file names and units for this batch
+        file_batch = [item.file_name for item in batch]
+        units_by_index = {i: item.unit for i, item in enumerate(batch)}
+
+        gen = prepare_batch_with_meta_units(
+            file_batch=file_batch,
+            units_by_index=units_by_index,
+            frames=frames,
+            doc=document,
+            prompt=prompt,
+            source_dir=source_dir,
+            context_manager=context_manager,
+        )
         for idx, inp in enumerate(gen, 1):
             logging.debug(
-                "Worker processing input #%d for batch of %d files",
+                "Worker processing input #%d for batch of %d items",
                 idx,
                 len(batch),
             )
@@ -494,7 +870,7 @@ async def ascan_and_process_images(
                 expect_output=expect_output,
             )
 
-    tasks = [asyncio.create_task(_worker(batch)) for batch in batched_files]
+    tasks = [asyncio.create_task(_worker(batch)) for batch in batched_items]
     error_file_path = "/tmp/marie/llm-engine/error.log"
     if not os.path.exists(os.path.dirname(error_file_path)):
         os.makedirs(os.path.dirname(error_file_path), exist_ok=True)
