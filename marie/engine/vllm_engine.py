@@ -19,6 +19,8 @@ from marie.engine.engine_utils import (
 from marie.engine.vllm_config import VLLM_MODEL_MAP as MODEL_MAP
 from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
+from marie.registry.model_registry import ModelRegistry
+from marie.constants import __marie_home__, __model_path__
 
 # Ensures vLLM and flash-attention are installed
 try:
@@ -85,8 +87,19 @@ class VLLMEngine(EngineLM):
         model_name = MODEL_NAME_MAP[
             model_name
         ]  # Returns: "Qwen/Qwen2.5-VL-3B-Instruct"
-
         engine_config = MODEL_MAP[model_name]  # Returns: config_qwen2_5_vl
+        # Registry local model
+        registry_kwargs = {
+            "__model_path__": __model_path__
+        }
+        model_name_or_path = ModelRegistry.get(
+            model_name,
+            version=None,
+            raise_exceptions_for_missing_entries=False,
+            **registry_kwargs,
+        )
+        model_name = model_name_or_path if model_name_or_path else model_name
+
         self.llm, self.prompt, self.stop_token_ids, self.default_mm_processor_kwargs = (
             engine_config(model_name, "image" if is_multimodal else "text")
         )
