@@ -282,7 +282,7 @@ VLLM_MODEL_MAP = {
     MODEL_NAME_MAP["qwen2_5_vl_7b"]: config_qwen2_5_vl,
     MODEL_NAME_MAP["qwen2_5_vl_7b_awq"]: config_qwen2_5_vl,
     MODEL_NAME_MAP["qwen3_vl_4b"]: config_qwen3_vl,
-    MODEL_NAME_MAP["rms/qwen3_vl_4b_merged_lora"]: config_qwen3_vl,
+    MODEL_NAME_MAP["qwen3_vl_4b_merged_lora"]: config_qwen3_vl,
     MODEL_NAME_MAP["qwen2_5_3b"]: config_qwen2_5,
     MODEL_NAME_MAP["qwen2_5_7b"]: config_qwen2_5,
     MODEL_NAME_MAP["qwen2_5_14b"]: config_qwen2_5,

@@ -176,8 +176,6 @@ def initialize_tasks(tasks: List[LLMTask], task_files_path: str):
 def parse_task_output(task_outputs: List[str], output_type):
     extract_predictions = []
     for task_output in task_outputs:
-        if task_output:
-            task_output = task_output.replace("'", '"').replace("None", "null")
         prediction, conversion_failure = CONVERSION_STRATEGIES[output_type](task_output)
         error_data = None
         if conversion_failure:
