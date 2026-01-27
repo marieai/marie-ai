@@ -6,6 +6,7 @@ import os.path
 import threading
 import time
 from dataclasses import dataclass
+from threading import Lock
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -93,35 +94,59 @@ def load_prompt(prompt_file: str) -> str:
         raise
 
 
+# Module-level engine cache to prevent orphaned AsyncClient instances
+_engine_cache: Dict[Tuple[str, bool], EngineLM] = {}
+_engine_lock = Lock()
+
+
 def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
     """
     Route the LLM call to the appropriate engine based on the model name.
+    Engines are cached and reused to prevent resource leaks.
+
     :param model_name: The name of the model to use.
     :param is_multimodal: Flag indicating if the model is multimodal.
     :return: An instance of the appropriate EngineLM class.
     """
+    cache_key = (model_name, is_multimodal)
 
-    # this should be set in the environment variables or in .env file
-    api_key = os.environ['OPENAI_API_KEY']
-    api_base = os.environ['OPENAI_API_BASE']
+    with _engine_lock:
+        if cache_key in _engine_cache:
+            logger.info("Reusing engine %s", cache_key)
+            return _engine_cache[cache_key]
 
-    logger.info(f'OPENAI_API_KEY = {api_key}')
-    logger.info(f'OPENAI_API_BASE = {api_base}')
+        api_key = os.environ.get('OPENAI_API_KEY')
+        api_base = os.environ.get('OPENAI_API_BASE')
 
-    if not api_key or not api_base:
-        raise ValueError(
-            "Both OPENAI_API_KEY and OPENAI_API_BASE must be set in the environment variables."
+        if not api_key or not api_base:
+            raise ValueError("OPENAI_API_KEY and OPENAI_API_BASE must be set")
+
+        engine = OpenAIEngine(
+            api_key=api_key,
+            base_url=api_base,
+            model_name=model_name,
+            is_multimodal=is_multimodal,
+            cache=False,
         )
 
-    engine = OpenAIEngine(
-        api_key=api_key,
-        base_url=api_base,
-        model_name=model_name,
-        is_multimodal=is_multimodal,
-        cache=False,
-    )
+        _engine_cache[cache_key] = engine
+        logger.info("Engine created: %s", cache_key)
+        return engine
 
-    return engine
+
+def clear_engine_cache() -> None:
+    """Clear the engine cache. Call this when shutting down."""
+    _engine_cache.clear()
+    logger.info("Engine cache cleared")
+
+
+def close_all_engines():
+    for engine in _engine_cache.values():
+        try:
+            engine.close()
+        except Exception:
+            logger.exception("Failed closing engine")
+    _engine_cache.clear()
 
 
 def preprocess_images_for_inference(
