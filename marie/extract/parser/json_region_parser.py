@@ -174,11 +174,18 @@ class JsonRegionParser(BaseRegionParser):
         # Convert dict to KeyValue objects
         kv_items = []
         for k, v in data.items():
-            # Convert value to string representation
-            if isinstance(v, (str, int, float, bool)):
+            # Handle the {"value": "..."} format used by totals
+            if isinstance(v, dict) and "value" in v:
+                inner_value = v["value"]
+                # Skip null values entirely - they mean no data collected
+                if inner_value is None:
+                    continue
+                value_str = str(inner_value)
+            elif isinstance(v, (str, int, float, bool)):
                 value_str = str(v)
             elif v is None:
-                value_str = "None"
+                # Skip null values at top level too
+                continue
             else:
                 value_str = json.dumps(v, ensure_ascii=False)
 

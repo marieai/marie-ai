@@ -1,4 +1,5 @@
 from abc import ABC
+from typing import Any, Dict, Union
 
 from marie.extract.structures.serializable import Serializable
 
@@ -10,7 +11,14 @@ class Annotation(Serializable, ABC):
     Look to the concrete kind of annotations to get mode examples.
     """
 
-    def __init__(self, start: int, end: int, name: str, value: str, bboxes: []) -> None:
+    def __init__(
+        self,
+        start: int,
+        end: int,
+        name: str,
+        value: Union[str, Dict[str, Any]],
+        bboxes: [],
+    ) -> None:
         """
         Some kind of text information about symbols between start and end.
         For example Annotation(1, 13, "italic", "True") says that text between 1st and 13th symbol was writen in italic.
@@ -18,13 +26,13 @@ class Annotation(Serializable, ABC):
         :param start: start of the annotated text
         :param end: end of the annotated text (end isn't included)
         :param name: annotation's name
-        :param value: information about annotated text
+        :param value: information about annotated text (can be string or structured dict)
         :param bboxes: list of bounding boxes for the annotation
         """
         self.start: int = start
         self.end: int = end
         self.name: str = name
-        self.value: str = value
+        self.value: Union[str, Dict[str, Any]] = value
         self.bboxes = bboxes
 
     def __eq__(self, o: object) -> bool:

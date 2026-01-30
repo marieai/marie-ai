@@ -625,21 +625,60 @@ def prepare_batch_with_meta_units(
                     INJECTED_TEXT = "\n" + injected_file.read()
             updated_prompt = prompt.replace("INJECTED_TEXT", INJECTED_TEXT)
 
-            # Build OCR content
+            # Get the ProcessingUnit for this batch item BEFORE building OCR content
+            # so we can build filtered OCR for table-specific extraction
+            unit = units_by_index.get(batch_idx)
+
+            # Extract table line range for filtered OCR
+            # This ensures the LLM only sees OCR lines relevant to the specific table
+            table_line_range = None
+            if unit and unit.data:
+                header_rows = unit.data.get("header_rows", [])
+                data_rows = unit.data.get("rows", [])
+                all_rows = header_rows + data_rows
+                if all_rows:
+                    line_numbers = []
+                    for row in all_rows:
+                        if isinstance(row, dict) and "line_number" in row:
+                            line_numbers.append(row["line_number"])
+                    if line_numbers:
+                        table_line_range = (min(line_numbers), max(line_numbers))
+                        logging.debug(
+                            f"Table line range for filtering: {table_line_range}"
+                        )
+
+            # Build OCR content (full page for OCR_DATA)
             lines_by_page = decorated_lines_by_page.get(page_number - 1, [])
             decorated_lines = []
+            filtered_decorated_lines = []
             for line_id, line in enumerate(lines_by_page):
+                actual_line_number = line_id + 1  # 1-indexed line number
                 line_text = line['text']
-                decorated_line = decorator(line_text, line_id + 1)
+                decorated_line = decorator(line_text, actual_line_number)
                 decorated_lines.append(decorated_line)
-            content = "\n".join(decorated_lines)
 
+                # Build filtered OCR content (only lines within table range)
+                if table_line_range:
+                    min_line, max_line = table_line_range
+                    if min_line <= actual_line_number <= max_line:
+                        filtered_decorated_lines.append(decorated_line)
+
+            content = "\n".join(decorated_lines)
+            filtered_content = (
+                "\n".join(filtered_decorated_lines)
+                if filtered_decorated_lines
+                else content
+            )
+
+            # Replace OCR placeholders
+            # FILTERED_OCR_DATA: only lines within table range (for table-specific extraction)
+            # OCR_DATA/OCR_TEXT: full page content (for legacy compatibility)
+            updated_prompt = updated_prompt.replace(
+                "FILTERED_OCR_DATA", filtered_content
+            )
             updated_prompt = updated_prompt.replace("OCR_DATA", content).replace(
                 "OCR_TEXT", content
             )
-
-            # Get the ProcessingUnit for this batch item
-            unit = units_by_index.get(batch_idx)
 
             # Inject context from providers
             if context_manager:

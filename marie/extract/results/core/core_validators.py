@@ -19,8 +19,7 @@ def validate_noop(context: ValidationContext) -> ValidationResult:
     No-op validator for annotations. This is a placeholder and does not perform any action.
     """
     logging.info("No-op validator for annotations called. No action taken.")
-    # This function is intentionally left empty to serve as a placeholder.
-    pass
+    return ValidationResult(valid=True, validator_name="noop")
 
 
 class AnnotationsValidator(BaseValidator):
@@ -52,7 +51,7 @@ class AnnotationsValidator(BaseValidator):
             if line.annotations:
                 lines_with_annotations += 1
                 total_annotations += len(line.annotations)
-                pages_with_annotations.add(line.page_id)
+                pages_with_annotations.add(line.metadata.page_id)
                 for ann in line.annotations:
                     if hasattr(ann, 'annotation_type'):
                         annotation_types.add(ann.annotation_type)
@@ -192,7 +191,7 @@ class DocumentStructureValidator(BaseValidator):
             return result
 
         # Check for reasonable document length
-        total_text = sum(len(line.text) for line in doc.lines)
+        total_text = sum(len(line.line) for line in doc.lines)
         if total_text < 50:
             result.add_warning(
                 "VERY_SHORT_DOCUMENT",
@@ -200,7 +199,7 @@ class DocumentStructureValidator(BaseValidator):
             )
 
         # Check empty lines ratio
-        empty_lines = sum(1 for line in doc.lines if not line.text.strip())
+        empty_lines = sum(1 for line in doc.lines if not line.line.strip())
         if doc.lines:
             empty_ratio = empty_lines / len(doc.lines)
             if empty_ratio > 0.7:

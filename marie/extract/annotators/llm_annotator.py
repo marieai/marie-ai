@@ -176,23 +176,6 @@ class LLMAnnotator(DocumentAnnotator):
         """
         self.logger.info(f"Annotating document with {self.name}...")
 
-        # Pre-parse claims into document if this is claim-extract
-        # This adds CLAIM annotations that ClaimContextProvider can read
-        if self.name == "claim-extract":
-            from marie.extract.results.result_parser import parse_claims_to_document
-
-            # Look for pre-existing claims in agent-output/claims/
-            claims_dir = os.path.join(
-                os.path.dirname(self.output_dir), "claims"  # agent-output/
-            )
-            if os.path.exists(claims_dir):
-                self.logger.info(f"Pre-parsing claims from {claims_dir} into document")
-                parse_claims_to_document(document, claims_dir)
-
-        render_document_markdown(
-            document, os.path.join(self.working_dir, "debug", f"{self.name}_input.md")
-        )
-
         # Write context provider debug info to show what variables are being injected
         if self.context_manager:
             import json

@@ -235,7 +235,6 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
                 self.logger.error(error_msg, exc_info=True)
 
                 if self.fail_fast:
-                    # Re-raise with context for proper error handling upstream
                     raise ProcessingError(error_msg) from e
                 else:
                     processing_errors.append((processor_name, str(e)))

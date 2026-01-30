@@ -85,9 +85,23 @@ class TableContextProvider(ContextProvider):
             # Filter using subclass-defined logic
             filtered = [t for t in extractions if self._should_include_table(t)]
 
+            # Sort tables by their starting line number for deterministic order
+            # This ensures consistent _t0, _t1, etc. assignment across runs
+            def get_table_start_line(table: Dict[str, Any]) -> int:
+                """Get the first header line number for sorting."""
+                header_rows = table.get("header_rows", [])
+                if header_rows and isinstance(header_rows[0], dict):
+                    return header_rows[0].get("line_number", float("inf"))
+                return float("inf")
+
+            filtered.sort(key=get_table_start_line)
+
             if filtered:
                 self._tables_by_page[page_num] = filtered
-                logger.debug(f"Loaded {len(filtered)} tables for page {page_num}")
+                logger.debug(
+                    f"Loaded {len(filtered)} tables for page {page_num} "
+                    f"(sorted by line: {[get_table_start_line(t) for t in filtered]})"
+                )
 
         logger.info(
             f"{self.__class__.__name__}: Loaded tables for {len(self._tables_by_page)} pages"

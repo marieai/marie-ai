@@ -1,4 +1,4 @@
-from typing import List
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -17,9 +17,9 @@ class Segment(BaseModel, ReasoningMixin):
     label: str = Field(
         ..., description="The target field label extracted from the OCR input."
     )
-    value: str = Field(
+    value: Union[str, Dict[str, Any]] = Field(
         ...,
-        description="The text extracted immediately after the first delimiter until the next target field label or end of the line.",
+        description="The extracted value. Can be a string for simple fields or a structured dict for complex fields like remarks.",
     )
 
     label_found_at: str = Field(
@@ -40,11 +40,37 @@ class LineSegment(BaseModel, ReasoningMixin):
     found_at: str = Field(..., description="Formatted as 'Found in row X'.")
 
 
+class TableContinuation(BaseModel):
+    """Table continuation metadata for multi-page tables."""
+
+    is_continuation: bool = False
+    from_table_name: str = ""
+    continuation_rationale: str = ""
+
+
 class Table(BaseModel):
     name: str
     header_rows: List[LineSegment]
     rows: List[LineSegment]
     columns: List[str] = Field(..., description="List of column names.")
+    # Extended fields for classification and filtering
+    table_classification: Optional[str] = Field(
+        default=None,
+        description="Classification of the table (e.g., 'CLAIM', 'REMARK', 'SUMMARY').",
+    )
+    page_index: Optional[int] = Field(
+        default=None, description="Zero-based page index where the table is located."
+    )
+    header_present: Optional[bool] = Field(
+        default=None, description="Whether the table has a header row."
+    )
+    continuation: Optional[TableContinuation] = Field(
+        default=None, description="Continuation metadata for multi-page tables."
+    )
+    columns_inferred: Optional[bool] = Field(
+        default=None,
+        description="Whether the column names were inferred from the image.",
+    )
 
 
 class TableExtractionResult(BaseModel):

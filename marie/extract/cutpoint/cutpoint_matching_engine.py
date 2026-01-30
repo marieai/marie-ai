@@ -32,9 +32,6 @@ class CutpointMatchingEngine:
         print("\n===== Start of Cutpoint Matching =====")
         print("Selector Sets:", selector_sets)
         print("Parent:", parent)
-        print("======================================\n")
-        print("Selector Sets:", selector_sets)
-        print("parent:", parent)
 
         cutpoints = []
         selector_matcher = SelectorMatcher(context, parent)
