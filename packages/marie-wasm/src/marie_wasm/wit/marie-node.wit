@@ -1,0 +1,96 @@
+// marie-node.wit
+// WIT interface definition for Marie workflow nodes
+// Aligned with Cloudflare Workers naming conventions
+
+package marie:node@1.0.0;
+
+/// Core types for node execution
+interface types {
+    /// Execution context (similar to Cloudflare's Context)
+    record context {
+        workflow-id: string,
+        execution-id: string,
+        node-id: string,
+        run-index: u32,
+    }
+
+    /// Data item flowing through the workflow
+    record item {
+        json: string,
+        binary: option<list<u8>>,
+    }
+
+    /// Environment bindings (similar to Cloudflare's Env)
+    /// Provides access to configuration and bindings
+    record env {
+        /// Node configuration as JSON
+        vars: string,
+    }
+
+    /// Response from node execution (similar to Result pattern)
+    variant response {
+        ok(list<item>),
+        err(string),
+    }
+}
+
+/// HTTP client for making outbound requests
+interface http-client {
+    record http-request {
+        method: string,
+        url: string,
+        headers: list<tuple<string, string>>,
+        body: option<list<u8>>,
+    }
+
+    record http-response {
+        status: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    fetch: func(req: http-request) -> result<http-response, string>;
+}
+
+/// Access to secrets (part of Env bindings in Cloudflare)
+interface secrets {
+    get: func(name: string) -> option<string>;
+}
+
+/// Key-value storage (similar to Cloudflare KV)
+interface kv {
+    get: func(key: string) -> option<list<u8>>;
+    put: func(key: string, value: list<u8>, ttl-seconds: option<u32>) -> result<_, string>;
+    delete: func(key: string) -> result<_, string>;
+}
+
+/// Logging interface
+interface console {
+    enum log-level { debug, info, warn, error }
+    log: func(level: log-level, message: string);
+}
+
+/// Event emission for workflow events
+interface events {
+    emit: func(event-type: string, payload: string);
+}
+
+/// The node world - what a Marie node component implements
+world node {
+    // Imports (provided by the host runtime)
+    import http-client;
+    import secrets;
+    import kv;
+    import console;
+    import events;
+
+    use types.{context, item, env, response};
+
+    /// Main entry point - similar to Cloudflare's fetch handler
+    /// but for data processing rather than HTTP
+    export execute: func(
+        input: list<item>,
+        env: env,
+        ctx: context
+    ) -> response;
+}

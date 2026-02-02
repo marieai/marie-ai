@@ -60,6 +60,7 @@ opentelemetry-exporter-otlp-proto-grpc>=1.13.0: perf,standard,devel
 fastapi>=0.100.1:            standard,devel
 uvicorn[standard]<=0.23.1:  standard,devel
 docker:                     standard,devel
+wasmtime>=21.0.0:           wasm,standard
 pathspec:                   standard,devel
 filelock:                   standard,devel
 requests:                   standard,devel

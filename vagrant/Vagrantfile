@@ -1,0 +1,256 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# Marie-AI Vagrant Test Environment
+# This Vagrantfile creates isolated VMs for testing Docker Compose deployments
+# without affecting the local development environment.
+#
+# MULTI-INSTANCE SUPPORT:
+#   Set VAGRANT_INSTANCE to run multiple VMs simultaneously.
+#   Each instance gets unique ports and IP address.
+#
+# BOX SELECTION:
+#   Default: cloud-image/ubuntu-24.04
+#   Override: VAGRANT_BOX=bento/ubuntu-24.04 vagrant up
+#   Options: cloud-image/ubuntu-24.04, bento/ubuntu-24.04, ubuntu/noble64
+#
+# Usage:
+#   vagrant up                           # Start instance 1 (default)
+#   VAGRANT_INSTANCE=2 vagrant up        # Start instance 2
+#   VAGRANT_INSTANCE=3 vagrant up        # Start instance 3
+#
+# Or via bootstrap-marie.sh:
+#   ./bootstrap-marie.sh --vagrant                    # Deploy in instance 1
+#   ./bootstrap-marie.sh --vagrant --instance=2      # Deploy in instance 2
+#   ./bootstrap-marie.sh --vagrant-ssh --instance=2  # SSH into instance 2
+#   ./bootstrap-marie.sh --vagrant-list              # List all instances
+
+# ============================================================
+# Instance Configuration
+# ============================================================
+# Instance ID (1-9 supported, each gets unique ports/IP)
+INSTANCE_ID = (ENV['VAGRANT_INSTANCE'] || "1").to_i
+
+# Validate instance ID
+if INSTANCE_ID < 1 || INSTANCE_ID > 9
+  abort("Error: VAGRANT_INSTANCE must be between 1 and 9 (got #{INSTANCE_ID})")
+end
+
+# ============================================================
+# Resource Configuration (can be overridden via environment)
+# ============================================================
+VAGRANT_MEMORY = ENV['VAGRANT_MEMORY'] || "8192"
+VAGRANT_CPUS = ENV['VAGRANT_CPUS'] || "4"
+# Disk size in GB (libvirt needs integer)
+VAGRANT_DISK_SIZE = (ENV['VAGRANT_DISK_SIZE'] || "50").to_s.gsub(/[^0-9]/, '').to_i
+VAGRANT_DISK_SIZE = 50 if VAGRANT_DISK_SIZE < 10  # Minimum 10GB
+
+# ============================================================
+# Computed Values Based on Instance ID
+# ============================================================
+# VM naming: marie-test-1, marie-test-2, etc.
+VAGRANT_VM_NAME = ENV['VAGRANT_VM_NAME'] || "marie-test-#{INSTANCE_ID}"
+
+# IP addressing: 192.168.56.11, 192.168.56.12, etc.
+VAGRANT_IP = ENV['VAGRANT_IP'] || "192.168.56.#{10 + INSTANCE_ID}"
+
+# Port offset calculation:
+#   Instance 1: +10000 (ports 15432, 18123, etc.)
+#   Instance 2: +11000 (ports 16432, 19123, etc.)
+#   Instance 3: +12000 (ports 17432, 20123, etc.)
+BASE_PORT_OFFSET = 10000
+PORT_OFFSET = BASE_PORT_OFFSET + ((INSTANCE_ID - 1) * 1000)
+
+# Helper to calculate host port
+def host_port(guest_port, offset = PORT_OFFSET)
+  guest_port + offset
+end
+
+# Special handling for ports that would conflict
+def rabbitmq_mgmt_port(offset = PORT_OFFSET)
+  # RabbitMQ management is on 15672, offset would make it 25672, 26672, etc.
+  15672 + offset
+end
+
+Vagrant.configure("2") do |config|
+  # Base box: Ubuntu 24.04 LTS (Noble Numbat)
+  # Options: "cloud-image/ubuntu-24.04", "bento/ubuntu-24.04", "ubuntu/noble64"
+  config.vm.box = ENV['VAGRANT_BOX'] || "cloud-image/ubuntu-24.04"
+  config.vm.box_check_update = true
+
+  config.vm.define VAGRANT_VM_NAME do |node|
+    node.vm.hostname = VAGRANT_VM_NAME
+
+    # Private network for direct VM access
+    node.vm.network "private_network", ip: VAGRANT_IP
+
+    # ============================================================
+    # Port Forwarding: Container Port -> Host Port (with offset)
+    # ============================================================
+    # Note: Some ports use custom offsets to avoid conflicts with local services
+    # Local RabbitMQ Mgmt uses 15672, so we offset AMQP to 15673+
+
+    # Infrastructure Services
+    node.vm.network "forwarded_port", guest: 5432,  host: host_port(5432),   id: "postgresql"
+    node.vm.network "forwarded_port", guest: 8123,  host: host_port(8123),   id: "clickhouse-http"
+    node.vm.network "forwarded_port", guest: 9000,  host: host_port(9000),   id: "clickhouse-native"
+    node.vm.network "forwarded_port", guest: 5672,  host: host_port(5673),   id: "rabbitmq-amqp"      # +10001 to avoid 15672 conflict
+    node.vm.network "forwarded_port", guest: 15672, host: rabbitmq_mgmt_port, id: "rabbitmq-mgmt"
+    node.vm.network "forwarded_port", guest: 9001,  host: host_port(9001),   id: "minio-api"
+    node.vm.network "forwarded_port", guest: 9002,  host: host_port(9002),   id: "minio-console"
+    node.vm.network "forwarded_port", guest: 2379,  host: host_port(2379),   id: "etcd"
+    node.vm.network "forwarded_port", guest: 3001,  host: host_port(3001),   id: "gitea-http"
+    node.vm.network "forwarded_port", guest: 2222,  host: host_port(2222),   id: "gitea-ssh"
+    node.vm.network "forwarded_port", guest: 4000,  host: host_port(4000),   id: "litellm"
+
+    # Observability Stack (ClickStack)
+    node.vm.network "forwarded_port", guest: 8080,  host: host_port(8080),   id: "hyperdx-ui"
+    node.vm.network "forwarded_port", guest: 4317,  host: host_port(4317),   id: "otel-grpc"
+    node.vm.network "forwarded_port", guest: 4318,  host: host_port(4318),   id: "otel-http"
+
+    # Application Services
+    node.vm.network "forwarded_port", guest: 51000, host: host_port(51000),  id: "gateway-grpc"
+    node.vm.network "forwarded_port", guest: 52000, host: host_port(52000),  id: "gateway-http"
+    node.vm.network "forwarded_port", guest: 8081,  host: host_port(8081),   id: "extract-executor"
+
+    # ============================================================
+    # VirtualBox Provider Configuration
+    # ============================================================
+    node.vm.provider "virtualbox" do |vb|
+      vb.name = "marie-ai-test-vm-#{INSTANCE_ID}"
+      vb.memory = VAGRANT_MEMORY
+      vb.cpus = VAGRANT_CPUS
+
+      # Performance optimizations
+      vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+      vb.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
+      vb.customize ["modifyvm", :id, "--ioapic", "on"]
+
+      # Enable nested virtualization if supported (for Docker)
+      vb.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
+    end
+
+    # ============================================================
+    # Libvirt Provider Configuration (Linux alternative)
+    # ============================================================
+    node.vm.provider "libvirt" do |lv|
+      lv.memory = VAGRANT_MEMORY
+      lv.cpus = VAGRANT_CPUS
+      lv.nested = true
+      lv.cpu_mode = "host-passthrough"
+      # Disk size (default 50GB, cloud images often come with ~2GB)
+      lv.machine_virtual_size = VAGRANT_DISK_SIZE
+    end
+
+    # ============================================================
+    # Synced Folders
+    # ============================================================
+    # Sync compose files and configs to VM using rsync for performance
+    # The VM will have a complete copy of the deployment configuration
+    node.vm.synced_folder "../Dockerfiles", "/home/vagrant/marie/Dockerfiles",
+      type: "rsync",
+      rsync__exclude: [".git/", "*.log", "__pycache__/"],
+      rsync__auto: false
+
+    node.vm.synced_folder "../config", "/home/vagrant/marie/config",
+      type: "rsync",
+      rsync__exclude: [".git/", "*.log", "__pycache__/", "*.pyc"],
+      rsync__auto: false
+
+    # Sync the bootstrap script (excludes large/unnecessary directories)
+    node.vm.synced_folder "..", "/home/vagrant/marie-src",
+      type: "rsync",
+      rsync__exclude: [
+        ".git/",
+        "*.log",
+        "__pycache__/",
+        "*.pyc",
+        "node_modules/",
+        ".venv/",
+        "venv/",
+        "*.egg-info/",
+        "dist/",
+        "build/",
+        ".pytest_cache/",
+        ".mypy_cache/",
+        ".tox/",
+        ".ruff_cache/",
+        ".coverage",
+        "htmlcov/",
+        "data/",
+        "db/",
+        "model_zoo/",        # Large ML models - not needed for infra testing
+        "*.pt",              # PyTorch model files
+        "*.pth",             # PyTorch model files
+        "*.onnx",            # ONNX model files
+        "*.bin",             # Binary model files
+        "*.safetensors",     # Safetensors model files
+        "cache/",
+        ".cache/",
+        "logs/",
+        "*.tar.gz",
+        "*.zip"
+      ],
+      rsync__auto: false
+
+    # ============================================================
+    # Provisioning
+    # ============================================================
+    # Shell provisioner: Install Docker and dependencies
+    node.vm.provision "shell", path: "provision/bootstrap.sh", privileged: true
+
+    # Copy bootstrap script after Docker is installed
+    node.vm.provision "shell", inline: <<-SHELL
+      # Create symlinks for easy access
+      ln -sf /home/vagrant/marie-src/bootstrap-marie.sh /home/vagrant/marie/bootstrap-marie.sh
+      chown -R vagrant:vagrant /home/vagrant/marie
+
+      # Create a convenience script for running bootstrap in VM context
+      cat > /home/vagrant/run-bootstrap.sh << 'EOF'
+#!/bin/bash
+cd /home/vagrant/marie
+./bootstrap-marie.sh "$@"
+EOF
+      chmod +x /home/vagrant/run-bootstrap.sh
+      chown vagrant:vagrant /home/vagrant/run-bootstrap.sh
+
+      # Store instance info for reference
+      echo "#{INSTANCE_ID}" > /home/vagrant/.marie-instance-id
+      chown vagrant:vagrant /home/vagrant/.marie-instance-id
+    SHELL
+
+    # Display connection info after provisioning
+    node.vm.provision "shell", inline: <<-SHELL
+      echo ""
+      echo "=============================================="
+      echo "  Marie-AI Test VM #{INSTANCE_ID} Provisioned"
+      echo "=============================================="
+      echo ""
+      echo "Instance: #{INSTANCE_ID}"
+      echo "VM Name:  #{VAGRANT_VM_NAME}"
+      echo "IP:       #{VAGRANT_IP}"
+      echo ""
+      echo "VM Access:"
+      echo "  SSH: VAGRANT_INSTANCE=#{INSTANCE_ID} vagrant ssh"
+      echo "  Or:  ./bootstrap-marie.sh --vagrant-ssh --instance=#{INSTANCE_ID}"
+      echo ""
+      echo "Deploy Marie-AI in VM:"
+      echo "  ./bootstrap-marie.sh --vagrant --instance=#{INSTANCE_ID}"
+      echo ""
+      echo "Port Mappings (Host -> VM) for Instance #{INSTANCE_ID}:"
+      echo "  PostgreSQL:     #{host_port(5432)} -> 5432"
+      echo "  ClickHouse:     #{host_port(8123)} -> 8123"
+      echo "  RabbitMQ AMQP:  #{host_port(5673)} -> 5672"
+      echo "  RabbitMQ Mgmt:  #{rabbitmq_mgmt_port} -> 15672"
+      echo "  MinIO API:      #{host_port(9001)} -> 9001"
+      echo "  MinIO Console:  #{host_port(9002)} -> 9002"
+      echo "  etcd:           #{host_port(2379)} -> 2379"
+      echo "  Gitea:          #{host_port(3001)} -> 3001"
+      echo "  LiteLLM:        #{host_port(4000)} -> 4000"
+      echo "  Gateway HTTP:   #{host_port(52000)} -> 52000"
+      echo "  Gateway gRPC:   #{host_port(51000)} -> 51000"
+      echo ""
+      echo "=============================================="
+    SHELL
+  end
+end

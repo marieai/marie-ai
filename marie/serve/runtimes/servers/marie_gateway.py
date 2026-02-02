@@ -53,6 +53,7 @@ from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
+from marie.serve.runtimes.servers.wasm_routes import register_wasm_routes
 from marie.state.base import is_stale
 from marie.state.semaphore_store import SemaphoreStore
 from marie.state.slot_capacity_manager import SlotCapacityManager
@@ -838,6 +839,9 @@ class MarieServerGateway(CompositeServer):
                         "success": False,
                         "error": f"Planner with ID '{planner_id}' not found",
                     }
+
+            # Register Wasm compilation routes
+            register_wasm_routes(app)
 
             return app
 

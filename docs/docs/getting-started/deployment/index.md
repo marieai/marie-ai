@@ -13,6 +13,7 @@ Deploy Marie-AI to production using Docker, Kubernetes, or other infrastructure.
 | [Docker](./docker.md) | Single-node deployments, development | Low |
 | [Kubernetes](./kubernetes.md) | Production clusters, scaling | Medium-High |
 | [Control plane](./control-plane.md) | Multi-node orchestration | High |
+| [Vagrant testing](./vagrant-testing.md) | Isolated testing, CI/CD | Low |
 
 ## Quick start
 

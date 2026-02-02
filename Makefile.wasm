@@ -1,0 +1,61 @@
+# Makefile.wasm - Wasm compiler and runtime targets
+#
+# Usage:
+#   make -f Makefile.wasm compilers-build
+#   make -f Makefile.wasm compilers-test
+#   make -f Makefile.wasm compilers-push
+
+.PHONY: compilers-build compilers-push compilers-test verify-wasmtime wasm-setup help
+
+REGISTRY ?= marieai
+VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo "dev")
+LANGUAGES := rust python js
+
+# Build all compiler containers
+compilers-build:
+	@echo "Building Wasm compiler containers..."
+	@./scripts/build-wasm-compilers.sh build
+
+# Push compiler containers to registry
+compilers-push:
+	@echo "Pushing Wasm compiler containers..."
+	@./scripts/build-wasm-compilers.sh push
+
+# Test each compiler with hello world
+compilers-test:
+	@echo "Testing Wasm compiler containers..."
+	@./scripts/build-wasm-compilers.sh test
+
+# Verify wasmtime-py is installed
+verify-wasmtime:
+	@echo "Verifying Wasmtime installation..."
+	@./scripts/build-wasm-compilers.sh verify
+
+# Full setup: build, test, verify
+wasm-setup: compilers-build compilers-test verify-wasmtime
+	@echo "Wasm runtime setup complete!"
+
+# Install marie-wasm package in development mode
+install-marie-wasm:
+	@echo "Installing marie-wasm package..."
+	@pip install -e packages/marie-wasm[dev]
+
+# Run marie-wasm tests
+test-marie-wasm:
+	@echo "Running marie-wasm tests..."
+	@cd packages/marie-wasm && python -m pytest tests/ -v
+
+# Help
+help:
+	@echo "Wasm Runtime Targets:"
+	@echo "  compilers-build   - Build all compiler containers locally"
+	@echo "  compilers-push    - Push containers to registry"
+	@echo "  compilers-test    - Test each compiler with hello world"
+	@echo "  verify-wasmtime   - Verify wasmtime-py is installed"
+	@echo "  wasm-setup        - Full setup: build, test, verify"
+	@echo "  install-marie-wasm - Install marie-wasm in dev mode"
+	@echo "  test-marie-wasm   - Run marie-wasm tests"
+	@echo ""
+	@echo "Environment:"
+	@echo "  REGISTRY=$(REGISTRY)"
+	@echo "  VERSION=$(VERSION)"

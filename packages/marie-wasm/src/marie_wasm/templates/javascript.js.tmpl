@@ -1,0 +1,102 @@
+// Marie Node JavaScript Wrapper
+// Aligned with Cloudflare Workers naming conventions
+//
+// This wrapper is injected around user code to provide:
+// - Error handling with structured responses
+// - Input/env/context injection
+// - Return type validation
+// - Logging integration
+//
+// WIT imports are mapped by esbuild during bundling.
+
+import { log, LogLevel } from 'marie:node/console';
+
+// ============================================
+// USER CODE START
+// ============================================
+
+{USER_CODE}
+
+// ============================================
+// USER CODE END
+// ============================================
+
+/**
+ * Internal wrapper that calls the user's execute function with error handling.
+ * This is the component's exported execute function.
+ */
+function _marie_execute(inputItems, env, ctx) {
+    try {
+        // Parse env vars JSON for user convenience
+        let vars = {};
+        try {
+            vars = env.vars ? JSON.parse(env.vars) : {};
+        } catch (e) {
+            log(LogLevel.WARN, `Failed to parse env vars JSON: ${e.message}`);
+        }
+
+        // Convert Items to plain objects for simpler user code
+        const inputDicts = inputItems.map(item => {
+            const dict = { json: item.json };
+            if (item.binary !== null && item.binary !== undefined) {
+                dict.binary = new Uint8Array(item.binary);
+            }
+            return dict;
+        });
+
+        // Build context object with camelCase naming
+        const context = {
+            workflowId: ctx.workflowId,
+            executionId: ctx.executionId,
+            nodeId: ctx.nodeId,
+            runIndex: ctx.runIndex,
+        };
+
+        // Call user's execute function (defined in USER CODE section)
+        const result = execute(inputDicts, vars, context);
+
+        // Validate return type
+        if (result === null || result === undefined) {
+            log(LogLevel.ERROR, 'execute() returned null/undefined');
+            return { err: 'execute() must return an object with "ok" or "err" key' };
+        }
+
+        if (typeof result !== 'object') {
+            log(LogLevel.ERROR, `execute() must return an object, got ${typeof result}`);
+            return { err: 'execute() must return an object with "ok" or "err" key' };
+        }
+
+        if ('err' in result) {
+            return { err: String(result.err) };
+        }
+
+        if (!('ok' in result)) {
+            log(LogLevel.ERROR, 'execute() must return {ok: [...]} or {err: "..."}');
+            return { err: 'execute() must return {ok: [...]} or {err: "..."}' };
+        }
+
+        // Convert output to Items
+        const outputItems = result.ok.map(item => {
+            if (typeof item === 'object' && item !== null) {
+                const jsonStr = item.json !== undefined ? item.json : JSON.stringify(item);
+                const binary = item.binary ? Array.from(item.binary) : null;
+                return { json: jsonStr, binary };
+            } else {
+                return { json: JSON.stringify(item), binary: null };
+            }
+        });
+
+        return { ok: outputItems };
+
+    } catch (e) {
+        const errorMsg = `Execution error: ${e.message || e}`;
+        log(LogLevel.ERROR, errorMsg);
+        if (e.stack) {
+            log(LogLevel.ERROR, e.stack);
+        }
+        return { err: errorMsg };
+    }
+}
+
+// Export the wrapper as the component's execute function
+export { _marie_execute as execute };

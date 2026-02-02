@@ -1,0 +1,101 @@
+# Marie Node Python Wrapper
+# Aligned with Cloudflare Workers naming conventions
+#
+# This wrapper is injected around user code to provide:
+# - Error handling with structured responses
+# - Input/env/context injection
+# - Return type validation
+# - Logging integration
+#
+# componentize-py generates bindings in the 'node' package from the WIT world.
+
+import json
+import traceback
+
+import node
+from node.imports.types import (
+    Item,
+    Env,
+    Context,
+    Response,
+    Response_Ok,
+    Response_Err,
+)
+from node.imports.console import log, LogLevel
+
+# ============================================
+# USER CODE START
+# ============================================
+
+{USER_CODE}
+
+# ============================================
+# USER CODE END
+# ============================================
+
+class Node(node.Node):
+    """
+    Component implementation that wraps user's execute function with error handling.
+    """
+
+    def execute(
+        self,
+        input_items: list[Item],
+        env: Env,
+        ctx: Context,
+    ) -> Response:
+        """
+        Internal wrapper that calls the user's execute function with error handling.
+        """
+        try:
+            # Parse env vars JSON for user convenience
+            vars_data = json.loads(env.vars) if env.vars else {}
+
+            # Convert Items to dicts for simpler user code
+            input_dicts = []
+            for item in input_items:
+                item_dict = {"json": item.json}
+                if item.binary is not None:
+                    item_dict["binary"] = bytes(item.binary)
+                input_dicts.append(item_dict)
+
+            # Build context dict
+            context_dict = {
+                "workflow_id": ctx.workflow_id,
+                "execution_id": ctx.execution_id,
+                "node_id": ctx.node_id,
+                "run_index": ctx.run_index,
+            }
+
+            # Call user's execute function (defined in USER CODE section)
+            result = execute(input_dicts, vars_data, context_dict)
+
+            # Validate return type
+            if not isinstance(result, dict):
+                log(LogLevel.ERROR, f"execute() must return a dict, got {type(result).__name__}")
+                return Response_Err("execute() must return a dict with 'ok' or 'err' key")
+
+            if "err" in result:
+                return Response_Err(str(result["err"]))
+
+            if "ok" not in result:
+                log(LogLevel.ERROR, "execute() must return {'ok': [...]} or {'err': '...'}")
+                return Response_Err("execute() must return {'ok': [...]} or {'err': '...'}")
+
+            # Convert output to Items
+            output_items = []
+            for item in result["ok"]:
+                if isinstance(item, dict):
+                    json_str = item.get("json", "{}")
+                    binary = item.get("binary")
+                    output_items.append(Item(json=json_str, binary=list(binary) if binary else None))
+                else:
+                    output_items.append(Item(json=json.dumps(item), binary=None))
+
+            return Response_Ok(output_items)
+
+        except Exception as e:
+            error_msg = f"Execution error: {e}"
+            log(LogLevel.ERROR, error_msg)
+            log(LogLevel.ERROR, traceback.format_exc())
+            return Response_Err(error_msg)

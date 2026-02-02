@@ -31,6 +31,13 @@ DEPLOY_CLICKHOUSE=${DEPLOY_CLICKHOUSE:-true}
 DEPLOY_CLICKSTACK=${DEPLOY_CLICKSTACK:-false}
 DEPLOY_GITEA=${DEPLOY_GITEA:-true}
 
+# Vagrant configuration
+VAGRANT_MODE=${VAGRANT_MODE:-false}
+VAGRANT_DIR="./vagrant"
+VAGRANT_INSTANCE="${VAGRANT_INSTANCE:-1}"
+VAGRANT_VM_NAME="${VAGRANT_VM_NAME:-marie-test-${VAGRANT_INSTANCE}}"
+VAGRANT_SYNC_IMAGES=${VAGRANT_SYNC_IMAGES:-false}
+
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}    Marie-AI System Bootstrap${NC}"
 echo -e "${BLUE}========================================${NC}"
@@ -323,6 +330,724 @@ stop_all_services() {
     echo ""
     echo -e "${GREEN}✅ All Marie-AI services stopped and cleaned up!${NC}"
     echo ""
+}
+
+# ============================================================
+# Vagrant Functions
+# ============================================================
+
+vagrant_check_installed() {
+    if ! command -v vagrant &> /dev/null; then
+        echo -e "${RED}❌ Vagrant is not installed${NC}"
+        echo "Please install Vagrant: https://www.vagrantup.com/downloads"
+        echo ""
+        echo "Quick install:"
+        echo "  macOS: brew install --cask vagrant"
+        echo "  Ubuntu: sudo apt-get install vagrant"
+        echo "  Fedora: sudo dnf install vagrant"
+        exit 1
+    fi
+
+    if ! command -v VBoxManage &> /dev/null && ! command -v virsh &> /dev/null; then
+        echo -e "${YELLOW}⚠️  No supported VM provider found${NC}"
+        echo "Please install VirtualBox or libvirt:"
+        echo "  VirtualBox: https://www.virtualbox.org/wiki/Downloads"
+        echo "  libvirt: sudo apt-get install libvirt-daemon-system"
+    fi
+}
+
+vagrant_check_libvirt_deps() {
+    # Check for libvirt development libraries needed for vagrant-libvirt plugin
+    local missing_deps=()
+
+    # Check for libvirt-dev (needed for plugin compilation)
+    if ! pkg-config --exists libvirt 2>/dev/null; then
+        missing_deps+=("libvirt-dev")
+    fi
+
+    # Check for libvirt daemon
+    if ! command -v libvirtd &> /dev/null && ! systemctl list-unit-files libvirtd.service &> /dev/null; then
+        missing_deps+=("libvirt-daemon-system")
+    fi
+
+    # Check for virsh client
+    if ! command -v virsh &> /dev/null; then
+        missing_deps+=("libvirt-clients")
+    fi
+
+    # Check for qemu-kvm
+    if ! command -v qemu-system-x86_64 &> /dev/null && ! command -v kvm &> /dev/null; then
+        missing_deps+=("qemu-kvm")
+    fi
+
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        echo -e "${YELLOW}========================================${NC}" >&2
+        echo -e "${YELLOW}  Missing libvirt Dependencies${NC}" >&2
+        echo -e "${YELLOW}========================================${NC}" >&2
+        echo "" >&2
+        echo "The following packages are required for vagrant-libvirt:" >&2
+        echo "" >&2
+
+        # Detect package manager and provide appropriate command
+        if command -v apt-get &> /dev/null; then
+            echo "  sudo apt-get install -y ${missing_deps[*]}" >&2
+        elif command -v dnf &> /dev/null; then
+            # Map to Fedora package names
+            local fedora_deps=()
+            for dep in "${missing_deps[@]}"; do
+                case "$dep" in
+                    libvirt-dev) fedora_deps+=("libvirt-devel") ;;
+                    libvirt-daemon-system) fedora_deps+=("libvirt-daemon") ;;
+                    libvirt-clients) fedora_deps+=("libvirt-client") ;;
+                    *) fedora_deps+=("$dep") ;;
+                esac
+            done
+            echo "  sudo dnf install -y ${fedora_deps[*]}" >&2
+        elif command -v pacman &> /dev/null; then
+            echo "  sudo pacman -S libvirt qemu virt-manager" >&2
+        else
+            echo "  Install: ${missing_deps[*]}" >&2
+        fi
+        echo "" >&2
+        return 1
+    fi
+    return 0
+}
+
+vagrant_detect_provider() {
+    # Check if provider is already set
+    if [ -n "$VAGRANT_DEFAULT_PROVIDER" ]; then
+        echo "$VAGRANT_DEFAULT_PROVIDER"
+        return
+    fi
+
+    # Check if KVM is loaded (Linux only)
+    if [ -f /proc/modules ] && grep -q "^kvm" /proc/modules 2>/dev/null; then
+        # KVM is loaded - VirtualBox won't work
+        echo -e "${BLUE}KVM detected, using libvirt provider${NC}" >&2
+
+        # Check libvirt dependencies
+        if ! vagrant_check_libvirt_deps; then
+            echo "" >&2
+            echo "After installing dependencies, also run:" >&2
+            echo "  sudo usermod -aG libvirt \$USER" >&2
+            echo "  newgrp libvirt  # or log out and back in" >&2
+            echo "  vagrant plugin install vagrant-libvirt" >&2
+            echo "" >&2
+            exit 1
+        fi
+
+        # Check if user is in libvirt group (check /etc/group, not current session)
+        local current_user
+        current_user=$(whoami)
+        local in_libvirt_group=false
+
+        # Check if user is in libvirt or libvirt-qemu group (varies by distro)
+        if getent group libvirt 2>/dev/null | grep -q "\b${current_user}\b"; then
+            in_libvirt_group=true
+        elif getent group libvirt-qemu 2>/dev/null | grep -q "\b${current_user}\b"; then
+            in_libvirt_group=true
+        elif getent group kvm 2>/dev/null | grep -q "\b${current_user}\b"; then
+            in_libvirt_group=true
+        fi
+
+        if [ "$in_libvirt_group" = false ]; then
+            echo -e "${YELLOW}========================================${NC}" >&2
+            echo -e "${YELLOW}  User Not in libvirt Group${NC}" >&2
+            echo -e "${YELLOW}========================================${NC}" >&2
+            echo "" >&2
+            echo "Add yourself to the libvirt group:" >&2
+            echo "  sudo usermod -aG libvirt \$USER" >&2
+            echo "" >&2
+            echo "Then either log out and back in, or run:" >&2
+            echo "  newgrp libvirt" >&2
+            echo "" >&2
+            exit 1
+        fi
+
+        # Check if current session has the group (might need newgrp or re-login)
+        if ! groups | grep -qE "(libvirt|libvirt-qemu|kvm)"; then
+            echo -e "${YELLOW}========================================${NC}" >&2
+            echo -e "${YELLOW}  libvirt Group Not Active in Session${NC}" >&2
+            echo -e "${YELLOW}========================================${NC}" >&2
+            echo "" >&2
+            echo "You are in the libvirt group but it's not active in this session." >&2
+            echo "Either log out and back in, or run:" >&2
+            echo "  newgrp libvirt" >&2
+            echo "  ./bootstrap-marie.sh --vagrant" >&2
+            echo "" >&2
+            exit 1
+        fi
+
+        # Check if vagrant-libvirt plugin is installed
+        if ! vagrant plugin list 2>/dev/null | grep -q "vagrant-libvirt"; then
+            echo -e "${YELLOW}========================================${NC}" >&2
+            echo -e "${YELLOW}  vagrant-libvirt Plugin Required${NC}" >&2
+            echo -e "${YELLOW}========================================${NC}" >&2
+            echo "" >&2
+            echo "Install the vagrant-libvirt plugin:" >&2
+            echo "  vagrant plugin install vagrant-libvirt" >&2
+            echo "" >&2
+            exit 1
+        fi
+
+        echo "libvirt"
+        return
+    fi
+
+    # Default to virtualbox if available
+    if command -v VBoxManage &> /dev/null; then
+        echo "virtualbox"
+        return
+    fi
+
+    # Fall back to libvirt if available
+    if command -v virsh &> /dev/null; then
+        if ! vagrant_check_libvirt_deps; then
+            exit 1
+        fi
+        if vagrant plugin list 2>/dev/null | grep -q "vagrant-libvirt"; then
+            echo "libvirt"
+            return
+        fi
+    fi
+
+    # No provider found
+    echo -e "${RED}========================================${NC}" >&2
+    echo -e "${RED}  No Vagrant Provider Available${NC}" >&2
+    echo -e "${RED}========================================${NC}" >&2
+    echo "" >&2
+    echo "Install VirtualBox or libvirt:" >&2
+    echo "" >&2
+    echo "Option 1 - VirtualBox:" >&2
+    echo "  https://www.virtualbox.org/wiki/Downloads" >&2
+    echo "" >&2
+    echo "Option 2 - libvirt (recommended for Linux with KVM):" >&2
+    if command -v apt-get &> /dev/null; then
+        echo "  sudo apt-get install -y libvirt-dev libvirt-daemon-system libvirt-clients qemu-kvm" >&2
+    elif command -v dnf &> /dev/null; then
+        echo "  sudo dnf install -y libvirt-devel libvirt-daemon libvirt-client qemu-kvm" >&2
+    else
+        echo "  Install: libvirt-dev libvirt-daemon-system libvirt-clients qemu-kvm" >&2
+    fi
+    echo "  sudo usermod -aG libvirt \$USER" >&2
+    echo "  newgrp libvirt" >&2
+    echo "  vagrant plugin install vagrant-libvirt" >&2
+    echo "" >&2
+    exit 1
+}
+
+vagrant_filter_output() {
+    # Filter vagrant output to show only important messages
+    while IFS= read -r line; do
+        # Skip verbose/noisy lines
+        case "$line" in
+            *"Vagrant insecure key"*|*"Inserting generated public"*|*"Removing insecure key"*|*"Key inserted"*)
+                # Skip SSH key messages
+                ;;
+            *"Warning: Connection refused"*)
+                # Show connection status on same line
+                printf "\r  ⏳ Waiting for SSH...        "
+                ;;
+            *"SSH address:"*)
+                local ip=$(echo "$line" | grep -oP '\d+\.\d+\.\d+\.\d+')
+                printf "\r  📍 VM IP: $ip             \n"
+                ;;
+            *"Waiting for domain"*|*"Waiting for machine"*)
+                printf "  ⏳ Booting VM...\n"
+                ;;
+            *"Machine booted and ready"*)
+                printf "  ✅ VM booted\n"
+                ;;
+            *"Setting hostname"*)
+                printf "  ✅ Hostname configured\n"
+                ;;
+            *"Forwarding ports"*)
+                printf "  ✅ Port forwarding:\n"
+                ;;
+            *"(guest) =>"*)
+                # Port forwarding detail - show condensed
+                local guest=$(echo "$line" | grep -oP '\d+(?= \(guest\))')
+                local host=$(echo "$line" | grep -oP '(?<=> )\d+(?= \(host\))')
+                if [ -n "$guest" ] && [ -n "$host" ]; then
+                    printf "      $guest → $host\n"
+                fi
+                ;;
+            *"Rsyncing folder"*)
+                local folder=$(echo "$line" | grep -oP '(?<=> )/[^ ]+' | head -1)
+                printf "  ✅ Syncing: ${folder}\n"
+                ;;
+            *"Creating domain"*)
+                printf "  ⏳ Creating VM...\n"
+                ;;
+            *"Creating image"*)
+                printf "  ⏳ Preparing disk image...\n"
+                ;;
+            *"Starting domain"*)
+                printf "  ⏳ Starting VM...\n"
+                ;;
+            *"Downloading:"*)
+                printf "  ⏳ Downloading box (this may take a while)...\n"
+                ;;
+            *"Successfully added box"*)
+                printf "  ✅ Box downloaded\n"
+                ;;
+            *"Uploading base box"*)
+                printf "  ⏳ Uploading box to libvirt storage...\n"
+                ;;
+            *"Error"*|*"error:"*)
+                # Always show errors
+                echo -e "${RED}  ❌ $line${NC}"
+                ;;
+            *"[fog][WARNING]"*)
+                # Skip fog warnings
+                ;;
+            "")
+                # Skip empty lines
+                ;;
+            *"-- Name:"*)
+                local vmname=$(echo "$line" | awk '{print $NF}')
+                printf "  📦 VM: $vmname\n"
+                ;;
+            *"-- Cpus:"*|*"-- Memory:"*)
+                # Show resources
+                local val=$(echo "$line" | awk '{print $NF}')
+                local key=$(echo "$line" | grep -oP '(?<=-- )[^:]+')
+                printf "      $key: $val\n"
+                ;;
+            *)
+                # Skip most other lines
+                :
+                ;;
+        esac
+    done
+}
+
+vagrant_status() {
+    vagrant_check_installed
+
+    if [ ! -d "$VAGRANT_DIR" ]; then
+        echo -e "${RED}❌ Vagrant directory not found: $VAGRANT_DIR${NC}"
+        exit 1
+    fi
+
+    # Detect provider (but don't fail if none available for status check)
+    local provider
+    provider=$(vagrant_detect_provider 2>/dev/null || echo "unknown")
+
+    # Calculate port offset for this instance
+    local port_offset=$((10000 + (VAGRANT_INSTANCE - 1) * 1000))
+    local vm_ip="192.168.56.$((10 + VAGRANT_INSTANCE))"
+
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE}    Vagrant VM Status (Instance $VAGRANT_INSTANCE)${NC}"
+    echo -e "${BLUE}    Provider: $provider${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    echo ""
+
+    cd "$VAGRANT_DIR"
+    VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant status
+    echo ""
+
+    # Check if VM is running and show additional info
+    local vm_status
+    vm_status=$(VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant status --machine-readable 2>/dev/null | grep ",state," | cut -d',' -f4)
+
+    if [ "$vm_status" = "running" ]; then
+        echo -e "${GREEN}VM Instance $VAGRANT_INSTANCE is running${NC}"
+        echo ""
+        echo "SSH into VM:    ./bootstrap-marie.sh --vagrant-ssh --instance=$VAGRANT_INSTANCE"
+        echo ""
+        echo "Port mappings (Host -> VM) for Instance $VAGRANT_INSTANCE:"
+        echo "  PostgreSQL:     localhost:$((5432 + port_offset))"
+        echo "  ClickHouse:     localhost:$((8123 + port_offset))"
+        echo "  RabbitMQ AMQP:  localhost:$((5673 + port_offset))"
+        echo "  RabbitMQ Mgmt:  localhost:$((15672 + port_offset))"
+        echo "  MinIO Console:  localhost:$((9002 + port_offset))"
+        echo "  Gitea:          localhost:$((3001 + port_offset))"
+        echo "  LiteLLM:        localhost:$((4000 + port_offset))"
+        echo "  Gateway HTTP:   localhost:$((52000 + port_offset))"
+        echo ""
+        echo "Direct VM access: http://$vm_ip"
+    fi
+
+    cd - > /dev/null
+}
+
+vagrant_up() {
+    vagrant_check_installed
+
+    if [ ! -d "$VAGRANT_DIR" ]; then
+        echo -e "${RED}❌ Vagrant directory not found: $VAGRANT_DIR${NC}"
+        exit 1
+    fi
+
+    # Detect and set provider
+    local provider
+    provider=$(vagrant_detect_provider)
+    export VAGRANT_DEFAULT_PROVIDER="$provider"
+
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE}    Starting Vagrant VM (Instance $VAGRANT_INSTANCE)${NC}"
+    echo -e "${BLUE}    Provider: $provider${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    echo ""
+
+    cd "$VAGRANT_DIR"
+
+    # Check current status
+    local vm_status
+    vm_status=$(VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant status --machine-readable 2>/dev/null | grep ",state," | cut -d',' -f4)
+
+    if [ "$vm_status" = "running" ]; then
+        echo -e "${GREEN}✅ VM Instance $VAGRANT_INSTANCE is already running${NC}"
+        echo "Syncing files..."
+        VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant rsync 2>&1 | vagrant_filter_output
+    else
+        echo "Starting VM Instance $VAGRANT_INSTANCE (this may take a few minutes on first run)..."
+        VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant up --provider="$provider" 2>&1 | vagrant_filter_output
+    fi
+
+    cd - > /dev/null
+
+    echo ""
+    echo -e "${GREEN}✅ Vagrant VM Instance $VAGRANT_INSTANCE is ready${NC}"
+}
+
+vagrant_down() {
+    vagrant_check_installed
+
+    if [ ! -d "$VAGRANT_DIR" ]; then
+        echo -e "${RED}❌ Vagrant directory not found: $VAGRANT_DIR${NC}"
+        exit 1
+    fi
+
+    echo -e "${YELLOW}========================================${NC}"
+    echo -e "${YELLOW}    Destroying Vagrant VM (Instance $VAGRANT_INSTANCE)${NC}"
+    echo -e "${YELLOW}========================================${NC}"
+    echo ""
+    echo -e "${YELLOW}⚠️  This will permanently delete VM Instance $VAGRANT_INSTANCE and all data inside it.${NC}"
+    read -p "Are you sure? (y/N): " confirm
+
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+        echo "Cancelled."
+        exit 0
+    fi
+
+    cd "$VAGRANT_DIR"
+    VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant destroy -f
+    cd - > /dev/null
+
+    echo ""
+    echo -e "${GREEN}✅ Vagrant VM Instance $VAGRANT_INSTANCE destroyed${NC}"
+}
+
+vagrant_ssh() {
+    vagrant_check_installed
+
+    if [ ! -d "$VAGRANT_DIR" ]; then
+        echo -e "${RED}❌ Vagrant directory not found: $VAGRANT_DIR${NC}"
+        exit 1
+    fi
+
+    # Detect and set provider
+    local provider
+    provider=$(vagrant_detect_provider)
+    export VAGRANT_DEFAULT_PROVIDER="$provider"
+
+    cd "$VAGRANT_DIR"
+
+    # Check if VM is running
+    local vm_status
+    vm_status=$(VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant status --machine-readable 2>/dev/null | grep ",state," | cut -d',' -f4)
+
+    if [ "$vm_status" != "running" ]; then
+        echo -e "${YELLOW}VM Instance $VAGRANT_INSTANCE is not running. Starting VM...${NC}"
+        VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant up --provider="$provider" 2>&1 | vagrant_filter_output
+    fi
+
+    echo -e "${BLUE}Connecting to Vagrant VM Instance $VAGRANT_INSTANCE...${NC}"
+    VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant ssh
+
+    cd - > /dev/null
+}
+
+vagrant_ensure_running() {
+    vagrant_check_installed
+
+    if [ ! -d "$VAGRANT_DIR" ]; then
+        echo -e "${RED}❌ Vagrant directory not found: $VAGRANT_DIR${NC}"
+        exit 1
+    fi
+
+    # Detect and set provider
+    local provider
+    provider=$(vagrant_detect_provider)
+    export VAGRANT_DEFAULT_PROVIDER="$provider"
+
+    cd "$VAGRANT_DIR"
+
+    local vm_status
+    vm_status=$(VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant status --machine-readable 2>/dev/null | grep ",state," | cut -d',' -f4)
+
+    if [ "$vm_status" != "running" ]; then
+        echo -e "${YELLOW}VM Instance $VAGRANT_INSTANCE is not running. Starting VM...${NC}"
+        echo -e "${BLUE}Provider: $provider${NC}"
+        VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant up --provider="$provider" 2>&1 | vagrant_filter_output
+    else
+        # Sync files to ensure latest configs are in VM
+        echo -e "${BLUE}Syncing files to VM Instance $VAGRANT_INSTANCE...${NC}"
+        VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant rsync 2>&1 | vagrant_filter_output
+    fi
+
+    cd - > /dev/null
+}
+
+vagrant_exec() {
+    local cmd="$1"
+    cd "$VAGRANT_DIR"
+    VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant ssh -c "$cmd"
+    local exit_code=$?
+    cd - > /dev/null
+    return $exit_code
+}
+
+vagrant_list() {
+    vagrant_check_installed
+
+    if [ ! -d "$VAGRANT_DIR" ]; then
+        echo -e "${RED}❌ Vagrant directory not found: $VAGRANT_DIR${NC}"
+        exit 1
+    fi
+
+    # Detect provider
+    local provider
+    provider=$(vagrant_detect_provider 2>/dev/null || echo "unknown")
+
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE}    Marie-AI Vagrant Instances${NC}"
+    echo -e "${BLUE}    Provider: $provider${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    echo ""
+
+    cd "$VAGRANT_DIR"
+
+    # Check status of all possible instances (1-9)
+    local found_any=false
+    echo -e "${BLUE}Instance  VM Name          IP Address       Status     PostgreSQL  ClickHouse${NC}"
+    echo "--------  ---------------  ---------------  ---------  ----------  ----------"
+
+    for i in 1 2 3 4 5 6 7 8 9; do
+        local vm_status
+        vm_status=$(VAGRANT_INSTANCE=$i vagrant status --machine-readable 2>/dev/null | grep ",state," | cut -d',' -f4)
+
+        if [ -n "$vm_status" ] && [ "$vm_status" != "not_created" ]; then
+            found_any=true
+            local port_offset=$((10000 + (i - 1) * 1000))
+            local vm_ip="192.168.56.$((10 + i))"
+            local pg_port=$((5432 + port_offset))
+            local ch_port=$((8123 + port_offset))
+
+            # Color based on status
+            local status_color="${YELLOW}"
+            if [ "$vm_status" = "running" ]; then
+                status_color="${GREEN}"
+            elif [ "$vm_status" = "poweroff" ] || [ "$vm_status" = "saved" ]; then
+                status_color="${RED}"
+            fi
+
+            printf "%-8s  %-15s  %-15s  ${status_color}%-9s${NC}  %-10s  %-10s\n" \
+                "$i" "marie-test-$i" "$vm_ip" "$vm_status" "$pg_port" "$ch_port"
+        fi
+    done
+
+    if [ "$found_any" = false ]; then
+        echo -e "${YELLOW}No Vagrant instances found.${NC}"
+        echo ""
+        echo "Create a new instance:"
+        echo "  ./bootstrap-marie.sh --vagrant                  # Instance 1 (default)"
+        echo "  ./bootstrap-marie.sh --vagrant --instance=2     # Instance 2"
+    else
+        echo ""
+        echo "Commands:"
+        echo "  ./bootstrap-marie.sh --vagrant-status --instance=N   # Check instance N"
+        echo "  ./bootstrap-marie.sh --vagrant-ssh --instance=N      # SSH into instance N"
+        echo "  ./bootstrap-marie.sh --vagrant-down --instance=N     # Destroy instance N"
+    fi
+
+    cd - > /dev/null
+}
+
+vagrant_sync_images() {
+    # Stream local Docker images directly to the Vagrant VM (no temp files on host)
+    # This avoids disk space issues by piping: docker save | ssh docker load
+
+    local images_to_sync=("$@")
+
+    if [ ${#images_to_sync[@]} -eq 0 ]; then
+        # Default: sync all infrastructure images that exist locally
+        images_to_sync=(
+            "ghcr.io/ferretdb/postgres-documentdb:17-0.103.0"
+            "rabbitmq:3-management-alpine"
+            "minio/minio:latest"
+            "minio/mc:latest"
+            "quay.io/coreos/etcd:v3.6.1"
+            "gitea/gitea:latest"
+            "clickhouse/clickhouse-server:latest"
+            "marieai/marie-gateway:4.0.0-cpu"
+            "marieai/marie:4.0.0-cuda"
+            "marieai/marie:4.0.0-cpu"
+        )
+    fi
+
+    echo -e "${BLUE}Streaming Docker images to VM...${NC}"
+
+    cd "$VAGRANT_DIR"
+
+    local synced=0
+    local skipped=0
+    local failed=0
+
+    for img in "${images_to_sync[@]}"; do
+        if docker image inspect "$img" &>/dev/null; then
+            local img_size
+            img_size=$(docker image inspect "$img" --format='{{.Size}}' | numfmt --to=iec 2>/dev/null || echo "unknown")
+            echo -e "${BLUE}⏳ Streaming $img ($img_size)...${NC}"
+
+            # Stream via vagrant ssh (uses Vagrant's SSH config automatically)
+            # Use subshell to prevent set -e from exiting on pipe failure
+            local result=0
+            docker save "$img" | VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant ssh -c "docker load" || result=$?
+            if [ $result -eq 0 ]; then
+                echo -e "${GREEN}✔ $img${NC}"
+                ((synced++)) || true
+            else
+                echo -e "${RED}❌ Failed: $img${NC}"
+                ((failed++)) || true
+            fi
+        else
+            ((skipped++)) || true
+        fi
+    done
+
+    cd - > /dev/null
+
+    echo -e "${GREEN}✔ Synced $synced image(s)${NC}"
+    if [ $skipped -gt 0 ]; then
+        echo -e "${YELLOW}ℹ Skipped $skipped image(s) (not found locally)${NC}"
+    fi
+    if [ $failed -gt 0 ]; then
+        echo -e "${YELLOW}⚠ Failed: $failed image(s)${NC}"
+    fi
+}
+
+vagrant_bootstrap() {
+    # Calculate port offset for this instance
+    local port_offset=$((10000 + (VAGRANT_INSTANCE - 1) * 1000))
+    local vm_ip="192.168.56.$((10 + VAGRANT_INSTANCE))"
+
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE}    Marie-AI Vagrant Deployment${NC}"
+    echo -e "${BLUE}    Instance: $VAGRANT_INSTANCE${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    echo ""
+
+    # Ensure VM is running
+    vagrant_ensure_running
+
+    # Sync local Docker images to VM if requested
+    if [ "$VAGRANT_SYNC_IMAGES" = "true" ]; then
+        vagrant_sync_images
+    fi
+
+    # Build the command to run inside the VM
+    local vagrant_args=""
+
+    # Pass through relevant flags (excluding vagrant-specific ones)
+    if [ "$DEPLOY_GATEWAY" = "false" ]; then
+        vagrant_args="$vagrant_args --no-gateway"
+    fi
+    if [ "$DEPLOY_EXTRACT" = "false" ]; then
+        vagrant_args="$vagrant_args --no-extract"
+    fi
+    if [ "$DEPLOY_INFRASTRUCTURE" = "false" ]; then
+        vagrant_args="$vagrant_args --no-infrastructure"
+    fi
+    if [ "$DEPLOY_LITELLM" = "true" ]; then
+        # LiteLLM is disabled by default, only pass if explicitly enabled
+        : # Don't add --no-litellm
+    else
+        vagrant_args="$vagrant_args --no-litellm"
+    fi
+    if [ "$DEPLOY_CLICKHOUSE" = "false" ]; then
+        vagrant_args="$vagrant_args --no-clickhouse"
+    fi
+    if [ "$DEPLOY_CLICKSTACK" = "true" ]; then
+        vagrant_args="$vagrant_args --with-clickstack"
+    fi
+    if [ "$DEPLOY_GITEA" = "false" ]; then
+        vagrant_args="$vagrant_args --no-gitea"
+    fi
+
+    # Determine which env file to use
+    local vm_env_file="/home/vagrant/marie/config/.env.dev"
+
+    if [ -n "$ENV_FILE" ] && [ "$ENV_FILE" != "./config/.env.dev" ]; then
+        # Custom env file specified - need to copy it to VM
+        local env_basename
+        env_basename=$(basename "$ENV_FILE")
+        echo -e "${BLUE}Copying environment file to VM...${NC}"
+        cd "$VAGRANT_DIR"
+        VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant ssh -c "mkdir -p /home/vagrant/marie/config"
+        # Use vagrant rsync to sync the config dir which should include the env file
+        VAGRANT_INSTANCE=$VAGRANT_INSTANCE vagrant rsync
+        vm_env_file="/home/vagrant/marie/config/$env_basename"
+        cd - > /dev/null
+    fi
+
+    echo -e "${BLUE}Running bootstrap inside Vagrant VM Instance $VAGRANT_INSTANCE...${NC}"
+    echo ""
+
+    # Execute bootstrap inside VM
+    vagrant_exec "cd /home/vagrant/marie && ./bootstrap-marie.sh --env-file $vm_env_file $vagrant_args"
+
+    local exit_code=$?
+
+    echo ""
+    if [ $exit_code -eq 0 ]; then
+        echo -e "${GREEN}========================================${NC}"
+        echo -e "${GREEN}    Vagrant Deployment Complete!${NC}"
+        echo -e "${GREEN}    Instance: $VAGRANT_INSTANCE${NC}"
+        echo -e "${GREEN}========================================${NC}"
+        echo ""
+        echo "Services are running inside Vagrant VM Instance $VAGRANT_INSTANCE."
+        echo ""
+        echo "Access services via forwarded ports:"
+        echo "  PostgreSQL:     localhost:$((5432 + port_offset))"
+        echo "  ClickHouse:     localhost:$((8123 + port_offset))"
+        echo "  RabbitMQ Mgmt:  http://localhost:$((15672 + port_offset))"
+        echo "  MinIO Console:  http://localhost:$((9002 + port_offset))"
+        echo "  Gitea:          http://localhost:$((3001 + port_offset))"
+        echo "  LiteLLM:        http://localhost:$((4000 + port_offset))"
+        echo "  Gateway HTTP:   http://localhost:$((52000 + port_offset))"
+        echo ""
+        echo "Direct VM access: http://$vm_ip"
+        echo ""
+        echo "SSH into VM:      ./bootstrap-marie.sh --vagrant-ssh --instance=$VAGRANT_INSTANCE"
+        echo "Check status:     ./bootstrap-marie.sh --vagrant-status --instance=$VAGRANT_INSTANCE"
+        echo "Destroy VM:       ./bootstrap-marie.sh --vagrant-down --instance=$VAGRANT_INSTANCE"
+        echo "List all VMs:     ./bootstrap-marie.sh --vagrant-list"
+    else
+        echo -e "${RED}========================================${NC}"
+        echo -e "${RED}    Vagrant Deployment Failed${NC}"
+        echo -e "${RED}    Instance: $VAGRANT_INSTANCE${NC}"
+        echo -e "${RED}========================================${NC}"
+        echo ""
+        echo "SSH into VM to investigate:"
+        echo "  ./bootstrap-marie.sh --vagrant-ssh --instance=$VAGRANT_INSTANCE"
+    fi
+
+    return $exit_code
 }
 
 show_deployment_config() {
@@ -1051,6 +1776,43 @@ parse_args() {
                 stop_all_services
                 exit 0
                 ;;
+            --vagrant)
+                VAGRANT_MODE=true
+                shift
+                ;;
+            --vagrant-up)
+                VAGRANT_ACTION="up"
+                shift
+                ;;
+            --vagrant-down)
+                VAGRANT_ACTION="down"
+                shift
+                ;;
+            --vagrant-ssh)
+                VAGRANT_ACTION="ssh"
+                shift
+                ;;
+            --vagrant-status)
+                VAGRANT_ACTION="status"
+                shift
+                ;;
+            --vagrant-list)
+                vagrant_list
+                exit 0
+                ;;
+            --instance=*)
+                VAGRANT_INSTANCE="${1#*=}"
+                if ! [[ "$VAGRANT_INSTANCE" =~ ^[1-9]$ ]]; then
+                    echo -e "${RED}❌ Invalid instance ID: $VAGRANT_INSTANCE (must be 1-9)${NC}"
+                    exit 1
+                fi
+                VAGRANT_VM_NAME="marie-test-${VAGRANT_INSTANCE}"
+                shift
+                ;;
+            --sync-images)
+                VAGRANT_SYNC_IMAGES=true
+                shift
+                ;;
             --no-gateway)
                 DEPLOY_GATEWAY=false
                 shift
@@ -1134,7 +1896,16 @@ show_help() {
     echo "  --infrastructure-only Deploy only infrastructure services"
     echo "  --services-only       Deploy only Marie application services (gateway + extract)"
     echo "  --litellm-only        Deploy only LiteLLM proxy (with required infrastructure)"
-    echo "  -h, --help           Show this help message"
+    echo "  -h, --help            Show this help message"
+    echo ""
+    echo "Vagrant Options (isolated VM testing):"
+    echo "  --vagrant             Run deployment inside Vagrant VM"
+    echo "  --vagrant-up          Start/create Vagrant VM (without deploying)"
+    echo "  --vagrant-down        Destroy Vagrant VM"
+    echo "  --vagrant-ssh         SSH into the Vagrant VM"
+    echo "  --vagrant-status      Show Vagrant VM status"
+    echo "  --vagrant-list        List all Vagrant instances"
+    echo "  --instance=N          Specify instance number (1-9, default: 1)"
     echo ""
     echo "Service Categories:"
     echo "  Infrastructure: Storage (MinIO), Message Queue (RabbitMQ), Service Discovery (etcd),"
@@ -1151,11 +1922,57 @@ show_help() {
     echo "  $0 --no-extract                 # Deploy infrastructure + gateway only"
     echo "  $0 --no-clickhouse --no-gitea   # Deploy without analytics and Git"
     echo "  $0 --litellm-only               # Deploy minimal infrastructure + LiteLLM"
+    echo ""
+    echo "Vagrant Examples:"
+    echo "  $0 --vagrant                    # Deploy full stack in instance 1"
+    echo "  $0 --vagrant --instance=2       # Deploy in instance 2"
+    echo "  $0 --vagrant --infrastructure-only  # Deploy only infrastructure in VM"
+    echo "  $0 --vagrant --sync-images      # Sync local Docker images to VM first"
+    echo "  $0 --vagrant-up                 # Start instance 1"
+    echo "  $0 --vagrant-up --instance=2    # Start instance 2"
+    echo "  $0 --vagrant-ssh --instance=2   # SSH into instance 2"
+    echo "  $0 --vagrant-status --instance=2    # Check instance 2 status"
+    echo "  $0 --vagrant-list               # List all instances"
+    echo "  $0 --vagrant-down --instance=2  # Destroy instance 2"
+    echo ""
+    echo "Multi-Instance Port Mapping:"
+    echo "  Instance 1: PostgreSQL=15432, ClickHouse=18123, RabbitMQ=25672"
+    echo "  Instance 2: PostgreSQL=16432, ClickHouse=19123, RabbitMQ=26672"
+    echo "  Instance 3: PostgreSQL=17432, ClickHouse=20123, RabbitMQ=27672"
 }
 
 main() {
     parse_args "$@"
 
+    # Handle Vagrant actions (must be after parse_args to get --instance)
+    if [ -n "$VAGRANT_ACTION" ]; then
+        case "$VAGRANT_ACTION" in
+            up)
+                vagrant_up
+                exit 0
+                ;;
+            down)
+                vagrant_down
+                exit 0
+                ;;
+            ssh)
+                vagrant_ssh
+                exit 0
+                ;;
+            status)
+                vagrant_status
+                exit 0
+                ;;
+        esac
+    fi
+
+    # Handle Vagrant deployment mode
+    if [ "$VAGRANT_MODE" = "true" ]; then
+        vagrant_bootstrap
+        exit $?
+    fi
+
+    # Standard bare-metal deployment
     append_additional_compose_files
     show_deployment_config
     validate_environment

@@ -308,6 +308,18 @@ docker run --gpus all --name=marieai -d --network=host \
 
 Marie-AI provides modular Docker Compose files for running infrastructure services. These are located in `Dockerfiles/` directory.
 
+:::tip Isolated Testing with Vagrant
+To test Docker Compose deployments without affecting your local environment, use the [Vagrant testing environment](./vagrant-testing.md). This creates an isolated VM with all dependencies pre-installed.
+
+```bash
+# Deploy in isolated VM
+./bootstrap-marie.sh --vagrant
+
+# SSH into VM for debugging
+./bootstrap-marie.sh --vagrant-ssh
+```
+:::
+
 ### Available Compose Files
 
 | File | Services | Description |
