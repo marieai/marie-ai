@@ -122,12 +122,14 @@ class JsonRegionParser(BaseRegionParser):
             if not isinstance(columns, list) or not isinstance(rows, list):
                 return [], []
 
-            # Convert all row values to strings
+            # Convert all row values to strings, filtering out garbage rows (all empty cells)
             string_rows = []
             for row in rows:
                 if isinstance(row, list):
                     string_row = [str(cell) if cell is not None else "" for cell in row]
-                    string_rows.append(string_row)
+                    # Skip garbage rows where all cells are empty or whitespace-only
+                    if any(cell.strip() for cell in string_row):
+                        string_rows.append(string_row)
 
             return [str(col) for col in columns], string_rows
 

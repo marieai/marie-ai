@@ -422,6 +422,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     )
 
                     self._process_region_as_kv(
+                        context,  # Pass execution context for field config lookup
                         regions_cfg,
                         section,  # The original MatchSection to populate with results
                         structured_section,
@@ -437,6 +438,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
     def _process_region_as_kv(
         self,
+        context: ExecutionContext,
         regions_cfg: List[Dict],
         match_section: MatchSection,
         structured_section: Section,
@@ -583,11 +585,30 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 )
 
                 # Resolve field definition
+                # Priority: 1. Layer mappings, 2. Global config field definitions
                 field_def = template_field_mappings.get(field_name, {}) or {}
+                if not field_def:
+                    # Look up from global config fields (non_repeating then repeating)
+                    if context.conf is not None:
+                        config_fields = context.conf.get("fields", {})
+                        if field_name in config_fields.get("non_repeating", {}):
+                            field_def = OmegaConf.to_container(
+                                config_fields.non_repeating[field_name], resolve=True
+                            )
+                        elif field_name in config_fields.get("repeating", {}):
+                            field_def = OmegaConf.to_container(
+                                config_fields.repeating[field_name], resolve=True
+                            )
+                    if not field_def:
+                        self.logger.warning(
+                            f"No field definition found for '{field_name}', using defaults"
+                        )
+                        field_def = {}
+
                 field_def = dict(field_def)  # shallow copy
                 field_def["name"] = field_name
-                # Optional type override fallback if template missing; many totals are MONEY
-                field_def.setdefault("type", "MONEY")
+                # Use ALPHA as default, not MONEY - most text fields are alphanumeric
+                field_def.setdefault("type", "ALPHA")
 
                 transformed_value = transform_field_value(field_def, value_text)
                 # this is a dummy line_with_meta; we don't have line-level metadata for KV values
