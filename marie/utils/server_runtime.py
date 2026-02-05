@@ -1,3 +1,4 @@
+import asyncio
 import atexit
 import os
 import threading
@@ -17,6 +18,10 @@ from marie.utils.types import strtobool
 # Global reference to LLM tracking worker for cleanup
 _llm_tracking_worker: Optional[Any] = None
 _llm_tracking_thread: Optional[threading.Thread] = None
+
+# Global reference to sensor worker for cleanup
+_sensor_worker: Optional[Any] = None
+_sensor_worker_thread: Optional[threading.Thread] = None
 
 
 def setup_auth(auth_config: Dict[str, Any]) -> None:
@@ -220,3 +225,101 @@ def stop_llm_tracking() -> None:
     Can be called manually for graceful shutdown.
     """
     _stop_llm_tracking_worker()
+
+
+def setup_sensor_worker(
+    sensor_config: Dict[str, Any],
+    db_config: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Setup the SensorWorker in a dedicated background thread."""
+    global _sensor_worker, _sensor_worker_thread
+
+    if sensor_config is None or not sensor_config:
+        return
+
+    if not strtobool(sensor_config.get("enabled", False)):
+        logger.info("SensorWorker is disabled")
+        return
+
+    try:
+        from marie.sensors.daemon.worker import SensorWorker
+
+        logger.info("Starting SensorWorker...")
+
+        _sensor_worker = SensorWorker(config=sensor_config)
+
+        _sensor_worker_thread = threading.Thread(
+            target=_run_sensor_worker,
+            args=(db_config,),
+            name="sensor-worker",
+            daemon=True,
+        )
+        _sensor_worker_thread.start()
+
+        atexit.register(_stop_sensor_worker)
+        logger.info("SensorWorker started in background thread")
+
+    except ImportError as e:
+        logger.warning(f"SensorWorker dependencies not available: {e}")
+    except Exception as e:
+        logger.error(f"Failed to start SensorWorker: {e}")
+
+
+def _run_sensor_worker(db_config: Optional[Dict[str, Any]] = None) -> None:
+    """Run the SensorWorker in its own event loop."""
+
+    if _sensor_worker is None:
+        return
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        loop.run_until_complete(_init_sensor_storage(db_config))
+        loop.run_until_complete(_sensor_worker.start())
+
+        if _sensor_worker._daemon_task is not None:
+            loop.run_until_complete(_sensor_worker._daemon_task)
+    except Exception as e:
+        logger.error(f"SensorWorker failed: {e}")
+    finally:
+        loop.close()
+
+
+async def _init_sensor_storage(db_config: Optional[Dict[str, Any]] = None) -> None:
+    """Initialize PostgreSQL storage for the sensor worker."""
+    if _sensor_worker is None or db_config is None:
+        return
+
+    try:
+        from marie.sensors.state.psql_storage import PostgreSQLSensorStorage
+
+        storage = PostgreSQLSensorStorage(db_config)
+        await storage.initialize()
+        _sensor_worker.set_storage(storage)
+        logger.info("SensorWorker storage initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize SensorWorker storage: {e}")
+
+
+def _stop_sensor_worker() -> None:
+    """Stop the SensorWorker."""
+    global _sensor_worker, _sensor_worker_thread
+
+    if _sensor_worker is not None:
+        logger.info("Stopping SensorWorker...")
+        try:
+            _sensor_worker._shutdown_event.set()
+        except Exception as e:
+            logger.warning(f"Error signaling SensorWorker shutdown: {e}")
+
+    if _sensor_worker_thread is not None and _sensor_worker_thread.is_alive():
+        _sensor_worker_thread.join(timeout=10.0)
+
+    _sensor_worker = None
+    _sensor_worker_thread = None
+
+
+def stop_sensor_worker() -> None:
+    """Public function to stop the SensorWorker."""
+    _stop_sensor_worker()
