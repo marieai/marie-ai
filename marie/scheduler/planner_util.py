@@ -7,6 +7,7 @@ from typing import Tuple
 from marie.constants import (
     __default_extract_dir__,
 )
+from marie.executor.extract.util import layout_config
 from marie.logging_core.predefined import default_logger as logger
 from marie.query_planner.base import (
     NoopQueryDefinition,

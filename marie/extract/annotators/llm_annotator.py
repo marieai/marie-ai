@@ -124,8 +124,14 @@ class LLMAnnotator(DocumentAnnotator):
         self.prompt_text = self.load_prompt(full_prompt_path)
         self.engine = route_llm_engine(self.model_name, self.multimodal)
 
+        # Get processing mode from annotator config (per-page or per-table)
+        self.processing_mode = annotator_conf.get('mode', 'per-table')
+        self.logger.info(f"Processing mode: {self.processing_mode}")
+
         self.context_manager: Optional[ContextProviderManager] = ContextProviderManager(
-            run_context=self.run_context, annotator_name=self.name
+            run_context=self.run_context,
+            annotator_name=self.name,
+            mode=self.processing_mode,
         )
 
         if self.context_manager is not None and self.context_manager.has_providers():
@@ -182,8 +188,8 @@ class LLMAnnotator(DocumentAnnotator):
 
             debug_dir = ensure_exists(os.path.join(self.working_dir, "debug"))
             debug_context_path = os.path.join(debug_dir, f"{self.name}_context.json")
-            # Get variables for each processing unit
             units = self.context_manager.get_processing_units(document)
+
             if units:
                 context_debug = {
                     "annotator": self.name,
@@ -213,7 +219,7 @@ class LLMAnnotator(DocumentAnnotator):
                 except Exception as e:
                     self.logger.warning(f"Failed to write context debug: {e}")
 
-        # Check if output directory contains results
+        # Check if output directory contains results, disable for now
         if os.listdir(self.output_dir):
             self.logger.info(
                 f"Output directory '{self.output_dir}' contains results. Skipping annotation..."

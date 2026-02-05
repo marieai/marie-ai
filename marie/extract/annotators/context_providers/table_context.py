@@ -28,8 +28,9 @@ class TableContextProvider(ContextProvider):
         self,
         run_context: Optional["RunContext"],
         annotator_name: str,
+        mode: str = "per-table",
     ):
-        super().__init__(run_context, annotator_name)
+        super().__init__(run_context, annotator_name, mode)
         self._tables_by_page: Dict[int, List[Dict[str, Any]]] = {}
         self._load_tables()
 
@@ -123,28 +124,46 @@ class TableContextProvider(ContextProvider):
         self, document: "UnstructuredDocument"
     ) -> List[ProcessingUnit]:
         """
-        Return one ProcessingUnit per table (not per page).
+        Return processing units based on mode setting.
 
-        This enables per-table LLM calls instead of bundling all tables
-        on a page into a single call.
+        - per-table mode (default): One ProcessingUnit per table, enabling
+          separate LLM calls for each table.
+        - per-page mode: One ProcessingUnit per page with ALL tables aggregated,
+          enabling a single LLM call per page.
 
         Args:
             document: The document being processed.
 
         Returns:
-            List of ProcessingUnit, one for each table found.
+            List of ProcessingUnit instances representing work items.
         """
         units = []
-        for page_num in sorted(self._tables_by_page.keys()):
-            tables = self._tables_by_page[page_num]
-            for idx, table in enumerate(tables):
+
+        if self.mode == "per-page":
+            # Per-page mode: one unit per page with ALL tables aggregated
+            for page_num in sorted(self._tables_by_page.keys()):
+                tables = self._tables_by_page[page_num]
+                # Single unit per page containing all tables
                 units.append(
                     ProcessingUnit(
                         page_number=page_num,
-                        index=idx,
-                        data=table,
+                        index=None,  # No index = whole page
+                        data={"tables": tables},  # All tables for this page
                     )
                 )
+        else:
+            # Per-table mode (default): one unit per table
+            for page_num in sorted(self._tables_by_page.keys()):
+                tables = self._tables_by_page[page_num]
+                for idx, table in enumerate(tables):
+                    units.append(
+                        ProcessingUnit(
+                            page_number=page_num,
+                            index=idx,
+                            data=table,
+                        )
+                    )
+
         return units
 
     def get_tables_json(self, page_number: int) -> str:
@@ -164,7 +183,7 @@ class TableClaimContextProvider(TableContextProvider):
     Combines both table data and pre-annotated claim context for claim-extract.
 
     Injects variables:
-    - TABLE_CONTEXT_CLAIMS: JSON of table data
+    - TABLE_CONTEXT_ALL: JSON of table data
     - TABLE_INDEX: Index of table within page
     - TABLE_NAME: Name of table if available
     - INFERRED_HEADERS_HINT: Column mapping hint for headerless continuation tables
@@ -300,31 +319,43 @@ Map data values to columns by POSITION, not by header matching.
 
         # Table context
         if unit and unit.data is not None:
-            # Per-table mode: inject single table
-            variables["TABLE_CONTEXT_CLAIMS"] = json.dumps(unit.data, indent=2)
-            variables["TABLE_INDEX"] = str(unit.index)
-            variables["TABLE_NAME"] = unit.data.get("name", "")
+            # Check if per-page mode (data contains "tables" key with list)
+            if self.mode == "per-page" and "tables" in unit.data:
+                # Per-page mode: inject all tables for this page
+                variables["TABLE_CONTEXT_ALL"] = json.dumps(
+                    unit.data["tables"], indent=2
+                )
+                variables["TABLE_INDEX"] = ""
+                variables["TABLE_NAME"] = ""
+                variables["INFERRED_HEADERS_HINT"] = ""
+            else:
+                # Per-table mode: inject single table
+                variables["TABLE_CONTEXT_ALL"] = json.dumps(unit.data, indent=2)
+                variables["TABLE_INDEX"] = str(unit.index)
+                variables["TABLE_NAME"] = unit.data.get("name", "")
 
-            # Get table header line for claim filtering
-            header_rows = unit.data.get("header_rows", [])
-            if header_rows:
-                first_header = header_rows[0]
-                if isinstance(first_header, dict):
-                    table_header_line = first_header.get("line_number")
+                # Get table header line for claim filtering
+                header_rows = unit.data.get("header_rows", [])
+                if header_rows:
+                    first_header = header_rows[0]
+                    if isinstance(first_header, dict):
+                        table_header_line = first_header.get("line_number")
 
-            # Check if headers are missing (continuation table)
-            header_present = unit.data.get("header_present", True)
-            columns = unit.data.get("columns", [])
+                # Check if headers are missing (continuation table)
+                header_present = unit.data.get("header_present", True)
+                columns = unit.data.get("columns", [])
 
-            inferred_headers_hint = ""
-            if not header_present or not header_rows:
-                if columns:
-                    inferred_headers_hint = self._build_inferred_headers_hint(columns)
+                inferred_headers_hint = ""
+                if not header_present or not header_rows:
+                    if columns:
+                        inferred_headers_hint = self._build_inferred_headers_hint(
+                            columns
+                        )
 
-            variables["INFERRED_HEADERS_HINT"] = inferred_headers_hint
+                variables["INFERRED_HEADERS_HINT"] = inferred_headers_hint
         else:
             # Legacy mode: inject all tables for page
-            variables["TABLE_CONTEXT_CLAIMS"] = self.get_tables_json(page_number)
+            variables["TABLE_CONTEXT_ALL"] = self.get_tables_json(page_number)
             variables["INFERRED_HEADERS_HINT"] = ""
 
         # # Claim context
@@ -370,14 +401,26 @@ class TableRemarkCodesContextProvider(TableContextProvider):
         unit: Optional[ProcessingUnit] = None,
     ) -> Dict[str, str]:
         if unit and unit.data is not None:
-            # Per-table mode: inject single table
-            return {
-                "TABLE_CONTEXT_CODES": json.dumps(unit.data, indent=2),
-                "TABLE_COUNT": "1",
-                "HAS_TABLES": "true",
-                "TABLE_INDEX": str(unit.index),
-                "TABLE_NAME": unit.data.get("name", ""),
-            }
+            # Check if per-page mode (data contains "tables" key with list)
+            if self.mode == "per-page" and "tables" in unit.data:
+                # Per-page mode: inject all tables for this page
+                tables = unit.data["tables"]
+                return {
+                    "TABLE_CONTEXT_CODES": json.dumps(tables, indent=2),
+                    "TABLE_COUNT": str(len(tables)),
+                    "HAS_TABLES": "true" if tables else "false",
+                    "TABLE_INDEX": "",
+                    "TABLE_NAME": "",
+                }
+            else:
+                # Per-table mode: inject single table
+                return {
+                    "TABLE_CONTEXT_CODES": json.dumps(unit.data, indent=2),
+                    "TABLE_COUNT": "1",
+                    "HAS_TABLES": "true",
+                    "TABLE_INDEX": str(unit.index),
+                    "TABLE_NAME": unit.data.get("name", ""),
+                }
         else:
             # Legacy mode: inject all tables for page
             tables = self._tables_by_page.get(page_number, [])

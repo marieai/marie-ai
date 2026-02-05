@@ -73,6 +73,7 @@ class ContextProvider(ABC):
         self,
         run_context: Optional["RunContext"],
         annotator_name: str,
+        mode: str = "per-table",
     ):
         """
         Initialize the context provider.
@@ -80,9 +81,12 @@ class ContextProvider(ABC):
         Args:
             run_context: RunContext for accessing upstream task results.
             annotator_name: Name of the annotator this provider is injecting into.
+            mode: Processing mode - "per-table" (one LLM call per table) or
+                  "per-page" (one LLM call per page with all tables aggregated).
         """
         self.run_context = run_context
         self.annotator_name = annotator_name
+        self.mode = mode
 
     @abstractmethod
     def get_eligible_pages(self, document: "UnstructuredDocument") -> Set[int]:
@@ -142,7 +146,7 @@ class ContextProvider(ABC):
 
         Example:
             return {
-                "TABLE_CONTEXT_CLAIMS": json.dumps(tables),
+                "TABLE_CONTEXT_ALL": json.dumps(tables),
                 "TABLE_COUNT": str(len(tables)),
                 "HAS_TABLES": "true" if tables else "false",
             }
@@ -188,6 +192,7 @@ class ContextProviderManager:
         self,
         run_context: Optional["RunContext"],
         annotator_name: str,
+        mode: str = "per-table",
     ):
         """
         Initialize the context provider manager.
@@ -196,18 +201,21 @@ class ContextProviderManager:
             run_context: RunContext for accessing upstream task results.
             annotator_name: Name of the annotator - providers that target this
                           annotator will be auto-discovered.
+            mode: Processing mode - "per-table" (one LLM call per table) or
+                  "per-page" (one LLM call per page with all tables aggregated).
         """
         from marie.extract.registry import component_registry
         from marie.logging_core.predefined import default_logger as logger
 
         self.providers: List[ContextProvider] = []
+        self.mode = mode
         self._logger = logger
         # Auto-discover providers that target this annotator
         provider_infos = component_registry.get_providers_for_annotator(annotator_name)
 
         for info in provider_infos:
             try:
-                provider = info.cls(run_context, annotator_name)
+                provider = info.cls(run_context, annotator_name, mode)
                 self.providers.append(provider)
                 logger.info(
                     f"Activated context provider '{info.name}' for annotator '{annotator_name}'"

@@ -527,7 +527,7 @@ def prepare_batch_with_meta(
                 file_name = os.path.basename(name)
                 unit = units_by_file.get(file_name) if units_by_file else None
 
-                # Inject context from providers (e.g., TABLE_CONTEXT_CLAIMS)
+                # Inject context from providers (e.g., TABLE_CONTEXT_ALL)
                 if context_manager:
                     if unit:
                         # Per-unit mode: inject with unit context

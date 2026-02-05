@@ -238,7 +238,7 @@ def _load_query_planner(planner_name: str) -> Callable:
         raise
 
 
-def query_planner(planner_info: PlannerInfo) -> QueryPlan:
+def query_planner(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
     query_planner_name = planner_info.name
     try:
         query_planner_fn = _load_query_planner(query_planner_name)
@@ -246,7 +246,7 @@ def query_planner(planner_info: PlannerInfo) -> QueryPlan:
         logger.error(f"Error loading query planner: {e}")
         raise
 
-    plan = query_planner_fn(planner_info)
+    plan = query_planner_fn(planner_info, **kwargs)
     if not plan:
         error_message = (
             f"Query planner '{query_planner_name}' returned an invalid plan."
