@@ -81,6 +81,7 @@ from marie.agent.agents import (
     Router,
     VisionDocumentAgent,
 )
+from marie.agent.assistants import DocumentAssistant
 from marie.agent.backends import (
     AgentBackend,
     AgentResult,
@@ -152,7 +153,9 @@ from marie.agent.tools import (
     TOOL_REGISTRY,
     AgentTool,
     ComponentTool,
+    DocumentSearchTool,
     FunctionTool,
+    MultiDocumentSearchTool,
     ToolMetadata,
     ToolOutput,
     adapt_tool,
@@ -179,6 +182,8 @@ __all__ = [
     "VisionDocumentAgent",
     "DocumentExtractionAgent",
     "DocumentQAAgent",
+    # Document Assistants (RAG)
+    "DocumentAssistant",
     # Backends
     "AgentBackend",
     "AgentResult",
@@ -226,7 +231,9 @@ __all__ = [
     # Tool system
     "AgentTool",
     "ComponentTool",
+    "DocumentSearchTool",
     "FunctionTool",
+    "MultiDocumentSearchTool",
     "ToolMetadata",
     "ToolOutput",
     "TOOL_REGISTRY",
