@@ -57,8 +57,7 @@ CREATE INDEX IF NOT EXISTS idx_event_log_event_key
 
 -- Retention cleanup (received_at for time-based pruning)
 CREATE INDEX IF NOT EXISTS idx_event_log_retention
-    ON {schema}.event_log(received_at)
-    WHERE received_at < NOW() - INTERVAL '14 days';
+    ON {schema}.event_log(received_at);
 
 -- ============================================================================
 -- COMMENTS
