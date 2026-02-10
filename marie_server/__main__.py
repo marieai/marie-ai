@@ -25,6 +25,7 @@ from marie.utils.device import gpu_device_count
 from marie.utils.server_runtime import (
     setup_auth,
     setup_llm_tracking,
+    setup_sensor_worker,
     setup_storage,
     setup_toast_events,
 )
@@ -293,6 +294,9 @@ def setup_server(config: Dict[str, Any]) -> None:
     setup_storage(config.get("storage", {}))
     setup_auth(config.get("auth", {}))
     setup_llm_tracking(config.get("llm_tracking", {}))
+    setup_sensor_worker(
+        config.get("sensors", {}), config.get("with", {}).get("kv_store_kwargs", {})
+    )
 
 
 def filter_endpoint() -> None:

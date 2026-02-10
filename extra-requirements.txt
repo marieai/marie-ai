@@ -163,4 +163,7 @@ jsonpath-ng:                   standard,core
 clickhouse-driver==0.2.10:     standard,core
 python-dotenv:                 standard,devel
 
+# Memory integration (Mem0 SDK for agent memory)
+mem0ai>=0.1.0:                 standard,core
+
 #grpcio-tools 1.59.5

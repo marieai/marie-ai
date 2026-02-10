@@ -36,6 +36,8 @@ from marie.agent.tools.registry import resolve_tools
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
+    from marie_mem0 import Mem0Config
+
     from marie.agent.llm_wrapper import BaseLLMWrapper
 
 logger = MarieLogger("marie.agent.base")
@@ -78,6 +80,7 @@ class BaseAgent(ABC):
         system_message: Optional[str] = DEFAULT_SYSTEM_MESSAGE,
         name: Optional[str] = None,
         description: Optional[str] = None,
+        memory: Optional["Mem0Config"] = None,
         **kwargs: Any,
     ):
         """Initialize the agent.
@@ -92,6 +95,7 @@ class BaseAgent(ABC):
             system_message: System message prepended to conversations
             name: Agent name (used in multi-agent scenarios)
             description: Agent description (used for delegation decisions)
+            memory: Optional Mem0 configuration for memory integration
             **kwargs: Additional configuration
         """
         self.llm = llm
@@ -99,6 +103,11 @@ class BaseAgent(ABC):
         self.name = name
         self.description = description
         self.extra_generate_cfg: Dict[str, Any] = kwargs.get("extra_generate_cfg", {})
+
+        # Initialize memory
+        self._mem0 = None
+        if memory and memory.enabled:
+            self._init_memory(memory)
 
         # Initialize tools
         self.function_map: Dict[str, AgentTool] = {}
@@ -121,6 +130,136 @@ class BaseAgent(ABC):
                     f"Repeatedly adding tool {name}, will use the newest tool"
                 )
             self.function_map[name] = tool
+
+    def _init_memory(self, memory_config: "Mem0Config") -> None:
+        """Initialize Mem0 memory integration.
+
+        Args:
+            memory_config: Mem0 configuration
+        """
+        try:
+            from marie_mem0 import Mem0Memory
+
+            self._mem0 = Mem0Memory(memory_config)
+            logger.info("Mem0 memory integration initialized")
+        except ImportError:
+            logger.warning(
+                "marie-mem0 package not installed, memory integration disabled. "
+                "Install with: pip install marie-mem0"
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize Mem0 memory: {e}")
+
+    def _augment_with_memories(
+        self,
+        messages: List[Message],
+        user_id: str,
+        agent_id: Optional[str] = None,
+        limit: int = 5,
+    ) -> List[Message]:
+        """Search and prepend relevant memories to context.
+
+        Args:
+            messages: Current conversation messages
+            user_id: User identifier for memory scoping
+            agent_id: Optional agent identifier
+            limit: Maximum memories to retrieve
+
+        Returns:
+            Messages with memory context prepended
+        """
+        if not self._mem0 or not self._mem0.is_enabled:
+            return messages
+
+        # Get last user message as query
+        query = ""
+        for msg in reversed(messages):
+            if msg.role == "user":
+                query = msg.text_content or ""
+                break
+
+        if not query:
+            return messages
+
+        # Search for relevant memories
+        memories = self._mem0.search(
+            query=query,
+            user_id=user_id,
+            agent_id=agent_id,
+            limit=limit,
+        )
+
+        if not memories:
+            return messages
+
+        # Format memories as context
+        memory_lines = []
+        for m in memories:
+            memory_text = m.get("memory", "")
+            if memory_text:
+                memory_lines.append(f"- {memory_text}")
+
+        if not memory_lines:
+            return messages
+
+        memory_context = "\n".join(memory_lines)
+
+        # Create memory context message
+        memory_msg = Message(
+            role=SYSTEM,
+            content=f"Relevant memories from previous interactions:\n{memory_context}",
+        )
+
+        # Insert after the first system message or at the beginning
+        result = list(messages)
+        insert_idx = 0
+        if result and result[0].role == SYSTEM:
+            insert_idx = 1
+
+        result.insert(insert_idx, memory_msg)
+        return result
+
+    def _store_interaction(
+        self,
+        messages: List[Message],
+        response: str,
+        user_id: str,
+        agent_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Store the interaction in memory.
+
+        Args:
+            messages: Conversation messages
+            response: Agent response content
+            user_id: User identifier for memory scoping
+            agent_id: Optional agent identifier
+            metadata: Optional metadata to attach
+        """
+        if not self._mem0 or not self._mem0.is_enabled:
+            return
+
+        # Convert messages to dict format for mem0
+        msg_dicts = []
+        for msg in messages:
+            if msg.role != SYSTEM:  # Skip system messages
+                msg_dicts.append(
+                    {
+                        "role": msg.role,
+                        "content": msg.text_content or "",
+                    }
+                )
+
+        # Add the assistant response
+        msg_dicts.append({"role": ASSISTANT, "content": response})
+
+        # Store in memory
+        self._mem0.add(
+            messages=msg_dicts,
+            user_id=user_id,
+            agent_id=agent_id or self.name,
+            metadata=metadata,
+        )
 
     def add_tool(self, tool: Union[str, Dict, AgentTool, Callable]) -> None:
         """Add a tool to the agent.

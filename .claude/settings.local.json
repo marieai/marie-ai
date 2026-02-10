@@ -17,7 +17,15 @@
       "WebFetch(domain:github.com)",
       "Bash(tree:*)",
       "Bash(curl:*)",
-      "Bash(docker exec:*)"
+      "Bash(docker exec:*)",
+      "Bash(wc:*)",
+      "Bash(docker manifest inspect:*)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:docs.mem0.ai)",
+      "Bash(python -m py_compile:*)",
+      "Bash(git -C /home/gbugaj/dev/marieai/marie-ai-scheduler-compiler status --short)",
+      "Bash(PYTHONPATH=packages/marie-mem0/src:. python3:*)"
     ],
     "deny": [],
     "ask": []

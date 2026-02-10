@@ -10,3 +10,15 @@ model_list:
       api_key: EMPTY
       api_base: http://127.0.0.1:4000
 
+  # Chat model for Mem0
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: ${OPENAI_API_KEY}
+
+  # Embedding model for Mem0
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: ${OPENAI_API_KEY}
+

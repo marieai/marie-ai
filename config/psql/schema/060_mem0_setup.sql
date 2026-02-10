@@ -1,0 +1,36 @@
+-- ============================================================================
+-- Mem0 SDK Database Setup
+-- ============================================================================
+--
+-- This file documents the database setup required for Mem0 SDK integration.
+-- The actual database and extension are created by the bootstrap-marie.sh script.
+--
+-- Mem0 SDK handles table creation automatically on first use, so no explicit
+-- table definitions are needed here.
+--
+-- Requirements:
+-- 1. PostgreSQL 16+ with pgvector extension
+-- 2. Database: mem0 (created by bootstrap script)
+-- 3. Extension: vector (enabled by bootstrap script)
+--
+-- The mem0ai SDK will automatically create the following tables on first use:
+-- - memories: Stores memory embeddings and metadata
+-- - Additional internal tables as needed by mem0
+--
+-- Configuration is done via the Mem0Config Python class which sets:
+-- - collection_name: "memories" (default)
+-- - embedding_model_dims: 1536 (for text-embedding-3-small)
+-- - hnsw: true (for efficient similarity search)
+--
+-- Usage:
+-- The Mem0 SDK connects to this database through the Marie agent framework.
+-- See marie/agent/memory/mem0_config.py for configuration options.
+--
+-- Manual verification (if needed):
+-- \c mem0
+-- \dx  -- Should show 'vector' extension
+-- \dt  -- Should show mem0 tables after first SDK use
+-- ============================================================================
+
+-- Enable pgvector extension (idempotent, safe to run multiple times)
+CREATE EXTENSION IF NOT EXISTS vector;

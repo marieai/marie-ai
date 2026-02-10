@@ -167,17 +167,30 @@ When you have enough information to answer, provide a clear and helpful response
         Args:
             messages: Input messages with system message prepended
             lang: Language code
-            **kwargs: Additional arguments
+            **kwargs: Additional arguments (user_id, agent_id for memory)
 
         Yields:
             Lists of response Messages (streaming partial results)
         """
+        # Extract memory-related kwargs
+        user_id = kwargs.get("user_id")
+        agent_id = kwargs.get("agent_id") or self.name
+
+        # Augment with memories if enabled and user_id provided
+        if user_id and self._mem0 and self._mem0.is_enabled:
+            messages = self._augment_with_memories(
+                messages,
+                user_id=user_id,
+                agent_id=agent_id,
+            )
+
         # Get function definitions if we have tools
         functions = self._get_tool_definitions() if self.function_map else None
 
         # Track conversation for this run
         conversation = list(messages)
         iteration = 0
+        final_response = None
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -248,6 +261,7 @@ When you have enough information to answer, provide a clear and helpful response
 
             if not has_call:
                 # No tool call - this is the final response
+                final_response = response
                 break
 
             # Execute single tool
@@ -285,6 +299,18 @@ When you have enough information to answer, provide a clear and helpful response
                 f"Agent reached max iterations ({self.max_iterations}). "
                 "Consider increasing max_iterations or simplifying the task."
             )
+
+        # Store interaction in memory (best-effort, non-blocking)
+        if user_id and self._mem0 and self._mem0.is_enabled and final_response:
+            try:
+                self._store_interaction(
+                    messages=messages,
+                    response=final_response.text_content or "",
+                    user_id=user_id,
+                    agent_id=agent_id,
+                )
+            except Exception as e:
+                logger.debug(f"Memory storage failed (best-effort): {e}")
 
 
 class FunctionCallingAgent(BaseAgent):
@@ -335,16 +361,29 @@ class FunctionCallingAgent(BaseAgent):
         Args:
             messages: Input messages
             lang: Language code
-            **kwargs: Additional arguments
+            **kwargs: Additional arguments (user_id, agent_id for memory)
 
         Yields:
             Response Messages
         """
+        # Extract memory-related kwargs
+        user_id = kwargs.get("user_id")
+        agent_id = kwargs.get("agent_id") or self.name
+
+        # Augment with memories if enabled and user_id provided
+        if user_id and self._mem0 and self._mem0.is_enabled:
+            messages = self._augment_with_memories(
+                messages,
+                user_id=user_id,
+                agent_id=agent_id,
+            )
+
         # Get OpenAI-style tool definitions
         tools = self._get_tool_definitions_openai() if self.function_map else None
 
         conversation = list(messages)
         iteration = 0
+        final_response = None
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -372,6 +411,7 @@ class FunctionCallingAgent(BaseAgent):
             # Check for tool_calls (OpenAI style)
             if not response.tool_calls:
                 # No tool calls - final response
+                final_response = response
                 break
 
             # Execute all tool calls
@@ -396,6 +436,18 @@ class FunctionCallingAgent(BaseAgent):
 
             # Yield intermediate state
             yield [response] + tool_results
+
+        # Store interaction in memory (best-effort, non-blocking)
+        if user_id and self._mem0 and self._mem0.is_enabled and final_response:
+            try:
+                self._store_interaction(
+                    messages=messages,
+                    response=final_response.text_content or "",
+                    user_id=user_id,
+                    agent_id=agent_id,
+                )
+            except Exception as e:
+                logger.debug(f"Memory storage failed (best-effort): {e}")
 
 
 class ChatAgent(BaseAgent):
@@ -437,16 +489,45 @@ class ChatAgent(BaseAgent):
         Args:
             messages: Input messages
             lang: Language code
-            **kwargs: Additional arguments
+            **kwargs: Additional arguments (user_id, agent_id for memory)
 
         Yields:
             Response Messages
         """
+        # Extract memory-related kwargs
+        user_id = kwargs.get("user_id")
+        agent_id = kwargs.get("agent_id") or self.name
+
+        # Augment with memories if enabled and user_id provided
+        if user_id and self._mem0 and self._mem0.is_enabled:
+            messages = self._augment_with_memories(
+                messages,
+                user_id=user_id,
+                agent_id=agent_id,
+            )
+
         extra_cfg = {"lang": lang}
         if kwargs.get("seed") is not None:
             extra_cfg["seed"] = kwargs["seed"]
 
-        return self._call_llm(messages, extra_generate_cfg=extra_cfg)
+        # Track final response for memory storage
+        final_response = None
+        for responses in self._call_llm(messages, extra_generate_cfg=extra_cfg):
+            if responses:
+                final_response = responses[-1]
+            yield responses
+
+        # Store interaction in memory (best-effort, non-blocking)
+        if user_id and self._mem0 and self._mem0.is_enabled and final_response:
+            try:
+                self._store_interaction(
+                    messages=messages,
+                    response=final_response.text_content or "",
+                    user_id=user_id,
+                    agent_id=agent_id,
+                )
+            except Exception as e:
+                logger.debug(f"Memory storage failed (best-effort): {e}")
 
 
 class PlanAndExecuteAgent(BaseAgent):
@@ -514,10 +595,31 @@ When all steps are complete, provide a FINAL ANSWER."""
         """Execute planning and execution loop.
 
         This uses the same ReAct-style loop but with planning-focused prompts.
+
+        Args:
+            messages: Input messages
+            lang: Language code
+            **kwargs: Additional arguments (user_id, agent_id for memory)
+
+        Yields:
+            Response Messages
         """
+        # Extract memory-related kwargs
+        user_id = kwargs.get("user_id")
+        agent_id = kwargs.get("agent_id") or self.name
+
+        # Augment with memories if enabled and user_id provided
+        if user_id and self._mem0 and self._mem0.is_enabled:
+            messages = self._augment_with_memories(
+                messages,
+                user_id=user_id,
+                agent_id=agent_id,
+            )
+
         functions = self._get_tool_definitions() if self.function_map else None
         conversation = list(messages)
         iteration = 0
+        final_response = None
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -546,6 +648,7 @@ When all steps are complete, provide a FINAL ANSWER."""
 
             # Check if we've reached final answer
             if "FINAL ANSWER" in text_content.upper():
+                final_response = response
                 break
 
             # Check for multiple tool_calls (OpenAI parallel tool calling)
@@ -599,3 +702,15 @@ When all steps are complete, provide a FINAL ANSWER."""
                 )
             conversation.append(tool_msg)
             yield [response, tool_msg]
+
+        # Store interaction in memory (best-effort, non-blocking)
+        if user_id and self._mem0 and self._mem0.is_enabled and final_response:
+            try:
+                self._store_interaction(
+                    messages=messages,
+                    response=final_response.text_content or "",
+                    user_id=user_id,
+                    agent_id=agent_id,
+                )
+            except Exception as e:
+                logger.debug(f"Memory storage failed (best-effort): {e}")

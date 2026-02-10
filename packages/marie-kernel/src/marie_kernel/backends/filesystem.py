@@ -301,9 +301,17 @@ class FileSystemStateBackend:
             if base.endswith(ext):
                 base = base[: -len(ext)]
 
-        # Try to extract number from the end
-        # Match patterns like: frame_0001, page_1, 0001, etc.
-        match = re.search(r"_?(\d+)$", base)
+        # Remove table suffix like _t0, _t1 before extracting page number
+        # This handles filenames like "00002_t0" where we want page 2, not 0
+        base_no_suffix = re.sub(r"_t\d+$", "", base)
+
+        # Try to extract page number from start (handles: 00002, frame_0001, page_1)
+        match = re.search(r"^(?:frame_|page_)?(\d+)", base_no_suffix)
+        if match:
+            return int(match.group(1))
+
+        # Fallback: try to extract any number from the cleaned base
+        match = re.search(r"(\d+)", base_no_suffix)
         if match:
             return int(match.group(1))
 

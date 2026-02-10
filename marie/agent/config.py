@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import yaml
+from marie_mem0 import Mem0Config
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -204,6 +205,10 @@ class AgentConfig(BaseModel):
     mcp: MCPConfig = Field(
         default_factory=MCPConfig,
         description="MCP configuration",
+    )
+    mem0: Mem0Config = Field(
+        default_factory=Mem0Config,
+        description="Mem0 memory configuration",
     )
 
     @field_validator("tools", mode="before")

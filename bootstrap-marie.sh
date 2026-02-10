@@ -30,6 +30,8 @@ DEPLOY_LITELLM=${DEPLOY_LITELLM:-false}
 DEPLOY_CLICKHOUSE=${DEPLOY_CLICKHOUSE:-true}
 DEPLOY_CLICKSTACK=${DEPLOY_CLICKSTACK:-false}
 DEPLOY_GITEA=${DEPLOY_GITEA:-true}
+# Note: Mem0 is now integrated as a Python SDK, not a separate container
+# The database is always created in initialize_databases()
 
 # Vagrant configuration
 VAGRANT_MODE=${VAGRANT_MODE:-false}
@@ -988,6 +990,7 @@ vagrant_bootstrap() {
     if [ "$DEPLOY_GITEA" = "false" ]; then
         vagrant_args="$vagrant_args --no-gitea"
     fi
+    # Note: Mem0 is SDK-based, no container deployment needed
 
     # Determine which env file to use
     local vm_env_file="/home/vagrant/marie/config/.env.dev"
@@ -1060,6 +1063,7 @@ show_deployment_config() {
     echo -e "    ├── Analytics DB (ClickHouse): ${DEPLOY_CLICKHOUSE}"
     echo -e "    ├── Observability (ClickStack): ${DEPLOY_CLICKSTACK}"
     echo -e "    └── Git Service (Gitea): ${DEPLOY_GITEA}"
+    echo -e "  AI Memory (Mem0): SDK-based (uses existing PostgreSQL)"
     echo -e "  Application Services:"
     echo -e "    ├── Gateway: ${DEPLOY_GATEWAY}"
     echo -e "    └── Extract Executors: ${DEPLOY_EXTRACT}"
@@ -1310,6 +1314,19 @@ initialize_databases() {
             "CREATE DATABASE litellm" >/dev/null 2>&1
         echo -e "${GREEN}  ✅ Database 'litellm' ready${NC}"
     fi
+
+    # Create Mem0 database for SDK usage (always created, SDK-based integration)
+    local mem0_db="${MEM0_DB_NAME:-mem0}"
+    echo "  Creating database '$mem0_db' for Mem0 SDK..."
+    docker exec marie-psql-server psql -U "${POSTGRES_USER:-postgres}" -tc \
+        "SELECT 1 FROM pg_database WHERE datname = '$mem0_db'" | grep -q 1 || \
+        docker exec marie-psql-server psql -U "${POSTGRES_USER:-postgres}" -c \
+        "CREATE DATABASE $mem0_db" >/dev/null 2>&1
+    # Enable pgvector extension for Mem0
+    echo "  Enabling pgvector extension in '$mem0_db'..."
+    docker exec marie-psql-server psql -U "${POSTGRES_USER:-postgres}" -d "$mem0_db" -c \
+        "CREATE EXTENSION IF NOT EXISTS vector" >/dev/null 2>&1
+    echo -e "${GREEN}  ✅ Database '$mem0_db' ready with pgvector${NC}"
 
     # Initialize ClickHouse databases
     if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
@@ -1598,6 +1615,9 @@ bootstrap_system() {
             echo ""
         fi
 
+        # Note: Mem0 is now integrated as a Python SDK, not a separate container
+        # The mem0 database is created in initialize_databases() and the SDK uses it directly
+
         # Check if mc-setup completed successfully
         echo -e "${YELLOW}Checking MinIO setup completion...${NC}"
         local setup_attempts=30
@@ -1748,6 +1768,9 @@ show_service_endpoints() {
             echo "  📊 OTLP gRPC: localhost:${OTEL_GRPC_PORT:-4317}"
             echo "  📊 OTLP HTTP: localhost:${OTEL_HTTP_PORT:-4318}"
         fi
+
+        # Note: Mem0 is integrated as a Python SDK, not a container
+        echo "  🧠 Mem0: SDK-based (uses PostgreSQL database 'mem0')"
     fi
 
     if [ "$DEPLOY_GATEWAY" = "true" ]; then
@@ -1911,6 +1934,7 @@ show_help() {
     echo "  Infrastructure: Storage (MinIO), Message Queue (RabbitMQ), Service Discovery (etcd),"
     echo "                  LLM Proxy (LiteLLM), Analytics DB (ClickHouse), Observability (ClickStack),"
     echo "                  Git Service (Gitea)"
+    echo "  AI Memory:      Mem0 (SDK-based, uses existing PostgreSQL)"
     echo "  Application:    Gateway, Extract Executors"
     echo ""
     echo "Examples:"
@@ -2001,6 +2025,10 @@ main() {
         echo "  View Log Collector logs: docker logs -f marie-log-collector"
         echo "  HyperDX UI: http://localhost:8080"
     fi
+    echo ""
+    echo "Mem0 (SDK-based):"
+    echo "  Database: mem0 (PostgreSQL with pgvector)"
+    echo "  Usage: pip install 'marie-ai[memory]'"
 }
 
 main "$@"
