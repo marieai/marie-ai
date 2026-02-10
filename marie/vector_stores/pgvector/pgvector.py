@@ -9,6 +9,7 @@ Key features:
 - Async support via asyncpg
 - Metadata filtering
 - Source-based filtering for multi-tenant RAG
+- Index (collection) support for organizing documents
 """
 
 from __future__ import annotations
@@ -135,6 +136,7 @@ class PGVectorStore(BasePydanticVectorStore):
                 CREATE TABLE IF NOT EXISTS {self.table_name} (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                     node_id TEXT UNIQUE NOT NULL,
+                    index_name TEXT NOT NULL DEFAULT 'default',
                     source_id TEXT NOT NULL,
                     ref_doc_id TEXT,
                     content TEXT,
@@ -146,7 +148,29 @@ class PGVectorStore(BasePydanticVectorStore):
             """
             )
 
+            # Add index_name column if it doesn't exist (migration for existing tables)
+            await conn.execute(
+                f"""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = '{self.table_name}' AND column_name = 'index_name'
+                    ) THEN
+                        ALTER TABLE {self.table_name} ADD COLUMN index_name TEXT NOT NULL DEFAULT 'default';
+                    END IF;
+                END $$;
+            """
+            )
+
             # Create indexes
+            await conn.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS idx_{self.table_name}_index_name
+                ON {self.table_name} (index_name);
+            """
+            )
+
             await conn.execute(
                 f"""
                 CREATE INDEX IF NOT EXISTS idx_{self.table_name}_source
@@ -207,6 +231,7 @@ class PGVectorStore(BasePydanticVectorStore):
             nodes: Sequence of BaseNode objects with embeddings.
             **kwargs: Additional arguments:
                 - source_id: Required. ID of the DocumentSource.
+                - index_name: Index/collection name. Default: 'default'.
                 - node_type: Node type (text/image/document). Default: text.
 
         Returns:
@@ -219,6 +244,7 @@ class PGVectorStore(BasePydanticVectorStore):
         if not source_id:
             raise ValueError("source_id is required for PGVectorStore.async_add")
 
+        index_name = kwargs.get("index_name", "default")
         node_type = kwargs.get("node_type", "text")
         await self._ensure_pool()
 
@@ -258,16 +284,18 @@ class PGVectorStore(BasePydanticVectorStore):
                     row = await conn.fetchrow(
                         f"""
                         INSERT INTO {self.table_name}
-                        (node_id, source_id, ref_doc_id, content, node_type, metadata, embedding)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        (node_id, index_name, source_id, ref_doc_id, content, node_type, metadata, embedding)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                         ON CONFLICT (node_id) DO UPDATE SET
                             embedding = EXCLUDED.embedding,
                             content = EXCLUDED.content,
                             metadata = EXCLUDED.metadata,
-                            source_id = EXCLUDED.source_id
+                            source_id = EXCLUDED.source_id,
+                            index_name = EXCLUDED.index_name
                         RETURNING id
                         """,
                         node_id,
+                        index_name,
                         source_id,
                         ref_doc_id,
                         content,
@@ -317,6 +345,7 @@ class PGVectorStore(BasePydanticVectorStore):
         Args:
             query: VectorStoreQuery with embedding and filters.
             **kwargs: Additional arguments:
+                - index_name: Index/collection to search in. Default: 'default'.
                 - source_ids: List of source IDs to filter by.
                 - node_type: Filter by node type.
 
@@ -337,6 +366,12 @@ class PGVectorStore(BasePydanticVectorStore):
         where_clauses = []
         params: List[Any] = [embedding_db]
         param_idx = 2
+
+        # Index name filtering (always apply)
+        index_name = kwargs.get("index_name", "default")
+        where_clauses.append(f"index_name = ${param_idx}")
+        params.append(index_name)
+        param_idx += 1
 
         # Source ID filtering
         source_ids = kwargs.get("source_ids")
@@ -383,7 +418,7 @@ class PGVectorStore(BasePydanticVectorStore):
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
-                SELECT id, node_id, source_id, ref_doc_id, content,
+                SELECT id, node_id, index_name, source_id, ref_doc_id, content,
                        node_type, metadata,
                        1 - (embedding <=> $1) as similarity
                 FROM {self.table_name}
@@ -413,6 +448,7 @@ class PGVectorStore(BasePydanticVectorStore):
                 metadata=metadata,
             )
             # Store additional info in metadata
+            node.metadata["_index_name"] = row["index_name"]
             node.metadata["_source_id"] = row["source_id"]
             node.metadata["_node_type"] = row["node_type"]
             node.metadata["_ref_doc_id"] = row["ref_doc_id"]
@@ -534,6 +570,7 @@ class PGVectorStore(BasePydanticVectorStore):
         source_id: str,
         metadata: Optional[Dict[str, Any]] = None,
         ref_doc_id: Optional[str] = None,
+        index_name: str = "default",
     ) -> str:
         """Add a single node directly (convenience method).
 
@@ -545,6 +582,7 @@ class PGVectorStore(BasePydanticVectorStore):
             source_id: Parent DocumentSource ID.
             metadata: Additional metadata.
             ref_doc_id: Reference document ID.
+            index_name: Index/collection name. Default: 'default'.
 
         Returns:
             Database UUID of inserted row.
@@ -560,15 +598,17 @@ class PGVectorStore(BasePydanticVectorStore):
             row = await conn.fetchrow(
                 f"""
                 INSERT INTO {self.table_name}
-                (node_id, source_id, ref_doc_id, content, node_type, metadata, embedding)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                (node_id, index_name, source_id, ref_doc_id, content, node_type, metadata, embedding)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 ON CONFLICT (node_id) DO UPDATE SET
                     embedding = EXCLUDED.embedding,
                     content = EXCLUDED.content,
-                    metadata = EXCLUDED.metadata
+                    metadata = EXCLUDED.metadata,
+                    index_name = EXCLUDED.index_name
                 RETURNING id
                 """,
                 node_id,
+                index_name,
                 source_id,
                 ref_doc_id,
                 content,
@@ -584,6 +624,7 @@ class PGVectorStore(BasePydanticVectorStore):
         source_ids: Optional[List[str]] = None,
         top_k: int = 10,
         node_type: Optional[str] = None,
+        index_name: str = "default",
     ) -> List[Dict[str, Any]]:
         """Search the vector store (convenience method).
 
@@ -594,6 +635,7 @@ class PGVectorStore(BasePydanticVectorStore):
             source_ids: Filter to specific sources.
             top_k: Number of results.
             node_type: Filter by node type.
+            index_name: Index/collection to search in. Default: 'default'.
 
         Returns:
             List of matching documents as dictionaries.
@@ -606,23 +648,26 @@ class PGVectorStore(BasePydanticVectorStore):
         embedding_db = to_db(query_embedding, dim=self.embedding_dim)
 
         # Build WHERE clause
-        where_clauses = []
-        params: List[Any] = [embedding_db, top_k]
+        where_clauses = ["index_name = $3"]
+        params: List[Any] = [embedding_db, top_k, index_name]
+        param_idx = 4
 
         if source_ids:
-            where_clauses.append(f"source_id = ANY($3)")
+            where_clauses.append(f"source_id = ANY(${param_idx})")
             params.append(source_ids)
+            param_idx += 1
 
         if node_type:
-            where_clauses.append(f"node_type = ${len(params) + 1}")
+            where_clauses.append(f"node_type = ${param_idx}")
             params.append(node_type)
+            param_idx += 1
 
-        where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+        where_sql = " AND ".join(where_clauses)
 
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
-                SELECT id, node_id, source_id, ref_doc_id, content,
+                SELECT id, node_id, index_name, source_id, ref_doc_id, content,
                        node_type, metadata,
                        1 - (embedding <=> $1) as similarity
                 FROM {self.table_name}
@@ -635,11 +680,40 @@ class PGVectorStore(BasePydanticVectorStore):
 
         return [dict(r) for r in rows]
 
-    async def delete_by_source(self, source_id: str) -> int:
+    async def delete_by_source(
+        self, source_id: str, index_name: Optional[str] = None
+    ) -> int:
         """Delete all nodes for a DocumentSource.
 
         Args:
             source_id: DocumentSource ID.
+            index_name: Optional index filter. If None, deletes from all indexes.
+
+        Returns:
+            Number of deleted rows.
+        """
+        await self._ensure_pool()
+        async with self._pool.acquire() as conn:
+            if index_name:
+                result = await conn.execute(
+                    f"DELETE FROM {self.table_name} WHERE source_id = $1 AND index_name = $2",
+                    source_id,
+                    index_name,
+                )
+            else:
+                result = await conn.execute(
+                    f"DELETE FROM {self.table_name} WHERE source_id = $1",
+                    source_id,
+                )
+            count = int(result.split()[-1])
+            logger.info(f"Deleted {count} nodes for source_id={source_id}")
+            return count
+
+    async def delete_by_index(self, index_name: str) -> int:
+        """Delete all nodes for an index/collection.
+
+        Args:
+            index_name: Index name to delete.
 
         Returns:
             Number of deleted rows.
@@ -647,38 +721,97 @@ class PGVectorStore(BasePydanticVectorStore):
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             result = await conn.execute(
-                f"DELETE FROM {self.table_name} WHERE source_id = $1",
-                source_id,
+                f"DELETE FROM {self.table_name} WHERE index_name = $1",
+                index_name,
             )
             count = int(result.split()[-1])
-            logger.info(f"Deleted {count} nodes for source_id={source_id}")
+            logger.info(f"Deleted {count} nodes for index_name={index_name}")
             return count
 
-    async def get_source_stats(self, source_id: str) -> Dict[str, Any]:
+    async def get_source_stats(
+        self, source_id: str, index_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Get statistics for a DocumentSource.
 
         Args:
             source_id: DocumentSource ID.
+            index_name: Optional index filter.
 
         Returns:
             Dictionary with node counts by type.
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                f"""
-                SELECT node_type, COUNT(*) as count
-                FROM {self.table_name}
-                WHERE source_id = $1
-                GROUP BY node_type
-                """,
-                source_id,
-            )
+            if index_name:
+                rows = await conn.fetch(
+                    f"""
+                    SELECT node_type, COUNT(*) as count
+                    FROM {self.table_name}
+                    WHERE source_id = $1 AND index_name = $2
+                    GROUP BY node_type
+                    """,
+                    source_id,
+                    index_name,
+                )
+            else:
+                rows = await conn.fetch(
+                    f"""
+                    SELECT node_type, COUNT(*) as count
+                    FROM {self.table_name}
+                    WHERE source_id = $1
+                    GROUP BY node_type
+                    """,
+                    source_id,
+                )
 
         stats = {"total": 0, "by_type": {}}
         for row in rows:
             stats["by_type"][row["node_type"]] = row["count"]
             stats["total"] += row["count"]
+
+        return stats
+
+    async def get_index_stats(self, index_name: str) -> Dict[str, Any]:
+        """Get statistics for an index/collection.
+
+        Args:
+            index_name: Index name.
+
+        Returns:
+            Dictionary with node counts by type and source.
+        """
+        await self._ensure_pool()
+        async with self._pool.acquire() as conn:
+            # Get counts by type
+            type_rows = await conn.fetch(
+                f"""
+                SELECT node_type, COUNT(*) as count
+                FROM {self.table_name}
+                WHERE index_name = $1
+                GROUP BY node_type
+                """,
+                index_name,
+            )
+
+            # Get counts by source
+            source_rows = await conn.fetch(
+                f"""
+                SELECT source_id, COUNT(*) as count
+                FROM {self.table_name}
+                WHERE index_name = $1
+                GROUP BY source_id
+                """,
+                index_name,
+            )
+
+        stats = {"total": 0, "by_type": {}, "by_source": {}, "source_count": 0}
+        for row in type_rows:
+            stats["by_type"][row["node_type"]] = row["count"]
+            stats["total"] += row["count"]
+
+        for row in source_rows:
+            stats["by_source"][row["source_id"]] = row["count"]
+            stats["source_count"] += 1
 
         return stats
 
@@ -688,3 +821,477 @@ class PGVectorStore(BasePydanticVectorStore):
             await self._pool.close()
             self._pool = None
             logger.info(f"Closed connection pool for {self.table_name}")
+
+    # -------------------------------------------------------------------------
+    # Extended methods for BasePydanticVectorStore compliance
+    # -------------------------------------------------------------------------
+
+    def get_nodes(
+        self,
+        node_ids: Optional[List[str]] = None,
+        filters: Optional[MetadataFilters] = None,
+        index_name: Optional[str] = None,
+    ) -> List[BaseNode]:
+        """Get nodes from vector store (synchronous wrapper)."""
+        import asyncio
+
+        return asyncio.get_event_loop().run_until_complete(
+            self.aget_nodes(node_ids, filters, index_name)
+        )
+
+    async def aget_nodes(
+        self,
+        node_ids: Optional[List[str]] = None,
+        filters: Optional[MetadataFilters] = None,
+        index_name: Optional[str] = None,
+    ) -> List[BaseNode]:
+        """Asynchronously get nodes from vector store.
+
+        Args:
+            node_ids: Optional list of node IDs to retrieve.
+            filters: Optional metadata filters.
+            index_name: Optional index filter.
+
+        Returns:
+            List of BaseNode objects.
+        """
+        await self._ensure_pool()
+
+        if not self._initialized:
+            await self.initialize()
+
+        where_clauses = []
+        params: List[Any] = []
+        param_idx = 1
+
+        if index_name:
+            where_clauses.append(f"index_name = ${param_idx}")
+            params.append(index_name)
+            param_idx += 1
+
+        if node_ids:
+            where_clauses.append(f"node_id = ANY(${param_idx})")
+            params.append(node_ids)
+            param_idx += 1
+
+        if filters:
+            filter_sql, filter_params = self._build_metadata_filter_sql(
+                filters, param_idx
+            )
+            if filter_sql:
+                where_clauses.append(filter_sql)
+                params.extend(filter_params)
+
+        where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT id, node_id, index_name, source_id, ref_doc_id, content,
+                       node_type, metadata
+                FROM {self.table_name}
+                WHERE {where_sql}
+                ORDER BY created_at DESC
+                """,
+                *params,
+            )
+
+        nodes = []
+        for row in rows:
+            metadata = (
+                json.loads(row["metadata"])
+                if isinstance(row["metadata"], str)
+                else row["metadata"] or {}
+            )
+
+            node = TextNode(
+                id=row["node_id"],
+                text=row["content"] or "",
+                metadata=metadata,
+            )
+            node.metadata["_index_name"] = row["index_name"]
+            node.metadata["_source_id"] = row["source_id"]
+            node.metadata["_node_type"] = row["node_type"]
+            node.metadata["_ref_doc_id"] = row["ref_doc_id"]
+            nodes.append(node)
+
+        return nodes
+
+    def delete_nodes(
+        self,
+        node_ids: Optional[List[str]] = None,
+        filters: Optional[MetadataFilters] = None,
+        **delete_kwargs: Any,
+    ) -> None:
+        """Delete nodes from vector store (synchronous wrapper)."""
+        import asyncio
+
+        asyncio.get_event_loop().run_until_complete(
+            self.adelete_nodes(node_ids, filters, **delete_kwargs)
+        )
+
+    async def adelete_nodes(
+        self,
+        node_ids: Optional[List[str]] = None,
+        filters: Optional[MetadataFilters] = None,
+        **delete_kwargs: Any,
+    ) -> None:
+        """Asynchronously delete nodes from vector store.
+
+        Args:
+            node_ids: Optional list of node IDs to delete.
+            filters: Optional metadata filters for deletion.
+            **delete_kwargs: Additional arguments (e.g., source_id, index_name).
+        """
+        await self._ensure_pool()
+
+        where_clauses = []
+        params: List[Any] = []
+        param_idx = 1
+
+        # Support index_name in delete_kwargs
+        index_name = delete_kwargs.get("index_name")
+        if index_name:
+            where_clauses.append(f"index_name = ${param_idx}")
+            params.append(index_name)
+            param_idx += 1
+
+        if node_ids:
+            where_clauses.append(f"node_id = ANY(${param_idx})")
+            params.append(node_ids)
+            param_idx += 1
+
+        # Support source_id in delete_kwargs
+        source_id = delete_kwargs.get("source_id")
+        if source_id:
+            where_clauses.append(f"source_id = ${param_idx}")
+            params.append(source_id)
+            param_idx += 1
+
+        if filters:
+            filter_sql, filter_params = self._build_metadata_filter_sql(
+                filters, param_idx
+            )
+            if filter_sql:
+                where_clauses.append(filter_sql)
+                params.extend(filter_params)
+
+        if not where_clauses:
+            logger.warning("delete_nodes called without any filters - skipping")
+            return
+
+        where_sql = " AND ".join(where_clauses)
+
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                f"DELETE FROM {self.table_name} WHERE {where_sql}",
+                *params,
+            )
+            count = int(result.split()[-1])
+            logger.info(f"Deleted {count} nodes from {self.table_name}")
+
+    def clear(self) -> None:
+        """Clear all nodes from vector store (synchronous wrapper)."""
+        import asyncio
+
+        asyncio.get_event_loop().run_until_complete(self.aclear())
+
+    async def aclear(self) -> None:
+        """Asynchronously clear all nodes from vector store."""
+        await self._ensure_pool()
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(f"TRUNCATE TABLE {self.table_name}")
+            logger.info(f"Cleared all nodes from {self.table_name}")
+
+    # -------------------------------------------------------------------------
+    # Batch operations for high-throughput ingestion
+    # -------------------------------------------------------------------------
+
+    async def add_nodes_batch(
+        self,
+        nodes: List[Dict[str, Any]],
+        source_id: str,
+        batch_size: int = 100,
+        index_name: str = "default",
+    ) -> int:
+        """Add multiple nodes in batches for high throughput.
+
+        Args:
+            nodes: List of node dictionaries with keys:
+                - node_id: Unique node identifier
+                - embedding: Vector embedding list
+                - content: Text content
+                - node_type: Type of node (text/image/document)
+                - metadata: Optional metadata dict
+                - ref_doc_id: Optional reference document ID
+            source_id: Parent DocumentSource ID.
+            batch_size: Number of nodes per batch.
+            index_name: Index/collection name. Default: 'default'.
+
+        Returns:
+            Total number of nodes inserted.
+        """
+        await self._ensure_pool()
+
+        if not self._initialized:
+            await self.initialize()
+
+        total_inserted = 0
+
+        for i in range(0, len(nodes), batch_size):
+            batch = nodes[i : i + batch_size]
+
+            # Prepare batch data
+            records = []
+            for node in batch:
+                embedding_db = to_db(node["embedding"], dim=self.embedding_dim)
+                records.append(
+                    (
+                        node["node_id"],
+                        index_name,
+                        source_id,
+                        node.get("ref_doc_id"),
+                        node.get("content", ""),
+                        node.get("node_type", "text"),
+                        json.dumps(node.get("metadata", {})),
+                        embedding_db,
+                    )
+                )
+
+            async with self._pool.acquire() as conn:
+                # Use executemany for batch insert
+                result = await conn.executemany(
+                    f"""
+                    INSERT INTO {self.table_name}
+                    (node_id, index_name, source_id, ref_doc_id, content, node_type, metadata, embedding)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    ON CONFLICT (node_id) DO UPDATE SET
+                        embedding = EXCLUDED.embedding,
+                        content = EXCLUDED.content,
+                        metadata = EXCLUDED.metadata,
+                        source_id = EXCLUDED.source_id,
+                        index_name = EXCLUDED.index_name
+                    """,
+                    records,
+                )
+                total_inserted += len(batch)
+
+            logger.debug(f"Inserted batch {i // batch_size + 1}: {len(batch)} nodes")
+
+        logger.info(f"Batch insert complete: {total_inserted} nodes added")
+        return total_inserted
+
+    # -------------------------------------------------------------------------
+    # Hybrid search support (vector + full-text)
+    # -------------------------------------------------------------------------
+
+    async def hybrid_search(
+        self,
+        query_embedding: List[float],
+        query_text: str,
+        source_ids: Optional[List[str]] = None,
+        top_k: int = 10,
+        alpha: float = 0.5,
+        node_type: Optional[str] = None,
+        index_name: str = "default",
+    ) -> List[Dict[str, Any]]:
+        """Hybrid search combining vector similarity and full-text search.
+
+        Uses RRF (Reciprocal Rank Fusion) to combine vector and text scores.
+
+        Args:
+            query_embedding: Query vector.
+            query_text: Query text for full-text search.
+            source_ids: Filter to specific sources.
+            top_k: Number of results.
+            alpha: Weight for vector vs text (1.0 = vector only, 0.0 = text only).
+            node_type: Filter by node type.
+            index_name: Index/collection to search in. Default: 'default'.
+
+        Returns:
+            List of matching documents with combined scores.
+        """
+        await self._ensure_pool()
+
+        if not self._initialized:
+            await self.initialize()
+
+        embedding_db = to_db(query_embedding, dim=self.embedding_dim)
+
+        # Build WHERE clause
+        where_clauses = ["index_name = $4"]
+        params: List[Any] = [
+            embedding_db,
+            query_text,
+            top_k * 2,
+            index_name,
+        ]  # Fetch more for fusion
+        param_idx = 5
+
+        if source_ids:
+            where_clauses.append(f"source_id = ANY(${param_idx})")
+            params.append(source_ids)
+            param_idx += 1
+
+        if node_type:
+            where_clauses.append(f"node_type = ${param_idx}")
+            params.append(node_type)
+            param_idx += 1
+
+        where_sql = " AND ".join(where_clauses)
+
+        async with self._pool.acquire() as conn:
+            # Get vector search results with ranks
+            vector_rows = await conn.fetch(
+                f"""
+                WITH vector_results AS (
+                    SELECT id, node_id, source_id, ref_doc_id, content,
+                           node_type, metadata,
+                           1 - (embedding <=> $1) as similarity,
+                           ROW_NUMBER() OVER (ORDER BY embedding <=> $1) as rank
+                    FROM {self.table_name}
+                    WHERE {where_sql}
+                    ORDER BY embedding <=> $1
+                    LIMIT $3
+                )
+                SELECT * FROM vector_results
+                """,
+                *params,
+            )
+
+            # Get text search results with ranks
+            text_rows = await conn.fetch(
+                f"""
+                WITH text_results AS (
+                    SELECT id, node_id, source_id, ref_doc_id, content,
+                           node_type, metadata,
+                           ts_rank_cd(to_tsvector('english', COALESCE(content, '')),
+                                      plainto_tsquery('english', $2)) as text_score,
+                           ROW_NUMBER() OVER (
+                               ORDER BY ts_rank_cd(
+                                   to_tsvector('english', COALESCE(content, '')),
+                                   plainto_tsquery('english', $2)
+                               ) DESC
+                           ) as rank
+                    FROM {self.table_name}
+                    WHERE {where_sql}
+                      AND to_tsvector('english', COALESCE(content, '')) @@
+                          plainto_tsquery('english', $2)
+                    ORDER BY text_score DESC
+                    LIMIT $3
+                )
+                SELECT * FROM text_results
+                """,
+                *params,
+            )
+
+        # RRF fusion
+        k = 60  # RRF constant
+        node_scores: Dict[str, Dict[str, Any]] = {}
+
+        for row in vector_rows:
+            node_id = row["node_id"]
+            rrf_score = alpha / (k + row["rank"])
+            node_scores[node_id] = {
+                "row": dict(row),
+                "vector_rank": row["rank"],
+                "vector_similarity": row["similarity"],
+                "text_rank": None,
+                "text_score": 0,
+                "rrf_score": rrf_score,
+            }
+
+        for row in text_rows:
+            node_id = row["node_id"]
+            rrf_text = (1 - alpha) / (k + row["rank"])
+
+            if node_id in node_scores:
+                node_scores[node_id]["text_rank"] = row["rank"]
+                node_scores[node_id]["text_score"] = row["text_score"]
+                node_scores[node_id]["rrf_score"] += rrf_text
+            else:
+                node_scores[node_id] = {
+                    "row": dict(row),
+                    "vector_rank": None,
+                    "vector_similarity": 0,
+                    "text_rank": row["rank"],
+                    "text_score": row["text_score"],
+                    "rrf_score": rrf_text,
+                }
+
+        # Sort by RRF score and return top_k
+        sorted_results = sorted(
+            node_scores.values(), key=lambda x: x["rrf_score"], reverse=True
+        )[:top_k]
+
+        results = []
+        for item in sorted_results:
+            row = item["row"]
+            metadata = (
+                json.loads(row["metadata"])
+                if isinstance(row["metadata"], str)
+                else row["metadata"] or {}
+            )
+            results.append(
+                {
+                    "id": row["id"],
+                    "node_id": row["node_id"],
+                    "source_id": row["source_id"],
+                    "ref_doc_id": row.get("ref_doc_id"),
+                    "content": row["content"],
+                    "node_type": row["node_type"],
+                    "metadata": metadata,
+                    "similarity": item["vector_similarity"],
+                    "text_score": item["text_score"],
+                    "rrf_score": item["rrf_score"],
+                }
+            )
+
+        return results
+
+    async def count_nodes(
+        self,
+        source_id: Optional[str] = None,
+        node_type: Optional[str] = None,
+        index_name: Optional[str] = None,
+    ) -> int:
+        """Count nodes in the vector store.
+
+        Args:
+            source_id: Optional source ID filter.
+            node_type: Optional node type filter.
+            index_name: Optional index filter.
+
+        Returns:
+            Number of matching nodes.
+        """
+        await self._ensure_pool()
+
+        where_clauses = []
+        params: List[Any] = []
+        param_idx = 1
+
+        if index_name:
+            where_clauses.append(f"index_name = ${param_idx}")
+            params.append(index_name)
+            param_idx += 1
+
+        if source_id:
+            where_clauses.append(f"source_id = ${param_idx}")
+            params.append(source_id)
+            param_idx += 1
+
+        if node_type:
+            where_clauses.append(f"node_type = ${param_idx}")
+            params.append(node_type)
+            param_idx += 1
+
+        where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT COUNT(*) as count FROM {self.table_name} WHERE {where_sql}",
+                *params,
+            )
+
+        return row["count"] if row else 0

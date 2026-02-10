@@ -151,3 +151,66 @@ class RAGQueryResponse(BaseModel):
     processing_time_ms: float = Field(
         default=0.0, description="Query processing time in milliseconds"
     )
+
+
+class RAGIndex(BaseModel):
+    """A named collection (index) for organizing RAG documents.
+
+    An index provides isolated storage with its own configuration for
+    embedding, chunking, and retrieval. Inspired by LlamaCloud's Index pattern.
+    """
+
+    id: str = Field(..., description="Unique identifier (UUID)")
+    name: str = Field(..., description="Human-readable name, unique per workspace")
+    workspace_id: str = Field(..., description="Workspace this index belongs to")
+
+    # Embedding configuration
+    embedding_model: str = Field(
+        default="jinaai/jina-embeddings-v4",
+        description="Embedding model to use for this index",
+    )
+    embedding_dim: int = Field(
+        default=2048,
+        description="Embedding dimension (128/256/512/1024/2048 for Matryoshka)",
+    )
+
+    # Transform configuration
+    chunk_size: int = Field(
+        default=1024, description="Maximum chunk size in characters"
+    )
+    chunk_overlap: int = Field(
+        default=200, description="Overlap between chunks in characters"
+    )
+    segmentation_mode: Literal["page", "paragraph", "semantic"] = Field(
+        default="semantic", description="Document segmentation strategy"
+    )
+
+    # Search configuration
+    hybrid_enabled: bool = Field(
+        default=True, description="Enable hybrid search (vector + full-text)"
+    )
+    hybrid_alpha: float = Field(
+        default=0.5,
+        description="Balance between dense (1.0) and sparse (0.0) search",
+        ge=0.0,
+        le=1.0,
+    )
+
+    # Multimodal configuration
+    multimodal_enabled: bool = Field(
+        default=True, description="Enable image embedding in same vector space"
+    )
+
+    # Metadata
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="Additional index metadata"
+    )
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow, description="Creation timestamp"
+    )
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow, description="Last update timestamp"
+    )
+
+    class Config:
+        json_encoders = {datetime: lambda v: v.isoformat()}

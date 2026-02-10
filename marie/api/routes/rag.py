@@ -81,6 +81,67 @@ class ReingestResponse(BaseModel):
     message: str
 
 
+class IngestRequest(BaseModel):
+    """Request for direct text ingestion."""
+
+    texts: List[str] = Field(..., description="Text chunks to ingest", min_length=1)
+    source_id: str = Field(..., description="Source ID for the documents")
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None, description="Metadata to attach to all chunks"
+    )
+    ref_doc_id: Optional[str] = Field(default=None, description="Reference document ID")
+
+
+class IngestResponse(BaseModel):
+    """Response after ingestion."""
+
+    source_id: str
+    count: int
+    message: str
+
+
+class SearchRequest(BaseModel):
+    """Request for semantic search (simpler than full RAG query)."""
+
+    query: str = Field(..., description="Search query")
+    source_ids: Optional[List[str]] = Field(
+        default=None, description="Filter to specific sources"
+    )
+    top_k: int = Field(default=10, description="Number of results")
+    use_hybrid: bool = Field(
+        default=False, description="Use hybrid search (vector + keyword)"
+    )
+
+
+class SearchResponse(BaseModel):
+    """Response from semantic search."""
+
+    results: List[Dict[str, Any]]
+    query: str
+    total_results: int
+
+
+class DeleteRequest(BaseModel):
+    """Request for deletion."""
+
+    source_id: Optional[str] = Field(
+        default=None, description="Delete all nodes from this source"
+    )
+    node_ids: Optional[List[str]] = Field(
+        default=None, description="Delete specific node IDs"
+    )
+    ref_doc_id: Optional[str] = Field(
+        default=None, description="Delete by reference document ID"
+    )
+
+
+class DeleteResponse(BaseModel):
+    """Response after deletion."""
+
+    deleted_count: int
+    message: str
+
+
 class QueryRequest(BaseModel):
     """Request for RAG query."""
 
@@ -366,6 +427,178 @@ class RAGRouter:
             by_type=stats.get("by_type", {}),
         )
 
+    async def ingest(
+        self,
+        request: IngestRequest,
+        user_id: str,
+    ) -> IngestResponse:
+        """Ingest text documents directly.
+
+        Args:
+            request: Ingest request with texts.
+            user_id: User ID for authorization.
+
+        Returns:
+            IngestResponse with count.
+        """
+        source = self._sources.get(request.source_id)
+        if source and source.user_id != user_id:
+            raise ValueError(f"Unauthorized access to source: {request.source_id}")
+
+        if not self._embeddings:
+            raise ValueError("Embeddings not configured")
+
+        if not self._vector_store:
+            raise ValueError("Vector store not configured")
+
+        logger.info(
+            f"Ingesting {len(request.texts)} texts to source {request.source_id}"
+        )
+
+        # Embed texts
+        embeddings = self._embeddings.embed_text(request.texts, is_query=False)
+
+        # Prepare nodes
+        import uuid as uuid_module
+
+        nodes = []
+        for text, embedding in zip(request.texts, embeddings):
+            node_id = f"{request.source_id}_{uuid_module.uuid4().hex[:8]}"
+            nodes.append(
+                {
+                    "node_id": node_id,
+                    "embedding": embedding.tolist(),
+                    "content": text,
+                    "node_type": "text",
+                    "metadata": request.metadata or {},
+                    "ref_doc_id": request.ref_doc_id,
+                }
+            )
+
+        # Batch insert
+        count = await self._vector_store.add_nodes_batch(
+            nodes=nodes,
+            source_id=request.source_id,
+        )
+
+        # Update source if it exists
+        if source:
+            source.node_count += count
+            source.updated_at = datetime.utcnow()
+
+        return IngestResponse(
+            source_id=request.source_id,
+            count=count,
+            message=f"Successfully ingested {count} documents.",
+        )
+
+    async def search(
+        self,
+        request: SearchRequest,
+        user_id: str,
+    ) -> SearchResponse:
+        """Semantic search over documents.
+
+        Args:
+            request: Search request.
+            user_id: User ID for authorization.
+
+        Returns:
+            SearchResponse with results.
+        """
+        if not self._embeddings:
+            raise ValueError("Embeddings not configured")
+
+        if not self._vector_store:
+            raise ValueError("Vector store not configured")
+
+        # Validate source access
+        if request.source_ids:
+            for sid in request.source_ids:
+                source = self._sources.get(sid)
+                if source and source.user_id != user_id:
+                    raise ValueError(f"Unauthorized access to source: {sid}")
+
+        logger.info(
+            f"Searching: query='{request.query[:50]}...', top_k={request.top_k}"
+        )
+
+        # Embed query
+        query_embedding = self._embeddings.embed_text([request.query], is_query=True)[0]
+
+        # Search
+        if request.use_hybrid:
+            results = await self._vector_store.hybrid_search(
+                query_embedding=query_embedding.tolist(),
+                query_text=request.query,
+                source_ids=request.source_ids,
+                top_k=request.top_k,
+            )
+        else:
+            results = await self._vector_store.search(
+                query_embedding=query_embedding.tolist(),
+                source_ids=request.source_ids,
+                top_k=request.top_k,
+            )
+
+        return SearchResponse(
+            results=results,
+            query=request.query,
+            total_results=len(results),
+        )
+
+    async def delete(
+        self,
+        request: DeleteRequest,
+        user_id: str,
+    ) -> DeleteResponse:
+        """Delete documents from the store.
+
+        Args:
+            request: Delete request.
+            user_id: User ID for authorization.
+
+        Returns:
+            DeleteResponse with count.
+        """
+        if not self._vector_store:
+            raise ValueError("Vector store not configured")
+
+        if not any([request.source_id, request.node_ids, request.ref_doc_id]):
+            raise ValueError(
+                "At least one of source_id, node_ids, or ref_doc_id required"
+            )
+
+        # Check authorization
+        if request.source_id:
+            source = self._sources.get(request.source_id)
+            if source and source.user_id != user_id:
+                raise ValueError(f"Unauthorized access to source: {request.source_id}")
+
+        deleted = 0
+
+        if request.source_id and not request.node_ids and not request.ref_doc_id:
+            # Delete entire source
+            deleted = await self._vector_store.delete_by_source(request.source_id)
+        elif request.ref_doc_id:
+            # Delete by ref_doc_id
+            await self._vector_store.adelete(request.ref_doc_id)
+            deleted = -1
+        elif request.node_ids:
+            # Delete specific nodes
+            await self._vector_store.adelete_nodes(node_ids=request.node_ids)
+            deleted = len(request.node_ids)
+
+        if deleted == -1:
+            message = f"Deleted documents with ref_doc_id '{request.ref_doc_id}'."
+        else:
+            message = f"Deleted {deleted} documents."
+
+        return DeleteResponse(
+            deleted_count=deleted if deleted >= 0 else 0,
+            message=message,
+        )
+
     async def query(
         self,
         request: QueryRequest,
@@ -534,6 +767,39 @@ def create_fastapi_router(
         ):
             try:
                 return await rag.query(request, user_id)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
+        @api_router.post("/ingest", response_model=IngestResponse)
+        async def ingest(
+            request: IngestRequest,
+            user_id: str = Depends(get_current_user),
+        ):
+            """Ingest text documents directly into the vector store."""
+            try:
+                return await rag.ingest(request, user_id)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
+        @api_router.post("/search", response_model=SearchResponse)
+        async def search(
+            request: SearchRequest,
+            user_id: str = Depends(get_current_user),
+        ):
+            """Semantic search over documents."""
+            try:
+                return await rag.search(request, user_id)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
+        @api_router.post("/delete", response_model=DeleteResponse)
+        async def delete(
+            request: DeleteRequest,
+            user_id: str = Depends(get_current_user),
+        ):
+            """Delete documents from the vector store."""
+            try:
+                return await rag.delete(request, user_id)
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
 

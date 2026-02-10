@@ -48,6 +48,12 @@ from marie.query_planner.planner import (
     query_planner,
     topological_sort,
 )
+from marie.query_planner.rag import (
+    ContextCacheQueryDefinition,
+    RAGDeleteQueryDefinition,
+    RAGIngestQueryDefinition,
+    RAGSearchQueryDefinition,
+)
 
 __all__ = [
     # Base classes
@@ -92,4 +98,9 @@ __all__ = [
     "HitlApprovalQueryDefinition",
     "HitlCorrectionQueryDefinition",
     "HitlRouterQueryDefinition",
+    # RAG (Agentic Retrieval)
+    "RAGSearchQueryDefinition",
+    "RAGIngestQueryDefinition",
+    "RAGDeleteQueryDefinition",
+    "ContextCacheQueryDefinition",
 ]

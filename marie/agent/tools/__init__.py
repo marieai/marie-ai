@@ -34,6 +34,22 @@ from marie.agent.tools.filesystem import (
     ShellInput,
     ShellTool,
 )
+
+# Query Plan tools (auto-registered via @register_tool decorator)
+from marie.agent.tools.query_plan_tools import (
+    get_node_defaults,
+    get_node_types,
+    validate_query_plan,
+)
+from marie.agent.tools.rag_tool import (
+    RAGDeleteInput,
+    RAGIngestInput,
+    RAGIngestTool,
+    RAGSearchInput,
+    RAGSearchTool,
+    RAGStatsInput,
+    RAGTool,
+)
 from marie.agent.tools.registry import (
     TOOL_REGISTRY,
     get_tool,
@@ -76,6 +92,13 @@ __all__ = [
     # RAG tools
     "DocumentSearchTool",
     "MultiDocumentSearchTool",
+    "RAGTool",
+    "RAGSearchTool",
+    "RAGIngestTool",
+    "RAGSearchInput",
+    "RAGIngestInput",
+    "RAGDeleteInput",
+    "RAGStatsInput",
     # Filesystem tools
     "FileListInput",
     "FileListTool",
@@ -91,4 +114,8 @@ __all__ = [
     "SystemInfoTool",
     "WebFetchInput",
     "WebFetchTool",
+    # Query Plan tools
+    "get_node_types",
+    "validate_query_plan",
+    "get_node_defaults",
 ]

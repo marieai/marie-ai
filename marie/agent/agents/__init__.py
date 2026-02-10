@@ -6,6 +6,7 @@ from marie.agent.agents.assistant import (
     PlanAndExecuteAgent,
     ReactAgent,
 )
+from marie.agent.agents.query_plan_builder import QueryPlanBuilderAgent
 from marie.agent.agents.router import MultiAgentHub, Router
 from marie.agent.agents.vision_document_agent import (
     DocumentExtractionAgent,
@@ -27,4 +28,6 @@ __all__ = [
     "VisionDocumentAgent",
     "DocumentExtractionAgent",
     "DocumentQAAgent",
+    # Query Plan Builder
+    "QueryPlanBuilderAgent",
 ]
