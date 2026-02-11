@@ -12,7 +12,33 @@ from marie.serve.discovery.timeout_utils import OperationTimeoutError, run_with_
 from marie.serve.discovery.util import form_service_key
 from marie.utils.timing import exponential_backoff
 
-__all__ = ["EtcdServiceRegistry"]
+__all__ = ["EtcdServiceRegistry", "EtcdConnectionError"]
+
+_KNOWN_CONNECTION_ERRORS = (
+    "trying to use a failed node",
+    "etcd connection failed",
+    "connection refused",
+    "unavailable",
+    "deadline exceeded",
+    "transport is closing",
+    "no leader",
+    "lease not found",
+)
+
+
+class EtcdConnectionError(Exception):
+    """Raised when etcd connection issues prevent operations from completing."""
+
+    def __init__(self, message: str, service_addr: str = None, cause: Exception = None):
+        self.service_addr = service_addr
+        self.cause = cause
+        super().__init__(message)
+
+
+def _is_known_connection_error(error: Exception) -> bool:
+    """Check if an exception is a known etcd connection error."""
+    error_str = str(error).lower()
+    return any(known in error_str for known in _KNOWN_CONNECTION_ERRORS)
 
 
 class EtcdServiceRegistry(ServiceRegistry):
@@ -72,6 +98,8 @@ class EtcdServiceRegistry(ServiceRegistry):
 
         self._leases = {}
         self._services = {}
+        # Store registration metadata (addr_cls, metadata) per service_addr for re-registration
+        self._registration_info = {}
         self._heartbeat_time = heartbeat_time
         self._default_service_ttl = 6  # Match container.py ETCD_LEASE_SEC default
         self.setup_heartbeat_async()
@@ -89,23 +117,49 @@ class EtcdServiceRegistry(ServiceRegistry):
                 old_lease = old_leases.get(service_addr)
                 ttl = None
                 if old_lease is not None:
+                    # Catch all exceptions, not just AttributeError, because
+                    # old leases may reference a failed etcd client and throw
+                    # ValueError("Trying to use a failed node") or similar
                     try:
                         ttl = old_lease.remaining_ttl
-                    except AttributeError:
+                        # Treat TTL=0 as invalid - the lease is dead/expired
+                        if ttl is not None and ttl <= 0:
+                            ttl = None
+                    except Exception:
                         try:
-                            ttl = old_lease.ttl
-                        except AttributeError:
+                            ttl = getattr(old_lease, 'ttl', None)
+                            if ttl is not None and ttl <= 0:
+                                ttl = None
+                        except Exception:
                             ttl = None
                 if not ttl:
                     ttl = self._default_service_ttl
+
+                # Retrieve the original addr_cls and metadata for re-registration
+                reg_info = self._registration_info.get(service_addr, {})
+                addr_cls = reg_info.get('addr_cls')
+                metadata = reg_info.get('metadata')
+
                 if service_names:
                     services_to_reregister.append(
-                        (list(service_names), service_addr, ttl)
+                        (list(service_names), service_addr, ttl, addr_cls, metadata)
                     )
 
-        for service_names, service_addr, ttl in services_to_reregister:
+        for (
+            service_names,
+            service_addr,
+            ttl,
+            addr_cls,
+            metadata,
+        ) in services_to_reregister:
             try:
-                self.register(service_names, service_addr, ttl)
+                self.register(
+                    service_names,
+                    service_addr,
+                    ttl,
+                    addr_cls=addr_cls,
+                    metadata=metadata,
+                )
                 logger.info(f"Re-registered services {service_names} at {service_addr}")
             except Exception as e:
                 logger.error(
@@ -127,16 +181,27 @@ class EtcdServiceRegistry(ServiceRegistry):
         logger.error(f"Etcd connection failed: {err}")
 
     def _lease_ttl(self, lease, default=None) -> int:
-        """Return TTL from lease or default (no hasattr/getattr)."""
+        """Return TTL from lease or default.
+
+        Catches all exceptions (not just AttributeError) because the lease
+        may reference a failed etcd client and throw ValueError or other
+        exceptions when accessing remaining_ttl.
+
+        Returns default if TTL is 0 or negative (indicating dead/expired lease).
+        """
         if lease is None:
             return default
         try:
-            return lease.remaining_ttl
-        except AttributeError:
+            ttl = lease.remaining_ttl
+            if ttl is not None and ttl > 0:
+                return ttl
+        except Exception:
             pass
         try:
-            return lease.ttl
-        except AttributeError:
+            ttl = lease.ttl
+            if ttl is not None and ttl > 0:
+                return ttl
+        except Exception:
             pass
         return default
 
@@ -150,13 +215,11 @@ class EtcdServiceRegistry(ServiceRegistry):
                     ttl = self._lease_ttl(lease)
                     if ttl and ttl > 0:
                         return lease
+                    # TTL is 0/None/invalid - drop the bad lease
+                    self._leases.pop(service_addr, None)
                 except Exception:
                     # bad lease; drop it
-                    try:
-                        del self._leases[service_addr]
-                    except Exception:
-                        pass
-                    lease = None
+                    self._leases.pop(service_addr, None)
 
             # Let etcd assign lease id to avoid collisions
             lease = self._etcd_client.lease(service_ttl)
@@ -178,6 +241,12 @@ class EtcdServiceRegistry(ServiceRegistry):
             lease = self.get_lease(service_addr, service_ttl)
             addr_cls = addr_cls or PlainAddress
 
+            # Store registration info for re-registration after reconnection
+            self._registration_info[service_addr] = {
+                'addr_cls': addr_cls,
+                'metadata': metadata,
+            }
+
             for service_name in service_names:
                 key = form_service_key(service_name, service_addr)
                 resolved = self._etcd_client.get(key)
@@ -198,10 +267,26 @@ class EtcdServiceRegistry(ServiceRegistry):
                     addr_obj = addr_cls(service_addr)
 
                 addr_val = addr_obj.add_value()
-                put_key, _ = self._etcd_client.put(key, addr_val, lease=lease)
-                logger.info(
-                    f"Registering service : {service_name}@{service_addr} : {put_key}"
-                )
+
+                # Retry once if lease not found (stale lease after reconnection)
+                for attempt in range(2):
+                    try:
+                        put_key, _ = self._etcd_client.put(key, addr_val, lease=lease)
+                        logger.info(
+                            f"Registering service : {service_name}@{service_addr} : {put_key}"
+                        )
+                        break
+                    except Exception as e:
+                        if "lease not found" in str(e).lower() and attempt == 0:
+                            logger.warning(
+                                f"Lease not found for {service_addr}, creating fresh lease"
+                            )
+                            # Invalidate and create fresh lease
+                            self._leases.pop(service_addr, None)
+                            lease = self._etcd_client.lease(service_ttl)
+                            self._leases[service_addr] = lease
+                            continue
+                        raise
 
                 try:
                     self._services[service_addr].add(service_name)
@@ -278,13 +363,32 @@ class EtcdServiceRegistry(ServiceRegistry):
                     logger.warning(
                         f"Lease expired (TTL=0) for {svc_addr}, re-registering services"
                     )
-                    fallback_ttl = self._lease_ttl(lease, service_ttl) or service_ttl
-                    self.register(list(registered), svc_addr, fallback_ttl)
+                    # Clear the invalid cached lease BEFORE re-registering
+                    # This ensures get_lease() creates a fresh lease
+                    with self._lock:
+                        self._leases.pop(svc_addr, None)
+                        # Get stored registration info to preserve addr_cls and metadata
+                        reg_info = self._registration_info.get(svc_addr, {})
+                    fallback_ttl = service_ttl or self._default_service_ttl
+                    self.register(
+                        list(registered),
+                        svc_addr,
+                        fallback_ttl,
+                        addr_cls=reg_info.get('addr_cls'),
+                        metadata=reg_info.get('metadata'),
+                    )
 
             except Exception as e:
-                logger.error(
-                    f"Error during heartbeat for {svc_addr}: {e}", exc_info=True
-                )
+                # For known connection errors, log briefly without traceback
+                if _is_known_connection_error(e):
+                    logger.warning(
+                        f"Heartbeat skipped for {svc_addr}: {type(e).__name__} - {e}"
+                    )
+                else:
+                    # Unknown error - log with full traceback
+                    logger.error(
+                        f"Error during heartbeat for {svc_addr}: {e}", exc_info=True
+                    )
 
     def unregister(self, service_names, service_addr, addr_cls=None):
         """Unregister services with the same address."""
@@ -320,6 +424,8 @@ class EtcdServiceRegistry(ServiceRegistry):
                 self._services[service_addr] = registered_services
             else:
                 self._services.pop(service_addr, None)
+                # Clean up registration info when no services remain for this address
+                self._registration_info.pop(service_addr, None)
 
     def setup_heartbeat_async(self):
         """
@@ -363,31 +469,39 @@ class EtcdServiceRegistry(ServiceRegistry):
                         f" (connection: {current_state.name})" if current_state else ""
                     )
 
-                    logger.error(
-                        f"Error in heartbeat attempt {failures}/{max_failures}{state_info}: {e}"
-                    )
-                    logger.debug(f"Traceback: {traceback.format_exc()}")
+                    is_known = _is_known_connection_error(e)
+                    is_reconnecting = current_state in [
+                        ConnectionState.DISCONNECTED,
+                        ConnectionState.RECONNECTING,
+                        ConnectionState.FAILED,
+                    ]
+
+                    if is_known and is_reconnecting:
+                        logger.debug(
+                            f"Heartbeat deferred{state_info}: {type(e).__name__}"
+                        )
+                    elif is_known:
+                        logger.warning(
+                            f"Heartbeat failed{state_info}: {type(e).__name__} - {e}"
+                        )
+                    else:
+                        logger.error(
+                            f"Error in heartbeat attempt {failures}/{max_failures}{state_info}: {e}"
+                        )
+                        logger.debug(f"Traceback: {traceback.format_exc()}")
+
                     backoff_time = exponential_backoff(
                         failures, initial_backoff, max_backoff
                     )
 
-                    # Don't count failures during known disconnections
-                    if current_state in [
-                        ConnectionState.DISCONNECTED,
-                        ConnectionState.RECONNECTING,
-                        ConnectionState.FAILED,
-                    ]:
+                    if is_reconnecting:
                         failures = min(failures, max_failures - 1)
                         backoff_time = self._heartbeat_time
-                        logger.debug("Not counting failure - connection is down")
-                    else:
-                        logger.warning(
-                            f"Retrying heartbeat in {backoff_time:.2f} seconds"
-                        )
 
                     if failures >= max_failures:
                         logger.error(
-                            f"Max failures reached ({max_failures}). Heartbeat process will stop."
+                            f"Heartbeat stopped after {max_failures} consecutive failures. "
+                            f"Last error: {type(e).__name__} - {e}"
                         )
                         break
 

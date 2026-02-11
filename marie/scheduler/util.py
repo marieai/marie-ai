@@ -2,6 +2,7 @@ import random
 from collections import defaultdict
 
 from marie.job.common import JobStatus
+from marie.logging_core.predefined import default_logger as logger
 from marie.scheduler.state import WorkState
 from marie.state.semaphore_store import SemaphoreStore
 
@@ -53,7 +54,6 @@ def available_slots(entrypoint: str, sem: SemaphoreStore) -> int:
     Reads from the semaphore store to ensure consistency with reserve()/renew().
     """
     executor = entrypoint.split("://", 1)[0]
-    # single-slot query (O(1))
     return max(0, sem.available_slot_count(executor))
 
 
@@ -61,8 +61,14 @@ def available_slots_by_executor(sem: SemaphoreStore) -> dict[str, int]:
     """
     Snapshot available slots for all executors from the semaphore store.
     Equivalent to: capacities - used_count, based on holders/count keys.
+
+    Returns an empty dict if the semaphore store is unavailable.
     """
-    return sem.available_count_all()
+    try:
+        return sem.available_count_all()
+    except Exception as ex:
+        logger.warning(f"Failed to read available slots (etcd unavailable?): {ex}")
+        return {}
 
 
 # # Example Usage

@@ -17,7 +17,17 @@
       "WebFetch(domain:github.com)",
       "Bash(tree:*)",
       "Bash(curl:*)",
-      "Bash(docker exec:*)"
+      "Bash(docker exec:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(python:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(for dir in */)",
+      "Bash(do if [ -f \"$dir/source.png\" ])",
+      "Bash([ -f \"$dir/source.tif\" ])",
+      "Bash([ -f \"$dir/source.tiff\" ])",
+      "Bash(then md5sum \"$dir\"source.*)",
+      "Bash(fi)",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": []
