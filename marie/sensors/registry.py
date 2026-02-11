@@ -114,6 +114,7 @@ def register_all_sensors() -> None:
         schedule_sensor,
         webhook_sensor,
     )
+    from marie.sensors.definitions.data_sink import s3_sensor
 
     # Verify all expected types are registered
     registry = SensorRegistry.get_instance()
@@ -124,6 +125,7 @@ def register_all_sensors() -> None:
         SensorType.POLLING,
         SensorType.EVENT,
         SensorType.RUN_STATUS,
+        SensorType.DATA_SINK,
     ]
 
     missing = [t for t in expected_types if not registry.has_evaluator(t)]

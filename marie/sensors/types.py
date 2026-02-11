@@ -24,6 +24,7 @@ class SensorType(str, Enum):
     EVENT = "event"  # Message queue (RabbitMQ/Kafka, ingest to event_log)
     RUN_STATUS = "run_status"  # Job completion monitoring
     ASSET = "asset"  # Asset materialization
+    DATA_SINK = "data_sink"  # Cloud storage monitoring (S3, GCS, etc.)
 
 
 class SensorStatus(str, Enum):

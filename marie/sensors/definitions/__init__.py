@@ -5,6 +5,12 @@ Each sensor type has its own implementation that extends BaseSensor.
 """
 
 from marie.sensors.definitions.base import BaseSensor
+from marie.sensors.definitions.data_sink import (
+    DataSinkProvider,
+    DataSinkSensor,
+    FileObject,
+    S3DataSinkSensor,
+)
 from marie.sensors.definitions.event_sensor import EventSensor
 from marie.sensors.definitions.manual_sensor import ManualSensor
 from marie.sensors.definitions.polling_sensor import PollingSensor
@@ -20,4 +26,8 @@ __all__ = [
     "PollingSensor",
     "EventSensor",
     "RunStatusSensor",
+    "DataSinkProvider",
+    "DataSinkSensor",
+    "FileObject",
+    "S3DataSinkSensor",
 ]
