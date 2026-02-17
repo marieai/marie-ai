@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  echo-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    command: python echo_agent.py
+    ports:
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9001/.well-known/agent.json"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  calculator-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    command: python calculator_agent.py
+    ports:
+      - "9002:9002"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9002/.well-known/agent.json"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  streaming-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    command: python streaming_agent.py
+    ports:
+      - "9003:9003"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9003/.well-known/agent.json"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  async-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    command: python async_task_agent.py
+    ports:
+      - "9004:9004"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9004/.well-known/agent.json"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+networks:
+  default:
+    name: a2a-test-network

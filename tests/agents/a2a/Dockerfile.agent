@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install curl for healthchecks
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Install A2A SDK with HTTP server dependencies
+RUN pip install --no-cache-dir a2a-sdk[http-server] uvicorn
+
+# Copy agent files
+COPY *.py /app/
+
+# Default port (overridden per service)
+EXPOSE 9001 9002 9003 9004
+
+# Default command (overridden per service)
+CMD ["python", "echo_agent.py"]

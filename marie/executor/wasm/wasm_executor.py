@@ -3,14 +3,24 @@ Wasm Node Executor.
 
 Executes pre-compiled WebAssembly components using Wasmtime.
 Components are loaded from storage (S3/PostgreSQL) or local disk.
+
+Isolation model:
+- Wasmtime sandbox: primary security boundary (memory, capability, fuel)
+- ProcessPoolExecutor: blast-radius containment if wasmtime has a bug.
+  A SIGSEGV in a worker kills that process only; the pool replaces it
+  and the executor survives.
 """
 
 import asyncio
 import json
+import logging
+import os
 import threading
 import time
 from collections import OrderedDict
+from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
 from dataclasses import dataclass, field
+from multiprocessing import get_context
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -21,33 +31,212 @@ from marie import Executor, requests
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
 
-# Optional wasmtime import
+# Optional marie_wasm import (main process only — for permission resolution)
 try:
-    from wasmtime import Component, Config, Engine, Linker, Store
-
-    WASMTIME_AVAILABLE = True
-except ImportError:
-    WASMTIME_AVAILABLE = False
-    Config = None  # type: ignore
-    Engine = None  # type: ignore
-    Store = None  # type: ignore
-    Component = None  # type: ignore
-    Linker = None  # type: ignore
-
-# Optional marie_wasm import
-try:
-    from marie_wasm import (
-        BUILTIN_PERMISSIONS,
-        DataItem,
-        ExecutionContext,
-        ExecutionResult,
-        HostImplementations,
-        Permissions,
-    )
+    from marie_wasm import BUILTIN_PERMISSIONS, Permissions
 
     MARIE_WASM_AVAILABLE = True
 except ImportError:
     MARIE_WASM_AVAILABLE = False
+
+# Check wasmtime at import time so status endpoint can report it
+try:
+    import wasmtime  # noqa: F401
+
+    WASMTIME_AVAILABLE = True
+except ImportError:
+    WASMTIME_AVAILABLE = False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Worker-process globals.  Initialised once per pool worker via
+# _init_worker(); never touched by the main executor process.
+# ──────────────────────────────────────────────────────────────────────
+_worker_engine: Any = None
+_worker_epoch_stop: Optional[threading.Event] = None
+_worker_epoch_thread: Optional[threading.Thread] = None
+_worker_component_cache: Optional["LRUCache"] = None
+_worker_http_client: Any = None
+
+
+def _init_worker(
+    max_cached_components: int = 100,
+    http_timeout: float = 30.0,
+) -> None:
+    """Called once when a pool worker process starts.
+
+    Creates the wasmtime Engine and epoch ticker thread so that the
+    first real execution doesn't pay the cold-start cost.
+    """
+    global _worker_engine, _worker_epoch_stop, _worker_epoch_thread
+    global _worker_component_cache, _worker_http_client
+
+    from wasmtime import Config, Engine
+
+    config = Config()
+    config.consume_fuel = True
+    config.epoch_interruption = True
+    config.wasm_component_model = True
+    _worker_engine = Engine(config)
+    _worker_component_cache = LRUCache(max_cached_components)
+
+    # Epoch ticker — 10 ms granularity, same as the old in-process thread
+    _worker_epoch_stop = threading.Event()
+
+    def _tick() -> None:
+        while not _worker_epoch_stop.wait(timeout=0.01):
+            _worker_engine.increment_epoch()
+
+    _worker_epoch_thread = threading.Thread(target=_tick, daemon=True)
+    _worker_epoch_thread.start()
+
+    # Lazy HTTP client — created on first use inside the worker
+    try:
+        import httpx
+
+        _worker_http_client = httpx.Client(timeout=http_timeout)
+    except ImportError:
+        _worker_http_client = None
+
+    logging.getLogger("wasm_worker").debug("WASM worker %d initialised", os.getpid())
+
+
+def _execute_in_worker(
+    wasm_bytes: bytes,
+    input_data: list[dict],
+    config: dict,
+    context: dict,
+    permissions_dict: dict,
+    credentials: Optional[dict[str, str]],
+    cache_key: str,
+) -> dict:
+    """Run a single WASM execution inside a pool worker process.
+
+    Everything here is process-isolated from the main executor.
+    A wasmtime Cranelift JIT bug that causes a SIGSEGV kills only
+    this worker; the ProcessPoolExecutor replaces it transparently.
+
+    All arguments are plain dicts/bytes — no unpicklable wasmtime objects
+    cross the process boundary.
+    """
+    from wasmtime import Component, Linker, Store
+
+    if _worker_engine is None:
+        return {"success": False, "error": "Worker not initialised"}
+
+    # ── Compile or fetch from worker-local cache ──────────────────
+    component = _worker_component_cache.get(cache_key)
+    if component is None:
+        try:
+            component = Component(_worker_engine, wasm_bytes)
+            _worker_component_cache.put(cache_key, component)
+        except Exception as e:
+            return {"success": False, "error": f"Component compile error: {e}"}
+
+    # ── Reconstruct permissions in worker ─────────────────────────
+    try:
+        from marie_wasm import HostImplementations, Permissions
+
+        permissions = Permissions(
+            allow_http=permissions_dict.get("allow_http", False),
+            http_allowed_hosts=permissions_dict.get("http_allowed_hosts", []),
+            allow_secrets=permissions_dict.get("allow_secrets", False),
+            secret_allowed_names=permissions_dict.get("secret_allowed_names", []),
+            allow_kv=permissions_dict.get("allow_kv", False),
+            kv_prefix=permissions_dict.get("kv_prefix", ""),
+            max_memory_mb=permissions_dict.get("max_memory_mb", 64),
+            max_fuel=permissions_dict.get("max_fuel", 1_000_000_000),
+            timeout_ms=permissions_dict.get("timeout_ms", 30_000),
+        )
+        host = HostImplementations(
+            permissions=permissions,
+            credentials=credentials,
+            http_client=_worker_http_client,
+            execution_id=context.get("execution_id", ""),
+        )
+        marie_wasm_ok = True
+    except ImportError:
+        permissions = None
+        host = None
+        marie_wasm_ok = False
+
+    # ── Create store with resource limits ─────────────────────────
+    max_fuel = permissions_dict.get("max_fuel", 1_000_000_000)
+    timeout_ms = permissions_dict.get("timeout_ms", 30_000)
+
+    store = Store(_worker_engine)
+    store.set_fuel(max_fuel)
+    store.set_epoch_deadline(int(timeout_ms / 10))
+
+    # ── Bind host functions ───────────────────────────────────────
+    linker = Linker(_worker_engine)
+    if host and marie_wasm_ok:
+        bindings = host.get_bindings()
+        for interface_name, functions in bindings.items():
+            for func_name, func in functions.items():
+                try:
+                    linker.define_func(interface_name, func_name, func)
+                except Exception:
+                    pass  # non-fatal: component may not import this interface
+
+    # ── Instantiate and execute ───────────────────────────────────
+    try:
+        instance = linker.instantiate(store, component)
+        execute_func = instance.exports(store).get("execute")
+        if execute_func is None:
+            return {
+                "success": False,
+                "error": "Component does not export 'execute' function",
+            }
+
+        config_arg = {"json": json.dumps(config)}
+        context_arg = {
+            "workflow-id": context.get("workflow_id", ""),
+            "execution-id": context.get("execution_id", ""),
+            "node-id": context.get("node_id", ""),
+            "run-index": context.get("run_index", 0),
+        }
+
+        start = time.monotonic()
+        result = execute_func(store, input_data, config_arg, context_arg)
+        elapsed = time.monotonic() - start
+
+        fuel_remaining = store.get_fuel()
+        fuel_consumed = max_fuel - fuel_remaining
+
+        if "success" in result:
+            return {
+                "success": True,
+                "data": result["success"],
+                "fuel_consumed": fuel_consumed,
+                "execution_time_ms": elapsed * 1000,
+            }
+        elif "error" in result:
+            return {
+                "success": False,
+                "error": result["error"],
+                "fuel_consumed": fuel_consumed,
+                "execution_time_ms": elapsed * 1000,
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Unexpected result format",
+                "fuel_consumed": fuel_consumed,
+            }
+
+    except Exception as e:
+        msg = str(e)
+        if "epoch deadline" in msg.lower():
+            return {"success": False, "error": "Execution timeout"}
+        if "fuel" in msg.lower():
+            return {"success": False, "error": "CPU limit exceeded"}
+        return {"success": False, "error": f"Execution error: {msg}"}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Main-process classes
+# ──────────────────────────────────────────────────────────────────────
 
 
 class WasmInputDoc(BaseDoc):
@@ -70,23 +259,16 @@ class WasmOutputDoc(BaseDoc):
 class WasmParameters:
     """Parameters for Wasm execution."""
 
-    # Either node_type (built-in) or wasm_path (user code)
     node_type: Optional[str] = None
     wasm_path: Optional[str] = None
 
-    # Execution context
     workflow_id: str = ""
     execution_id: str = ""
     node_id: str = ""
     run_index: int = 0
 
-    # Node configuration (JSON)
     config: str = "{}"
-
-    # Permissions (for user code)
     permissions: Optional[dict] = None
-
-    # Credentials for secrets interface
     credentials: Optional[dict[str, str]] = None
 
 
@@ -118,11 +300,17 @@ class WasmNodeExecutor(MarieExecutor):
     Loads .wasm modules from storage (compiled at build time by Gateway)
     and executes them with the Wasmtime runtime.
 
+    Isolation model:
+    - Wasmtime sandbox: primary boundary (memory, capability, fuel)
+    - ProcessPoolExecutor: blast-radius containment.  A wasmtime bug
+      that crashes a worker kills that process only; the pool replaces
+      it and the executor survives.
+
     Features:
     - Wasmtime component model API
-    - Epoch-based timeout enforcement
+    - Epoch-based timeout enforcement (per-worker epoch thread)
     - Fuel metering for CPU limits
-    - LRU component cache
+    - LRU wasm-bytes cache (main process) + compiled-component cache (workers)
     - Host function implementations (HTTP, secrets, logging)
     """
 
@@ -132,23 +320,20 @@ class WasmNodeExecutor(MarieExecutor):
         max_cached_components: int = 100,
         default_timeout_ms: int = 30000,
         default_max_fuel: int = 1_000_000_000,
+        worker_count: int = 0,
+        http_timeout: float = 30.0,
         storage: Optional[dict[str, Any]] = None,
-        http_client: Optional[Callable] = None,
-        kv_store: Optional[Any] = None,
         **kwargs,
     ):
         """
-        Initialize the Wasm node executor.
-
         Args:
-            builtin_nodes_dir: Path to pre-compiled built-in nodes
-            max_cached_components: Maximum number of cached components
-            default_timeout_ms: Default execution timeout in milliseconds
-            default_max_fuel: Default CPU fuel limit
-            storage: S3/PostgreSQL config for loading user-compiled nodes
-            http_client: HTTP client for host functions
-            kv_store: Key-value store for host functions
-            **kwargs: Additional MarieExecutor arguments
+            builtin_nodes_dir: Path to pre-compiled built-in nodes.
+            max_cached_components: LRU cache size (both main + per-worker).
+            default_timeout_ms: Default execution timeout in milliseconds.
+            default_max_fuel: Default CPU fuel limit.
+            worker_count: Pool size.  0 = number of CPUs (capped at 8).
+            http_timeout: Timeout for HTTP requests made by host functions.
+            storage: S3/PostgreSQL config for loading user-compiled nodes.
         """
         kwargs["storage"] = storage
         super().__init__(**kwargs)
@@ -157,344 +342,154 @@ class WasmNodeExecutor(MarieExecutor):
         self.builtin_nodes_dir = Path(builtin_nodes_dir)
         self.default_timeout_ms = default_timeout_ms
         self.default_max_fuel = default_max_fuel
-        self._http_client = http_client
-        self._kv_store = kv_store
+        self._max_cached_components = max_cached_components
+        self._http_timeout = http_timeout
 
-        # Check dependencies
+        # Wasm bytes cache — keyed by cache_key, holds raw bytes.
+        # Workers compile these into Components in their own caches.
+        self._bytes_cache: LRUCache = LRUCache(max_cached_components)
+
+        # Pre-load built-in node bytes
+        self._load_builtin_bytes()
+
+        # Worker pool
         if not WASMTIME_AVAILABLE:
             self.logger.warning(
-                "wasmtime not installed - Wasm execution will fail. "
+                "wasmtime not installed — Wasm execution will fail. "
                 "Install with: pip install wasmtime"
             )
-            self.engine = None
+            self._pool: Optional[ProcessPoolExecutor] = None
         else:
-            # Configure Wasmtime engine for component model
-            config = Config()
-            config.consume_fuel = True
-            config.epoch_interruption = True
-            config.wasm_component_model = True
-            self.engine = Engine(config)
+            count = worker_count or min(os.cpu_count() or 4, 8)
+            mp_ctx = get_context("spawn")
+            self._pool = ProcessPoolExecutor(
+                max_workers=count,
+                mp_context=mp_ctx,
+                initializer=_init_worker,
+                initargs=(max_cached_components, http_timeout),
+            )
+            self.logger.info("WASM process pool started with %d workers", count)
 
         if not MARIE_WASM_AVAILABLE:
             self.logger.warning(
-                "marie_wasm not installed - host functions unavailable. "
+                "marie_wasm not installed — host functions unavailable. "
                 "Install with: pip install marie-wasm"
             )
 
-        # Component cache (built-in + user code)
-        self._component_cache: LRUCache = LRUCache(max_cached_components)
-
-        # Epoch increment thread for timeout enforcement
-        self._epoch_thread: Optional[threading.Thread] = None
-        self._epoch_stop = threading.Event()
-        if self.engine:
-            self._start_epoch_thread()
-
-        # Load built-in nodes
-        self._load_builtin_nodes()
-
         self.logger.info(
-            f"WasmNodeExecutor initialized - "
-            f"wasmtime: {WASMTIME_AVAILABLE}, "
-            f"marie_wasm: {MARIE_WASM_AVAILABLE}"
+            "WasmNodeExecutor initialised — " "wasmtime: %s, marie_wasm: %s",
+            WASMTIME_AVAILABLE,
+            MARIE_WASM_AVAILABLE,
         )
 
-    def _start_epoch_thread(self) -> None:
-        """Start background thread that increments engine epoch for timeouts."""
-
-        def epoch_incrementer() -> None:
-            while not self._epoch_stop.wait(timeout=0.01):  # 10ms granularity
-                if self.engine:
-                    self.engine.increment_epoch()
-
-        self._epoch_thread = threading.Thread(target=epoch_incrementer, daemon=True)
-        self._epoch_thread.start()
-        self.logger.debug("Epoch thread started")
+    # ── Lifecycle ─────────────────────────────────────────────────
 
     def shutdown(self) -> None:
-        """Shutdown the executor and stop epoch thread."""
-        self._epoch_stop.set()
-        if self._epoch_thread:
-            self._epoch_thread.join(timeout=1.0)
+        """Shutdown the worker pool."""
+        if self._pool is not None:
+            self._pool.shutdown(wait=False, cancel_futures=True)
+            self._pool = None
         self.logger.info("WasmNodeExecutor shutdown")
 
-    def _load_builtin_nodes(self) -> None:
-        """Pre-load all built-in node components from disk."""
-        if not self.engine:
-            return
+    # ── Bytes loading (main process) ──────────────────────────────
 
+    def _load_builtin_bytes(self) -> None:
+        """Pre-load raw bytes for all built-in .wasm files."""
         if not self.builtin_nodes_dir.exists():
             self.logger.debug(
-                f"Built-in nodes directory not found: {self.builtin_nodes_dir}"
+                "Built-in nodes directory not found: %s", self.builtin_nodes_dir
             )
             return
 
         loaded = 0
         for wasm_file in self.builtin_nodes_dir.glob("*.wasm"):
-            node_type = wasm_file.stem
-            try:
-                component = Component.from_file(self.engine, str(wasm_file))
-                self._component_cache.put(f"builtin:{node_type}", component)
-                loaded += 1
-            except Exception as e:
-                self.logger.warning(f"Failed to load builtin node {node_type}: {e}")
+            cache_key = f"builtin:{wasm_file.stem}"
+            self._bytes_cache.put(cache_key, wasm_file.read_bytes())
+            loaded += 1
 
-        if loaded > 0:
-            self.logger.info(f"Loaded {loaded} built-in Wasm nodes")
+        if loaded:
+            self.logger.info("Pre-loaded %d built-in Wasm node(s)", loaded)
 
-    async def _load_component(
-        self, wasm_path: str, node_type: Optional[str] = None
-    ) -> Optional[Any]:
-        """
-        Load a Wasm component from storage or cache.
-
-        Args:
-            wasm_path: Storage path to .wasm file
-            node_type: Built-in node type name
-
-        Returns:
-            Wasmtime Component or None if not found
-        """
-        if not self.engine:
-            return None
-
-        # Check for built-in node
+    async def _get_wasm_bytes(
+        self, wasm_path: str, node_type: Optional[str]
+    ) -> tuple[Optional[bytes], str]:
+        """Load raw .wasm bytes and return (bytes, cache_key)."""
+        # Built-in node
         if node_type:
             cache_key = f"builtin:{node_type}"
-            component = self._component_cache.get(cache_key)
-            if component:
-                return component
+            cached = self._bytes_cache.get(cache_key)
+            if cached is not None:
+                return cached, cache_key
 
-            # Try loading from disk
             wasm_file = self.builtin_nodes_dir / f"{node_type}.wasm"
             if wasm_file.exists():
-                try:
-                    component = Component.from_file(self.engine, str(wasm_file))
-                    self._component_cache.put(cache_key, component)
-                    return component
-                except Exception as e:
-                    self.logger.error(f"Failed to load builtin node {node_type}: {e}")
-                    return None
+                data = wasm_file.read_bytes()
+                self._bytes_cache.put(cache_key, data)
+                return data, cache_key
 
-        # Load from storage
+        # User-compiled node
         cache_key = f"user:{wasm_path}"
-        component = self._component_cache.get(cache_key)
-        if component:
-            return component
+        cached = self._bytes_cache.get(cache_key)
+        if cached is not None:
+            return cached, cache_key
 
-        # Download from storage
         try:
-            # Use storage mixin if available
             if hasattr(self, "store") and self.store:
-                wasm_bytes = await self.store.download(wasm_path)
+                data = await self.store.download(wasm_path)
             else:
-                # Fall back to local file
-                wasm_file = Path(wasm_path)
-                if wasm_file.exists():
-                    wasm_bytes = wasm_file.read_bytes()
-                else:
-                    self.logger.error(f"Wasm file not found: {wasm_path}")
-                    return None
+                p = Path(wasm_path)
+                if not p.exists():
+                    self.logger.error("Wasm file not found: %s", wasm_path)
+                    return None, cache_key
+                data = p.read_bytes()
 
-            component = Component(self.engine, wasm_bytes)
-            self._component_cache.put(cache_key, component)
-            return component
-
+            self._bytes_cache.put(cache_key, data)
+            return data, cache_key
         except Exception as e:
-            self.logger.error(f"Failed to load component from {wasm_path}: {e}")
-            return None
+            self.logger.error("Failed to load wasm from %s: %s", wasm_path, e)
+            return None, cache_key
 
-    def _get_permissions(
+    # ── Permission resolution (main process) ──────────────────────
+
+    def _resolve_permissions(
         self, node_type: Optional[str], permissions_dict: Optional[dict]
-    ) -> "Permissions":
-        """Get permissions for execution."""
-        if not MARIE_WASM_AVAILABLE:
-            # Return a basic permissions object
-            @dataclass
-            class BasicPermissions:
-                allow_http: bool = False
-                allow_secrets: bool = False
-                allow_kv: bool = False
-                kv_prefix: str = ""
-                max_memory_mb: int = 64
-                max_fuel: int = 1_000_000_000
-                timeout_ms: int = 30000
-
-            return BasicPermissions()
-
-        # Built-in node permissions
-        if node_type and node_type in BUILTIN_PERMISSIONS:
-            return BUILTIN_PERMISSIONS[node_type]
-
-        # User-provided permissions
-        if permissions_dict:
-            return Permissions(
-                allow_http=permissions_dict.get("allow_http", False),
-                http_allowed_hosts=permissions_dict.get("http_allowed_hosts", []),
-                allow_secrets=permissions_dict.get("allow_secrets", False),
-                secret_allowed_names=permissions_dict.get("secret_allowed_names", []),
-                allow_kv=permissions_dict.get("allow_kv", False),
-                kv_prefix=permissions_dict.get("kv_prefix", ""),
-                max_memory_mb=permissions_dict.get("max_memory_mb", 64),
-                max_fuel=permissions_dict.get("max_fuel", self.default_max_fuel),
-                timeout_ms=permissions_dict.get("timeout_ms", self.default_timeout_ms),
-            )
-
-        # Default minimal permissions
-        return Permissions()
-
-    async def _execute_component(
-        self,
-        component: Any,
-        input_data: list[dict],
-        config: dict,
-        context: dict,
-        permissions: Any,
-        credentials: Optional[dict[str, str]] = None,
     ) -> dict:
-        """
-        Execute a Wasm component with the given permissions.
+        """Resolve permissions to a plain dict for the worker."""
+        defaults = {
+            "allow_http": False,
+            "http_allowed_hosts": [],
+            "allow_secrets": False,
+            "secret_allowed_names": [],
+            "allow_kv": False,
+            "kv_prefix": "",
+            "max_memory_mb": 64,
+            "max_fuel": self.default_max_fuel,
+            "timeout_ms": self.default_timeout_ms,
+        }
 
-        Args:
-            component: Wasmtime Component
-            input_data: List of input data items
-            config: Node configuration
-            context: Execution context
-            permissions: Permission settings
-            credentials: Secret credentials
-
-        Returns:
-            Dict with success/error and data
-        """
-        if not self.engine:
-            return {"success": False, "error": "Wasmtime not available"}
-
-        # Create store with resource limits
-        store = Store(self.engine)
-        store.set_fuel(permissions.max_fuel)
-
-        # Set epoch deadline for timeout (10ms per epoch)
-        epoch_deadline = int(permissions.timeout_ms / 10)
-        store.set_epoch_deadline(epoch_deadline)
-
-        # Create host implementations
-        if MARIE_WASM_AVAILABLE:
-            host = HostImplementations(
-                permissions=permissions,
-                credentials=credentials,
-                http_client=self._http_client,
-                kv_store=self._kv_store,
-                logger_func=lambda level, msg: self.logger.log(
-                    self._log_level_to_int(level), msg
-                ),
-                execution_id=context.get("execution-id", ""),
-            )
-        else:
-            host = None
-
-        # Create linker and bind host functions
-        linker = Linker(self.engine)
-        if host:
-            self._bind_host_functions(linker, host)
-
-        try:
-            # Instantiate component
-            instance = linker.instantiate(store, component)
-
-            # Get the execute export
-            execute_func = instance.exports(store).get("execute")
-            if execute_func is None:
-                return {
-                    "success": False,
-                    "error": "Component does not export 'execute' function",
-                }
-
-            # Prepare arguments
-            config_arg = {"json": json.dumps(config)}
-            context_arg = {
-                "workflow-id": context.get("workflow_id", ""),
-                "execution-id": context.get("execution_id", ""),
-                "node-id": context.get("node_id", ""),
-                "run-index": context.get("run_index", 0),
+        if MARIE_WASM_AVAILABLE and node_type and node_type in BUILTIN_PERMISSIONS:
+            perms = BUILTIN_PERMISSIONS[node_type]
+            return {
+                "allow_http": perms.allow_http,
+                "http_allowed_hosts": list(perms.http_allowed_hosts),
+                "allow_secrets": perms.allow_secrets,
+                "secret_allowed_names": list(perms.secret_allowed_names),
+                "allow_kv": perms.allow_kv,
+                "kv_prefix": perms.kv_prefix,
+                "max_memory_mb": perms.max_memory_mb,
+                "max_fuel": perms.max_fuel,
+                "timeout_ms": perms.timeout_ms,
             }
 
-            # Execute in thread pool to not block async loop
-            loop = asyncio.get_event_loop()
-            start_time = time.monotonic()
+        if permissions_dict:
+            for key in defaults:
+                if key in permissions_dict:
+                    defaults[key] = permissions_dict[key]
+            return defaults
 
-            result = await loop.run_in_executor(
-                None,
-                lambda: execute_func(store, input_data, config_arg, context_arg),
-            )
+        return defaults
 
-            execution_time = time.monotonic() - start_time
-
-            # Calculate fuel consumed
-            fuel_remaining = store.get_fuel()
-            fuel_consumed = permissions.max_fuel - fuel_remaining
-
-            self.logger.debug(
-                f"Wasm execution completed: "
-                f"time={execution_time:.3f}s, fuel={fuel_consumed}"
-            )
-
-            # Parse result
-            if "success" in result:
-                return {
-                    "success": True,
-                    "data": result["success"],
-                    "fuel_consumed": fuel_consumed,
-                    "execution_time_ms": execution_time * 1000,
-                }
-            elif "error" in result:
-                return {
-                    "success": False,
-                    "error": result["error"],
-                    "fuel_consumed": fuel_consumed,
-                    "execution_time_ms": execution_time * 1000,
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": "Unexpected result format",
-                    "fuel_consumed": fuel_consumed,
-                }
-
-        except Exception as e:
-            error_msg = str(e)
-            if "epoch deadline" in error_msg.lower():
-                return {"success": False, "error": "Execution timeout"}
-            if "fuel" in error_msg.lower():
-                return {"success": False, "error": "CPU limit exceeded"}
-            self.logger.error(f"Wasm execution error: {e}")
-            return {"success": False, "error": f"Execution error: {error_msg}"}
-
-    def _log_level_to_int(self, level: str) -> int:
-        """Convert log level string to logging int."""
-        import logging
-
-        levels = {
-            "debug": logging.DEBUG,
-            "info": logging.INFO,
-            "warn": logging.WARNING,
-            "warning": logging.WARNING,
-            "error": logging.ERROR,
-        }
-        return levels.get(level.lower(), logging.INFO)
-
-    def _bind_host_functions(self, linker: Any, host: Any) -> None:
-        """Bind host function implementations to the linker."""
-        # Get all bindings from host
-        bindings = host.get_bindings()
-
-        for interface_name, functions in bindings.items():
-            for func_name, func in functions.items():
-                try:
-                    linker.define_func(interface_name, func_name, func)
-                except Exception as e:
-                    self.logger.debug(
-                        f"Could not bind {interface_name}::{func_name}: {e}"
-                    )
+    # ── Request handlers ──────────────────────────────────────────
 
     @requests(on="/execute")
     async def execute(
@@ -503,25 +498,9 @@ class WasmNodeExecutor(MarieExecutor):
         parameters: Optional[dict] = None,
         **kwargs,
     ) -> DocList[WasmOutputDoc]:
-        """
-        Execute a Wasm node.
-
-        Args:
-            docs: Input documents
-            parameters: Execution parameters including:
-                - node_type: Built-in node name
-                - wasm_path: S3 path to user-compiled .wasm
-                - workflow_id, execution_id, node_id, run_index
-                - config: Node configuration JSON
-                - permissions: Permission dict for user code
-                - credentials: Secret credentials
-
-        Returns:
-            Output documents
-        """
+        """Execute a Wasm node."""
         params = WasmParameters(**(parameters or {}))
 
-        # Validate parameters
         if not params.node_type and not params.wasm_path:
             return DocList[WasmOutputDoc](
                 [
@@ -532,38 +511,42 @@ class WasmNodeExecutor(MarieExecutor):
                 ]
             )
 
-        # Load component
-        component = await self._load_component(
-            wasm_path=params.wasm_path or "",
-            node_type=params.node_type,
-        )
+        if self._pool is None:
+            return DocList[WasmOutputDoc](
+                [WasmOutputDoc(success=False, error="Wasmtime not available")]
+            )
 
-        if not component:
+        # Load bytes in main process (may hit S3/storage)
+        wasm_bytes, cache_key = await self._get_wasm_bytes(
+            params.wasm_path or "", params.node_type
+        )
+        if wasm_bytes is None:
             return DocList[WasmOutputDoc](
                 [
                     WasmOutputDoc(
                         success=False,
-                        error=f"Failed to load component: {params.node_type or params.wasm_path}",
+                        error=f"Failed to load: {params.node_type or params.wasm_path}",
                     )
                 ]
             )
 
-        # Get permissions
-        permissions = self._get_permissions(params.node_type, params.permissions)
+        permissions_dict = self._resolve_permissions(
+            params.node_type, params.permissions
+        )
 
-        # Prepare input data
         input_data = [
-            {"json": doc.json_data, "binary": list(doc.binary) if doc.binary else None}
+            {
+                "json": doc.json_data,
+                "binary": list(doc.binary) if doc.binary else None,
+            }
             for doc in docs
         ]
 
-        # Parse config
         try:
             config = json.loads(params.config) if params.config else {}
         except json.JSONDecodeError:
             config = {}
 
-        # Build context
         context = {
             "workflow_id": params.workflow_id,
             "execution_id": params.execution_id,
@@ -571,15 +554,31 @@ class WasmNodeExecutor(MarieExecutor):
             "run_index": params.run_index,
         }
 
-        # Execute
-        result = await self._execute_component(
-            component=component,
-            input_data=input_data,
-            config=config,
-            context=context,
-            permissions=permissions,
-            credentials=params.credentials,
-        )
+        # Dispatch to worker pool
+        loop = asyncio.get_event_loop()
+        try:
+            result = await loop.run_in_executor(
+                self._pool,
+                _execute_in_worker,
+                wasm_bytes,
+                input_data,
+                config,
+                context,
+                permissions_dict,
+                params.credentials,
+                cache_key,
+            )
+        except BrokenExecutor:
+            self.logger.error("WASM worker pool crashed — reinitialising")
+            self._recreate_pool()
+            return DocList[WasmOutputDoc](
+                [
+                    WasmOutputDoc(
+                        success=False,
+                        error="Execution failed: worker process crashed",
+                    )
+                ]
+            )
 
         # Build output
         if result.get("success"):
@@ -588,7 +587,7 @@ class WasmNodeExecutor(MarieExecutor):
                 output_docs.append(
                     WasmOutputDoc(
                         json_data=item.get("json", "{}"),
-                        binary=bytes(item["binary"]) if item.get("binary") else None,
+                        binary=(bytes(item["binary"]) if item.get("binary") else None),
                         success=True,
                     )
                 )
@@ -610,16 +609,16 @@ class WasmNodeExecutor(MarieExecutor):
     @requests(on="/status")
     async def status(self, **kwargs) -> DocList[TextDoc]:
         """Health check endpoint."""
-        status_info = {
+        pool = self._pool
+        info = {
             "executor": "WasmNodeExecutor",
             "wasmtime_available": WASMTIME_AVAILABLE,
             "marie_wasm_available": MARIE_WASM_AVAILABLE,
-            "cached_components": len(self._component_cache),
-            "epoch_thread_alive": (
-                self._epoch_thread.is_alive() if self._epoch_thread else False
-            ),
+            "cached_wasm_bytes": len(self._bytes_cache),
+            "pool_alive": pool is not None and not getattr(pool, "_broken", False),
+            "pool_workers": pool._max_workers if pool else 0,
         }
-        return DocList[TextDoc]([TextDoc(text=json.dumps(status_info))])
+        return DocList[TextDoc]([TextDoc(text=json.dumps(info))])
 
     @requests(on="/list-nodes")
     async def list_nodes(self, **kwargs) -> DocList[TextDoc]:
@@ -628,5 +627,25 @@ class WasmNodeExecutor(MarieExecutor):
         if self.builtin_nodes_dir.exists():
             for wasm_file in self.builtin_nodes_dir.glob("*.wasm"):
                 nodes.append(wasm_file.stem)
-
         return DocList[TextDoc]([TextDoc(text=json.dumps({"nodes": nodes}))])
+
+    # ── Internal ──────────────────────────────────────────────────
+
+    def _recreate_pool(self) -> None:
+        """Replace a broken pool with a fresh one."""
+        old = self._pool
+        if old is not None:
+            try:
+                old.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+
+        count = old._max_workers if old else min(os.cpu_count() or 4, 8)
+        mp_ctx = get_context("spawn")
+        self._pool = ProcessPoolExecutor(
+            max_workers=count,
+            mp_context=mp_ctx,
+            initializer=_init_worker,
+            initargs=(self._max_cached_components, self._http_timeout),
+        )
+        self.logger.info("WASM process pool recreated with %d workers", count)
