@@ -14,16 +14,33 @@ from marie.utils.json import to_json
 
 
 class BlockingPikaClient:
+    """
+    Blocking RabbitMQ client with automatic reconnection support.
+
+    Handles connection drops gracefully by attempting to reconnect
+    before failing operations.
+    """
+
     def __init__(self, conf: Dict[str, str]):
         # "amazon-rabbitmq"  "rabbitmq"
+        self._conf = conf
+        self._parameters: Optional[pika.URLParameters] = None
+        self.connection: Optional[pika.BlockingConnection] = None
+        self.channel: Optional[pika.channel.Channel] = None
+        self.logger = logger
 
-        provider = conf.get("provider", "rabbitmq")
-        hostname = conf.get("hostname", "localhost")
-        port = int(conf.get("port", 5672))
-        username = conf.get("username", "guest")
-        password = conf.get("password", "guest")
-        tls_enabled = conf.get("tls", False)
-        vhost = conf.get("vhost", "/")
+        self._build_parameters()
+        self._connect()
+
+    def _build_parameters(self) -> None:
+        """Build connection parameters from config."""
+        provider = self._conf.get("provider", "rabbitmq")
+        hostname = self._conf.get("hostname", "localhost")
+        port = int(self._conf.get("port", 5672))
+        username = self._conf.get("username", "guest")
+        password = self._conf.get("password", "guest")
+        tls_enabled = self._conf.get("tls", False)
+        vhost = self._conf.get("vhost", "/")
 
         # URL-encode vhost for inclusion in URL
         # Default "/" becomes "/" (trailing slash)
@@ -33,29 +50,81 @@ class BlockingPikaClient:
         else:
             vhost_part = "/" + urllib.parse.quote(vhost, safe="")
 
+        # Use shorter heartbeat (60s) to detect dead connections faster
         # b-ff3d0999-a25b-4a5a-9775-e7ba76f8fa3d.mq.us-east-1.amazonaws.com
         if tls_enabled:
-            url = f"amqps://{username}:{password}@{hostname}:{port}{vhost_part}?connection_attempts=3&heartbeat=3600"
+            url = f"amqps://{username}:{password}@{hostname}:{port}{vhost_part}?connection_attempts=3&heartbeat=60"
         else:
-            url = f"amqp://{username}:{password}@{hostname}:{port}{vhost_part}?connection_attempts=3&heartbeat=3600"
+            url = f"amqp://{username}:{password}@{hostname}:{port}{vhost_part}?connection_attempts=3&heartbeat=60"
 
-        parameters = pika.URLParameters(url)
+        self._parameters = pika.URLParameters(url)
         if provider == "amazon-rabbitmq":
             # SSL Context for TLS configuration of Amazon MQ for RabbitMQ
             ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
             ssl_context.set_ciphers("ECDHE+AESGCM:!ECDSA")
-            parameters.ssl_options = pika.SSLOptions(context=ssl_context)
+            self._parameters.ssl_options = pika.SSLOptions(context=ssl_context)
 
-        self.connection = pika.BlockingConnection(parameters)
+    def _connect(self) -> None:
+        """Establish connection and channel."""
+        self.connection = pika.BlockingConnection(self._parameters)
         self.channel = self.connection.channel()
-
         # Turn on delivery confirmations
         self.channel.confirm_delivery()
-        self.logger = logger
+        self.logger.debug("BlockingPikaClient connected")
 
-    def close(self):
-        self.channel.close()
-        self.connection.close()
+    def is_connected(self) -> bool:
+        """Check if connection and channel are open."""
+        return bool(
+            self.connection
+            and self.channel
+            and self.connection.is_open
+            and self.channel.is_open
+        )
+
+    def reconnect(self) -> None:
+        """
+        Reconnect to RabbitMQ.
+
+        Closes existing connection if any, then establishes a new one.
+        """
+        self.logger.info("Attempting to reconnect to RabbitMQ...")
+        try:
+            # Close existing connection only if it's open
+            self._safe_close()
+            self._connect()
+            self.logger.info("Successfully reconnected to RabbitMQ")
+        except Exception as e:
+            self.logger.error(f"Failed to reconnect to RabbitMQ: {e}")
+            raise
+
+    def ensure_connection(self) -> None:
+        """Ensure connection is alive, reconnect if necessary."""
+        if not self.is_connected():
+            self.reconnect()
+
+    def _safe_close(self) -> None:
+        """Safely close channel and connection, ignoring errors on already-closed resources."""
+        # Close channel first
+        if self.channel is not None:
+            try:
+                if self.channel.is_open:
+                    self.channel.close()
+            except Exception:
+                pass  # Already closed or broken
+            self.channel = None
+
+        # Then close connection
+        if self.connection is not None:
+            try:
+                if self.connection.is_open:
+                    self.connection.close()
+            except Exception:
+                pass  # Already closed or broken
+            self.connection = None
+
+    def close(self) -> None:
+        """Close the client connection."""
+        self._safe_close()
 
     def declare_queue(self, queue_name: str, durable: Optional[bool] = True) -> Any:
         return self.channel.queue_declare(queue=queue_name, durable=durable)
@@ -82,15 +151,26 @@ class BlockingPikaClient:
             durable=durable,
         )
 
-    def publish_message(self, exchange: str, routing_key: str, message) -> None:
+    def publish_message(
+        self,
+        exchange: str,
+        routing_key: str,
+        message,
+        max_retries: int = 3,
+        retry_delay: float = 0.5,
+    ) -> None:
         """
-        Publish a message to an exchange with a routing key
-        :param exchange:
-        :param routing_key:
-        :param message:
+        Publish a message to an exchange with a routing key.
+
+        Includes automatic retry with reconnection on connection failures.
+
+        Args:
+            exchange: Exchange name
+            routing_key: Routing key
+            message: Message payload (will be JSON-encoded)
+            max_retries: Maximum retry attempts on connection failure
+            retry_delay: Initial delay between retries (doubles each attempt)
         """
-        # channel = self.connection.channel()
-        channel = self.channel
         hdrs = {"key": "val"}
 
         # this should be a configuration
@@ -105,20 +185,62 @@ class BlockingPikaClient:
             delivery_mode=pika.DeliveryMode.Transient,
             expiration=str(mils),
         )
-        # body = json.dumps(message, ensure_ascii=False)
         body = to_json(message)
         body = body.encode("utf-8")
 
-        # Send a message
-        try:
-            channel.basic_publish(
-                exchange, routing_key, body, properties, mandatory=True
-            )
-            self.logger.debug(
-                f"Sent message. Exchange: {exchange}, Routing Key: {routing_key}"
-            )
-        except pika.exceptions.UnroutableError as e:
-            self.logger.error(e)
+        last_error: Optional[Exception] = None
+        delay = retry_delay
+
+        for attempt in range(max_retries):
+            try:
+                # Ensure connection is alive before publishing
+                self.ensure_connection()
+
+                self.channel.basic_publish(
+                    exchange, routing_key, body, properties, mandatory=True
+                )
+                self.logger.debug(
+                    f"Sent message. Exchange: {exchange}, Routing Key: {routing_key}"
+                )
+                return  # Success
+
+            except pika.exceptions.UnroutableError as e:
+                # Message was rejected by broker (no matching queue)
+                # This is not a connection issue, don't retry
+                self.logger.error(f"Message unroutable: {e}")
+                raise
+
+            except (
+                pika.exceptions.StreamLostError,
+                pika.exceptions.AMQPConnectionError,
+                pika.exceptions.ChannelClosedByBroker,
+                pika.exceptions.ConnectionClosedByBroker,
+                pika.exceptions.ChannelWrongStateError,
+                pika.exceptions.ConnectionWrongStateError,
+            ) as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    import time
+
+                    self.logger.warning(
+                        f"Connection lost during publish (attempt {attempt + 1}/{max_retries}), "
+                        f"retrying in {delay:.1f}s: {e}"
+                    )
+                    time.sleep(delay)
+                    delay *= 2  # Exponential backoff
+                    # Force reconnection on next iteration
+                    try:
+                        self.reconnect()
+                    except Exception as reconnect_error:
+                        self.logger.warning(f"Reconnect failed: {reconnect_error}")
+                else:
+                    self.logger.error(
+                        f"Failed to publish after {max_retries} attempts: {e}"
+                    )
+
+        # All retries exhausted
+        if last_error:
+            raise last_error
 
     def queue_bind(self, queue: str, exchange: str, routing_key: str) -> None:
         """

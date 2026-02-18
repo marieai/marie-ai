@@ -1,3 +1,5 @@
+from typing import Any, Dict, Union
+
 from pydantic import BaseModel
 
 from marie.extract.structures.annotation import Annotation
@@ -10,7 +12,7 @@ class TypedAnnotation(Annotation):
         start: int,
         end: int,
         name: str,
-        value: str,
+        value: Union[str, Dict[str, Any]],
         annotation_type: str,
         bboxes: [],
     ):

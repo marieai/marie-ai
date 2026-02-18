@@ -130,21 +130,73 @@ class RabbitMQExporter(AbstractExporter):
                 self._started = False
         logger.debug("RabbitMQ exporter stopped")
 
+    def _reconnect_client(self) -> bool:
+        """
+        Attempt to reconnect the RabbitMQ client.
+
+        Returns:
+            True if reconnection succeeded, False otherwise.
+        """
+        try:
+            logger.info("Attempting to reconnect RabbitMQ exporter client...")
+
+            # Close existing client
+            if self._client is not None:
+                try:
+                    self._client.close()
+                except Exception:
+                    pass
+
+            # Recreate client
+            from marie.messaging.rabbitmq.client import BlockingPikaClient
+
+            conf = self._parse_url()
+            self._client = BlockingPikaClient(conf)
+
+            # Re-declare topology
+            from pika.exchange_type import ExchangeType
+
+            self._client.exchange_declare(
+                exchange=self._exchange,
+                exchange_type=ExchangeType.topic,
+                durable=True,
+            )
+            self._client.declare_queue(queue_name=self._queue, durable=True)
+            self._client.queue_bind(
+                queue=self._queue,
+                exchange=self._exchange,
+                routing_key=self._routing_key,
+            )
+
+            logger.info("RabbitMQ exporter client reconnected successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to reconnect RabbitMQ exporter client: {e}")
+            return False
+
     def _publish(
-        self, event_type: EventType, event_id: str, trace_id: str, project_id: str
+        self,
+        event_type: EventType,
+        event_id: str,
+        trace_id: str,
+        project_id: str,
+        max_retries: int = 2,
     ) -> None:
         """
         Publish a queue message to RabbitMQ.
+
+        Includes retry logic with client reconnection on failure.
 
         Args:
             event_type: Type of the event
             event_id: ID of the raw event in Postgres
             trace_id: Associated trace ID
             project_id: Project ID
+            max_retries: Number of retries at exporter level (client also retries internally)
 
         Raises:
             RuntimeError: If exporter is not started
-            Exception: If publish fails (re-raised for caller to handle)
+            Exception: If publish fails after all retries (re-raised for caller to handle)
         """
         if not self._started or self._client is None:
             # Raise instead of silently skipping - caller should handle with DLQ
@@ -159,17 +211,37 @@ class RabbitMQExporter(AbstractExporter):
             project_id=project_id,
         )
 
-        try:
-            self._client.publish_message(
-                exchange=self._exchange,
-                routing_key=self._routing_key,
-                message=message.to_dict(),
-            )
-            logger.debug(f"Published {event_type.value} event: {event_id}")
-        except Exception as e:
-            # Re-raise so caller can handle with DLQ
-            logger.exception(f"Failed to publish event {event_id}")
-            raise
+        last_error: Optional[Exception] = None
+
+        for attempt in range(max_retries):
+            try:
+                # BlockingPikaClient.publish_message() has its own retry logic
+                # This outer retry handles cases where the client itself needs rebuilding
+                self._client.publish_message(
+                    exchange=self._exchange,
+                    routing_key=self._routing_key,
+                    message=message.to_dict(),
+                )
+                logger.debug(f"Published {event_type.value} event: {event_id}")
+                return  # Success
+
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"Publish failed for event {event_id} (attempt {attempt + 1}/{max_retries}), "
+                        f"attempting client reconnection: {e}"
+                    )
+                    if self._reconnect_client():
+                        continue  # Retry with new client
+                    else:
+                        logger.error("Client reconnection failed, giving up")
+                        break
+
+        # All retries exhausted
+        logger.error(f"Failed to publish event {event_id} after {max_retries} attempts")
+        if last_error:
+            raise last_error
 
     def export_trace(self, trace: Trace) -> None:
         """

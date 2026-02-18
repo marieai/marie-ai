@@ -146,7 +146,7 @@ class ComponentRegistry:
                 target_annotators=["claim-extract", "claim-validation"]
             )
             class TableClaimContextProvider(ContextProvider):
-                VARIABLE_NAME = "TABLE_CONTEXT_CLAIMS"
+                VARIABLE_NAME = "TABLE_CONTEXT_ALL"
                 ...
         """
         from marie.extract.annotators.context_provider import ContextProviderInfo

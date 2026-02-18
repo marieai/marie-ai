@@ -187,6 +187,7 @@ class EtcdClient(object):
         self._shutting_down = False
         self._reconnect_timer = None
         self._monitor_stop = threading.Event()
+        self._in_recovery = False  # Prevents cascade during recovery attempts
 
         self._start_event_processor()
 
@@ -254,25 +255,29 @@ class EtcdClient(object):
                     self._reconnect_attempts = 0
 
     def _attempt_immediate_reconnection(self):
-        """Attempt reconnection immediately when disconnected"""
+        """Attempt reconnection with exponential backoff when disconnected"""
+        if self._in_recovery:
+            return  # Don't cascade during recovery attempts
+
         if self._reconnect_attempts >= self._max_reconnect_attempts:
             logger.error(
-                f"Maximum reconnection attempts ({self._max_reconnect_attempts}) reached"
+                f"Maximum reconnection attempts ({self._max_reconnect_attempts}) reached. "
+                "Manual intervention may be required."
             )
             self._set_connection_state(ConnectionState.FAILED)
             return
 
-        # Faster reconnection with bounded backoff: 2s, 3s, 4.5s, 6.75s, 10s, 15s (capped)
-        delay = min(2 * (1.5**self._reconnect_attempts), 15)
+        if self._reconnect_timer and self._reconnect_timer.is_alive():
+            logger.debug("Reconnection already scheduled, skipping")
+            return
+
+        delay = min(3 * (2**self._reconnect_attempts), 60)
         self._reconnect_attempts += 1
 
         logger.info(
-            f"Scheduling reconnection attempt #{self._reconnect_attempts} in {delay:.1f} seconds"
+            f"Scheduling reconnection attempt #{self._reconnect_attempts} in {delay:.0f}s"
         )
 
-        # this will prevent the asyncio loop from being blocked
-        if self._reconnect_timer and self._reconnect_timer.is_alive():
-            return  # already scheduled
         self._reconnect_timer = threading.Timer(delay, self._do_reconnection_attempt)
         self._reconnect_timer.daemon = True
         self._reconnect_timer.start()
@@ -281,6 +286,7 @@ class EtcdClient(object):
         """Execute reconnection attempt"""
         current_state = self.get_connection_state()
         if current_state != ConnectionState.DISCONNECTED:
+            logger.debug(f"Skipping reconnection - state is {current_state.name}")
             return
 
         try:
@@ -289,12 +295,83 @@ class EtcdClient(object):
             )
             self.reconnect()
             self._last_successful_operation = time.time()
+            logger.info("Reconnection successful")
 
         except Exception as e:
-            logger.error(
-                f"Automatic reconnection attempt #{self._reconnect_attempts} failed: {e}"
+            # Log concisely - the connect() method already logged details
+            logger.warning(
+                f"Reconnection attempt #{self._reconnect_attempts} failed, will retry"
             )
-            self._set_connection_state(ConnectionState.DISCONNECTED, e)
+            # Only schedule next reconnection if still in DISCONNECTED state.
+            # State may have transitioned to FAILED during the attempt.
+            if self.get_connection_state() == ConnectionState.DISCONNECTED:
+                self._set_connection_state(ConnectionState.DISCONNECTED, e)
+
+    def _schedule_recovery_attempt(self):
+        """Schedule a recovery attempt from FAILED state with longer backoff."""
+        if self._reconnect_timer and self._reconnect_timer.is_alive():
+            return  # Already scheduled
+
+        # Use longer delay for recovery attempts (30 seconds)
+        delay = 30.0
+        logger.info(
+            f"FAILED state detected - scheduling recovery attempt in {delay:.0f}s"
+        )
+
+        self._reconnect_timer = threading.Timer(delay, self._do_recovery_attempt)
+        self._reconnect_timer.daemon = True
+        self._reconnect_timer.start()
+
+    def _do_recovery_attempt(self):
+        """Execute recovery attempt - creates fresh client to reset internal state."""
+        if self.get_connection_state() != ConnectionState.FAILED:
+            return
+
+        try:
+            self._in_recovery = True  # Prevent reconnection cascade
+            logger.info("Executing recovery attempt from FAILED state...")
+
+            # Close existing client to reset poisoned node state
+            if self.client:
+                try:
+                    self.client.close()
+                except Exception:
+                    pass
+
+            # Reset state for fresh start
+            self._reconnect_attempts = 0
+            if not self._is_multi_endpoint:
+                self._client_idx = 0
+
+            # Create fresh client directly (bypassing reconnect() state machine)
+            self.client = self._create_client()
+
+            # Set up cluster reference
+            if self._is_multi_endpoint:
+                self._cluster = [self.client]
+            else:
+                try:
+                    self._cluster = [m._etcd_client for m in self.client.members]
+                except Exception:
+                    self._cluster = [self.client]
+                if not self._cluster:
+                    self._cluster = [self.client]
+
+            # Quick connectivity test
+            self.get("__recovery_test__")
+
+            # Success
+            self._last_successful_operation = time.time()
+            self._set_connection_state(ConnectionState.CONNECTED)
+            logger.info("Recovery successful - connection restored")
+
+        except Exception as e:
+            logger.warning(f"Recovery attempt failed: {e}")
+            # Ensure we stay in FAILED state for health monitor to retry
+            if self.get_connection_state() != ConnectionState.FAILED:
+                self._set_connection_state(ConnectionState.FAILED, e)
+        finally:
+            self._in_recovery = False
 
     def get_connection_state(self) -> ConnectionState:
         """Get the current connection state"""
@@ -334,15 +411,33 @@ class EtcdClient(object):
 
         # Monotonic baseline (avoid wall-clock jumps)
         last_ok_monotonic = time.monotonic()
+        prev_state = self.get_connection_state()
 
         while self._connection_monitor_running and not self._monitor_stop.is_set():
             try:
                 now_mono = time.monotonic()
+                cur_state = self.get_connection_state()
+
+                # Reset counters when recovering from FAILED to CONNECTED
+                # (recovery happened externally, reset our local tracking)
+                if (
+                    prev_state == ConnectionState.FAILED
+                    and cur_state == ConnectionState.CONNECTED
+                ):
+                    consecutive_failures = 0
+                    consecutive_successes = 0
+                    last_ok_monotonic = now_mono
+                    logger.debug("Health monitor: reset counters after recovery")
+
+                prev_state = cur_state
 
                 # If it's been a while since last success, consider flipping to DISCONNECTED
-                if (now_mono - last_ok_monotonic) > failure_threshold:
+                # Don't change state during recovery
+                if (
+                    now_mono - last_ok_monotonic
+                ) > failure_threshold and not self._in_recovery:
                     if (
-                        self.get_connection_state() == ConnectionState.CONNECTED
+                        cur_state == ConnectionState.CONNECTED
                         and consecutive_failures >= 1
                     ):
                         # Require at least 2 consecutive failures before declaring down
@@ -365,6 +460,7 @@ class EtcdClient(object):
                         cur in (ConnectionState.DISCONNECTED, ConnectionState.FAILED)
                         and consecutive_successes >= 2
                     ):
+                        self._reconnect_attempts = 0  # Reset counter on recovery
                         self._set_connection_state(ConnectionState.CONNECTED)
 
                 except OperationTimeoutError:
@@ -375,18 +471,33 @@ class EtcdClient(object):
                         f"(failures: {consecutive_failures})"
                     )
 
-                    cur = self.get_connection_state()
-                    if cur == ConnectionState.CONNECTED and consecutive_failures >= 2:
-                        self._set_connection_state(ConnectionState.DISCONNECTED)
+                    # Don't change state during recovery - the health check used old client
+                    if not self._in_recovery:
+                        cur = self.get_connection_state()
+                        if (
+                            cur == ConnectionState.CONNECTED
+                            and consecutive_failures >= 2
+                        ):
+                            self._set_connection_state(ConnectionState.DISCONNECTED)
 
                 except Exception as e:
                     consecutive_failures += 1
                     consecutive_successes = 0
 
-                    cur = self.get_connection_state()
-                    # Only flip to DISCONNECTED from CONNECTED after 2 consecutive failures
-                    if cur == ConnectionState.CONNECTED and consecutive_failures >= 2:
-                        self._set_connection_state(ConnectionState.DISCONNECTED, e)
+                    # Don't change state during recovery - the health check used old client
+                    if not self._in_recovery:
+                        cur = self.get_connection_state()
+                        # Only flip to DISCONNECTED from CONNECTED after 2 consecutive failures
+                        if (
+                            cur == ConnectionState.CONNECTED
+                            and consecutive_failures >= 2
+                        ):
+                            self._set_connection_state(ConnectionState.DISCONNECTED, e)
+                        elif (
+                            cur == ConnectionState.FAILED and consecutive_failures >= 3
+                        ):
+                            # Trigger recovery attempt from FAILED state
+                            self._schedule_recovery_attempt()
 
                 # Cooperative wait so close() can stop us immediately
                 self._monitor_stop.wait(check_interval)
@@ -789,15 +900,15 @@ class EtcdClient(object):
             try:
                 if isinstance(response, grpc.RpcError):
                     code = response.code()
-                    if (
-                        code == grpc.StatusCode.UNAVAILABLE
-                        or code == grpc.StatusCode.INTERNAL
-                        or (
-                            code == grpc.StatusCode.UNKNOWN
-                            and "invalid auth token" not in response.details()
-                        )
+                    if code in (
+                        grpc.StatusCode.UNAVAILABLE,
+                        grpc.StatusCode.INTERNAL,
+                        grpc.StatusCode.CANCELLED,
+                    ) or (
+                        code == grpc.StatusCode.UNKNOWN
+                        and "invalid auth token" not in response.details()
                     ):
-                        logger.error(f"Watch connection error detected: {response}")
+                        logger.warning(f"Watch connection error detected: {response}")
                         self._set_connection_state(
                             ConnectionState.DISCONNECTED, response
                         )
@@ -805,15 +916,14 @@ class EtcdClient(object):
 
                 # Check if response has events attribute before accessing it
                 if not hasattr(response, 'events'):
-                    logger.error(
-                        f"Response object does not have 'events' attribute: {type(response)}"
-                    )
                     if isinstance(response, grpc.RpcError):
-                        logger.error(
-                            f"Unhandled gRPC error in watch callback: {response}"
-                        )
+                        logger.warning(f"gRPC error in watch callback: {response}")
                         self._set_connection_state(
                             ConnectionState.DISCONNECTED, response
+                        )
+                    else:
+                        logger.error(
+                            f"Unexpected response type in watch callback: {type(response)}"
                         )
                     return
 
@@ -1246,7 +1356,7 @@ class EtcdClient(object):
         """
         try:
             self._set_connection_state(ConnectionState.RECONNECTING)
-            logger.info("Explicitly reconnecting to etcd...")
+            logger.debug("Closing existing etcd client...")
             if self.client:
                 try:
                     self.client.close()
@@ -1256,28 +1366,26 @@ class EtcdClient(object):
             if not self._is_multi_endpoint:
                 self._client_idx = 0
 
-            connected = (
-                self.connect()
-            )  # Recreate the client, this is the easiest and clenest way
+            connected = self.connect()
             if not connected:
                 self._set_connection_state(ConnectionState.FAILED)
                 return False
-            logger.warning(f"Reconnected to etcd.")
 
+            # Quick connectivity test
             try:
                 self.get("__reconnect_test__")
-                logger.info("Reconnection test successful")
             except Exception as test_error:
-                logger.warning(f"Reconnection test failed: {test_error}")
+                logger.debug(
+                    f"Reconnection test query failed (non-fatal): {test_error}"
+                )
 
-            logger.info("Successfully reconnected to etcd")
             self._set_connection_state(ConnectionState.CONNECTED)
             self._last_successful_operation = time.time()
 
             return True
 
         except Exception as e:
-            logger.error(f"Failed to reconnect to etcd: {e}")
+            # Don't log here - connect() already logged the error
             self._set_connection_state(ConnectionState.FAILED, e)
             raise
 
@@ -1285,11 +1393,17 @@ class EtcdClient(object):
         """Connect to etcd using the appropriate client type with connection state management."""
         times = 0
         last_ex = None
+        # Use fewer retries for reconnection (3) vs initial connection
+        max_retries = (
+            min(self.retry_times, 3)
+            if self._reconnect_attempts > 0
+            else self.retry_times
+        )
 
         # Set initial state to reconnecting (connecting for the first time)
         self._set_connection_state(ConnectionState.RECONNECTING)
 
-        while times < self.retry_times:
+        while times < max_retries:
             try:
                 self.client = self._create_client()
 
@@ -1324,12 +1438,14 @@ class EtcdClient(object):
                     self._set_connection_state(ConnectionState.DISCONNECTED, e)
 
                 if e.code() in (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.UNKNOWN):
-                    logger.error(
-                        f"etcd3 connection failed. retrying after 2 sec, attempt # {times} of {self.retry_times}"
-                    )
-                    if times < self.retry_times:
+                    # Exponential backoff: 2s, 4s, 8s, capped at 15s
+                    backoff = min(2 * (2 ** (times - 1)), 15)
+                    if times < max_retries:
+                        logger.warning(
+                            f"etcd connection attempt {times}/{max_retries} failed, retrying in {backoff}s"
+                        )
                         self._set_connection_state(ConnectionState.RECONNECTING, e)
-                    time.sleep(1)
+                    time.sleep(backoff)
                     continue
                 else:
                     self._set_connection_state(ConnectionState.FAILED, e)
@@ -1342,18 +1458,19 @@ class EtcdClient(object):
                 if times == 1:
                     self._set_connection_state(ConnectionState.DISCONNECTED, e)
 
-                logger.error(
-                    f"etcd3 connection failed with {e}. retrying after 2 sec, attempt # {times} of {self.retry_times}"
-                )
-
-                if times < self.retry_times:
+                # Exponential backoff: 2s, 4s, 8s, capped at 15s
+                backoff = min(2 * (2 ** (times - 1)), 15)
+                if times < max_retries:
+                    logger.warning(
+                        f"etcd connection attempt {times}/{max_retries} failed, retrying in {backoff}s"
+                    )
                     self._set_connection_state(ConnectionState.RECONNECTING, e)
-                time.sleep(1)
+                time.sleep(backoff)
 
-        if times >= self.retry_times:
+        if times >= max_retries:
             self._set_connection_state(ConnectionState.FAILED, last_ex)
             raise RuntimeFailToStart(
-                f"Initialize etcd client failed after {self.retry_times} times. Due to {last_ex}"
+                f"Initialize etcd client failed after {max_retries} attempts. Due to {last_ex}"
             )
 
         logger.info(f'Connected to etcd with namespace "{self.ns}"')

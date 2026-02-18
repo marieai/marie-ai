@@ -16,14 +16,10 @@ class SelectorMatcher:
         self.parent = parent
 
     def visit(self, selector: Selector) -> List[ScanResult]:
-        print("Checking selector:", selector)
+        print(f"Checking selector: {selector}")
         doc = self.context.document
-        start = self.parent.start
-        stop = self.parent.stop
-
-        print("parent:", self.parent)
-        print('Start:', start)
-        print('Stop:', stop)
+        # start = self.parent.start
+        # stop = self.parent.stop
 
         # we are only interested in text selectors for now
         if not isinstance(selector, TextSelector):

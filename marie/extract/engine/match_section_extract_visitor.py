@@ -1,3 +1,4 @@
+import json
 import re
 import uuid
 from collections import deque
@@ -190,6 +191,14 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             self.logger.info("Section has no spans; skipping region processing.")
             return
 
+        # DEBUG: Log section and span info
+        self.logger.info(
+            f"=== SCOPING DEBUG: Processing MatchSection '{section.label}' ==="
+        )
+        self.logger.info(
+            f"  Section spans: {[(s.page, s.y, s.h, s.start_line_id, s.end_line_id) for s in spans]}"
+        )
+
         for span in spans:
             page_id = span.page
             start_line = span.start_line_id
@@ -198,7 +207,16 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             if end_line == len(document.lines_for_page(page_id)):
                 end_line += 1
 
+            # DEBUG: Log span details
+            self.logger.info(
+                f"  Checking page {page_id}: start_line={start_line}, end_line={end_line}"
+            )
+
             regions_by_page = document.regions_for_page(page_id)
+            self.logger.info(
+                f"  Found {len(regions_by_page)} regions on page {page_id}"
+            )
+
             for region in regions_by_page:
                 try:
                     # Compute region line range from its parts' spans on this page
@@ -219,13 +237,41 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
                     region_start = min(mins)
                     region_end = max(maxs)
+
+                    # DEBUG: Log region scoping check
+                    is_in_scope = region_start >= start_line and region_end <= end_line
+                    self.logger.info(
+                        f"    Region '{region.region_id}': lines {region_start}-{region_end}, "
+                        f"check: {region_start} >= {start_line} AND {region_end} <= {end_line} = {is_in_scope}"
+                    )
+
                     # Fully-contained check
-                    if region_start >= start_line and region_end <= end_line:
+                    if is_in_scope:
                         regions_in_scope.add(region)
                 except Exception:
                     raise
 
-        if not regions_in_scope:
+        # Sort regions by page and start line to ensure correct processing order
+        # This is critical for maintaining document order when merging sections across regions
+        def region_sort_key(region):
+            """Sort key: (page, start_line, region_id) based on region's first part span.
+
+            The region_id is used as a tie-breaker when multiple regions have the
+            same (page, start_line). This ensures consistent ordering across runs.
+            """
+            if not region.parts:
+                return (float('inf'), float('inf'), "")
+            first_part = region.parts[0]
+            return (first_part.span.page, first_part.span.y, region.region_id)
+
+        sorted_regions = sorted(regions_in_scope, key=region_sort_key)
+
+        # DEBUG: Log collected regions (now sorted)
+        self.logger.info(
+            f"  RESULT: Collected {len(sorted_regions)} regions in scope (sorted): {[r.region_id for r in sorted_regions]}"
+        )
+
+        if not sorted_regions:
             self.logger.warning(
                 f"No structured regions found within spans for section '{section.label}'"
             )
@@ -256,8 +302,11 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 )
                 return
 
-        # Iterate through all sections of all scoped regions and process them based on their `role_hint` tag.
-        for region in regions_in_scope:
+        # Collect all structured sections from all regions and group by role_hint.
+        # This merges sections across regions (and pages) that belong to the same MatchSection.
+        # We iterate over sorted_regions to maintain document order (by page, then by start line).
+        sections_by_role: Dict[str, List] = {}
+        for region in sorted_regions:
             for structured_section in region.sections_flat():
                 role_hint = structured_section.tags.get("role_hint")
                 if not role_hint:
@@ -265,36 +314,96 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         f'Role hint for section {structured_section.title} not found.'
                     )
                     continue
+                if role_hint not in sections_by_role:
+                    sections_by_role[role_hint] = []
+                sections_by_role[role_hint].append(structured_section)
 
-                # Find the parsing rule for this section's role hint.
-                section_rule = next(
-                    (
-                        rule
-                        for rule in parser_sections_rules
-                        if rule.get("role") == role_hint
-                    ),
-                    None,
+        self.logger.info(
+            f"Collected sections by role: {list(sections_by_role.keys())} from {len(sorted_regions)} regions"
+        )
+
+        # DEBUG: Dump merged sections as JSON for review
+        for role_hint, structured_sections in sections_by_role.items():
+            self.logger.info(
+                f"=== DEBUG MERGED SECTIONS JSON for role_hint '{role_hint}' ==="
+            )
+            for idx, ss in enumerate(structured_sections):
+                section_dump = {
+                    "index": idx,
+                    "title": ss.title,
+                    "role": str(ss.role) if ss.role else None,
+                    "tags": dict(ss.tags) if ss.tags else {},
+                    "blocks": [],
+                }
+                for block in ss.blocks:
+                    if isinstance(block, KVList):
+                        block_dump = {
+                            "type": "KVList",
+                            "items": [
+                                {"key": kv.key, "value": kv.value} for kv in block.items
+                            ],
+                        }
+                    elif isinstance(block, TableBlock):
+                        block_dump = {
+                            "type": "TableBlock",
+                            "rows_count": len(block.rows) if block.rows else 0,
+                            "header_binding": (
+                                list(block.header_binding)
+                                if block.header_binding
+                                else None
+                            ),
+                        }
+                    elif isinstance(block, TableSeries):
+                        block_dump = {
+                            "type": "TableSeries",
+                            "segments_count": (
+                                len(block.segments) if block.segments else 0
+                            ),
+                        }
+                    else:
+                        block_dump = {"type": type(block).__name__}
+                    section_dump["blocks"].append(block_dump)
+                self.logger.info(
+                    f"Section[{idx}]: {json.dumps(section_dump, indent=2)}"
                 )
 
-                # Not every role_hint needs to have a rule; some may be informational only or processed differently aka(like lookup tables)
-                # if the section is intereset then it needs to have a rule to be processed even if it is a no-op rule
+        # Process each role_hint group (merged across all regions in scope)
+        for role_hint, structured_sections in sections_by_role.items():
+            # Find the parsing rule for this role hint.
+            section_rule = next(
+                (
+                    rule
+                    for rule in parser_sections_rules
+                    if rule.get("role") == role_hint
+                ),
+                None,
+            )
 
-                if not section_rule:
-                    # USED FOR DEBUG ONLY
-                    if False:
-                        raise ValueError(
-                            f"No rule for role_hint `{role_hint}` so we can't process it on layer `{layer.layer_name}`."
-                        )
-                    self.logger.warning(
+            # Not every role_hint needs to have a rule; some may be informational only or processed differently aka(like lookup tables)
+            # if the section is intereset then it needs to have a rule to be processed even if it is a no-op rule
+
+            if not section_rule:
+                # USED FOR DEBUG ONLY
+                if False:
+                    raise ValueError(
                         f"No rule for role_hint `{role_hint}` so we can't process it on layer `{layer.layer_name}`."
                     )
-                    continue
-
-                parse_method = section_rule.get("parse")
-                self.logger.info(
-                    f"Found structured section '{structured_section.title}' with role_hint '{role_hint}'. Parsing as '{parse_method}'."
+                self.logger.warning(
+                    f"No rule for role_hint `{role_hint}` so we can't process it on layer `{layer.layer_name}`."
                 )
+                continue
 
+            parse_method = section_rule.get("parse")
+            self.logger.info(
+                f"Processing {len(structured_sections)} merged sections with role_hint '{role_hint}'. Parsing as '{parse_method}'."
+            )
+
+            # Track populated fields across all sections in this role_hint group
+            # This prevents duplicate field extraction when multiple regions have the same KV fields
+            kv_populated_fields: set[str] = set()
+
+            # Process all sections of this role together
+            for structured_section in structured_sections:
                 # Delegate to the appropriate processor based on the parse method.
                 if parse_method == "table":
                     self.logger.info(
@@ -313,11 +422,13 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     )
 
                     self._process_region_as_kv(
+                        context,  # Pass execution context for field config lookup
                         regions_cfg,
                         section,  # The original MatchSection to populate with results
                         structured_section,
                         field_mappings,
                         all_field_mappings,
+                        populated_fields=kv_populated_fields,  # Pass shared set to prevent duplicates
                     )
 
                 else:
@@ -327,11 +438,13 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
     def _process_region_as_kv(
         self,
+        context: ExecutionContext,
         regions_cfg: List[Dict],
         match_section: MatchSection,
         structured_section: Section,
         field_mappings: List[FieldMapping],
         all_field_mappings: List[FieldMapping],
+        populated_fields: Optional[set[str]] = None,
     ) -> None:
         """
         Process a structured section configured as key-value (kv).
@@ -346,6 +459,12 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 FIELD_NAME_B:
                   annotation_selectors: [ "LABEL_B" ]
                 ...
+
+        Args:
+            populated_fields: Optional set of field names that have already been populated.
+                              When provided, fields in this set will be skipped to prevent
+                              duplicate extraction across multiple regions in the same MatchSection.
+                              This set is updated in-place as fields are extracted.
 
         Returns:
             List of created field objects (as produced by create_fields).
@@ -405,7 +524,10 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             return
 
         #  Walk KVList blocks and match selectors against item.key
-        populated_fields: set[str] = set()
+        # Use the passed-in populated_fields set if provided, otherwise create a new one
+        # When shared across multiple sections, this prevents duplicate field extraction
+        if populated_fields is None:
+            populated_fields = set()
         template_field_mappings = {}
         extracted_fields = []
 
@@ -463,11 +585,30 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 )
 
                 # Resolve field definition
+                # Priority: 1. Layer mappings, 2. Global config field definitions
                 field_def = template_field_mappings.get(field_name, {}) or {}
+                if not field_def:
+                    # Look up from global config fields (non_repeating then repeating)
+                    if context.conf is not None:
+                        config_fields = context.conf.get("fields", {})
+                        if field_name in config_fields.get("non_repeating", {}):
+                            field_def = OmegaConf.to_container(
+                                config_fields.non_repeating[field_name], resolve=True
+                            )
+                        elif field_name in config_fields.get("repeating", {}):
+                            field_def = OmegaConf.to_container(
+                                config_fields.repeating[field_name], resolve=True
+                            )
+                    if not field_def:
+                        self.logger.warning(
+                            f"No field definition found for '{field_name}', using defaults"
+                        )
+                        field_def = {}
+
                 field_def = dict(field_def)  # shallow copy
                 field_def["name"] = field_name
-                # Optional type override fallback if template missing; many totals are MONEY
-                field_def.setdefault("type", "MONEY")
+                # Use ALPHA as default, not MONEY - most text fields are alphanumeric
+                field_def.setdefault("type", "ALPHA")
 
                 transformed_value = transform_field_value(field_def, value_text)
                 # this is a dummy line_with_meta; we don't have line-level metadata for KV values
@@ -481,6 +622,10 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     field_def, value_text, transformed_value, faux_line_with_meta
                 )
                 extracted_fields.extend(created_fields)
+
+                # Mark this field as populated to prevent duplicate extraction
+                # from other regions in the same MatchSection
+                populated_fields.add(field_name)
 
         # Attach kv fields to the matched section.
         # TODO: we will change this to a dictionary of field types
@@ -669,6 +814,12 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
             self.logger.info(f"Columns to process mapping: {columns_to_process}")
 
+            # DEBUG: Log region info and body_rows count
+            region_id = structured_section.tags.get("source_region_id", "unknown")
+            self.logger.info(
+                f"TABLE DEBUG: Processing region '{region_id}' with {len(body_rows)} body_rows for page {page_id}"
+            )
+
             # Extract rows using the resolved column indices
             matched_field_rows: List[MatchFieldRow] = self._build_matched_field_rows(
                 document=document,
@@ -680,8 +831,19 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
             if not match_section_to_populate.matched_field_rows:
                 match_section_to_populate.matched_field_rows = matched_field_rows
+                self.logger.info(
+                    f"ROWS DEBUG: Assigned {len(matched_field_rows)} rows to MatchSection '{match_section_to_populate.label}' "
+                    f"(id={id(match_section_to_populate)}). Total rows now: {len(match_section_to_populate.matched_field_rows)}"
+                )
             else:  # MatchSection has collected rows from a previous region in scope
+                self.logger.info(
+                    f"ROWS DEBUG: Extending MatchSection '{match_section_to_populate.label}' (id={id(match_section_to_populate)}) "
+                    f"with {len(matched_field_rows)} rows. Had: {len(match_section_to_populate.matched_field_rows)}"
+                )
                 match_section_to_populate.matched_field_rows.extend(matched_field_rows)
+                self.logger.info(
+                    f"ROWS DEBUG: Now has: {len(match_section_to_populate.matched_field_rows)} rows"
+                )
 
     def _build_matched_field_rows(
         self,
@@ -704,7 +866,6 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             List[MatchFieldRow]
         """
         matched_field_rows: List[MatchFieldRow] = []
-
         if not body_rows or not columns_to_process:
             return matched_field_rows
 
@@ -719,7 +880,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
         for row in body_rows:
             extracted_cells = []
-            self.logger.info("row : *******************")
+            self.logger.debug("row : *******************")
 
             cells = row.cells
             for field_name in ordered_fields:
@@ -756,12 +917,12 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 transformed_value: TransformReturnType = transform_field_value(
                     field_def, cell_value, document
                 )
-                self.logger.info(f"transformed_value XXX : {transformed_value}")
+                self.logger.debug(f"transformed_value XXX : {transformed_value}")
 
                 fields = self.create_fields(
                     field_def, cell_value, transformed_value, root_line
                 )
-                self.logger.info(f"transformed_value fields : {len(fields)}  {fields}")
+                self.logger.debug(f"transformed_value fields : {len(fields)}  {fields}")
                 extracted_cells.extend(fields)
 
             matched_field_row: MatchFieldRow = MatchFieldRow(fields=extracted_cells)

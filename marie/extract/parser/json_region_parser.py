@@ -122,12 +122,14 @@ class JsonRegionParser(BaseRegionParser):
             if not isinstance(columns, list) or not isinstance(rows, list):
                 return [], []
 
-            # Convert all row values to strings
+            # Convert all row values to strings, filtering out garbage rows (all empty cells)
             string_rows = []
             for row in rows:
                 if isinstance(row, list):
                     string_row = [str(cell) if cell is not None else "" for cell in row]
-                    string_rows.append(string_row)
+                    # Skip garbage rows where all cells are empty or whitespace-only
+                    if any(cell.strip() for cell in string_row):
+                        string_rows.append(string_row)
 
             return [str(col) for col in columns], string_rows
 
@@ -174,11 +176,18 @@ class JsonRegionParser(BaseRegionParser):
         # Convert dict to KeyValue objects
         kv_items = []
         for k, v in data.items():
-            # Convert value to string representation
-            if isinstance(v, (str, int, float, bool)):
+            # Handle the {"value": "..."} format used by totals
+            if isinstance(v, dict) and "value" in v:
+                inner_value = v["value"]
+                # Skip null values entirely - they mean no data collected
+                if inner_value is None:
+                    continue
+                value_str = str(inner_value)
+            elif isinstance(v, (str, int, float, bool)):
                 value_str = str(v)
             elif v is None:
-                value_str = "None"
+                # Skip null values at top level too
+                continue
             else:
                 value_str = json.dumps(v, ensure_ascii=False)
 

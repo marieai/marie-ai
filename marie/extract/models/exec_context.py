@@ -16,6 +16,7 @@ class ExecutionContext(BaseModel):
     doc_id: str
     metadata: Optional[Dict] = None
     output_dir: Path
+    conf: Optional[Any] = None  # OmegaConf - merged configuration
 
     class Config:
         arbitrary_types_allowed = True

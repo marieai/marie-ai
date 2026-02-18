@@ -182,7 +182,7 @@ def convert_document_to_structure(
         raise
 
     context = ExecutionContext(
-        doc_id=doc_id, template=template, document=doc, output_dir=output_dir
+        doc_id=doc_id, template=template, document=doc, output_dir=output_dir, conf=conf
     )
 
     visitors = conf.get("processing", {}).get("visitors", None)

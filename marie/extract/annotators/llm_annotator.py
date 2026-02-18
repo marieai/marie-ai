@@ -124,8 +124,14 @@ class LLMAnnotator(DocumentAnnotator):
         self.prompt_text = self.load_prompt(full_prompt_path)
         self.engine = route_llm_engine(self.model_name, self.multimodal)
 
+        # Get processing mode from annotator config (per-page or per-table)
+        self.processing_mode = annotator_conf.get('mode', 'per-table')
+        self.logger.info(f"Processing mode: {self.processing_mode}")
+
         self.context_manager: Optional[ContextProviderManager] = ContextProviderManager(
-            run_context=self.run_context, annotator_name=self.name
+            run_context=self.run_context,
+            annotator_name=self.name,
+            mode=self.processing_mode,
         )
 
         if self.context_manager is not None and self.context_manager.has_providers():
@@ -176,31 +182,14 @@ class LLMAnnotator(DocumentAnnotator):
         """
         self.logger.info(f"Annotating document with {self.name}...")
 
-        # Pre-parse claims into document if this is claim-extract
-        # This adds CLAIM annotations that ClaimContextProvider can read
-        if self.name == "claim-extract":
-            from marie.extract.results.result_parser import parse_claims_to_document
-
-            # Look for pre-existing claims in agent-output/claims/
-            claims_dir = os.path.join(
-                os.path.dirname(self.output_dir), "claims"  # agent-output/
-            )
-            if os.path.exists(claims_dir):
-                self.logger.info(f"Pre-parsing claims from {claims_dir} into document")
-                parse_claims_to_document(document, claims_dir)
-
-        render_document_markdown(
-            document, os.path.join(self.working_dir, "debug", f"{self.name}_input.md")
-        )
-
         # Write context provider debug info to show what variables are being injected
         if self.context_manager:
             import json
 
             debug_dir = ensure_exists(os.path.join(self.working_dir, "debug"))
             debug_context_path = os.path.join(debug_dir, f"{self.name}_context.json")
-            # Get variables for each processing unit
             units = self.context_manager.get_processing_units(document)
+
             if units:
                 context_debug = {
                     "annotator": self.name,
@@ -230,7 +219,7 @@ class LLMAnnotator(DocumentAnnotator):
                 except Exception as e:
                     self.logger.warning(f"Failed to write context debug: {e}")
 
-        # Check if output directory contains results
+        # Check if output directory contains results, disable for now
         if os.listdir(self.output_dir):
             self.logger.info(
                 f"Output directory '{self.output_dir}' contains results. Skipping annotation..."

@@ -6,6 +6,7 @@ import os.path
 import threading
 import time
 from dataclasses import dataclass
+from threading import Lock
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -93,35 +94,59 @@ def load_prompt(prompt_file: str) -> str:
         raise
 
 
+# Module-level engine cache to prevent orphaned AsyncClient instances
+_engine_cache: Dict[Tuple[str, bool], EngineLM] = {}
+_engine_lock = Lock()
+
+
 def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
     """
     Route the LLM call to the appropriate engine based on the model name.
+    Engines are cached and reused to prevent resource leaks.
+
     :param model_name: The name of the model to use.
     :param is_multimodal: Flag indicating if the model is multimodal.
     :return: An instance of the appropriate EngineLM class.
     """
+    cache_key = (model_name, is_multimodal)
 
-    # this should be set in the environment variables or in .env file
-    api_key = os.environ['OPENAI_API_KEY']
-    api_base = os.environ['OPENAI_API_BASE']
+    with _engine_lock:
+        if cache_key in _engine_cache:
+            logger.info("Reusing engine %s", cache_key)
+            return _engine_cache[cache_key]
 
-    logger.info(f'OPENAI_API_KEY = {api_key}')
-    logger.info(f'OPENAI_API_BASE = {api_base}')
+        api_key = os.environ.get('OPENAI_API_KEY')
+        api_base = os.environ.get('OPENAI_API_BASE')
 
-    if not api_key or not api_base:
-        raise ValueError(
-            "Both OPENAI_API_KEY and OPENAI_API_BASE must be set in the environment variables."
+        if not api_key or not api_base:
+            raise ValueError("OPENAI_API_KEY and OPENAI_API_BASE must be set")
+
+        engine = OpenAIEngine(
+            api_key=api_key,
+            base_url=api_base,
+            model_name=model_name,
+            is_multimodal=is_multimodal,
+            cache=False,
         )
 
-    engine = OpenAIEngine(
-        api_key=api_key,
-        base_url=api_base,
-        model_name=model_name,
-        is_multimodal=is_multimodal,
-        cache=False,
-    )
+        _engine_cache[cache_key] = engine
+        logger.info("Engine created: %s", cache_key)
+        return engine
 
-    return engine
+
+def clear_engine_cache() -> None:
+    """Clear the engine cache. Call this when shutting down."""
+    _engine_cache.clear()
+    logger.info("Engine cache cleared")
+
+
+def close_all_engines():
+    for engine in _engine_cache.values():
+        try:
+            engine.close()
+        except Exception:
+            logger.exception("Failed closing engine")
+    _engine_cache.clear()
 
 
 def preprocess_images_for_inference(
@@ -502,7 +527,7 @@ def prepare_batch_with_meta(
                 file_name = os.path.basename(name)
                 unit = units_by_file.get(file_name) if units_by_file else None
 
-                # Inject context from providers (e.g., TABLE_CONTEXT_CLAIMS)
+                # Inject context from providers (e.g., TABLE_CONTEXT_ALL)
                 if context_manager:
                     if unit:
                         # Per-unit mode: inject with unit context
@@ -600,21 +625,60 @@ def prepare_batch_with_meta_units(
                     INJECTED_TEXT = "\n" + injected_file.read()
             updated_prompt = prompt.replace("INJECTED_TEXT", INJECTED_TEXT)
 
-            # Build OCR content
+            # Get the ProcessingUnit for this batch item BEFORE building OCR content
+            # so we can build filtered OCR for table-specific extraction
+            unit = units_by_index.get(batch_idx)
+
+            # Extract table line range for filtered OCR
+            # This ensures the LLM only sees OCR lines relevant to the specific table
+            table_line_range = None
+            if unit and unit.data:
+                header_rows = unit.data.get("header_rows", [])
+                data_rows = unit.data.get("rows", [])
+                all_rows = header_rows + data_rows
+                if all_rows:
+                    line_numbers = []
+                    for row in all_rows:
+                        if isinstance(row, dict) and "line_number" in row:
+                            line_numbers.append(row["line_number"])
+                    if line_numbers:
+                        table_line_range = (min(line_numbers), max(line_numbers))
+                        logging.debug(
+                            f"Table line range for filtering: {table_line_range}"
+                        )
+
+            # Build OCR content (full page for OCR_DATA)
             lines_by_page = decorated_lines_by_page.get(page_number - 1, [])
             decorated_lines = []
+            filtered_decorated_lines = []
             for line_id, line in enumerate(lines_by_page):
+                actual_line_number = line_id + 1  # 1-indexed line number
                 line_text = line['text']
-                decorated_line = decorator(line_text, line_id + 1)
+                decorated_line = decorator(line_text, actual_line_number)
                 decorated_lines.append(decorated_line)
-            content = "\n".join(decorated_lines)
 
+                # Build filtered OCR content (only lines within table range)
+                if table_line_range:
+                    min_line, max_line = table_line_range
+                    if min_line <= actual_line_number <= max_line:
+                        filtered_decorated_lines.append(decorated_line)
+
+            content = "\n".join(decorated_lines)
+            filtered_content = (
+                "\n".join(filtered_decorated_lines)
+                if filtered_decorated_lines
+                else content
+            )
+
+            # Replace OCR placeholders
+            # FILTERED_OCR_DATA: only lines within table range (for table-specific extraction)
+            # OCR_DATA/OCR_TEXT: full page content (for legacy compatibility)
+            updated_prompt = updated_prompt.replace(
+                "FILTERED_OCR_DATA", filtered_content
+            )
             updated_prompt = updated_prompt.replace("OCR_DATA", content).replace(
                 "OCR_TEXT", content
             )
-
-            # Get the ProcessingUnit for this batch item
-            unit = units_by_index.get(batch_idx)
 
             # Inject context from providers
             if context_manager:

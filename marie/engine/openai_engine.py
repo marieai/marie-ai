@@ -127,6 +127,17 @@ class OpenAIEngine(EngineLM):
                 "Please set the OPENAI_API_KEY environment variable if you'd like to use OpenAI models."
             )
 
+    def __del__(self):
+        """Detach client to prevent cleanup errors during GC."""
+        try:
+            if hasattr(self, 'client') and self.client is not None:
+                # Detach internal httpx client to prevent async cleanup issues
+                if hasattr(self.client, '_client'):
+                    self.client._client = None
+                self.client = None
+        except Exception:
+            pass  # Never raise in __del__
+
     def _generate_from_single_prompt(
         self,
         content: Union[str, List[str]],

@@ -45,6 +45,7 @@ from marie.scheduler.state import WorkState
 from marie.scheduler.util import available_slots_by_executor
 from marie.serve.discovery import JsonAddress
 from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
+from marie.serve.discovery.registry import _is_known_connection_error
 from marie.serve.discovery.resolver import EtcdServiceResolver
 from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.networking.utils import get_grpc_channel
@@ -1255,7 +1256,14 @@ class MarieServerGateway(CompositeServer):
                 node="gateway",
             )
         except Exception as ex:
-            self.logger.error(f"Failed to publish capacity event: {ex}", exc_info=True)
+            if _is_known_connection_error(ex):
+                self.logger.debug(
+                    f"Capacity event skipped (etcd unavailable): {type(ex).__name__}"
+                )
+            else:
+                self.logger.error(
+                    f"Failed to publish capacity event: {ex}", exc_info=True
+                )
 
     async def _capacity_broadcast_loop(self, interval_s: float = 5.0) -> None:
         """Periodically broadcast capacity state to connected clients."""
@@ -1267,7 +1275,10 @@ class MarieServerGateway(CompositeServer):
             try:
                 await self._publish_capacity_event()
             except Exception as ex:
-                self.logger.error(f"Capacity broadcast error: {ex}", exc_info=True)
+                if _is_known_connection_error(ex):
+                    self.logger.debug(f"Capacity broadcast skipped (etcd unavailable)")
+                else:
+                    self.logger.error(f"Capacity broadcast error: {ex}", exc_info=True)
             await asyncio.sleep(interval_s)
 
     async def wait_and_start_scheduler(self, timeout: int = 5):
@@ -1433,7 +1444,12 @@ class MarieServerGateway(CompositeServer):
             except asyncio.CancelledError:
                 pass
             except Exception as ex:
-                self.logger.error(f"Rebuild error: {ex}", exc_info=True)
+                if _is_known_connection_error(ex):
+                    self.logger.debug(
+                        f"Rebuild deferred (etcd unavailable): {type(ex).__name__}"
+                    )
+                else:
+                    self.logger.error(f"Rebuild error: {ex}", exc_info=True)
 
         self._rebuild_task = asyncio.create_task(_rebuilder())
 
@@ -1445,7 +1461,7 @@ class MarieServerGateway(CompositeServer):
                 if ev.ev_type == "put":
                     await self.gateway_server_online(ev.service, ev.value)
                 elif ev.ev_type == "delete":
-                    await self.gateway_server_offline(ev.service, ev.value)
+                    await self.gateway_server_offline(ev.key, ev.value)
                 else:
                     self.logger.warning(f"Unknown service ev_type: {ev.ev_type}")
 
@@ -1686,6 +1702,18 @@ class MarieServerGateway(CompositeServer):
                         "executor": executor,
                         "gateway": ctrl_address,
                     }
+                    # Prevent duplicate entries on reconnection
+                    existing = self.deployment_nodes[executor]
+                    is_duplicate = any(
+                        n.get("address") == deployment_address
+                        and n.get("endpoint") == endpoint
+                        for n in existing
+                    )
+                    if is_duplicate:
+                        self.logger.debug(
+                            f"Skipping duplicate endpoint: {executor} : {deployment_details}"
+                        )
+                        continue
                     self.deployment_nodes[executor].append(deployment_details)
                     self.logger.debug(
                         f"Discovered endpoint: {executor} : {deployment_details}"
@@ -1842,22 +1870,33 @@ class MarieServerGateway(CompositeServer):
         self.streamer = streamer
         self.distributor.streamer = streamer
 
-    async def gateway_server_offline(self, service: str, ev_value):
+    async def gateway_server_offline(self, service_key: str, ev_value):
         """
         Handle the event when a gateway server goes offline.
 
-        :param service: The name of the service.
-        :param ev_value: The value representing the offline gateway.
-        :return: None
+        :param service_key: The full service key (e.g., "gateway/marie/192.168.106.75:55698")
+        :param ev_value: The value representing the offline gateway (usually None for DELETE).
         """
-        ctrl_address = service.split("/")[-1]
+        # Extract address from full key: "gateway/marie/192.168.106.75:55698" -> "192.168.106.75:55698"
+        ctrl_address = service_key.split("/")[-1]
         self.logger.info(
-            f"Service {service} is offline @ {ctrl_address}, removing nodes"
+            f"Service {service_key} is offline @ {ctrl_address}, removing nodes"
         )
+
+        removed_count = 0
         for executor, nodes in self.deployment_nodes.items():
+            before_len = len(nodes)
             self.deployment_nodes[executor] = [
                 node for node in nodes if node["gateway"] != ctrl_address
             ]
+            removed_count += before_len - len(self.deployment_nodes[executor])
+
+        if removed_count > 0:
+            self.logger.info(
+                f"Removed {removed_count} nodes for offline gateway {ctrl_address}"
+            )
+        else:
+            self.logger.debug(f"No nodes found for offline gateway {ctrl_address}")
 
     async def deployment_changed(self, ev_key: str, ev_type: str, ev_value: dict):
         self.logger.info(f"Deployment changed : {ev_key}, {ev_type}, {ev_value}")
@@ -2012,7 +2051,10 @@ class MarieServerGateway(CompositeServer):
                             continue
 
             except Exception as e:
-                self.logger.error(f"Reconcile loop error: {e}", exc_info=True)
+                if _is_known_connection_error(e):
+                    self.logger.debug(f"Reconcile loop deferred (etcd unavailable)")
+                else:
+                    self.logger.error(f"Reconcile loop error: {e}", exc_info=True)
             finally:
                 await asyncio.sleep(interval_s)
 

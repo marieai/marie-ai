@@ -257,14 +257,15 @@ def convert_date_format(
     def try_parse_date(
         date_str: str, field_format: Optional[str] = None
     ) -> Union[str, None]:
-        # Try parsing the date string with the provided format
+        """Try parsing the date string with the provided format"""
         if field_format:
             try:
                 return datetime.strptime(date_str.strip(), field_format).strftime(
                     output_format
                 )
             except ValueError as e:
-                print(e)
+                # we are catching things like
+                # time data '11/25/26' does not match format 'MM/dd/yyyy'
                 pass
 
         for fmt in common_formats:
@@ -332,7 +333,11 @@ def convert_to_alphanumeric(
         return ""
     if not isinstance(field_value, str):
         field_value = str(field_value)
-    return re.sub(r'[^a-zA-Z0-9]', '', field_value)
+    # Preserve commas as delimiters (e.g., for multi-value fields)
+    # First normalize comma-space patterns to just comma
+    normalized = re.sub(r'\s*,\s*', ',', field_value)
+    # Then remove remaining non-alphanumeric chars except comma
+    return re.sub(r'[^a-zA-Z0-9,]', '', normalized)
 
 
 def trim_name_prefix(field_value: str) -> str:
