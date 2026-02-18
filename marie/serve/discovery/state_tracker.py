@@ -1,8 +1,11 @@
 import hashlib
 import json
+import logging
 import threading
 import time
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class StateTracker:
@@ -91,9 +94,7 @@ class StateTracker:
         self._state_cache.clear()
         self._state_hashes.clear()
         if entries_cleared > 0:
-            print(
-                f"StateTracker: Cleared {entries_cleared} entries due to TTL expiration"
-            )
+            logger.info(f"StateTracker: Cleared {entries_cleared} entries")
 
     def _generate_hash(self, value: Any) -> str:
         """Generate a consistent hash for any value."""
