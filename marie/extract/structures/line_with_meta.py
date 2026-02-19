@@ -4,7 +4,9 @@ from pydantic import BaseModel
 
 from marie.extract.models.models import LineModel
 from marie.extract.structures.annotation import Annotation
-from marie.extract.structures.concrete_annotations.typed_annotation import TypedAnnotation
+from marie.extract.structures.concrete_annotations.typed_annotation import (
+    TypedAnnotation,
+)
 from marie.extract.structures.line_metadata import LineMetadata
 from marie.extract.structures.serializable import Serializable
 

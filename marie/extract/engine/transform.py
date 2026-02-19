@@ -305,7 +305,9 @@ def convert_date_format(
             ):
                 extracted_date = split_value.strip()
                 split_format = java_to_python_date_format(split_format.strip())
-                print(f'Trying to parse "{extracted_date}" with format "{split_format}" after java_to_python_date_format')
+                print(
+                    f'Trying to parse "{extracted_date}" with format "{split_format}" after java_to_python_date_format'
+                )
                 formatted = try_parse_date(extracted_date, split_format)
                 if not formatted:
                     logger.warning(
@@ -320,7 +322,9 @@ def convert_date_format(
             split_format = java_to_python_date_format(split_formats[i].strip())
             formatted = try_parse_date(extracted_date, field_format=split_format)
             if not formatted:
-                print(f'Trying to parse "{extracted_date}" with format "{split_format}" after java_to_python_date_format')
+                print(
+                    f'Trying to parse "{extracted_date}" with format "{split_format}" after java_to_python_date_format'
+                )
 
                 logger.warning(
                     f"Failed to parse date '{extracted_date}' with format '{split_format}'"
