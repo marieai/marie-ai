@@ -94,7 +94,7 @@ class StructuredLLM(LLM):
         for partial_output in stream_output:
             yield ChatResponse(
                 message=ChatMessage(
-                    role=MessageRole.ASSISTANT, content=partial_output.json()
+                    role=MessageRole.ASSISTANT, content=partial_output.model_dump_json()
                 ),
                 raw=partial_output,
             )
@@ -153,7 +153,7 @@ class StructuredLLM(LLM):
             async for partial_output in stream_output:
                 yield ChatResponse(
                     message=ChatMessage(
-                        role=MessageRole.ASSISTANT, content=partial_output.json()
+                        role=MessageRole.ASSISTANT, content=partial_output.model_dump_json()
                     ),
                     raw=partial_output,
                 )

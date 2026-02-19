@@ -4,10 +4,12 @@ from typing import Callable, Dict, Optional
 import torch
 from dotenv import find_dotenv
 from pydantic import computed_field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=find_dotenv("local.env"), extra="ignore")
+
     # General
     TORCH_DEVICE: Optional[str] = None
     IMAGE_DPI_HIGHRES: int = 192  # Used for OCR, table rec
@@ -100,10 +102,6 @@ class Settings(BaseSettings):
         if self.TORCH_DEVICE_MODEL == "xla":
             return torch.no_grad
         return torch.inference_mode
-
-    class Config:
-        env_file = find_dotenv("local.env")
-        extra = "ignore"
 
 
 settings = Settings()

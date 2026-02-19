@@ -500,7 +500,7 @@ class PydanticProgramExtractor(BaseExtractor):
         )
 
         ret_object = await self.program.acall(**{self.input_key: extract_str})
-        return ret_object.dict()
+        return ret_object.model_dump()
 
     async def aextract(self, nodes: Sequence[BaseNode]) -> List[Dict]:
         """Extract pydantic program."""

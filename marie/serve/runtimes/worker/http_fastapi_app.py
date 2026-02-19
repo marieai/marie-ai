@@ -4,16 +4,13 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 from pydantic import ConfigDict
 
 from marie import Document, DocumentArray
-from marie._docarray import docarray_v2
+from marie._docarray import BaseDoc, DocList
 from marie.importer import ImportExtensions
 from marie.serve.networking.sse import EventSourceResponse
 from marie.types_core.request.data import DataRequest
 
 if TYPE_CHECKING:
     from marie.logging_core.logger import MarieLogger
-
-if docarray_v2:
-    from docarray import BaseDoc, DocList
 
 
 def get_fastapi_app(
@@ -89,10 +86,9 @@ def get_fastapi_app(
             summary=f"Endpoint {endpoint_path}",
             response_model=output_model,
         )
-        if docarray_v2:
-            from docarray.base_doc.docarray_response import DocArrayResponse
+        from docarray.base_doc.docarray_response import DocArrayResponse
 
-            app_kwargs["response_class"] = DocArrayResponse
+        app_kwargs["response_class"] = DocArrayResponse
 
         @app.api_route(**app_kwargs)
         async def post(body: input_model, response: Response):
@@ -106,19 +102,11 @@ def get_fastapi_app(
             req.header.exec_endpoint = endpoint_path
             data = body.data
             if isinstance(data, list):
-                if not docarray_v2:
-                    req.direct_docs = DocumentArray.from_pydantic_model(data)
-                else:
-                    req.document_array_cls = DocList[input_doc_model]
-                    req.direct_docs = DocList[input_doc_list_model](data)
+                req.document_array_cls = DocList[input_doc_model]
+                req.direct_docs = DocList[input_doc_list_model](data)
             else:
-                if not docarray_v2:
-                    req.direct_docs = DocumentArray(
-                        [Document.from_pydantic_model(data)]
-                    )
-                else:
-                    req.document_array_cls = DocList[input_doc_model]
-                    req.direct_docs = DocList[input_doc_list_model]([data])
+                req.document_array_cls = DocList[input_doc_model]
+                req.direct_docs = DocList[input_doc_list_model]([data])
                 if body.header is None:
                     req.header.request_id = req.docs[0].id
 
@@ -130,10 +118,7 @@ def get_fastapi_app(
                     detail=status.description,
                 )
             else:
-                if not docarray_v2:
-                    docs_response = resp.docs.to_dict()
-                else:
-                    docs_response = resp.docs
+                docs_response = resp.docs
                 ret = output_model(data=docs_response, parameters=resp.parameters)
 
                 return ret
@@ -152,21 +137,11 @@ def get_fastapi_app(
         async def streaming_get(request: Request = None, body: input_doc_model = None):
             if not body:
                 query_params = dict(request.query_params)
-                body = (
-                    input_doc_model.parse_obj(query_params)
-                    if docarray_v2
-                    else Document.from_dict(query_params)
-                )
-            else:
-                if not docarray_v2:
-                    body = Document.from_pydantic_model(body)
+                body = input_doc_model.model_validate(query_params)
             req = DataRequest()
             req.header.exec_endpoint = endpoint_path
-            if not docarray_v2:
-                req.direct_docs = DocumentArray([body])
-            else:
-                req.document_array_cls = DocList[input_doc_model]
-                req.direct_docs = DocList[input_doc_model]([body])
+            req.document_array_cls = DocList[input_doc_model]
+            req.direct_docs = DocList[input_doc_model]([body])
             event_generator = _gen_dict_documents(await caller(req))
             return EventSourceResponse(event_generator)
 
@@ -193,12 +168,8 @@ def get_fastapi_app(
                 parameters_model = Optional[Dict]
                 default_parameters = None
 
-            if docarray_v2:
-                # _config = inherit_config(InnerConfig, BaseDoc.__config__)
-                # Use InnerConfig directly instead of inherit_config
-                _config = InnerConfig
-            else:
-                _config = input_doc_model.__config__
+            # Use InnerConfig directly instead of inherit_config
+            _config = InnerConfig
 
             endpoint_input_model = pydantic.create_model(
                 f'{endpoint.strip("/")}_input_model',
@@ -258,7 +229,4 @@ async def _gen_dict_documents(gen):
 
 
 def _doc_to_event(doc):
-    if not docarray_v2:
-        return {"event": "update", "data": doc.to_dict()}
-    else:
-        return {"event": "update", "data": doc.dict()}
+    return {"event": "update", "data": doc.model_dump()}

@@ -7,7 +7,6 @@ from aiohttp import WSMsgType
 from aiohttp.payload import BytesPayload
 from starlette import status
 
-from marie._docarray import docarray_v2
 from marie.clients.base import retry
 from marie.enums import WebsocketSubProtocols
 from marie.excepts import BadClient
@@ -22,25 +21,25 @@ if TYPE_CHECKING:  # pragma: no cover
     from marie._docarray import Document
     from marie.logging_core.logger import MarieLogger
 
-if docarray_v2:
-    from docarray.base_doc.io.json import orjson_dumps
+from docarray.base_doc.io.json import orjson_dumps
 
-    class JinaJsonPayload(BytesPayload):
-        """A JSON payload for Jina Requests"""
 
-        def __init__(
-            self,
-            value,
+class JinaJsonPayload(BytesPayload):
+    """A JSON payload for Jina Requests"""
+
+    def __init__(
+        self,
+        value,
+        *args,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            orjson_dumps(value),
+            content_type="application/json",
+            encoding="utf-8",
             *args,
             **kwargs,
-        ) -> None:
-            super().__init__(
-                orjson_dumps(value),
-                content_type="application/json",
-                encoding="utf-8",
-                *args,
-                **kwargs,
-            )
+        )
 
 
 class AioHttpClientlet(ABC):
@@ -167,12 +166,7 @@ class HTTPClientlet(AioHttpClientlet):
         for attempt in range(1, self.max_attempts + 1):
             try:
                 request_kwargs = {"url": url}
-                if not docarray_v2:
-                    request_kwargs["json"] = req_dict
-                else:
-                    from docarray.base_doc.io.json import orjson_dumps
-
-                    request_kwargs["data"] = JinaJsonPayload(value=req_dict)
+                request_kwargs["data"] = JinaJsonPayload(value=req_dict)
 
                 async with self.session.post(**request_kwargs) as response:
                     try:
@@ -214,7 +208,7 @@ class HTTPClientlet(AioHttpClientlet):
         :param on: Request endpoint
         :yields: responses
         """
-        req_dict = doc.to_dict() if hasattr(doc, "to_dict") else doc.dict()
+        req_dict = doc.to_dict() if hasattr(doc, "to_dict") else doc.model_dump()
         request_kwargs = {
             "url": url,
             "headers": {"Accept": "text/event-stream"},

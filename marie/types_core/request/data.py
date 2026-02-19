@@ -3,7 +3,7 @@ from typing import Dict, Optional, Type, TypeVar, Union
 
 from google.protobuf import json_format
 
-from marie._docarray import Document, DocumentArray, docarray_v2
+from marie._docarray import Document, DocumentArray
 from marie.excepts import BadRequestType
 from marie.helper import random_identity, typename
 from marie.proto import jina_pb2
@@ -67,13 +67,7 @@ class DataRequest(Request):
             """
             if value is not None:
                 self._loaded_doc_array = None
-
-                if docarray_v2:
-                    self._content.docs.CopyFrom(value.to_protobuf())
-                else:
-                    self._content.docs.CopyFrom(
-                        value.to_protobuf(ndarray_type=ndarray_type)
-                    )
+                self._content.docs.CopyFrom(value.to_protobuf())
 
         @property
         def docs_bytes(self) -> bytes:
@@ -267,10 +261,7 @@ class DataRequest(Request):
             preserving_proto_field_name=True,
             use_integers_for_enums=True,
         )
-        if docarray_v2:
-            d["data"] = da
-        else:
-            d["data"] = da.to_dict()
+        d["data"] = da
         return d
 
     @property
@@ -313,11 +304,10 @@ class DataRequest(Request):
         """
         self.proto_wo_data.parameters.Clear()
         parameters = value
-        if docarray_v2:
-            from pydantic import BaseModel
+        from pydantic import BaseModel
 
-            if isinstance(value, BaseModel):
-                parameters = dict(value)
+        if isinstance(value, BaseModel):
+            parameters = dict(value)
         self.proto_wo_data.parameters.update(parameters)
 
     @property
@@ -603,10 +593,7 @@ class SingleDocumentRequest(Request):
             preserving_proto_field_name=True,
             use_integers_for_enums=True,
         )
-        if docarray_v2:
-            d["document"] = doc
-        else:
-            d["document"] = doc.to_dict()
+        d["document"] = doc
         return d
 
     @property
@@ -675,11 +662,10 @@ class SingleDocumentRequest(Request):
         """
         self.proto_wo_data.parameters.Clear()
         parameters = value
-        if docarray_v2:
-            from pydantic import BaseModel
+        from pydantic import BaseModel
 
-            if isinstance(value, BaseModel):
-                parameters = dict(value)
+        if isinstance(value, BaseModel):
+            parameters = dict(value)
         self.proto_wo_data.parameters.update(parameters)
 
     def __copy__(self):

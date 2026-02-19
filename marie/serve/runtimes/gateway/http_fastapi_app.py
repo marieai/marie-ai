@@ -1,26 +1,24 @@
-import json
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
-from marie.clients.request import request_generator
-from marie.enums import DataInputType
 from marie.excepts import InternalNetworkError
 from marie.helper import get_full_version
 from marie.importer import ImportExtensions
 from marie.logging_core.logger import MarieLogger
+from marie.serve.networking.sse import EventSourceResponse
+from marie.types_core.request.data import DataRequest
 
 if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry import trace
 
     from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 
+from fastapi import status as http_status
+
 
 def get_fastapi_app(
     streamer: "GatewayStreamer",
     title: str,
     description: str,
-    no_debug_endpoints: bool,
-    no_crud_endpoints: bool,
-    expose_endpoints: Optional[str],
     expose_graphql_endpoint: bool,
     cors: bool,
     logger: "MarieLogger",
@@ -34,11 +32,6 @@ def get_fastapi_app(
     :param streamer: gateway streamer object
     :param title: The title of this HTTP server. It will be used in automatics docs such as Swagger UI.
     :param description: The description of this HTTP server. It will be used in automatics docs such as Swagger UI.
-    :param no_debug_endpoints: If set, `/status` `/post` endpoints are removed from HTTP interface.
-    :param no_crud_endpoints: If set, `/index`, `/search`, `/update`, `/delete` endpoints are removed from HTTP interface.
-
-              Any executor that has `@requests(on=...)` bound with those values will receive data requests.
-    :param expose_endpoints: A JSON string that represents a map from executor endpoints (`@requests(on=...)`) to HTTP endpoints.
     :param expose_graphql_endpoint: If set, /graphql endpoint is added to HTTP interface.
     :param cors: If set, a CORS middleware is added to FastAPI frontend to allow cross-origin access.
     :param logger: Jina logger.
@@ -47,18 +40,20 @@ def get_fastapi_app(
     :param kwargs: Extra kwargs to make it compatible with other methods
     :return: fastapi app
     """
+    if expose_graphql_endpoint:
+        logger.error(f" GraphQL endpoint is not enabled when using docarray >0.30")
     with ImportExtensions(required=True):
-        from fastapi import FastAPI, Response, status
+        from fastapi import FastAPI, Response, HTTPException
         from fastapi.middleware.cors import CORSMiddleware
-        from marie.serve.runtimes.gateway.models import (
-            JinaEndpointRequestModel,
-            JinaRequestModel,
-            JinaResponseModel,
-        )
+        import pydantic
+        from pydantic import Field
+    from docarray import BaseDoc, DocList
+    from docarray.base_doc.docarray_response import DocArrayResponse
+
     from marie import __version__
 
     app = FastAPI(
-        title=title or "My Jina Service",
+        title=title or "My Marie Service",
         description=description
         or "This is my awesome service. You can set `title` and `description` in your `Flow` or `Gateway` "
         "to customize the title and description.",
@@ -84,53 +79,66 @@ def get_fastapi_app(
     async def _shutdown():
         await streamer.close()
 
-    openapi_tags = []
-    if not no_debug_endpoints:
-        openapi_tags.append(
-            {
-                "name": "Debug",
-                "description": "Debugging interface. In production, you should hide them by setting "
-                "`--no-debug-endpoints` in `Flow`/`Gateway`.",
-            }
+    import os
+
+    from pydantic import BaseModel, ConfigDict
+
+    from marie.proto import jina_pb2
+    from marie.serve.runtimes.gateway.models import (
+        PROTO_TO_PYDANTIC_MODELS,
+        _to_camel_case,
+    )
+    from marie.types_core.request.status import StatusMessage
+
+    # Manually set the configurations
+    class InnerConfig(ConfigDict):
+        def __init__(self):
+            super().__init__()
+            self.alias_generator = _to_camel_case
+            self.populate_by_name = True
+
+    # Use InnerConfig directly instead of inherit_config
+    _config = InnerConfig
+
+    class Header(BaseModel):
+        request_id: Optional[str] = Field(
+            None, description="Request ID", example=os.urandom(16).hex()
         )
+        target_executor: Optional[str] = Field(default=None, example="")
 
-        from marie._docarray import DocumentArray
-        from marie.proto import jina_pb2
-        from marie.serve.executors import __dry_run_endpoint__
-        from marie.serve.runtimes.gateway.health_model import JinaInfoModel
-        from marie.serve.runtimes.gateway.models import PROTO_TO_PYDANTIC_MODELS
-        from marie.types_core.request.status import StatusMessage
+        # TODO[pydantic]: The `Config` class inherits from another class, please create the `model_config` manually.
+        # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-config for more information.
+        model_config = ConfigDict(alias_generator=_to_camel_case, populate_by_name=True)
 
-        @app.get(
-            path="/dry_run",
-            summary="Get the readiness of Jina Flow service, sends an empty DocumentArray to the complete Flow to "
-            "validate connectivity",
-            response_model=PROTO_TO_PYDANTIC_MODELS.StatusProto,
-        )
-        async def _flow_health():
-            """
-            Get the health of the complete Flow service.
-            .. # noqa: DAR201
+    @app.get(
+        path="/dry_run",
+        summary="Get the readiness of Marie Flow service, sends an empty DocumentArray to the complete Flow to "
+        "validate connectivity",
+        response_model=PROTO_TO_PYDANTIC_MODELS.StatusProto,
+    )
+    async def _flow_health():
+        """
+        Get the health of the complete Flow service.
+        .. # noqa: DAR201
 
-            """
+        """
 
-            da = DocumentArray([])
+        docs = DocList[BaseDoc]([])
 
-            try:
-                _ = await _get_singleton_result(
-                    request_generator(
-                        exec_endpoint=__dry_run_endpoint__,
-                        data=da,
-                        data_type=DataInputType.DOCUMENT,
-                    )
-                )
+        try:
+            async for _ in streamer.stream_docs(docs, request_size=1):
                 status_message = StatusMessage()
                 status_message.set_code(jina_pb2.StatusProto.SUCCESS)
                 return status_message.to_dict()
-            except Exception as ex:
-                status_message = StatusMessage()
-                status_message.set_exception(ex)
-                return status_message.to_dict(use_integers_for_enums=True)
+        except Exception as ex:
+            status_message = StatusMessage()
+            status_message.set_exception(ex)
+            return status_message.to_dict(use_integers_for_enums=True)
+
+    request_models_map = streamer._endpoints_models_map
+
+    if "/status" not in request_models_map:
+        from marie.serve.runtimes.gateway.health_model import JinaInfoModel
 
         @app.get(
             path="/status",
@@ -151,69 +159,10 @@ def get_fastapi_app(
                 version[k] = str(v)
             for k, v in env_info.items():
                 env_info[k] = str(v)
-            return {"jina": version, "envs": env_info}
-
-        @app.post(
-            path="/post",
-            response_model=JinaResponseModel,
-            # do not add response_model here, this debug endpoint should not restricts the response model
-        )
-        async def post(
-            body: JinaEndpointRequestModel, response: Response
-        ):  # 'response' is a FastAPI response, not a Jina response
-            """
-            Post a data request to some endpoint.
-
-            This is equivalent to the following:
-
-                from marie import Flow
-
-                f = Flow().add(...)
-
-                with f:
-                    f.post(endpoint, ...)
-
-            .. # noqa: DAR201
-            .. # noqa: DAR101
-            """
-            # The above comment is written in Markdown for better rendering in FastAPI
-            from marie.enums import DataInputType
-
-            bd = body.dict()  # type: Dict
-            req_generator_input = bd
-            req_generator_input["data_type"] = DataInputType.DICT
-            if bd["data"] is not None and "docs" in bd["data"]:
-                req_generator_input["data"] = req_generator_input["data"]["docs"]
-
-            try:
-                result = await _get_singleton_result(
-                    request_generator(**req_generator_input)
-                )
-            except InternalNetworkError as err:
-                import grpc
-
-                if (
-                    err.code() == grpc.StatusCode.UNAVAILABLE
-                    or err.code() == grpc.StatusCode.NOT_FOUND
-                ):
-                    response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-                elif err.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
-                    response.status_code = status.HTTP_504_GATEWAY_TIMEOUT
-                else:
-                    response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-                result = bd  # send back the request
-                result["header"] = _generate_exception_header(
-                    err
-                )  # attach exception details to response header
-                logger.error(
-                    f"Error while getting responses from deployments: {err.details()}"
-                )
-            return result
+            return {"marie": version, "envs": env_info}
 
     def _generate_exception_header(error: InternalNetworkError):
         import traceback
-
-        from marie.proto.serializer import DataRequest
 
         exception_dict = {
             "name": str(error.__class__),
@@ -230,207 +179,157 @@ def get_fastapi_app(
         header_dict = {"request_id": error.request_id, "status": status_dict}
         return header_dict
 
-    def expose_executor_endpoint(exec_endpoint, http_path=None, **kwargs):
-        """Exposing an executor endpoint to http endpoint
-        :param exec_endpoint: the executor endpoint
-        :param http_path: the http endpoint
-        :param kwargs: kwargs accepted by FastAPI
-        """
-
-        # set some default kwargs for richer semantics
-        # group flow exposed endpoints into `customized` group
-        kwargs["tags"] = kwargs.get("tags", ["Customized"])
-        kwargs["response_model"] = kwargs.get(
-            "response_model",
-            JinaResponseModel,  # use standard response model by default
+    def add_post_route(
+        endpoint_path,
+        input_model,
+        output_model,
+        input_doc_list_model=None,
+        output_doc_list_model=None,
+    ):
+        app_kwargs = dict(
+            path=f'/{endpoint_path.strip("/")}',
+            methods=["POST"],
+            summary=f"Endpoint {endpoint_path}",
+            response_model=output_model,
         )
-        kwargs["methods"] = kwargs.get("methods", ["POST"])
+        app_kwargs["response_class"] = DocArrayResponse
 
-        if kwargs["methods"] == ["POST"]:
-
-            @app.api_route(
-                path=http_path or exec_endpoint,
-                name=http_path or exec_endpoint,
-                **kwargs,
-            )
-            async def foo_post(body: JinaRequestModel, response: Response):
-                from marie.enums import DataInputType
-
-                bd = body.dict() if body else {"data": None}
-                bd["exec_endpoint"] = exec_endpoint
-                req_generator_input = bd
-                req_generator_input["data_type"] = DataInputType.DICT
-                if bd["data"] is not None and "docs" in bd["data"]:
-                    req_generator_input["data"] = req_generator_input["data"]["docs"]
-
-                try:
-                    result = await _get_singleton_result(
-                        request_generator(**req_generator_input)
-                    )
-                except InternalNetworkError as err:
-                    import grpc
-
-                    if (
-                        err.code() == grpc.StatusCode.UNAVAILABLE
-                        or err.code() == grpc.StatusCode.NOT_FOUND
-                    ):
-                        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-                    elif err.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
-                        response.status_code = status.HTTP_504_GATEWAY_TIMEOUT
-                    else:
-                        response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-                    result = bd  # send back the request
-                    result["header"] = _generate_exception_header(
-                        err
-                    )  # attach exception details to response header
-                    logger.error(
-                        f"Error while getting responses from deployments: {err.details()}"
-                    )
-                return result
-
-        else:
-
-            @app.api_route(
-                path=http_path or exec_endpoint,
-                name=http_path or exec_endpoint,
-                **kwargs,
-            )
-            async def foo_no_post(body: JinaRequestModel):
-                from marie.enums import DataInputType
-
-                bd = body.dict() if body else {"data": None}
-                bd["exec_endpoint"] = exec_endpoint
-                req_generator_input = bd
-                req_generator_input["data_type"] = DataInputType.DICT
-                if bd["data"] is not None and "docs" in bd["data"]:
-                    req_generator_input["data"] = req_generator_input["data"]["docs"]
-
-                return await _get_singleton_result(
-                    request_generator(**req_generator_input)
-                )
-
-    if not no_crud_endpoints:
-        openapi_tags.append(
-            {
-                "name": "CRUD",
-                "description": "CRUD interface. If your service does not implement those interfaces, you can should "
-                "hide them by setting `--no-crud-endpoints` in `Flow`/`Gateway`.",
-            }
-        )
-        crud = {
-            "/index": {"methods": ["POST"]},
-            "/search": {"methods": ["POST"]},
-            "/delete": {"methods": ["DELETE"]},
-            "/update": {"methods": ["PUT"]},
-        }
-        for k, v in crud.items():
-            v["tags"] = ["CRUD"]
-            v["description"] = (
-                f'Post data requests to the Flow. Executors with `@requests(on="{k}")` will respond.'
-            )
-            expose_executor_endpoint(exec_endpoint=k, **v)
-
-    if openapi_tags:
-        app.openapi_tags = openapi_tags
-
-    if expose_endpoints:
-        endpoints = json.loads(expose_endpoints)  # type: Dict[str, Dict]
-        for k, v in endpoints.items():
-            expose_executor_endpoint(exec_endpoint=k, **v)
-
-    if expose_graphql_endpoint:
-        with ImportExtensions(required=True):
-            from dataclasses import asdict
-
-            import strawberry
-            from strawberry.fastapi import GraphQLRouter
-
-            from marie._docarray import DocumentArray, docarray_v2
-
-            if not docarray_v2:
-                from docarray.document.strawberry_type import (
-                    JSONScalar,
-                    StrawberryDocument,
-                    StrawberryDocumentInput,
-                )
+        @app.api_route(**app_kwargs)
+        async def post(body: input_model, response: Response):
+            target_executor = None
+            req_id = None
+            if body.header is not None:
+                target_executor = body.header.target_executor
+                req_id = body.header.request_id
+            data = body.data
+            if isinstance(data, list):
+                docs = DocList[input_doc_list_model](data)
             else:
-                raise NotImplementedError("GraphQL is not yet supported for DocArrayV2")
+                docs = DocList[input_doc_list_model]([data])
+                if body.header is None:
+                    if hasattr(docs[0], "id"):
+                        req_id = docs[0].id
 
-            async def get_docs_from_endpoint(
-                data, target_executor, parameters, exec_endpoint
-            ):
-                req_generator_input = {
-                    "data": [asdict(d) for d in data],
-                    "target_executor": target_executor,
-                    "parameters": parameters,
-                    "exec_endpoint": exec_endpoint,
-                    "data_type": DataInputType.DICT,
-                }
+            try:
+                async for resp in streamer.stream_docs(
+                    docs,
+                    exec_endpoint=endpoint_path,
+                    parameters=body.parameters,
+                    target_executor=target_executor,
+                    request_id=req_id,
+                    return_results=True,
+                    return_type=DocList[output_doc_list_model],
+                ):
+                    status = resp.header.status
+
+                    if status.code == jina_pb2.StatusProto.ERROR:
+                        raise HTTPException(
+                            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=status.description,
+                        )
+                    else:
+                        result_dict = resp.to_dict()
+                        return result_dict
+            except InternalNetworkError as err:
+                import grpc
 
                 if (
-                    req_generator_input["data"] is not None
-                    and "docs" in req_generator_input["data"]
+                    err.code() == grpc.StatusCode.UNAVAILABLE
+                    or err.code() == grpc.StatusCode.NOT_FOUND
                 ):
-                    req_generator_input["data"] = req_generator_input["data"]["docs"]
+                    response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+                elif err.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                    response.status_code = status.HTTP_504_GATEWAY_TIMEOUT
+                else:
+                    response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+                result = body.model_dump()  # send back the request
+                result["header"] = _generate_exception_header(
+                    err
+                )  # attach exception details to response header
+                logger.error(
+                    f"Error while getting responses from deployments: {err.details()}"
+                )
+                return result
+
+    def add_streaming_routes(
+        endpoint_path,
+        input_doc_model=None,
+    ):
+        from fastapi import Request
+
+        @app.api_route(
+            path=f'/{endpoint_path.strip("/")}',
+            methods=["GET"],
+            summary=f"Streaming Endpoint {endpoint_path}",
+        )
+        async def streaming_get(request: Request, body: input_doc_model = None):
+            body = body or dict(request.query_params)
+            body = input_doc_model.model_validate(body)
+
+            async def event_generator():
+                async for doc, error in streamer.stream_doc(
+                    doc=body, exec_endpoint=endpoint_path
+                ):
+                    if error:
+                        raise HTTPException(status_code=499, detail=str(error))
+                    yield {"event": "update", "data": doc.model_dump()}
+                yield {"event": "end"}
+
+            return EventSourceResponse(event_generator())
+
+    for endpoint, input_output_map in request_models_map.items():
+        if endpoint != "_jina_dry_run_":
+            input_doc_model = input_output_map["input"]
+            output_doc_model = input_output_map["output"]
+            is_generator = input_output_map["is_generator"]
+            parameters_model = input_output_map["parameters"]
+            parameters_model_needed = parameters_model is not None
+            if parameters_model_needed:
                 try:
-                    response = await _get_singleton_result(
-                        request_generator(**req_generator_input)
-                    )
-                except InternalNetworkError as err:
-                    logger.error(
-                        f"Error while getting responses from deployments: {err.details()}"
-                    )
-                    raise err  # will be handled by Strawberry
-                return DocumentArray.from_dict(response["data"]).to_strawberry_type()
+                    _ = parameters_model()
+                    parameters_model_needed = False
+                except:
+                    parameters_model_needed = True
+                parameters_model = (
+                    parameters_model
+                    if parameters_model_needed
+                    else Optional[parameters_model]
+                )
+                default_parameters = ... if parameters_model_needed else None
+            else:
+                parameters_model = Optional[Dict]
+                default_parameters = None
 
-            @strawberry.type
-            class Mutation:
-                @strawberry.mutation
-                async def docs(
-                    self,
-                    data: Optional[List[StrawberryDocumentInput]] = None,
-                    target_executor: Optional[str] = None,
-                    parameters: Optional[JSONScalar] = None,
-                    exec_endpoint: str = "/search",
-                ) -> List[StrawberryDocument]:
-                    return await get_docs_from_endpoint(
-                        data, target_executor, parameters, exec_endpoint
-                    )
+            # _config =_config inherit_config(InnerConfig, BaseDoc.__config__)
 
-            @strawberry.type
-            class Query:
-                @strawberry.field
-                async def docs(
-                    self,
-                    data: Optional[List[StrawberryDocumentInput]] = None,
-                    target_executor: Optional[str] = None,
-                    parameters: Optional[JSONScalar] = None,
-                    exec_endpoint: str = "/search",
-                ) -> List[StrawberryDocument]:
-                    return await get_docs_from_endpoint(
-                        data, target_executor, parameters, exec_endpoint
-                    )
+            endpoint_input_model = pydantic.create_model(
+                f'{endpoint.strip("/")}_input_model',
+                data=(Union[List[input_doc_model], input_doc_model], ...),
+                parameters=(parameters_model, default_parameters),
+                header=(Optional[Header], None),
+                __config__=_config,
+            )
 
-            schema = strawberry.Schema(query=Query, mutation=Mutation)
-            app.include_router(GraphQLRouter(schema), prefix="/graphql")
+            endpoint_output_model = pydantic.create_model(
+                f'{endpoint.strip("/")}_output_model',
+                data=(Union[List[output_doc_model], output_doc_model], ...),
+                parameters=(Optional[Dict], None),
+                header=(Optional[Header], None),
+                __config__=_config,
+            )
 
-    async def _get_singleton_result(request_iterator) -> Dict:
-        """
-        Streams results from AsyncPrefetchCall as a dict
-
-        :param request_iterator: request iterator, with length of 1
-        :return: the first result from the request iterator
-        """
-        from marie._docarray import docarray_v2
-
-        async for result in streamer.rpc_stream(request_iterator=request_iterator):
-            if not docarray_v2:
-                for i in range(len(result.data._content.docs.docs)):
-                    if result.data._content.docs.docs[i].HasField("embedding"):
-                        result.data._content.docs.docs[i].embedding.cls_name = "numpy"
-                    if result.data._content.docs.docs[i].HasField("tensor"):
-                        result.data._content.docs.docs[i].tensor.cls_name = "numpy"
-            result_dict = result.to_dict()
-            return result_dict
+            if is_generator:
+                add_streaming_routes(
+                    endpoint,
+                    input_doc_model=input_doc_model,
+                )
+            else:
+                add_post_route(
+                    endpoint,
+                    input_model=endpoint_input_model,
+                    output_model=endpoint_output_model,
+                    input_doc_list_model=input_doc_model,
+                    output_doc_list_model=output_doc_model,
+                )
 
     return app

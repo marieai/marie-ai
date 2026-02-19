@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 import grpc
 from grpc import RpcError
 
-from marie._docarray import Document, docarray_v2
+from marie._docarray import Document
 from marie.clients.base import BaseClient
 from marie.clients.base.stream_rpc import StreamRpc
 from marie.clients.base.unary_rpc import UnaryRpc

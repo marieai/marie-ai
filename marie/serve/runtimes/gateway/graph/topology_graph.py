@@ -128,10 +128,10 @@ class TopologyGraph:
                                 if not _check_schema_equality(
                                     self._pydantic_models_by_endpoint[outgoing_endp][
                                         "output"
-                                    ].schema(),
+                                    ].model_json_schema(),
                                     node._pydantic_models_by_endpoint[incoming_endp][
                                         "input"
-                                    ].schema(),
+                                    ].model_json_schema(),
                                 ):
                                     raise Exception(
                                         f"The output schema of {self.name} at {outgoing_endp} endpoint is incompatible with the input schema of {node.name} at {incoming_endp} endpoint"
@@ -579,10 +579,10 @@ class TopologyGraph:
 
                     if (
                         previous_output
-                        and previous_output.schema()
+                        and previous_output.model_json_schema()
                         == self._pydantic_models_by_endpoint[endpoint][
                             "output"
-                        ].schema()
+                        ].model_json_schema()
                     ):
                         # this is needed to not mix model IDs, otherwise FastAPI gets crazy
                         return {

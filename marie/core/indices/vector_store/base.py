@@ -324,7 +324,7 @@ class VectorStoreIndex(BaseIndex[IndexDict]):
         for node in nodes:
             if isinstance(node, IndexNode):
                 try:
-                    node.dict()
+                    node.model_dump()
                 except ValueError:
                     self._object_map[node.index_id] = node.obj
                     node.obj = None

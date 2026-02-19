@@ -3,7 +3,7 @@ import json
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Dict, Optional, Tuple, Type
 
-from marie._docarray import Document, DocumentArray, docarray_v2
+from marie._docarray import Document, DocumentArray
 from marie.clients.base import BaseClient
 from marie.clients.base.helper import HTTPClientlet, handle_response_status
 from marie.clients.helper import callback_exec
@@ -238,21 +238,16 @@ class HTTPBaseClient(BaseClient):
 
                 da = None
                 if "data" in r_str and r_str["data"] is not None:
-                    from marie._docarray import DocumentArray, docarray_v2
+                    from docarray import DocList
 
-                    if not docarray_v2:
-                        da = DocumentArray.from_dict(r_str["data"])
+                    if issubclass(return_type, DocList):
+                        da = return_type(
+                            [return_type.doc_type(**v) for v in r_str["data"]]
+                        )
                     else:
-                        from docarray import DocList
-
-                        if issubclass(return_type, DocList):
-                            da = return_type(
-                                [return_type.doc_type(**v) for v in r_str["data"]]
-                            )
-                        else:
-                            da = DocList[return_type](
-                                [return_type(**v) for v in r_str["data"]]
-                            )
+                        da = DocList[return_type](
+                            [return_type(**v) for v in r_str["data"]]
+                        )
                     del r_str["data"]
 
                 resp = DataRequest(r_str)
@@ -310,7 +305,4 @@ class HTTPBaseClient(BaseClient):
                         await self.iolet.__aenter__()
                     iolet = self.iolet
             async for doc in iolet.send_streaming_message(url=url, doc=inputs, on=on):
-                if not docarray_v2:
-                    yield Document.from_dict(json.loads(doc))
-                else:
-                    yield return_type(**json.loads(doc))
+                yield return_type(**json.loads(doc))

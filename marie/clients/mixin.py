@@ -15,7 +15,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from pydantic import BaseModel
     from marie.clients.base import CallbackFnType, InputType
     from marie.types_core.request.data import Response
-from marie._docarray import Document, DocumentArray, docarray_v2
+from marie._docarray import Document, DocumentArray
 
 
 def _include_results_field_in_param(parameters: Optional["Dict"]) -> "Dict":
@@ -396,14 +396,13 @@ class PostMixin:
         return_results = (on_always is None) and (on_done is None)
 
         async def _get_results(*args, **kwargs):
+            from docarray import DocList
+
             is_singleton = False
             inferred_return_type = return_type
-            if docarray_v2:
-                from docarray import DocList
-
-                if not issubclass(return_type, DocList):
-                    is_singleton = True
-                    inferred_return_type = DocList[return_type]
+            if not issubclass(return_type, DocList):
+                is_singleton = True
+                inferred_return_type = DocList[return_type]
             result = [] if return_responses else inferred_return_type([])
 
             async for resp in c._get_results(*args, **kwargs):
@@ -527,15 +526,14 @@ class AsyncPostMixin:
             return_type=return_type,
             **kwargs,
         ):
-            is_singleton = False
-            if docarray_v2:
-                from docarray import DocList
+            from docarray import DocList
 
-                if issubclass(return_type, DocList):
-                    result.document_array_cls = return_type
-                else:
-                    is_singleton = True
-                    result.document_array_cls = DocList[return_type]
+            is_singleton = False
+            if issubclass(return_type, DocList):
+                result.document_array_cls = return_type
+            else:
+                is_singleton = True
+                result.document_array_cls = DocList[return_type]
             if not return_responses:
                 ret_docs = result.docs
                 if is_singleton and len(ret_docs) == 1:

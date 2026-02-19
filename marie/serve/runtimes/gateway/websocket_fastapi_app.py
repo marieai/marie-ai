@@ -1,6 +1,5 @@
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Union
 
-from marie._docarray import docarray_v2
 from marie.clients.request import request_generator
 from marie.enums import DataInputType, WebsocketSubProtocols
 from marie.excepts import InternalNetworkError
@@ -38,10 +37,7 @@ def get_fastapi_app(
     :param tracer_provider: If tracing is enabled the tracer_provider will be used to instrument the code.
     :return: fastapi app
     """
-    if not docarray_v2:
-        from marie.serve.runtimes.gateway.models import JinaEndpointRequestModel
-    else:
-        from docarray import BaseDoc, DocList
+    from docarray import BaseDoc, DocList
 
     with ImportExtensions(required=True):
         from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect, status
@@ -169,28 +165,10 @@ def get_fastapi_app(
                     if request == {}:
                         break
                     else:
-                        # NOTE: Helps in converting camelCase to snake_case
-                        # you can't do `yield from` inside an async function
-                        if not docarray_v2:
-                            req_generator_input = JinaEndpointRequestModel(
-                                **request
-                            ).dict()
-                            req_generator_input["data_type"] = DataInputType.DICT
-                            if (
-                                request["data"] is not None
-                                and "docs" in request["data"]
-                            ):
-                                req_generator_input["data"] = req_generator_input[
-                                    "data"
-                                ]["docs"]
-                            for data_request in request_generator(
-                                **req_generator_input
-                            ):
-                                yield data_request
-                        else:
-                            raise RuntimeError(
-                                f" DocArray v2 is not compatible with {WebsocketSubProtocols.JSON} subprotocol"
-                            )
+                        # JSON subprotocol is not supported in DocArray v2
+                        raise RuntimeError(
+                            f"DocArray v2 is not compatible with {WebsocketSubProtocols.JSON} subprotocol"
+                        )
                 elif isinstance(request, bytes):
                     if request == bytes(True):
                         break
@@ -199,13 +177,6 @@ def get_fastapi_app(
 
         try:
             async for msg in streamer.rpc_stream(request_iterator=req_iter()):
-                if not docarray_v2:
-                    for i in range(len(msg.data._content.docs.docs)):
-                        if msg.data._content.docs.docs[i].HasField("embedding"):
-                            msg.data._content.docs.docs[i].embedding.cls_name = "numpy"
-
-                        if msg.data._content.docs.docs[i].HasField("tensor"):
-                            msg.data._content.docs.docs[i].tensor.cls_name = "numpy"
                 await manager.send(websocket, msg)
         except InternalNetworkError as err:
             import grpc
@@ -256,10 +227,7 @@ def get_fastapi_app(
         .. # noqa: DAR201
 
         """
-        if not docarray_v2:
-            da = DocumentArray([])
-        else:
-            da = DocList[BaseDoc]([])
+        da = DocList[BaseDoc]([])
 
         try:
             _ = await _get_singleton_result(
@@ -285,10 +253,7 @@ def get_fastapi_app(
         from marie.serve.executors import __dry_run_endpoint__
 
         await manager.connect(websocket)
-        if not docarray_v2:
-            da = DocumentArray([])
-        else:
-            da = DocList[BaseDoc]([])
+        da = DocList[BaseDoc]([])
 
         try:
             async for _ in streamer.rpc_stream(

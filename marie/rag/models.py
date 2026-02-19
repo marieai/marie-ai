@@ -43,9 +43,6 @@ class DocumentSource(BaseModel):
         default_factory=datetime.utcnow, description="Last update timestamp"
     )
 
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
-
 
 class SourceCitation(BaseModel):
     """Citation for RAG responses.
@@ -123,9 +120,6 @@ class RAGNode(BaseModel):
     created_at: datetime = Field(
         default_factory=datetime.utcnow, description="Creation timestamp"
     )
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class RAGQueryRequest(BaseModel):
@@ -211,6 +205,3 @@ class RAGIndex(BaseModel):
     updated_at: datetime = Field(
         default_factory=datetime.utcnow, description="Last update timestamp"
     )
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}

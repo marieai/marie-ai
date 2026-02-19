@@ -27,7 +27,7 @@ from typing import (
     overload,
 )
 
-from marie._docarray import DocumentArray, docarray_v2
+from marie._docarray import BaseDoc, DocList, DocumentArray, LegacyDocument
 from marie.constants import __args_executor_init__, __cache_path__, __default_endpoint__
 from marie.enums import BetterEnum, ProviderType
 from marie.helper import (
@@ -51,9 +51,6 @@ from marie.serve.helper import (
     wrap_func,
 )
 from marie.serve.instrumentation import MetricsTimer
-
-if docarray_v2:
-    from docarray.documents.legacy import LegacyDocument
 
 if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry.context.context import Context
@@ -184,47 +181,44 @@ class _FunctionWithSchema(NamedTuple):
         assert not (
             self.is_generator and self.is_batch_docs
         ), f"Cannot specify the `docs` parameter if the endpoint {self.fn.__name__} is a generator"
-        if docarray_v2:
-            from docarray import BaseDoc, DocList
-
-            if not self.is_generator:
-                if self.is_batch_docs and (
-                    not issubclass(self.request_schema, DocList)
-                    or not issubclass(self.response_schema, DocList)
-                ):
-                    faulty_schema = (
-                        "request_schema"
-                        if not issubclass(self.request_schema, DocList)
-                        else "response_schema"
-                    )
-                    raise Exception(
-                        f"The {faulty_schema} schema for {self.fn.__name__}: {self.request_schema} is not a DocList. Please make sure that your endpoint used DocList for request and response schema"
-                    )
-                if self.is_singleton_doc and (
-                    not issubclass(self.request_schema, BaseDoc)
-                    or not issubclass(self.response_schema, BaseDoc)
-                ):
-                    faulty_schema = (
-                        "request_schema"
-                        if not issubclass(self.request_schema, BaseDoc)
-                        else "response_schema"
-                    )
-                    raise Exception(
-                        f"The {faulty_schema} schema for {self.fn.__name__}: {self.request_schema} is not a BaseDoc. Please make sure that your endpoint used BaseDoc for request and response schema"
-                    )
-            else:
-                if not issubclass(self.request_schema, BaseDoc) or not (
-                    issubclass(self.response_schema, BaseDoc)
-                    or issubclass(self.response_schema, BaseDoc)
-                ):  # response_schema may be a DocList because by default we use LegacyDocument, and for generators we ignore response
-                    faulty_schema = (
-                        "request_schema"
-                        if not issubclass(self.request_schema, BaseDoc)
-                        else "response_schema"
-                    )
-                    raise Exception(
-                        f"The {faulty_schema} schema for {self.fn.__name__}: {self.request_schema} is not a BaseDoc. Please make sure that your streaming endpoints used BaseDoc for request and response schema"
-                    )
+        if not self.is_generator:
+            if self.is_batch_docs and (
+                not issubclass(self.request_schema, DocList)
+                or not issubclass(self.response_schema, DocList)
+            ):
+                faulty_schema = (
+                    "request_schema"
+                    if not issubclass(self.request_schema, DocList)
+                    else "response_schema"
+                )
+                raise Exception(
+                    f"The {faulty_schema} schema for {self.fn.__name__}: {self.request_schema} is not a DocList. Please make sure that your endpoint used DocList for request and response schema"
+                )
+            if self.is_singleton_doc and (
+                not issubclass(self.request_schema, BaseDoc)
+                or not issubclass(self.response_schema, BaseDoc)
+            ):
+                faulty_schema = (
+                    "request_schema"
+                    if not issubclass(self.request_schema, BaseDoc)
+                    else "response_schema"
+                )
+                raise Exception(
+                    f"The {faulty_schema} schema for {self.fn.__name__}: {self.request_schema} is not a BaseDoc. Please make sure that your endpoint used BaseDoc for request and response schema"
+                )
+        else:
+            if not issubclass(self.request_schema, BaseDoc) or not (
+                issubclass(self.response_schema, BaseDoc)
+                or issubclass(self.response_schema, BaseDoc)
+            ):  # response_schema may be a DocList because by default we use LegacyDocument, and for generators we ignore response
+                faulty_schema = (
+                    "request_schema"
+                    if not issubclass(self.request_schema, BaseDoc)
+                    else "response_schema"
+                )
+                raise Exception(
+                    f"The {faulty_schema} schema for {self.fn.__name__}: {self.request_schema} is not a BaseDoc. Please make sure that your streaming endpoints used BaseDoc for request and response schema"
+                )
 
     @staticmethod
     def get_function_with_schema(fn: Callable) -> T:
@@ -244,26 +238,17 @@ class _FunctionWithSchema(NamedTuple):
         docs_annotation = fn.__annotations__.get(
             "docs", fn.__annotations__.get("doc", None)
         )
-        parameters_model = (
-            fn.__annotations__.get("parameters", None) if docarray_v2 else None
-        )
+        parameters_model = fn.__annotations__.get("parameters", None)
         parameters_is_pydantic_model = False
-        if parameters_model is not None and docarray_v2:
+        if parameters_model is not None:
             from pydantic import BaseModel
 
             parameters_is_pydantic_model = is_pydantic_model(parameters_model)
             parameters_model = get_inner_pydantic_model(parameters_model)
 
-        if docarray_v2:
-            from docarray import BaseDoc, DocList
-
-            default_annotations = (
-                DocList[LegacyDocument] if is_batch_docs else LegacyDocument
-            )
-        else:
-            from marie import Document, DocumentArray
-
-            default_annotations = DocumentArray if is_batch_docs else Document
+        default_annotations = (
+            DocList[LegacyDocument] if is_batch_docs else LegacyDocument
+        )
 
         if docs_annotation is None:
             pass
@@ -434,39 +419,30 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         )  # watch because this makes it no serializable
 
     def _get_endpoint_models_dict(self):
-        from marie._docarray import docarray_v2
-
-        if not docarray_v2:
-            from docarray.document.pydantic_model import PydanticDocument
-
         endpoint_models = {}
         for endpoint, function_with_schema in self.requests.items():
             _is_generator = function_with_schema.is_generator
             _is_singleton_doc = function_with_schema.is_singleton_doc
             _is_batch_docs = function_with_schema.is_batch_docs
             _parameters_model = function_with_schema.parameters_model
-            if docarray_v2:
-                # if the endpoint is not a generator endpoint, then the request schema is a DocumentArray and we need
-                # to get the doc_type from the schema
-                # otherwise, since generator endpoints only accept a Document as input, the request_schema is the schema
-                # of the Document
-                if not _is_generator:
-                    request_schema = (
-                        function_with_schema.request_schema.doc_type
-                        if _is_batch_docs
-                        else function_with_schema.request_schema
-                    )
-                    response_schema = (
-                        function_with_schema.response_schema.doc_type
-                        if _is_batch_docs
-                        else function_with_schema.response_schema
-                    )
-                else:
-                    request_schema = function_with_schema.request_schema
-                    response_schema = function_with_schema.response_schema
+            # if the endpoint is not a generator endpoint, then the request schema is a DocumentArray and we need
+            # to get the doc_type from the schema
+            # otherwise, since generator endpoints only accept a Document as input, the request_schema is the schema
+            # of the Document
+            if not _is_generator:
+                request_schema = (
+                    function_with_schema.request_schema.doc_type
+                    if _is_batch_docs
+                    else function_with_schema.request_schema
+                )
+                response_schema = (
+                    function_with_schema.response_schema.doc_type
+                    if _is_batch_docs
+                    else function_with_schema.response_schema
+                )
             else:
-                request_schema = PydanticDocument
-                response_schema = PydanticDocument
+                request_schema = function_with_schema.request_schema
+                response_schema = function_with_schema.response_schema
             endpoint_models[endpoint] = {
                 "input": {
                     "name": request_schema.__name__,
@@ -786,12 +762,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             @functools.wraps(func)  # Step 2: Use functools.wraps to preserve metadata
             def wrapper(*args, **kwargs):
                 docs = kwargs.pop("docs")
-                if docarray_v2:
-                    from docarray import DocList
-
-                    ret = DocList[response_schema]()
-                else:
-                    ret = DocumentArray()
+                ret = DocList[response_schema]()
                 for doc in docs:
                     f_ret = func(*args, doc=doc, **kwargs)
                     if f_ret is None:
@@ -806,12 +777,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             @functools.wraps(func)  # Step 2: Use functools.wraps to preserve metadata
             async def wrapper(*args, **kwargs):
                 docs = kwargs.pop("docs")
-                if docarray_v2:
-                    from docarray import DocList
-
-                    ret = DocList[response_schema]()
-                else:
-                    ret = DocumentArray()
+                ret = DocList[response_schema]()
                 for doc in docs:
                     f_ret = await original_func(*args, doc=doc, **kwargs)
                     if f_ret is None:

@@ -855,7 +855,7 @@ class IndexNode(TextNode):
     def dict(self, **kwargs: Any) -> Dict[str, Any]:
         from marie.core.storage.docstore.utils import doc_to_json
 
-        data = super().dict(**kwargs)
+        data = super().model_dump(**kwargs)
 
         try:
             if self.obj is None:
@@ -880,7 +880,7 @@ class IndexNode(TextNode):
         """Create index node from text node."""
         # copy all attributes from text node, add index id
         return cls(
-            **node.dict(),
+            **node.model_dump(),
             index_id=index_id,
         )
 

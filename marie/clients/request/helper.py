@@ -2,12 +2,11 @@
 
 from typing import Optional, Tuple
 
-from marie._docarray import Document, DocumentArray, docarray_v2
+from docarray import BaseDoc, DocList
+
+from marie._docarray import Document, DocumentArray
 from marie.enums import DataInputType
 from marie.types_core.request.data import DataRequest
-
-if docarray_v2:
-    from docarray import BaseDoc, DocList
 
 
 def _new_data_request_from_batch(
@@ -47,21 +46,13 @@ def _new_doc_from_data(
         return Document(content=data), DataInputType.CONTENT
 
     if data_type == DataInputType.DICT:
-        return (
-            (Document(**data), DataInputType.DICT)
-            if docarray_v2
-            else (Document.from_dict(data), DataInputType.DICT)
-        )
+        return (Document(**data), DataInputType.DICT)
     if data_type == DataInputType.AUTO or data_type == DataInputType.DOCUMENT:
         if isinstance(data, Document):
             # if incoming is already primitive type Document, then all good, best practice!
             return data, DataInputType.DOCUMENT
         elif isinstance(data, dict):
-            return (
-                (Document(**data), DataInputType.DICT)
-                if docarray_v2
-                else (Document.from_dict(data), DataInputType.DICT)
-            )
+            return (Document(**data), DataInputType.DICT)
         else:
             try:
                 d = Document(data)
@@ -78,13 +69,10 @@ def _new_doc_from_data(
 
 
 def _add_docs(req: DataRequest, batch, data_type: DataInputType) -> None:
-    if not docarray_v2:
-        da = DocumentArray([])
+    if len(batch) > 0:
+        da = DocList[batch[0].__class__]()
     else:
-        if len(batch) > 0:
-            da = DocList[batch[0].__class__]()
-        else:
-            da = DocList[BaseDoc]()
+        da = DocList[BaseDoc]()
 
     for content in batch:
         d, data_type = _new_doc_from_data(content, data_type)

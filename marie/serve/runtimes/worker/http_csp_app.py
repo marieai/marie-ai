@@ -1,14 +1,11 @@
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
-from marie._docarray import docarray_v2
+from marie._docarray import BaseDoc, DocList
 from marie.importer import ImportExtensions
 from marie.types_core.request.data import DataRequest
 
 if TYPE_CHECKING:
     from marie.logging_core.logger import MarieLogger
-
-if docarray_v2:
-    from docarray import BaseDoc, DocList
 
 
 def get_fastapi_app(
@@ -38,10 +35,6 @@ def get_fastapi_app(
 
     from marie.proto import jina_pb2
     from marie.serve.runtimes.gateway.models import _to_camel_case
-
-    if not docarray_v2:
-        logger.warning("Only docarray v2 is supported with CSP. ")
-        return
 
     # Manually set the configurations
     class InnerConfig(ConfigDict):
@@ -91,7 +84,7 @@ def get_fastapi_app(
             from typing_extensions import get_args, get_origin
 
         from docarray.base_doc.docarray_response import DocArrayResponse
-        from pydantic import BaseModel, ValidationError, parse_obj_as
+        from pydantic import BaseModel, TypeAdapter, ValidationError
 
         app_kwargs = dict(
             path=f'/{endpoint_path.strip("/")}',
@@ -164,12 +157,12 @@ def get_fastapi_app(
                     model: Type[BaseModel], line: List[str]
                 ) -> BaseModel:
                     parsed_fields = {}
-                    model_fields = model.__fields__
+                    fields = model.model_fields
 
                     for field_str, (field_name, field_info) in zip(
-                        line, model_fields.items()
+                        line, fields.items()
                     ):
-                        field_type = field_info.outer_type_
+                        field_type = field_info.annotation
 
                         # Handle Union types by attempting to arse each potential type
                         if get_origin(field_type) is Union:
@@ -179,9 +172,9 @@ def get_fastapi_app(
                                     break
                                 else:
                                     try:
-                                        parsed_fields[field_name] = parse_obj_as(
-                                            possible_type, json.loads(field_str)
-                                        )
+                                        parsed_fields[field_name] = TypeAdapter(
+                                            possible_type
+                                        ).validate_python(json.loads(field_str))
                                         break
                                     except (json.JSONDecodeError, ValidationError):
                                         continue
@@ -191,23 +184,23 @@ def get_fastapi_app(
                             if field_str:
                                 parsed_list = json.loads(field_str)
                                 if issubclass(list_item_type, BaseModel):
-                                    parsed_fields[field_name] = parse_obj_as(
-                                        List[list_item_type], parsed_list
-                                    )
+                                    parsed_fields[field_name] = TypeAdapter(
+                                        List[list_item_type]
+                                    ).validate_python(parsed_list)
                                 else:
                                     parsed_fields[field_name] = parsed_list
                         # General parsing attempt for other types
                         else:
                             if field_str:
                                 try:
-                                    parsed_fields[field_name] = field_info.type_(
+                                    parsed_fields[field_name] = field_info.annotation(
                                         field_str
                                     )
                                 except (ValueError, TypeError):
-                                    # Fallback to parse_obj_as when type is more complex, e., AnyUrl or ImageBytes
-                                    parsed_fields[field_name] = parse_obj_as(
-                                        field_info.type_, field_str
-                                    )
+                                    # Fallback to TypeAdapter when type is more complex, e., AnyUrl or ImageBytes
+                                    parsed_fields[field_name] = TypeAdapter(
+                                        field_info.annotation
+                                    ).validate_python(field_str)
 
                     return model(**parsed_fields)
 
@@ -217,7 +210,7 @@ def get_fastapi_app(
                 # This also means, all fields in the input model must be present in the
                 # csv file including the optional ones.
                 # We also expect the csv file to have no quotes and use the escape char '\'
-                field_names = [f for f in input_doc_list_model.__fields__]
+                field_names = [f for f in input_doc_list_model.model_fields]
                 data = []
                 for line in csv.reader(
                     StringIO(csv_body),
