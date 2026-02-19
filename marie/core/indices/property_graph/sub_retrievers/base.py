@@ -105,7 +105,7 @@ class BasePGRetriever(BaseRetriever):
                     new_content = (
                         preamble_text + graph_content_str + "\n\n" + cur_content
                     )
-                    mapped_node = TextNode(**mapped_node.dict())
+                    mapped_node = TextNode(**mapped_node.model_dump())
                     mapped_node.text = new_content
                 result_nodes.append(
                     NodeWithScore(

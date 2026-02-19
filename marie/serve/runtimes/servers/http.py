@@ -3,7 +3,6 @@ import os
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Optional
 
-from marie._docarray import docarray_v2
 from marie.importer import ImportExtensions
 from marie.serve.runtimes.servers import BaseServer
 
@@ -116,16 +115,15 @@ class FastAPIBaseServer(BaseServer):
             # Filter out healthcheck endpoint `GET /`
             logging.getLogger("uvicorn.access").addFilter(_EndpointFilter())
 
-        if docarray_v2:
-            from marie.serve.runtimes.gateway.request_handling import (
-                GatewayRequestHandler,
-            )
+        from marie.serve.runtimes.gateway.request_handling import (
+            GatewayRequestHandler,
+        )
 
-            if isinstance(self._request_handler, GatewayRequestHandler):
-                await self._request_handler.streamer._get_endpoints_input_output_models(
-                    is_cancel=self.is_cancel
-                )
-                self._request_handler.streamer._validate_flow_docarray_compatibility()
+        if isinstance(self._request_handler, GatewayRequestHandler):
+            await self._request_handler.streamer._get_endpoints_input_output_models(
+                is_cancel=self.is_cancel
+            )
+            self._request_handler.streamer._validate_flow_docarray_compatibility()
 
         # app property will generate a new fastapi app each time called
         app = self.app

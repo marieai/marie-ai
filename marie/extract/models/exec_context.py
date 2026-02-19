@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from marie.extract.models.base import Page
 from marie.extract.models.definition import Template
@@ -9,6 +9,8 @@ from marie.extract.structures import UnstructuredDocument
 
 
 class ExecutionContext(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     template: Optional[Template] = None
     document: Optional[UnstructuredDocument] = None
     pages: List[Page] = []  # Page
@@ -17,9 +19,6 @@ class ExecutionContext(BaseModel):
     metadata: Optional[Dict] = None
     output_dir: Path
     conf: Optional[Any] = None  # OmegaConf - merged configuration
-
-    class Config:
-        arbitrary_types_allowed = True
 
     def __str__(self) -> str:
         return (

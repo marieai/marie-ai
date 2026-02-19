@@ -8,14 +8,14 @@ from marie import Gateway
 
 
 class DummyResponseModel(BaseModel):
-    arg1: Optional[str]
-    arg2: Optional[str]
-    arg3: Optional[str]
+    arg1: Optional[str] = None
+    arg2: Optional[str] = None
+    arg3: Optional[str] = None
 
 
 class ProcessedResponseModel(BaseModel):
     text: str
-    tags: Optional[dict]
+    tags: Optional[dict] = None
 
 
 class DummyGateway(Gateway):

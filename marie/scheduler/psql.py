@@ -779,7 +779,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         try:
             # Mark nodes as SKIPPED in database
             skip_metadata = {
-                "skip_reason": skip_reason.dict(),
+                "skip_reason": skip_reason.model_dump(),
                 "skipped_at": skip_reason.timestamp.isoformat(),
             }
 
@@ -938,7 +938,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 "overall_passed": result.overall_passed,
                 "overall_score": result.overall_score,
                 "selected_path_id": result.selected_path_id,
-                "individual_results": [r.dict() for r in result.individual_results],
+                "individual_results": [
+                    r.model_dump() for r in result.individual_results
+                ],
                 "evaluated_at": datetime.now(timezone.utc).isoformat(),
                 "error": result.error,
             }

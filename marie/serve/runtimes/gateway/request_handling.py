@@ -124,15 +124,10 @@ class GatewayRequestHandler:
         **kwargs,
     ):
 
-        from marie._docarray import docarray_v2
         from marie.helper import extend_rest_interface
-
-        if not docarray_v2:
-            from marie.serve.runtimes.gateway.http_fastapi_app import get_fastapi_app
-        else:
-            from marie.serve.runtimes.gateway.http_fastapi_app_docarrayv2 import (
-                get_fastapi_app,
-            )
+        from marie.serve.runtimes.gateway.http_fastapi_app import (
+            get_fastapi_app,
+        )
 
         return extend_rest_interface(
             get_fastapi_app(
@@ -315,8 +310,8 @@ class GatewayRequestHandler:
             schema_maps = {}
             for k, v in request_models_map.items():
                 schema_maps[k] = {}
-                schema_maps[k]["input"] = v["input"].schema()
-                schema_maps[k]["output"] = v["output"].schema()
+                schema_maps[k]["input"] = v["input"].model_json_schema()
+                schema_maps[k]["output"] = v["output"].model_json_schema()
                 schema_maps[k]["is_generator"] = v["is_generator"]
                 schema_maps[k]["is_singleton_doc"] = v["is_singleton_doc"]
             response.endpoints.extend(schema_maps.keys())

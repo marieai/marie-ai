@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from marie.extract.models.base import (
     CutpointStrategy,
@@ -85,6 +85,8 @@ class Constraint(BaseModel):
 
 
 class Layer(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, use_enum_values=True)
+
     search_perimeter: Optional[Perimeter] = None
     row_extraction_strategy: RowExtractionStrategy = (
         RowExtractionStrategy.PRIMARY_COLUMN_VARIABLE
@@ -118,19 +120,14 @@ class Layer(BaseModel):
     )
     regions_config_raw: Optional[Dict[str, Any]] = None
 
-    class Config:
-        arbitrary_types_allowed = True
-        use_enum_values = True
-
 
 class Template(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     tid: str
     version: int
     layers: Optional[List["Layer"]] = None
     name: str = ""
-
-    class Config:
-        arbitrary_types_allowed = True
 
     def set_layers(self, layers: List["Layer"]):
         self.layers = layers

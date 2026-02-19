@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, AsyncGenerator, Callable, List, Optional, Tupl
 
 import grpc.aio
 
-from marie._docarray import DocumentArray, docarray_v2
+from marie._docarray import DocList, DocumentArray
 from marie.excepts import InternalNetworkError
 from marie.helper import GATEWAY_NAME
 from marie.logging_core.logger import MarieLogger
@@ -112,20 +112,14 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
             request_doc_ids = []
 
             if graph.has_filter_conditions:
-                if not docarray_v2:
-                    request_doc_ids = request.data.docs[
-                        :, "id"
-                    ]  # used to maintain order of docs that are filtered by executors
-                else:
-                    init_task = gather_endpoints_task
-                    from docarray import DocList
-                    from docarray.base_doc import AnyDoc
+                init_task = gather_endpoints_task
+                from docarray.base_doc import AnyDoc
 
-                    prev_doc_array_cls = request.data.document_array_cls
-                    request.data.document_array_cls = DocList[AnyDoc]
-                    request_doc_ids = request.data.docs.id
-                    request.data._loaded_doc_array = None
-                    request.data.document_array_cls = prev_doc_array_cls
+                prev_doc_array_cls = request.data.document_array_cls
+                request.data.document_array_cls = DocList[AnyDoc]
+                request_doc_ids = request.data.docs.id
+                request.data._loaded_doc_array = None
+                request.data.document_array_cls = prev_doc_array_cls
             else:
                 init_task = None
 

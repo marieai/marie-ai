@@ -65,9 +65,6 @@ class PlannerMetadata(BaseModel):
         description="Last update timestamp",
     )
 
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
-
 
 class QueryPlanRegistryWheelCallback:
     """Callback handler for wheel installation events in QueryPlanRegistry"""
