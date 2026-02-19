@@ -111,6 +111,13 @@ RUN python3 -m pip install /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl \
 RUN python3 -m pip install omegaconf==2.3.0 \
     && python3 /tmp/patches/patch-omegaconf-py312.py --no-confirm
 
+# Install marie packages (monorepo local packages)
+COPY packages/ /tmp/packages/
+RUN python3 -m pip install /tmp/packages/marie-kernel \
+    && python3 -m pip install /tmp/packages/marie-wasm \
+    && python3 -m pip install /tmp/packages/marie-mem0 \
+    && python3 -m pip install /tmp/packages/marie-mcp
+
 RUN cd /tmp/ \
     && python3 -m pip install --default-timeout=100 --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
 

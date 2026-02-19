@@ -118,6 +118,13 @@ RUN python3 -m pip install /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl \
 RUN python3 -m pip install omegaconf==2.3.0 \
     && python3 /tmp/patches/patch-omegaconf-py312.py --no-confirm
 
+# Install marie packages (monorepo local packages)
+COPY packages/ /tmp/packages/
+RUN python3 -m pip install /tmp/packages/marie-kernel \
+    && python3 -m pip install /tmp/packages/marie-wasm \
+    && python3 -m pip install /tmp/packages/marie-mem0 \
+    && python3 -m pip install /tmp/packages/marie-mcp
+
 # Order is important, need to install detectron2 last expected version is 0.6
 # We also disable build isolation to avoid issues with error in detectron2 : No module named 'torch'
 

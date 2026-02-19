@@ -16,6 +16,7 @@
 !docarray/**
 !fastentrypoints.py
 
-# Allow directories for wheels and patches
+# Allow directories for wheels, patches, and packages
 !wheels/**
 !patches/**
+!packages/**

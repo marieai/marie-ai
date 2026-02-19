@@ -9,7 +9,7 @@ This documentation describes the Docker Compose infrastructure for Marie-AI, inc
 - [Quick Start](#quick-start)
 - [Service Details](#service-details)
 - [Environment Configuration](#environment-configuration)
-- [G5 Annotator Services](#g5-annotator-services)
+- [Annotator Services](#annotator-services)
 
 ---
 
