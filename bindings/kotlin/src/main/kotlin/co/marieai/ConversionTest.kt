@@ -28,13 +28,12 @@ private fun templateSelector(label: String, region: BBox, filePath: String): Tem
 
 
 private fun createRequest(): TemplateMatchingRequest {
-    val template0 = templateSelector("see_note", BBox(0, 0, 0, 0), "/tmp/grapnel/anchors/215219944.png")
-    val template1 = templateSelector("codes", BBox(0, 0, 0, 0), "/tmp/grapnel/anchors/76432244.png")
-    val template2 = templateSelector("totals", BBox(0, 0, 0, 0), "/tmp/grapnel/anchors/1099855928.png")
+    val template0 = templateSelector("see_note", BBox(0, 0, 0, 0), "~/tmp/anchors/215219944.png")
+    val template1 = templateSelector("codes", BBox(0, 0, 0, 0), "~/tmp/anchors/76432244.png")
+    val template2 = templateSelector("totals", BBox(0, 0, 0, 0), "~/tmp/anchors/1099855928.png")
 
     val request = TemplateMatchingRequest(
-//        assetKey = "/opt/grapnel-local/burst/175160793_3.tiff",
-        assetKey = "/home/gbugaj/dev/workflow/mbx-grapnel/mbx-grapnel-engine/src/test/resources/test-deck/Integration_Marie001/PID_1658_8634_0_175160793.tif",// multipage
+        assetKey = "75160793.tif",// multipage
         id = generateRequestId(),
         pages = listOf(2, 3),
         scoreThreshold = 0.90,
