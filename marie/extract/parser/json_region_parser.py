@@ -133,16 +133,21 @@ class JsonRegionParser(BaseRegionParser):
 
             return [str(col) for col in columns], string_rows
 
-        # Format 2: Array of objects
-        if isinstance(data, list) and data and isinstance(data[0], dict):
-            # Extract headers from first object
-            headers = list(data[0].keys())
-            rows = []
-            for obj in data:
-                if isinstance(obj, dict):
-                    row = [str(obj.get(header, "")) for header in headers]
-                    rows.append(row)
-            return headers, rows
+        # Format 2: Array of objects or primitives
+        if isinstance(data, list) and data:
+            first_item = data[0]
+            if isinstance(first_item, dict):
+                # Extract headers from first object
+                headers = list(first_item.keys())
+                rows = []
+                for obj in data:
+                    if isinstance(obj, dict):
+                        row = [str(obj.get(header, "")) for header in headers]
+                        rows.append(row)
+                return headers, rows
+            else:
+                # List of primitives - treat as single column
+                return ["Value"], [[str(item)] for item in data]
 
         # Format 3: Single object (treated as single row)
         if isinstance(data, dict) and "columns" not in data:

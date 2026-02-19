@@ -226,6 +226,24 @@ Map data values to columns by POSITION, not by header matching.
 """
         return hint
 
+    def _get_inferred_headers_hint(self, table: Dict[str, Any]) -> str:
+        """
+        Get inferred headers hint for a table if it's missing headers.
+
+        Args:
+            table: Table dict with header_present, header_rows, and columns keys.
+
+        Returns:
+            Formatted hint string if table is headerless, empty string otherwise.
+        """
+        header_present = table.get("header_present", True)
+        header_rows = table.get("header_rows", [])
+        columns = table.get("columns", [])
+
+        if (not header_present or not header_rows) and columns:
+            return self._build_inferred_headers_hint(columns)
+        return ""
+
     def _extract_claims_from_document(
         self, document: "UnstructuredDocument"
     ) -> Dict[int, List[Dict[str, Any]]]:
@@ -260,53 +278,6 @@ Map data values to columns by POSITION, not by header matching.
 
         return claims_by_page
 
-    def _get_claims_for_table(
-        self,
-        claims_by_page: Dict[int, List[Dict[str, Any]]],
-        page_number: int,
-        table_header_line: Optional[int] = None,
-    ) -> tuple[List[Dict[str, Any]], int]:
-        """
-        Get claims relevant to this table based on header line position.
-
-        Strategy:
-        1. If table has header line, get claims on same page BEFORE that line
-        2. If no claims found (or no header line), fall back to previous pages
-
-        Args:
-            claims_by_page: Dict mapping page numbers to claim lists.
-            page_number: 1-indexed page number of the table.
-            table_header_line: Line number of the table header (optional).
-
-        Returns:
-            Tuple of (claims_list, source_page_number).
-            source_page_number is the page where claims were found,
-            or 0 if no claims found anywhere.
-        """
-        # Get claims on current page
-        page_claims = claims_by_page.get(page_number, [])
-
-        if page_claims and table_header_line is not None:
-            # Filter to claims BEFORE the table header
-            relevant = [c for c in page_claims if c["line_number"] < table_header_line]
-            if relevant:
-                return relevant, page_number
-
-        # If claims exist on page (no header filter or all after header), use them
-        if page_claims:
-            return page_claims, page_number
-
-        # Fallback: search previous pages (closest first)
-        for prev_page in range(page_number - 1, 0, -1):
-            if prev_page in claims_by_page:
-                logger.debug(
-                    f"No claims on page {page_number}, using claims from page {prev_page}"
-                )
-                return claims_by_page[prev_page], prev_page
-
-        # No claims found anywhere
-        return [], 0
-
     def get_variables(
         self,
         document: "UnstructuredDocument",
@@ -322,12 +293,13 @@ Map data values to columns by POSITION, not by header matching.
             # Check if per-page mode (data contains "tables" key with list)
             if self.mode == "per-page" and "tables" in unit.data:
                 # Per-page mode: inject all tables for this page
-                variables["TABLE_CONTEXT_ALL"] = json.dumps(
-                    unit.data["tables"], indent=2
-                )
+                tables = unit.data["tables"]
+                variables["TABLE_CONTEXT_ALL"] = json.dumps(tables, indent=2)
                 variables["TABLE_INDEX"] = ""
                 variables["TABLE_NAME"] = ""
-                variables["INFERRED_HEADERS_HINT"] = ""
+                variables["INFERRED_HEADERS_HINT"] = (
+                    self._get_inferred_headers_hint(tables[0]) if tables else ""
+                )
             else:
                 # Per-table mode: inject single table
                 variables["TABLE_CONTEXT_ALL"] = json.dumps(unit.data, indent=2)
@@ -341,22 +313,16 @@ Map data values to columns by POSITION, not by header matching.
                     if isinstance(first_header, dict):
                         table_header_line = first_header.get("line_number")
 
-                # Check if headers are missing (continuation table)
-                header_present = unit.data.get("header_present", True)
-                columns = unit.data.get("columns", [])
-
-                inferred_headers_hint = ""
-                if not header_present or not header_rows:
-                    if columns:
-                        inferred_headers_hint = self._build_inferred_headers_hint(
-                            columns
-                        )
-
-                variables["INFERRED_HEADERS_HINT"] = inferred_headers_hint
+                variables["INFERRED_HEADERS_HINT"] = self._get_inferred_headers_hint(
+                    unit.data
+                )
         else:
             # Legacy mode: inject all tables for page
             variables["TABLE_CONTEXT_ALL"] = self.get_tables_json(page_number)
-            variables["INFERRED_HEADERS_HINT"] = ""
+            tables = self._tables_by_page.get(page_number, [])
+            variables["INFERRED_HEADERS_HINT"] = (
+                self._get_inferred_headers_hint(tables[0]) if tables else ""
+            )
 
         # # Claim context
         # claims_by_page = self._extract_claims_from_document(document)

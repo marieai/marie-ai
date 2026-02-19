@@ -132,11 +132,15 @@ def transform_field_value(
             module = importlib.import_module(module_name)
             transformer_func = getattr(module, func_name)
             return transformer_func(value, field_def, document=document)
-        except (ImportError, AttributeError, ValueError) as e:
+        except ImportError as e:
+            logger.error(
+                f"Could not import transform function '{custom_transformer_path}': {e}"
+            )
+            raise e
+        except (AttributeError, ValueError) as e:
             logger.error(
                 f"Could not resolve or use transform function '{custom_transformer_path}': {e}"
             )
-            return value
         except Exception as e:
             logger.error(
                 f"Error during custom transformation of field '{field_name}' with '{custom_transformer_path}': {e}"
@@ -277,7 +281,6 @@ def convert_date_format(
 
     # If regex is defined, use it to extract and convert components
     if validation_regex and derived_fields:
-        # formats can be different for each split
         format_split = field_def.get('split', '-')
         split_values = value.split(format_split)
         split_formats = field_format.split(format_split)
@@ -302,6 +305,7 @@ def convert_date_format(
             ):
                 extracted_date = split_value.strip()
                 split_format = java_to_python_date_format(split_format.strip())
+                print(f'Trying to parse "{extracted_date}" with format "{split_format}" after java_to_python_date_format')
                 formatted = try_parse_date(extracted_date, split_format)
                 if not formatted:
                     logger.warning(
@@ -316,8 +320,10 @@ def convert_date_format(
             split_format = java_to_python_date_format(split_formats[i].strip())
             formatted = try_parse_date(extracted_date, field_format=split_format)
             if not formatted:
+                print(f'Trying to parse "{extracted_date}" with format "{split_format}" after java_to_python_date_format')
+
                 logger.warning(
-                    f"Failed to parse date '{extracted_date}' with format '{field_format}'"
+                    f"Failed to parse date '{extracted_date}' with format '{split_format}'"
                 )
             output[group_name] = formatted
         return output

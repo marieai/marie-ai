@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 from marie.extract.models.models import LineModel
 from marie.extract.structures.annotation import Annotation
+from marie.extract.structures.concrete_annotations.typed_annotation import TypedAnnotation
 from marie.extract.structures.line_metadata import LineMetadata
 from marie.extract.structures.serializable import Serializable
 
@@ -91,12 +92,15 @@ class LineWithMeta(Sized, Serializable):
         annotations = []
         for annotation in self.annotations:
             if start < annotation.end and stop > annotation.start:
+                # Preserve annotation_type if the annotation is a TypedAnnotation
+                annotation_type = getattr(annotation, "annotation_type", "UNKNOWN")
                 annotations.append(
-                    Annotation(
+                    TypedAnnotation(
                         start=max(annotation.start, start) - start,
                         end=min(annotation.end, stop) - start,
                         name=annotation.name,
                         value=annotation.value,
+                        annotation_type=annotation_type,
                         bboxes=annotation.bboxes,
                     )
                 )
@@ -165,11 +169,15 @@ class LineWithMeta(Sized, Serializable):
         shift = len(self)
         other_annotations = []
         for annotation in other.annotations:
-            new_annotation = Annotation(
+            # Preserve annotation_type if the annotation is a TypedAnnotation
+            annotation_type = getattr(annotation, "annotation_type", "UNKNOWN")
+            new_annotation = TypedAnnotation(
                 start=annotation.start + shift,
                 end=annotation.end + shift,
                 name=annotation.name,
                 value=annotation.value,
+                annotation_type=annotation_type,
+                bboxes=getattr(annotation, "bboxes", []),
             )
             other_annotations.append(new_annotation)
         annotations = AnnotationMerger().merge_annotations(
