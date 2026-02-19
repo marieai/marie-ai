@@ -66,7 +66,8 @@ filelock:                   standard,devel
 requests:                   standard,devel
 websockets:                 standard,devel
 # Pydantic v2 is required (v1 patterns removed)
-pydantic>=2.10.0:           core
+# very important that we pin this to 2.10.0, otherwise it will cause issues  in models.CustomConfig
+pydantic==2.10.0:           core
 pydantic-settings>=2.0.0:   core
 python-multipart:           standard,devel
 aiofiles:                   standard,devel
@@ -160,12 +161,13 @@ filetype:                      standard,core
 dataclasses_json:              standard,core
 watchdog:                      standard,core
 cachetools==5.5.0:             standard,core
+portalocker==3.2.0:            standard,core
 jsonpath-ng:                   standard,core
 clickhouse-driver==0.2.10:     standard,core
 python-dotenv:                 standard,devel
 
 # Memory integration (Mem0 SDK for agent memory)
-mem0ai>=0.1.0:                 standard,core
+# mem0ai>=0.1.0:                 standard,core
 
 # Dev-only: used to regenerate *_pb2.py from .proto files (not a runtime dep)
 # Must be >=1.62.0 for protobuf v5 compatibility

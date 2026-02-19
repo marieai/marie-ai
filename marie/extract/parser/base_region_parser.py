@@ -91,7 +91,7 @@ class BaseRegionParser(ABC):
 
     @staticmethod
     def _split_sets_by_parse(
-        sections_cfg: Iterable[Dict[str, object]]
+        sections_cfg: Iterable[Dict[str, object]],
     ) -> Tuple[Dict[str, object], set[str], set[str]]:
         """
         From a list-based 'sections' config, compute:

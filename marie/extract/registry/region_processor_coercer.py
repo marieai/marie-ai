@@ -6,7 +6,7 @@ from .sig import count_required_params, has_zero_arg_init
 
 
 def coerce_region_processor_fn(
-    obj: Union[RegionProcessorFn, RegionProcessorProto, Type[RegionProcessorProto]]
+    obj: Union[RegionProcessorFn, RegionProcessorProto, Type[RegionProcessorProto]],
 ) -> RegionProcessorFn:
     """Normalize to (context, parent, section, region_parser_config, regions_config) -> List[Dict]."""
     if inspect.isclass(obj):

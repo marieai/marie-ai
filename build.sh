@@ -6,7 +6,12 @@ set -e
 CPU_COUNT=$(grep -c ^processor /proc/cpuinfo)
 CPU_COUNT=$((CPU_COUNT-1))
 
-readonly DEFAULT_VERSION="4.0.11"
+readonly INIT_FILE="marie/__init__.py"
+readonly DEFAULT_VERSION=$(sed -n '/^__version__/p' "${INIT_FILE}" | cut -d \' -f2)
+if [[ -z "$DEFAULT_VERSION" ]]; then
+    echo -e "\033[0;31m[ERROR]\033[0m Failed to read version from ${INIT_FILE}" >&2
+    exit 1
+fi
 readonly VERSION="${MARIE_VERSION:-$DEFAULT_VERSION}"
 
 declare -A PROFILES=(
@@ -52,8 +57,8 @@ show_profiles() {
     echo >&2
     log_info "Marie AI Docker Builder (Version: ${VERSION})"
     log_info "Available build profiles:"
-    echo "1) marie-gateway      - MarieAI Gateway (CPU) -> marieai/marie-gateway:4.0.0-cpu" >&2
-    echo "2) marie-cuda         - MarieAI Core (CUDA) -> marieai/marie:4.0.0-cuda" >&2
+    echo "1) marie-gateway      - MarieAI Gateway (CPU) -> marieai/marie-gateway:${VERSION}-cpu" >&2
+    echo "2) marie-cuda         - MarieAI Core (CUDA) -> marieai/marie:${VERSION}-cuda" >&2
     echo "3) all                - Build all profiles" >&2
     echo "4) exit               - Exit without building" >&2
     echo >&2
