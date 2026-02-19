@@ -68,7 +68,7 @@ def get_text(cfg, generator, model, sample, bpe):
 if __name__ == '__main__':
     model_path = '~/devio/3rdparty/unilm/models/trocr-large-printed.pt'
     jpg_path = "~/devio/marie-icr/assets/psm/word/0001.jpg"
-    jpg_path = "~/gbugaj/devio/marie-icr/assets/english/Lines/004.png"
+    jpg_path = "~/devio/marie-icr/assets/english/Lines/004.png"
     beam = 5
 
     model, cfg, task, generator, bpe, img_transform, device = init(model_path, beam)

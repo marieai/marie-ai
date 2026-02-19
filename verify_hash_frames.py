@@ -270,7 +270,9 @@ def scan_all_generators(base_dir):
 
 
 def main():
-    default_dir = "/home/gbugaj/.marie/generators_WITH_DUPLICATED_GENDIR/db81e247d8a9f691673d4a1f9bf947a9"
+    default_dir = (
+        "~/.marie/generators_WITH_DUPLICATED_GENDIR/db81e247d8a9f691673d4a1f9bf947a9"
+    )
 
     if len(sys.argv) > 1:
         target_dir = sys.argv[1]

@@ -85,7 +85,7 @@ if __name__ == "__main__":
 
     print(__model_path__)
     model_path = os.path.join(__model_path__, "trocr/trocr-large-printed.pt")
-    burst_dir = "/home/gbugaj/dev/marieai/marie-ai/assets/psm/word"
+    burst_dir = "~/dev/marieai/marie-ai/assets/psm/word"
 
     beam = 5
     model, cfg, task, generator, bpe, img_transform, device = init(model_path, beam)

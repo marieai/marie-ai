@@ -67,10 +67,7 @@ if __name__ == "__main__":
     executor = OverlayExecutor(_name_or_path, True, storage_conf)
 
     storage_enabled = False
-    img_path = f"/home/gbugaj/tmp/2022-08-09/PID_698_7367_0_159277012.tif"
-    # img_path = (
-    #     f"/home/greg/tmp/marie-cleaner/to-clean-001/PID_1925_9289_0_157186264.tif"
-    # )
+    img_path = f"277012.tif"
 
     if not os.path.isdir(img_path):
         process_file(executor, img_path, storage_enabled, storage_conf)

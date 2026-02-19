@@ -146,7 +146,7 @@ def export():
     print("Exporting model")
 
     # load model and tokenizer
-    model_id = "/home/gbugaj/models/layoutlmv3-base-finetuned/checkpoint-50000"
+    model_id = "~/models/layoutlmv3-base-finetuned/checkpoint-50000"
     print(f"TokenClassification dir : {model_id}")
 
     # Max model size is 512, so we will need to handle any documents larger thjan ath

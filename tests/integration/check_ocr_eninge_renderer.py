@@ -155,8 +155,6 @@ if __name__ == "__main__":
 
     img_path = "~/tmp/4007/176073139.tif"
     img_path = "~/tmp/demo/159581778_1.png"
-    # img_path = os.path.expanduser("~/tmp/demo")
-    # img_path = os.path.expanduser("/home/gbugaj/dev/marieai/marie-ai/assets/template_matching/sample-001.png")
 
     use_cuda = torch.cuda.is_available()
     ocr_engine = DefaultOcrEngine(cuda=use_cuda)
