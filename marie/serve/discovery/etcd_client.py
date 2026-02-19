@@ -228,11 +228,21 @@ class EtcdClient(object):
         old_state = None
 
         with self._state_lock:
-            logger.info(f"Setting connection state: {new_state} (error: {error})")
             old_state = self._connection_state
 
             if old_state != new_state:
                 self._connection_state = new_state
+
+                # Clear state tracker on connection changes to allow
+                # reconnection events to fire properly. Without this,
+                # the StateTracker would filter out re-registration events
+                # after reconnection because the hash would be identical.
+                if new_state in (
+                    ConnectionState.DISCONNECTED,
+                    ConnectionState.CONNECTED,
+                ):
+                    self.state_tracker.force_clear_all()
+
                 event = ConnectionEvent(old_state, new_state, error)
                 handlers = self._connection_event_handlers.get(new_state, [])
                 handlers_to_call = list(handlers)
@@ -243,9 +253,11 @@ class EtcdClient(object):
             except Exception as e:
                 logger.error(f"Error in connection event handler: {e}")
 
+        # Only log actual state changes (single consolidated log)
         if old_state != new_state:
             logger.info(
-                f"EtcdClient connection state changed: {old_state.value} -> {new_state.value}"
+                f"EtcdClient connection state: {old_state.value} -> {new_state.value}"
+                + (f" (error: {error})" if error else "")
             )
 
             if not self._shutting_down:
@@ -900,15 +912,15 @@ class EtcdClient(object):
             try:
                 if isinstance(response, grpc.RpcError):
                     code = response.code()
-                    if code in (
-                        grpc.StatusCode.UNAVAILABLE,
-                        grpc.StatusCode.INTERNAL,
-                        grpc.StatusCode.CANCELLED,
-                    ) or (
-                        code == grpc.StatusCode.UNKNOWN
-                        and "invalid auth token" not in response.details()
+                    if (
+                        code == grpc.StatusCode.UNAVAILABLE
+                        or code == grpc.StatusCode.INTERNAL
+                        or (
+                            code == grpc.StatusCode.UNKNOWN
+                            and "invalid auth token" not in response.details()
+                        )
                     ):
-                        logger.warning(f"Watch connection error detected: {response}")
+                        logger.error(f"Watch connection error detected: {response}")
                         self._set_connection_state(
                             ConnectionState.DISCONNECTED, response
                         )
@@ -916,14 +928,15 @@ class EtcdClient(object):
 
                 # Check if response has events attribute before accessing it
                 if not hasattr(response, 'events'):
+                    logger.error(
+                        f"Response object does not have 'events' attribute: {type(response)}"
+                    )
                     if isinstance(response, grpc.RpcError):
-                        logger.warning(f"gRPC error in watch callback: {response}")
+                        logger.error(
+                            f"Unhandled gRPC error in watch callback: {response}"
+                        )
                         self._set_connection_state(
                             ConnectionState.DISCONNECTED, response
-                        )
-                    else:
-                        logger.error(
-                            f"Unexpected response type in watch callback: {type(response)}"
                         )
                     return
 
@@ -1366,7 +1379,8 @@ class EtcdClient(object):
             if not self._is_multi_endpoint:
                 self._client_idx = 0
 
-            connected = self.connect()
+            # Pass flag to skip state management in connect() since we handle it here
+            connected = self.connect(_from_reconnect=True)
             if not connected:
                 self._set_connection_state(ConnectionState.FAILED)
                 return False
@@ -1389,8 +1403,13 @@ class EtcdClient(object):
             self._set_connection_state(ConnectionState.FAILED, e)
             raise
 
-    def connect(self) -> bool:
-        """Connect to etcd using the appropriate client type with connection state management."""
+    def connect(self, _from_reconnect: bool = False) -> bool:
+        """Connect to etcd using the appropriate client type with connection state management.
+
+        Args:
+            _from_reconnect: If True, skip state management as reconnect() handles it.
+                           This prevents redundant state transitions.
+        """
         times = 0
         last_ex = None
         # Use fewer retries for reconnection (3) vs initial connection
@@ -1400,8 +1419,9 @@ class EtcdClient(object):
             else self.retry_times
         )
 
-        # Set initial state to reconnecting (connecting for the first time)
-        self._set_connection_state(ConnectionState.RECONNECTING)
+        # Set initial state only when called directly (not from reconnect)
+        if not _from_reconnect:
+            self._set_connection_state(ConnectionState.RECONNECTING)
 
         while times < max_retries:
             try:
@@ -1426,7 +1446,9 @@ class EtcdClient(object):
                         # Fallback to the client itself for calls/retries
                         self._cluster = [self.client]
 
-                self._set_connection_state(ConnectionState.CONNECTED)
+                # Only set CONNECTED state when called directly (not from reconnect)
+                if not _from_reconnect:
+                    self._set_connection_state(ConnectionState.CONNECTED)
                 self._last_successful_operation = time.time()
 
                 break
@@ -1434,7 +1456,7 @@ class EtcdClient(object):
             except grpc.RpcError as e:
                 times += 1
                 last_ex = e
-                if times == 1:
+                if not _from_reconnect and times == 1:
                     self._set_connection_state(ConnectionState.DISCONNECTED, e)
 
                 if e.code() in (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.UNKNOWN):
@@ -1444,18 +1466,20 @@ class EtcdClient(object):
                         logger.warning(
                             f"etcd connection attempt {times}/{max_retries} failed, retrying in {backoff}s"
                         )
-                        self._set_connection_state(ConnectionState.RECONNECTING, e)
+                        if not _from_reconnect:
+                            self._set_connection_state(ConnectionState.RECONNECTING, e)
                     time.sleep(backoff)
                     continue
                 else:
-                    self._set_connection_state(ConnectionState.FAILED, e)
+                    if not _from_reconnect:
+                        self._set_connection_state(ConnectionState.FAILED, e)
                     raise e
 
             except Exception as e:
                 times += 1
                 last_ex = e
 
-                if times == 1:
+                if not _from_reconnect and times == 1:
                     self._set_connection_state(ConnectionState.DISCONNECTED, e)
 
                 # Exponential backoff: 2s, 4s, 8s, capped at 15s
@@ -1464,11 +1488,13 @@ class EtcdClient(object):
                     logger.warning(
                         f"etcd connection attempt {times}/{max_retries} failed, retrying in {backoff}s"
                     )
-                    self._set_connection_state(ConnectionState.RECONNECTING, e)
+                    if not _from_reconnect:
+                        self._set_connection_state(ConnectionState.RECONNECTING, e)
                 time.sleep(backoff)
 
         if times >= max_retries:
-            self._set_connection_state(ConnectionState.FAILED, last_ex)
+            if not _from_reconnect:
+                self._set_connection_state(ConnectionState.FAILED, last_ex)
             raise RuntimeFailToStart(
                 f"Initialize etcd client failed after {max_retries} attempts. Due to {last_ex}"
             )
