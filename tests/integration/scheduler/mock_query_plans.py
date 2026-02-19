@@ -2,7 +2,7 @@
 Mock Query Plans for Job Distribution Performance Testing
 
 This module provides mock query plans that mimic the structure of production query plans
-from grapnel-g5 for testing job distribution performance, scheduling behavior, and
+from testing job distribution performance, scheduling behavior, and
 resource allocation in the Marie-AI scheduler.
 
 Includes both traditional linear/parallel plans and advanced branching/conditional plans.

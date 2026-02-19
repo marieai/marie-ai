@@ -9,12 +9,6 @@ from marie.utils.image_utils import hash_frames_fast
 from marie.utils.tiff_ops import merge_tiff_frames, save_frame_as_tiff_g4
 from marie.utils.utils import ensure_exists
 
-# executor = NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
-# executor = NerExtractionExecutor("rms/layoutlmv3-large-corr")
-# executor = NerExtractionExecutor(
-#     "/home/gbugaj/dev/marieai/marie-ai/model_zoo/rms/layoutlmv3-large-20230711-stride128"
-# )
-
 executor = None
 
 
@@ -57,7 +51,7 @@ def process_dir_pdf(image_dir: str):
             frames = frames_from_file(img_path)
             print(len(frames))
             merge_tiff_frames(
-                frames, "/home/gbugaj/tmp/analysis/resized-pdf/gen/{}.tif".format(name)
+                frames, "~/tmp/analysis/resized-pdf/gen/{}.tif".format(name)
             )
         except Exception as e:
             print(e)
@@ -75,12 +69,12 @@ def process_dir_tiff(image_dir: str):
 
     tiff_files = sorted(glob.glob(os.path.join(image_dir, "*.tif")), key=numeric_key)
     tiff_files = sorted(
-        glob.glob(os.path.join("/home/gbugaj/tmp/analysis/resized-pdf/g4", "*.tif")),
+        glob.glob(os.path.join("~/tmp/analysis/resized-pdf/g4", "*.tif")),
         key=numeric_key,
     )
     frames = []
 
-    output_dir = os.path.join("/home/gbugaj/tmp/analysis/resized-pdf/g4")
+    output_dir = os.path.join("~/tmp/analysis/resized-pdf/g4")
     ensure_exists(output_dir)
     for idx, img_path in enumerate(tiff_files):
         try:
@@ -103,9 +97,7 @@ def process_dir_tiff(image_dir: str):
             raise e
 
         print(len(frames))
-        merge_tiff_frames(
-            frames, "/home/gbugaj/tmp/analysis/resized-pdf/converted-g4.tif"
-        )
+        merge_tiff_frames(frames, "~/tmp/analysis/resized-pdf/converted-g4.tif")
 
 
 def resize_with_aspect_ratio(image, width=None, height=None, inter=cv2.INTER_AREA):
@@ -126,18 +118,10 @@ def resize_with_aspect_ratio(image, width=None, height=None, inter=cv2.INTER_ARE
 
 if __name__ == "__main__":
     # ensure_exists("/tmp/pdf_2_tif")
-
     # can also use pdftoppm to convert pdf to tiff as the PDFU can fail on some PDFs
     # https://stackoverflow.com/questions/75500/best-way-to-convert-pdf-files-to-tiff-files
     # pdftoppm bw.tiff.pdf pages -tiff
 
     # convert input.tif -units PixelsPerInch -density 300 output.tif
-
-    # process_dir_pdf("/home/gbugaj/tmp/analysis/resized-pdf")
-    process_dir_tiff("/home/gbugaj/tmp/analysis/resized-pdf/gen")
-
-    # process_dir("/opt/shares/_hold/ENSEMBLE/SAMPLE/PRODUCTION/PDF")
-    # process_dir_ner("/tmp/pdf_2_tif")
-    # process_image("/home/gbugaj/tmp/analysis/OVERFLOWING-CORR/148447127_0.png")
-    # process_image("/home/gbugaj/tmp/PID_1925_9289_0_157186264.png")
-    # process_image("/home/gbugaj/tmp/eob-issues/158954482_0.png")
+    # process_dir_pdf("~/tmp/analysis/resized-pdf")
+    process_dir_tiff("~/tmp/analysis/resized-pdf/gen")

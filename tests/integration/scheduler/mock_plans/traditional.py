@@ -192,15 +192,12 @@ def query_planner_mock_medium(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
 @register_query_plan("mock_complex")
 def query_planner_mock_complex(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
     """
-    Complex mock query plan mimicking production grapnel-g5 structure.
+    Complex mock query plan mimicking production  structure.
 
     Structure:
         START -> INIT -> [5 parallel annotators] -> MERGE ->
         [Sequential post-processing: Parser, Extractor, Validator] -> END
         (12 nodes, with parallel and sequential stages)
-
-    This plan closely mimics the structure found in grapnel-g5 query plans
-    and is suitable for comprehensive performance testing.
 
     Args:
         planner_info: Contains configuration and state information for the plan
@@ -341,7 +338,7 @@ def _build_subgraph_mock(
     """
     Helper function to build a mock subgraph with parallel execution.
 
-    This demonstrates the subgraph pattern used in grapnel-g5 for complex workflows.
+    This demonstrates the subgraph pattern used in for complex workflows.
 
     Args:
         planner_info: Planner configuration
@@ -403,7 +400,7 @@ def query_planner_mock_with_subgraphs(planner_info: PlannerInfo, **kwargs) -> Qu
     """
     Advanced mock query plan with nested subgraphs.
 
-    This demonstrates the subgraph pattern used in grapnel-g5 for organizing
+    This demonstrates the subgraph pattern for organizing
     complex workflows with clear boundaries.
 
     Structure:

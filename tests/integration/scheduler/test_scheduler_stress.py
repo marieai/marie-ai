@@ -96,7 +96,7 @@ def create_complex_document_processing_plan(planner_info: PlannerInfo, **kwargs)
     Structure:
         START -> OCR -> [Parallel Annotators] -> Merge -> [Post-processing] -> Parse -> END
 
-    This mimics the structure found in grapnel-g5 sample plans with multiple parallel
+    This mimics  plans with multiple parallel
     annotators and sequential post-processing steps.
     """
     base_id = planner_info.base_id

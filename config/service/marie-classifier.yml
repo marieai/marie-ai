@@ -170,41 +170,19 @@ executors:
           name: 'default-corr' # name of the pipeline, used for logging and asset saving
           device: 'cuda' # Force default to run on CPU or we will blow OOM
           id2label:
-            '0': additional_information
-            '1': attorney
-            '2': auth_approval
-            '3': auth_denial
-            '4': bankruptcy
-            '5': cms_letter
-            '6': dispute
-            '7': eligibility
-            '8': medical_certificate
-            '9': medical_record
-            '10': misc
-            '11': newborn
-            '12': noop_blank
-            '13': noop_check
-            '14': noop_cover
-            '15': noop_envelope
-            '16': noop_eob
-            '17': noop_hicfa
-            '18': noop_notice
-            '19': noop_patpay
-            '20': noop_w9
-            '21': pa_162
-            '22': referral
-            '23': refund_request
-            '24': tax_1099
+            '0': CATEGORY_A
+            '1': CATEGORY_B
+            '2': CATEGORY_C
 
           page_classifier:
-            - model_name_or_path: 'rms/corr-layoutlmv3-classifier'
+            - model_name_or_path: 'CPREFIX/corr-layoutlmv3-classifier'
               name: 'corr_page_classifier_layoutlmv3'
               type: 'transformers'
               task: 'text-classification-multimodal'
               device: 'cuda'
               enabled: True
 
-            - model_name_or_path: 'rms/corr-longformer-classifier'
+            - model_name_or_path: 'CPREFIX/corr-longformer-classifier'
               task: 'text-classification'
               name: 'corr_page_classifier_longformer'
               type: 'transformers'
@@ -213,7 +191,7 @@ executors:
               device: 'cuda'
 
           sub_classifier:
-            - model_name_or_path: 'rms/corr-auth-longformer-classifier'
+            - model_name_or_path: 'CPREFIX/corr-auth-longformer-classifier'
               task: 'text-classification'
               name: 'corr_auth_sub_classifier'
               type: 'transformers'

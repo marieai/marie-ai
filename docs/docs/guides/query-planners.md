@@ -417,7 +417,7 @@ query_planners:
   # Code-based planners
   planners:
     - name: existing_planner
-      py_module: grapnel_g5.query.planner
+      py_module: module_path.query.planner
 ```
 
 ### Initialize Storage on Startup

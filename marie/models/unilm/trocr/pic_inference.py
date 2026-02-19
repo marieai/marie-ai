@@ -48,7 +48,7 @@ def preprocess(img_path, img_transform):
 
 def get_text(cfg, generator, model, sample, bpe):
     decoder_output = task.inference_step(generator, model, sample, prefix_tokens=None, constraints=None)
-    decoder_output = decoder_output[0][0]       #top1
+    decoder_output = decoder_output[0][0]  # top1
 
     hypo_tokens, hypo_str, alignment = utils.post_process_prediction(
         hypo_tokens=decoder_output["tokens"].int().cpu(),
@@ -66,22 +66,19 @@ def get_text(cfg, generator, model, sample, bpe):
 
 
 if __name__ == '__main__':
-    model_path = '/home/gbugaj/devio/3rdparty/unilm/models/trocr-large-printed.pt'
-    # model_path = '/home/gbugaj/devio/3rdparty/unilm/models/trocr-small-printed.pt'
-
-    jpg_path = "/home/gbugaj/devio/marie-icr/assets/psm/word/0001.jpg"
-    jpg_path = "/home/gbugaj/devio/marie-icr/assets/english/Lines/004.png"
-    # jpg_path = "/opt/grapnel/debug-x1/0001/340551352.png"
+    model_path = '~/devio/3rdparty/unilm/models/trocr-large-printed.pt'
+    jpg_path = "~/devio/marie-icr/assets/psm/word/0001.jpg"
+    jpg_path = "~/gbugaj/devio/marie-icr/assets/english/Lines/004.png"
     beam = 5
 
     model, cfg, task, generator, bpe, img_transform, device = init(model_path, beam)
-    _path =  jpg_path
+    _path = jpg_path
 
     sample = preprocess(_path, img_transform)
     text = get_text(cfg, generator, model, sample, bpe)
     print(f"format : {text}  >> {_path}")
 
-    os.exit(0) 
+    os.exit(0)
     burst_dir = "/tmp/boxes/PID_576_7188_0_150459314_page_0004/bounding_boxes/field/crop"
 
     for _path in sorted(glob.glob(os.path.join(burst_dir, "*.*"))):
@@ -90,4 +87,3 @@ if __name__ == '__main__':
         print(f"format : {text}  >> {_path}")
 
     print('done')
-

@@ -184,7 +184,7 @@ executors:
          pipeline:
            name: 'default'
            page_classifier:
-             - model_name_or_path: 'marie/lmv3-medical-document-classification'
+             - model_name_or_path: 'marie/medical-document-classification'
                type: 'transformers'
                task: 'text-classification-multimodal'
                device: 'cuda'
@@ -192,19 +192,20 @@ executors:
                name: 'medical-page-classifier'
                group: 'medical_page_classifier'
 
-             - model_name_or_path: 'marie/lmv3-medical-document-payer'
+             - model_name_or_path: 'marie/medical-document-classification-xyz'
                type: 'transformers'
                task: 'text-classification-multimodal'
                enabled: False
                device: 'cuda'
-               name: 'medical_payer_classifier'
-               group: 'medical_payer_classifier'
+               name: 'document-classifier-xyz'
+               group: 'document-classifier-xyz'
+
            page_splitter:
-             model_name_or_path: 'marie/lmv3-medical-document-splitter'
+             model_name_or_path: 'marie/document-splitter'
              enabled: False
 
            page_boundary:
-             model_name_or_path: 'rms/page-boundary-detection'
+             model_name_or_path: 'marie/page-boundary-detection'
              device: 'cuda'
              name: 'page_boundary_default'
              filter:

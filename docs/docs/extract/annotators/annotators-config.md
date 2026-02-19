@@ -12,7 +12,7 @@ This section describes how annotators are configured, where prompts live, and ho
 - Typical structure:
 
 ```plain text
-g5/
+extract/
   config/
     base-config.yml
     field-config.yml
@@ -49,7 +49,7 @@ g5/
 # ALL prompt paths are relative to the config base directory defaulting to `__config_dir__/extract/`
 
 # Structure of the config directory:
-#   - g5/
+#   - extract/
 #     - config/
 #       - base-config.yml
 #       - field-config.yml

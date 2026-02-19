@@ -40,7 +40,7 @@ def test_transformer_document_indexer():
     torch.set_num_threads(psutil.cpu_count(logical=False))
 
     # return
-    model_name_or_path = "rms/layoutlmv3-large-corr-ner"
+    model_name_or_path = "CPREFIX/layoutlmv3-large"
     resolved_model_path = ensure_model(model_name_or_path)
     print("resolved_model_path", resolved_model_path)
 

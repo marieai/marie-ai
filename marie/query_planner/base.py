@@ -248,7 +248,7 @@ class QueryPlanRegistry:
         Scans the package directory for subdirectories matching the given pattern
         and imports any .py files that contain the @register_query_plan decorator.
 
-        :param package_name: The fully qualified package name (e.g., 'grapnel_g5.extract.providers')
+        :param package_name: The fully qualified package name (e.g., 'module_name.extraction.planners')
         :param pattern: Glob pattern for matching subdirectory names (default: '*')
         :return: Dictionary with 'loaded', 'failed', and 'skipped' lists
         """

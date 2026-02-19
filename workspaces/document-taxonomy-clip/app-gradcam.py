@@ -1,7 +1,3 @@
-import os
-from time import time
-from typing import Dict, List, Tuple
-
 import gradio as gr
 import numpy as np
 import torch
@@ -15,9 +11,7 @@ use_cuda = torch.cuda.is_available()
 model1_name = "openai/clip-vit-base-patch16"
 model2_name = "openai/clip-vit-large-patch14"
 model2_name = "openai/clip-vit-large-patch14-336"
-model2_name = (
-    "/home/gbugaj/dev/grapnel-tooling/train-clip/oputput-taxonomy/checkpoint-5000"
-)
+model2_name = "~/tooling/train-clip/oputput-taxonomy/checkpoint-5000"
 
 # Load CLIP models and their respective processors
 model_1 = CLIPModel.from_pretrained(model1_name)

@@ -202,65 +202,6 @@ executors:
     env:
       CUDA_VISIBLE_DEVICES: RR
 
-#  - name: extract_xyz
-#    uses:
-#      jtype: TextExtractionExecutorMock
-#      metas:
-#        py_modules:
-#          - marie.executor.text
-#    timeout_ready: 3000000
-#    replicas: 1
-##    replicas: ${{ CONTEXT.gpu_device_count }}
-#    env :
-#      CUDA_VISIBLE_DEVICES: RR
-
-#  - name: ner_t
-#    uses:
-#      jtype: NerExtractionExecutor
-#      with:
-#        model_name_or_path : 'rms/layoutlmv3-large-corr-ner'
-#        <<: *psql_conf_shared
-#        storage_enabled : False
-#      metas:
-#        py_modules:
-##          - marie_server.executors.ner.mserve_torch
-#          - marie.executor.ner
-#    timeout_ready: 3000000
-##    replicas: 1
-#    replicas: ${{ CONTEXT.gpu_device_count }}
-#    env :
-#      CUDA_VISIBLE_DEVICES: RR
-
-#  - name: document_classifier
-#    uses:
-#      jtype: DocumentClassificationExecutor
-#      with:
-#        model_name_or_path :
-#          - 'marie/layoutlmv3-document-classification'
-#          - 'marie/layoutlmv3-document-classification'
-#        <<: *psql_conf_shared
-#        storage_enabled : False
-#      metas:
-#        py_modules:
-#          - marie.executor.classifier
-#    timeout_ready: 3000000
-##    replicas: 1
-#    replicas: ${{ CONTEXT.gpu_device_count }}
-#    env :
-#      CUDA_VISIBLE_DEVICES: RR
-##
-#  - name: overlay_t
-#    uses:
-#      jtype: OverlayExecutor
-#      with:
-#        model_name_or_path : 'rms/holder'
-#        <<: *storage_conf
-#        storage_enabled : True
-#      metas:
-#        py_modules:
-#          - marie.executor.overlay
-#    timeout_ready: 3000000
-#    replicas: 1
 
 # Authentication and Authorization configuration
 
