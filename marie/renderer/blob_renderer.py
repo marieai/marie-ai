@@ -29,6 +29,7 @@ class BlobRenderer(ResultRenderer):
         root.set("yres", "300")
         root.set("xres", "300")
         root.set("page", str(page_index))
+        root.set("producer", "MARIE-AI")
 
         try:
             meta = result["meta"]
