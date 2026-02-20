@@ -222,7 +222,8 @@ build_image() {
     log_info "Contents of build context:"
     ls -la patches/ wheels/ || log_warn "Some directories might be missing"
 
-    DOCKER_BUILDKIT=0 docker build . \
+    DOCKER_BUILDKIT=1 docker build . \
+        --progress=plain \
         --network=host \
         --cpuset-cpus="0-$CPU_COUNT" \
         --build-arg PIP_TAG="$PIP_TAG" \

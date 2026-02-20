@@ -95,10 +95,11 @@ with:
     # Planners have to be available in the python path.
     # When running in a container, the planners should be available in the container's python path.
     # Planners are auto-discovered by scanning packages for @register_query_plan decorator
+    # MARIE_DEFAULT_MOUNT: /mnt/data/marie-ai (local) or /etc/marie (docker)
     query_planners:
       watch_wheels: True
       wheel_directories:
-        - /mnt/data/marie-ai/config/wheels
+        - ${{ ENV.MARIE_DEFAULT_MOUNT }}/config/wheels
       # Auto-discover planners from packages
       discover_packages:
         - package: project_a.extract.providers

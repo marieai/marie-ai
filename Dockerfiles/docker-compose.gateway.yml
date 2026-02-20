@@ -15,7 +15,7 @@ services:
 #      - marie_default
     command: >
       gateway 
-      --uses /etc/marie/config/service/extract/${GATEWAY_CONFIG_TAG:-marie-gateway-4.0.0.yml}
+      --uses /etc/marie/config/service/${GATEWAY_CONFIG_TAG:-marie-gateway-4.0.0.yml}
       --protocols HTTP GRPC
       --ports 51000 52000
       --extra-search-paths /etc/marie/config/config/extra_py_modules

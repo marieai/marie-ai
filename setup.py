@@ -160,9 +160,9 @@ if sys.version_info.major == 3 and sys.version_info.minor >= 11:
     for dep in list(final_deps):
         if dep.startswith('grpcio'):
             final_deps.remove(dep)
-    final_deps.add('grpcio>=1.49.0')
-    final_deps.add('grpcio-health-checking>=1.49.0')
-    final_deps.add('grpcio-reflection>=1.49.0')
+    final_deps.add('grpcio>=1.60.0,<1.66.0')
+    final_deps.add('grpcio-health-checking>=1.60.0,<1.66.0')
+    final_deps.add('grpcio-reflection>=1.60.0,<1.66.0')
 
 
 extra_golang_kw = {}

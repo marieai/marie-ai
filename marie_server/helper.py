@@ -2,9 +2,9 @@ import json
 import os
 import sys
 import threading
+from importlib.metadata import version as get_pkg_version
 from urllib.request import Request, urlopen
 
-import pkg_resources
 from packaging.version import Version
 from rich import print
 from rich.panel import Panel
@@ -27,7 +27,7 @@ def _version_check(package: str = None, github_repo: str = None):
         if not github_repo:
             github_repo = package
 
-        cur_ver = Version(pkg_resources.get_distribution(package).version)
+        cur_ver = Version(get_pkg_version(package))
         req = Request(
             f'https://pypi.python.org/pypi/{package}/json',
             headers={'User-Agent': 'Mozilla/5.0'},

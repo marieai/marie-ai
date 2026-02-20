@@ -4,7 +4,7 @@ import os
 import re
 from typing import Dict, List, Tuple, cast
 
-from pkg_resources import Requirement
+from packaging.requirements import Requirement
 
 # Adopted from requirements-parser:
 # https://github.com/madpah/requirements-parser
@@ -100,7 +100,7 @@ def parse_requirement(line: str) -> 'Requirement':
 
         line = f'{egg or name} @ {line}'
 
-    return Requirement.parse(line)
+    return Requirement(line)
 
 
 def get_env_variables(line: str) -> List:

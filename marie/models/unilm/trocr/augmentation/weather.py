@@ -4,7 +4,7 @@ import math
 from PIL import Image, ImageOps, ImageDraw
 from skimage import color
 from scipy import interpolate
-from pkg_resources import resource_filename
+from importlib.resources import files
 from io import BytesIO
 from .ops import plasma_fractal, clipped_zoom, MotionImage
 
@@ -66,12 +66,13 @@ class Frost:
             index = mag
         c = c[index]
 
-        filename = [resource_filename(__name__, 'frost/frost1.png'),
-                    resource_filename(__name__, 'frost/frost2.png'),
-                    resource_filename(__name__, 'frost/frost3.png'),
-                    resource_filename(__name__, 'frost/frost4.jpg'),
-                    resource_filename(__name__, 'frost/frost5.jpg'),
-                    resource_filename(__name__, 'frost/frost6.jpg')
+        pkg_files = files(__package__)
+        filename = [str(pkg_files.joinpath('frost/frost1.png')),
+                    str(pkg_files.joinpath('frost/frost2.png')),
+                    str(pkg_files.joinpath('frost/frost3.png')),
+                    str(pkg_files.joinpath('frost/frost4.jpg')),
+                    str(pkg_files.joinpath('frost/frost5.jpg')),
+                    str(pkg_files.joinpath('frost/frost6.jpg'))
                     ]
         index = np.random.randint(0, len(filename))
         filename = filename[index]

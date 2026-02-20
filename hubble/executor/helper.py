@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
+from packaging.requirements import Requirement
 from rich.console import Console
 
 from hubble import get_token
@@ -681,12 +682,11 @@ def is_requirements_installed(
     :param show_warning: if to show a warning when a dependency is not satisfied
     :return: True or False if not satisfied
     """
-    import pkg_resources
-    from pkg_resources import (
-        DistributionNotFound,
-        RequirementParseError,
-        VersionConflict,
-    )
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as get_version
+
+    from packaging.requirements import InvalidRequirement
+    from packaging.version import Version
 
     install_reqs, install_options = _get_install_options(requirements_file)
 
@@ -694,11 +694,25 @@ def is_requirements_installed(
         return True
 
     try:
-        pkg_resources.require('\n'.join(install_reqs))
-    except (DistributionNotFound, VersionConflict, RequirementParseError) as ex:
+        for req_str in install_reqs:
+            try:
+                req = Requirement(req_str)
+                installed_version = Version(get_version(req.name))
+                if req.specifier and installed_version not in req.specifier:
+                    # Version conflict
+                    if show_warning:
+                        warnings.warn(
+                            f"Version conflict: {req.name} {installed_version} not in {req.specifier}"
+                        )
+                    return True  # Return True like original VersionConflict behavior
+            except PackageNotFoundError:
+                return False
+            except InvalidRequirement:
+                return False
+    except Exception as ex:
         if show_warning:
             warnings.warn(repr(ex))
-        return isinstance(ex, VersionConflict)
+        return False
     return True
 
 

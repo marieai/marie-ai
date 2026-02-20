@@ -14,7 +14,8 @@ ARG PY_VERSION=3.12
 ARG BUILD_DATE
 ARG MARIE_VERSION
 ARG TARGETPLATFORM
-ARG PIP_EXTRA_INDEX_URL="https://www.piwheels.org/simple"
+# Note: piwheels is for ARM/Raspberry Pi only, not needed for x86_64 builds
+ARG PIP_EXTRA_INDEX_URL=""
 
 # constant, wont invalidate cache
 LABEL org.opencontainers.image.vendor="Marie AI" \
@@ -118,8 +119,10 @@ RUN python3 -m pip install /tmp/packages/marie-kernel \
     && python3 -m pip install /tmp/packages/marie-mem0 \
     && python3 -m pip install /tmp/packages/marie-mcp
 
+# Install marie-ai package with dependencies
+# Use --prefer-binary to speed up installation by using pre-built wheels when available
 RUN cd /tmp/ \
-    && python3 -m pip install --default-timeout=100 --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
+    && python3 -m pip install --default-timeout=100 --compile --prefer-binary .
 
 
 FROM ubuntu:24.04
