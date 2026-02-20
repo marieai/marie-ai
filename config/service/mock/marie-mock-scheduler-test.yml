@@ -10,10 +10,10 @@ shared_config:
   storage: &storage
     psql: &psql_conf_shared
       provider: postgresql
-      hostname: 127.0.0.1
+      hostname: ${{ ENV.POSTGRES_HOSTNAME }}
       port: 5432
-      username: postgres
-      password: 123456
+      username: ${{ ENV.POSTGRES_USER }}
+      password: ${{ ENV.POSTGRES_PASSWORD }}
       database: postgres
       default_table: shared_docs
 
@@ -27,7 +27,9 @@ shared_config:
       tls: False
       virtualhost: /
 
-# Toast event tracking
+
+# Toast event tracking system
+# It can be backed by Message Queue and Database backed
 toast:
   native:
     enabled: True
@@ -37,24 +39,43 @@ toast:
     enabled: True
   psql:
     <<: *psql_conf_shared
+    schema: marie_scheduler
     default_table: event_tracking
-    enabled: True
+    enabled : True
 
-# Storage configuration
+# Document Storage
+# The storage service is used to store the data that is being processed
+# Storage can be backed by S3 compatible
+
 storage:
+  # S3 configuration. Will be used only if value of backend is "s3"
   s3: &s3_conf_shared
     enabled: True
-    metadata_only: False
+    metadata_only: False # If True, only metadata will be stored in the storage backend
+    # api endpoint to connect to. use AWS S3 or any S3 compatible object storage endpoint.
     endpoint_url: ${{ ENV.S3_ENDPOINT_URL }}
+    # optional.
+    # access key id when using static credentials.
     access_key_id: ${{ ENV.S3_ACCESS_KEY_ID }}
+    # optional.
+    # secret key when using static credentials.
     secret_access_key: ${{ ENV.S3_SECRET_ACCESS_KEY }}
+    # Bucket name in s3
     bucket_name: ${{ ENV.S3_BUCKET_NAME }}
+    # optional.
+    # Example: "region: us-east-2"
     region: ${{ ENV.S3_REGION }}
+    # optional.
+    # enable if endpoint is http
     insecure: True
+    # optional.
+    # enable if you want to use path style requests
     addressing_style: path
 
+  # postgresql configuration. Will be used only if value of backend is "psql"
   psql:
     <<: *psql_conf_shared
+    schema: marie_scheduler
     default_table: store_metadata
     enabled: False
 
@@ -62,24 +83,53 @@ storage:
 scheduler:
   psql:
     <<: *psql_conf_shared
+    schema: marie_scheduler
     default_table: job_queue
-    enabled: True
+    enabled : True
 
-# Gateway configuration
+# LLM Tracking configuration
+llm_tracking:
+  enabled: true
+  exporter: rabbitmq
+  project_id: marie-extract
+  worker:
+    enabled: true
+  postgres:
+    <<: *psql_conf_shared
+    schema: marie_scheduler
+  rabbitmq:
+    <<: *rabbitmq_conf_shared
+    exchange: llm-events
+  clickhouse:
+    host: localhost
+    port: 9000
+    database: marie
+
+# FLOW / GATEWAY configuration
 with:
   protocol:
     - grpc
 
   discovery: true
-  discovery_host: 127.0.0.1
+  discovery_host: 0.0.0.0 # SINGLE HOST OR A LIST OF HOSTS
   discovery_port: 2379
-  discovery_watchdog_interval: 5
+  discovery_watchdog_interval: 5 # DEPRECATED replace by discovery_heartbeat_sec
   discovery_service_name: gateway/marie
   discovery_namespace: marie
   discovery_lease_sec: 6
   discovery_heartbeat_sec: 1.5
   discovery_timeout_sec: 10
-  discovery_retry_times: 5
+  discovery_retry_times : 5
+
+#  discovery_ca_cert: "/path/to/ca.crt"
+#  discovery_cert_key: "/path/to/client.key"
+#  discovery_cert_cert: "/path/to/client.crt"
+#  discovery_grpc_options: "grpc.keepalive_time_ms:30000,grpc.keepalive_timeout_ms:5000"
+
+  discovery_ca_cert:
+  discovery_cert_key:
+  discovery_cert_cert:
+  discovery_grpc_options:
 
   kv_store_kwargs:
     provider: postgresql
@@ -88,11 +138,21 @@ with:
     username: postgres
     password: '123456'
     database: postgres
+    schema: marie_scheduler
     default_table: kv_store_worker
     max_pool_size: 5
     max_connections: 5
 
+  discovery_kwargs:
+    endpoints: 127.0.0.1:2379,192.168.1.1:2379
+
+
+#  host: 127.0.0.1
   host: 0.0.0.0
+
+# monitoring done by grafana/prometheus has been deprecated in favor of open-telemetry
+#  monitoring: false
+#  port_monitoring: 57843
   tracing: False
   traces_exporter_host: http://0.0.0.0
   traces_exporter_port: 4317
