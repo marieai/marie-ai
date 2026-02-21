@@ -7,6 +7,7 @@ from PIL import Image
 
 from marie.boxes import PSMode
 from marie.excepts import BadConfigSource
+from marie.executor.asset_util import create_working_dir
 from marie.logging_core.profile import TimeContext
 from marie.models.utils import initialize_device_settings
 from marie.ocr import CoordinateFormat
@@ -22,7 +23,6 @@ from marie.pipe.components import (
     update_existing_meta,
 )
 from marie.pipe.llm_indexer import LLMIndexerPipelineComponent
-from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.utils import ensure_exists
 
@@ -107,6 +107,7 @@ class LLMPipeline(BasePipeline):
         root_asset_dir: str,
         job_id: str,
         runtime_conf: Optional[dict[str, any]] = None,
+        queue_id: str = None,
     ) -> dict[str, any]:
         if ref_type is None or ref_id is None:
             raise ValueError("Invalid reference type or id")
@@ -148,7 +149,13 @@ class LLMPipeline(BasePipeline):
         burst_frames(ref_id, frames, root_asset_dir)
 
         # Load Available OCR data if possible
-        ocr_results = ocr_frames(self.ocr_engines, ref_id, frames, root_asset_dir)
+        ocr_results = ocr_frames(
+            self.ocr_engines,
+            ref_id,
+            frames,
+            root_asset_dir,
+            queue_id=queue_id,
+        )
         metadata["ocr"] = ocr_results
 
         # Track pipline execution time for metrics
@@ -306,9 +313,13 @@ class LLMPipeline(BasePipeline):
                 f"Coordinate format `{coordinate_format}` is not implemented yet"
             )
 
-        # create local asset directory
-        frame_checksum = hash_frames_fast(frames=frames)
-        root_asset_dir = ensure_exists(os.path.join("/tmp/generators", frame_checksum))
+        root_asset_dir = create_working_dir(
+            frames,
+            ref_id=ref_id,
+            ref_type=ref_type,
+            queue_id=queue_id,
+            job_id=job_id,
+        )
         self.logger.info(f"Root asset dir {ref_id}, {ref_type} : {root_asset_dir}")
 
         if runtime_conf is None:
@@ -317,5 +328,11 @@ class LLMPipeline(BasePipeline):
         self.logger.info(f"runtime_conf args : {runtime_conf}")
 
         return self.execute_frames_pipeline(
-            ref_id, ref_type, frames, root_asset_dir, job_id, runtime_conf
+            ref_id,
+            ref_type,
+            frames,
+            root_asset_dir,
+            job_id,
+            runtime_conf,
+            queue_id=queue_id,
         )

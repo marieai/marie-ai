@@ -124,7 +124,9 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
         """
         job_id, ref_id, ref_type, _, payload = parse_parameters(parameters)
         frames = get_frames_from_docs(docs)
-        root_asset_dir = create_working_dir(frames)
+        root_asset_dir = create_working_dir(
+            frames, ref_id=ref_id, ref_type=ref_type, job_id=job_id
+        )
 
         features = payload.get("features", [])
         meta_folders = [

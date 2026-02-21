@@ -1,6 +1,4 @@
 import os
-import shutil
-from datetime import datetime
 from typing import List, Optional, Union
 
 import numpy as np
@@ -8,6 +6,7 @@ from PIL import Image
 
 from marie.boxes import PSMode
 from marie.excepts import BadConfigSource
+from marie.executor.asset_util import create_working_dir
 from marie.models.utils import initialize_device_settings
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_known_ocr_engines
@@ -20,9 +19,7 @@ from marie.pipe.components import (
     split_filename,
     store_assets,
 )
-from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import store_json_object
-from marie.utils.utils import ensure_exists
 
 
 class ClassificationPipeline(BasePipeline):
@@ -103,6 +100,7 @@ class ClassificationPipeline(BasePipeline):
         root_asset_dir: str,
         job_id: str,
         runtime_conf: Optional[dict[str, any]] = None,
+        queue_id: str = None,
     ) -> dict[str, any]:
         if ref_type is None or ref_id is None:
             raise ValueError("Invalid reference type or id")
@@ -152,7 +150,13 @@ class ClassificationPipeline(BasePipeline):
         )
         burst_frames(ref_id, frames, root_asset_dir)
 
-        ocr_results = ocr_frames(self.ocr_engines, ref_id, frames, root_asset_dir)
+        ocr_results = ocr_frames(
+            self.ocr_engines,
+            ref_id,
+            frames,
+            root_asset_dir,
+            queue_id=queue_id,
+        )
         metadata["ocr"] = ocr_results
         self.execute_classifier_and_indexer_pipeline(
             frames,
@@ -226,18 +230,13 @@ class ClassificationPipeline(BasePipeline):
         :return:  metadata for the document (e.g. OCR results, classification results, etc)
         """
 
-        # create local asset directory
-        frame_checksum = hash_frames_fast(frames=frames)
-        # create backup name by appending a timestamp
-        # TODO : Need to refactor this
-        if False:  # os.path.exists(os.path.join("/tmp/generators", frame_checksum)):
-            ts = datetime.now().strftime("%Y%m%d%H%M%S")
-            shutil.move(
-                os.path.join("/tmp/generators", frame_checksum),
-                os.path.join("/tmp/generators", f"{frame_checksum}-{ts}"),
-            )
-
-        root_asset_dir = ensure_exists(os.path.join("/tmp/generators", frame_checksum))
+        root_asset_dir = create_working_dir(
+            frames,
+            ref_id=ref_id,
+            ref_type=ref_type,
+            queue_id=queue_id,
+            job_id=job_id,
+        )
 
         self.logger.info(f"Root asset dir {ref_id}, {ref_type} : {root_asset_dir}")
         self.logger.info(f"runtime_conf args : {runtime_conf}")
@@ -247,5 +246,11 @@ class ClassificationPipeline(BasePipeline):
             runtime_conf = {}
 
         return self.execute_frames_pipeline(
-            ref_id, ref_type, frames, root_asset_dir, job_id, runtime_conf
+            ref_id,
+            ref_type,
+            frames,
+            root_asset_dir,
+            job_id,
+            runtime_conf,
+            queue_id=queue_id,
         )

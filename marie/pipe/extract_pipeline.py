@@ -1,7 +1,6 @@
 import glob
 import os
 import shutil
-from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -11,12 +10,13 @@ import torch
 from PIL import Image
 
 from marie.boxes import PSMode
-from marie.common.file_io import get_cache_dir, get_file_count
+from marie.common.file_io import get_file_count
 from marie.components.document_registration.datamodel import DocumentBoundaryPrediction
 from marie.components.template_matching.document_matched import (
     load_template_matching_definitions,
     match_templates,
 )
+from marie.executor.asset_util import create_working_dir
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_known_ocr_engines
 from marie.pipe.base_pipeline import BasePipeline
@@ -36,7 +36,6 @@ from marie.renderer import PdfRenderer, TextRenderer
 from marie.renderer.adlib_renderer import AdlibRenderer
 from marie.renderer.blob_renderer import BlobRenderer
 from marie.utils.docs import docs_from_image, frames_from_file
-from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import store_json_object
 from marie.utils.tiff_ops import merge_tiff, save_frame_as_tiff_g4
 from marie.utils.utils import ensure_exists
@@ -267,6 +266,7 @@ class ExtractPipeline(BasePipeline):
         root_asset_dir: str,
         job_id: str,
         runtime_conf: Optional[dict[str, any]] = None,
+        queue_id: str = None,
     ) -> dict[str, any]:
         """
         Execute the pipeline for the document with the given frames.
@@ -350,6 +350,7 @@ class ExtractPipeline(BasePipeline):
             ref_id,
             clean_frames,
             root_asset_dir,
+            queue_id=queue_id,
             engine_name=self.engine_name,
         )
 
@@ -408,6 +409,7 @@ class ExtractPipeline(BasePipeline):
         coordinate_format: CoordinateFormat = CoordinateFormat.XYWH,
         job_id: str = None,
         runtime_conf: Optional[dict[str, any]] = None,
+        queue_id: str = None,
     ) -> dict[str, any]:
         self.logger.info(
             f"Executing pipeline : {ref_id}, {ref_type} with regions : {regions}"
@@ -426,6 +428,7 @@ class ExtractPipeline(BasePipeline):
             ref_id,
             clean_frames,
             root_asset_dir,
+            queue_id=queue_id,
             force=True,
             regions=regions,
             ps_mode=ps_mode,
@@ -482,27 +485,13 @@ class ExtractPipeline(BasePipeline):
         :return:  metadata for the document (e.g. OCR results, classification results, etc)
         """
 
-        # create local asset directory
-        frame_checksum = hash_frames_fast(frames=frames)
-
-        cache_dir = get_cache_dir()
-        generators_dir = os.path.join(cache_dir, "generators")
-
-        # create backup name by appending a timestamp
-        if False and os.path.exists(os.path.join(generators_dir, frame_checksum)):
-            if True:
-                self.logger.warning(
-                    f"Asset dir already exists, moving to backup : {frame_checksum}"
-                )
-                return {}
-
-            ts = datetime.now().strftime("%Y%m%d%H%M%S")
-            shutil.move(
-                os.path.join(generators_dir, frame_checksum),
-                os.path.join(generators_dir, f"{frame_checksum}-{ts}"),
-            )
-
-        root_asset_dir = ensure_exists(os.path.join(generators_dir, frame_checksum))
+        root_asset_dir = create_working_dir(
+            frames,
+            ref_id=ref_id,
+            ref_type=ref_type,
+            queue_id=queue_id,
+            job_id=job_id,
+        )
         self.logger.info(f"Root asset dir {ref_id}, {ref_type} : {root_asset_dir}")
         self.logger.info(f"runtime_conf args : {runtime_conf}")
 
@@ -522,10 +511,17 @@ class ExtractPipeline(BasePipeline):
                     coordinate_format,
                     job_id,
                     runtime_conf,
+                    queue_id,
                 )
             else:
                 return self.execute_frames_pipeline(
-                    ref_id, ref_type, frames, root_asset_dir, job_id, runtime_conf
+                    ref_id,
+                    ref_type,
+                    frames,
+                    root_asset_dir,
+                    job_id,
+                    runtime_conf,
+                    queue_id=queue_id,
                 )
         except Exception as e:
             self.logger.error(f"Error executing pipeline : {e}")

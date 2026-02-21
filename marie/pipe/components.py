@@ -542,6 +542,7 @@ def ocr_frames(
     ref_id: str,
     frames: Union[List[np.ndarray], List[Image.Image]],
     root_asset_dir: str,
+    queue_id: str = None,
     force: bool = False,
     ps_mode: PSMode = PSMode.SPARSE,
     coord_format: CoordinateFormat = CoordinateFormat.XYWH,
@@ -555,6 +556,7 @@ def ocr_frames(
     :param ref_id:  reference id of the document
     :param frames:  frames to perform OCR on
     :param root_asset_dir:  root directory to store the OCR results
+    :param queue_id: queue identifier used to isolate OCR engine temp/debug paths
     :param force:  force OCR (default: False)
     :param ps_mode:  page segmentation mode(default: Sparse)
     :param coord_format: coordinate format(default: XYWH)
@@ -618,7 +620,13 @@ def ocr_frames(
 
     if force or not os.path.exists(json_path):
         logger.info(f"Performing OCR : {json_path}")
-        results = engine.extract(frames, ps_mode, coord_format, regions)
+        results = engine.extract(
+            frames,
+            ps_mode,
+            coord_format,
+            regions,
+            queue_id=queue_id,
+        )
         store_json_object(results, json_path)
     else:
         logger.debug(f"Skipping OCR : {json_path}")

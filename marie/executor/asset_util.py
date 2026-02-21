@@ -1,4 +1,5 @@
 import functools
+import hashlib
 import os
 import shutil
 import time
@@ -68,7 +69,7 @@ def prepare_asset_directory(
         logger.error("The 'local_path' parameter is None. Unable to proceed.")
         raise ValueError("The 'local_path' parameter cannot be None.")
 
-    root_asset_dir = create_working_dir(frames)
+    root_asset_dir = create_working_dir(frames, ref_id=ref_id, ref_type=ref_type)
     frames_dir = os.path.join(root_asset_dir, "frames")
     ensure_exists(frames_dir)
 
@@ -157,17 +158,35 @@ def prepare_asset_directory(
     return root_asset_dir, frames_dir, metadata_file
 
 
-def create_working_dir(frames: List, backup: bool = False) -> str:
+def create_working_dir(
+    frames: List,
+    backup: bool = False,
+    ref_id: str = None,
+    ref_type: str = None,
+    queue_id: str = None,
+    job_id: str = None,
+) -> str:
+    """Create an isolated working directory for a pipeline execution.
+
+    The directory hash is derived from the frame pixel data combined with
+    request identifiers (ref_id, ref_type, queue_id, job_id) so that
+    concurrent jobs never collide even when processing identical frames.
+    """
     frame_checksum = hash_frames_fast(frames=frames)
+    md5 = hashlib.md5(frame_checksum.encode("utf-8"))
+
+    for token in (ref_id, ref_type, queue_id, job_id):
+        if token:
+            md5.update(token.encode("utf-8"))
+    combined_checksum = md5.hexdigest()
+
     generators_dir = os.path.join(get_cache_dir(), "generators")
     os.makedirs(generators_dir, exist_ok=True)
+    target_dir = os.path.join(generators_dir, combined_checksum)
 
     # create backup name by appending a timestamp
-    if backup:
-        if os.path.exists(os.path.join(generators_dir, frame_checksum)):
-            ts = datetime.now().strftime("%Y%m%d%H%M%S")
-            shutil.move(
-                os.path.join(generators_dir, frame_checksum),
-                os.path.join(generators_dir, f"{frame_checksum}-{ts}"),
-            )
-    return ensure_exists(os.path.join(generators_dir, frame_checksum))
+    if backup and os.path.exists(target_dir):
+        ts = datetime.now().strftime("%Y%m%d%H%M%S")
+        shutil.move(target_dir, f"{target_dir}-{ts}")
+
+    return ensure_exists(target_dir)

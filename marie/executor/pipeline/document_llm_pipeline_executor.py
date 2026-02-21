@@ -92,7 +92,13 @@ class DocumentLLMPipelineExecutor(PipelineExecutor):
             pages = None
 
         frames = get_frames_from_docs(docs, pages)
-        root_asset_dir = create_working_dir(frames)
+        root_asset_dir = create_working_dir(
+            frames,
+            ref_id=ref_id,
+            ref_type=ref_type,
+            queue_id=queue_id,
+            job_id=job_id,
+        )
         try:
             metadata = self.pipeline.execute_frames_pipeline(
                 ref_id=ref_id,
@@ -100,6 +106,7 @@ class DocumentLLMPipelineExecutor(PipelineExecutor):
                 frames=frames,
                 root_asset_dir=root_asset_dir,
                 job_id=job_id,
+                queue_id=queue_id,
                 runtime_conf=runtime_conf,
             )
             if metadata is None:
