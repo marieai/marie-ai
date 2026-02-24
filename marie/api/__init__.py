@@ -12,7 +12,6 @@ from marie.api.docs import AssetKeyDoc
 from marie.logging_core.predefined import default_logger
 from marie.storage import StorageManager
 from marie.utils.base64 import base64StringToBytes
-from marie.utils.docs import docs_from_asset, frames_from_docs
 from marie.utils.image_utils import ensure_max_page_size
 from marie.utils.utils import FileSystem, ensure_exists
 
@@ -370,6 +369,8 @@ def get_frames_from_docs(
 
     doc: AssetKeyDoc = docs[0]
     logger.debug(f"Document asset key: {doc.asset_key}")
+    from marie.utils.docs import docs_from_asset, frames_from_docs
+
     pages = doc.pages if pages is None else pages
     docs = docs_from_asset(doc.asset_key, pages)
     src_frames = frames_from_docs(docs)
