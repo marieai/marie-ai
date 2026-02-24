@@ -60,9 +60,10 @@ create table marie_scheduler.sensor_tick (
   foreign key (sensor_id) references marie_scheduler.sensor (id)
   match simple on update cascade on delete cascade
 );
-create index sensor_tick_sensor_id_idx on sensor_tick using btree (sensor_id);
-create index sensor_tick_started_at_idx on sensor_tick using btree (started_at);
-create index sensor_tick_sensor_id_started_at_idx on sensor_tick using btree (sensor_id, started_at);
-create index idx_sensor_tick_started_status on sensor_tick using btree (status, started_at) WHERE (status = 'started'::tick_status);
 
+-- create index sensor_tick_sensor_id_idx on sensor_tick using btree (sensor_id);
+-- create index sensor_tick_started_at_idx on sensor_tick using btree (started_at);
+-- create index sensor_tick_sensor_id_started_at_idx on sensor_tick using btree (sensor_id, started_at);
+-- create index idx_sensor_tick_started_status on sensor_tick using btree (status, started_at) WHERE (status = 'started'::tick_status);
+--
 
