@@ -22,8 +22,8 @@ from examples.utils import (
     setup_queue,
     setup_s3_storage,
 )
-from marie.pipe.components import s3_asset_path
 from marie.storage import StorageManager
+from marie.utils.asset_util import s3_asset_path
 from marie.utils.json import load_json_file, store_json_object
 
 logging.basicConfig(level=logging.INFO)

@@ -9,8 +9,8 @@ import uuid
 import requests
 
 from examples.utils import online, setup_queue, setup_s3_storage
-from marie.pipe.components import s3_asset_path
 from marie.storage import StorageManager
+from marie.utils.asset_util import s3_asset_path
 from marie.utils.json import store_json_object
 from marie.utils.utils import ensure_exists
 

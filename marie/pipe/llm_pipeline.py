@@ -7,7 +7,6 @@ from PIL import Image
 
 from marie.boxes import PSMode
 from marie.excepts import BadConfigSource
-from marie.executor.asset_util import create_working_dir
 from marie.logging_core.profile import TimeContext
 from marie.models.utils import initialize_device_settings
 from marie.ocr import CoordinateFormat
@@ -17,12 +16,15 @@ from marie.pipe.components import (
     burst_frames,
     load_pipeline,
     ocr_frames,
-    restore_assets,
-    split_filename,
-    store_assets,
     update_existing_meta,
 )
 from marie.pipe.llm_indexer import LLMIndexerPipelineComponent
+from marie.utils.asset_util import (
+    create_working_dir,
+    restore_assets,
+    split_filename,
+    store_assets,
+)
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.utils import ensure_exists
 

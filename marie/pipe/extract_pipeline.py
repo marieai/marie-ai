@@ -16,7 +16,6 @@ from marie.components.template_matching.document_matched import (
     load_template_matching_definitions,
     match_templates,
 )
-from marie.executor.asset_util import create_working_dir
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_known_ocr_engines
 from marie.pipe.base_pipeline import BasePipeline
@@ -24,17 +23,20 @@ from marie.pipe.components import (
     burst_frames,
     load_pipeline,
     ocr_frames,
-    restore_assets,
-    s3_asset_path,
     setup_document_boundary,
     setup_overlay,
     setup_template_matching,
-    split_filename,
-    store_assets,
 )
 from marie.renderer import PdfRenderer, TextRenderer
 from marie.renderer.adlib_renderer import AdlibRenderer
 from marie.renderer.blob_renderer import BlobRenderer
+from marie.utils.asset_util import (
+    create_working_dir,
+    restore_assets,
+    s3_asset_path,
+    split_filename,
+    store_assets,
+)
 from marie.utils.docs import docs_from_image, frames_from_file
 from marie.utils.json import store_json_object
 from marie.utils.tiff_ops import merge_tiff, save_frame_as_tiff_g4

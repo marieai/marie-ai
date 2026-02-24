@@ -6,15 +6,13 @@ from PIL import Image
 
 from marie.boxes import PSMode
 from marie.excepts import BadConfigSource
-from marie.executor.asset_util import create_working_dir
 from marie.models.utils import initialize_device_settings
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_known_ocr_engines
 from marie.pipe.base_pipeline import BasePipeline
-from marie.pipe.components import (
-    burst_frames,
-    load_pipeline,
-    ocr_frames,
+from marie.pipe.components import burst_frames, load_pipeline, ocr_frames
+from marie.utils.asset_util import (
+    create_working_dir,
     restore_assets,
     split_filename,
     store_assets,
