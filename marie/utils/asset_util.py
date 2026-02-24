@@ -40,11 +40,7 @@ def avoid_concurrent_lock_wrapper(func: Callable) -> Callable:
             file_lock = filelock.FileLock(lock_file, timeout=-1)
 
         with file_lock:
-            try:
-                print(f'Acquired lock for {func.__name__} with {file_lock}')
-                return func(*args, **kwargs)
-            finally:
-                print(f'Released lock for {func.__name__}')
+            return func(*args, **kwargs)
 
     return arg_wrapper
 
@@ -191,7 +187,6 @@ def create_working_dir(
         "0",
         "no",
     )
-
     if use_legacy:
         import warnings
 
@@ -202,7 +197,7 @@ def create_working_dir(
             DeprecationWarning,
             stacklevel=2,
         )
-        cache_dir = os.path.expanduser("~/.marie")
+        cache_dir = get_cache_dir()
         target_dir = os.path.join(cache_dir, "generators", frame_checksum)
     else:
         md5 = hashlib.md5(frame_checksum.encode("utf-8"))
@@ -222,7 +217,7 @@ def create_working_dir(
     return ensure_exists(target_dir)
 
 
-def split_filename(img_path: str) -> (str, str, str):
+def split_filename(img_path: str) -> tuple[str, str, str]:
     filename = img_path.split("/")[-1]
     prefix = filename.split(".")[0]
     suffix = filename.split(".")[-1]
@@ -298,7 +293,7 @@ def restore_assets(
     root_asset_dir: str,
     full_restore=False,
     overwrite=False,
-) -> str or None:
+) -> Optional[str]:
     """
     Restore assets from primary storage (S3) into root asset directory. This restores
     the assets from the last run of the extract pipeline.
@@ -348,7 +343,7 @@ def restore_assets(
 
 def store_assets(
     ref_id: str, ref_type: str, root_asset_dir: str, match_wildcard: Optional[str] = "*"
-) -> List[str]:
+) -> list[str] | None:
     """
     Store assets in primary storage (S3)
 
@@ -386,7 +381,7 @@ def download_asset(
     root_asset_dir: str,
     s3_file_path: str = "meta.json",
     overwrite=True,
-) -> str or None:
+) -> Optional[str]:
     """
     Download assets from primary storage (S3) into root asset directory. This restores
     the assets from the last run of the extract pipeline.
