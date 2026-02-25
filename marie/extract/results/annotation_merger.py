@@ -1,7 +1,15 @@
-from typing import Dict, Tuple
+import json
+from typing import Any, Dict, Hashable, Tuple, Union
 
 from marie.extract.structures import UnstructuredDocument
 from marie.extract.structures.concrete_annotations import TypedAnnotation
+
+
+def _make_hashable(value: Union[str, Dict[str, Any]]) -> Hashable:
+    """Convert a value to a hashable form for use as a dict key."""
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True)
+    return value
 
 
 class AnnotationMerger:
@@ -32,9 +40,9 @@ class AnnotationMerger:
             if len(anns) <= 1:
                 continue
 
-            unique: Dict[Tuple[str, str], TypedAnnotation] = {}
+            unique: Dict[Tuple[str, Hashable], TypedAnnotation] = {}
             for ann in anns:
-                key = (ann.name, ann.value)
+                key = (ann.name, _make_hashable(ann.value))
                 if key not in unique:
                     unique[key] = ann
                     continue

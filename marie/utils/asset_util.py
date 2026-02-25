@@ -362,7 +362,7 @@ def store_assets(
             logger.error(f"Error storing assets : Could not connect to S3")
             return [s3_asset_base]
 
-        # copy the files to s3
+        logger.info(f"store_assets for {ref_id} : {ref_type} : {root_asset_dir}")
         StorageManager.copy_dir(
             root_asset_dir,
             s3_asset_base,

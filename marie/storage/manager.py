@@ -164,7 +164,7 @@ class PathHandler:
         path: str,
         suppress_errors: bool = False,
         **kwargs: Any,
-    ) -> bytes:
+    )  -> bytes | None:
         """
         Reads the resource at the given URI and returns the contents as bytes.
         This is not optimal for large files.
@@ -491,7 +491,7 @@ class StorageManager:
         """
         if not Path(local_path).is_dir():
             logger.error("Local path '{}' does not exist".format(local_path))
-            return
+            return None
 
         futures = []
         with ThreadPoolExecutor(max_workers=mp.cpu_count() // 2) as executor:

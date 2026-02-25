@@ -951,7 +951,6 @@ async def ascan_and_process_images(
 
     except asyncio.CancelledError as cancel_error:
         logger.warning("One or more tasks were cancelled.")
-        # DUMP FOR DEBUGGING
         with open(error_file_path, "a", encoding="utf-8") as error_file:
             error_message = f"Task(s) cancelled due to: {repr(cancel_error)}\n"
             error_file.write(error_message)
