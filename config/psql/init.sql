@@ -29,3 +29,16 @@ CREATE TABLE IF NOT EXISTS embeddings (
   text text,
   created_at timestamptz DEFAULT now()
 );
+-- =========================================================
+-- Database creation for dependent services
+-- =========================================================
+-- Create databases for services that depend on PostgreSQL
+-- These are created here to ensure they exist before services start
+
+-- Gitea database (self-hosted Git service)
+SELECT 'CREATE DATABASE gitea'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'gitea')\gexec
+
+-- LiteLLM database (if needed in future)
+SELECT 'CREATE DATABASE litellm'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'litellm')\gexec

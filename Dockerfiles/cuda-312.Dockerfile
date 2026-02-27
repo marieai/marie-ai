@@ -129,10 +129,19 @@ RUN python3 -m pip install /tmp/packages/marie-kernel \
 # Order is important, need to install detectron2 last expected version is 0.6
 # We also disable build isolation to avoid issues with error in detectron2 : No module named 'torch'
 
-RUN python3 -m pip install torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 \
-    && python3 -m pip install git+https://github.com/facebookresearch/fvcore \
+# Install torch separately with retries to handle transient download corruption (BadZipFile CRC-32 errors)
+# Override PIP_NO_CACHE_DIR so retries can use cached downloads; BuildKit cache mount avoids bloating the image
+RUN --mount=type=cache,target=/root/.cache/pip \
+    export PIP_NO_CACHE_DIR=0 && \
+    for i in 1 2 3; do \
+        python3 -m pip install torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 \
+        && break \
+        || { echo "Attempt $i failed, purging pip cache and retrying..."; pip cache purge 2>/dev/null; sleep 5; }; \
+    done
+
+RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore \
     && python3 -m pip install git+https://github.com/marieai/fairseq.git  \
-    && python3 -m pip install --no-build-isolation  git+https://github.com/facebookresearch/detectron2.git -v 
+    && python3 -m pip install --no-build-isolation  git+https://github.com/facebookresearch/detectron2.git -v
 
 # Installing VLLM independently to avoid issues with torch version, down the road we will use as  --constraint constraints.txt
 RUN python3 -m pip install psutil

@@ -231,9 +231,14 @@ class QueryPlanRegistry:
             logger.info(f"Successfully registered planner from {planner_module}")
             return True
         except Exception as e:
-            logger.error(f"Error registering planner from {planner_module}: {e}")
+            import traceback
+
+            tb_str = traceback.format_exc()
+            logger.error(
+                f"Error registering planner from {planner_module}: {e}\n{tb_str}"
+            )
             warnings.warn(
-                f"Error importing {planner_module} : some configs may not be available\n\n\tRoot cause: {e}\n"
+                f"Error importing {planner_module} : some configs may not be available\n\n\tRoot cause: {e}\n\n\tFull traceback:\n{tb_str}\n"
             )
             return False
 
