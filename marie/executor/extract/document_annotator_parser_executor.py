@@ -105,6 +105,7 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
             ref_id=ref_id,
             ref_type=ref_type,
             logger=self.logger,
+            restore_dirs=["agent-output"],
         )
         self.logger.info(f"root_asset_dir = {root_asset_dir}")
 

@@ -47,7 +47,12 @@ def avoid_concurrent_lock_wrapper(func: Callable) -> Callable:
 
 @avoid_concurrent_lock_wrapper
 def prepare_asset_directory(
-    frames, local_path: str, ref_id: str, ref_type: str, logger
+    frames,
+    local_path: str,
+    ref_id: str,
+    ref_type: str,
+    logger,
+    restore_dirs: list[str] | None = None,
 ):
     """
     Prepares the asset directory by creating the required subdirectories and processing input files.
@@ -57,6 +62,8 @@ def prepare_asset_directory(
     :param ref_id: Unique identifier for the asset reference.
     :param ref_type: Type of the reference for the asset.
     :param logger: Logger instance to handle logging.
+    :param restore_dirs: Optional list of directory names to download from S3
+        (e.g. ``["agent-output"]``).  Downloaded after metadata is fetched.
     :return: Tuple containing root asset directory path, frames directory path, and metadata file path.
     :raises ValueError: If the local_path parameter is None.
     """
@@ -134,6 +141,27 @@ def prepare_asset_directory(
     )
     logger.info(f"Metadata file downloaded and stored at: '{metadata_file}'")
     time.sleep(0.1)  # Ensure file system operations are completed
+
+    # Download additional directories from S3 (e.g. agent-output from upstream nodes)
+    if restore_dirs:
+        from marie.storage import StorageManager
+
+        s3_root_path = s3_asset_path(ref_id, ref_type)
+        connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
+        if connected:
+            for dir_name in restore_dirs:
+                try:
+                    StorageManager.copy_remote(
+                        s3_root_path,
+                        root_asset_dir,
+                        match_wildcard=f"*/{dir_name}/*",
+                        overwrite=True,
+                        silence_errors=True,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to restore '{dir_name}' from S3: {e}")
+        else:
+            logger.warning("Could not connect to S3 to restore directories")
 
     # Ensure the metadata file exists and that it is a valid JSON file
     if not os.path.exists(metadata_file):
