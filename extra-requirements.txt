@@ -172,6 +172,18 @@ python-dotenv:                 standard,devel
 # Memory integration (Mem0 SDK for agent memory)
 # mem0ai>=0.1.0:                 standard,core
 
+python-docx>=1.1.2:           standard,core
+python-pptx>=1.0.2:           standard,core
+openpyxl>=3.1.5:              standard,core
+beautifulsoup4>=4.12.3:       standard,core
+marko:                        standard,core
+ebooklib:                     standard,core
+extract-msg:                  standard,core
+pillow-heif:                  standard,core
+pdf2image:                    standard,core
+weasyprint:                   standard,core
+docutils:                     standard,core
+
 # Dev-only: used to regenerate *_pb2.py from .proto files (not a runtime dep)
 # Must be >=1.62.0 for protobuf v5 compatibility
 #grpcio-tools>=1.62.0

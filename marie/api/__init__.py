@@ -1,10 +1,9 @@
 import hashlib
-import imghdr
-import io
 import os
 from typing import Any, Optional
 
 import cv2
+import filetype
 import numpy as np
 from docarray import DocList
 
@@ -12,42 +11,75 @@ from marie.api.docs import AssetKeyDoc
 from marie.logging_core.predefined import default_logger
 from marie.storage import StorageManager
 from marie.utils.base64 import base64StringToBytes
+from marie.utils.format_registry import (
+    ALL_SUPPORTED_FORMATS,
+    IMAGE_FORMATS,
+    MIME_TO_FORMAT,
+)
 from marie.utils.image_utils import ensure_max_page_size
 from marie.utils.utils import FileSystem, ensure_exists
 
 logger = default_logger
 
-ALLOWED_TYPES = {"png", "jpeg", "tiff"}
-TYPES_TO_EXT = {"png": "png", "jpeg": "jpg", "tiff": "tif"}
+TYPES_TO_EXT = {
+    "png": "png",
+    "jpeg": "jpg",
+    "tiff": "tif",
+    "bmp": "bmp",
+    "gif": "gif",
+    "webp": "webp",
+    "heif": "heif",
+    "pdf": "pdf",
+    "docx": "docx",
+    "xlsx": "xlsx",
+    "pptx": "pptx",
+    "html": "html",
+    "markdown": "md",
+    "epub": "epub",
+    "msg": "msg",
+    "rst": "rst",
+    "csv": "csv",
+    "doc": "doc",
+    "xls": "xls",
+    "ppt": "ppt",
+    "odt": "odt",
+    "ods": "ods",
+    "odp": "odp",
+    "rtf": "rtf",
+    "latex": "tex",
+    "djvu": "djvu",
+}
+
+
+def _detect_type_from_bytes(data: bytes) -> str:
+    """Detect canonical format from raw bytes using filetype magic, then raise on unknown."""
+    guess = filetype.guess(data)
+    if guess is not None and guess.mime in MIME_TO_FORMAT:
+        return MIME_TO_FORMAT[guess.mime]
+    raise ValueError(
+        f"Could not detect file type from bytes. Supported: {ALL_SUPPORTED_FORMATS}"
+    )
 
 
 def store_temp_file(message_bytes, queue_id, file_type, store_raw) -> tuple[str, str]:
-    """Store temp file from decoded payload message
-    :param message_bytes: message bytes
-    :param queue_id: queue id to use for storing temp files
-    :param file_type: file type to store
-    :param store_raw: store raw file or convert to image
-    :return: tuple of temp file and checksum
-    """
-
+    """Store temp file from decoded payload message."""
     m = hashlib.sha256()
     m.update(message_bytes)
     file_digest = m.hexdigest()
 
     upload_dir = ensure_exists(f"/tmp/marie/{queue_id}")
-    ext = TYPES_TO_EXT[file_type]
+    ext = TYPES_TO_EXT.get(file_type, file_type)
 
     tmp_file = f"{upload_dir}/{file_digest}.{ext}"
 
-    if store_raw:
-        # message read directly from a file
+    # Non-image formats must always be stored raw
+    if store_raw or file_type not in IMAGE_FORMATS:
         with open(tmp_file, "wb") as tmp:
             tmp.write(message_bytes)
     else:
         # TODO : This does not handle multipage tiffs
         # convert to numpy array as the message has been passed from base64
         npimg = np.frombuffer(message_bytes, np.uint8)
-        # convert numpy array to image
         img = cv2.imdecode(npimg, cv2.IMREAD_UNCHANGED)
         cv2.imwrite(tmp_file, img)
 
@@ -120,19 +152,13 @@ def extract_payload(payload, queue_id) -> tuple[str, str, str]:
     if not data:
         raise Exception("No data read from payload")
 
-    with io.BytesIO(data) as memfile:
-        file_type = imghdr.what(memfile)
+    file_type = _detect_type_from_bytes(data)
 
-    if file_type not in ALLOWED_TYPES:
-        raise Exception(f"Unsupported file type, expected one of : {ALLOWED_TYPES}")
-
-    # if we have a tiff file we need to store as RAW otherwise only first page will be converted
-    if file_type == "tiff":
+    # tiff and non-image formats must be stored as raw bytes
+    if file_type == "tiff" or file_type not in IMAGE_FORMATS:
         store_raw = True
 
     tmp_file, file_digest = store_temp_file(data, queue_id, file_type, store_raw)
-    # if we don't perform this check our method returns
-    # <built-in function print> instead of the actual value <str, str>
     if not isinstance(file_digest, str):
         raise Exception("Checksum is not a string")
 
@@ -188,14 +214,10 @@ def extract_payload_to_uri(payload, queue_id) -> str:
 
     # data was not a uri, so we need to store it locally and then return the URI
 
-    with io.BytesIO(data) as memfile:
-        file_type = imghdr.what(memfile)
+    file_type = _detect_type_from_bytes(data)
 
-    if file_type not in ALLOWED_TYPES:
-        raise Exception(f"Unsupported file type, expected one of : {ALLOWED_TYPES}")
-
-    # if we have a tiff file we need to store as RAW otherwise only first page will be converted
-    if file_type == "tiff":
+    # tiff and non-image formats must be stored as raw bytes
+    if file_type == "tiff" or file_type not in IMAGE_FORMATS:
         store_raw = True
 
     tmp_file, file_digest = store_temp_file(data, queue_id, file_type, store_raw)
