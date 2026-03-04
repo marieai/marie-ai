@@ -989,12 +989,31 @@ def get_llm_wrapper(
 
     Example:
         ```python
-        # Using marie.engine
+        # Using marie.engine (local VLLM)
         wrapper = get_llm_wrapper("marie", engine_name="qwen2_5_vl_7b")
 
-        # Using OpenAI
-        wrapper = get_llm_wrapper("openai", model="gpt-4")
+        # Using OpenAI direct
+        wrapper = get_llm_wrapper("openai", model="gpt-4o")
+
+        # Using Claude via LiteLLM proxy
+        wrapper = get_llm_wrapper(
+            "openai",
+            model="claude/claude-sonnet-4-20250514",
+            base_url="http://localhost:4000",  # LiteLLM server
+        )
+
+        # Using any provider via LiteLLM
+        wrapper = get_llm_wrapper(
+            "openai",
+            model="anthropic/claude-3-opus",
+            base_url="http://localhost:4000",
+        )
         ```
+
+    Note:
+        For Claude and other providers, use the 'openai' backend with LiteLLM.
+        LiteLLM provides an OpenAI-compatible endpoint that translates to
+        various provider APIs. Set base_url to your LiteLLM server URL.
     """
     if backend == "marie":
         return MarieEngineLLMWrapper(**kwargs)

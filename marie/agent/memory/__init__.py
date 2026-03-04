@@ -1,7 +1,8 @@
 """Memory integration for Marie agent framework.
 
-This module re-exports from the marie-mem0 package for convenience.
-For direct usage, you can also import from marie_mem0 directly.
+This module provides memory capabilities for agents:
+- Mem0 integration for individual agent memory
+- Group memory for coordinated multi-agent execution
 """
 
 from marie_mem0 import (
@@ -14,7 +15,16 @@ from marie_mem0 import (
     Mem0VectorStoreConfig,
 )
 
+from marie.agent.memory.group_memory import (
+    GroupMemory,
+    GroupMemoryConfig,
+    GroupMemoryEntry,
+    GroupMemoryStats,
+    MemoryType,
+)
+
 __all__ = [
+    # Mem0 exports
     "Mem0Config",
     "Mem0EmbedderConfig",
     "Mem0LLMConfig",
@@ -22,4 +32,10 @@ __all__ = [
     "Mem0Memory",
     "AsyncMem0Memory",
     "Mem0Provider",
+    # Group memory exports
+    "GroupMemory",
+    "GroupMemoryConfig",
+    "GroupMemoryEntry",
+    "GroupMemoryStats",
+    "MemoryType",
 ]

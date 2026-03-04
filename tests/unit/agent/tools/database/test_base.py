@@ -53,7 +53,9 @@ class TestAsyncDatabaseToolBase:
 
     @pytest.mark.asyncio
     async def test_get_pool_initializes(self, db_config, mock_pool):
-        """_get_pool should initialize pool if not set."""
+        """_get_pool should return provided pool without re-initializing."""
+        # Pre-initialize the pool since we're passing it as already ready
+        mock_pool._initialized = True
         tool = ConcreteAsyncDatabaseTool(db_config, pool=mock_pool)
 
         pool = await tool._get_pool()

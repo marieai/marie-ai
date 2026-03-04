@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from marie.agent.tools.base import AgentTool, ToolMetadata, ToolOutput
+from marie.helper import run_async
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
@@ -128,7 +129,7 @@ class DocumentSearchTool(AgentTool):
         Returns:
             ToolOutput with formatted results and citations.
         """
-        return asyncio.get_event_loop().run_until_complete(
+        return run_async(
             self.acall(query=query, source_ids=source_ids, top_k=top_k, **kwargs)
         )
 
