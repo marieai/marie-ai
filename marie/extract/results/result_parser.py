@@ -670,10 +670,20 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
 
     print(f'conf : {conf}')
 
-    DIRS = {
-        name: os.path.join(agent_output_dir, name) for name in conf.annotators.keys()
+    # Filter to only enabled annotators (enabled defaults to True if not specified)
+    enabled_annotators = {
+        name: ann_conf
+        for name, ann_conf in conf.annotators.items()
+        if ann_conf.get("enabled", True)
     }
-    print(f"Expected directories for annotators: {DIRS}")
+
+    DIRS = {
+        name: os.path.join(agent_output_dir, name) for name in enabled_annotators.keys()
+    }
+    logger.info(f"Expected directories for enabled annotators: {DIRS}")
+    skipped = set(conf.annotators.keys()) - set(enabled_annotators.keys())
+    if skipped:
+        logger.info(f"Skipping disabled annotators: {skipped}")
     check_directories_exist(DIRS.values())
 
     files = sorted(f for f in os.listdir(frames_dir) if f.lower().endswith(".png"))
@@ -687,7 +697,7 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
     logger.info(f"Validation  enabled: {validation_enabled}")
     logger.info(f"Fail on validation errors: {fail_on_validation_errors}")
 
-    for name, ann_conf in conf.annotators.items():
+    for name, ann_conf in enabled_annotators.items():
         target = ann_conf.get("parser", name)
         parser_fn = component_registry.get_parser(target)
 

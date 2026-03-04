@@ -684,6 +684,8 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
         # There is only one table config per region name, but each labeled region can have one table block
         table_config = region_entry.get("table", {})
+        grouping_config = table_config.get('body', {}).get('grouping', {})
+        row_types_config = grouping_config.get('row_types', None)
         field_to_header_map = {}
         field_to_footer_map = {}  # FOOTER ARE NOT SUPPORTED YET or MAYBE EVEN EVER
 
@@ -814,6 +816,24 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
             self.logger.info(f"Columns to process mapping: {columns_to_process}")
 
+            # Detect primary column and ROW_TYPE column indices for multiline row support
+            primary_col_index = -1
+            type_col_index = -1
+
+            for field_name, col_def in columns_to_process.items():
+                if col_def["header_config"].get("primary", False):
+                    primary_col_index = col_def["cell_index"]
+                if row_types_config and field_name == row_types_config.get(
+                    "type_column", "ROW_TYPE"
+                ):
+                    type_col_index = col_def["cell_index"]
+
+            if row_types_config:
+                self.logger.info(
+                    f"Row types config detected: primary_col_index={primary_col_index}, "
+                    f"type_col_index={type_col_index}, config={row_types_config}"
+                )
+
             # DEBUG: Log region info and body_rows count
             region_id = structured_section.tags.get("source_region_id", "unknown")
             self.logger.info(
@@ -827,6 +847,9 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 columns_to_process=columns_to_process,
                 page_id=page_id,
                 template_fields_repeating=template_fields_repeating,
+                primary_col_index=primary_col_index,
+                type_col_index=type_col_index,
+                row_types_config=row_types_config,
             )
 
             if not match_section_to_populate.matched_field_rows:
@@ -852,15 +875,26 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         columns_to_process: Dict[str, Dict[str, Any]],
         page_id: int,
         template_fields_repeating: Dict[str, Any],
+        primary_col_index: int = -1,
+        type_col_index: int = -1,
+        row_types_config: Optional[Dict[str, Any]] = None,
     ) -> List[MatchFieldRow]:
         """
         Build MatchFieldRow list by extracting values from body rows using resolved column indices.
+
+        When row_types_config is provided, enables dual detection:
+        - PRIMARY_COLUMN: if the primary column is empty, the row is a child row
+        - ROW_TYPE column: classifies which type of child row (e.g., ADJUSTMENT), each with
+          its own active_columns that limit which fields are extracted
 
         Parameters:
             body_rows: list of TableRow objects with role BODY
             columns_to_process: mapping of field name -> { cell_index: int, header_config: dict }
             page_id: page identifier to propagate to line metadata
             template_fields_repeating: field configuration template for repeating fields
+            primary_col_index: index of the primary column (-1 if not set)
+            type_col_index: index of the ROW_TYPE column (-1 if not set)
+            row_types_config: row types configuration dict from grouping config
 
         Returns:
             List[MatchFieldRow]
@@ -868,6 +902,16 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         matched_field_rows: List[MatchFieldRow] = []
         if not body_rows or not columns_to_process:
             return matched_field_rows
+
+        # Pre-compute active columns per row type for child row filtering
+        type_active_columns: Dict[str, set] = {}
+        type_column_name: Optional[str] = None
+        if row_types_config:
+            type_column_name = row_types_config.get("type_column", "ROW_TYPE")
+            for type_name, type_def in row_types_config.get("types", {}).items():
+                type_active_columns[type_name.upper()] = set(
+                    type_def.get("active_columns", [])
+                )
 
         # Stable processing order
         ordered_fields = [
@@ -879,11 +923,61 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         ]
 
         for row in body_rows:
+            cells = row.cells
+
+            # Step 1: Check primary column — is this a child row?
+            is_child_row = False
+            if primary_col_index >= 0 and row_types_config:
+                if primary_col_index < len(cells):
+                    primary_cell = cells[primary_col_index]
+                    primary_value = ""
+                    if primary_cell.lines and len(primary_cell.lines) > 0:
+                        primary_value = (primary_cell.lines[0].line or "").strip()
+                    else:
+                        primary_value = (
+                            str(primary_cell) if primary_cell else ""
+                        ).strip()
+                    is_child_row = primary_value == ""
+
+            # Step 2: If child row, read ROW_TYPE to determine which active_columns
+            active_columns: Optional[set] = (
+                None  # None = all columns (default/main row)
+            )
+            if is_child_row and type_col_index >= 0:
+                if type_col_index < len(cells):
+                    type_cell = cells[type_col_index]
+                    type_value = ""
+                    if type_cell.lines and len(type_cell.lines) > 0:
+                        type_value = (type_cell.lines[0].line or "").strip().upper()
+                    else:
+                        type_value = (
+                            (str(type_cell) if type_cell else "").strip().upper()
+                        )
+
+                    if type_value in type_active_columns:
+                        active_columns = type_active_columns[type_value]
+                        self.logger.info(
+                            f"Child row detected: ROW_TYPE='{type_value}', "
+                            f"active_columns={active_columns}"
+                        )
+                    else:
+                        self.logger.info(
+                            f"Child row detected with unknown ROW_TYPE='{type_value}'; "
+                            f"extracting all columns as fallback"
+                        )
+
             extracted_cells = []
             self.logger.debug("row : *******************")
 
-            cells = row.cells
             for field_name in ordered_fields:
+                # Skip ROW_TYPE column from output — it's a classification signal, not a data field
+                if type_column_name and field_name == type_column_name:
+                    continue
+
+                # Skip non-active columns for typed child rows
+                if active_columns is not None and field_name not in active_columns:
+                    continue
+
                 column_def = columns_to_process[field_name]
                 column_index = int(column_def["cell_index"])
                 header_config = column_def["header_config"]
