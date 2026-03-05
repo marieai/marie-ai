@@ -684,7 +684,21 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
     skipped = set(conf.annotators.keys()) - set(enabled_annotators.keys())
     if skipped:
         logger.info(f"Skipping disabled annotators: {skipped}")
-    check_directories_exist(DIRS.values())
+
+    strict_dirs = conf.get("validation", {}).get("strict_directories", False)
+    missing_dirs = {name for name, path in DIRS.items() if not os.path.exists(path)}
+    if missing_dirs:
+        if strict_dirs:
+            raise FileNotFoundError(
+                f"The following directories are missing: "
+                f"{', '.join(DIRS[n] for n in missing_dirs)}"
+            )
+        logger.warning(
+            f"Skipping annotators with missing output directories: {missing_dirs}"
+        )
+        for name in missing_dirs:
+            del DIRS[name]
+            del enabled_annotators[name]
 
     files = sorted(f for f in os.listdir(frames_dir) if f.lower().endswith(".png"))
     frames = [frames_from_file(os.path.join(frames_dir, f))[0] for f in files]

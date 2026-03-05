@@ -185,6 +185,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         all_field_mappings: List[FieldMapping] = layer.fields
 
         parser_sections_rules = region_parser_cfg.get("sections", [])
+        region_scoping = region_parser_cfg.get("region_scoping", "strict")
         # Collect all regions fully contained by any of the section spans (line-based)
         regions_in_scope = set()
         if not spans:
@@ -238,14 +239,32 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     region_start = min(mins)
                     region_end = max(maxs)
 
-                    # DEBUG: Log region scoping check
-                    is_in_scope = region_start >= start_line and region_end <= end_line
-                    self.logger.info(
-                        f"    Region '{region.region_id}': lines {region_start}-{region_end}, "
-                        f"check: {region_start} >= {start_line} AND {region_end} <= {end_line} = {is_in_scope}"
-                    )
+                    # Determine if region is in scope based on scoping strategy
+                    if region_scoping == "relaxed":
+                        # Majority overlap: region is in scope if >50% of its lines fall within the span
+                        overlap_start = max(region_start, start_line)
+                        overlap_end = min(region_end, end_line)
+                        overlap_length = max(0, overlap_end - overlap_start)
+                        region_length = region_end - region_start
+                        overlap_ratio = (
+                            overlap_length / region_length if region_length > 0 else 0.0
+                        )
+                        is_in_scope = overlap_ratio > 0.5
+                        self.logger.info(
+                            f"    Region '{region.region_id}': lines {region_start}-{region_end}, "
+                            f"scoping=relaxed, overlap={overlap_length}/{region_length} ({overlap_ratio:.1%}), "
+                            f"in_scope={is_in_scope}"
+                        )
+                    else:
+                        # Strict: fully contained
+                        is_in_scope = (
+                            region_start >= start_line and region_end <= end_line
+                        )
+                        self.logger.info(
+                            f"    Region '{region.region_id}': lines {region_start}-{region_end}, "
+                            f"check: {region_start} >= {start_line} AND {region_end} <= {end_line} = {is_in_scope}"
+                        )
 
-                    # Fully-contained check
                     if is_in_scope:
                         regions_in_scope.add(region)
                 except Exception:
