@@ -209,6 +209,7 @@ RUN apt-get update && \
         libomp-dev \
         libjemalloc-dev \
         libgoogle-perftools-dev \
+        graphviz \
         libmagickwand-dev && \
     ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
     ln -s /usr/lib/x86_64-linux-gnu/libjemalloc.so /usr/lib/libjemalloc.so && \
