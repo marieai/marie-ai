@@ -119,6 +119,89 @@ echo "$metadata"
 # ("mock_hitl_router", "HITL Confidence Router Workflow"),
 # ("mock_hitl_complete_workflow", "Complete HITL Workflow (All Node Types)"),
 
+# RAG Indexing Plans:
+# ("mock_rag_indexing_simple", "Simple RAG Indexing Pipeline"),
+# ("mock_rag_indexing_with_chunking", "RAG Indexing with Chunking"),
+# ("mock_rag_indexing_noop", "Minimal RAG Indexing (test only)"),
+
+# RAG Indexing test job functions
+submit_rag_pdf() {
+    local metadata='{
+        "on": "document_backend_executor://extract",
+        "uri": "s3://marie-test-bucket/samples/invoice.pdf",
+        "ref_id": "rag_test_pdf_001",
+        "ref_type": "submission_document",
+        "source_id": "submission:test_001",
+        "index_name": "test_index",
+        "node_type": "document"
+    }'
+    python ./send_request_to_gateway.py job submit mock_rag_indexing_simple \
+        --metadata-json "$metadata" \
+        --address "$host" --protocol "$protocol" --api_key "$api_key"
+}
+
+submit_rag_docx() {
+    local metadata='{
+        "on": "document_backend_executor://extract",
+        "uri": "s3://marie-test-bucket/samples/contract.docx",
+        "ref_id": "rag_test_docx_001",
+        "ref_type": "submission_document",
+        "source_id": "submission:test_002",
+        "index_name": "test_index",
+        "node_type": "document"
+    }'
+    python ./send_request_to_gateway.py job submit mock_rag_indexing_simple \
+        --metadata-json "$metadata" \
+        --address "$host" --protocol "$protocol" --api_key "$api_key"
+}
+
+submit_rag_xlsx() {
+    local metadata='{
+        "on": "document_backend_executor://extract",
+        "uri": "s3://marie-test-bucket/samples/financials.xlsx",
+        "ref_id": "rag_test_xlsx_001",
+        "ref_type": "submission_document",
+        "source_id": "submission:test_003",
+        "index_name": "financial_docs",
+        "node_type": "spreadsheet"
+    }'
+    python ./send_request_to_gateway.py job submit mock_rag_indexing_simple \
+        --metadata-json "$metadata" \
+        --address "$host" --protocol "$protocol" --api_key "$api_key"
+}
+
+submit_rag_image() {
+    local metadata='{
+        "on": "document_backend_executor://extract",
+        "uri": "s3://marie-test-bucket/samples/scanned_receipt.jpg",
+        "ref_id": "rag_test_image_001",
+        "ref_type": "submission_document",
+        "source_id": "submission:test_004",
+        "index_name": "receipts",
+        "node_type": "image"
+    }'
+    python ./send_request_to_gateway.py job submit mock_rag_indexing_simple \
+        --metadata-json "$metadata" \
+        --address "$host" --protocol "$protocol" --api_key "$api_key"
+}
+
+submit_rag_with_chunking() {
+    local metadata='{
+        "on": "document_backend_executor://extract",
+        "uri": "s3://marie-test-bucket/samples/long_document.pdf",
+        "ref_id": "rag_test_chunking_001",
+        "ref_type": "submission_document",
+        "source_id": "submission:test_005",
+        "index_name": "test_index",
+        "chunk_size": 512,
+        "chunk_overlap": 50
+    }'
+    python ./send_request_to_gateway.py job submit mock_rag_indexing_with_chunking \
+        --metadata-json "$metadata" \
+        --address "$host" --protocol "$protocol" --api_key "$api_key"
+}
+
+# Default job submission loop (extract jobs)
 for i in $(seq 1 "$2"); do
     echo "Submitting job $i"
     python ./send_request_to_gateway.py job submit extract --metadata-json "$metadata" --address "$host" --protocol "$protocol" --api_key "$api_key" &
@@ -129,3 +212,10 @@ done
 wait
 
 echo "All requests have completed!"
+
+# Usage examples for RAG indexing tests (uncomment to use):
+# submit_rag_pdf
+# submit_rag_docx
+# submit_rag_xlsx
+# submit_rag_image
+# submit_rag_with_chunking

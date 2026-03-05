@@ -112,6 +112,7 @@ def register_all_sensors() -> None:
         polling_sensor,
         run_status_sensor,
         schedule_sensor,
+        submission_document_sensor,
         webhook_sensor,
     )
     from marie.sensors.definitions.data_sink import s3_sensor

@@ -72,8 +72,6 @@ def parse_args():
 
 def setup_s3_storage(config: dict):
     handler = S3StorageHandler(config=config)
-
-    # export AWS_ACCESS_KEY_ID=MARIEACCESSKEY; export AWS_SECRET_ACCESS_KEY=MARIESECRETACCESSKEY;  aws s3 ls --endpoint-url http://localhost:8000
     StorageManager.register_handler(handler=handler)
     StorageManager.ensure_connection("s3://")
 
