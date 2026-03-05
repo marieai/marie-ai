@@ -1,5 +1,9 @@
 from marie.engine.base import EngineLM
 
+# Supported LLM providers
+# Note: Claude is accessed via 'openai' provider with LiteLLM base_url
+SUPPORTED_PROVIDERS = ["vllm", "openai"]
+
 # TODO add  Gemma 3 (Based on v4.49.0)
 # https://github.com/huggingface/transformers/releases/tag/v4.49.0-Gemma-3
 MODEL_NAME_MAP = {
@@ -49,12 +53,42 @@ def validate_multimodal_engine(engine):
 def get_engine(engine_name: str, provider: str = 'vllm', **kwargs) -> EngineLM:
     """
     Get the engine based on the engine name and provider.
-    :param engine_name: The engine name to use for the LLM call.
-    :param provider: The provider to use for the LLM call. Currently only vllm is supported.
-    :param kwargs:
-    :return: The engine to use for the LLM call.
+
+    Args:
+        engine_name: The engine/model name to use for the LLM call.
+        provider: The provider to use for the LLM call.
+            Supported: 'vllm', 'openai'
+        **kwargs: Additional arguments passed to the engine constructor.
+            For 'openai' provider, pass base_url to use LiteLLM proxy for
+            other providers (Claude, Gemini, etc.)
+
+    Returns:
+        The engine to use for the LLM call.
+
+    Example:
+        ```python
+        # VLLM local model
+        engine = get_engine("qwen2_5_vl_7b", provider="vllm")
+
+        # OpenAI API direct
+        engine = get_engine("gpt-4o", provider="openai")
+
+        # Claude via LiteLLM proxy
+        engine = get_engine(
+            "claude/claude-sonnet-4-20250514",
+            provider="openai",
+            base_url="http://localhost:4000",  # LiteLLM server
+        )
+
+        # Any provider via LiteLLM
+        engine = get_engine(
+            "anthropic/claude-3-opus",
+            provider="openai",
+            base_url="http://localhost:4000",
+        )
+        ```
     """
-    if "vllm" == provider:
+    if provider == "vllm":
         from .vllm_engine import VLLMEngine
 
         return VLLMEngine(
@@ -68,5 +102,16 @@ def get_engine(engine_name: str, provider: str = 'vllm', **kwargs) -> EngineLM:
             },
             **kwargs,
         )
+    elif provider == "openai":
+        from .openai_engine import OpenAIEngine
+
+        return OpenAIEngine(
+            model_name=engine_name,
+            is_multimodal=True,
+            **kwargs,
+        )
     else:
-        raise ValueError(f"Engine {engine_name} not supported")
+        raise ValueError(
+            f"Provider '{provider}' not supported. "
+            f"Supported providers: {SUPPORTED_PROVIDERS}"
+        )

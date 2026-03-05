@@ -230,7 +230,76 @@ class VectorStoreExecutor(MarieExecutor):
                 self.logger.error(f"Failed to process doc {doc.id}: {e}")
 
         self.logger.info(f"Stored {stored_count}/{len(docs)} documents")
+
+        # Update submission document status if this is a submission workflow
+        await self._update_submission_status(parameters, stored_count, len(docs))
+
         return docs
+
+    async def _update_submission_status(
+        self,
+        parameters: Dict[str, Any],
+        stored_count: int,
+        total_count: int,
+    ) -> None:
+        """Update submission document indexing status after embedding.
+
+        Only updates if workflow_id and ref_id are present in parameters,
+        indicating this is part of a submission document workflow.
+        """
+        workflow_id = parameters.get("workflow_id")
+        ref_id = parameters.get("ref_id")
+
+        if not workflow_id or not ref_id:
+            return
+
+        try:
+            import os
+
+            postgres_url = os.getenv("DATABASE_URL")
+            if not postgres_url:
+                self.logger.warning(
+                    "DATABASE_URL not set, skipping submission status update"
+                )
+                return
+
+            from marie.storage.submission import SubmissionStorage
+
+            storage = SubmissionStorage(postgres_url)
+
+            if stored_count > 0:
+                # Success - update both workflow and document status
+                storage.update_workflow_status(
+                    workflow_id=workflow_id,
+                    status="completed",
+                )
+                storage.update_document_indexing_status(
+                    document_id=ref_id,
+                    status="indexed",
+                )
+                self.logger.info(
+                    f"Updated submission document {ref_id} status to 'indexed'"
+                )
+            else:
+                # No documents stored - mark as failed
+                storage.update_workflow_status(
+                    workflow_id=workflow_id,
+                    status="failed",
+                    error="No documents were stored",
+                )
+                storage.update_document_indexing_status(
+                    document_id=ref_id,
+                    status="failed",
+                    error="No documents were stored",
+                )
+                self.logger.warning(
+                    f"No documents stored for {ref_id}, marked as failed"
+                )
+
+            storage.stop()
+
+        except Exception as e:
+            self.logger.error(f"Failed to update submission status: {e}")
 
     @requests(on="/search")
     async def search(

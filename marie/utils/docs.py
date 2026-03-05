@@ -1,53 +1,78 @@
-import imghdr
-import io
 import os
 import tempfile
 from typing import Any, List, Optional, Tuple, Union
 
 import cv2
+import filetype
 import numpy as np
 import PyPDF4
 import skimage.io as skio
 from docarray import DocList
 from PIL import Image
 from PyPDF4 import PdfFileReader
-from PyPDF4.utils import PdfReadError
 
 from marie.api.docs import DOC_KEY_PAGE_NUMBER, MarieDoc
 from marie.common.file_io import StrOrBytesPath
 from marie.logging_core.predefined import default_logger as logger
 from marie.storage import StorageManager
+from marie.utils.format_registry import (
+    ALL_SUPPORTED_FORMATS,
+    EXT_TO_FORMAT,
+    MIME_TO_FORMAT,
+)
 from marie.utils.utils import ensure_exists
 
-ALLOWED_TYPES = {"png", "jpeg", "tiff", "pdf"}
-TYPES_TO_EXT = {"png": "png", "jpeg": "jpg", "tiff": "tif", "pdf": "pdf"}
+TYPES_TO_EXT = {
+    "png": "png",
+    "jpeg": "jpg",
+    "tiff": "tif",
+    "bmp": "bmp",
+    "gif": "gif",
+    "webp": "webp",
+    "heif": "heif",
+    "pdf": "pdf",
+    "docx": "docx",
+    "xlsx": "xlsx",
+    "pptx": "pptx",
+    "html": "html",
+    "markdown": "md",
+    "epub": "epub",
+    "msg": "msg",
+    "rst": "rst",
+    "csv": "csv",
+    "doc": "doc",
+    "xls": "xls",
+    "ppt": "ppt",
+    "odt": "odt",
+    "ods": "ods",
+    "odp": "odp",
+    "rtf": "rtf",
+    "latex": "tex",
+    "djvu": "djvu",
+}
 
 
-def get_document_type(file_path: str):
-    """Get document type"""
-
+def get_document_type(file_path: str) -> str:
+    """Detect document format using magic bytes, then extension fallback."""
     if not os.path.exists(file_path):
-        raise Exception(f"File not found : {file_path}")
+        raise FileNotFoundError(f"File not found: {file_path}")
 
-    with open(file_path, "rb") as file:
-        data = file.read()
+    # Tier 1: magic-byte detection
+    guess = filetype.guess(file_path)
+    if guess is not None:
+        mime = guess.mime
+        if mime in MIME_TO_FORMAT:
+            return MIME_TO_FORMAT[mime]
 
-    with io.BytesIO(data) as memfile:
-        file_type = imghdr.what(memfile)
+    # Tier 2: extension fallback
+    _, ext = os.path.splitext(file_path)
+    ext = ext.lstrip(".").lower()
+    if ext in EXT_TO_FORMAT:
+        return EXT_TO_FORMAT[ext]
 
-    if file_type is None:
-        try:
-            PyPDF4.PdfFileReader(open(file_path, "rb"))
-            file_type = "pdf"
-        except PdfReadError as e:
-            print(f"invalid PDF file : {e}")
-        else:
-            pass
-
-    if f"{file_type}".lower() not in ALLOWED_TYPES:
-        raise Exception(f"Unsupported file type, expected one of : {ALLOWED_TYPES}")
-
-    return file_type
+    raise ValueError(
+        f"Unsupported file type for '{file_path}'. Supported: {ALL_SUPPORTED_FORMATS}"
+    )
 
 
 def _handle_filter_real(x_object, obj, mode, size, data):
@@ -197,61 +222,35 @@ def convert_frames(frames, img_format):
     return converted
 
 
+def load_document(file_path: str, img_format: str = "cv") -> dict:
+    """Unified entry point for all document formats.
+
+    Returns dict with 'mode' key:
+      - mode='frames': {'mode': 'frames', 'frames': List[np.ndarray]}
+      - mode='parsed': {'mode': 'parsed', 'results': List[Dict], 'pages': int}
+    """
+    from marie.backend import get_backend
+
+    file_type = get_document_type(file_path)
+    backend = get_backend(file_type)
+    result = backend.convert(file_path)
+    if result["mode"] == "frames":
+        result["frames"] = convert_frames(result["frames"], img_format)
+    return result
+
+
 def load_image(img_path, img_format: str = "cv") -> (bool, List[np.ndarray]):
-    """
-    Load image, if the image is a TIFF, we will load the image as a multipage tiff, otherwise we return an
-    array with image as first element. If the document is a PDF we will extract images from the document and
-    return them as frames
-
-    :param img_path: source image path
-    :param img_format: cv or pil
-    :return (bool, List[np.ndarray]): loaded, frames
-    """
-
+    """Backward-compatible wrapper. Returns (bool, List[np.ndarray])."""
     if img_path is None:
         return False, None
 
-    image_type = get_document_type(img_path)
-    loaded = False
-    frames = []
-
-    if image_type == "pdf":
-        loaded, frames = load_pdf_frames(img_path)
-        if not loaded:
-            return False, []
-    elif image_type == "tiff":
-        loaded, frames = cv2.imreadmulti(img_path, [], cv2.IMREAD_ANYCOLOR)
-        if not loaded:
-            return False, []
-
-    # each frame needs to be converted to RGB format to keep proper shape [x,y,c]
-    if loaded:
-        converted = convert_frames(frames, img_format)
-        del frames
-        return loaded, converted
-
-    # img = skio.imread(img_path)  # RGB order
-    img = Image.open(img_path).convert('RGB')
-    img = np.array(img, dtype=np.uint8)
-
-    # return True, [img]
-
-    if img.shape[0] == 2:
-        img = img[0]
-    if len(img.shape) == 2:
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-    if img.shape[2] == 4:
-        img = img[:, :, :3]
-
-    # cv or pil
-    # if we converted with np.array then the PIl image get converted to ndarray
-    if img_format == "pil":
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = Image.fromarray(img.copy())
-        return True, [img]
-
-    # img = np.array(img)
-    return True, [img]
+    result = load_document(img_path, img_format)
+    if result["mode"] == "frames":
+        frames = result["frames"]
+        return (True, frames) if frames else (False, [])
+    # Parsed formats shouldn't reach here via existing callers,
+    # but handle gracefully
+    return (False, [])
 
 
 def frames_from_docs(
@@ -277,10 +276,9 @@ def docs_from_file(
     path: StrOrBytesPath, pages: Optional[List[int]] = None
 ) -> DocList[MarieDoc]:
     """
-    Create DocumentArray from image file. This will create one document per page in the image file, if the image
-    is large and has many pages this can be very memory intensive.
+    Create DocumentArray from document file. This will create one document per page.
 
-    :param path:  path to image file
+    :param path:  path to document file
     :param pages:  list of pages to extract from document NONE or empty list will extract all pages from document
     :return: DocumentArray with tensor content
     """
@@ -290,18 +288,30 @@ def docs_from_file(
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found : {path}")
 
-    loaded, frames = load_image(path)
-    # no pages specified, we will use all pages as documents
-    if pages is None or len(pages) == 0:
-        pages = [i for i in range(len(frames))]
-
+    result = load_document(path)
     docs = DocList[MarieDoc]()
-    if loaded:
+
+    if result["mode"] == "parsed":
+        pages_results = result["results"]
+        if pages is None or len(pages) == 0:
+            pages = list(range(len(pages_results)))
+        for idx, page_result in enumerate(pages_results):
+            if idx not in pages:
+                continue
+            doc = MarieDoc()
+            doc.tags["parsed_content"] = page_result
+            doc.tags["mode"] = "parsed"
+            docs.append(doc)
+    else:
+        frames = result["frames"]
+        if pages is None or len(pages) == 0:
+            pages = list(range(len(frames)))
         for idx, frame in enumerate(frames):
             if idx not in pages:
                 continue
             doc = MarieDoc(tensor=frame)
             docs.append(doc)
+
     return docs
 
 
@@ -342,37 +352,37 @@ def docs_from_asset(
             raise ValueError(f"Remote file does not exist : {uri}")
 
         StorageManager.read_to_file(uri, temp_file_out, overwrite=True)
-        temp_file_out.seek(0)
-        data = temp_file_out.read()
         path = temp_file_out.name
 
-        with io.BytesIO(data) as memfile:
-            file_type = imghdr.what(memfile)
-
-        if file_type not in ALLOWED_TYPES:
-            raise ValueError(
-                f"Unsupported file type, expected one of : {ALLOWED_TYPES}"
-            )
+        file_type = get_document_type(path)
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found : {path}")
 
-    loaded, frames = load_image(path)
-
-    # No pages specified, we will use all pages as documents
-    if pages is None or len(pages) == 0:
-        pages = [i for i in range(len(frames))]
-
+    result = load_document(path)
     docs = DocList[MarieDoc]()
 
-    if loaded:
+    if result["mode"] == "parsed":
+        pages_results = result["results"]
+        if pages is None or len(pages) == 0:
+            pages = list(range(len(pages_results)))
+        for idx, page_result in enumerate(pages_results):
+            if idx not in pages:
+                continue
+            doc = MarieDoc()
+            doc.tags["parsed_content"] = page_result
+            doc.tags["mode"] = "parsed"
+            docs.append(doc)
+    else:
+        frames = result["frames"]
+        if pages is None or len(pages) == 0:
+            pages = list(range(len(frames)))
         for idx, frame in enumerate(frames):
             if idx not in pages:
                 continue
             doc = MarieDoc(tensor=frame)
             docs.append(doc)
 
-    # Return documents and optionally the file path
     if return_file_path:
         return docs, path
     return docs
@@ -389,7 +399,22 @@ def frames_from_file(img_path: StrOrBytesPath) -> List[np.ndarray]:
         image_files_to_sort = []
         for file_name in os.listdir(img_path):
             name, ext = os.path.splitext(file_name)
-            if ext.lower() in [".png", ".tiff", ".tif"] and name.isdigit():
+            if (
+                ext.lower()
+                in [
+                    ".png",
+                    ".jpg",
+                    ".jpeg",
+                    ".tiff",
+                    ".tif",
+                    ".bmp",
+                    ".gif",
+                    ".webp",
+                    ".heif",
+                    ".heic",
+                ]
+                and name.isdigit()
+            ):
                 image_files_to_sort.append((int(name), file_name))
 
         # Sort files based on the integer value of the name

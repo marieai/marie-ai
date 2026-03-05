@@ -2,11 +2,15 @@
 
 This module provides the abstract base class for all agents following
 the Qwen-Agent template method pattern with marie.engine integration.
+
+All agents inherit skill support, enabling Claude Code-like slash commands
+and automatic skill routing.
 """
 
 from __future__ import annotations
 
 import copy
+import re
 from abc import ABC, abstractmethod
 from typing import (
     TYPE_CHECKING,
@@ -39,8 +43,14 @@ if TYPE_CHECKING:
     from marie_mem0 import Mem0Config
 
     from marie.agent.llm_wrapper import BaseLLMWrapper
+    from marie.agent.skills import Skill, SkillContext, SkillRouter
 
 logger = MarieLogger("marie.agent.base")
+
+# Pattern for explicit skill invocation: /skill-name [args]
+SLASH_COMMAND_PATTERN = re.compile(
+    r"^/([a-z0-9][a-z0-9-]*[a-z0-9]|[a-z0-9])(?:\s+(.*))?$"
+)
 
 
 class BaseAgent(ABC):
@@ -81,6 +91,9 @@ class BaseAgent(ABC):
         name: Optional[str] = None,
         description: Optional[str] = None,
         memory: Optional["Mem0Config"] = None,
+        skills_enabled: bool = True,
+        auto_match_skills: bool = True,
+        default_skills: Optional[List[str]] = None,
         **kwargs: Any,
     ):
         """Initialize the agent.
@@ -96,6 +109,9 @@ class BaseAgent(ABC):
             name: Agent name (used in multi-agent scenarios)
             description: Agent description (used for delegation decisions)
             memory: Optional Mem0 configuration for memory integration
+            skills_enabled: Enable skill routing (slash commands, auto-matching)
+            auto_match_skills: Auto-match skills from message content
+            default_skills: Skills to always load (by name)
             **kwargs: Additional configuration
         """
         self.llm = llm
@@ -103,6 +119,12 @@ class BaseAgent(ABC):
         self.name = name
         self.description = description
         self.extra_generate_cfg: Dict[str, Any] = kwargs.get("extra_generate_cfg", {})
+
+        # Skill system configuration
+        self.skills_enabled = skills_enabled
+        self.auto_match_skills = auto_match_skills
+        self.default_skills = default_skills or []
+        self._skill_router: Optional["SkillRouter"] = None
 
         # Initialize memory
         self._mem0 = None
@@ -113,6 +135,10 @@ class BaseAgent(ABC):
         self.function_map: Dict[str, AgentTool] = {}
         if function_list:
             self._init_tools(function_list)
+
+        # Initialize skill router if enabled
+        if self.skills_enabled:
+            self._init_skills()
 
     def _init_tools(
         self,
@@ -130,6 +156,114 @@ class BaseAgent(ABC):
                     f"Repeatedly adding tool {name}, will use the newest tool"
                 )
             self.function_map[name] = tool
+
+    def _init_skills(self) -> None:
+        """Initialize the skill routing system."""
+        try:
+            from marie.agent.skills import SKILL_REGISTRY, SkillRouter
+
+            self._skill_router = SkillRouter(registry=SKILL_REGISTRY)
+            logger.debug(f"Skill router initialized with {len(SKILL_REGISTRY)} skills")
+        except ImportError:
+            logger.debug("Skills module not available, skill routing disabled")
+            self.skills_enabled = False
+        except Exception as e:
+            logger.warning(f"Failed to initialize skill router: {e}")
+            self.skills_enabled = False
+
+    def _parse_slash_command(self, message: str) -> tuple[Optional[str], str]:
+        """Extract /skill-name from message.
+
+        Args:
+            message: User message
+
+        Returns:
+            Tuple of (skill_name, remaining_message) or (None, original_message)
+        """
+        message = message.strip()
+        match = SLASH_COMMAND_PATTERN.match(message)
+
+        if match:
+            skill_name = match.group(1)
+            remaining = match.group(2) or ""
+            return skill_name, remaining.strip()
+
+        return None, message
+
+    async def _route_to_skill(
+        self,
+        message: str,
+        explicit_skill: Optional[str] = None,
+    ) -> Optional["SkillContext"]:
+        """Route message to a skill if applicable.
+
+        Args:
+            message: User message
+            explicit_skill: Explicitly requested skill name
+
+        Returns:
+            SkillContext if skill matched, None otherwise
+        """
+        if not self.skills_enabled or not self._skill_router:
+            return None
+
+        # Check for explicit skill first
+        if explicit_skill:
+            context = await self._skill_router.route(
+                message,
+                explicit_skill=explicit_skill,
+                auto_match=False,
+            )
+            return context if context.has_skill else None
+
+        # Check for /skill-name in message
+        parsed_skill, _ = self._parse_slash_command(message)
+        if parsed_skill:
+            context = await self._skill_router.route(
+                message,
+                explicit_skill=parsed_skill,
+                auto_match=False,
+            )
+            return context if context.has_skill else None
+
+        # Auto-match if enabled
+        if self.auto_match_skills:
+            context = await self._skill_router.route(
+                message,
+                auto_match=True,
+            )
+            return context if context.has_skill else None
+
+        return None
+
+    def _build_skill_system_prompt(self, skill: "Skill") -> str:
+        """Build enhanced system prompt with skill instructions.
+
+        Args:
+            skill: Active skill
+
+        Returns:
+            Combined system prompt with skill context
+        """
+        base_system = self.system_message or ""
+        skill_injection = skill.to_system_prompt_injection()
+
+        return f"{base_system}\n\n{skill_injection}"
+
+    def _resolve_skill_tools(self, skill: "Skill") -> Dict[str, AgentTool]:
+        """Resolve tools specified in skill's allowed-tools.
+
+        Args:
+            skill: Skill with tool requirements
+
+        Returns:
+            Dict of tool name to AgentTool
+        """
+        if not skill.metadata.allowed_tools:
+            return {}
+
+        resolved = resolve_tools(skill.metadata.allowed_tools)
+        return resolved
 
     def _init_memory(self, memory_config: "Mem0Config") -> None:
         """Initialize Mem0 memory integration.
@@ -286,19 +420,37 @@ class BaseAgent(ABC):
     def run(
         self,
         messages: List[Union[Dict, Message]],
+        skill_name: Optional[str] = None,
         **kwargs: Any,
     ) -> Iterator[List[Message]]:
         """Execute the agent with the given messages.
 
         This is the public entry point that normalizes input and delegates
-        to `_run()` for core logic.
+        to `_run()` for core logic. Supports skill routing via explicit
+        skill_name parameter or /skill-name slash commands in messages.
 
         Args:
             messages: Input messages (can be dicts or Message objects)
+            skill_name: Explicit skill to use (bypasses auto-matching)
             **kwargs: Additional arguments passed to `_run()`
 
         Yields:
             Lists of response Messages (streaming, yields partial results)
+
+        Example:
+            ```python
+            # Normal execution
+            for responses in agent.run([{"role": "user", "content": "Hello"}]):
+                print(responses[-1].content)
+
+            # With explicit skill
+            for responses in agent.run(messages, skill_name="document-extraction"):
+                print(responses[-1].content)
+
+            # With slash command (skill parsed from message)
+            for responses in agent.run([{"role": "user", "content": "/code-review main.py"}]):
+                print(responses[-1].content)
+            ```
         """
         # Deep copy to avoid mutation
         messages = copy.deepcopy(messages)
@@ -317,38 +469,123 @@ class BaseAgent(ABC):
                     new_messages.append(msg)
                     _return_message_type = "message"
 
-        # Prepend system message
-        if self.system_message:
-            if not new_messages or new_messages[0][ROLE] != SYSTEM:
-                new_messages.insert(
-                    0, Message(role=SYSTEM, content=self.system_message)
+        # Determine system message (may be enhanced by skill)
+        system_message = self.system_message
+        skill_tools: Dict[str, AgentTool] = {}
+
+        # Skill routing (if enabled)
+        if self.skills_enabled and new_messages:
+            # Get last user message for skill matching
+            user_message = ""
+            for msg in reversed(new_messages):
+                if msg.role == "user":
+                    user_message = msg.text_content or ""
+                    break
+
+            if user_message:
+                # Check for explicit skill or slash command
+                explicit_skill = skill_name
+                if not explicit_skill:
+                    parsed_skill, _ = self._parse_slash_command(user_message)
+                    explicit_skill = parsed_skill
+
+                # Try to route to skill
+                skill_context = self._sync_route_to_skill(
+                    user_message,
+                    explicit_skill=explicit_skill,
                 )
+
+                if skill_context and skill_context.has_skill:
+                    skill = skill_context.skill
+                    logger.debug(
+                        f"Using skill '{skill.name}' "
+                        f"(explicit={skill_context.explicit_invocation})"
+                    )
+
+                    # Enhance system message with skill instructions
+                    system_message = self._build_skill_system_prompt(skill)
+
+                    # Resolve skill tools
+                    skill_tools = self._resolve_skill_tools(skill)
+
+        # Prepend system message
+        if system_message:
+            if not new_messages or new_messages[0][ROLE] != SYSTEM:
+                new_messages.insert(0, Message(role=SYSTEM, content=system_message))
             else:
                 # Merge with existing system message
                 existing_content = new_messages[0][CONTENT]
                 if isinstance(existing_content, str):
                     new_messages[0][CONTENT] = (
-                        self.system_message + "\n\n" + existing_content
+                        system_message + "\n\n" + existing_content
                     )
                 elif isinstance(existing_content, list):
                     new_messages[0][CONTENT] = [
-                        ContentItem(text=self.system_message + "\n\n")
+                        ContentItem(text=system_message + "\n\n")
                     ] + existing_content
 
-        # Execute core logic
-        for responses in self._run(messages=new_messages, **kwargs):
-            # Set agent name on responses
-            for resp in responses:
-                if not resp.name and self.name:
-                    resp.name = self.name
+        # Merge skill tools with agent tools
+        if skill_tools:
+            original_tools = self.function_map.copy()
+            self.function_map.update(skill_tools)
 
-            # Convert output format based on input format
-            if _return_message_type == "message":
-                yield [Message(**r) if isinstance(r, dict) else r for r in responses]
+        try:
+            # Execute core logic
+            for responses in self._run(messages=new_messages, **kwargs):
+                # Set agent name on responses
+                for resp in responses:
+                    if not resp.name and self.name:
+                        resp.name = self.name
+
+                # Convert output format based on input format
+                if _return_message_type == "message":
+                    yield [
+                        Message(**r) if isinstance(r, dict) else r for r in responses
+                    ]
+                else:
+                    yield [
+                        r.model_dump() if isinstance(r, Message) else r
+                        for r in responses
+                    ]
+        finally:
+            # Restore original tools if skill tools were added
+            if skill_tools:
+                self.function_map = original_tools
+
+    def _sync_route_to_skill(
+        self,
+        message: str,
+        explicit_skill: Optional[str] = None,
+    ) -> Optional["SkillContext"]:
+        """Synchronous skill routing wrapper.
+
+        Args:
+            message: User message
+            explicit_skill: Explicitly requested skill name
+
+        Returns:
+            SkillContext if skill matched, None otherwise
+        """
+        import asyncio
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Already in async context, use thread
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(
+                        asyncio.run, self._route_to_skill(message, explicit_skill)
+                    )
+                    return future.result(timeout=5.0)
             else:
-                yield [
-                    r.model_dump() if isinstance(r, Message) else r for r in responses
-                ]
+                return loop.run_until_complete(
+                    self._route_to_skill(message, explicit_skill)
+                )
+        except Exception as e:
+            logger.debug(f"Skill routing failed: {e}")
+            return None
 
     def run_nonstream(
         self,

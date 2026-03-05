@@ -26,14 +26,39 @@ logger = MarieLogger("marie.agent.config")
 class LLMConfig(BaseModel):
     """Configuration for LLM backends.
 
-    Supports marie.engine and OpenAI-compatible backends.
+    Supports marie.engine and OpenAI-compatible backends (including LiteLLM proxy).
+
+    Example YAML configurations:
+
+        # Local VLLM model
+        llm:
+          backend: marie
+          engine_name: qwen2_5_vl_7b
+          provider: vllm
+
+        # OpenAI direct
+        llm:
+          backend: openai
+          model: gpt-4o
+
+        # Claude via LiteLLM proxy
+        llm:
+          backend: openai
+          model: claude/claude-sonnet-4-20250514
+          base_url: http://localhost:4000
+
+        # Any provider via LiteLLM
+        llm:
+          backend: openai
+          model: anthropic/claude-3-opus
+          base_url: ${LITELLM_BASE_URL}
     """
 
     model_config = ConfigDict(extra="allow")
 
     backend: Literal["marie", "openai"] = Field(
         default="marie",
-        description="LLM backend to use",
+        description="LLM backend to use. Use 'openai' for OpenAI, Claude via LiteLLM, etc.",
     )
     engine_name: str = Field(
         default="qwen2_5_vl_7b",
@@ -41,19 +66,19 @@ class LLMConfig(BaseModel):
     )
     provider: str = Field(
         default="vllm",
-        description="Provider for marie backend (vllm, openai, etc.)",
+        description="Provider for marie backend (vllm, openai)",
     )
     model: Optional[str] = Field(
         default=None,
-        description="Model name for OpenAI backend",
+        description="Model name. For LiteLLM use format: provider/model (e.g., claude/claude-sonnet-4)",
     )
     api_key: Optional[str] = Field(
         default=None,
-        description="API key for OpenAI backend",
+        description="API key (uses OPENAI_API_KEY or LITELLM_API_KEY env var if not provided)",
     )
     base_url: Optional[str] = Field(
         default=None,
-        description="Custom API base URL",
+        description="Custom API base URL. Set to LiteLLM server URL for Claude/other providers.",
     )
     temperature: Optional[float] = Field(
         default=None,
@@ -67,12 +92,16 @@ class LLMConfig(BaseModel):
     def to_wrapper_kwargs(self) -> Dict[str, Any]:
         """Convert to kwargs for LLM wrapper initialization."""
         if self.backend == "marie":
-            return {
+            kwargs: Dict[str, Any] = {
                 "engine_name": self.engine_name,
                 "provider": self.provider,
             }
+            # Pass through base_url for LiteLLM via marie engine
+            if self.base_url:
+                kwargs["base_url"] = self.base_url
+            return kwargs
         elif self.backend == "openai":
-            kwargs: Dict[str, Any] = {}
+            kwargs = {}
             if self.model:
                 kwargs["model"] = self.model
             if self.api_key:
@@ -133,6 +162,78 @@ class MemoryConfig(BaseModel):
     )
 
 
+class SkillsConfig(BaseModel):
+    """Configuration for agent skills system."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable skill routing (slash commands, auto-matching)",
+    )
+    auto_match: bool = Field(
+        default=True,
+        description="Auto-match skills from message content",
+    )
+    default_skills: List[str] = Field(
+        default_factory=list,
+        description="Skills to always load (by name)",
+    )
+    skill_paths: List[str] = Field(
+        default_factory=list,
+        description="Additional directories to search for skills",
+    )
+
+
+class CoordinationConfig(BaseModel):
+    """Configuration for agent coordination.
+
+    Enables multi-agent coordination capabilities. Agents with the same
+    group_id share memory and can coordinate their execution.
+
+    Example YAML:
+        ```yaml
+        agent:
+          name: document_analyzer
+          coordination:
+            topology: parallel
+            merge_strategy: aggregate
+            max_concurrent: 5
+            timeout: 30.0
+            group_id: document-processing
+            shared_memory_enabled: true
+        ```
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    topology: str = Field(
+        default="sequential",
+        description="Execution topology: parallel (fan-out), sequential (chain), or custom registered topology",
+    )
+    merge_strategy: Literal["aggregate", "vote", "first_wins", "best_score"] = Field(
+        default="aggregate",
+        description="Strategy for combining results from multiple agents",
+    )
+    max_concurrent: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        description="Maximum concurrent agent executions for parallel topology",
+    )
+    timeout: float = Field(
+        default=30.0,
+        gt=0,
+        description="Timeout in seconds for coordination operations",
+    )
+    group_id: Optional[str] = Field(
+        default=None,
+        description="Group identifier for shared memory scoping",
+    )
+    shared_memory_enabled: bool = Field(
+        default=False,
+        description="Enable shared memory across coordinated agents",
+    )
+
+
 class AgentConfig(BaseModel):
     """Main configuration for an agent.
 
@@ -158,6 +259,12 @@ class AgentConfig(BaseModel):
               config:
                 timeout: 30
 
+          skills:
+            enabled: true
+            auto_match: true
+            default_skills:
+              - document-extraction
+
           memory:
             type: chat_buffer
             max_messages: 50
@@ -170,6 +277,7 @@ class AgentConfig(BaseModel):
             backend="qwen_agent",
             llm=LLMConfig(engine_name="qwen2_5_vl_7b"),
             tools=["search", "calculator"],
+            skills=SkillsConfig(enabled=True, default_skills=["document-extraction"]),
         )
         ```
     """
@@ -198,6 +306,10 @@ class AgentConfig(BaseModel):
         default_factory=list,
         description="Tools available to the agent",
     )
+    skills: SkillsConfig = Field(
+        default_factory=SkillsConfig,
+        description="Skills system configuration",
+    )
     memory: MemoryConfig = Field(
         default_factory=MemoryConfig,
         description="Memory configuration",
@@ -209,6 +321,10 @@ class AgentConfig(BaseModel):
     mem0: Mem0Config = Field(
         default_factory=Mem0Config,
         description="Mem0 memory configuration",
+    )
+    coordination: Optional[CoordinationConfig] = Field(
+        default=None,
+        description="Multi-agent coordination configuration",
     )
 
     @field_validator("tools", mode="before")

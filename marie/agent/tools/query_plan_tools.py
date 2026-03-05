@@ -416,7 +416,7 @@ NODE_CATALOG: List[NodeTypeInfo] = [
 
 
 @register_tool(
-    name="get_node_types",
+    "get_node_types",
     description="Get all available node types with descriptions. Optionally filter by business vertical.",
 )
 def get_node_types(vertical: Optional[str] = None) -> str:
@@ -464,7 +464,7 @@ def get_node_types(vertical: Optional[str] = None) -> str:
 
 
 @register_tool(
-    name="validate_query_plan",
+    "validate_query_plan",
     description="Validate a query plan JSON against the schema. Returns validation errors or 'valid'.",
 )
 def validate_query_plan(plan_json: str) -> str:
@@ -543,7 +543,7 @@ def validate_query_plan(plan_json: str) -> str:
 
 
 @register_tool(
-    name="get_node_defaults",
+    "get_node_defaults",
     description="Get default configuration for a specific node method.",
 )
 def get_node_defaults(method: str) -> str:
