@@ -149,6 +149,7 @@ from marie.agent.state import (
     ConversationState,
     ConversationStore,
 )
+from marie.agent.tool_call_parser import ParsedToolCalls, ToolCallTextParser
 from marie.agent.tools import (
     TOOL_REGISTRY,
     AgentTool,
@@ -247,6 +248,9 @@ __all__ = [
     "MarieEngineLLMWrapper",
     "OpenAICompatibleWrapper",
     "get_llm_wrapper",
+    # Tool call parsing
+    "ToolCallTextParser",
+    "ParsedToolCalls",
     # Configuration
     "AgentConfig",
     "ExecutorConfig",

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from abc import ABC, abstractmethod
 from typing import (
     TYPE_CHECKING,
@@ -30,6 +29,7 @@ from marie.agent.message import (
     FunctionCall,
     Message,
 )
+from marie.agent.tool_call_parser import ToolCallTextParser
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
@@ -133,21 +133,9 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
         ```
     """
 
-    # Pattern to detect function calls in model output
-    FUNCTION_CALL_PATTERN = re.compile(
-        r"<tool_call>\s*(\{.*?\})\s*</tool_call>",
-        re.DOTALL,
-    )
-
-    # Alternative patterns for different function calling formats
-    ACTION_PATTERN = re.compile(
-        r"Action:\s*(\w+)\s*\nAction Input:\s*(.+?)(?=\n(?:Observation|Action|$))",
-        re.DOTALL,
-    )
-
     def __init__(
         self,
-        engine_name: str = "qwen2_5_vl_7b",
+        engine_name: str = "model_name",
         provider: str = "vllm",
         system_prompt: Optional[str] = None,
         function_call_format: str = "auto",
@@ -156,7 +144,7 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
         """Initialize the Marie engine wrapper.
 
         Args:
-            engine_name: Name of the engine (e.g., 'qwen2_5_vl_7b')
+            engine_name: Name of the engine (e.g., 'model_name')
             provider: Provider backend ('vllm', 'openai', etc.)
             system_prompt: Default system prompt (overridden by message system prompt)
             function_call_format: How to format function calls ('auto', 'tool_call', 'action')
@@ -170,6 +158,7 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
         self.engine_name = engine_name
         self.system_prompt = system_prompt
         self.function_call_format = function_call_format
+        self._tool_call_parser = ToolCallTextParser(format=function_call_format)
 
     def _has_multimodal_content(self, messages: List[Message]) -> bool:
         """Check if any message contains multimodal content (images, etc).
@@ -538,39 +527,10 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
         function_call = None
         content = response
 
-        # Try <tool_call> format first
-        tool_match = self.FUNCTION_CALL_PATTERN.search(response)
-        if tool_match:
-            try:
-                call_data = json.loads(tool_match.group(1))
-                function_call = FunctionCall(
-                    name=call_data.get("name", ""),
-                    arguments=call_data.get("arguments", {}),
-                )
-                # Remove tool_call from content
-                content = self.FUNCTION_CALL_PATTERN.sub("", response).strip()
-            except json.JSONDecodeError:
-                logger.warning(f"Failed to parse tool_call JSON: {tool_match.group(1)}")
-
-        # Try Action/Action Input format if no tool_call found
-        if function_call is None:
-            action_match = self.ACTION_PATTERN.search(response)
-            if action_match:
-                action_name = action_match.group(1).strip()
-                action_input = action_match.group(2).strip()
-
-                # Try to parse action input as JSON
-                try:
-                    arguments = json.loads(action_input)
-                except json.JSONDecodeError:
-                    arguments = {"input": action_input}
-
-                function_call = FunctionCall(
-                    name=action_name,
-                    arguments=arguments,
-                )
-                # Extract content before Action
-                content = response[: action_match.start()].strip()
+        parsed = self._tool_call_parser.parse(response)
+        if parsed and parsed.tool_calls:
+            function_call = parsed.tool_calls[0].function
+            content = parsed.clean_content
 
         # Validate function name if functions provided
         if function_call and functions:
@@ -615,6 +575,7 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         api_key: Optional[str] = None,
         model: str = "gpt-4",
         base_url: Optional[str] = None,
+        tool_call_format: str = "auto",
         **client_kwargs: Any,
     ):
         """Initialize OpenAI-compatible wrapper.
@@ -623,6 +584,9 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
             api_key: API key (uses OPENAI_API_KEY env var if not provided)
             model: Model name
             base_url: Custom API base URL
+            tool_call_format: Fallback text parser format when the API returns
+                tool calls as text instead of structured tool_calls.
+                One of "auto", "hermes", "llama3_json", "action", "none".
             **client_kwargs: Additional client configuration
         """
         try:
@@ -638,6 +602,11 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
             **client_kwargs,
         )
         self.model = model
+        self._tool_call_parser: Optional[ToolCallTextParser] = (
+            ToolCallTextParser(format=tool_call_format)
+            if tool_call_format != "none"
+            else None
+        )
 
     def chat(
         self,
@@ -941,7 +910,12 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         return result
 
     def _openai_to_message(self, openai_msg: Any) -> Message:
-        """Convert OpenAI message to Message."""
+        """Convert OpenAI message to Message.
+
+        Includes fallback: when the API returns no structured tool_calls
+        but the content contains tool call markup (e.g. from vLLM without
+        a tool parser configured), extract them from the text.
+        """
         function_call = None
         if hasattr(openai_msg, "function_call") and openai_msg.function_call:
             function_call = FunctionCall(
@@ -966,9 +940,18 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
                     )
                 )
 
+        content = openai_msg.content
+
+        # Fallback: parse tool calls from content when API returned none
+        if not tool_calls and not function_call and content and self._tool_call_parser:
+            parsed = self._tool_call_parser.parse(content)
+            if parsed and parsed.tool_calls:
+                tool_calls = parsed.tool_calls
+                content = parsed.clean_content or None
+
         return Message(
             role=openai_msg.role,
-            content=openai_msg.content,
+            content=content,
             function_call=function_call,
             tool_calls=tool_calls,
         )
