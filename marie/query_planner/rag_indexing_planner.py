@@ -4,6 +4,15 @@ RAG Indexing Query Planner.
 Creates DAGs for indexing documents into vector stores.
 Uses document backend for format-aware extraction and
 VectorStoreExecutor for embedding and storage.
+
+Runtime parameters (provided at job submission, NOT at plan creation):
+    uri: S3 or file URI of the document
+    ref_id: Document reference ID
+    ref_type: Document type classification
+    source_id: RAG source filter (e.g., "submission:s1")
+    index_name: Vector store index name
+    node_type: Node classification (document, image, text)
+    workflow_id: Workflow record ID for status updates
 """
 
 from marie.job.job_manager import generate_job_id, increment_uuid7str
@@ -13,15 +22,13 @@ from marie.query_planner.base import (
     PlannerInfo,
     Query,
     QueryPlan,
-    QueryPlanRegistry,
     QueryType,
-    register_query_plan,
 )
 
 PLAN_ID = "rag_indexing"
 
 
-@register_query_plan(PLAN_ID)
+# Note: Registration is done in builtin.py via QueryPlanRegistry.register()
 def query_planner_rag_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
     """
     Plan a query execution graph for RAG document indexing.
@@ -32,23 +39,12 @@ def query_planner_rag_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan
 
     Pipeline: START -> EXTRACT -> EMBED_AND_STORE -> END
 
-    Config parameters (from run_config):
-        uri: S3 or file URI of the document
-        ref_id: Document reference ID
-        ref_type: Document type classification
-        source_id: RAG source filter (e.g., "submission:s1")
-        index_name: Vector store index name
-        node_type: Node classification (document, image, text)
-        workflow_id: Workflow record ID for status updates
+    Note: Runtime parameters (uri, ref_id, source_id, etc.) are provided
+    at job submission time, not during plan creation. The planner only
+    defines the DAG structure and static configuration.
     """
+    layout = planner_info.name
     base_id = planner_info.base_id
-    config = kwargs.get("config", {})
-
-    # Validate required params
-    required = ["uri", "ref_id", "source_id", "index_name"]
-    missing = [p for p in required if not config.get(p)]
-    if missing:
-        raise ValueError(f"RAG indexing planner missing required params: {missing}")
 
     nodes = []
 
@@ -67,6 +63,7 @@ def query_planner_rag_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan
     # Automatically routes to:
     # - Parsed mode: DOCX, XLSX, PPTX, HTML, Markdown, CSV, Email, EPUB
     # - Frames mode + OCR: PDF, images, legacy Office, LaTeX, RST, DjVu
+    # Runtime params (uri, ref_id, ref_type) provided at job submission
     extract_node = Query(
         task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
         query_str=f"{planner_info.current_id}: EXTRACT text (format-aware)",
@@ -75,9 +72,7 @@ def query_planner_rag_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan
         definition=ExecutorEndpointQueryDefinition(
             endpoint="document_backend_executor://extract",
             params={
-                "uri": config.get("uri"),
-                "ref_id": config.get("ref_id"),
-                "ref_type": config.get("ref_type", "document"),
+                "layout": layout,
                 "ocr_fallback": True,
             },
         ),
@@ -86,6 +81,7 @@ def query_planner_rag_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan
     nodes.append(extract_node)
 
     # EMBED_AND_STORE node - uses VectorStoreExecutor
+    # Runtime params (source_id, index_name, ref_id, etc.) provided at job submission
     embed_node = Query(
         task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
         query_str=f"{planner_info.current_id}: EMBED and STORE",
@@ -94,13 +90,7 @@ def query_planner_rag_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan
         definition=ExecutorEndpointQueryDefinition(
             endpoint="vector_store_executor://embed_and_store",
             params={
-                "source_id": config.get("source_id"),
-                "index_name": config.get("index_name", "default"),
-                "node_type": config.get("node_type", "document"),
-                "ref_doc_id": config.get("ref_id"),
-                # Workflow tracking for status updates
-                "workflow_id": config.get("workflow_id"),
-                "ref_id": config.get("ref_id"),
+                "layout": layout,
             },
         ),
     )
@@ -123,25 +113,21 @@ def query_planner_rag_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan
 if __name__ == "__main__":
     from pprint import pprint
 
+    from marie.query_planner.base import QueryPlanRegistry
     from marie.query_planner.planner import (
         print_query_plan,
         query_planner,
         visualize_query_plan_graph,
     )
 
-    # Test the planner
-    planner_info = PlannerInfo(name=PLAN_ID, base_id=generate_job_id())
-    config = {
-        "uri": "s3://test-bucket/tenants/t1/submissions/s1/doc.pdf",
-        "ref_id": "doc_001",
-        "ref_type": "submission_document",
-        "source_id": "submission:s1",
-        "index_name": "test_index",
-        "node_type": "document",
-        "workflow_id": "wf_001",
-    }
+    # Register the planner for testing (normally done via builtin.py)
+    QueryPlanRegistry.register(PLAN_ID, query_planner_rag_indexing)
 
-    plan = query_planner(planner_info, config=config)
+    # Test the planner - runtime params (uri, ref_id, etc.) are NOT passed here
+    # They are provided at job submission time via the job scheduler
+    planner_info = PlannerInfo(name=PLAN_ID, base_id=generate_job_id())
+
+    plan = query_planner(planner_info)
     pprint(plan.model_dump())
     visualize_query_plan_graph(plan)
     print_query_plan(plan, PLAN_ID)

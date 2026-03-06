@@ -57,12 +57,8 @@ def plan_to_yaml(plan: QueryPlan, output_path: str = "query_plan_pretty.yaml") -
     :param output_path: The file path to save the YAML file (default: 'query_plan_pretty.yaml').
     :return: The YAML content as a string.
     """
-    # Convert the QueryPlan model to a dictionary
     plan_dict = plan.model_dump()
-
-    # Create an in-memory string buffer for YAML output
     yaml_buffer = StringIO()
-
     # Dump the YAML content to the string buffer
     yaml.dump(
         plan_dict,
@@ -72,10 +68,7 @@ def plan_to_yaml(plan: QueryPlan, output_path: str = "query_plan_pretty.yaml") -
         sort_keys=False,  # Preserve key order
     )
 
-    # Get the YAML string from the buffer
     yaml_str = yaml_buffer.getvalue()
-
-    # Write the YAML string to the output file
     with open(output_path, "w") as yaml_file:
         yaml_file.write(yaml_str)
 

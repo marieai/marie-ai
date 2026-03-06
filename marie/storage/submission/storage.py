@@ -34,7 +34,7 @@ class SubmissionStorage(PostgresqlMixin):
     def __init__(
         self,
         postgres_url: str,
-        schema: str = "marie_studio",
+        schema: str = "marie_scheduler",
         pool_size: int = 5,
         connect_timeout: int = 10,
     ):
