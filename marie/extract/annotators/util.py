@@ -941,13 +941,20 @@ async def ascan_and_process_images(
 
     try:
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        errors = []
         for r in results:
             if isinstance(r, asyncio.CancelledError):
                 logger.warning(f"One of the tasks was cancelled : {r}")
             elif isinstance(r, Exception):
                 logger.error("Task failed:", exc_info=r)
+                errors.append(r)
             else:
                 logger.info(f"Task completed successfully with result: {r}")
+
+        if errors:
+            raise RuntimeError(
+                f"Batch processing failed: {len(errors)}/{len(results)} batches failed"
+            ) from errors[0]
 
     except asyncio.CancelledError as cancel_error:
         logger.warning("One or more tasks were cancelled.")

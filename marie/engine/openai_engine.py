@@ -334,7 +334,7 @@ class OpenAIEngine(EngineLM):
             )
         except Exception as e:
             self.logger.error(f"Batch inference failed:\n" + get_exception_traceback())
-            return ["ERROR: Inference failed"] * len(batch_content)
+            raise  # Propagate to caller
 
         elapsed_time = time.time() - start_time
         self.logger.info(f"Batch inference completed in {elapsed_time:.2f} sec")

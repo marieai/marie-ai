@@ -312,6 +312,16 @@ class BatchProcessor:
                 except Exception as tracking_error:
                     self.logger.debug(f"LLM tracking error (retry): {tracking_error}")
             raise e
+        except (APIError, APIConnectionError, APITimeoutError, RateLimitError) as e:
+            self.logger.error(
+                f"Request {request_id} - Task {task_id} - API error in completion_non_streaming: {e}"
+            )
+            if tracker and tracker.enabled and observation_id:
+                try:
+                    tracker.error(observation_id, e)
+                except Exception as tracking_error:
+                    self.logger.debug(f"LLM tracking error (error): {tracking_error}")
+            raise  # Let tenacity retry these
         except Exception as e:  # swallow all other exceptions for now
             self.logger.error(
                 f"Request {request_id} - Task {task_id} - Error in completion_non_streaming: {e}"
@@ -351,8 +361,10 @@ class BatchProcessor:
                 trace_id=trace_id,
             )
         except Exception as e:
-            self.logger.error(f"Request {request_id} – Task {task_id} failed: {e!r}")
-            return task_id, None
+            self.logger.error(
+                f"Request {request_id} – Task {task_id} failed after retries: {e!r}"
+            )
+            raise  # Propagate to caller
 
     async def load_batched_request(
         self,
@@ -515,6 +527,12 @@ class BatchProcessor:
                 )
                 self.logger.error(response)
                 failed_count += 1
+
+        if failed_count > 0:
+            raise RuntimeError(
+                f"Batch inference failed: {failed_count}/{len(messages_list)} tasks failed "
+                f"(request_id={request_id})"
+            )
 
         elapsed_time = time.time() - start_time
         self.logger.info(
