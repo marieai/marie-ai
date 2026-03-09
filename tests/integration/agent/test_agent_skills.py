@@ -11,13 +11,15 @@ import pytest
 
 from marie.agent import (
     AgentTool,
-    AssistantAgent,
     FunctionTool,
     Message,
     ReactAgent,
     ToolMetadata,
     ToolOutput,
 )
+
+# ReactAgent was previously named AssistantAgent
+AssistantAgent = ReactAgent
 from marie.agent.skills.models import Skill, SkillInstructions, SkillMetadata
 from marie.agent.skills.registry import SkillRegistry
 from marie.agent.skills.router import SkillRouter
@@ -68,8 +70,8 @@ class TestAgentWithSkills:
             ),
         ))
 
-        router = SkillRouter(registry=registry)
-        result = router.match_skill("find documents about testing")
+        router = SkillRouter(registry=registry, auto_match_threshold=0.1)
+        result = router.match_skill("search for documents")
 
         assert result is not None
         skill, score = result

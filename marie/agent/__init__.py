@@ -102,6 +102,7 @@ from marie.agent.backends import (
     create_research_backend,
 )
 from marie.agent.base import BaseAgent, BasicAgent
+from marie.agent.cancellation import AbortController, AbortError, AbortSignal
 from marie.agent.config import (
     AgentConfig,
     ExecutorConfig,
@@ -148,6 +149,15 @@ from marie.agent.state import (
     AgentMemoryBridge,
     ConversationState,
     ConversationStore,
+)
+from marie.agent.streaming import (
+    StreamChunk,
+    StreamCompleteEvent,
+    StreamErrorEvent,
+    StreamStartEvent,
+    StreamTokenEvent,
+    StreamUsage,
+    ToolCallAccumulator,
 )
 from marie.agent.tool_call_parser import ParsedToolCalls, ToolCallTextParser
 from marie.agent.tools import (
@@ -267,6 +277,18 @@ __all__ = [
     "ChatMessage",
     "ChatResponse",
     "CompletionResponse",
+    # Cancellation
+    "AbortController",
+    "AbortSignal",
+    "AbortError",
+    # Streaming
+    "StreamChunk",
+    "StreamUsage",
+    "ToolCallAccumulator",
+    "StreamStartEvent",
+    "StreamTokenEvent",
+    "StreamCompleteEvent",
+    "StreamErrorEvent",
     # Utilities
     "run_async",
     "asyncio_run",

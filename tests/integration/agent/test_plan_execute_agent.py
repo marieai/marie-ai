@@ -29,7 +29,7 @@ class TestPlanAndExecuteAgentCreation:
         )
 
         assert agent.llm is mock_llm
-        assert "planning" in agent.__class__.__name__.lower()
+        assert "plan" in agent.__class__.__name__.lower()
 
     def test_create_with_tools(self, mock_llm, mock_search_tool, mock_calculator_tool):
         """Test creating planning agent with tools."""

@@ -18,8 +18,21 @@ from marie.agent import (
     Message,
     ToolCall,
     format_messages,
-    has_chinese_content,
 )
+
+
+def has_chinese_content(messages):
+    """Check if any message contains Chinese characters (placeholder for removed utility)."""
+    import re
+    for msg in messages:
+        text = msg.content if isinstance(msg.content, str) else ""
+        if not text and isinstance(msg.content, list):
+            text = " ".join(
+                item.text for item in msg.content if hasattr(item, "text") and item.text
+            )
+        if re.search(r"[\u4e00-\u9fff]", text):
+            return True
+    return False
 
 
 class TestMessageCreation:

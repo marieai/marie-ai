@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     Dict,
     Iterator,
     List,
@@ -19,6 +20,7 @@ from typing import (
     Union,
 )
 
+from marie.agent.cancellation import AbortSignal
 from marie.agent.message import (
     ASSISTANT,
     FUNCTION,
@@ -29,6 +31,7 @@ from marie.agent.message import (
     FunctionCall,
     Message,
 )
+from marie.agent.streaming import StreamChunk, ToolCallAccumulator
 from marie.agent.tool_call_parser import ToolCallTextParser
 from marie.logging_core.logger import MarieLogger
 
@@ -99,6 +102,31 @@ class BaseLLMWrapper(ABC):
             Response Message
         """
         pass
+
+    async def achat_stream(
+        self,
+        messages: List[Message],
+        functions: Optional[List[Dict]] = None,
+        abort_signal: Optional[AbortSignal] = None,
+        extra_generate_cfg: Optional[Dict[str, Any]] = None,
+    ) -> AsyncGenerator[StreamChunk, None]:
+        """Stream chat response as chunks.
+
+        Default implementation falls back to ``achat()`` and yields a single
+        chunk.  Subclasses may override for real token-level streaming.
+        """
+        if abort_signal:
+            abort_signal.throw_if_aborted()
+
+        message = await self.achat(messages, functions, extra_generate_cfg)
+
+        tool_calls = message.tool_calls if message.tool_calls else None
+
+        yield StreamChunk(
+            content=message.text_content or None,
+            finish_reason="stop",
+            tool_calls=tool_calls,
+        )
 
 
 class MarieEngineLLMWrapper(BaseLLMWrapper):
@@ -405,6 +433,43 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
 
         return await asyncio.to_thread(_sync_chat)
 
+    async def achat_stream(
+        self,
+        messages: List[Message],
+        functions: Optional[List[Dict]] = None,
+        abort_signal: Optional[AbortSignal] = None,
+        extra_generate_cfg: Optional[Dict[str, Any]] = None,
+    ) -> AsyncGenerator[StreamChunk, None]:
+        """Simulated streaming — yields a single chunk.
+
+        Real engine-level streaming can be added when ``EngineLM`` supports it.
+        """
+        if abort_signal:
+            abort_signal.throw_if_aborted()
+
+        message = await self.achat(messages, functions, extra_generate_cfg)
+
+        tool_calls = message.tool_calls if message.tool_calls else None
+        function_call = message.function_call
+
+        # Convert legacy function_call to tool_calls for consistent API
+        if function_call and not tool_calls:
+            from marie.agent.message import ToolCall
+
+            tool_calls = [
+                ToolCall(
+                    id="call_0",
+                    type="function",
+                    function=function_call,
+                )
+            ]
+
+        yield StreamChunk(
+            content=message.text_content or None,
+            finish_reason="stop",
+            tool_calls=tool_calls,
+        )
+
     def _build_prompt(
         self,
         messages: List[Message],
@@ -654,24 +719,27 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
 
         yield [message]
 
-    async def achat(
+    def _get_async_client(self) -> Any:
+        """Get or create the async OpenAI client."""
+        if not hasattr(self, "_async_client") or self._async_client is None:
+            try:
+                from openai import AsyncOpenAI
+            except ImportError:
+                raise ImportError("openai package required")
+
+            self._async_client = AsyncOpenAI(
+                api_key=self.client.api_key,
+                base_url=str(self.client.base_url) if self.client.base_url else None,
+            )
+        return self._async_client
+
+    def _build_api_kwargs(
         self,
         messages: List[Message],
         functions: Optional[List[Dict]] = None,
         extra_generate_cfg: Optional[Dict[str, Any]] = None,
-    ) -> Message:
-        """Generate response asynchronously."""
-        # Use async client
-        try:
-            from openai import AsyncOpenAI
-        except ImportError:
-            raise ImportError("openai package required")
-
-        async_client = AsyncOpenAI(
-            api_key=self.client.api_key,
-            base_url=str(self.client.base_url) if self.client.base_url else None,
-        )
-
+    ) -> Dict[str, Any]:
+        """Build kwargs dict for the OpenAI API call."""
         openai_messages = [self._message_to_openai(msg) for msg in messages]
 
         kwargs: Dict[str, Any] = {
@@ -688,10 +756,84 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
             if "max_tokens" in extra_generate_cfg:
                 kwargs["max_tokens"] = extra_generate_cfg["max_tokens"]
 
+        return kwargs
+
+    async def achat(
+        self,
+        messages: List[Message],
+        functions: Optional[List[Dict]] = None,
+        extra_generate_cfg: Optional[Dict[str, Any]] = None,
+    ) -> Message:
+        """Generate response asynchronously."""
+        async_client = self._get_async_client()
+        kwargs = self._build_api_kwargs(messages, functions, extra_generate_cfg)
+
         response = await async_client.chat.completions.create(**kwargs)
         choice = response.choices[0]
 
         return self._openai_to_message(choice.message)
+
+    async def achat_stream(
+        self,
+        messages: List[Message],
+        functions: Optional[List[Dict]] = None,
+        abort_signal: Optional[AbortSignal] = None,
+        extra_generate_cfg: Optional[Dict[str, Any]] = None,
+    ) -> AsyncGenerator[StreamChunk, None]:
+        """Stream response using OpenAI's streaming API.
+
+        Properly handles:
+        - Text content deltas
+        - Indexed tool-call deltas (buffered until JSON is valid)
+        - Abort signal checking per chunk
+        - Both content AND tool_calls in the same delta (finding #5)
+        """
+        if abort_signal:
+            abort_signal.throw_if_aborted()
+
+        async_client = self._get_async_client()
+        kwargs = self._build_api_kwargs(messages, functions, extra_generate_cfg)
+        kwargs["stream"] = True
+
+        response = await async_client.chat.completions.create(**kwargs)
+
+        tool_accumulator = ToolCallAccumulator()
+        has_tool_calls = False
+
+        async for chunk in response:
+            # Check abort signal each iteration
+            if abort_signal and abort_signal.aborted:
+                break
+
+            if not chunk.choices:
+                continue
+
+            delta = chunk.choices[0].delta
+            finish_reason = chunk.choices[0].finish_reason
+
+            # Yield text content if present (finding #5: don't skip content
+            # just because tool_calls are also present in this delta)
+            content = getattr(delta, "content", None)
+            if content:
+                yield StreamChunk(content=content)
+
+            # Accumulate tool-call deltas (finding #6: proper indexed protocol)
+            delta_tool_calls = getattr(delta, "tool_calls", None)
+            if delta_tool_calls:
+                has_tool_calls = True
+                tool_accumulator.feed(delta_tool_calls)
+
+            # On finish, yield completed tool calls if any
+            if finish_reason is not None:
+                completed_calls = (
+                    tool_accumulator.get_complete_calls() if has_tool_calls else None
+                )
+                yield StreamChunk(
+                    content=None,
+                    finish_reason=finish_reason,
+                    tool_calls=completed_calls,
+                    event_type="done",
+                )
 
     def _message_to_openai(self, msg: Message) -> Dict[str, Any]:
         """Convert Message to OpenAI format.

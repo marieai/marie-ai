@@ -15,16 +15,20 @@ import pytest
 from marie.agent import (
     TOOL_REGISTRY,
     AgentTool,
-    AssistantAgent,
     BasicAgent,
     ChatAgent,
     FunctionTool,
     Message,
-    PlanningAgent,
+    PlanAndExecuteAgent,
+    ReactAgent,
     ToolMetadata,
     ToolOutput,
     register_tool,
 )
+
+# Backwards-compatible aliases (classes were renamed)
+AssistantAgent = ReactAgent
+PlanningAgent = PlanAndExecuteAgent
 from marie.agent.llm_wrapper import BaseLLMWrapper
 
 # =============================================================================

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -200,6 +200,25 @@ class AgentBackend(ABC):
         from marie.helper import run_async
 
         return run_async(self.run(messages, tools, config, **kwargs))
+
+    async def run_stream(
+        self,
+        messages: List[Message],
+        tools: Optional[Dict[str, "AgentTool"]] = None,
+        abort_signal: Optional[Any] = None,
+        config: Optional[BackendConfig] = None,
+        **kwargs: Any,
+    ) -> AsyncGenerator[Any, None]:
+        """Stream agent execution as chunks.
+
+        Default falls back to ``run()`` and yields a single result.
+        Backends with streaming support should override this.
+
+        Yields:
+            StreamChunk objects during generation, AgentResult at the end.
+        """
+        result = await self.run(messages, tools, config, **kwargs)
+        yield result
 
     @abstractmethod
     def get_available_tools(self) -> List[Dict[str, Any]]:

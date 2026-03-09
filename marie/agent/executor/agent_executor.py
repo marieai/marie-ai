@@ -461,13 +461,83 @@ class AgentExecutor(MarieExecutor):
     ) -> DocList[TextDoc]:
         """Streaming chat endpoint.
 
-        Note:
-            Streaming is not yet implemented. This endpoint currently
-            returns the complete response. True streaming will require
-            SSE (Server-Sent Events) or WebSocket support.
+        Uses ``backend.run_stream()`` to stream token-level chunks.
+        Currently collects all chunks and returns the assembled response
+        as a single ``TextDoc``.  When SSE/WebSocket transport is
+        available, the chunks can be forwarded directly.
         """
-        # Streaming not yet implemented - delegate to regular chat
-        return await self.chat_endpoint(docs, parameters, **kwargs)
+        self._ensure_initialized()
+        parameters = parameters or {}
+
+        conversation_id = parameters.get("conversation_id", str(uuid.uuid4()))
+        messages = await self._build_messages(docs, conversation_id, parameters)
+
+        # Build abort signal from optional timeout
+        from marie.agent.cancellation import AbortSignal
+        from marie.agent.streaming import StreamChunk
+
+        timeout_seconds = self._backend_config.get("timeout_seconds", 300.0)
+        abort_signal = AbortSignal.timeout(timeout_seconds)
+
+        start_time = time.time()
+        collected_text_parts: List[str] = []
+        final_result: Optional[AgentResult] = None
+
+        try:
+            async for item in self._backend.run_stream(
+                messages=messages,
+                tools=self._tools,
+                abort_signal=abort_signal,
+                **parameters,
+            ):
+                if isinstance(item, AgentResult):
+                    final_result = item
+                elif isinstance(item, StreamChunk):
+                    if item.content:
+                        collected_text_parts.append(item.content)
+        except Exception as e:
+            logger.error(f"Streaming execution failed: {e}")
+            return DocList[TextDoc](
+                [
+                    TextDoc(
+                        text=f"Streaming error: {e}",
+                        tags={
+                            "conversation_id": conversation_id,
+                            "status": "failed",
+                        },
+                    )
+                ]
+            )
+
+        duration_ms = (time.time() - start_time) * 1000
+        response_text = "".join(collected_text_parts)
+
+        # Update conversation store
+        if self._conversation_store:
+            user_content = docs[0].text if docs else ""
+            await self._conversation_store.add_message(
+                conversation_id, Message.user(user_content)
+            )
+            if response_text:
+                await self._conversation_store.add_message(
+                    conversation_id, Message.assistant(response_text)
+                )
+
+        status = final_result.status.value if final_result else "completed"
+
+        return DocList[TextDoc](
+            [
+                TextDoc(
+                    text=response_text,
+                    tags={
+                        "conversation_id": conversation_id,
+                        "status": status,
+                        "duration_ms": duration_ms,
+                        "streamed": True,
+                    },
+                )
+            ]
+        )
 
     @requests(on="/tools")
     async def list_tools_endpoint(

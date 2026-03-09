@@ -15,6 +15,7 @@ from abc import ABC, abstractmethod
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     Callable,
     Dict,
     Iterator,
@@ -24,6 +25,7 @@ from typing import (
     Union,
 )
 
+from marie.agent import AbortSignal, StreamChunk
 from marie.agent.message import (
     ASSISTANT,
     CONTENT,
@@ -679,6 +681,47 @@ class BaseAgent(ABC):
                 yield [error_msg]
 
             return error_generator()
+
+    async def _call_llm_stream(
+        self,
+        messages: List[Message],
+        functions: Optional[List[Dict]] = None,
+        abort_signal: Optional["AbortSignal"] = None,
+        extra_generate_cfg: Optional[Dict[str, Any]] = None,
+    ) -> AsyncGenerator["StreamChunk", None]:
+        """Stream LLM response as chunks.
+
+        Requires the LLM wrapper to implement ``achat_stream()``.
+        Falls back gracefully if the wrapper only has the default implementation.
+
+        Args:
+            messages: Messages to send to the LLM
+            functions: Optional function definitions
+            abort_signal: Optional cancellation signal
+            extra_generate_cfg: Additional generation configuration
+
+        Yields:
+            StreamChunk deltas
+        """
+
+        if self.llm is None:
+            raise ValueError("LLM is not configured for this agent")
+
+        merged_cfg = {**self.extra_generate_cfg}
+        if extra_generate_cfg:
+            merged_cfg.update(extra_generate_cfg)
+
+        try:
+            async for chunk in self.llm.achat_stream(
+                messages=messages,
+                functions=functions,
+                abort_signal=abort_signal,
+                extra_generate_cfg=merged_cfg,
+            ):
+                yield chunk
+        except Exception as e:
+            logger.error(f"LLM stream failed: {type(e).__name__}: {e}")
+            yield StreamChunk.error(str(e))
 
     def _call_tool(
         self,

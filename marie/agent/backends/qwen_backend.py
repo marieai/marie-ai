@@ -7,7 +7,7 @@ for LLM inference with ReAct-style reasoning.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 from marie.agent.agents.assistant import ReactAgent
 from marie.agent.backends.base import (
@@ -17,8 +17,10 @@ from marie.agent.backends.base import (
     BackendConfig,
     ToolCallRecord,
 )
+from marie.agent.cancellation import AbortSignal
 from marie.agent.llm_wrapper import BaseLLMWrapper, MarieEngineLLMWrapper
 from marie.agent.message import Message
+from marie.agent.streaming import StreamChunk
 from marie.agent.tools.base import AgentTool
 from marie.logging_core.logger import MarieLogger
 
@@ -207,6 +209,56 @@ class QwenAgentBackend(AgentBackend):
                 iterations=iterations,
                 is_complete=False,
                 tool_calls=self._tool_call_history,
+            )
+
+    async def run_stream(
+        self,
+        messages: List[Message],
+        tools: Optional[Dict[str, AgentTool]] = None,
+        abort_signal: Optional[AbortSignal] = None,
+        config: Optional[BackendConfig] = None,
+        **kwargs: Any,
+    ) -> AsyncGenerator[Union[StreamChunk, AgentResult], None]:
+        """Stream agent execution as chunks.
+
+        Yields StreamChunk objects during generation, then a final AgentResult.
+        """
+        start_time = time.time()
+        self._tool_call_history = []
+
+        try:
+            agent = self._create_agent(tools)
+            message_dicts = [msg.model_dump() for msg in messages]
+
+            async for chunk in agent.arun_stream(
+                message_dicts,
+                abort_signal=abort_signal,
+                **kwargs,
+            ):
+                yield chunk
+
+            # Yield final AgentResult
+            duration_ms = (time.time() - start_time) * 1000
+            yield AgentResult(
+                output="",
+                messages=[],
+                status=AgentStatus.COMPLETED,
+                iterations=0,
+                is_complete=True,
+                metadata={
+                    "duration_ms": duration_ms,
+                    "engine": self.qwen_config.engine_name,
+                    "streamed": True,
+                },
+            )
+
+        except Exception as e:
+            logger.error(f"Qwen streaming execution failed: {e}")
+            yield AgentResult(
+                output="",
+                status=AgentStatus.FAILED,
+                error=str(e),
+                is_complete=False,
             )
 
     def get_available_tools(self) -> List[Dict[str, Any]]:

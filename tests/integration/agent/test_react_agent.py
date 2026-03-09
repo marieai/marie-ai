@@ -162,7 +162,7 @@ class TestReactAgentToolCalling:
             function_call=FunctionCall(name="mock_search", arguments={"query": "test"}),
         )
 
-        has_call, name, args, text = agent._detect_tool_call(msg)
+        has_call, name, args, text, tool_id = agent._detect_tool_call(msg)
 
         assert has_call is True
         assert name == "mock_search"
@@ -176,7 +176,7 @@ class TestReactAgentToolCalling:
         )
 
         msg = Message.assistant(content="Just a regular response.")
-        has_call, name, args, text = agent._detect_tool_call(msg)
+        has_call, name, args, text, tool_id = agent._detect_tool_call(msg)
 
         assert has_call is False
         assert text == "Just a regular response."

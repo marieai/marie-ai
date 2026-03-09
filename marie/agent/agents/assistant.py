@@ -13,6 +13,7 @@ import json
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     Dict,
     Iterator,
     List,
@@ -21,6 +22,7 @@ from typing import (
 )
 
 from marie.agent.base import BaseAgent
+from marie.agent.cancellation import AbortSignal
 from marie.agent.message import (
     ASSISTANT,
     FUNCTION,
@@ -28,6 +30,7 @@ from marie.agent.message import (
     FunctionCall,
     Message,
 )
+from marie.agent.streaming import StreamChunk
 from marie.agent.tools.base import AgentTool
 from marie.logging_core.logger import MarieLogger
 
@@ -311,6 +314,127 @@ When you have enough information to answer, provide a clear and helpful response
                 )
             except Exception as e:
                 logger.debug(f"Memory storage failed (best-effort): {e}")
+
+    async def arun_stream(
+        self,
+        messages: List[Union[Dict, Message]],
+        abort_signal: Optional[AbortSignal] = None,
+        **kwargs: Any,
+    ) -> AsyncGenerator[StreamChunk, None]:
+        """Stream the ReAct loop, yielding ``StreamChunk`` objects.
+
+        This is a **separate method** from ``run()`` / ``arun()`` to avoid
+        breaking coordination paths that ``await arun()``.  The generator
+        yields only ``StreamChunk`` — tool results are encoded as chunks
+        with ``event_type="tool_result"`` to keep a uniform type.
+
+        Args:
+            messages: Input messages (dicts or Message objects)
+            abort_signal: Optional cancellation signal
+            **kwargs: Extra args (lang, user_id, agent_id, seed)
+
+        Yields:
+            StreamChunk objects: token deltas, tool results, and a final
+            done chunk.
+        """
+        # Normalize messages
+        normalized: List[Message] = []
+        for msg in messages:
+            if isinstance(msg, dict):
+                normalized.append(Message(**msg))
+            else:
+                normalized.append(msg)
+
+        # Prepend system message
+        if self.system_message and (not normalized or normalized[0].role != "system"):
+            normalized.insert(0, Message.system(self.system_message))
+
+        # Get function definitions
+        functions = self._get_tool_definitions() if self.function_map else None
+
+        conversation = list(normalized)
+        lang = kwargs.get("lang", "en")
+        extra_cfg: Dict[str, Any] = {"lang": lang}
+        if kwargs.get("seed") is not None:
+            extra_cfg["seed"] = kwargs["seed"]
+
+        for iteration in range(self.max_iterations):
+            if abort_signal and abort_signal.aborted:
+                break
+
+            # Stream LLM response
+            chunks: List[StreamChunk] = []
+            async for chunk in self._call_llm_stream(
+                conversation,
+                functions=functions,
+                abort_signal=abort_signal,
+                extra_generate_cfg=extra_cfg,
+            ):
+                chunks.append(chunk)
+                # Only yield token chunks to the caller
+                if chunk.event_type == "token" and chunk.content:
+                    yield chunk
+
+            # Reconstruct full response
+            full = StreamChunk.from_chunks(chunks)
+            message = full.to_message()
+            conversation.append(message)
+
+            # Check for tool calls in accumulated response
+            if full.tool_calls:
+                for tc in full.tool_calls:
+                    tool_name = tc.function.name
+                    tool_args = tc.function.get_arguments_str()
+                    logger.debug(f"[stream] Calling tool '{tool_name}'")
+                    tool_result = await self._acall_tool(tool_name, tool_args, **kwargs)
+
+                    # Add tool result to conversation
+                    tool_msg = Message.tool_result(
+                        tool_call_id=tc.id,
+                        content=str(tool_result),
+                        name=tool_name,
+                    )
+                    conversation.append(tool_msg)
+
+                    # Yield tool result as a chunk
+                    yield StreamChunk.tool_result_chunk(
+                        tool_name=tool_name,
+                        tool_call_id=tc.id,
+                        result=str(tool_result),
+                    )
+                continue
+
+            # Fall back to single tool call detection (text-based format)
+            has_call, tool_name, tool_args, _, tool_call_id = self._detect_tool_call(
+                message
+            )
+            if not has_call:
+                break
+
+            logger.debug(f"[stream] Calling tool '{tool_name}'")
+            tool_result = await self._acall_tool(tool_name, tool_args, **kwargs)
+
+            if tool_call_id:
+                tool_msg = Message.tool_result(
+                    tool_call_id=tool_call_id,
+                    content=str(tool_result),
+                    name=tool_name,
+                )
+            else:
+                tool_msg = Message.function_result(
+                    name=tool_name,
+                    content=str(tool_result),
+                )
+            conversation.append(tool_msg)
+
+            yield StreamChunk.tool_result_chunk(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id or "call_0",
+                result=str(tool_result),
+            )
+
+        # Terminal chunk
+        yield StreamChunk.done()
 
 
 class FunctionCallingAgent(BaseAgent):
