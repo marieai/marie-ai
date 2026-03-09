@@ -210,7 +210,6 @@ RUN apt-get update && \
         libjemalloc-dev \
         libgoogle-perftools-dev \
         graphviz \
-        libmagickwand-dev && \
         libmagickwand-dev \
         libreoffice-core \
         libreoffice-writer \

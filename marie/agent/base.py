@@ -25,7 +25,6 @@ from typing import (
     Union,
 )
 
-from marie.agent import AbortSignal, StreamChunk
 from marie.agent.message import (
     ASSISTANT,
     CONTENT,
@@ -40,6 +39,9 @@ from marie.agent.message import (
 from marie.agent.tools.base import AgentTool, ToolOutput
 from marie.agent.tools.registry import resolve_tools
 from marie.logging_core.logger import MarieLogger
+
+from marie.agent.cancellation import AbortSignal  # isort:skip circular with marie.agent
+from marie.agent.streaming import StreamChunk  # isort:skip circular with marie.agent
 
 if TYPE_CHECKING:
     from marie_mem0 import Mem0Config

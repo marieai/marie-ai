@@ -223,6 +223,8 @@ pillow-heif:                  standard,core
 pdf2image:                    standard,core
 weasyprint:                   standard,core
 docutils:                     standard,core
+nameparser:                   standard,core
+prettytable:                   standard,core
 
 # Dev-only: used to regenerate *_pb2.py from .proto files (not a runtime dep)
 # Must be >=1.62.0 for protobuf v5 compatibility
