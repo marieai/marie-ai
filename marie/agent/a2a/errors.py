@@ -4,9 +4,32 @@ This module defines exception types for A2A protocol operations,
 mapping to JSON-RPC error codes and providing rich error context.
 """
 
+from enum import IntEnum
 from typing import Any, Optional
 
-from marie.agent.a2a.constants import A2AErrorCode
+
+class A2AErrorCode(IntEnum):
+    """A2A JSON-RPC error codes.
+
+    Standard JSON-RPC 2.0 errors: -32700 to -32600
+    A2A-specific errors: -32001 to -32099
+    """
+
+    # Standard JSON-RPC errors
+    PARSE_ERROR = -32700
+    INVALID_REQUEST = -32600
+    METHOD_NOT_FOUND = -32601
+    INVALID_PARAMS = -32602
+    INTERNAL_ERROR = -32603
+
+    # A2A-specific errors
+    TASK_NOT_FOUND = -32001
+    TASK_NOT_CANCELABLE = -32002
+    PUSH_NOT_SUPPORTED = -32003
+    UNSUPPORTED_OPERATION = -32004
+    CONTENT_TYPE_NOT_SUPPORTED = -32005
+    INVALID_AGENT_RESPONSE = -32006
+    EXTENDED_CARD_NOT_CONFIGURED = -32007
 
 
 class A2AError(Exception):

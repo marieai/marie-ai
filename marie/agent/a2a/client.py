@@ -1,37 +1,22 @@
 """A2A Client for calling external agents.
 
 This module provides the A2AClient class for making requests to
-external A2A-compatible agents.
+external A2A-compatible agents using the official SDK types.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from typing import Any, AsyncGenerator, Optional, Union
 from uuid import uuid4
 
 import httpx
-
-from marie.agent.a2a.constants import (
-    AGENT_CARD_PATH,
-    DEFAULT_REQUEST_TIMEOUT,
-    DEFAULT_STREAM_TIMEOUT,
-    JSONRPC_VERSION,
-    A2AMethod,
-)
-from marie.agent.a2a.errors import (
-    A2AClientError,
-    AgentDiscoveryError,
-    TaskNotFoundError,
-)
-from marie.agent.a2a.types import (
+from a2a.types import (
     AgentCard,
     Message,
     MessageSendConfiguration,
     MessageSendParams,
-    Part,
     Role,
     Task,
     TaskIdParams,
@@ -39,7 +24,28 @@ from marie.agent.a2a.types import (
     TextPart,
 )
 
+from marie.agent.a2a.errors import (
+    A2AClientError,
+    AgentDiscoveryError,
+    TaskNotFoundError,
+)
+
 logger = logging.getLogger(__name__)
+
+# Protocol constants
+AGENT_CARD_PATH = "/.well-known/agent.json"
+JSONRPC_VERSION = "2.0"
+DEFAULT_REQUEST_TIMEOUT = 60
+DEFAULT_STREAM_TIMEOUT = 300
+
+
+class A2AMethod:
+    """A2A JSON-RPC method names."""
+
+    SEND_MESSAGE = "message/send"
+    SEND_MESSAGE_STREAM = "message/stream"
+    GET_TASK = "tasks/get"
+    CANCEL_TASK = "tasks/cancel"
 
 
 class A2AClient:
@@ -161,11 +167,11 @@ class A2AClient:
         """
         if isinstance(content, str):
             message = Message(
-                role=Role.USER,
+                role=Role.user,
                 parts=[TextPart(text=content)],
-                message_id=str(uuid4()),
-                context_id=context_id,
-                task_id=task_id,
+                messageId=str(uuid4()),
+                contextId=context_id,
+                taskId=task_id,
             )
         else:
             message = content
@@ -178,8 +184,8 @@ class A2AClient:
         request_body = {
             "jsonrpc": JSONRPC_VERSION,
             "id": str(uuid4()),
-            "method": A2AMethod.SEND_MESSAGE.value,
-            "params": params.model_dump(by_alias=True),
+            "method": A2AMethod.SEND_MESSAGE,
+            "params": params.model_dump(by_alias=True, exclude_none=True),
         }
 
         response = await self._client.post(
@@ -217,11 +223,11 @@ class A2AClient:
         """
         if isinstance(content, str):
             message = Message(
-                role=Role.USER,
+                role=Role.user,
                 parts=[TextPart(text=content)],
-                message_id=str(uuid4()),
-                context_id=context_id,
-                task_id=task_id,
+                messageId=str(uuid4()),
+                contextId=context_id,
+                taskId=task_id,
             )
         else:
             message = content
@@ -231,8 +237,8 @@ class A2AClient:
         request_body = {
             "jsonrpc": JSONRPC_VERSION,
             "id": str(uuid4()),
-            "method": A2AMethod.SEND_MESSAGE_STREAM.value,
-            "params": params.model_dump(by_alias=True),
+            "method": A2AMethod.SEND_MESSAGE_STREAM,
+            "params": params.model_dump(by_alias=True, exclude_none=True),
         }
 
         async with self._client.stream(
@@ -273,13 +279,13 @@ class A2AClient:
         Raises:
             TaskNotFoundError: If task not found.
         """
-        params = TaskQueryParams(id=task_id, history_length=history_length)
+        params = TaskQueryParams(id=task_id, historyLength=history_length)
 
         request_body = {
             "jsonrpc": JSONRPC_VERSION,
             "id": str(uuid4()),
-            "method": A2AMethod.GET_TASK.value,
-            "params": params.model_dump(by_alias=True),
+            "method": A2AMethod.GET_TASK,
+            "params": params.model_dump(by_alias=True, exclude_none=True),
         }
 
         response = await self._client.post(
@@ -316,8 +322,8 @@ class A2AClient:
         request_body = {
             "jsonrpc": JSONRPC_VERSION,
             "id": str(uuid4()),
-            "method": A2AMethod.CANCEL_TASK.value,
-            "params": params.model_dump(by_alias=True),
+            "method": A2AMethod.CANCEL_TASK,
+            "params": params.model_dump(by_alias=True, exclude_none=True),
         }
 
         response = await self._client.post(
@@ -369,5 +375,5 @@ class A2AClient:
     def supports_push_notifications(self) -> bool:
         """Check if agent supports push notifications."""
         if self.agent_card.capabilities:
-            return self.agent_card.capabilities.push_notifications
+            return self.agent_card.capabilities.pushNotifications
         return False

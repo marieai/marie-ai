@@ -11,6 +11,9 @@ from marie.agent.tools.base import (
 # Database tools (asyncpg-based)
 from marie.agent.tools.database import (
     AsyncDatabaseTool,
+    GroupMemoryAction,
+    GroupMemoryInput,
+    GroupMemoryTool,
     MemoryTool,
     NotesTool,
     PostgresTool,
@@ -85,6 +88,9 @@ __all__ = [
     "resolve_tools",
     # Database tools
     "AsyncDatabaseTool",
+    "GroupMemoryAction",
+    "GroupMemoryInput",
+    "GroupMemoryTool",
     "MemoryTool",
     "NotesTool",
     "PostgresTool",

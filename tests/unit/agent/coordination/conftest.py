@@ -149,3 +149,75 @@ def fan_out_coordinator(coordination_config):
 def chain_coordinator(sequential_config):
     """ChainCoordinator instance."""
     return ChainCoordinator(sequential_config)
+
+
+# Workflow coordinator fixtures
+
+@pytest.fixture
+def workflow_config():
+    """Configuration for workflow coordinator tests."""
+    return CoordinationConfig(
+        topology="workflow",
+        max_steps=20,
+        max_retries_per_agent=3,
+        timeout=30.0,
+    )
+
+
+@pytest.fixture
+def workflow_coordinator(workflow_config):
+    """WorkflowCoordinator instance for testing."""
+    from marie.agent.coordination import WorkflowCoordinator
+
+    return WorkflowCoordinator(workflow_config)
+
+
+@pytest.fixture
+def checkpoint_store():
+    """In-memory checkpoint store for testing."""
+    from marie.agent.coordination import InMemoryCheckpointStore
+
+    return InMemoryCheckpointStore()
+
+
+@pytest.fixture
+def audit_logger():
+    """In-memory audit logger for testing."""
+    from marie.agent.coordination import InMemoryAuditLogger
+
+    return InMemoryAuditLogger()
+
+
+@pytest.fixture
+def workflow_state():
+    """Fresh workflow state for testing."""
+    from marie.agent.coordination import AgentWorkflowState
+
+    return AgentWorkflowState(
+        workflow_id="test-workflow-123",
+        goal="Test workflow execution",
+    )
+
+
+@dataclass
+class RoutingMockAgent:
+    """Mock agent that returns routing instructions in metadata."""
+
+    name: str = "routing_agent"
+    next_receiver: str = "__end__"
+    response: str = "routing response"
+    call_count: int = field(default=0, init=False)
+
+    async def arun(self, messages, **kwargs):
+        self.call_count += 1
+        return {
+            "output": f"{self.name}: {self.response}",
+            "messages": [],
+            "metadata": {"next_agent": self.next_receiver},
+        }
+
+
+@pytest.fixture
+def routing_agent():
+    """Agent that returns routing instructions."""
+    return RoutingMockAgent

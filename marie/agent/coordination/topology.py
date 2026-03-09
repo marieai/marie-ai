@@ -12,6 +12,7 @@ from marie.logging_core.logger import MarieLogger
 if TYPE_CHECKING:
     from marie.agent.base import BaseAgent
     from marie.agent.coordination.config import CoordinationConfig
+    from marie.agent.coordination.state import AgentWorkflowState
     from marie.agent.message import Message
 
 logger = MarieLogger("marie.agent.coordination")
@@ -46,6 +47,7 @@ class CoordinationResult:
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: Optional[datetime] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    workflow_state: Optional["AgentWorkflowState"] = None
 
     @property
     def success_count(self) -> int:

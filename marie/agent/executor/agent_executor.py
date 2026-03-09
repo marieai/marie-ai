@@ -9,7 +9,10 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
+
+if TYPE_CHECKING:
+    from marie.agent.base import BaseAgent
 
 from docarray import DocList
 from docarray.documents import TextDoc
@@ -22,7 +25,13 @@ from marie.agent.backends import (
     BackendConfig,
     QwenAgentBackend,
 )
-from marie.agent.config import AgentConfig, load_config
+from marie.agent.config import AgentConfig, CoordinationConfig, load_config
+from marie.agent.coordination import (
+    AgentExecutionContext,
+    CoordinationResult,
+    CoordinatorFactory,
+    coordination_result_to_agent_result,
+)
 from marie.agent.message import Message
 from marie.agent.state.conversation import ConversationStore
 from marie.agent.tools import resolve_tools
@@ -115,12 +124,16 @@ class AgentExecutor(MarieExecutor):
         super().__init__(**kwargs)
 
         # Load config from file if provided
+        config: Optional[AgentConfig] = None
         if config_path:
             config = load_config(path=config_path)
             backend = config.backend
             backend_config = config.llm.model_dump()
             tools = config.get_tool_list()
             system_message = config.system_message
+
+        # Store full config for coordination support
+        self._config = config
 
         self._backend_name = backend
         self._backend_config = backend_config or {}
@@ -137,6 +150,7 @@ class AgentExecutor(MarieExecutor):
 
         # Lazy initialization
         self._initialized = False
+        self._sub_agents: Dict[str, "BaseAgent"] = {}
 
     def _ensure_initialized(self) -> None:
         """Ensure backend and tools are initialized."""
@@ -155,6 +169,146 @@ class AgentExecutor(MarieExecutor):
         logger.info(f"Initialized backend: {self._backend_name}")
 
         self._initialized = True
+
+    def _should_use_coordination(self) -> bool:
+        """Check if coordination mode should be used."""
+        return (
+            self._config is not None
+            and self._config.coordination is not None
+            and self._config.coordination.topology
+            in ("parallel", "sequential", "workflow")
+            and self._config.sub_agents is not None
+            and len(self._config.sub_agents) > 0
+        )
+
+    def _load_sub_agents(self) -> Dict[str, "BaseAgent"]:
+        """Load sub-agents by name.
+
+        Note: For now, this returns cached agents. In production, this would
+        resolve agent names to actual agent instances from a registry.
+        """
+        if self._sub_agents:
+            return self._sub_agents
+
+        if not self._config or not self._config.sub_agents:
+            return {}
+
+        # TODO: Implement agent registry lookup
+        # For now, log a warning that sub-agents need to be registered
+        logger.warning(
+            f"Sub-agents requested but not registered: {self._config.sub_agents}. "
+            "Use register_sub_agent() to add agent instances."
+        )
+        return self._sub_agents
+
+    def register_sub_agent(self, name: str, agent: "BaseAgent") -> None:
+        """Register a sub-agent for coordination.
+
+        Args:
+            name: Agent name (must match name in config.sub_agents)
+            agent: Agent instance
+        """
+        self._sub_agents[name] = agent
+        logger.info(f"Registered sub-agent: {name}")
+
+    async def _coordinated_chat(
+        self,
+        docs: DocList[TextDoc],
+        parameters: Dict[str, Any],
+    ) -> DocList[TextDoc]:
+        """Execute chat using coordination mode.
+
+        Args:
+            docs: Input documents
+            parameters: Request parameters
+
+        Returns:
+            DocList with coordinated response
+        """
+        conversation_id = parameters.get("conversation_id", str(uuid.uuid4()))
+        messages = await self._build_messages(docs, conversation_id, parameters)
+
+        start_time = time.time()
+
+        # Create execution context for tracing
+        with AgentExecutionContext(
+            workflow_id=f"coord-{conversation_id}",
+            agent_name="coordinator",
+        ) as ctx:
+            # Get coordinator
+            coord_config = self._config.coordination
+            coordinator = CoordinatorFactory.create(coord_config)
+
+            # Load and add sub-agents
+            sub_agents = self._load_sub_agents()
+            if not sub_agents:
+                logger.error("No sub-agents available for coordination")
+                return DocList[TextDoc](
+                    [
+                        TextDoc(
+                            text="Error: No sub-agents configured for coordination",
+                            tags={"status": "failed", "error": "no_sub_agents"},
+                        )
+                    ]
+                )
+
+            for agent in sub_agents.values():
+                coordinator.add_agent(agent)
+
+            # Run coordination
+            try:
+                coord_result = await asyncio.wait_for(
+                    coordinator.run(messages),
+                    timeout=coord_config.timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"Coordination timed out after {coord_config.timeout}s")
+                return DocList[TextDoc](
+                    [
+                        TextDoc(
+                            text=f"Coordination timed out after {coord_config.timeout} seconds",
+                            tags={
+                                "status": "timeout",
+                                "conversation_id": conversation_id,
+                            },
+                        )
+                    ]
+                )
+
+            # Convert to AgentResult for API compatibility
+            result = coordination_result_to_agent_result(coord_result)
+
+        # Update conversation store
+        if self._conversation_store:
+            user_content = docs[0].text if docs else ""
+            await self._conversation_store.add_message(
+                conversation_id,
+                Message.user(user_content),
+            )
+            if result.output:
+                await self._conversation_store.add_message(
+                    conversation_id,
+                    Message.assistant(result.output_text),
+                )
+
+        # Build response
+        duration_ms = (time.time() - start_time) * 1000
+
+        response_doc = TextDoc(
+            text=result.output_text,
+            tags={
+                "conversation_id": conversation_id,
+                "status": result.status.value,
+                "duration_ms": duration_ms,
+                "coordination": {
+                    "topology": coord_result.topology,
+                    "success_count": coord_result.success_count,
+                    "failure_count": coord_result.failure_count,
+                },
+            },
+        )
+
+        return DocList[TextDoc]([response_doc])
 
     def _create_backend(self) -> AgentBackend:
         """Create the agent backend.
@@ -226,6 +380,10 @@ class AgentExecutor(MarieExecutor):
         """
         self._ensure_initialized()
         parameters = parameters or {}
+
+        # Check for coordination mode
+        if self._should_use_coordination():
+            return await self._coordinated_chat(docs, parameters)
 
         # Extract conversation ID
         conversation_id = parameters.get("conversation_id", str(uuid.uuid4()))

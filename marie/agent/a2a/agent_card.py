@@ -1,15 +1,15 @@
 """AgentCard generation from Marie agents.
 
 This module provides utilities for generating A2A AgentCards from
-Marie agent configurations and tool registrations.
+Marie agent configurations and tool registrations using the official SDK types.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
-from marie.agent.a2a.types import (
+from a2a.types import (
     AgentCapabilities,
     AgentCard,
     AgentProvider,
@@ -91,7 +91,7 @@ class AgentCardBuilder:
     def with_provider(
         self,
         organization: str,
-        url: Optional[str] = None,
+        url: str,
     ) -> "AgentCardBuilder":
         """Set provider information."""
         self._provider = AgentProvider(organization=organization, url=url)
@@ -111,7 +111,7 @@ class AgentCardBuilder:
         self,
         id: str,
         name: str,
-        description: Optional[str] = None,
+        description: str,
         tags: Optional[list[str]] = None,
         examples: Optional[list[str]] = None,
     ) -> "AgentCardBuilder":
@@ -121,7 +121,7 @@ class AgentCardBuilder:
                 id=id,
                 name=name,
                 description=description,
-                tags=tags,
+                tags=tags or ["general"],
                 examples=examples,
             )
         )
@@ -182,7 +182,7 @@ class AgentCardBuilder:
         return AgentSkill(
             id=tool.name,
             name=tool.name.replace("_", " ").title(),
-            description=tool.description,
+            description=tool.description or f"Tool: {tool.name}",
             tags=self._extract_tags(tool),
             examples=examples if examples else None,
         )
@@ -196,7 +196,8 @@ class AgentCardBuilder:
         if len(name_parts) > 1:
             tags.append(name_parts[0])  # First part as category
 
-        return tags if tags else None
+        # SDK requires at least one tag
+        return tags if tags else ["general"]
 
     def build(self) -> AgentCard:
         """Build the AgentCard.
@@ -214,10 +215,10 @@ class AgentCardBuilder:
 
         return AgentCard(
             name=self._name,
-            description=self._description,
+            description=self._description or f"{self._name} agent",
             url=self._url,
             version=self._version,
-            skills=self._skills if self._skills else None,
+            skills=self._skills,
             capabilities=self._capabilities
             or AgentCapabilities(streaming=False, push_notifications=False),
             default_input_modes=self._input_modes,

@@ -4,12 +4,20 @@ These tests require the test agents to be running. Use the fixtures
 from conftest.py to start them automatically.
 """
 
+import uuid
+
 import pytest
 import pytest_asyncio
 
-from marie.agent.a2a.client import A2AClient
-from marie.agent.a2a.discovery import A2AAgentDiscovery, AgentRegistry
-from marie.agent.a2a.types import Message, Role, TaskState, TextPart
+from marie.agent.a2a import (
+    A2AAgentDiscovery,
+    A2AClient,
+    AgentRegistry,
+    Message,
+    Role,
+    TaskState,
+    TextPart,
+)
 
 
 @pytest.mark.asyncio
@@ -43,7 +51,8 @@ class TestA2AClientWithEchoAgent:
         """Test sending a Message object."""
         async with await A2AClient.from_url(echo_agent) as client:
             message = Message(
-                role=Role.USER,
+                message_id=str(uuid.uuid4()),
+                role=Role.user,
                 parts=[TextPart(text="Test message")],
             )
             result = await client.send_message(message)

@@ -11,10 +11,11 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Union
 
+from a2a.types import AgentCard, Message, Role, Task, TextPart
+
 from marie.agent.a2a.client import A2AClient
 from marie.agent.a2a.discovery import A2AAgentDiscovery, AgentRegistry
 from marie.agent.a2a.errors import A2AClientError, AgentDiscoveryError
-from marie.agent.a2a.types import AgentCard, Message, Role, Task, TextPart
 from marie.agent.tools.base import AgentTool, ToolOutput
 
 logger = logging.getLogger(__name__)

@@ -200,6 +200,15 @@ class CoordinationConfig(BaseModel):
             timeout: 30.0
             group_id: document-processing
             shared_memory_enabled: true
+            routing_policy: sequential
+            routing_sequence:
+              - agent1
+              - agent2
+            max_steps: 20
+            max_retries_per_agent: 3
+            checkpoint_enabled: true
+            checkpoint_store: sqlite
+            audit_enabled: true
         ```
     """
 
@@ -231,6 +240,38 @@ class CoordinationConfig(BaseModel):
     shared_memory_enabled: bool = Field(
         default=False,
         description="Enable shared memory across coordinated agents",
+    )
+    routing_policy: Optional[str] = Field(
+        default=None,
+        description="Routing policy: 'sequential', 'llm', or custom policy name. If None, uses message-driven routing.",
+    )
+    routing_sequence: Optional[List[str]] = Field(
+        default=None,
+        description="Agent sequence for sequential routing policy",
+    )
+    max_steps: int = Field(
+        default=20,
+        ge=1,
+        le=1000,
+        description="Maximum workflow steps before termination",
+    )
+    max_retries_per_agent: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Maximum retry attempts per agent on failure",
+    )
+    checkpoint_enabled: bool = Field(
+        default=False,
+        description="Enable workflow state checkpointing for recovery",
+    )
+    checkpoint_store: Literal["sqlite", "postgresql"] = Field(
+        default="sqlite",
+        description="Checkpoint storage backend",
+    )
+    audit_enabled: bool = Field(
+        default=False,
+        description="Enable structured audit logging of agent communications",
     )
 
 
@@ -325,6 +366,10 @@ class AgentConfig(BaseModel):
     coordination: Optional[CoordinationConfig] = Field(
         default=None,
         description="Multi-agent coordination configuration",
+    )
+    sub_agents: Optional[List[str]] = Field(
+        default=None,
+        description="List of sub-agent names for coordination (resolved at runtime)",
     )
 
     @field_validator("tools", mode="before")

@@ -204,6 +204,9 @@ graphviz:                      standard,core
 networkx:                      standard,core
 json_repair:                   standard,core
 
+# A2A (Agent-to-Agent) Protocol SDK
+a2a-sdk>=0.3.9:                standard,core
+
 
 
 # Memory integration (Mem0 SDK for agent memory)

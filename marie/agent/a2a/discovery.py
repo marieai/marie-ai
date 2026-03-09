@@ -1,7 +1,7 @@
 """A2A agent discovery with caching.
 
 This module provides utilities for discovering and caching
-information about external A2A agents.
+information about external A2A agents using the official SDK types.
 """
 
 from __future__ import annotations
@@ -13,17 +13,17 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import httpx
+from a2a.types import AgentCard
 
 from marie.agent.a2a.client import A2AClient
-from marie.agent.a2a.constants import (
-    AGENT_CARD_PATH,
-    DEFAULT_DISCOVERY_CACHE_TTL,
-    DEFAULT_REQUEST_TIMEOUT,
-)
 from marie.agent.a2a.errors import AgentDiscoveryError
-from marie.agent.a2a.types import AgentCard
 
 logger = logging.getLogger(__name__)
+
+# Protocol constants
+AGENT_CARD_PATH = "/.well-known/agent.json"
+DEFAULT_DISCOVERY_CACHE_TTL = 3600  # 1 hour
+DEFAULT_REQUEST_TIMEOUT = 60
 
 
 @dataclass

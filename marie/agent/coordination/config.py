@@ -16,6 +16,7 @@ class Topology(str, Enum):
 
     PARALLEL = "parallel"
     SEQUENTIAL = "sequential"
+    WORKFLOW = "workflow"
 
 
 class MergeStrategy(str, Enum):
