@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Union
 
 import boto3
 from boto3.s3.transfer import TransferConfig
+from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError, EndpointConnectionError
 
 from marie.excepts import BadConfigSource, raise_exception
@@ -270,6 +271,7 @@ class S3StorageHandler(PathHandler):
             aws_session_token=config["S3_SESSION_TOKEN"],
             region_name=config["S3_REGION"],
             endpoint_url=config["S3_ENDPOINT_URL"],
+            config=BotoConfig(max_pool_connections=40),
         )
         return s3_resource
 
