@@ -329,12 +329,19 @@ class OpenAIEngine(EngineLM):
         )
         start_time = time.time()
         try:
+            bp_kwargs = {}
+            if "completion_params" in kwargs:
+                bp_kwargs["completion_params"] = kwargs["completion_params"]
+
             ordered_outputs = self.batch_processor.batch_generate(
-                messages_list, guided_json=guided_json, on_result=on_result
+                messages_list,
+                guided_json=guided_json,
+                on_result=on_result,
+                **bp_kwargs,
             )
         except Exception as e:
             self.logger.error(f"Batch inference failed:\n" + get_exception_traceback())
-            return ["ERROR: Inference failed"] * len(batch_content)
+            raise  # Propagate to caller
 
         elapsed_time = time.time() - start_time
         self.logger.info(f"Batch inference completed in {elapsed_time:.2f} sec")

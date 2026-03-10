@@ -301,6 +301,7 @@ async def process_batch(
     output_path: str,
     is_multimodal: bool = False,
     expect_output: str = None,
+    completion_params: Optional[Dict[str, Any]] = None,
 ) -> list[Any] | None:
     """
     Processes a batch of images using the specified engine.
@@ -390,16 +391,16 @@ async def process_batch(
     while retries < max_retries:
         try:
             # Prepare batch for LLM call
+            call_kwargs = {"max_tokens": 4096 * 4, "on_result": on_result}
+            if completion_params:
+                call_kwargs["completion_params"] = completion_params
+
             if is_multimodal:
                 batch_t = [[b[0], b[1]] for b in batch]
-                responses = await llm_call.acall(
-                    batch_t, max_tokens=4096 * 4, on_result=on_result
-                )
+                responses = await llm_call.acall(batch_t, **call_kwargs)
             else:
                 batch_t = [b[1] for b in batch]
-                responses = await llm_call.acall(
-                    batch_t, max_tokens=4096 * 4, on_result=on_result
-                )
+                responses = await llm_call.acall(batch_t, **call_kwargs)
 
             # Check for any errors that occurred during incremental writes
             if write_errors:
@@ -440,6 +441,7 @@ def prepare_batch_with_meta(
     source_dir: str,
     context_manager: Optional["ContextProviderManager"] = None,
     units_by_file: Optional[Dict[str, "ProcessingUnit"]] = None,
+    mm_processor_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Generator:
     """
     Prepare batches of images with prompts for processing.
@@ -546,10 +548,11 @@ def prepare_batch_with_meta(
                 print(f"Unable to extract page number from filename: {name}")
 
         print(f"Extracted page numbers: {page_numbers}")
-        # TODO : this needs to be configured via the config file
-        # 2048
+        _mm_kwargs = mm_processor_kwargs or {}
         images = preprocess_images_for_inference(
-            image_paths, min_pixels=512 * 28 * 28, max_pixels=2048 * 28 * 28
+            image_paths,
+            min_pixels=_mm_kwargs.get("min_pixels", 512 * 28 * 28),
+            max_pixels=_mm_kwargs.get("max_pixels", 2048 * 28 * 28),
         )
         batch_input = [
             [img, prt, img_path, suffix]
@@ -568,6 +571,7 @@ def prepare_batch_with_meta_units(
     prompt: str,
     source_dir: str,
     context_manager: Optional["ContextProviderManager"] = None,
+    mm_processor_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Generator:
     """
     Prepare a batch of items with prompts for processing, with explicit unit tracking.
@@ -702,8 +706,11 @@ def prepare_batch_with_meta_units(
     logging.info(f"Extracted page numbers: {page_numbers}")
 
     # Preprocess images
+    _mm_kwargs = mm_processor_kwargs or {}
     images = preprocess_images_for_inference(
-        image_paths, min_pixels=512 * 28 * 28, max_pixels=2048 * 28 * 28
+        image_paths,
+        min_pixels=_mm_kwargs.get("min_pixels", 512 * 28 * 28),
+        max_pixels=_mm_kwargs.get("max_pixels", 2048 * 28 * 28),
     )
 
     batch_input = [
@@ -724,6 +731,8 @@ def scan_and_process_images(
     is_multimodal: bool = False,
     expect_output: str = None,  # "json", "markdown", "none"
     context_manager: Optional["ContextProviderManager"] = None,
+    completion_params: Optional[Dict[str, Any]] = None,
+    mm_processor_kwargs: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Synchronous wrapper for the ascan_and_process_images function.
@@ -742,6 +751,7 @@ def scan_and_process_images(
         expect_output (str): Expected output format ("json", "markdown", "none").
         context_manager: Optional ContextProviderManager for injecting context
                         into prompts and determining eligible pages.
+        mm_processor_kwargs: Optional dict with min_pixels/max_pixels for image preprocessing.
     Returns:
         None
     """
@@ -754,6 +764,8 @@ def scan_and_process_images(
         is_multimodal=is_multimodal,
         expect_output=expect_output,
         context_manager=context_manager,
+        completion_params=completion_params,
+        mm_processor_kwargs=mm_processor_kwargs,
     )
 
     return run_async(coroutine)
@@ -786,6 +798,8 @@ async def ascan_and_process_images(
     is_multimodal: bool = False,
     expect_output: Optional[str] = None,  # "json", "markdown", "none"
     context_manager: Optional["ContextProviderManager"] = None,
+    completion_params: Optional[Dict[str, Any]] = None,
+    mm_processor_kwargs: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Scans the source directory for image files, processes each image
@@ -919,6 +933,7 @@ async def ascan_and_process_images(
             prompt=prompt,
             source_dir=source_dir,
             context_manager=context_manager,
+            mm_processor_kwargs=mm_processor_kwargs,
         )
         for idx, inp in enumerate(gen, 1):
             logging.debug(
@@ -932,6 +947,7 @@ async def ascan_and_process_images(
                 output_dir,
                 is_multimodal=is_multimodal,
                 expect_output=expect_output,
+                completion_params=completion_params,
             )
 
     tasks = [asyncio.create_task(_worker(batch)) for batch in batched_items]
@@ -941,13 +957,20 @@ async def ascan_and_process_images(
 
     try:
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        errors = []
         for r in results:
             if isinstance(r, asyncio.CancelledError):
                 logger.warning(f"One of the tasks was cancelled : {r}")
             elif isinstance(r, Exception):
                 logger.error("Task failed:", exc_info=r)
+                errors.append(r)
             else:
                 logger.info(f"Task completed successfully with result: {r}")
+
+        if errors:
+            raise RuntimeError(
+                f"Batch processing failed: {len(errors)}/{len(results)} batches failed"
+            ) from errors[0]
 
     except asyncio.CancelledError as cancel_error:
         logger.warning("One or more tasks were cancelled.")

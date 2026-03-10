@@ -209,14 +209,8 @@ RUN apt-get update && \
         libomp-dev \
         libjemalloc-dev \
         libgoogle-perftools-dev \
-        libmagickwand-dev \
-        libreoffice-core \
-        libreoffice-writer \
-        libreoffice-calc \
-        libreoffice-impress \
-        poppler-utils \
-        texlive-latex-base \
-        djvulibre-bin && \
+        graphviz \
+        libmagickwand-dev && \
     ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
     ln -s /usr/lib/x86_64-linux-gnu/libjemalloc.so /usr/lib/libjemalloc.so && \
     ln -s /usr/lib/x86_64-linux-gnu/libtcmalloc.so /usr/lib/libtcmalloc.so && \

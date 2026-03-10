@@ -123,6 +123,11 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
     dag_nodes = []
     node_dict = {node.task_id: node for node in plan.nodes}
 
+    # Preserve user's explicit endpoint override from submission metadata.
+    # The user may specify any endpoint on a given executor (e.g., /hello-direct,
+    # /document/extract-direct, /custom/path) — the path is arbitrary.
+    original_on = work_info.data.get('metadata', {}).get('on')
+
     for i, task_id in enumerate(sorted_nodes):
         node = node_dict.get(task_id)
         wi = copy.deepcopy(work_info)
@@ -134,6 +139,16 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
         meta_dict = meta.model_dump()  # need plain dict
         metadata = meta_dict["metadata"]
         wi.data['metadata'].update(metadata)
+
+        # Restore user's endpoint override when it targets the same executor.
+        # Match on executor name only — the endpoint path is the user's choice.
+        if original_on and '://' in original_on:
+            planner_on = metadata.get('on', '')
+            if '://' in planner_on:
+                original_executor = original_on.split('://', 1)[0]
+                planner_executor = planner_on.split('://', 1)[0]
+                if original_executor == planner_executor:
+                    wi.data['metadata']['on'] = original_on
 
         # Log info about mapper config usage (only once per planner)
         if query_planner_name not in _mapper_warnings_shown:

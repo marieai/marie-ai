@@ -203,6 +203,8 @@ tenacity:                      standard,core
 graphviz:                      standard,core
 networkx:                      standard,core
 json_repair:                   standard,core
+nameparser:                   standard,core
+prettytable:                   standard,core
 
 
 

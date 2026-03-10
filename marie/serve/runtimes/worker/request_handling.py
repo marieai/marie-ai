@@ -1730,6 +1730,9 @@ class WorkerRequestHandler:
 
         if job_id is not None and self._job_info_client is not None:
             try:
+                self.logger.info(
+                    f"[lifecycle] Recording RUNNING status for job {job_id}"
+                )
                 await self._job_info_client.put_status(
                     job_id,
                     JobStatus.RUNNING,

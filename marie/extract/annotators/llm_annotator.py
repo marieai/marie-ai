@@ -73,6 +73,25 @@ class LLMAnnotator(DocumentAnnotator):
         self.presence_penalty = self.model_config.get('presence_penalty', 0)
         self.multimodal = self.model_config.get('multimodal', False)
         self.expect_output = self.model_config.get('expect_output', None)
+        self.temperature = self.model_config.get('temperature', 0.0)
+        self.extra_body = self.model_config.get('extra_body', None)
+        self.min_pixels = self.model_config.get('min_pixels', 512 * 28 * 28)
+        self.max_pixels = self.model_config.get('max_pixels', 2048 * 28 * 28)
+
+        # Build completion_params dict from config
+        self.completion_params = {
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "frequency_penalty": self.frequency_penalty,
+            "presence_penalty": self.presence_penalty,
+        }
+        if self.extra_body is not None:
+            self.completion_params["extra_body"] = self.extra_body
+
+        self.mm_processor_kwargs = {
+            "min_pixels": self.min_pixels,
+            "max_pixels": self.max_pixels,
+        }
 
         # Output all parameters for debugging purposes
         self.logger.info(f"Annotator Name: {self.name}")
@@ -80,9 +99,13 @@ class LLMAnnotator(DocumentAnnotator):
         self.logger.info(f"Model Name: {self.model_name}")
         self.logger.info(f"Prompt Path: {self.prompt_path}")
         self.logger.info(f"System Prompt Text: {self.system_prompt_text}")
+        self.logger.info(f"Temperature: {self.temperature}")
         self.logger.info(f"Top P: {self.top_p}")
         self.logger.info(f"Frequency Penalty: {self.frequency_penalty}")
         self.logger.info(f"Presence Penalty: {self.presence_penalty}")
+        self.logger.info(f"Extra Body: {self.extra_body}")
+        self.logger.info(f"Min Pixels: {self.min_pixels}")
+        self.logger.info(f"Max Pixels: {self.max_pixels}")
         self.logger.info(f"Multimodal: {self.multimodal}")
         self.logger.info(f"Expected Output: {self.expect_output}")
 
@@ -171,6 +194,8 @@ class LLMAnnotator(DocumentAnnotator):
             is_multimodal=self.multimodal,
             expect_output=self.expect_output,
             context_manager=self.context_manager,
+            completion_params=self.completion_params,
+            mm_processor_kwargs=self.mm_processor_kwargs,
         )
 
     async def aannotate(self, document: UnstructuredDocument, frames: List) -> None:
@@ -235,6 +260,8 @@ class LLMAnnotator(DocumentAnnotator):
             is_multimodal=self.multimodal,
             expect_output=self.expect_output,
             context_manager=self.context_manager,
+            completion_params=self.completion_params,
+            mm_processor_kwargs=self.mm_processor_kwargs,
         )
 
         # self.parse_output(raw_output)
