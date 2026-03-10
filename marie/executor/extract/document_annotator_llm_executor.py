@@ -68,4 +68,5 @@ class DocumentAnnotatorLLMExecutor(DocumentAnnotatorExecutor):
             # we log the error and return an error message, later we can improve this to mark the job as failed
             # by introducing an improved error handling mechanism
             self.logger.error(f"Error during annotation: {e}")
+            raise e
             return {'status': 'error', 'message': str(e)}

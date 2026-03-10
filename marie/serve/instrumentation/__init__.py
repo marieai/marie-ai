@@ -53,21 +53,19 @@ class InstrumentationMixin:
         self.metrics = metrics
 
         if tracing:
-            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-                OTLPSpanExporter,
-            )
-            from opentelemetry.sdk.resources import Resource
-            from opentelemetry.sdk.trace import TracerProvider
-            from opentelemetry.sdk.trace.export import BatchSpanProcessor
+            import os
 
-            resource = Resource(attributes=_get_resource_attributes(name))
-            provider = TracerProvider(resource=resource)
-            processor = BatchSpanProcessor(
-                OTLPSpanExporter(
-                    endpoint=f'{traces_exporter_host}:{traces_exporter_port}',
-                )
+            from marie.instrumentation import register
+
+            console_export = os.environ.get(
+                "MARIE_OTEL_CONSOLE_EXPORT", ""
+            ).lower() in ("1", "true")
+
+            provider = register(
+                endpoint=f'{traces_exporter_host}:{traces_exporter_port}',
+                set_global_tracer_provider=True,
+                console_export=console_export,
             )
-            provider.add_span_processor(processor)
             self.tracer_provider = provider
             self.tracer = provider.get_tracer(name)
         else:

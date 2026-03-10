@@ -10,9 +10,9 @@ import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional, TextIO
 
-from marie.llm_tracking.config import get_settings
-from marie.llm_tracking.exporters.base import AbstractExporter
-from marie.llm_tracking.types import Observation, Score, Trace
+from marie.instrumentation.config import get_settings
+from marie.instrumentation.exporters.base import AbstractExporter
+from marie.instrumentation.types import Observation, Score, Trace
 
 logger = logging.getLogger(__name__)
 

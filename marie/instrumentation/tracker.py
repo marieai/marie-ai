@@ -5,7 +5,7 @@ The LLMTracker is a singleton class that manages traces and observations
 for LLM calls. It integrates with the exporter and storage systems.
 
 Usage:
-    from marie.llm_tracking import get_tracker
+    from marie.instrumentation import get_tracker
 
     tracker = get_tracker()
 
@@ -35,14 +35,32 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import uuid4
 
-from marie.llm_tracking.config import ExporterType, get_settings
-from marie.llm_tracking.exporters.base import BaseExporter
-from marie.llm_tracking.exporters.console import ConsoleExporter
-from marie.llm_tracking.token_counter import (
+from marie.instrumentation.config import ExporterType, get_settings
+from marie.instrumentation.exporters.base import BaseExporter
+from marie.instrumentation.exporters.console import ConsoleExporter
+
+# Lazy flag for OTelExporter isinstance checks (avoids import cycle at module level)
+_OTelExporter = None
+
+
+def _is_otel_exporter(exporter) -> bool:
+    """Check if the exporter is an OTelExporter (lazy import)."""
+    global _OTelExporter
+    if _OTelExporter is None:
+        try:
+            from marie.instrumentation.exporters.otel import OTelExporter
+
+            _OTelExporter = OTelExporter
+        except ImportError:
+            return False
+    return isinstance(exporter, _OTelExporter)
+
+
+from marie.instrumentation.token_counter import (
     count_tokens_with_fallback,
     extract_usage_from_response,
 )
-from marie.llm_tracking.types import (
+from marie.instrumentation.types import (
     Cost,
     EventType,
     Observation,
@@ -89,7 +107,7 @@ class LLMTracker:
     Main LLM tracking class - singleton.
 
     Manages traces, observations, and scores for LLM calls.
-    Integrates with exporters (console, RabbitMQ) and storage (Postgres, S3).
+    Integrates with exporters (console, OTel).
     """
 
     _instance: Optional["LLMTracker"] = None
@@ -138,33 +156,20 @@ class LLMTracker:
             logger.info("LLM tracking is disabled")
             return
 
-        # Guard: If using RabbitMQ exporter, storage MUST be configured
-        # RabbitMQ messages only contain event_id - worker needs Postgres/S3
-        if self._settings.EXPORTER == ExporterType.RABBITMQ:
-            if not self._settings.POSTGRES_URL:
-                raise ValueError(
-                    "RabbitMQ exporter requires Postgres storage. "
-                    "Configure postgres.url in llm_tracking config."
-                )
-            if not self._settings.S3_BUCKET:
-                raise ValueError(
-                    "RabbitMQ exporter requires S3 storage. "
-                    "Configure s3.bucket (or use shared storage.s3) in llm_tracking config."
-                )
-
         try:
             # Initialize exporter
             self._exporter = self._create_exporter()
             self._exporter.start()
 
-            # Initialize storage if configured
-            if self._settings.storage_enabled:
+            # Initialize storage if configured (not needed for OTel exporter)
+            if not _is_otel_exporter(self._exporter) and getattr(
+                self._settings, 'storage_enabled', False
+            ):
                 self._init_storage()
 
             self._started = True
             logger.info(
-                f"LLM tracker started: exporter={self._settings.EXPORTER.value}, "
-                f"storage={'enabled' if self._settings.storage_enabled else 'disabled'}"
+                f"LLM tracker started: exporter={self._settings.EXPORTER.value}"
             )
 
             # Register shutdown hook
@@ -180,10 +185,10 @@ class LLMTracker:
             return ConsoleExporter(
                 verbose=self._settings.DEBUG,
             )
-        elif self._settings.EXPORTER == ExporterType.RABBITMQ:
-            from marie.llm_tracking.exporters.rabbitmq import RabbitMQExporter
+        elif self._settings.EXPORTER == ExporterType.OTEL:
+            from marie.instrumentation.exporters.otel import OTelExporter
 
-            return RabbitMQExporter()
+            return OTelExporter()
         else:
             raise ValueError(f"Unknown exporter type: {self._settings.EXPORTER}")
 
@@ -201,7 +206,7 @@ class LLMTracker:
             )
 
         try:
-            from marie.llm_tracking.storage.s3 import S3Storage
+            from marie.instrumentation.storage.s3 import S3Storage
 
             self._s3 = S3Storage()
             self._s3.start()
@@ -211,7 +216,7 @@ class LLMTracker:
 
         # PostgreSQL stores metadata only
         try:
-            from marie.llm_tracking.storage.postgres import PostgresStorage
+            from marie.instrumentation.storage.postgres import PostgresStorage
 
             self._postgres = PostgresStorage()
             self._postgres.start()
@@ -289,13 +294,17 @@ class LLMTracker:
         Yields:
             TraceContext with trace ID and trace object
         """
-        if not self._ensure_started() or not self._should_sample():
-            # Return a dummy context
+        is_otel = _is_otel_exporter(self._exporter)
+
+        # In OTel mode, bypass _should_sample() — the OTel provider sampler is authoritative.
+        # In non-OTel mode, skip dummy traces only when sampling says no.
+        if not self._ensure_started() or (not is_otel and not self._should_sample()):
+            # Return a dummy context (not for OTel — OTel mode never creates dummies)
             dummy = Trace(id=trace_id or str(uuid4()), name=name)
             yield TraceContext(self, dummy)
             return
 
-        trace = Trace(
+        trace_obj = Trace(
             id=trace_id or str(uuid4()),
             name=name,
             project_id=self._settings.PROJECT_ID,
@@ -306,7 +315,11 @@ class LLMTracker:
             input=input,
         )
 
-        ctx = TraceContext(self, trace)
+        # OTel: create root span NOW so children can parent under it
+        if is_otel and self._exporter:
+            self._exporter.export_trace(trace_obj)
+
+        ctx = TraceContext(self, trace_obj)
         exc_info = (None, None, None)
         try:
             yield ctx
@@ -314,8 +327,16 @@ class LLMTracker:
             exc_info = (type(e), e, e.__traceback__)
             raise
         finally:
-            # Finalize the trace
-            ctx.__exit__(*exc_info)
+            trace_obj.updated_at = datetime.utcnow()
+            if exc_info[0] is not None:
+                trace_obj.output = {"error": str(exc_info[1])}
+
+            # OTel: end root span AFTER all children
+            if is_otel and self._exporter:
+                self._exporter.finalize_trace(trace_obj)
+            else:
+                # Legacy exporters: export on exit as before
+                self._finalize_trace(trace_obj)
 
     def create_trace(
         self,
@@ -333,10 +354,11 @@ class LLMTracker:
         Returns trace_id for use with observations.
         Call update_trace() to finalize.
         """
-        if not self._ensure_started() or not self._should_sample():
+        is_otel = _is_otel_exporter(self._exporter)
+        if not self._ensure_started() or (not is_otel and not self._should_sample()):
             return trace_id or str(uuid4())
 
-        trace = Trace(
+        trace_obj = Trace(
             id=trace_id or str(uuid4()),
             name=name,
             project_id=self._settings.PROJECT_ID,
@@ -347,8 +369,12 @@ class LLMTracker:
             input=input,
         )
 
-        self._finalize_trace(trace)
-        return trace.id
+        # For OTel, export_trace creates the root span. For legacy, finalize exports on creation.
+        if is_otel and self._exporter:
+            self._exporter.export_trace(trace_obj)
+        else:
+            self._finalize_trace(trace_obj)
+        return trace_obj.id
 
     def _store_failed_event(
         self,
@@ -388,15 +414,15 @@ class LLMTracker:
             )
 
     def _finalize_trace(self, trace: Trace) -> None:
-        """Export and store a trace."""
+        """Export and store a trace (used by non-OTel exporters and create_trace)."""
         if not self._started:
             return
 
         trace.updated_at = datetime.utcnow()
 
         try:
-            # Store raw event if storage is enabled
-            if self._postgres:
+            # Store raw event if storage is enabled (not needed for OTel exporter)
+            if not _is_otel_exporter(self._exporter) and self._postgres:
                 self._store_trace_event(trace)
 
             # Export to exporter
@@ -405,14 +431,14 @@ class LLMTracker:
 
         except Exception as e:
             logger.exception(f"Failed to finalize trace {trace.id}")
-            # Store to DLQ instead of silently losing the event
-            self._store_failed_event(
-                event_id=trace.id,
-                trace_id=trace.id,
-                event_type="trace-create",
-                error=e,
-                payload=trace.to_dict(),
-            )
+            if not _is_otel_exporter(self._exporter):
+                self._store_failed_event(
+                    event_id=trace.id,
+                    trace_id=trace.id,
+                    event_type="trace-create",
+                    error=e,
+                    payload=trace.to_dict(),
+                )
 
     def _store_trace_event(self, trace: Trace) -> None:
         """Store trace: payload to S3, metadata to PostgreSQL."""
@@ -597,6 +623,10 @@ class LLMTracker:
         with self._observations_lock:
             self._pending_observations[obs.id] = obs
 
+        # OTel: start the span immediately so it becomes the current OTel span
+        if _is_otel_exporter(self._exporter) and self._exporter:
+            self._exporter.start_span(obs)
+
         return obs.id
 
     def end(
@@ -707,25 +737,25 @@ class LLMTracker:
             return
 
         try:
-            # Store raw event if storage is enabled
-            if self._postgres:
+            # Store raw event if storage is enabled (not needed for OTel exporter)
+            if not _is_otel_exporter(self._exporter) and self._postgres:
                 self._store_observation_event(obs)
 
-            # Export to exporter
+            # Export to exporter (for OTel this ends the span and sets attributes)
             if self._exporter:
                 self._exporter.export_observation(obs)
 
         except Exception as e:
             logger.exception(f"Failed to finalize observation {obs.id}")
-            # Store to DLQ instead of silently losing the event
-            event_type = f"{obs.type.value.lower()}-create"
-            self._store_failed_event(
-                event_id=obs.id,
-                trace_id=obs.trace_id,
-                event_type=event_type,
-                error=e,
-                payload=obs.to_dict(),
-            )
+            if not _is_otel_exporter(self._exporter):
+                event_type = f"{obs.type.value.lower()}-create"
+                self._store_failed_event(
+                    event_id=obs.id,
+                    trace_id=obs.trace_id,
+                    event_type=event_type,
+                    error=e,
+                    payload=obs.to_dict(),
+                )
 
     def _store_observation_event(self, obs: Observation) -> None:
         """Store observation: payload to S3, metadata to PostgreSQL."""

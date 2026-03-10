@@ -11,7 +11,7 @@ _log = logging.getLogger(__name__)
 class ImageBackend(DocumentBackend):
     @classmethod
     def supported_formats(cls) -> set[str]:
-        return {"png", "jpeg", "bmp", "webp", "heif", "gif"}
+        return {"png", "jpeg", "tiff", "bmp", "webp", "heif", "gif"}
 
     @classmethod
     def is_available(cls) -> bool:
@@ -20,8 +20,8 @@ class ImageBackend(DocumentBackend):
     def convert(self, file_path: str, **kwargs) -> dict:
         img = Image.open(file_path)
 
-        # Animated GIF: extract all frames
-        if getattr(img, "is_animated", False):
+        # Multi-frame images: TIFF (n_frames > 1) and animated GIF
+        if getattr(img, "n_frames", 1) > 1:
             frames = []
             for i in range(img.n_frames):
                 img.seek(i)

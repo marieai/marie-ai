@@ -10,8 +10,8 @@ import logging
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from marie.llm_tracking.config import get_settings
-from marie.llm_tracking.types import Usage
+from marie.instrumentation.config import get_settings
+from marie.instrumentation.types import Usage
 
 logger = logging.getLogger(__name__)
 

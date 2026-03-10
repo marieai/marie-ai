@@ -6,8 +6,8 @@ Available exporters:
 - RabbitMQExporter: Production (publishes to RabbitMQ for async processing)
 """
 
-from marie.llm_tracking.exporters.base import BaseExporter
-from marie.llm_tracking.exporters.console import ConsoleExporter
+from marie.instrumentation.exporters.base import BaseExporter
+from marie.instrumentation.exporters.console import ConsoleExporter
 
 __all__ = ["BaseExporter", "ConsoleExporter"]
 
@@ -15,6 +15,6 @@ __all__ = ["BaseExporter", "ConsoleExporter"]
 # Lazy import for RabbitMQExporter to avoid dependency issues
 def get_rabbitmq_exporter():
     """Get RabbitMQExporter (lazy import)."""
-    from marie.llm_tracking.exporters.rabbitmq import RabbitMQExporter
+    from marie.instrumentation.exporters.rabbitmq import RabbitMQExporter
 
     return RabbitMQExporter

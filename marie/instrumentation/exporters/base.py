@@ -8,7 +8,13 @@ Exporters are responsible for sending events to their destination
 from abc import ABC, abstractmethod
 from typing import List, Protocol, runtime_checkable
 
-from marie.llm_tracking.types import Observation, QueueMessage, RawEvent, Score, Trace
+from marie.instrumentation.types import (
+    Observation,
+    QueueMessage,
+    RawEvent,
+    Score,
+    Trace,
+)
 
 
 @runtime_checkable
@@ -82,6 +88,14 @@ class BaseExporter(Protocol):
         """
         ...
 
+    def start_span(self, observation: Observation) -> None:
+        """Called when an observation is created (before end). No-op by default."""
+        ...
+
+    def finalize_trace(self, trace: Trace) -> None:
+        """Called when a trace context manager exits. No-op by default."""
+        ...
+
     def flush(self) -> None:
         """Flush any buffered events."""
         ...
@@ -132,6 +146,14 @@ class AbstractExporter(ABC):
         """Export multiple scores. Default: call export_score for each."""
         for score in scores:
             self.export_score(score)
+
+    def start_span(self, observation: Observation) -> None:
+        """Called when an observation is created. Override if needed."""
+        pass
+
+    def finalize_trace(self, trace: Trace) -> None:
+        """Called when a trace context manager exits. Override if needed."""
+        pass
 
     def flush(self) -> None:
         """Flush any buffered events. Override if needed."""

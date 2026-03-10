@@ -475,17 +475,11 @@ def _build_regions_from_json(
     if not json_data:
         return []
 
-    # Handle both single-claim format and legacy multi-claim format
-    # New format: { "claim_uid": "...", "source": {...}, ... } - single claim object
-    # Legacy format: { "claims": [ {...}, {...} ] } - array of claims
+    # Handle both multi-claim and single-claim formats
+    # Multi-claim format: { "claims": [ {...}, {...} ] } - multiple claims per page
+    # Single-claim format: { "claim_uid": "...", "source": {...}, ... } - one claim per file
     claims = []
     if "claims" in json_data:
-        # Legacy multi-claim format - emit warning
-        logging.warning(
-            f"[DEPRECATED] File {json_path} uses legacy 'claims' array format. "
-            "Please update to single-claim format (one claim per file). "
-            "This format will be removed in a future version."
-        )
         claims = json_data.get("claims", [])
     elif "claim_uid" in json_data or "source" in json_data:
         # New single-claim format - wrap in list for uniform processing

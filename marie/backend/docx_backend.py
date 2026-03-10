@@ -1,5 +1,4 @@
 import logging
-from pathlib import Path
 
 from docx import Document
 from docx.table import Table

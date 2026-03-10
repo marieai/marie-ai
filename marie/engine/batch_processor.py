@@ -14,7 +14,7 @@ def _get_llm_tracker():
     global _llm_tracker
     if _llm_tracker is None:
         try:
-            from marie.llm_tracking import get_tracker
+            from marie.instrumentation import get_tracker
 
             _llm_tracker = get_tracker()
         except (ImportError, RuntimeError):

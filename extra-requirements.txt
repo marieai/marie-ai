@@ -59,6 +59,7 @@ opentelemetry-instrumentation-aiohttp-client>=0.41b0:    perf,standard,devel
 opentelemetry-instrumentation-fastapi>=0.41b0:  perf,standard,devel
 opentelemetry-exporter-otlp-proto-grpc>=1.20.0: perf,standard,devel
 prometheus_client>=0.12.0:                      perf,standard,devel
+openinference-instrumentation>=0.1.46:          perf,standard,devel
 
 fastapi>=0.100.1:            standard,devel
 uvicorn[standard]>=0.23.1:  standard,devel

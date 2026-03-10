@@ -2,7 +2,6 @@ import asyncio
 import atexit
 import os
 import threading
-import time
 from typing import Any, Dict, Optional, Union
 
 from marie.constants import __cache_path__
@@ -15,10 +14,6 @@ from marie.messaging.rabbit_handler import RabbitMQToastHandler
 from marie.messaging.toast_registry import Toast
 from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.types import strtobool
-
-# Global reference to LLM tracking worker for cleanup
-_llm_tracking_worker: Optional[Any] = None
-_llm_tracking_thread: Optional[threading.Thread] = None
 
 # Global reference to sensor worker for cleanup
 _sensor_worker: Optional[Any] = None
@@ -116,138 +111,60 @@ def setup_llm_tracking(
     storage_config: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
-    Setup the LLM tracking worker for observability.
+    Setup LLM tracking instrumentation.
 
-    This starts a background thread that consumes LLM events from RabbitMQ
-    and writes them to ClickHouse for analytics.
-
-    Config example (YAML):
-        llm_tracking:
-          enabled: true
-          exporter: rabbitmq
-          project_id: marie-ai
-          worker:
-            enabled: true
-          rabbitmq:
-            <<: *rabbitmq_conf_shared
-            exchange: llm_tracking
-            queue: llm_events
-          clickhouse:
-            host: localhost
-            port: 8123
-            database: marie
-
-    :param llm_tracking_config: The llm_tracking section from YAML config
-    :param storage_config: Optional storage section for shared S3 config
+    Configures InstrumentationSettings from YAML and ensures a global
+    OI TracerProvider exists. No background worker -- OTel's
+    BatchSpanProcessor handles async export internally.
     """
-    global _llm_tracking_worker, _llm_tracking_thread
-
-    if llm_tracking_config is None or not llm_tracking_config:
-        logger.debug("No llm_tracking config provided, skipping")
+    if not llm_tracking_config or not strtobool(
+        llm_tracking_config.get("enabled", False)
+    ):
+        logger.debug("LLM tracking is disabled or not configured")
         return
 
-    # Check if tracking is enabled
-    if not strtobool(llm_tracking_config.get("enabled", False)):
-        logger.info("LLM tracking is disabled")
-        return
+    from marie.instrumentation.config import ExporterType, configure_from_yaml
 
-    # Configure settings from YAML (single source of truth)
-    from marie.llm_tracking.config import configure_from_yaml
+    settings = configure_from_yaml(llm_tracking_config, storage_config)
 
-    configure_from_yaml(llm_tracking_config, storage_config)
-    logger.info("LLM tracking configured from YAML config")
-
-    # Check if worker should be started
-    worker_config = llm_tracking_config.get("worker", {})
-    if not strtobool(worker_config.get("enabled", True)):
-        logger.info("LLM tracking worker is disabled, only tracking is enabled")
-        return
-
-    try:
-        from marie.llm_tracking.worker import LLMTrackingWorker
-
-        logger.info("Starting LLM tracking worker...")
-
-        # Create the worker
-        _llm_tracking_worker = LLMTrackingWorker()
-
-        # Start in a background thread
-        _llm_tracking_thread = threading.Thread(
-            target=_run_llm_tracking_worker,
-            name="llm-tracking-worker",
-            daemon=True,  # Will be stopped when main process exits
+    if settings.EXPORTER == ExporterType.OTEL:
+        _ensure_tracer_provider(
+            require_openinference=True,
+            console_export=settings.CONSOLE_SPANS,
         )
-        _llm_tracking_thread.start()
-
-        # Register cleanup
-        atexit.register(_stop_llm_tracking_worker)
-
-        logger.info("LLM tracking worker started in background thread")
-
-    except ImportError as e:
-        logger.warning(f"LLM tracking dependencies not available: {e}")
-    except Exception as e:
-        logger.error(f"Failed to start LLM tracking worker: {e}")
+        logger.info("LLM tracking configured with OTel exporter")
+    else:
+        _ensure_tracer_provider(console_export=settings.CONSOLE_SPANS)
+        logger.info("LLM tracking configured with console exporter")
 
 
-def _run_llm_tracking_worker() -> None:
-    """Run the LLM tracking worker (called in background thread).
+def _ensure_tracer_provider(
+    require_openinference: bool = False,
+    console_export: bool = False,
+) -> None:
+    """Ensure a compatible global OI TracerProvider exists."""
+    from opentelemetry import trace
 
-    Retries startup with exponential backoff so the worker survives
-    when the database schema hasn't been migrated yet at gateway boot.
-    """
-    if _llm_tracking_worker is None:
+    current = trace.get_tracer_provider()
+    is_proxy = type(current).__name__ == "ProxyTracerProvider"
+
+    if is_proxy:
+        from marie.instrumentation import register
+
+        register(console_export=console_export)
+        logger.info("Created global OI TracerProvider for LLM tracking")
         return
 
-    max_retries = 10
-    base_delay = 2  # seconds
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            _llm_tracking_worker.run()
-            return  # clean exit (e.g. shutdown)
-        except Exception as e:
-            if attempt >= max_retries:
-                logger.error(
-                    f"LLM tracking worker failed after {max_retries} attempts: {e}"
-                )
-                return
-
-            delay = min(base_delay * (2 ** (attempt - 1)), 60)
-            logger.warning(
-                f"LLM tracking worker failed (attempt {attempt}/{max_retries}): {e}. "
-                f"Retrying in {delay}s..."
+    if require_openinference:
+        tracer = trace.get_tracer("marie.instrumentation.bootstrap")
+        is_openinference = all(
+            hasattr(tracer, attr) for attr in ("agent", "chain", "tool", "llm")
+        )
+        if not is_openinference:
+            raise RuntimeError(
+                "Global TracerProvider already exists but does not expose "
+                "OpenInference tracer capabilities required by exporter=otel."
             )
-            # Reset started flag so run() will call start() again
-            _llm_tracking_worker._started = False
-            time.sleep(delay)
-
-
-def _stop_llm_tracking_worker() -> None:
-    """Stop the LLM tracking worker (called on shutdown)."""
-    global _llm_tracking_worker, _llm_tracking_thread
-
-    if _llm_tracking_worker is not None:
-        logger.info("Stopping LLM tracking worker...")
-        try:
-            _llm_tracking_worker.stop()
-        except Exception as e:
-            logger.warning(f"Error stopping LLM tracking worker: {e}")
-        finally:
-            _llm_tracking_worker = None
-
-    if _llm_tracking_thread is not None and _llm_tracking_thread.is_alive():
-        _llm_tracking_thread.join(timeout=5.0)
-        _llm_tracking_thread = None
-
-
-def stop_llm_tracking() -> None:
-    """
-    Public function to stop the LLM tracking worker.
-
-    Can be called manually for graceful shutdown.
-    """
-    _stop_llm_tracking_worker()
 
 
 def setup_sensor_worker(

@@ -139,16 +139,22 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
 
         Executors run in separate processes (via SPAWN) and don't inherit the
         gateway's configuration. This method calls configure_from_yaml() to
-        initialize LLM tracking settings in the executor process.
-
-        Args:
-            llm_tracking_config: The llm_tracking section from YAML config
-            storage_config: Optional storage section for shared S3 config
+        initialize LLM tracking settings, then ensures a global TracerProvider
+        exists for OTel export.
         """
         try:
-            from marie.llm_tracking.config import configure_from_yaml
+            from marie.instrumentation.config import ExporterType, configure_from_yaml
 
-            configure_from_yaml(llm_tracking_config, storage_config)
+            settings = configure_from_yaml(llm_tracking_config, storage_config)
+
+            if settings.EXPORTER == ExporterType.OTEL:
+                from marie.utils.server_runtime import _ensure_tracer_provider
+
+                _ensure_tracer_provider(
+                    require_openinference=True,
+                    console_export=settings.CONSOLE_SPANS,
+                )
+
             self.logger.info("LLM tracking configured for executor process")
         except Exception as e:
             self.logger.warning(f"Failed to configure LLM tracking: {e}")
