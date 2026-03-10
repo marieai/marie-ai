@@ -66,6 +66,7 @@ from marie.scheduler.util import (
     available_slots_by_executor,
     convert_job_status_to_work_state,
 )
+from marie.serve.discovery.registry import _is_known_connection_error
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.state.semaphore_store import SemaphoreStore
 from marie.state.slot_capacity_manager import SlotCapacityManager
@@ -1770,6 +1771,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 failures = 0
 
             except Exception as e:
+                if _is_known_connection_error(e):
+                    self.logger.warning(
+                        f"Poll loop: ETCD connection unavailable, waiting for reconnect"
+                    )
+                    await asyncio.sleep(3)
+                    continue
+
                 self.logger.error("Poll loop exception", exc_info=True)
                 failures += 1
                 if failures >= 5:
