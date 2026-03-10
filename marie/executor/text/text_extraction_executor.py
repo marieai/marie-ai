@@ -585,6 +585,38 @@ class TextExtractionExecutorMock(MarieExecutor):
             "data": "Data reply",
         }
 
+    @requests(on="/document/extract-direct")
+    async def func_extract_direct(
+        self,
+        docs: DocList[AssetKeyDoc],
+        parameters=None,
+        *args,
+        **kwargs,
+    ):
+        if parameters is None:
+            parameters = {}
+        self.logger.info(f"func_extract_direct called : {len(docs)}, {parameters}")
+        return {
+            "parameters": parameters,
+            "data": "Data reply from extract-direct",
+        }
+
+    @requests(on="/document/extract-fixed")
+    async def func_extract_fixed(
+        self,
+        docs: DocList[AssetKeyDoc],
+        parameters=None,
+        *args,
+        **kwargs,
+    ):
+        if parameters is None:
+            parameters = {}
+        self.logger.info(f"func_extract_fixed called : {len(docs)}, {parameters}")
+        return {
+            "parameters": parameters,
+            "data": "Data reply from extract-fixed",
+        }
+
 
 class FirstExecutor(Executor):
     """Example executor for demonstration."""

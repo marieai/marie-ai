@@ -86,6 +86,8 @@ class LLMTableAnnotator(LLMAnnotator):
             engine=engine,
             is_multimodal=self.multimodal,
             expect_output=self.expect_output,
+            completion_params=self.completion_params,
+            mm_processor_kwargs=self.mm_processor_kwargs,
         )
 
     async def aannotate(self, document: UnstructuredDocument, frames: List) -> None:
@@ -121,6 +123,8 @@ class LLMTableAnnotator(LLMAnnotator):
             engine=engine,
             is_multimodal=self.multimodal,
             expect_output=self.expect_output,
+            completion_params=self.completion_params,
+            mm_processor_kwargs=self.mm_processor_kwargs,
         )
 
     def parse_output(self, raw_output: str):

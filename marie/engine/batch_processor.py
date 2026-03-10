@@ -96,7 +96,13 @@ def _create_retry_decorator(max_retries: int) -> Callable[[Any], Any]:
 
 
 class BatchProcessor:
-    def __init__(self, client, model_string, logger: MarieLogger):
+    def __init__(
+        self,
+        client,
+        model_string,
+        logger: MarieLogger,
+        default_completion_params: Optional[Dict[str, Any]] = None,
+    ):
         self.client = client
         self.model_string = model_string
         self.logger = logger
@@ -104,6 +110,16 @@ class BatchProcessor:
             raise ValueError(
                 "Client must be an instance of OpenAI API client for async operations."
             )
+        _fallbacks = {
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "frequency_penalty": 0.0,
+            "presence_penalty": 0.0,
+            "extra_body": None,
+        }
+        if default_completion_params:
+            _fallbacks.update(default_completion_params)
+        self.default_completion_params = _fallbacks
 
     def extract_reasoning_content(
         self, model_output: str
@@ -183,6 +199,7 @@ class BatchProcessor:
         request_id,
         guided_json: Optional[Union[Dict, BaseModel, str]],
         trace_id: Optional[str] = None,
+        completion_params: Optional[Dict[str, Any]] = None,
     ):
         """
         Asynchronously performs inference for a single request,
@@ -241,18 +258,28 @@ class BatchProcessor:
             if not os.getenv("OPENAI_API_KEY"):
                 raise AuthenticationError(MISSING_API_KEY_ERROR_MESSAGE)
 
-            stream = await self.client.chat.completions.create(
+            effective = dict(self.default_completion_params)
+            if completion_params:
+                effective.update(completion_params)
+
+            extra_body = effective.pop("extra_body", None)
+
+            create_kwargs = dict(
                 model=self.model_string,
                 messages=messages,
-                temperature=0.0,
-                top_p=1.0,
-                frequency_penalty=0.0,
-                presence_penalty=0.0,
+                temperature=effective.get("temperature", 0.0),
+                top_p=effective.get("top_p", 1.0),
+                frequency_penalty=effective.get("frequency_penalty", 0.0),
+                presence_penalty=effective.get("presence_penalty", 0.0),
                 stop=stop,
                 max_tokens=max_tokens,
                 n=1,
                 stream=True,
             )
+            if extra_body is not None:
+                create_kwargs["extra_body"] = extra_body
+
+            stream = await self.client.chat.completions.create(**create_kwargs)
 
             full_response = ""
             async for chunk in stream:
@@ -312,6 +339,16 @@ class BatchProcessor:
                 except Exception as tracking_error:
                     self.logger.debug(f"LLM tracking error (retry): {tracking_error}")
             raise e
+        except (APIError, APIConnectionError, APITimeoutError, RateLimitError) as e:
+            self.logger.error(
+                f"Request {request_id} - Task {task_id} - API error in completion_non_streaming: {e}"
+            )
+            if tracker and tracker.enabled and observation_id:
+                try:
+                    tracker.error(observation_id, e)
+                except Exception as tracking_error:
+                    self.logger.debug(f"LLM tracking error (error): {tracking_error}")
+            raise  # Let tenacity retry these
         except Exception as e:  # swallow all other exceptions for now
             self.logger.error(
                 f"Request {request_id} - Task {task_id} - Error in completion_non_streaming: {e}"
@@ -337,6 +374,7 @@ class BatchProcessor:
         request_id,
         guided_json,
         trace_id: Optional[str] = None,
+        completion_params: Optional[Dict[str, Any]] = None,
     ):
         try:
             """Use tenacity to retry the completion call."""
@@ -349,10 +387,13 @@ class BatchProcessor:
                 request_id=request_id,
                 guided_json=guided_json,
                 trace_id=trace_id,
+                completion_params=completion_params,
             )
         except Exception as e:
-            self.logger.error(f"Request {request_id} – Task {task_id} failed: {e!r}")
-            return task_id, None
+            self.logger.error(
+                f"Request {request_id} – Task {task_id} failed after retries: {e!r}"
+            )
+            raise  # Propagate to caller
 
     async def load_batched_request(
         self,
@@ -361,6 +402,7 @@ class BatchProcessor:
         guided_json,
         trace_id: Optional[str] = None,
         on_result: Optional[Callable[[str, Optional[str]], None]] = None,
+        completion_params: Optional[Dict[str, Any]] = None,
     ):
         """
         Processes the batch of requests, invoking on_result as each completes.
@@ -389,6 +431,7 @@ class BatchProcessor:
                     request_id=request_id,
                     guided_json=guided_json,
                     trace_id=trace_id,
+                    completion_params=completion_params,
                 )
                 return BatchResult(tid, resp, None)
             except asyncio.CancelledError:
@@ -491,6 +534,8 @@ class BatchProcessor:
                     f"LLM tracking error (trace create): {tracking_error}"
                 )
 
+        completion_params = kwargs.get("completion_params", None)
+
         batch_outputs, task_results = run_coroutine_in_current_loop(
             self.load_batched_request(
                 messages_list,
@@ -498,6 +543,7 @@ class BatchProcessor:
                 guided_json,
                 trace_id=trace_id,
                 on_result=on_result,
+                completion_params=completion_params,
             )
         )
 
@@ -515,6 +561,12 @@ class BatchProcessor:
                 )
                 self.logger.error(response)
                 failed_count += 1
+
+        if failed_count > 0:
+            raise RuntimeError(
+                f"Batch inference failed: {failed_count}/{len(messages_list)} tasks failed "
+                f"(request_id={request_id})"
+            )
 
         elapsed_time = time.time() - start_time
         self.logger.info(

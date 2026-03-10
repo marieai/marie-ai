@@ -685,6 +685,13 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
     if skipped:
         logger.info(f"Skipping disabled annotators: {skipped}")
 
+    # Pre-create output directories for parser-only annotators (no annotator_type).
+    # These are derived/computed stages whose parsers create their own output,
+    # unlike LLM annotators whose directories are created by the annotation step.
+    for name, ann_conf in enabled_annotators.items():
+        if "annotator_type" not in ann_conf:
+            os.makedirs(DIRS[name], exist_ok=True)
+
     strict_dirs = conf.get("validation", {}).get("strict_directories", False)
     missing_dirs = {name for name, path in DIRS.items() if not os.path.exists(path)}
     if missing_dirs:
