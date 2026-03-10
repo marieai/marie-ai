@@ -3,6 +3,7 @@ version: "3.8"
 services:
   s3server:
     image: zenko/cloudserver:latest
+    init: true
     container_name: s3server
     restart: unless-stopped
     ports:

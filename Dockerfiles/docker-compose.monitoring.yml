@@ -20,6 +20,7 @@ services:
   jaeger:
     image: jaegertracing/jaeger:2.0.0
     container_name: jaeger
+    init: true
     ports:
       - "5778:5778"
       - "16686:16686"
@@ -39,6 +40,7 @@ services:
 
   otel-collector:
     image: otel/opentelemetry-collector:0.114.0
+    init: true
     command: [ "--config=/etc/otel-collector-config.yml" ]
     volumes:
       - ./config/opentelemetry/otel-collector-config.yml:/etc/otel-collector-config.yml
@@ -53,6 +55,7 @@ services:
 
   prometheus:
     image: prom/prometheus:latest
+    init: true
     restart: unless-stopped
     volumes:
      - ./config/prometheus:/etc/prometheus
@@ -67,6 +70,7 @@ services:
 
   alertmanager:
     image: prom/alertmanager:latest
+    init: true
     restart: unless-stopped
     networks:
       - public
@@ -79,6 +83,7 @@ services:
 
   grafana:
     image: grafana/grafana
+    init: true
     restart: unless-stopped
     user: "472"
     depends_on:
@@ -98,6 +103,7 @@ services:
 
   loki:
     image: grafana/loki:3.1.0
+    init: true
     restart: unless-stopped
     volumes:
       - ./config/grafana/loki:/etc/loki

@@ -12,6 +12,7 @@ version: "3.9"
 services:
   prometheus:
     image: prom/prometheus:latest
+    init: true
     restart: unless-stopped
     volumes:
      - ./config/prometheus:/etc/prometheus
@@ -26,6 +27,7 @@ services:
 
   alertmanager:
     image: prom/alertmanager:latest
+    init: true
     restart: unless-stopped
     networks:
       - public
@@ -38,6 +40,7 @@ services:
 
   grafana:
     image: grafana/grafana
+    init: true
     restart: unless-stopped
     user: "472"
     depends_on:
@@ -57,6 +60,7 @@ services:
 
   loki:
     image: grafana/loki:2.7.5
+    init: true
     restart: unless-stopped
     volumes:
       - ./config/grafana/loki:/etc/loki
@@ -72,6 +76,7 @@ services:
 
   rabbitmq:
     image: rabbitmq:3-management-alpine
+    init: true
     restart: unless-stopped
     container_name: 'marie-rabbitmq'
     ports:

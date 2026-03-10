@@ -18,6 +18,7 @@ services:
   s3server:
     image: minio/minio:latest
     container_name: marie-s3-server
+    init: true
     restart: unless-stopped
     ports:
       - "8000:8000"        # S3 API port

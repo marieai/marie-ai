@@ -17,6 +17,7 @@
 services:
   rabbitmq:
     image: rabbitmq:3-management-alpine
+    init: true
     restart: unless-stopped
     container_name: 'marie-rabbitmq'
     ports:

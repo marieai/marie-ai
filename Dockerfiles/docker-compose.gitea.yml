@@ -20,6 +20,7 @@ services:
   gitea:
     image: gitea/gitea:latest
     container_name: marie-gitea
+    init: true
     restart: unless-stopped
     environment:
       - USER_UID=1000

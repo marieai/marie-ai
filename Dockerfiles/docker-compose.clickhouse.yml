@@ -20,6 +20,7 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     container_name: marie-clickhouse
+    init: true
     restart: unless-stopped
     environment:
       # Default user configuration

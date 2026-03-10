@@ -7,6 +7,7 @@ version: '3.8'
 services:
   postgres:
     image: postgres:15
+    init: true
     container_name: llm_tracking_test_postgres
     environment:
       POSTGRES_USER: postgres
@@ -25,6 +26,7 @@ services:
 
   rabbitmq:
     image: rabbitmq:3-management
+    init: true
     container_name: llm_tracking_test_rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: guest
@@ -42,6 +44,7 @@ services:
 
   minio:
     image: minio/minio:latest
+    init: true
     container_name: llm_tracking_test_minio
     command: server /data --console-address ":9001"
     environment:
@@ -75,6 +78,7 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server:latest
+    init: true
     container_name: llm_tracking_test_clickhouse
     environment:
       CLICKHOUSE_USER: default
