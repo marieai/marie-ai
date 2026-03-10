@@ -194,7 +194,19 @@ portalocker==3.2.0:            standard,core
 jsonpath-ng:                   standard,core
 clickhouse-driver==0.2.10:     standard,core
 python-dotenv:                 standard,devel
-qwen-vl-utils:                 standard,devel
+
+qwen-vl-utils==0.0.14:         standard,core
+portalocker==3.2.0:            standard,core
+peft==0.14.0:                  standard,core
+ruamel.yaml:                   standard,core
+tenacity:                      standard,core
+graphviz:                      standard,core
+networkx:                      standard,core
+json_repair:                   standard,core
+nameparser:                   standard,core
+prettytable:                   standard,core
+
+
 
 # Memory integration (Mem0 SDK for agent memory)
 # mem0ai>=0.1.0:                 standard,core
