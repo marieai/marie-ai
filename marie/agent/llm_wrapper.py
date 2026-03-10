@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from abc import ABC, abstractmethod
 from typing import (
     TYPE_CHECKING,
@@ -36,6 +37,7 @@ from marie.agent.tool_call_parser import ToolCallTextParser
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
+    from marie.agent.emitter import Emitter
     from marie.engine.base import EngineLM
 
 logger = MarieLogger("marie.agent.llm_wrapper")
@@ -47,6 +49,20 @@ class BaseLLMWrapper(ABC):
     Provides a unified interface for different LLM backends to be used
     with the Marie agent framework.
     """
+
+    _emitter: Optional["Emitter"] = None
+
+    @property
+    def emitter(self) -> Optional["Emitter"]:
+        """Get the LLM wrapper's event emitter.
+
+        Set by the agent when executing LLM calls within a run context.
+        """
+        return self._emitter
+
+    @emitter.setter
+    def emitter(self, value: Optional["Emitter"]) -> None:
+        self._emitter = value
 
     @property
     def supports_native_tool_calling(self) -> bool:
@@ -787,53 +803,112 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         - Indexed tool-call deltas (buffered until JSON is valid)
         - Abort signal checking per chunk
         - Both content AND tool_calls in the same delta (finding #5)
+        - Event emission for observability (new_token, success, error)
         """
+        start_time = time.perf_counter()
+
         if abort_signal:
             abort_signal.throw_if_aborted()
+
+        # Emit start event
+        if self._emitter:
+            await self._emitter.emit(
+                "start",
+                {
+                    "model_name": self.model,
+                    "message_count": len(messages),
+                    "has_functions": functions is not None,
+                },
+                source="llm",
+            )
 
         async_client = self._get_async_client()
         kwargs = self._build_api_kwargs(messages, functions, extra_generate_cfg)
         kwargs["stream"] = True
 
-        response = await async_client.chat.completions.create(**kwargs)
+        accumulated_content = ""
 
-        tool_accumulator = ToolCallAccumulator()
-        has_tool_calls = False
+        try:
+            response = await async_client.chat.completions.create(**kwargs)
 
-        async for chunk in response:
-            # Check abort signal each iteration
-            if abort_signal and abort_signal.aborted:
-                break
+            tool_accumulator = ToolCallAccumulator()
+            has_tool_calls = False
 
-            if not chunk.choices:
-                continue
+            async for chunk in response:
+                # Check abort signal each iteration
+                if abort_signal and abort_signal.aborted:
+                    break
 
-            delta = chunk.choices[0].delta
-            finish_reason = chunk.choices[0].finish_reason
+                if not chunk.choices:
+                    continue
 
-            # Yield text content if present (finding #5: don't skip content
-            # just because tool_calls are also present in this delta)
-            content = getattr(delta, "content", None)
-            if content:
-                yield StreamChunk(content=content)
+                delta = chunk.choices[0].delta
+                finish_reason = chunk.choices[0].finish_reason
 
-            # Accumulate tool-call deltas (finding #6: proper indexed protocol)
-            delta_tool_calls = getattr(delta, "tool_calls", None)
-            if delta_tool_calls:
-                has_tool_calls = True
-                tool_accumulator.feed(delta_tool_calls)
+                # Yield text content if present (finding #5: don't skip content
+                # just because tool_calls are also present in this delta)
+                content = getattr(delta, "content", None)
+                if content:
+                    accumulated_content += content
+                    # Emit new_token event
+                    if self._emitter:
+                        await self._emitter.emit(
+                            "new_token",
+                            {
+                                "token": content,
+                                "accumulated_length": len(accumulated_content),
+                            },
+                            source="llm",
+                        )
+                    yield StreamChunk(content=content)
 
-            # On finish, yield completed tool calls if any
-            if finish_reason is not None:
-                completed_calls = (
-                    tool_accumulator.get_complete_calls() if has_tool_calls else None
+                # Accumulate tool-call deltas (finding #6: proper indexed protocol)
+                delta_tool_calls = getattr(delta, "tool_calls", None)
+                if delta_tool_calls:
+                    has_tool_calls = True
+                    tool_accumulator.feed(delta_tool_calls)
+
+                # On finish, yield completed tool calls if any
+                if finish_reason is not None:
+                    completed_calls = (
+                        tool_accumulator.get_complete_calls()
+                        if has_tool_calls
+                        else None
+                    )
+
+                    # Emit success event
+                    duration_ms = (time.perf_counter() - start_time) * 1000
+                    if self._emitter:
+                        await self._emitter.emit(
+                            "success",
+                            {
+                                "model_name": self.model,
+                                "has_tool_calls": completed_calls is not None,
+                                "duration_ms": duration_ms,
+                            },
+                            source="llm",
+                        )
+
+                    yield StreamChunk(
+                        content=None,
+                        finish_reason=finish_reason,
+                        tool_calls=completed_calls,
+                        event_type="done",
+                    )
+
+        except Exception as e:
+            # Emit error event
+            if self._emitter:
+                await self._emitter.emit(
+                    "error",
+                    {
+                        "model_name": self.model,
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                    },
+                    source="llm",
                 )
-                yield StreamChunk(
-                    content=None,
-                    finish_reason=finish_reason,
-                    tool_calls=completed_calls,
-                    event_type="done",
-                )
+            raise
 
     def _message_to_openai(self, msg: Message) -> Dict[str, Any]:
         """Convert Message to OpenAI format.

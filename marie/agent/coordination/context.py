@@ -10,7 +10,12 @@ import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+from marie.agent.cancellation import AbortController, AbortSignal
+
+if TYPE_CHECKING:
+    from marie.agent.emitter import Emitter
 
 _current_context: ContextVar[Optional["AgentExecutionContext"]] = ContextVar(
     "agent_execution_context", default=None
@@ -26,6 +31,8 @@ class AgentExecutionContext:
     - group_id inherited from parent (for distributed tracing)
     - Parent-child relationships for nested agent calls
     - Arbitrary context data storage
+    - Event emitter for middleware observability
+    - Abort controller for cancellation
 
     Usage:
         ```python
@@ -51,7 +58,25 @@ class AgentExecutionContext:
     agent_name: Optional[str] = None
     context: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    emitter: Optional["Emitter"] = field(default=None, repr=False)
+    _controller: AbortController = field(default_factory=AbortController, repr=False)
     _token: Any = field(default=None, repr=False)
+
+    @property
+    def signal(self) -> AbortSignal:
+        """Get the abort signal for cancellation checking."""
+        return self._controller.signal
+
+    def abort(self, reason: str = "Operation aborted") -> None:
+        """Abort this context and all operations using its signal."""
+        self._controller.abort(reason)
+
+    def destroy(self) -> None:
+        """Destroy the context, cleaning up emitter and aborting if needed."""
+        if self.emitter is not None:
+            self.emitter.destroy()
+        if not self._controller.signal.aborted:
+            self._controller.abort("Context destroyed")
 
     def __enter__(self) -> "AgentExecutionContext":
         """Enter context and set as current."""
@@ -80,15 +105,25 @@ class AgentExecutionContext:
             **extra_context: Additional context to merge
 
         Returns:
-            New child context
+            New child context with child emitter piped to parent
         """
         child_context = {**self.context, **extra_context}
+
+        # Create child emitter if parent has one
+        child_emitter = None
+        if self.emitter is not None:
+            child_emitter = self.emitter.child(
+                namespace=f"agent.{agent_name}" if agent_name else None,
+                group_id=self.group_id,
+            )
+
         return AgentExecutionContext(
             group_id=self.group_id,  # Inherited for tracing
             parent_id=self.run_id,
             workflow_id=self.workflow_id,
             agent_name=agent_name,
             context=child_context,
+            emitter=child_emitter,
         )
 
     def set(self, key: str, value: Any) -> None:

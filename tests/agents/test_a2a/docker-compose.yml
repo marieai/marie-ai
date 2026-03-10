@@ -2,6 +2,7 @@ version: '3.8'
 
 services:
   echo-agent:
+    init: true
     build:
       context: .
       dockerfile: Dockerfile.agent
@@ -16,6 +17,7 @@ services:
       start_period: 10s
 
   calculator-agent:
+    init: true
     build:
       context: .
       dockerfile: Dockerfile.agent
@@ -30,6 +32,7 @@ services:
       start_period: 10s
 
   streaming-agent:
+    init: true
     build:
       context: .
       dockerfile: Dockerfile.agent
@@ -44,6 +47,7 @@ services:
       start_period: 10s
 
   async-agent:
+    init: true
     build:
       context: .
       dockerfile: Dockerfile.agent

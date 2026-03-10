@@ -46,7 +46,9 @@ from marie.agent.streaming import StreamChunk  # isort:skip circular with marie.
 if TYPE_CHECKING:
     from marie_mem0 import Mem0Config
 
+    from marie.agent.emitter import Emitter
     from marie.agent.llm_wrapper import BaseLLMWrapper
+    from marie.agent.middleware import MiddlewareList, RunMiddlewareProtocol
     from marie.agent.skills import Skill, SkillContext, SkillRouter
 
 logger = MarieLogger("marie.agent.base")
@@ -98,6 +100,7 @@ class BaseAgent(ABC):
         skills_enabled: bool = True,
         auto_match_skills: bool = True,
         default_skills: Optional[List[str]] = None,
+        middlewares: Optional["MiddlewareList"] = None,
         **kwargs: Any,
     ):
         """Initialize the agent.
@@ -116,6 +119,7 @@ class BaseAgent(ABC):
             skills_enabled: Enable skill routing (slash commands, auto-matching)
             auto_match_skills: Auto-match skills from message content
             default_skills: Skills to always load (by name)
+            middlewares: Optional list of middleware to apply to runs
             **kwargs: Additional configuration
         """
         self.llm = llm
@@ -123,6 +127,8 @@ class BaseAgent(ABC):
         self.name = name
         self.description = description
         self.extra_generate_cfg: Dict[str, Any] = kwargs.get("extra_generate_cfg", {})
+        self.middlewares: List["RunMiddlewareProtocol"] = list(middlewares or [])
+        self._emitter: Optional["Emitter"] = None
 
         # Skill system configuration
         self.skills_enabled = skills_enabled
@@ -174,6 +180,31 @@ class BaseAgent(ABC):
         except Exception as e:
             logger.warning(f"Failed to initialize skill router: {e}")
             self.skills_enabled = False
+
+    @property
+    def emitter(self) -> Optional["Emitter"]:
+        """Get or create the agent's event emitter.
+
+        The emitter is lazily created on first access with namespace "agent".
+        """
+        if self._emitter is None:
+            from marie.agent.emitter import Emitter, EmitterOptions
+
+            namespace = f"agent.{self.name}" if self.name else "agent"
+            self._emitter = Emitter(EmitterOptions(namespace=namespace))
+        return self._emitter
+
+    def _bind_middlewares(self, emitter: "Emitter") -> None:
+        """Bind all middlewares to the emitter.
+
+        Middlewares are sorted by priority (highest first) before binding.
+        """
+        sorted_middlewares = sorted(
+            self.middlewares,
+            key=lambda m: -m.priority,
+        )
+        for middleware in sorted_middlewares:
+            middleware.bind(emitter)
 
     def _parse_slash_command(self, message: str) -> tuple[Optional[str], str]:
         """Extract /skill-name from message.
@@ -433,6 +464,12 @@ class BaseAgent(ABC):
         to `_run()` for core logic. Supports skill routing via explicit
         skill_name parameter or /skill-name slash commands in messages.
 
+        Emits events via the emitter if middlewares are configured:
+        - agent.start: When execution begins
+        - agent.success: When execution completes successfully
+        - agent.error: When an error occurs
+        - agent.finish: Always emitted when execution ends
+
         Args:
             messages: Input messages (can be dicts or Message objects)
             skill_name: Explicit skill to use (bypasses auto-matching)
@@ -454,8 +491,21 @@ class BaseAgent(ABC):
             # With slash command (skill parsed from message)
             for responses in agent.run([{"role": "user", "content": "/code-review main.py"}]):
                 print(responses[-1].content)
+
+            # With middleware
+            from marie.agent.middleware.trajectory import TrajectoryMiddleware
+
+            agent = MyAgent(middlewares=[TrajectoryMiddleware()])
+            for responses in agent.run(messages):
+                print(responses[-1].content)
             ```
         """
+        import time
+
+        from marie.agent.emitter import emit_sync
+
+        start_time = time.perf_counter()
+
         # Deep copy to avoid mutation
         messages = copy.deepcopy(messages)
 
@@ -533,6 +583,27 @@ class BaseAgent(ABC):
             original_tools = self.function_map.copy()
             self.function_map.update(skill_tools)
 
+        # Set up emitter and bind middleware
+        run_emitter = None
+        if self.middlewares:
+            run_emitter = self.emitter
+            self._bind_middlewares(run_emitter)
+
+        # Emit start event
+        emit_sync(
+            run_emitter,
+            "start",
+            {
+                "agent_name": self.name,
+                "message_count": len(new_messages),
+            },
+            source=self.name,
+        )
+
+        last_responses: List[Message] = []
+        success = False
+        error_exc: Optional[Exception] = None
+
         try:
             # Execute core logic
             for responses in self._run(messages=new_messages, **kwargs):
@@ -540,6 +611,8 @@ class BaseAgent(ABC):
                 for resp in responses:
                     if not resp.name and self.name:
                         resp.name = self.name
+
+                last_responses = responses
 
                 # Convert output format based on input format
                 if _return_message_type == "message":
@@ -551,7 +624,51 @@ class BaseAgent(ABC):
                         r.model_dump() if isinstance(r, Message) else r
                         for r in responses
                     ]
+
+            success = True
+
+            # Emit success event
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            emit_sync(
+                run_emitter,
+                "success",
+                {
+                    "agent_name": self.name,
+                    "result_count": len(last_responses),
+                    "duration_ms": duration_ms,
+                },
+                source=self.name,
+            )
+
+        except Exception as e:
+            error_exc = e
+            # Emit error event
+            emit_sync(
+                run_emitter,
+                "error",
+                {
+                    "agent_name": self.name,
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                },
+                source=self.name,
+            )
+            raise
+
         finally:
+            # Emit finish event
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            emit_sync(
+                run_emitter,
+                "finish",
+                {
+                    "agent_name": self.name,
+                    "success": success,
+                    "duration_ms": duration_ms,
+                },
+                source=self.name,
+            )
+
             # Restore original tools if skill tools were added
             if skill_tools:
                 self.function_map = original_tools

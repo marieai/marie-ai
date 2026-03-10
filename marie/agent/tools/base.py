@@ -9,10 +9,12 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import time
 import traceback
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -26,6 +28,9 @@ from typing import (
 from pydantic import BaseModel, Field
 
 from marie.logging_core.logger import MarieLogger
+
+if TYPE_CHECKING:
+    from marie.agent.emitter import Emitter
 
 logger = MarieLogger("marie.agent.tools")
 
@@ -182,6 +187,20 @@ class AgentTool(ABC):
         ```
     """
 
+    _emitter: Optional["Emitter"] = None
+
+    @property
+    def emitter(self) -> Optional["Emitter"]:
+        """Get the tool's event emitter.
+
+        Set by the agent when executing tools within a run context.
+        """
+        return self._emitter
+
+    @emitter.setter
+    def emitter(self, value: Optional["Emitter"]) -> None:
+        self._emitter = value
+
     @property
     @abstractmethod
     def metadata(self) -> ToolMetadata:
@@ -282,6 +301,12 @@ class AgentTool(ABC):
     ) -> ToolOutput:
         """Safely execute the tool with error handling and schema validation.
 
+        Emits events via emitter if set:
+        - tool.start: When execution begins
+        - tool.success: When execution completes successfully
+        - tool.error: When an error occurs
+        - tool.finish: Always emitted when execution ends
+
         Args:
             tool_args: Tool arguments (string or dict)
             **kwargs: Additional keyword arguments
@@ -289,13 +314,37 @@ class AgentTool(ABC):
         Returns:
             ToolOutput, with is_error=True if validation or execution failed
         """
+        from marie.agent.emitter import emit_sync
+
+        start_time = time.perf_counter()
         parsed_args = self._parse_input(tool_args)
         parsed_args.update(kwargs)
+
+        # Emit start event
+        emit_sync(
+            self._emitter,
+            "start",
+            {"tool_name": self.name, "arguments": parsed_args},
+            source=self.name,
+        )
 
         # Validate arguments against schema
         validated_args, validation_error = self._validate_args(parsed_args)
         if validation_error:
             logger.warning(f"Tool {self.name} validation failed: {validation_error}")
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            emit_sync(
+                self._emitter,
+                "error",
+                {"tool_name": self.name, "error": validation_error},
+                source=self.name,
+            )
+            emit_sync(
+                self._emitter,
+                "finish",
+                {"tool_name": self.name, "success": False, "duration_ms": duration_ms},
+                source=self.name,
+            )
             return ToolOutput(
                 content=validation_error,
                 tool_name=self.name,
@@ -305,10 +354,41 @@ class AgentTool(ABC):
             )
 
         try:
-            return self.call(**validated_args)
+            result = self.call(**validated_args)
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            emit_sync(
+                self._emitter,
+                "success",
+                {
+                    "tool_name": self.name,
+                    "result_length": len(result.content),
+                    "duration_ms": duration_ms,
+                },
+                source=self.name,
+            )
+            emit_sync(
+                self._emitter,
+                "finish",
+                {"tool_name": self.name, "success": True, "duration_ms": duration_ms},
+                source=self.name,
+            )
+            return result
         except Exception as ex:
             error_message = self._format_error(ex)
+            duration_ms = (time.perf_counter() - start_time) * 1000
             logger.warning(f"Tool {self.name} failed: {error_message}")
+            emit_sync(
+                self._emitter,
+                "error",
+                {"tool_name": self.name, "error": error_message},
+                source=self.name,
+            )
+            emit_sync(
+                self._emitter,
+                "finish",
+                {"tool_name": self.name, "success": False, "duration_ms": duration_ms},
+                source=self.name,
+            )
             return ToolOutput(
                 content=error_message,
                 tool_name=self.name,
@@ -322,6 +402,12 @@ class AgentTool(ABC):
     ) -> ToolOutput:
         """Safely execute the tool asynchronously with error handling and schema validation.
 
+        Emits events via emitter if set:
+        - tool.start: When execution begins
+        - tool.success: When execution completes successfully
+        - tool.error: When an error occurs
+        - tool.finish: Always emitted when execution ends
+
         Args:
             tool_args: Tool arguments (string or dict)
             **kwargs: Additional keyword arguments
@@ -329,13 +415,38 @@ class AgentTool(ABC):
         Returns:
             ToolOutput, with is_error=True if validation or execution failed
         """
+        start_time = time.perf_counter()
         parsed_args = self._parse_input(tool_args)
         parsed_args.update(kwargs)
+
+        # Emit start event
+        if self._emitter:
+            await self._emitter.emit(
+                "start",
+                {"tool_name": self.name, "arguments": parsed_args},
+                source=self.name,
+            )
 
         # Validate arguments against schema
         validated_args, validation_error = self._validate_args(parsed_args)
         if validation_error:
             logger.warning(f"Tool {self.name} validation failed: {validation_error}")
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            if self._emitter:
+                await self._emitter.emit(
+                    "error",
+                    {"tool_name": self.name, "error": validation_error},
+                    source=self.name,
+                )
+                await self._emitter.emit(
+                    "finish",
+                    {
+                        "tool_name": self.name,
+                        "success": False,
+                        "duration_ms": duration_ms,
+                    },
+                    source=self.name,
+                )
             return ToolOutput(
                 content=validation_error,
                 tool_name=self.name,
@@ -345,10 +456,47 @@ class AgentTool(ABC):
             )
 
         try:
-            return await self.acall(**validated_args)
+            result = await self.acall(**validated_args)
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            if self._emitter:
+                await self._emitter.emit(
+                    "success",
+                    {
+                        "tool_name": self.name,
+                        "result_length": len(result.content),
+                        "duration_ms": duration_ms,
+                    },
+                    source=self.name,
+                )
+                await self._emitter.emit(
+                    "finish",
+                    {
+                        "tool_name": self.name,
+                        "success": True,
+                        "duration_ms": duration_ms,
+                    },
+                    source=self.name,
+                )
+            return result
         except Exception as ex:
             error_message = self._format_error(ex)
+            duration_ms = (time.perf_counter() - start_time) * 1000
             logger.warning(f"Tool {self.name} failed: {error_message}")
+            if self._emitter:
+                await self._emitter.emit(
+                    "error",
+                    {"tool_name": self.name, "error": error_message},
+                    source=self.name,
+                )
+                await self._emitter.emit(
+                    "finish",
+                    {
+                        "tool_name": self.name,
+                        "success": False,
+                        "duration_ms": duration_ms,
+                    },
+                    source=self.name,
+                )
             return ToolOutput(
                 content=error_message,
                 tool_name=self.name,
