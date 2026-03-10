@@ -583,15 +583,25 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 if field_name in populated_fields:
                     continue
 
-                match_generator = (
+                # Two-pass match: prefer exact match over substring/contains
+                # This prevents "MEMBER_ID" from matching "MEMBER_ID_NAME"
+                exact_generator = (
                     (value_text, it, sel)
                     for sel in selectors
                     for key_text, value_text, it in kv_triplets
-                    if key_text
-                    and self._selector_matches_text(sel, key_text, use_regex_flag)
+                    if key_text and self._ci(sel) == self._ci(key_text)
                 )
+                first_match = next(exact_generator, None)
 
-                first_match = next(match_generator, None)
+                if not first_match:
+                    match_generator = (
+                        (value_text, it, sel)
+                        for sel in selectors
+                        for key_text, value_text, it in kv_triplets
+                        if key_text
+                        and self._selector_matches_text(sel, key_text, use_regex_flag)
+                    )
+                    first_match = next(match_generator, None)
 
                 if not first_match:
                     continue
@@ -793,16 +803,16 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
                 processed_column = -1
                 matched = False
+
+                # Pass 1: prefer exact match over substring/contains
                 for selector in selectors:
                     for col_index, header_text in enumerate(header_texts):
                         if col_index in claimed_columns or not header_text:
                             continue
-                        if self._selector_matches_text(
-                            selector, header_text, use_regex_flag
-                        ):
+                        if self._ci(selector) == self._ci(header_text):
                             self.logger.info(
                                 f"Matched header '{selector}' for field '{field_name}' at column {col_index} "
-                                f"(header='{header_text}')"
+                                f"(header='{header_text}', exact)"
                             )
                             processed_column = col_index
                             claimed_columns.add(col_index)
@@ -810,6 +820,26 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                             break
                     if matched:
                         break
+
+                # Pass 2: fall back to substring/regex match
+                if not matched:
+                    for selector in selectors:
+                        for col_index, header_text in enumerate(header_texts):
+                            if col_index in claimed_columns or not header_text:
+                                continue
+                            if self._selector_matches_text(
+                                selector, header_text, use_regex_flag
+                            ):
+                                self.logger.info(
+                                    f"Matched header '{selector}' for field '{field_name}' at column {col_index} "
+                                    f"(header='{header_text}')"
+                                )
+                                processed_column = col_index
+                                claimed_columns.add(col_index)
+                                matched = True
+                                break
+                        if matched:
+                            break
 
                 if processed_column != -1:
                     columns_to_process[field_name] = {
