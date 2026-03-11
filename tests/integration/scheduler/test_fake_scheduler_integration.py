@@ -5,6 +5,7 @@ import pytest
 
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
 from marie.scheduler.memory_frontier import MemoryFrontier
+from marie.scheduler.util import frontier_candidate_window
 
 
 def wi(
@@ -16,6 +17,8 @@ def wi(
         pri: int = 1,
         deps=None,
         exe: str = "exe://ok",
+        soft_sla=None,
+        hard_sla=None,
 ):
     return NS(
         id=jid,
@@ -25,6 +28,10 @@ def wi(
         priority=pri,
         dependencies=list(deps or []),
         data={"metadata": {"on": exe}},
+        start_after=None,
+        state="created",
+        soft_sla=soft_sla,
+        hard_sla=hard_sla,
     )
 
 
@@ -57,8 +64,10 @@ class FakeRunner:
     def __init__(self, dispatch_outcomes: dict[str, bool] | None = None, activation_ok: set[str] | None = None):
         self.dispatch_outcomes = dispatch_outcomes or {}
         self.activation_ok = activation_ok or set()
+        self.enqueued_ids: list[str] = []
 
     async def enqueue(self, wi) -> bool:
+        self.enqueued_ids.append(wi.id)
         return self.dispatch_outcomes.get(wi.id, True)
 
     async def activate(self, jid: str) -> bool:
@@ -128,8 +137,7 @@ class FakeScheduler:
         Returns: {"planned": list[(ep, wi)], "leased": set[str], "dispatched": set[str], "activated": set[str]}
         """
         # PEAK RUNNABLE WINDOW (slot-aware)
-        free = sum(max(v, 0) for v in slots_by_executor.values())
-        window = max(batch_size, min(2000, 4 * free + 64))
+        window = frontier_candidate_window(batch_size, slots_by_executor)
         filt = self.slot_filter(slots_by_executor)
 
         candidates = await self.frontier.peek_ready(window, filter_fn=filt)
@@ -245,6 +253,117 @@ class FakeScheduler:
         }
 
 
+class LegacyFakeScheduler(FakeScheduler):
+    async def cycle_peek_plan_take_backfill_dispatch(
+            self,
+            *,
+            slots_by_executor: dict[str, int],
+            batch_size: int = 64,
+            lease_ttl: float = 0.5,
+            backfill_scan_budget: int = 4096,
+    ) -> dict:
+        candidates = await self.frontier.peek_ready(batch_size)
+        if not candidates:
+            return {"planned": [], "leased": set(), "dispatched": set(), "activated": set()}
+
+        self._ensure_min_fields_for_planner(candidates)
+        planner_candidates = [(self._endpoint(wi), wi) for wi in candidates]
+        schemes_present = {ep.split("://", 1)[0] for ep, _ in planner_candidates if "://" in ep}
+        sum_all = sum(max(v, 0) for v in slots_by_executor.values())
+        planner_slots = {sch: sum_all for sch in schemes_present}
+
+        planned = self.planner.plan(
+            planner_candidates,
+            planner_slots,
+            active_dags=set(),
+            exclude_blocked=True,
+        )
+        if not planned:
+            return {"planned": [], "leased": set(), "dispatched": set(), "activated": set()}
+
+        planned_ids = [wi.id for _, wi in planned]
+        chosen_wi = await self.frontier.take(planned_ids, lease_ttl=lease_ttl)
+
+        missing = len(planned_ids) - len(chosen_wi)
+        if missing > 0:
+            refill = await self.frontier.select_ready(
+                missing,
+                filter_fn=self.slot_filter(slots_by_executor),
+                lease_ttl=lease_ttl,
+                scan_budget=backfill_scan_budget,
+            )
+            for wi2 in refill:
+                planned.append((self._endpoint(wi2), wi2))
+                chosen_wi.append(wi2)
+
+        if not chosen_wi:
+            return {"planned": planned, "leased": set(), "dispatched": set(), "activated": set()}
+
+        remaining = {k: max(v, 0) for k, v in slots_by_executor.items()}
+        eligible: list = []
+        overflow: list = []
+        chosen_ids_set = {w.id for w in chosen_wi}
+
+        for ep, wi in planned:
+            if wi.id not in chosen_ids_set:
+                continue
+            member = self._member_of_endpoint(ep)
+            if not member or member == "noop":
+                eligible.append(wi)
+                continue
+            if remaining.get(member, 0) > 0:
+                eligible.append(wi)
+                remaining[member] -= 1
+            else:
+                overflow.append(wi)
+
+        for wi in overflow:
+            await self.frontier.release_lease_local(wi.id)
+
+        if not eligible:
+            return {"planned": planned, "leased": set(), "dispatched": set(), "activated": set()}
+
+        by_name: dict[str, list[str]] = {}
+        for wi in eligible:
+            by_name.setdefault(wi.name, []).append(wi.id)
+
+        leased = await self.db.lease(by_name)
+        if not leased:
+            for wi in eligible:
+                await self.frontier.release_lease_local(wi.id)
+            return {"planned": planned, "leased": set(), "dispatched": set(), "activated": set()}
+
+        for wi in eligible:
+            if wi.id not in leased:
+                await self.frontier.release_lease_local(wi.id)
+
+        dispatched_ok: set[str] = set()
+        activated: set[str] = set()
+
+        for ep, wi in planned:
+            if wi.id not in leased:
+                continue
+            ok = await self.runner.enqueue(wi)
+            if not ok:
+                await self.db.release([wi.id])
+                await self.frontier.release_lease_local(wi.id)
+                continue
+            dispatched_ok.add(wi.id)
+
+            if await self.runner.activate(wi.id):
+                activated.add(wi.id)
+            else:
+                await self.db.release([wi.id])
+                await self.frontier.release_lease_local(wi.id)
+
+        return {
+            "planned": planned,
+            "leased": leased,
+            "dispatched": dispatched_ok,
+            "activated": set(activated),
+        }
+
+
 @pytest.fixture
 def frontier():
     return MemoryFrontier(higher_priority_wins=True, default_lease_ttl=0.25)
@@ -343,3 +462,66 @@ async def test_dispatch_and_activation_failures_release(frontier):
     peek_ids = {wi.id for wi in await frontier.peek_ready(10)}
     assert "A0" in peek_ids and "A1" in peek_ids
     assert "A2" not in peek_ids  # active job should not reappear
+
+
+@pytest.mark.asyncio
+async def test_slot_aware_peek_dispatches_at_least_legacy_under_blocked_heads(frontier):
+    blocked = [wi(f"B{i}", level=5, exe="exe://blocked") for i in range(12)]
+    runnable = [wi(f"R{i}", level=4, exe="exe://run") for i in range(6)]
+    await add_ready(frontier, blocked + runnable)
+
+    slots = {"blocked": 0, "run": 4}
+
+    legacy_runner = FakeRunner()
+    legacy = LegacyFakeScheduler(
+        frontier,
+        FakeDB(),
+        legacy_runner,
+        GlobalPriorityExecutionPlanner(),
+    )
+    legacy_res = await legacy.cycle_peek_plan_take_backfill_dispatch(
+        slots_by_executor=slots,
+        batch_size=8,
+        lease_ttl=0.3,
+    )
+
+    frontier2 = MemoryFrontier(higher_priority_wins=True, default_lease_ttl=0.25)
+    await add_ready(frontier2, blocked + runnable)
+
+    improved_runner = FakeRunner()
+    improved = FakeScheduler(
+        frontier2,
+        FakeDB(),
+        improved_runner,
+        GlobalPriorityExecutionPlanner(),
+    )
+    improved_res = await improved.cycle_peek_plan_take_backfill_dispatch(
+        slots_by_executor=slots,
+        batch_size=8,
+        lease_ttl=0.3,
+    )
+
+    assert len(improved_res["dispatched"]) >= len(legacy_res["dispatched"])
+    assert len(improved_res["dispatched"]) == 4
+    assert legacy_res["dispatched"] == set()
+
+
+@pytest.mark.asyncio
+async def test_partial_db_lease_preserves_planner_dispatch_order(frontier):
+    jobs = [
+        wi("A0", dag_id="active", level=4, exe="exe://A"),
+        wi("A1", dag_id="active", level=3, exe="exe://A"),
+        wi("N0", dag_id="new", level=4, exe="exe://A"),
+    ]
+    await add_ready(frontier, jobs)
+
+    runner = FakeRunner()
+    sched = FakeScheduler(frontier, FakeDB(leased_subset={"N0", "A0"}), runner, GlobalPriorityExecutionPlanner())
+    res = await sched.cycle_peek_plan_take_backfill_dispatch(
+        slots_by_executor={"A": 3},
+        batch_size=16,
+        lease_ttl=0.3,
+    )
+
+    expected_order = [wi.id for _, wi in res["planned"] if wi.id in res["leased"]]
+    assert runner.enqueued_ids == expected_order

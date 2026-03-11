@@ -14,7 +14,9 @@ class WorkInfo(BaseModel):
     id: str = Field(default_factory=lambda: uuid7str())
     dag_id: Optional[str] = None  # dag_id is used to group multiple jobs
     name: str
-    priority: int
+    priority: int = (
+        0  # operator-assigned manual priority; SLA urgency is computed at scheduling time
+    )
     data: Dict[str, Any]
     state: WorkState
     retry_limit: int

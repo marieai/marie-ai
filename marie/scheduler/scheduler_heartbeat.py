@@ -404,6 +404,20 @@ class SchedulerHeartbeat:
                 print("Memory Frontier State:")
                 frontier_summary = self.scheduler.frontier.summary(detail=True)
                 pprint(frontier_summary)
+                sla_summary = frontier_summary.get("sla", {})
+                if sla_summary:
+                    self.logger.info(
+                        "  ⏱️  SLA State        : "
+                        f"tracked={sla_summary.get('tracked', 0)}, "
+                        f"approaching={sla_summary.get('approaching_soft', 0)}, "
+                        f"soft_missed={sla_summary.get('soft_missed', 0)}, "
+                        f"hard_missed={sla_summary.get('hard_missed', 0)}, "
+                        f"highest_bucket={sla_summary.get('highest_bucket', 0)}"
+                    )
+                    if sla_summary.get("top_urgent"):
+                        self.logger.info(
+                            f"  ⏱️  Top Urgent Jobs  : {sla_summary['top_urgent']}"
+                        )
 
                 await asyncio.sleep(self.config.interval)
                 retry_count = 0

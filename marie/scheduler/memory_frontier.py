@@ -8,12 +8,15 @@ from typing import Any, Callable, Iterable, NamedTuple, Optional
 from marie.logging_core.predefined import default_logger as logger
 from marie.query_planner.base import QueryPlan
 from marie.scheduler.models import WorkInfo
-from marie.scheduler.state import WorkState
+from marie.scheduler.sla import compute_sla_priority_bucket, summarize_sla_work_items
+from marie.scheduler.state import WorkState, is_terminal_state
+
+DEFAULT_RETRY_DELAY_SECONDS = 2
 
 
 class ReadyEntry(NamedTuple):
-    # Field order defines heap ordering
-    key: tuple[int, int]  # (-job_level, ±priority)
+    # Field order defines the frontier's static approximation of planner ordering.
+    key: tuple[int, int, int]  # (-priority, -sla_bucket, -job_level)
     added_at: float  # monotonic timestamp when first ready
     seq: int  # FIFO tie-breaker
     ver: int  # version to invalidate stale entries
@@ -38,7 +41,7 @@ class MemoryFrontier:
         self.parents: dict[str, list[str]] = defaultdict(list)  # child -> parents
         self.unmet_count: dict[str, int] = defaultdict(int)
 
-        # THIS HAS TO BE KEPT IN SYNC WITH THE GlobalPriorityExecutionPlanner
+        # Keep this aligned with the planner's static sort factors.
         self._ready_heap: list[ReadyEntry] = []
 
         self._ready_set: set[str] = set()  # fast membership / lazy deletion
@@ -55,10 +58,17 @@ class MemoryFrontier:
         self._lock = asyncio.Lock()
         self._now = time.monotonic
 
-    def _priority_key(self, wi: WorkInfo) -> tuple[int, int]:
-        lvl = int(wi.job_level)
-        pri = int(wi.priority)
-        return (-lvl, (-pri if self.higher_priority_wins else pri))
+    def _priority_key(self, wi: WorkInfo) -> tuple[int, int, int]:
+        """Approximate planner ordering with the static factors available in the frontier."""
+        priority = int(wi.priority)
+        sla_bucket = compute_sla_priority_bucket(
+            datetime.now(timezone.utc),
+            wi.soft_sla,
+            wi.hard_sla,
+        )
+        level = int(wi.job_level)
+        priority_key = -priority if self.higher_priority_wins else priority
+        return (priority_key, -sla_bucket, -level)
 
     def _push_ready(self, wi: WorkInfo) -> None:
         # Always bump version when (re)adding to ready
@@ -75,6 +85,30 @@ class MemoryFrontier:
             ),
         )
 
+    def _rebuild_ready_heap_locked(self) -> None:
+        """Rebuild heap entries so updated priorities/levels take effect immediately."""
+        rebuilt: list[ReadyEntry] = []
+        for jid in list(self._ready_set):
+            wi = self.jobs_by_id.get(jid)
+            if wi is None:
+                self._ready_set.discard(jid)
+                continue
+            self._ver[jid] += 1
+            if jid not in self._added_at:
+                self._added_at[jid] = self._now()
+            self._seq += 1
+            rebuilt.append(
+                ReadyEntry(
+                    self._priority_key(wi),
+                    self._added_at[jid],
+                    self._seq,
+                    self._ver[jid],
+                    jid,
+                )
+            )
+        heapq.heapify(rebuilt)
+        self._ready_heap = rebuilt
+
     def _entry_is_current(self, entry: ReadyEntry) -> bool:
         return self._ver.get(entry.jid, 0) == entry.ver
 
@@ -82,10 +116,11 @@ class MemoryFrontier:
         self._ready_set.discard(job_id)
 
     def _still_ready(self, job_id: str) -> bool:
-        # Ready if: exists, unmet deps == 0, not soft-leased, in ready_set, and past start_after
         if job_id not in self.jobs_by_id:
             return False
         wi = self.jobs_by_id[job_id]
+        if is_terminal_state(wi.state):
+            return False
         if self.unmet_count.get(job_id, 1) != 0:
             return False
         if job_id not in self._ready_set:
@@ -161,6 +196,8 @@ class MemoryFrontier:
             # Update the job's state to COMPLETED
             if job_id in self.jobs_by_id:
                 self.jobs_by_id[job_id].state = WorkState.COMPLETED
+                self._remove_from_ready_set(job_id)
+                self.leased_until.pop(job_id, None)
             else:
                 logger.warning(
                     f"Job with id {job_id} not found in memory frontier for completion."
@@ -192,12 +229,31 @@ class MemoryFrontier:
             if job_id in self.jobs_by_id:
                 self.jobs_by_id[job_id].state = WorkState.FAILED
                 self._remove_from_ready_set(job_id)
+                self.leased_until.pop(job_id, None)
             else:
                 logger.warning(
                     f"Job with id {job_id} not found in memory frontier for failure."
                 )
 
             return []
+
+    async def on_job_skipped(self, job_id: str) -> None:
+        """
+        Handles a job being skipped (branch not taken).
+
+        Unlike on_job_completed(), this method does NOT decrement dependency
+        counts or unblock children. Skipped jobs have their descendants
+        cascade-skipped separately by the scheduler.
+        """
+        async with self._lock:
+            if job_id in self.jobs_by_id:
+                self.jobs_by_id[job_id].state = WorkState.SKIPPED
+                self._remove_from_ready_set(job_id)
+                self.leased_until.pop(job_id, None)
+            else:
+                logger.warning(
+                    f"Job with id {job_id} not found in memory frontier for skip."
+                )
 
     async def on_job_retry(self, job_id: str, work_item: WorkInfo) -> None:
         """
@@ -215,15 +271,15 @@ class MemoryFrontier:
             wi = self.jobs_by_id[job_id]
             wi.state = WorkState.RETRY
 
-            # Calculate start_after based on retry_delay
-            # Default to 2 seconds if retry_delay is not set
-            retry_delay_seconds = work_item.retry_delay if work_item.retry_delay else 2
+            # Clear the old lease so retry_delay is honored exactly
+            # (otherwise effective retry = max(start_after, old_lease_expiry))
+            self.leased_until.pop(job_id, None)
+
+            retry_delay_seconds = work_item.retry_delay or DEFAULT_RETRY_DELAY_SECONDS
             wi.start_after = datetime.now(timezone.utc) + timedelta(
                 seconds=retry_delay_seconds
             )
 
-            # Re-add to ready queue
-            # The _still_ready check will handle the start_after delay
             self._push_ready(wi)
             logger.info(
                 f"Job {job_id} re-added to ready queue for retry "
@@ -247,6 +303,9 @@ class MemoryFrontier:
             self.leased_until.pop(job_id, None)
             wi = self.jobs_by_id.get(job_id)
             if wi is None:
+                return
+            # Don't re-ready terminal jobs
+            if is_terminal_state(wi.state):
                 return
             if self.unmet_count.get(job_id, 1) == 0:
                 # keep original added_at to preserve aging
@@ -358,9 +417,41 @@ class MemoryFrontier:
             for jid in reap:
                 self.leased_until.pop(jid, None)
                 wi = self.jobs_by_id.get(jid)
-                if wi and self.unmet_count.get(jid, 1) == 0:
+                # Don't resurrect terminal jobs
+                if (
+                    wi
+                    and not is_terminal_state(wi.state)
+                    and self.unmet_count.get(jid, 1) == 0
+                ):
                     self._push_ready(wi)
             return len(reap)
+
+    async def refresh_priorities(self, priorities_by_job_id: dict[str, int]) -> int:
+        """
+        Apply DB-sourced priority changes to tracked jobs and rebuild ready ordering.
+        Returns the number of changed jobs.
+        """
+        async with self._lock:
+            changed = 0
+            for jid, new_priority in priorities_by_job_id.items():
+                wi = self.jobs_by_id.get(jid)
+                if wi is None:
+                    continue
+                new_priority = int(new_priority)
+                if int(wi.priority) == new_priority:
+                    continue
+                wi.priority = new_priority
+                changed += 1
+
+            if changed > 0:
+                self._rebuild_ready_heap_locked()
+
+            return changed
+
+    async def refresh_ready_ordering(self) -> None:
+        """Rebuild ready ordering so time-based SLA changes are reflected in heap order."""
+        async with self._lock:
+            self._rebuild_ready_heap_locked()
 
     @staticmethod
     def _executor_of(wi: WorkInfo) -> str:
@@ -436,6 +527,11 @@ class MemoryFrontier:
                 ),
             },
             "ready_age_seconds": _quantiles(ages),
+            "sla": summarize_sla_work_items(
+                self.jobs_by_id.values(),
+                now=datetime.now(timezone.utc),
+                top_n=top_n if detail else 0,
+            ),
         }
 
         if detail and ready_total:
