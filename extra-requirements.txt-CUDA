@@ -59,6 +59,7 @@ opentelemetry-instrumentation-aiohttp-client>=0.41b0:    perf,standard,devel
 opentelemetry-instrumentation-fastapi>=0.41b0:  perf,standard,devel
 opentelemetry-exporter-otlp-proto-grpc>=1.20.0: perf,standard,devel
 prometheus_client>=0.12.0:                      perf,standard,devel
+openinference-instrumentation>=0.1.46:          perf,standard,devel
 
 fastapi>=0.100.1:            standard,devel
 uvicorn[standard]>=0.23.1:  standard,devel
@@ -194,10 +195,37 @@ portalocker==3.2.0:            standard,core
 jsonpath-ng:                   standard,core
 clickhouse-driver==0.2.10:     standard,core
 python-dotenv:                 standard,devel
-qwen-vl-utils:                 standard,devel
+
+qwen-vl-utils==0.0.14:         standard,core
+portalocker==3.2.0:            standard,core
+peft==0.14.0:                  standard,core
+ruamel.yaml:                   standard,core
+tenacity:                      standard,core
+graphviz:                      standard,core
+networkx:                      standard,core
+json_repair:                   standard,core
+nameparser:                   standard,core
+prettytable:                   standard,core
+
+# A2A (Agent-to-Agent) Protocol SDK
+a2a-sdk>=0.3.9:                standard,core
+
+
 
 # Memory integration (Mem0 SDK for agent memory)
 # mem0ai>=0.1.0:                 standard,core
+
+python-docx>=1.1.2:           standard,core
+python-pptx>=1.0.2:           standard,core
+openpyxl>=3.1.5:              standard,core
+beautifulsoup4>=4.12.3:       standard,core
+marko:                        standard,core
+ebooklib:                     standard,core
+extract-msg:                  standard,core
+pillow-heif:                  standard,core
+pdf2image:                    standard,core
+weasyprint:                   standard,core
+docutils:                     standard,core
 
 # Dev-only: used to regenerate *_pb2.py from .proto files (not a runtime dep)
 # Must be >=1.62.0 for protobuf v5 compatibility
