@@ -423,15 +423,24 @@ class S3StorageHandler(PathHandler):
                 else:
                     with open(local_src, "wb") as data:
                         bucket.download_fileobj(s.key, data, Config=config)
-                return
+                return True
 
             except Exception as e:
                 logger.error(f"Attempt {attempt} failed to write file from bucket '{s.bucket}': {e}")
                 if attempt < retries:
                     time.sleep(sleep_time)
                 else:
+                    # Clean up empty/partial file left by open(local_src, "wb")
+                    if not file_like:
+                        try:
+                            if os.path.exists(local_src):
+                                os.remove(local_src)
+                        except OSError:
+                            pass
                     if not self.suppress_errors:
                         raise e
+
+        return False
 
     def _list(self, path: str, return_full_path=False, **kwargs: Any) -> List[str]:
         """List all files in current bucket in s3 storage"""

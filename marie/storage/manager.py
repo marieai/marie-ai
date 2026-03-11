@@ -429,7 +429,7 @@ class StorageManager:
         dst_path_or_buffer: str | os.PathLike | io.BytesIO,
         overwrite=False,
         **kwargs: Any,
-    ) -> None:
+    ) -> bool | None:
         """
         Read resource data synchronously at the given URI and writes the contents to the given file.
 
