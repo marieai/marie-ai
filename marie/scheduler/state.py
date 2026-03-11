@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Any
 
 
 class WorkState(Enum):
@@ -76,3 +77,24 @@ class WorkState(Enum):
             WorkState.CANCELLED,
             WorkState.FAILED,
         ]
+
+
+def is_terminal_state(state: Any) -> bool:
+    """
+    Check if state is terminal, handling WorkState enum, strings, or None.
+
+    This helper exists because:
+    - WorkInfo.state is typed as WorkState
+    - Tests may use plain strings like "completed"
+    - Hydration code may pass None
+    """
+    if state is None:
+        return False
+    if isinstance(state, WorkState):
+        return state.is_terminal()
+    if isinstance(state, str):
+        try:
+            return WorkState(state.lower()).is_terminal()
+        except ValueError:
+            return False
+    return False

@@ -15,6 +15,7 @@ class SJFSExecutionPlanner:
         slots: dict[str, int],
         active_dags: set[str],
         recently_activated_dags: set[str] = set(),
+        **kwargs,
     ) -> Sequence[FlatJob]:
         # annotate each job with its estimated runtime (inf if missing)
         annotated: list[tuple[str, WorkInfo, float]] = []

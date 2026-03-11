@@ -657,6 +657,73 @@ class DAGManagementService:
         else:
             self.logger.debug("All DAGs in memory are still valid")
 
+    async def refresh_frontier_priorities(
+        self, hydrate_missing_limit: int = 100
+    ) -> Dict[str, int]:
+        """
+        Refresh manual priorities from DB and hydrate missing DAGs that are
+        currently eligible for the frontier.
+        """
+        tracked_job_ids = list(self.frontier.jobs_by_id.keys())
+        changed = 0
+        if tracked_job_ids:
+            priorities = await self.repository.get_job_priorities(tracked_job_ids)
+            changed = await self.frontier.refresh_priorities(priorities)
+        else:
+            priorities = {}
+
+        def _discover_hydratable_dags() -> List[Tuple[str, Dict]]:
+            conn = self.repository._get_connection()
+            cur = None
+            try:
+                cur = conn.cursor()
+                query = (
+                    "SELECT dag_id, serialized_dag "
+                    "FROM marie_scheduler.hydrate_frontier_dags()"
+                )
+                if hydrate_missing_limit > 0:
+                    query += f" LIMIT {int(hydrate_missing_limit)}"
+                cur.execute(query)
+                rows = cur.fetchall()
+                conn.commit()
+                return [
+                    (str(dag_id), serialized_dag) for dag_id, serialized_dag in rows
+                ]
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                if cur and not cur.closed:
+                    self.repository._close_cursor(cur)
+                self.repository._close_connection(conn)
+
+        hydratable_dags = await self._loop.run_in_executor(
+            self._executor, _discover_hydratable_dags
+        )
+
+        hydrated = 0
+        for dag_id, _serialized_dag in hydratable_dags:
+            if dag_id in self.active_dags:
+                continue
+            if await self.hydrate_single_dag(dag_id):
+                hydrated += 1
+
+        if changed > 0 or hydrated > 0:
+            self.logger.info(
+                f"Refreshed priorities from DB: tracked={len(tracked_job_ids)}, "
+                f"fetched={len(priorities)}, changed={changed}, hydrated_missing={hydrated}"
+            )
+
+        return {
+            "tracked": len(tracked_job_ids),
+            "fetched": len(priorities),
+            "changed": changed,
+            "hydrated_missing": hydrated,
+        }
+
     def get_active_dag_count(self) -> int:
         """Get the count of active DAGs in memory."""
         return len(self.active_dags)
