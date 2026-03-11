@@ -17,6 +17,8 @@ def wi(
         pri: int = 1,
         deps=None,
         exe: str = "exe://ok",
+        soft_sla=None,
+        hard_sla=None,
 ):
     return NS(
         id=jid,
@@ -27,6 +29,9 @@ def wi(
         dependencies=list(deps or []),
         data={"metadata": {"on": exe}},
         start_after=None,
+        state="created",
+        soft_sla=soft_sla,
+        hard_sla=hard_sla,
     )
 
 
