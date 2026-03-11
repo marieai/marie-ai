@@ -1,3 +1,6 @@
+# for now as we manually keep changing them
+ extra-requirements.txt
+
 lightning_logs/
 model_zoo/
 .cache/
