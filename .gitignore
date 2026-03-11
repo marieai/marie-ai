@@ -136,6 +136,9 @@ dmypy.json
 # Pycharm
 .idea
 
+# Claude Code
+.claude/settings.local.json
+
 
 # emacs
 *.*~

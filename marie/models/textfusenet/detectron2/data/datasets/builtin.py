@@ -50,9 +50,8 @@ _PREDEFINED_SPLITS_COCO["coco"] = {
     "ctw1500":("ctw1500/train_images", "ctw1500/train.json"),
     "icdar2013":("icdar2013/train_images", "icdar2013/train.json"),
     "icdar2015XX":("icdar2015/train_images", "icdar2015/train.json"),
-    "icdar2015":("/home/gbugaj/devio/TextFuseNet/data/sample001/images/coco-text", "/home/gbugaj/devio/TextFuseNet/data/sample001/annotations/instances_default.json"),
+    "icdar2015":("~/devio/TextFuseNet/data/sample001/images/coco-text", "~/devio/TextFuseNet/data/sample001/annotations/instances_default.json"),
 
-    # "icdar2015":("/home/gbugaj/devio/TextFuseNet/data/ch4_training_images", "/home/gbugaj/devio/TextFuseNet/data/train_gt.json"),
 }
 
 _PREDEFINED_SPLITS_COCO["coco_person"] = {

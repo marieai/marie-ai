@@ -1730,6 +1730,9 @@ class WorkerRequestHandler:
 
         if job_id is not None and self._job_info_client is not None:
             try:
+                self.logger.info(
+                    f"[lifecycle] Recording RUNNING status for job {job_id}"
+                )
                 await self._job_info_client.put_status(
                     job_id,
                     JobStatus.RUNNING,
@@ -2033,13 +2036,22 @@ class WorkerRequestHandler:
         current_state = self._etcd_client.get_connection_state()
         self.logger.info(f"Event handler - connection state is now: {current_state}")
 
+        # ALWAYS re-claim on reconnect to refresh the lease.
+        # Even if the status key exists in ETCD, the lease may be dead/stale
+        # after a disconnect, so we must re-write with a fresh lease to
+        # trigger watch events for the gateway.
         try:
-            st = self._status_store.read(self._node, self._deployment)
-            if not st:
-                # Recreate a fresh NOT_SERVING doc on reconnect
+            if (
+                self._worker_state
+                == health_pb2.HealthCheckResponse.ServingStatus.SERVING
+            ):
+                self._claim_and_mark_serving()
+                self.logger.info("Re-claimed status as SERVING after reconnect")
+            else:
                 self._claim_and_mark_ready()
+                self.logger.info("Re-claimed status as NOT_SERVING after reconnect")
         except Exception as e:
-            self.logger.debug(f"post-reconnect reassert skipped: {e}")
+            self.logger.warning(f"post-reconnect status reassert failed: {e}")
 
     def _on_etcd_disconnected(self, event):
         """Handle etcd connection lost."""

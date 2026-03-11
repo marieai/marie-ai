@@ -169,7 +169,7 @@ class AssetKeyDAG(NamedTuple("_AssetKey", [("path", Sequence[str])])):
 
     @staticmethod
     def from_graphql_input(
-        graphql_input_asset_key: Mapping[str, Sequence[str]]
+        graphql_input_asset_key: Mapping[str, Sequence[str]],
     ) -> "AssetKey":
         return AssetKey(graphql_input_asset_key["path"])
 

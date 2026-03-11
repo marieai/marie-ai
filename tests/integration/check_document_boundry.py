@@ -43,7 +43,7 @@ def check_boundry_registration():
     frames = frames_from_docs(documents)
     converted_frames = []
 
-    output_dir = os.path.expanduser(f"~/tmp/grapnel/aligned/workdir/{basename}")
+    output_dir = os.path.expanduser(f"~/tmp/aligned/workdir/{basename}")
     ensure_exists(output_dir)
 
     for i, (frame, result) in enumerate(zip(frames, results)):
@@ -55,7 +55,7 @@ def check_boundry_registration():
         save_frame_as_tiff_g4(frame, save_path)
 
     print("Converted frames: ", len(converted_frames))
-    basedir = os.path.expanduser("~/tmp/grapnel/aligned")
+    basedir = os.path.expanduser("~/tmp/aligned")
     # merge_tiff_frames(converted_frames, os.path.join(basedir, f"{basename}_{registration_method}.tif"))
     clean_filename = os.path.join(basedir, f"{basename}_{registration_method}.tif")
     merge_tiff(

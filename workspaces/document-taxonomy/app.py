@@ -185,7 +185,7 @@ def generate_taxonomy_overlay(taxonomy_groups, image, source_key=None):
     bbox_labels = [group["label"] for group in taxonomy_groups]
     # Clip and save groups to temporary folders
     temp_dir = tempfile.mkdtemp()
-    temp_dir = "~/dev/workflow/grapnel-g5/assets/taxonomy_groups"
+    temp_dir = "~/tmp/assets/taxonomy_groups"
     temp_dir = os.path.expanduser(temp_dir)
     for group, bbox in zip(taxonomy_groups, aligned_bboxes):
         # convert from xywh to xyxy

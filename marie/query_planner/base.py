@@ -98,6 +98,7 @@ class QueryPlanRegistry:
     )  # Store metadata for each planner (keyed by name)
     _id_to_name: Dict[str, str] = {}  # Mapping from planner_id to name
     _external_modules_loaded: bool = False
+    _init_result: Optional[Dict[str, Any]] = None
     _storage_path: Optional[Path] = None  # Path to store JSON planners
 
     # Wheel management components (class-level)
@@ -230,9 +231,14 @@ class QueryPlanRegistry:
             logger.info(f"Successfully registered planner from {planner_module}")
             return True
         except Exception as e:
-            logger.error(f"Error registering planner from {planner_module}: {e}")
+            import traceback
+
+            tb_str = traceback.format_exc()
+            logger.error(
+                f"Error registering planner from {planner_module}: {e}\n{tb_str}"
+            )
             warnings.warn(
-                f"Error importing {planner_module} : some configs may not be available\n\n\tRoot cause: {e}\n"
+                f"Error importing {planner_module} : some configs may not be available\n\n\tRoot cause: {e}\n\n\tFull traceback:\n{tb_str}\n"
             )
             return False
 
@@ -248,7 +254,7 @@ class QueryPlanRegistry:
         Scans the package directory for subdirectories matching the given pattern
         and imports any .py files that contain the @register_query_plan decorator.
 
-        :param package_name: The fully qualified package name (e.g., 'grapnel_g5.extract.providers')
+        :param package_name: The fully qualified package name (e.g., 'module_name.extraction.planners')
         :param pattern: Glob pattern for matching subdirectory names (default: '*')
         :return: Dictionary with 'loaded', 'failed', and 'skipped' lists
         """
@@ -426,7 +432,18 @@ class QueryPlanRegistry:
                 f"Mixed results: {len(loaded_modules)} loaded, {len(failed_modules)} failed"
             )
 
+        cls._init_result = result
         return result
+
+    @classmethod
+    def get_planner_state(cls) -> Dict[str, Any]:
+        return {
+            'plans': {name: str(fn) for name, fn in cls._plans.items()},
+            'metadata': {
+                name: meta.model_dump() for name, meta in cls._metadata.items()
+            },
+            'id_to_name': dict(cls._id_to_name),
+        }
 
     @classmethod
     def get(cls, planner_name: str) -> Callable:
@@ -539,13 +556,10 @@ class QueryPlanRegistry:
                 planner_info: 'PlannerInfo', **kwargs
             ) -> 'QueryPlan':
                 """Dynamically created planner from JSON definition"""
-                # Return a copy of the plan with updated task IDs based on planner_info
                 return query_plan
 
-            # Register the function
             cls._plans[name] = json_planner_function
 
-            # Store metadata
             metadata = PlannerMetadata(
                 planner_id=name,  # Use name as ID
                 name=name,
@@ -556,9 +570,8 @@ class QueryPlanRegistry:
                 source_type="json",
                 plan_definition=plan_definition,
             )
-            cls._metadata[name] = metadata
 
-            # Maintain ID to name mapping (both are same now)
+            cls._metadata[name] = metadata
             cls._id_to_name[name] = name
 
             # Persist to storage if path is set
@@ -641,13 +654,9 @@ class QueryPlanRegistry:
             logger.warning(f"Planner '{name}' not found in registry")
             return False
 
-        # Remove from registry
         del cls._plans[name]
-
-        # Remove metadata
         metadata = cls._metadata.pop(name, None)
 
-        # Remove ID mapping
         if metadata and metadata.planner_id in cls._id_to_name:
             del cls._id_to_name[metadata.planner_id]
 
@@ -713,7 +722,6 @@ class QueryPlanRegistry:
             if metadata:
                 result.append(metadata.model_dump())
             else:
-                # Fallback for legacy planners without metadata (shouldn't happen anymore)
                 logger.warning(
                     f"Planner '{name}' has no metadata - this shouldn't happen"
                 )
@@ -742,6 +750,7 @@ class QueryPlanRegistry:
             cls._wheel_watcher.stop_watching()
         if cls._wheel_manager:
             cls._wheel_manager.cleanup()
+        cls._init_result = None
         logger.info("Query plan registry cleanup completed")
 
 

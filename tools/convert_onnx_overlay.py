@@ -153,7 +153,7 @@ def run_onnx_inference(model_path, input_data):
 
     # Input > N x C x W x H
     # read image and add batch dimension
-    img = Image.open("/home/gbugaj/sample.png").convert("RGB")
+    img = Image.open("~/sample.png").convert("RGB")
     # img = Image.open("/tmp/segment-1024x-2048.png").convert("RGB")
     # make sure image is divisible by 32
     print("Image size: ", img.size)
@@ -397,7 +397,7 @@ if __name__ == "__main__":
     if False:
         run_onnx_inference_as_module(
             "~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/latest_net_G.optimized.onnx",
-            "/home/gbugaj/sample.png",
+            "~/sample.png",
         )
 
     # run_onnx_inference("/tmp/latest_net_G.opt.onnx", torch.randn(1, 3, 256, 256))

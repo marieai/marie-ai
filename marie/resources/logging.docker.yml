@@ -4,19 +4,19 @@ handlers:
 level: INFO
 configs:
   FileHandler:
-    format: '%(asctime)s:{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
+    format: '%(asctime)s:{app:>15}@%(process)2d[%(levelname).1s]:%(message)s'
     output: 'marie-%(uptime)s.log'
     formatter: JsonFormatter
   StreamHandler:
     format: '🐳 %(asctime)s: %(message)s'
     formatter: PlainFormatter
   SysLogHandler:
-    format: '{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
+    format: '{app:>15}@%(process)2d[%(levelname).1s]:%(message)s'
     host: # when not given then record it locally
     port: # when not given then record it locally
     formatter: PlainFormatter
   RichHandler:
-    format: '{name}@%(process)2d %(message)s'
+    format: '{app}@%(process)2d %(message)s'
     markup: false
     rich_tracebacks: false
     show_path: false

@@ -22,8 +22,8 @@ from pydantic.tools import parse_obj_as
 
 from marie import Client
 from marie.logging_core.predefined import default_logger as logger
-from marie.pipe.components import s3_asset_path
 from marie.storage import StorageManager
+from marie.utils.asset_util import s3_asset_path
 from marie.utils.docs import frames_from_file
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import deserialize_value, load_json_file, store_json_object

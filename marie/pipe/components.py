@@ -26,81 +26,11 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.logging_core.profile import TimeContext
 from marie.ocr import CoordinateFormat, OcrEngine
 from marie.overlay.overlay import NoopOverlayProcessor, OverlayProcessor
-from marie.storage import StorageManager
+from marie.utils.asset_util import filename_supplier_page, split_filename
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.tiff_ops import burst_tiff_frames
 from marie.utils.types import strtobool
 from marie.utils.utils import ensure_exists
-
-
-def split_filename(img_path: str) -> (str, str, str):
-    filename = img_path.split("/")[-1]
-    prefix = filename.split(".")[0]
-    suffix = filename.split(".")[-1]
-
-    return filename, prefix, suffix
-
-
-def filename_supplier_page(
-    filename: str, prefix: str, suffix: str, pagenumber: int
-) -> str:
-    return f"{prefix}_{pagenumber:05}.{suffix}"
-
-
-def s3_asset_path(
-    ref_id: str, ref_type: str, include_prefix=False, include_filename=False
-) -> str:
-    """
-    Create a path to store the assets for a given ref_id and ref_type
-    The path is of the form s3://marie/{ref_type}/{prefix} and can be used between different marie instances
-
-    All paths are lowercased and ref_type is cleaned to avoid path traversal attacks by replacing "/" with "_",
-
-    Following are equivalent:
-
-    .. code-block:: text
-
-        s3://marie/ocr/sample
-        s3://marie/OCR/sample
-        s3://marie/ocr/SAMPLE
-        s3://marie/OCR/SAMPLE
-
-
-    Example usage:
-
-    .. code-block:: python
-
-        # this will return s3://marie/ocr/sample
-        path = s3_asset_path(ref_id="sample.tif", ref_type="ocr")
-
-        # this will return s3://marie/ocr/sample/sample
-        path = s3_asset_path(ref_id="sample.tif", ref_type="ocr", include_prefix=True)
-
-        # this will return s3://marie/ocr/sample/SAMple.tif
-        path = s3_asset_path(ref_id="SAMple.tif", ref_type="ocr", include_filename=True)
-
-    :param ref_type: type of the reference document
-    :param ref_id:  id of the reference document
-    :param include_prefix: include the filename prefix in the path(name of the file without extension)
-    :param include_filename: include the filename in the path (name of the file with extension)
-    :return: s3 path to store the assets
-    """
-    # prefix and filename need to be exclusive of each other
-    assert not (include_prefix and include_filename)
-
-    filename, prefix, suffix = split_filename(ref_id)
-    # clean ref_type to avoid path traversal attacks
-    ref_type = ref_type.replace("/", "_").lower()
-    marie_bucket = os.environ.get("MARIE_S3_BUCKET", "marie")
-
-    ret_path = f"s3://{marie_bucket}/{ref_type.lower()}/{prefix.lower()}"
-    if include_prefix:
-        ret_path = f"s3://{marie_bucket}/{ref_type.lower()}/{prefix.lower()}/{prefix}"
-
-    if include_filename:
-        ret_path = f"s3://{marie_bucket}/{ref_type.lower()}/{prefix.lower()}/{filename}"
-
-    return ret_path
 
 
 def setup_overlay(
@@ -386,162 +316,12 @@ def setup_template_matching(
     return matcher, resolved_definitions_path
 
 
-def restore_assets(
-    ref_id: str,
-    ref_type: str,
-    root_asset_dir: str,
-    full_restore=False,
-    overwrite=False,
-) -> str or None:
-    """
-    Restore assets from primary storage (S3) into root asset directory. This restores
-    the assets from the last run of the extract pipeline.
-
-    :param ref_id: document reference id (e.g. filename)
-    :param ref_type: document reference type(e.g. document, page, process)
-    :param root_asset_dir: root asset directory
-    :param full_restore: if True, restore all assets, otherwise only restore subset of assets (clean, results, pdf)
-    that are required for the extract pipeline.
-    :param overwrite: if True, overwrite existing assets in root asset directory
-    :return:
-    """
-    s3_root_path = s3_asset_path(ref_id, ref_type)
-    connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
-    if not connected:
-        logger.error(f"Error restoring assets : Could not connect to S3")
-        return None
-
-    logger.info(f"Restoring assets from {s3_root_path} to {root_asset_dir}")
-
-    if full_restore:
-        try:
-            StorageManager.copy_remote(
-                s3_root_path,
-                root_asset_dir,
-                match_wildcard="*",
-                overwrite=overwrite,
-            )
-        except Exception as e:
-            logger.error(f"Error restoring assets : {e}")
-    else:
-        dirs_to_restore = ["clean", "results", "pdf"]
-        for dir_to_restore in dirs_to_restore:
-            try:
-                StorageManager.copy_remote(
-                    s3_root_path,
-                    root_asset_dir,
-                    match_wildcard=f"*/{dir_to_restore}/*",
-                    overwrite=overwrite,
-                )
-            except Exception as e:
-                logger.error(f"Error restoring assets {dir_to_restore} : {e}")
-    return s3_root_path
-
-
-def store_assets(
-    ref_id: str, ref_type: str, root_asset_dir: str, match_wildcard: Optional[str] = "*"
-) -> List[str]:
-    """
-    Store assets in primary storage (S3)
-
-    :param ref_id:  document reference id (e.g. filename)
-    :param ref_type: document reference type (e.g. document, page, process)
-    :param root_asset_dir: root asset directory where all assets are stored
-    :param match_wildcard: wildcard to match files to store
-    :return:
-    """
-
-    try:
-        s3_asset_base = s3_asset_path(ref_id, ref_type)
-        connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
-        if not connected:
-            logger.error(f"Error storing assets : Could not connect to S3")
-            return [s3_asset_base]
-
-        # copy the files to s3
-        StorageManager.copy_dir(
-            root_asset_dir,
-            s3_asset_base,
-            relative_to_dir=root_asset_dir,
-            match_wildcard=match_wildcard,
-        )
-
-        return StorageManager.list(s3_asset_base, return_full_path=True)
-    except Exception as e:
-        logger.error(f"Error storing assets : {e}")
-
-
-def download_asset(
-    ref_id: str,
-    ref_type: str,
-    root_asset_dir: str,
-    s3_file_path: str = "meta.json",
-    overwrite=True,
-) -> str or None:
-    """
-    Download assets from primary storage (S3) into root asset directory. This restores
-    the assets from the last run of the extract pipeline.
-
-    :param ref_id: document reference id (e.g. filename)
-    :param ref_type: document reference type(e.g. document, page, process)
-    :param root_asset_dir: root asset directory
-    :param s3_file_path: file path in S3
-    :param overwrite: if True, overwrite existing assets in root asset directory
-    :return:
-    """
-
-    s3_root_path = s3_asset_path(ref_id, ref_type)
-    connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
-    if not connected:
-        logger.error(f"Error restoring assets : Could not connect to S3")
-        return None
-
-    uri = f"{s3_root_path}/{s3_file_path}"
-    logger.info(f"Restoring assets from {uri} to {root_asset_dir}")
-    output_file_path = os.path.join(root_asset_dir, s3_file_path)
-    StorageManager.read_to_file(uri, output_file_path, overwrite=overwrite)
-    return output_file_path
-
-
-def burst_frames(
-    ref_id: str,
-    frames: List[np.ndarray],
-    root_asset_dir: str,
-    force: bool = False,
-) -> None:
-    """
-    Burst the frames and save them to the output directory
-    :param ref_id:  reference id of the document
-    :param frames:  frames to burst
-    :param root_asset_dir:  root directory to store the burst frames
-    :param force: force bursting
-    :return:
-    """
-    output_dir = ensure_exists(os.path.join(root_asset_dir, "burst"))
-    filename, prefix, suffix = split_filename(ref_id)
-    filename_generator = partial(filename_supplier_page, filename, prefix, suffix)
-
-    file_count = get_file_count(output_dir)
-    logger.debug(
-        f"Bursting filename : {filename}, prefix : {prefix}, suffix : {suffix}"
-    )
-    if force or file_count != len(frames):
-        logger.info(f"Bursting frames for {ref_id}")
-        burst_tiff_frames(frames, output_dir, filename_generator=filename_generator)
-    else:
-        logger.info(f"Skipping bursting for {ref_id}")
-
-    # validate asset count
-    file_count = get_file_count(output_dir)
-    if file_count != len(frames):
-        logger.warning(f"File count mismatch [burst] : {file_count} != {len(frames)}")
-
-
 def ocr_frames(
     ocr_engines: dict[str, any],
     ref_id: str,
     frames: Union[List[np.ndarray], List[Image.Image]],
     root_asset_dir: str,
+    queue_id: str = None,
     force: bool = False,
     ps_mode: PSMode = PSMode.SPARSE,
     coord_format: CoordinateFormat = CoordinateFormat.XYWH,
@@ -555,6 +335,7 @@ def ocr_frames(
     :param ref_id:  reference id of the document
     :param frames:  frames to perform OCR on
     :param root_asset_dir:  root directory to store the OCR results
+    :param queue_id: queue identifier used to isolate OCR engine temp/debug paths
     :param force:  force OCR (default: False)
     :param ps_mode:  page segmentation mode(default: Sparse)
     :param coord_format: coordinate format(default: XYWH)
@@ -618,13 +399,87 @@ def ocr_frames(
 
     if force or not os.path.exists(json_path):
         logger.info(f"Performing OCR : {json_path}")
-        results = engine.extract(frames, ps_mode, coord_format, regions)
+        results = engine.extract(
+            frames,
+            ps_mode,
+            coord_format,
+            regions,
+            queue_id=queue_id,
+        )
         store_json_object(results, json_path)
     else:
         logger.debug(f"Skipping OCR : {json_path}")
         results = load_json_file(json_path)
 
     return results
+
+
+def burst_frames(
+    ref_id: str,
+    frames: List[np.ndarray],
+    root_asset_dir: str,
+    force: bool = False,
+) -> None:
+    """
+    Burst the frames and save them to the output directory
+    :param ref_id:  reference id of the document
+    :param frames:  frames to burst
+    :param root_asset_dir:  root directory to store the burst frames
+    :param force: force bursting
+    :return:
+    """
+    output_dir = ensure_exists(os.path.join(root_asset_dir, "burst"))
+    filename, prefix, suffix = split_filename(ref_id)
+    filename_generator = partial(filename_supplier_page, filename, prefix, suffix)
+
+    file_count = get_file_count(output_dir)
+    logger.debug(
+        f"Bursting filename : {filename}, prefix : {prefix}, suffix : {suffix}"
+    )
+    if force or file_count != len(frames):
+        logger.info(f"Bursting frames for {ref_id}")
+        burst_tiff_frames(frames, output_dir, filename_generator=filename_generator)
+    else:
+        logger.info(f"Skipping bursting for {ref_id}")
+
+    # validate asset count
+    file_count = get_file_count(output_dir)
+    if file_count != len(frames):
+        logger.warning(f"File count mismatch [burst] : {file_count} != {len(frames)}")
+
+
+def update_existing_meta(existing_meta: dict, metadata: dict):
+    if not existing_meta:
+        return metadata
+    if not metadata:
+        return existing_meta
+
+    # List elements are overridden on dict.update, so they need to be merged independently
+    # New metadata lists take priority when handling duplicate elements with the same identifier value
+    meta_lists = [("classifications", "group"), ("indexers", "group")]
+    merged_meta_lists = dict()
+    for category, identifier in meta_lists:
+        existing_list = existing_meta.get(category, [])
+        new_list = metadata.get(category, [])
+
+        # Determine if existing keys are stale
+        existing_keys = {unit[identifier]: False for unit in existing_list}
+        for unit in new_list:
+            existing_keys[unit[identifier]] = unit[identifier] in existing_keys
+        # Filter out stale categories
+        merged_list = [
+            unit for unit in existing_list if not existing_keys[unit[identifier]]
+        ]
+        merged_list.extend(new_list)
+
+        if merged_list:
+            merged_meta_lists[category] = merged_list
+
+    # Merge metas (prioritize new metadata)
+    existing_meta.update(metadata)
+    existing_meta.update(merged_meta_lists)
+
+    return existing_meta
 
 
 def setup_llm_tasks(pipeline_config, document_indexers):
@@ -731,37 +586,3 @@ def load_pipeline(
         logger.info(f"Registered LLM tasks : {llm_group}, {len(tasks)}, {tasks}")
 
     return pipeline_name, classifier_groups, indexer_groups
-
-
-def update_existing_meta(existing_meta: dict, metadata: dict):
-    if not existing_meta:
-        return metadata
-    if not metadata:
-        return existing_meta
-
-    # List elements are overridden on dict.update, so they need to be merged independently
-    # New metadata lists take priority when handling duplicate elements with the same identifier value
-    meta_lists = [("classifications", "group"), ("indexers", "group")]
-    merged_meta_lists = dict()
-    for category, identifier in meta_lists:
-        existing_list = existing_meta.get(category, [])
-        new_list = metadata.get(category, [])
-
-        # Determine if existing keys are stale
-        existing_keys = {unit[identifier]: False for unit in existing_list}
-        for unit in new_list:
-            existing_keys[unit[identifier]] = unit[identifier] in existing_keys
-        # Filter out stale categories
-        merged_list = [
-            unit for unit in existing_list if not existing_keys[unit[identifier]]
-        ]
-        merged_list.extend(new_list)
-
-        if merged_list:
-            merged_meta_lists[category] = merged_list
-
-    # Merge metas (prioritize new metadata)
-    existing_meta.update(metadata)
-    existing_meta.update(merged_meta_lists)
-
-    return existing_meta

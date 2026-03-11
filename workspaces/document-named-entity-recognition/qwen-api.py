@@ -265,7 +265,7 @@ def inference_with_api(
     # base64_image = base64.b64encode(bytes_data).decode('utf-8')
     base64_image = _b64_png(image_path)
     estimated_tokens = estimate_token_count(prompt)
-    estimated_tokens = 8192 * 2  #  estimated_tokens + 512  #
+    estimated_tokens = 8192 * 2  # estimated_tokens + 512  #
     # --max-batch-prefill-tokens 4096 --max-total-tokens 4096 --max-input-tokens 2048
 
     print('estimated_tokens : ', estimated_tokens)
@@ -502,6 +502,6 @@ demo.launch(debug=True, share=False)
 
 # https://www.linkedin.com/pulse/advancing-document-ai-table-column-detection-made-simple-vaghela-px6ac
 # https://github.com/VikParuchuri/marker/tree/master/marker
-# python table_recognition.py --debug --images /home/greg/dev/rms/grapnel-g5/assets/TID-100985/ANNOTATED/OUT/tables/fragments/5_0-1200.png --skip_table_detection
+
 # Converted
 # https://github.com/RapidAI/TableStructureRec/blob/main/demo_wired.py

@@ -16,7 +16,8 @@ ARG PY_VERSION=3.12
 ARG BUILD_DATE
 ARG MARIE_VERSION
 ARG TARGETPLATFORM
-ARG PIP_EXTRA_INDEX_URL="https://www.piwheels.org/simple"
+# Note: piwheels is for ARM/Raspberry Pi only, not needed for x86_64/CUDA builds
+ARG PIP_EXTRA_INDEX_URL=""
 
 # constant, wont invalidate cache
 LABEL org.opencontainers.image.vendor="Marie AI" \
@@ -118,13 +119,29 @@ RUN python3 -m pip install /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl \
 RUN python3 -m pip install omegaconf==2.3.0 \
     && python3 /tmp/patches/patch-omegaconf-py312.py --no-confirm
 
+# Install marie packages (monorepo local packages)
+COPY packages/ /tmp/packages/
+RUN python3 -m pip install /tmp/packages/marie-kernel \
+    && python3 -m pip install /tmp/packages/marie-wasm \
+    && python3 -m pip install /tmp/packages/marie-mem0 \
+    && python3 -m pip install /tmp/packages/marie-mcp
+
 # Order is important, need to install detectron2 last expected version is 0.6
 # We also disable build isolation to avoid issues with error in detectron2 : No module named 'torch'
 
-RUN python3 -m pip install torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 \
-    && python3 -m pip install git+https://github.com/facebookresearch/fvcore \
+# Install torch separately with retries to handle transient download corruption (BadZipFile CRC-32 errors)
+# Override PIP_NO_CACHE_DIR so retries can use cached downloads; BuildKit cache mount avoids bloating the image
+RUN --mount=type=cache,target=/root/.cache/pip \
+    export PIP_NO_CACHE_DIR=0 && \
+    for i in 1 2 3; do \
+        python3 -m pip install torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 \
+        && break \
+        || { echo "Attempt $i failed, purging pip cache and retrying..."; pip cache purge 2>/dev/null; sleep 5; }; \
+    done
+
+RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore \
     && python3 -m pip install git+https://github.com/marieai/fairseq.git  \
-    && python3 -m pip install --no-build-isolation  git+https://github.com/facebookresearch/detectron2.git -v 
+    && python3 -m pip install --no-build-isolation  git+https://github.com/facebookresearch/detectron2.git -v
 
 # Installing VLLM independently to avoid issues with torch version, down the road we will use as  --constraint constraints.txt
 RUN python3 -m pip install psutil
@@ -133,8 +150,10 @@ RUN python3 -m pip install vllm==0.7.3
 # ISSUE https://github.com/marieai/marie-ai/issues/136
 RUN python3 -m pip install pillow==9.5.0
 
+# Install marie-ai package with dependencies
+# Use --prefer-binary to speed up installation by using pre-built wheels when available
 RUN cd /tmp/ \
-    && python3 -m pip install --default-timeout=100 --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
+    && python3 -m pip install --default-timeout=100 --compile --prefer-binary .
 
 
 # No inference is being done currently 
@@ -190,6 +209,7 @@ RUN apt-get update && \
         libomp-dev \
         libjemalloc-dev \
         libgoogle-perftools-dev \
+        graphviz \
         libmagickwand-dev && \
     ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
     ln -s /usr/lib/x86_64-linux-gnu/libjemalloc.so /usr/lib/libjemalloc.so && \

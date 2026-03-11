@@ -110,9 +110,9 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             conn = None
             try:
                 conn = self._get_connection()
-                query = f"SELECT key, value FROM {self.qualified_table} WHERE key = '{key.decode()}'  AND namespace = '{namespace.decode()}' AND is_deleted = FALSE"
+                query = f"SELECT key, value FROM {self.qualified_table} WHERE key = %s AND namespace = %s AND is_deleted = FALSE"
                 cursor = self._execute_sql_gracefully(
-                    query, data=(), return_cursor=True, connection=conn
+                    query, data=(key.decode(), namespace.decode()), return_cursor=True, connection=conn
                 )
                 result = cursor.fetchone()
 
@@ -154,24 +154,30 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             uid = uuid7str()
             shard = 0
 
+            ns = namespace.decode()
+            k = key.decode()
+            v = value.decode()
+
             insert_q = f"""
                 INSERT INTO {self.qualified_table} (id, namespace, key, value, shard, created_at, updated_at)
-                VALUES ('{uid}', '{namespace.decode()}', '{key.decode()}', '{value.decode()}', {shard},current_timestamp,current_timestamp )
+                VALUES (%s, %s, %s, %s, %s, current_timestamp, current_timestamp)
             """
+            params = [uid, ns, k, v, shard]
 
-            upsert_q = f"""
-                ON CONFLICT (key, namespace)
-                DO
-                UPDATE SET value = '{value.decode()}', updated_at = current_timestamp
-            """
+            if overwrite:
+                insert_q += f"""
+                    ON CONFLICT (key, namespace)
+                    DO
+                    UPDATE SET value = %s, updated_at = current_timestamp
+                """
+                params.append(v)
 
             cursor = None
             conn = None
             try:
                 conn = self._get_connection()
-                query = insert_q + upsert_q if overwrite else insert_q
                 cursor = self._execute_sql_gracefully(
-                    query, return_cursor=True, connection=conn
+                    insert_q, data=tuple(params), return_cursor=True, connection=conn
                 )
 
                 if cursor is None:
@@ -200,14 +206,14 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         else:
 
             def _del_blocking():
-                query = f"DELETE FROM {self.qualified_table} WHERE key = '{key.decode()}' AND namespace = '{namespace.decode()}'"
+                query = f"DELETE FROM {self.qualified_table} WHERE key = %s AND namespace = %s"
                 cursor = None
                 conn = None
 
                 try:
                     conn = self._get_connection()
                     cursor = self._execute_sql_gracefully(
-                        query, data=(), return_cursor=True, connection=conn
+                        query, data=(key.decode(), namespace.decode()), return_cursor=True, connection=conn
                     )
                     if cursor is not None:
                         return 1
@@ -235,9 +241,9 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             conn = None
             try:
                 conn = self._get_connection()
-                query = f"SELECT key FROM {self.qualified_table} WHERE namespace = '{namespace.decode()}' AND is_deleted = FALSE"
+                query = f"SELECT key FROM {self.qualified_table} WHERE namespace = %s AND is_deleted = FALSE"
                 cursor = self._execute_sql_gracefully(
-                    query, data=(), return_cursor=True, connection=conn
+                    query, data=(namespace.decode(),), return_cursor=True, connection=conn
                 )
 
                 for record in cursor:

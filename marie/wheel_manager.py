@@ -442,19 +442,12 @@ if __name__ == "__main__":
     # Example usage
     wheel_manager = PipWheelManager()
 
-    # Install a specific wheel
-    # wheel_info = wheel_manager.install_wheel(
-    #     '/home/gbugaj/dev/hello_world_wheel/dist/hello_world_wheel-0.0.post1.dev1+g2164318-py3-none-any.whl')
-    #
-    # print(f"Installed: {wheel_info['package_name']}")
-    # print(wheel_info)
-
     if True:
         # using a wheel watcher
         watcher = WheelDirectoryWatcher(wheel_manager)
         # Watch a directory for wheel changes
         try:
-            watcher.watch_directory('/home/gbugaj/dev/hello_world_wheel/dist')
+            watcher.watch_directory('~/dev/hello_world_wheel/dist')
             print("Watching for wheel changes...")
             while True:
                 time.sleep(1)

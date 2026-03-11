@@ -11,7 +11,7 @@ model2_name = "openai/clip-vit-large-patch14"
 model1_name = "openai/clip-vit-large-patch14-336"
 model2_name = "openai/clip-vit-base-patch16"
 model2_name = os.path.expanduser(
-    "~/dev/grapnel-tooling/train-clip/oputput-taxonomy/checkpoint-13000"
+    "~/dev/tooling/train-clip/oputput-taxonomy/checkpoint-13000"
 )
 
 # Load CLIP models and their respective processors

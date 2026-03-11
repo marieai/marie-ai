@@ -440,7 +440,7 @@ https://github.com/autogluon/autogluon/
 
 # git submodule init
 # git submodule update
-# cmake .. -DTENSORRT_ROOT=/home/gbugaj/dev/3rdparty/TensorRT-8.6.0.12  && make -j
+# cmake .. -DTENSORRT_ROOT=~/dev/3rdparty/TensorRT-8.6.0.12  && make -j
 # ~/dev/3rdparty/onnx/onnx-tensorrt$ python3 setup.py install
 
 # configure Docker container

@@ -7,15 +7,15 @@ from docarray import DocList
 
 from marie import requests
 from marie.api.docs import AssetKeyDoc
-from marie.executor.asset_util import create_working_dir
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
 from marie.executor.request_util import get_frames_from_docs, parse_parameters
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import initialize_device_settings, setup_torch_optimizations
-from marie.pipe.components import s3_asset_path, store_assets, update_existing_meta
+from marie.pipe.components import update_existing_meta
 from marie.storage import StorageManager
+from marie.utils.asset_util import create_working_dir, s3_asset_path, store_assets
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.network import get_ip_address
 
@@ -124,7 +124,9 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
         """
         job_id, ref_id, ref_type, _, payload = parse_parameters(parameters)
         frames = get_frames_from_docs(docs)
-        root_asset_dir = create_working_dir(frames)
+        root_asset_dir = create_working_dir(
+            frames, ref_id=ref_id, ref_type=ref_type, job_id=job_id
+        )
 
         features = payload.get("features", [])
         meta_folders = [

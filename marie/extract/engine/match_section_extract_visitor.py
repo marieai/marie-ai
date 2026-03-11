@@ -185,6 +185,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         all_field_mappings: List[FieldMapping] = layer.fields
 
         parser_sections_rules = region_parser_cfg.get("sections", [])
+        region_scoping = region_parser_cfg.get("region_scoping", "strict")
         # Collect all regions fully contained by any of the section spans (line-based)
         regions_in_scope = set()
         if not spans:
@@ -238,14 +239,32 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     region_start = min(mins)
                     region_end = max(maxs)
 
-                    # DEBUG: Log region scoping check
-                    is_in_scope = region_start >= start_line and region_end <= end_line
-                    self.logger.info(
-                        f"    Region '{region.region_id}': lines {region_start}-{region_end}, "
-                        f"check: {region_start} >= {start_line} AND {region_end} <= {end_line} = {is_in_scope}"
-                    )
+                    # Determine if region is in scope based on scoping strategy
+                    if region_scoping == "relaxed":
+                        # Majority overlap: region is in scope if >50% of its lines fall within the span
+                        overlap_start = max(region_start, start_line)
+                        overlap_end = min(region_end, end_line)
+                        overlap_length = max(0, overlap_end - overlap_start)
+                        region_length = region_end - region_start
+                        overlap_ratio = (
+                            overlap_length / region_length if region_length > 0 else 0.0
+                        )
+                        is_in_scope = overlap_ratio > 0.5
+                        self.logger.info(
+                            f"    Region '{region.region_id}': lines {region_start}-{region_end}, "
+                            f"scoping=relaxed, overlap={overlap_length}/{region_length} ({overlap_ratio:.1%}), "
+                            f"in_scope={is_in_scope}"
+                        )
+                    else:
+                        # Strict: fully contained
+                        is_in_scope = (
+                            region_start >= start_line and region_end <= end_line
+                        )
+                        self.logger.info(
+                            f"    Region '{region.region_id}': lines {region_start}-{region_end}, "
+                            f"check: {region_start} >= {start_line} AND {region_end} <= {end_line} = {is_in_scope}"
+                        )
 
-                    # Fully-contained check
                     if is_in_scope:
                         regions_in_scope.add(region)
                 except Exception:
@@ -564,15 +583,25 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 if field_name in populated_fields:
                     continue
 
-                match_generator = (
+                # Two-pass match: prefer exact match over substring/contains
+                # This prevents "MEMBER_ID" from matching "MEMBER_ID_NAME"
+                exact_generator = (
                     (value_text, it, sel)
                     for sel in selectors
                     for key_text, value_text, it in kv_triplets
-                    if key_text
-                    and self._selector_matches_text(sel, key_text, use_regex_flag)
+                    if key_text and self._ci(sel) == self._ci(key_text)
                 )
+                first_match = next(exact_generator, None)
 
-                first_match = next(match_generator, None)
+                if not first_match:
+                    match_generator = (
+                        (value_text, it, sel)
+                        for sel in selectors
+                        for key_text, value_text, it in kv_triplets
+                        if key_text
+                        and self._selector_matches_text(sel, key_text, use_regex_flag)
+                    )
+                    first_match = next(match_generator, None)
 
                 if not first_match:
                     continue
@@ -684,6 +713,8 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
         # There is only one table config per region name, but each labeled region can have one table block
         table_config = region_entry.get("table", {})
+        grouping_config = table_config.get('body', {}).get('grouping', {})
+        row_types_config = grouping_config.get('row_types', None)
         field_to_header_map = {}
         field_to_footer_map = {}  # FOOTER ARE NOT SUPPORTED YET or MAYBE EVEN EVER
 
@@ -772,16 +803,16 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
                 processed_column = -1
                 matched = False
+
+                # Pass 1: prefer exact match over substring/contains
                 for selector in selectors:
                     for col_index, header_text in enumerate(header_texts):
                         if col_index in claimed_columns or not header_text:
                             continue
-                        if self._selector_matches_text(
-                            selector, header_text, use_regex_flag
-                        ):
+                        if self._ci(selector) == self._ci(header_text):
                             self.logger.info(
                                 f"Matched header '{selector}' for field '{field_name}' at column {col_index} "
-                                f"(header='{header_text}')"
+                                f"(header='{header_text}', exact)"
                             )
                             processed_column = col_index
                             claimed_columns.add(col_index)
@@ -789,6 +820,26 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                             break
                     if matched:
                         break
+
+                # Pass 2: fall back to substring/regex match
+                if not matched:
+                    for selector in selectors:
+                        for col_index, header_text in enumerate(header_texts):
+                            if col_index in claimed_columns or not header_text:
+                                continue
+                            if self._selector_matches_text(
+                                selector, header_text, use_regex_flag
+                            ):
+                                self.logger.info(
+                                    f"Matched header '{selector}' for field '{field_name}' at column {col_index} "
+                                    f"(header='{header_text}')"
+                                )
+                                processed_column = col_index
+                                claimed_columns.add(col_index)
+                                matched = True
+                                break
+                        if matched:
+                            break
 
                 if processed_column != -1:
                     columns_to_process[field_name] = {
@@ -814,6 +865,32 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
             self.logger.info(f"Columns to process mapping: {columns_to_process}")
 
+            # Detect primary column and ROW_TYPE column indices for multiline row support
+            primary_col_index = -1
+            type_col_index = -1
+
+            for field_name, col_def in columns_to_process.items():
+                if col_def["header_config"].get("primary", False):
+                    primary_col_index = col_def["cell_index"]
+
+            # ROW_TYPE is a classification column from the LLM output — it's typically
+            # NOT defined in the config columns, so look for it directly in header_texts
+            if row_types_config:
+                type_column_name = row_types_config.get("type_column", "ROW_TYPE")
+                for col_index, header_text in enumerate(header_texts):
+                    if (
+                        header_text
+                        and header_text.strip().upper() == type_column_name.upper()
+                    ):
+                        type_col_index = col_index
+                        break
+
+            if row_types_config:
+                self.logger.info(
+                    f"Row types config detected: primary_col_index={primary_col_index}, "
+                    f"type_col_index={type_col_index}, config={row_types_config}"
+                )
+
             # DEBUG: Log region info and body_rows count
             region_id = structured_section.tags.get("source_region_id", "unknown")
             self.logger.info(
@@ -827,6 +904,9 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 columns_to_process=columns_to_process,
                 page_id=page_id,
                 template_fields_repeating=template_fields_repeating,
+                primary_col_index=primary_col_index,
+                type_col_index=type_col_index,
+                row_types_config=row_types_config,
             )
 
             if not match_section_to_populate.matched_field_rows:
@@ -852,15 +932,26 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         columns_to_process: Dict[str, Dict[str, Any]],
         page_id: int,
         template_fields_repeating: Dict[str, Any],
+        primary_col_index: int = -1,
+        type_col_index: int = -1,
+        row_types_config: Optional[Dict[str, Any]] = None,
     ) -> List[MatchFieldRow]:
         """
         Build MatchFieldRow list by extracting values from body rows using resolved column indices.
+
+        When row_types_config is provided, enables dual detection:
+        - PRIMARY_COLUMN: if the primary column is empty, the row is a child row
+        - ROW_TYPE column: classifies which type of child row (e.g., ADJUSTMENT), each with
+          its own active_columns that limit which fields are extracted
 
         Parameters:
             body_rows: list of TableRow objects with role BODY
             columns_to_process: mapping of field name -> { cell_index: int, header_config: dict }
             page_id: page identifier to propagate to line metadata
             template_fields_repeating: field configuration template for repeating fields
+            primary_col_index: index of the primary column (-1 if not set)
+            type_col_index: index of the ROW_TYPE column (-1 if not set)
+            row_types_config: row types configuration dict from grouping config
 
         Returns:
             List[MatchFieldRow]
@@ -868,6 +959,19 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         matched_field_rows: List[MatchFieldRow] = []
         if not body_rows or not columns_to_process:
             return matched_field_rows
+
+        # Pre-compute per row-type config (active_columns, action, merge_strategies, column_mapping)
+        type_defs: Dict[str, Dict[str, Any]] = {}
+        type_active_columns: Dict[str, set] = {}
+        type_column_name: Optional[str] = None
+        if row_types_config:
+            type_column_name = row_types_config.get("type_column", "ROW_TYPE")
+            for type_name, type_def in row_types_config.get("types", {}).items():
+                upper_name = type_name.upper()
+                type_defs[upper_name] = type_def
+                active_cols = type_def.get("active_columns", [])
+                if active_cols:
+                    type_active_columns[upper_name] = set(active_cols)
 
         # Stable processing order
         ordered_fields = [
@@ -878,12 +982,77 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             )
         ]
 
+        current_parent: Optional[MatchFieldRow] = None
+
         for row in body_rows:
+            cells = row.cells
+
+            # Step 1: Check primary column — is this a child row?
+            is_child_row = False
+            if primary_col_index >= 0 and row_types_config:
+                if primary_col_index < len(cells):
+                    primary_cell = cells[primary_col_index]
+                    primary_value = ""
+                    if primary_cell.lines and len(primary_cell.lines) > 0:
+                        primary_value = (primary_cell.lines[0].line or "").strip()
+                    else:
+                        primary_value = (
+                            str(primary_cell) if primary_cell else ""
+                        ).strip()
+                    is_child_row = primary_value == ""
+
+            # Step 2: If child row, read ROW_TYPE to resolve type config and action
+            active_columns: Optional[set] = (
+                None  # None = all columns (default/main row)
+            )
+            child_type_value = ""
+            child_type_def: Dict[str, Any] = {}
+            if is_child_row and type_col_index >= 0:
+                if type_col_index < len(cells):
+                    type_cell = cells[type_col_index]
+                    if type_cell.lines and len(type_cell.lines) > 0:
+                        child_type_value = (
+                            (type_cell.lines[0].line or "").strip().upper()
+                        )
+                    else:
+                        child_type_value = (
+                            (str(type_cell) if type_cell else "").strip().upper()
+                        )
+
+                    child_type_def = type_defs.get(child_type_value, {})
+
+                    # Check action early — discard before extracting any fields
+                    action = child_type_def.get("action", "merge")
+                    if action == "discard":
+                        self.logger.info(
+                            f"Discarding child row with ROW_TYPE='{child_type_value}' (action=discard)"
+                        )
+                        continue
+
+                    if child_type_value in type_active_columns:
+                        active_columns = type_active_columns[child_type_value]
+                        self.logger.info(
+                            f"Child row detected: ROW_TYPE='{child_type_value}', "
+                            f"active_columns={active_columns}, action={action}"
+                        )
+                    else:
+                        self.logger.info(
+                            f"Child row detected: ROW_TYPE='{child_type_value}', "
+                            f"no active_columns filter, action={action}"
+                        )
+
             extracted_cells = []
             self.logger.debug("row : *******************")
 
-            cells = row.cells
             for field_name in ordered_fields:
+                # Skip ROW_TYPE column from output — it's a classification signal, not a data field
+                if type_column_name and field_name == type_column_name:
+                    continue
+
+                # Skip non-active columns for typed child rows
+                if active_columns is not None and field_name not in active_columns:
+                    continue
+
                 column_def = columns_to_process[field_name]
                 column_index = int(column_def["cell_index"])
                 header_config = column_def["header_config"]
@@ -925,10 +1094,123 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 self.logger.debug(f"transformed_value fields : {len(fields)}  {fields}")
                 extracted_cells.extend(fields)
 
-            matched_field_row: MatchFieldRow = MatchFieldRow(fields=extracted_cells)
-            matched_field_rows.append(matched_field_row)
+            if not is_child_row:
+                # Parent row — create new MatchFieldRow and track it
+                matched_field_row = MatchFieldRow(fields=extracted_cells)
+                matched_field_rows.append(matched_field_row)
+                if row_types_config:
+                    current_parent = matched_field_row
+            else:
+                # Child row — action/type already resolved in Step 2 (discard handled via continue above)
+                action = child_type_def.get("action", "merge")
+
+                if action == "standalone":
+                    self.logger.info(
+                        f"Emitting child row ROW_TYPE='{child_type_value}' as standalone (action=standalone)"
+                    )
+                    matched_field_rows.append(MatchFieldRow(fields=extracted_cells))
+                else:
+                    # action == "merge" (default)
+                    if current_parent is not None:
+                        type_merge_strategies = child_type_def.get(
+                            "merge_strategies", {}
+                        )
+                        column_mapping = child_type_def.get("column_mapping", {})
+                        default_merge = (
+                            row_types_config.get("default_merge", "append")
+                            if row_types_config
+                            else "append"
+                        )
+
+                        self._merge_child_fields_into_parent(
+                            current_parent,
+                            extracted_cells,
+                            merge_strategies=type_merge_strategies,
+                            column_mapping=column_mapping,
+                            default_merge=default_merge,
+                        )
+                    else:
+                        # Orphaned child row (no parent yet) — emit as standalone
+                        self.logger.warning(
+                            f"Child row ROW_TYPE='{child_type_value}' without parent; emitting as standalone"
+                        )
+                        matched_field_rows.append(MatchFieldRow(fields=extracted_cells))
 
         return matched_field_rows
+
+    def _merge_child_fields_into_parent(
+        self,
+        parent_row: MatchFieldRow,
+        child_fields: List[Field],
+        merge_strategies: Optional[Dict[str, str]] = None,
+        column_mapping: Optional[Dict[str, str]] = None,
+        default_merge: str = "append",
+    ) -> None:
+        """Merge active-column fields from a child row into the parent row.
+
+        Args:
+            parent_row: The parent SERVICE_LINE MatchFieldRow to merge into.
+            child_fields: Fields extracted from the child (ADJUSTMENT) row.
+            merge_strategies: Per-column merge strategy overrides
+                (child_column_name -> "append"|"replace").
+            column_mapping: Remap child field names to different parent field names
+                (child_column_name -> target_field_name). When a mapping exists, the
+                child value is merged into (or creates) the target field instead of
+                the same-named field. Useful when child row values should appear as
+                a new column in the parent (e.g., REMARK_CODE -> ADJUSTMENT_REMARK_CODE).
+            default_merge: Default merge strategy when no per-column override exists.
+        """
+        if merge_strategies is None:
+            merge_strategies = {}
+        if column_mapping is None:
+            column_mapping = {}
+
+        parent_field_map: Dict[str, Field] = {
+            f.field_name: f for f in parent_row.fields
+        }
+
+        for child_field in child_fields:
+            child_name = child_field.field_name
+            # Apply column_mapping: remap child field to a different target name
+            target_name = column_mapping.get(child_name, child_name)
+            strategy = merge_strategies.get(child_name, default_merge)
+            parent_field = parent_field_map.get(target_name)
+
+            child_val = (child_field.value or "").strip()
+            if not child_val:
+                continue
+
+            if parent_field is not None:
+                if strategy == "replace":
+                    parent_field.value = child_val
+                    child_orig = (child_field.value_original or "").strip()
+                    if child_orig:
+                        parent_field.value_original = child_orig
+                else:  # "append" (default)
+                    parent_val = (parent_field.value or "").strip()
+                    if parent_val:
+                        parent_field.value = f"{parent_val}, {child_val}"
+                    else:
+                        parent_field.value = child_val
+
+                    child_orig = (child_field.value_original or "").strip()
+                    if child_orig:
+                        parent_orig = (parent_field.value_original or "").strip()
+                        if parent_orig:
+                            parent_field.value_original = f"{parent_orig}, {child_orig}"
+                        else:
+                            parent_field.value_original = child_orig
+            else:
+                # Parent doesn't have this field — add it (with remapped name)
+                if target_name != child_name:
+                    child_field.field_name = target_name
+                parent_row.fields.append(child_field)
+                parent_field_map[target_name] = child_field
+
+        self.logger.info(
+            f"Merged {len(child_fields)} child field(s) into parent row "
+            f"(strategy: {default_merge}, mapping: {column_mapping})"
+        )
 
     def process_tables(
         self, context: ExecutionContext, parent: MatchSection, section: MatchSection

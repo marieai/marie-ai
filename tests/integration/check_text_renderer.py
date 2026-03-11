@@ -1,15 +1,12 @@
 import os
 
 import cv2
-import numpy as np
-import tqdm
 
 from marie.boxes.box_processor import PSMode
 from marie.renderer.text_renderer import TextRenderer
 from marie.utils.utils import ensure_exists
 
 if True:
-    from marie.boxes.craft_box_processor import BoxProcessorCraft
     from marie.boxes.textfusenet_box_processor import BoxProcessorTextFuseNet
     from marie.document.craft_ocr_processor import CraftOcrProcessor
 
@@ -30,8 +27,6 @@ if __name__ == "__main__":
     # img_path = './assets/english/Lines/005.png'
     # img_path = './assets/english/Lines/004.png'
     img_path = "./assets/private/PID_576_7188_0_149495857_page_0002.tif"
-    # img_path = "/home/gbugaj/data/private/coco-text/000005.tif"
-    img_path = "/home/gbugaj/tmp/marie-cleaner/161970410/burst/PID_1956_9362_0_161970410_page_0004.tif"
 
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")

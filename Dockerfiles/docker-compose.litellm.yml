@@ -3,6 +3,7 @@ services:
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: marie-litellm
+    init: true
     restart: unless-stopped
     ports:
       - "4000:4000"

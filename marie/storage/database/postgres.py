@@ -52,8 +52,13 @@ class PostgresqlMixin:
                 # Add connection validation
                 # HINT:  Available values: serializable, repeatable read, read committed, read uncommitted.
                 **{
-                    'options': '-c timezone=UTC',
-                    'application_name': application_name
+                    'options': '-c timezone=UTC -c statement_timeout=120000',
+                    'application_name': application_name,
+                    'connect_timeout': 10,
+                    'keepalives': 1,
+                    'keepalives_idle': 30,
+                    'keepalives_interval': 10,
+                    'keepalives_count': 3,
                 }
             )
 

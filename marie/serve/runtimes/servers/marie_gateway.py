@@ -841,6 +841,40 @@ class MarieServerGateway(CompositeServer):
                         "error": f"Planner with ID '{planner_id}' not found",
                     }
 
+            @app.api_route(
+                path="/api/registry",
+                methods=["GET"],
+                summary="Get component registry and query planner information",
+            )
+            async def get_registry_info():
+                self.logger.info(
+                    f"Registry info requested at {datetime.now(timezone.utc)}"
+                )
+                try:
+                    from marie.extract.registry import component_registry
+                    from marie.query_planner.base import QueryPlanRegistry
+
+                    registry_data = component_registry.get_registry_info()
+                    planner_info = QueryPlanRegistry.get_planner_info()
+                    planner_details = QueryPlanRegistry.list_planners_with_metadata()
+
+                    return {
+                        "status": "OK",
+                        "result": {
+                            "components": registry_data,
+                            "planners": {
+                                **planner_info,
+                                "planner_details": planner_details,
+                            },
+                        },
+                    }
+                except Exception as e:
+                    self.logger.error(f"Error getting registry info: {str(e)}")
+                    return {
+                        "status": "error",
+                        "result": f"Failed to get registry info: {str(e)}",
+                    }
+
             # Register Wasm compilation routes
             register_wasm_routes(app)
 

@@ -5,7 +5,6 @@ from docarray import DocList
 from marie import requests, safely_encoded
 from marie.api import AssetKeyDoc, value_from_payload_or_args
 from marie.boxes import PSMode
-from marie.executor.asset_util import create_working_dir
 from marie.executor.pipeline.document_pipeline_executor import PipelineExecutor
 from marie.executor.request_util import get_frames_from_docs, parse_parameters
 from marie.logging_core.mdc import MDC
@@ -13,6 +12,7 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import torch_gc
 from marie.ocr import CoordinateFormat
 from marie.pipe.llm_pipeline import LLMPipeline
+from marie.utils.asset_util import create_working_dir
 
 
 # TODO: refactor and aggregate into functional packages
@@ -92,7 +92,13 @@ class DocumentLLMPipelineExecutor(PipelineExecutor):
             pages = None
 
         frames = get_frames_from_docs(docs, pages)
-        root_asset_dir = create_working_dir(frames)
+        root_asset_dir = create_working_dir(
+            frames,
+            ref_id=ref_id,
+            ref_type=ref_type,
+            queue_id=queue_id,
+            job_id=job_id,
+        )
         try:
             metadata = self.pipeline.execute_frames_pipeline(
                 ref_id=ref_id,
@@ -100,6 +106,7 @@ class DocumentLLMPipelineExecutor(PipelineExecutor):
                 frames=frames,
                 root_asset_dir=root_asset_dir,
                 job_id=job_id,
+                queue_id=queue_id,
                 runtime_conf=runtime_conf,
             )
             if metadata is None:

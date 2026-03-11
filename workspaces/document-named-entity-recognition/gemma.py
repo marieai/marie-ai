@@ -14,7 +14,6 @@ from transformers import (
 
 model_id = "google/gemma-3-12b-it"
 
-
 bnb_config = BitsAndBytesConfig(
     load_in_8bit=True,  # Enable 8-bit loading
     llm_int8_threshold=6.0,  # Threshold for mixed-precision
@@ -36,7 +35,7 @@ def encode_image(image_path):
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 
-image_path = "/home/gbugaj/dev/workflow/grapnel-g5/assets/TID-100985/ANNOTATED/OUT/tables/fragments/30_1.png"
+image_path = "~/tmp/ANNOTATED/OUT/tables/fragments/30_1.png"
 base64_image = encode_image(image_path)
 
 messages = [
@@ -53,7 +52,6 @@ messages = [
         ],
     },
 ]
-
 
 inputs = processor.apply_chat_template(
     messages,

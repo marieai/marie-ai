@@ -8,12 +8,12 @@ from PIL import Image
 
 
 def is_jpeg(data):
-    jpeg_signature = b'\xFF\xD8\xFF'
+    jpeg_signature = b'\xff\xd8\xff'
     return data.startswith(jpeg_signature)
 
 
 def is_png(data):
-    png_signature = b'\x89\x50\x4E\x47\x0D\x0A\x1A\x0A'
+    png_signature = b'\x89\x50\x4e\x47\x0d\x0a\x1a\x0a'
     return data.startswith(png_signature)
 
 
@@ -288,7 +288,7 @@ def is_batched_request(
         List[str],
         List[Union[Image.Image, bytes, str]],
         List[List[Union[Image.Image, bytes, str]]],
-    ]
+    ],
 ) -> bool:
     """
     Determines whether the input content is a batched request.

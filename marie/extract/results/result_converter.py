@@ -173,8 +173,10 @@ def convert_document_to_structure(
     logger.info(f"Processing document with ID: {doc_id}")
 
     try:
+        conflict_resolution = conf.annotation_config.get("conflict_resolution", "none")
         annotation_merger = AnnotationMerger(
-            OmegaConf.to_container(conf.annotation_config.type_priority)
+            OmegaConf.to_container(conf.annotation_config.type_priority),
+            conflict_resolution=conflict_resolution,
         )
         annotation_merger.merge(doc)
     except Exception as e:

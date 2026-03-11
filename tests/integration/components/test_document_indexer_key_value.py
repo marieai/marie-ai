@@ -56,8 +56,8 @@ def test_transformer_document_indexer():
     template = env.get_template("inference_prompt.txt.j2")
 
     for i in range(NITER):
-        documents = docs_from_file("~/dev/rms/grapnel-g5/assets/section-frag/001/001.png")
-        ocr_results = load_json_file("~/dev/rms/grapnel-g5/assets/section-frag/001/result.json")
+        documents = docs_from_file("~/assets/section-frag/001/001.png")
+        ocr_results = load_json_file("~/assets/section-frag/001/result.json")
         words, boxes = get_words_and_boxes(ocr_results, 0)
         text = meta_to_text(ocr_results)
         print('-' * 50)

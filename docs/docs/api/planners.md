@@ -70,7 +70,7 @@ GET /api/planners
       "tags": [],
       "category": null,
       "source_type": "code",
-      "source_module": "grapnel_g5.query.receipt",
+      "source_module": "module.query.receipt",
       "plan_definition": null,
       "created_at": null,
       "updated_at": null

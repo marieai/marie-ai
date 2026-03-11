@@ -2,6 +2,7 @@ import asyncio
 import atexit
 import os
 import threading
+import time
 from typing import Any, Dict, Optional, Union
 
 from marie.constants import __cache_path__
@@ -190,14 +191,36 @@ def setup_llm_tracking(
 
 
 def _run_llm_tracking_worker() -> None:
-    """Run the LLM tracking worker (called in background thread)."""
+    """Run the LLM tracking worker (called in background thread).
+
+    Retries startup with exponential backoff so the worker survives
+    when the database schema hasn't been migrated yet at gateway boot.
+    """
     if _llm_tracking_worker is None:
         return
 
-    try:
-        _llm_tracking_worker.run()
-    except Exception as e:
-        logger.error(f"LLM tracking worker failed: {e}")
+    max_retries = 10
+    base_delay = 2  # seconds
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            _llm_tracking_worker.run()
+            return  # clean exit (e.g. shutdown)
+        except Exception as e:
+            if attempt >= max_retries:
+                logger.error(
+                    f"LLM tracking worker failed after {max_retries} attempts: {e}"
+                )
+                return
+
+            delay = min(base_delay * (2 ** (attempt - 1)), 60)
+            logger.warning(
+                f"LLM tracking worker failed (attempt {attempt}/{max_retries}): {e}. "
+                f"Retrying in {delay}s..."
+            )
+            # Reset started flag so run() will call start() again
+            _llm_tracking_worker._started = False
+            time.sleep(delay)
 
 
 def _stop_llm_tracking_worker() -> None:

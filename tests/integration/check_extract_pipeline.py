@@ -45,10 +45,6 @@ def run_extract_pipeline():
     # setup_storage()
     MDC.put("request_id", "test")
     img_path = "~/tmp/address-001.png"
-    img_path = "~/tmp/demo/159000487_1.png"
-    img_path = "~/tmp/4007/176075018.tif"
-
-    img_path = "~/dev/rms/grapnel-g5/assets/TID-100985/226749569/PID_7350_14627_0_226749569.tif"
 
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")

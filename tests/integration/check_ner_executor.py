@@ -66,12 +66,7 @@ def process_dir(
 if __name__ == "__main__":
     # 4.18.0  -> 4.21.0.dev0 : We should pin it to this version
     print(transformers.__version__)
-    # _name_or_path = "rms/layoutlmv3-large-corr-ner"
-    _name_or_path = "rms/layoutlmv3-large-20221118-001-best"
-    _name_or_path = "/mnt/data/models/layoutlmv3-large-stride/checkpoint-1000"
-    _name_or_path = "/mnt/data/marie-ai/model_zoo/rms/layoutlmv3-large-finetuned"
-    _name_or_path = "/mnt/data/marie-ai/model_zoo/rms/layoutlmv3-large-patpay-ner"
-    _name_or_path = "rms/layoutlmv3-large-corr-ner"
+    _name_or_path = "CPREFIX/layoutlmv3-large-best"
 
     kwargs = {"__model_path__": __model_path__}
     _name_or_path = ModelRegistry.get(_name_or_path, **kwargs)
@@ -82,9 +77,7 @@ if __name__ == "__main__":
     executor = NerExtractionExecutor(_name_or_path)
 
     storage_enabled = False
-    img_path = f"~/datasets/private/medical_page_classification/raw/CORRESPONDENCE/174617756_2.tiff"
     img_path = f"~/datasets/private/Data Labelling - All/EOB/159000444_1.png"
-    # img_path = f"/home/gbugaj/tmp/corr-indexing/small.png"
 
     if not os.path.isdir(img_path):
         process_file(executor, img_path, storage_enabled, storage_conf)

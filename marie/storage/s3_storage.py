@@ -354,7 +354,7 @@ class S3StorageHandler(PathHandler):
             # If S3 object_name was not specified, use file_name
             if key == "" and not file_like:
                 key = os.path.basename(src_path)
-            logger.debug(f"Uploading to {bucket}/{key}")
+            logger.info(f"Uploading to {bucket}/{key}")
             # Upload the file
             self.s3.Bucket(bucket).put_object(Key=key, Body=body, **extra_args)
         except Exception as e:
@@ -362,7 +362,6 @@ class S3StorageHandler(PathHandler):
             if not self.suppress_errors:
                 raise e
         finally:
-            # Close file handle if we opened it
             if not file_like and hasattr(body, 'close'):
                 body.close()
         return True
@@ -372,7 +371,7 @@ class S3StorageHandler(PathHandler):
         path: str,
         suppress_errors: bool = False,
         **kwargs: Any,
-    ) -> bytes:
+    ) -> bytes | None:
         s = S3Url(path)
         try:
             bytes_buffer = io.BytesIO()

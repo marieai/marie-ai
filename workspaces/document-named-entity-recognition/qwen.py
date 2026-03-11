@@ -1,24 +1,15 @@
 import ast
 import io
-import json
-import os
-import random
-import subprocess
 import uuid
 from threading import Thread
 
 import gradio as gr
-import numpy as np
 import torch
 from PIL import Image, ImageColor, ImageDraw, ImageFont
-from qwen_vl_utils import process_vision_info, smart_resize
 
 # Load model directly
 from transformers import (
-    AutoModelForImageTextToText,
-    AutoProcessor,
     BitsAndBytesConfig,
-    TextIteratorStreamer,
 )
 
 # processor = AutoProcessor.from_pretrained("reducto/RolmOCR")
@@ -32,7 +23,6 @@ additional_colors = [
 MODEL_ID = "Qwen/Qwen2-VL-7B-Instruct"
 MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
 MODEL_ID = "reducto/RolmOCR"
-
 
 # Configure BitsAndBytesConfig for 8-bit precision
 bnb_config = BitsAndBytesConfig(
@@ -327,6 +317,4 @@ demo.launch(debug=True)
 
 # https://www.linkedin.com/pulse/advancing-document-ai-table-column-detection-made-simple-vaghela-px6ac
 # https://github.com/VikParuchuri/marker/tree/master/marker
-# python table_recognition.py --debug --images /home/greg/dev/rms/grapnel-g5/assets/TID-100985/ANNOTATED/OUT/tables/fragments/5_0-1200.png --skip_table_detection
-# Converted
 # https://github.com/RapidAI/TableStructureRec/blob/main/demo_wired.py

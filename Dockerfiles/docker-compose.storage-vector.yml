@@ -7,6 +7,7 @@
 services:
   psql:
     container_name: marie-psql-server
+    init: true
 #    image: postgres:${POSTGRES_VERSION}
     # pgvector/pgvector:pg16
     image: pgvector/pgvector:pg${POSTGRES_VERSION}

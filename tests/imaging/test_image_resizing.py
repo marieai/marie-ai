@@ -47,13 +47,13 @@ def test_max_page_001():
 def test_downsample_001():
     # read image using cv2
     import cv2
-    cv2_img = cv2.imread('/home/gbugaj/analysis/grapnel/template-matching/TID-101220/TO-COMPARE/199026220-0001.png')
+    cv2_img = cv2.imread('~/template-matching/TID-101220/TO-COMPARE/199026220-0001.png')
     # resize image proportionally
     resized = cv2.resize(cv2_img, (0, 0), fx=0.5, fy=0.5, interpolation=cv2.INTER_LANCZOS4)
 
     # save the image
     cv2.imwrite(
-        '/home/gbugaj/analysis/grapnel/template-matching/TID-101220/TO-COMPARE/199026220-0001-TEST-50-LANCHOS.png',
+        '~/template-matching/TID-101220/TO-COMPARE/199026220-0001-TEST-50-LANCHOS.png',
         resized)
 
     # now resize using scale pyramids
@@ -63,9 +63,9 @@ def test_downsample_001():
     scale_3 = cv2.resize(scale_2, (0, 0), fx=0.75, fy=0.75, interpolation=cv2.INTER_LANCZOS4)
 
     # save the image
-    cv2.imwrite('/home/gbugaj/analysis/grapnel/template-matching/TID-101220/TO-COMPARE/199026220-0001-TEST-75-S1.png',
+    cv2.imwrite('~/template-matching/TID-101220/TO-COMPARE/199026220-0001-TEST-75-S1.png',
                 scale_1)
-    cv2.imwrite('/home/gbugaj/analysis/grapnel/template-matching/TID-101220/TO-COMPARE/199026220-0001-TEST-75-S2.png',
+    cv2.imwrite('~/template-matching/TID-101220/TO-COMPARE/199026220-0001-TEST-75-S2.png',
                 scale_2)
-    cv2.imwrite('/home/gbugaj/analysis/grapnel/template-matching/TID-101220/TO-COMPARE/199026220-0001-TEST-75-S3.png',
+    cv2.imwrite('~/template-matching/TID-101220/TO-COMPARE/199026220-0001-TEST-75-S3.png',
                 scale_3)

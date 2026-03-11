@@ -1,4 +1,4 @@
-"""Decorators and wrappers designed for wrapping :class:`BaseExecutor` functions. """
+"""Decorators and wrappers designed for wrapping :class:`BaseExecutor` functions."""
 
 import functools
 import inspect
@@ -103,7 +103,7 @@ def write(
             ],
             Optional[Union['DocumentArray', Dict]],
         ]
-    ] = None
+    ] = None,
 ):
     """
     `@write` is a decorator indicating that the function decorated will change the Executor finite state machine

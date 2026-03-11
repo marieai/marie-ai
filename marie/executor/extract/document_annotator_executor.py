@@ -10,7 +10,6 @@ from omegaconf import OmegaConf
 from marie.api.docs import AssetKeyDoc
 from marie.constants import __config_dir__
 from marie.excepts import RuntimeTerminated
-from marie.executor.asset_util import prepare_asset_directory
 from marie.executor.extract.util import layout_config
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
@@ -21,6 +20,7 @@ from marie.logging_core.logger import MarieLogger
 from marie.logging_core.mdc import MDC
 from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import torch_gc
+from marie.utils.asset_util import prepare_asset_directory, store_assets
 from marie.utils.docs import docs_from_asset, frames_from_docs
 from marie.utils.json import load_json_file
 from marie.utils.network import get_ip_address
@@ -310,6 +310,11 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                 dag_id=dag_id,
                 node_task_id=node_task_id,
                 partition_key=partition_key,
+            )
+
+            # Push only agent-output results to S3 for downstream nodes
+            store_assets(
+                ref_id, ref_type, root_asset_dir, match_wildcard="agent-output/**/*"
             )
 
             response = {

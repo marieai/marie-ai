@@ -2,6 +2,7 @@ services:
   s3server:
     image: zenko/cloudserver:latest
     container_name: s3server
+    init: true
     restart: unless-stopped
     ports:
       - "8000:8000"

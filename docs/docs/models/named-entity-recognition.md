@@ -104,7 +104,7 @@ if __name__ == "__main__":
     # pip install git+https://github.com/huggingface/transformers
     # 4.18.0  -> 4.21.0.dev0 : We should pin it to this version
     print(transformers.__version__)
-    _name_or_path = "rms/layoutlmv3-large-corr-ner"
+    _name_or_path = "CPREFIX/layoutlmv3-large-corr-ner"
     kwargs = {"__model_path__": __model_path__}
     _name_or_path = ModelRegistry.get(_name_or_path, **kwargs)
 
@@ -115,7 +115,7 @@ if __name__ == "__main__":
     executor = NerExtractionExecutor(_name_or_path)
 
     single_file = True
-    img_path = f"/home/greg/tmp/image5839050414130576656-0.tif"
+    img_path = f"~/tmp/image5839050414130576656-0.tif"
 
     if single_file:
         process_file(executor, img_path, True, storage_conf)

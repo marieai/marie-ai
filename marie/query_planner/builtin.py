@@ -35,10 +35,7 @@ def register_all_known_planners(query_planners_conf: QueryPlannersConf):
     """
     logger.info("Registering all known planners")
 
-    # Register built-in planners
     QueryPlanRegistry.register(EXTRACT_PLAN_ID, query_planner_extract)
-
-    # Initialize from configuration with wheel support
     result = QueryPlanRegistry.initialize_from_config(query_planners_conf)
 
     logger.info(f"Planner initialization results:")

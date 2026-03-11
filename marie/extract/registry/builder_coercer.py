@@ -6,7 +6,7 @@ from .sig import count_required_params, has_zero_arg_init
 
 
 def coerce_builder_fn(
-    obj: Union[TemplateBuilderFn, TemplateBuilderProto, Type[TemplateBuilderProto]]
+    obj: Union[TemplateBuilderFn, TemplateBuilderProto, Type[TemplateBuilderProto]],
 ) -> TemplateBuilderFn:
     """Normalize to (config: OmegaConf) -> Template."""
     if inspect.isclass(obj):

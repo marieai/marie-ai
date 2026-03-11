@@ -34,14 +34,14 @@ pybind11:                    standard,core
 numpy:                       standard,core
 # Pinning to version 3.20.2 as this will cause issues with tensorboard
 #protobuf==3.20.2:            standard,core
-protobuf>=3.20.2, <4.24:            standard,core
+protobuf>=5.29.0,<6.0.0:             standard,core
 grpcio>=1.46.0,<=1.57.0:    core
 grpcio-reflection>=1.46.0,<=1.57.0:  core
 grpcio-health-checking>=1.46.0,<=1.57.0:  core
 pyyaml>=5.3.1:              standard,core
 packaging>=20.0:            standard,core
-# We have to be on 0.40.0 for the latest version of docarray, newer version causes startup process
-docarray>=0.16.4,<=0.40.0:  core
+# docarray v2 is required (v1 support removed), pinned to <=0.40.0 for compatibility
+docarray>=0.30,<=0.40.0:  core
 
 prometheus_client:          standard,perf
 psutil:                     perf,standard,devel
@@ -58,14 +58,17 @@ opentelemetry-instrumentation-fastapi>=0.33b0: perf,standard,devel
 opentelemetry-exporter-otlp-proto-grpc>=1.13.0: perf,standard,devel
 
 fastapi>=0.100.1:            standard,devel
-uvicorn[standard]<=0.23.1:  standard,devel
+uvicorn[standard]>=0.23.1:  standard,devel
 docker:                     standard,devel
+wasmtime>=21.0.0:           wasm,standard
 pathspec:                   standard,devel
 filelock:                   standard,devel
 requests:                   standard,devel
 websockets:                 standard,devel
+# Pydantic v2 is required (v1 patterns removed)
 # very important that we pin this to 2.10.0, otherwise it will cause issues  in models.CustomConfig
 pydantic==2.10.0:           core
+pydantic-settings>=2.0.0:   core
 python-multipart:           standard,devel
 aiofiles:                   standard,devel
 aiohttp:                    standard,devel
@@ -86,19 +89,16 @@ black==24.3.0:              test
 kubernetes>=18.20.0,<31.0.0: test
 pytest-kind==22.11.1:       test
 pytest-lazy-fixture:        test
-torch:                      cicd
 psutil:                     test
 strawberry-graphql>=0.96.0: cicd,devel
 
-
 watchfiles>=0.18.0:           devel
 urllib3>=1.25.9,<2.0.0:       core
-transformers:                 standard,core
 anyconfig:                    standard,core
 
-python-consul2:               standard,devel
+# python-consul2:               standard,devel
 # PROVIDED VIA CUSTOM WHEEL
-#fastwer==0.1.3:               standard,core
+#fastwer==0.1.3:              standard,core
 matplotlib:                   standard,core
 albumentations:               standard,core
 dominate==2.7.0:              standard,core
@@ -113,10 +113,7 @@ imagecodecs:                  standard,core
 imutils:                      standard,core
 PyPDF4:                       standard,core
 reportlab:                    standard,core
-pycocotools:                  standard,core
-nltk:                         standard,core
-timm==1.0.11:                 standard,core
-#segmentation-models-pytorch:  standard,core
+
 Wand:                         standard,core
 
 Cython:                       standard,core
@@ -125,20 +122,14 @@ jsons:                        standard,core
 shapely:                      standard,core
 gradio:                       devel
 psycopg2-binary==2.9.10:      standard,core
+asyncpg>=0.29.0:              standard,core
 pytest:                       standard,core
 nlpaug:                       standard,core
 munch:                        standard,core
 
 # opentelemetry-api:          standard,core
 
-onnx:                         standard,core
-onnxruntime:                  standard,core
-onnxruntime-gpu:              standard,core
-# onnxconverter_common==1.13.0: standard,core
-# onnxmltools:                  standard,core
-
 pika:                         standard,core
-sentencepiece:                standard,core
 Levenshtein:                  standard,core
 boto3:                       standard,core
 sqlalchemy:                   standard,core
@@ -151,18 +142,11 @@ omegaconf==2.3.0:             standard,core
 hydra-core==1.3.1:            standard,core
 Pillow-SIMD:                  standard,core
 
-# INSTALLED VIA CONTAINER BUILD
 # https://github.com/facebookresearch/detectron2/issues/5010
-# pillow~=9.5:                  standard,core
+pillow~=9.5:                  standard,core
 
-pytesseract:                  standard,core
 patchify==0.2.3:              standard,core
 colorcet:                     standard,core
-fast_pytorch_kmeans:          standard,core
-
-sahi:                         standard,core
-clip:                         standard,core
-efficientnet-pytorch:         standard,core
 seaborn:                      standard,core
 textual:                      standard,core
 textual_textarea:             standard,core
@@ -171,13 +155,20 @@ textual_fastdatatable:        standard,core
 # etcd3:                        standard,core
 
 typing_extensions>=4.12.2:    standard,core
-# DIRECTLY INSTALLED IN container
-vllm==0.7.3:                  standard,core
 rtree:                        standard,core
 scikit-image:                  standard,core
 filetype:                      standard,core
 dataclasses_json:              standard,core
-
-faiss-gpu-cu12:                standard,core
-sentence-transformers==4.1.0:  standard,core
 watchdog:                      standard,core
+cachetools==5.5.0:             standard,core
+portalocker==3.2.0:            standard,core
+jsonpath-ng:                   standard,core
+clickhouse-driver==0.2.10:     standard,core
+python-dotenv:                 standard,devel
+
+# Memory integration (Mem0 SDK for agent memory)
+mem0ai>=0.1.0:                 standard,core
+
+# Dev-only: used to regenerate *_pb2.py from .proto files (not a runtime dep)
+# Must be >=1.62.0 for protobuf v5 compatibility
+#grpcio-tools>=1.62.0

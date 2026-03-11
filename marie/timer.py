@@ -4,8 +4,6 @@ from contextlib import ContextDecorator
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Dict, Optional
 
-import torch
-
 
 class TimerError(Exception):
     """A custom exception used to report errors in use of Timer class"""
@@ -64,6 +62,8 @@ class Timer(ContextDecorator):
 # in seconds. We use CUDA events and synchronization for the most accurate
 # measurements.
 def timed_cuda(fn):
+    import torch  # Lazy import - only needed when using CUDA timing
+
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
     start.record()

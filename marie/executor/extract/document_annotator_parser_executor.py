@@ -7,7 +7,6 @@ from docarray import DocList
 
 from marie import requests
 from marie.api.docs import AssetKeyDoc
-from marie.executor.asset_util import prepare_asset_directory
 from marie.executor.extract import DocumentAnnotatorExecutor
 from marie.executor.extract.util import layout_config
 from marie.extract.registry import component_registry
@@ -15,6 +14,7 @@ from marie.extract.registry.loader import initialize_components_from_config
 from marie.extract.results.result_parser import parse_results
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
+from marie.utils.asset_util import prepare_asset_directory, store_assets
 from marie.utils.docs import docs_from_asset, frames_from_docs
 from marie.utils.json import load_json_file
 
@@ -105,6 +105,7 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
             ref_id=ref_id,
             ref_type=ref_type,
             logger=self.logger,
+            restore_dirs=["agent-output"],
         )
         self.logger.info(f"root_asset_dir = {root_asset_dir}")
 
@@ -117,3 +118,6 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
         }
 
         parse_results(root_asset_dir, metadata, conf)
+        store_assets(
+            ref_id, ref_type, root_asset_dir, match_wildcard="parsed-result/**/*"
+        )

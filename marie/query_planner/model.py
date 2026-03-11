@@ -3,8 +3,6 @@ from typing import Any, Dict, List
 
 import yaml
 
-from marie.logging_core.predefined import default_logger as logger
-
 
 @dataclass
 class PlannerConf:
@@ -28,11 +26,11 @@ class DiscoverPackageConf:
     imports any .py files that contain @register_query_plan decorator.
 
     Example:
-        package: grapnel_g5.extract.providers
+        package: module.extract.providers
         pattern: "tid_*"
 
-        This will scan grapnel_g5/extract/providers/ for directories
-        like tid_121880/, tid_122169/ and import any files containing
+        This will scan module/extract/providers/ for directories
+        like tid_1234/, tid_12345/ and import any files containing
         @register_query_plan.
     """
 
@@ -206,28 +204,3 @@ class QueryPlannersConf:
                 for dp in self.discover_packages
             ]
         return result
-
-
-# Example usage:
-if __name__ == "__main__":
-    yaml_content = """
-    query_planners:
-      watch_wheels: True
-      wheel_directories:
-        - /mnt/data/marie-ai/config/wheels    
-      planners:
-        - name: tid_100985
-          py_module: grapnel_g5.query.tid_100985.query
-        - name: tid_121880
-          py_module: grapnel_g5.query.tid_121880.query
-    """
-
-    try:
-        query_planners_conf = QueryPlannersConf.from_yaml(yaml_content)
-
-        print(f"Loaded {len(query_planners_conf.planners)} planners:")
-        for planner in query_planners_conf.planners:
-            print(f"  - {planner.name}: {planner.py_module}")
-
-    except (ValueError, yaml.YAMLError) as e:
-        print(f"Configuration error: {e}")

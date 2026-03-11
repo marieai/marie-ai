@@ -3,5 +3,5 @@ handlers:
 level: INFO
 configs:
   StreamHandler:
-    format: '{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
+    format: '{app:>15}@%(process)2d[%(levelname).1s]:%(message)s'
     formatter: PlainFormatter

@@ -10,7 +10,7 @@ from marie.utils.json import load_json_file, to_json
 
 def test_llm_pipeline_component():
     indexer = MMLLMDocumentIndexer(
-        model_path="rms/corr-indexing-llm/qwen",
+        model_path="CPREFIX/corr-indexing-llm/qwen3",
         devices=["cuda"],
         ocr_engine=None,
     )
@@ -22,28 +22,12 @@ def test_llm_pipeline_component():
                 "indexer": indexer,
                 "group": "corr_page_indexing_llm",
             },
-            # Test for load with multiple LLM indexers
-            # "corr_page_indexer_qwen_1": {
-            #     "indexer": indexer,
-            #     "group": "corr_page_indexing_llm",
-            # },
-            # "corr_page_indexer_qwen_2": {
-            #     "indexer": indexer,
-            #     "group": "corr_page_indexing_llm",
-            # },
-            # "corr_page_indexer_qwen_3": {
-            #     "indexer": indexer,
-            #     "group": "corr_page_indexing_llm",
-            # },
-            # "corr_page_indexer_qwen_4": {
-            #     "indexer": indexer,
-            #     "group": "corr_page_indexing_llm",
-            # },
+
         }
     )
 
-    documents = docs_from_file("~/data/tmp/227803751/227803751.tif")
-    ocr_results = load_json_file("~/data/tmp/227803751/227803751.meta.json")["ocr"]
+    documents = docs_from_file("~/data/tmp/0000000/0000000.tif")
+    ocr_results = load_json_file("~/data/tmp/0000000/0000000.meta.json")["ocr"]
 
     words = []
     boxes = []

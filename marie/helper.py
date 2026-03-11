@@ -888,7 +888,7 @@ class ArgNamespace:
 
     @staticmethod
     def flatten_to_dict(
-        args: Union[Dict[str, "Namespace"], "Namespace"]
+        args: Union[Dict[str, "Namespace"], "Namespace"],
     ) -> Dict[str, Any]:
         """Convert argparse.Namespace to dict to be uploaded via REST.
 

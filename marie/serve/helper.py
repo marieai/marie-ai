@@ -152,7 +152,7 @@ def get_default_grpc_options() -> List[Tuple[str, Any]]:
 
 
 def get_server_side_grpc_options(
-    additional_options: Optional[Union[list, Dict[str, Any]]] = None
+    additional_options: Optional[Union[list, Dict[str, Any]]] = None,
 ) -> List[Tuple[str, Any]]:
     """transform dict of args into grpc option, will merge the args wit the default args
     :param additional_options: a dict of argument

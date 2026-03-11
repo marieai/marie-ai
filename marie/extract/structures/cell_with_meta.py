@@ -1,9 +1,10 @@
 from typing import List
 
+from pydantic import BaseModel
+
 from marie.extract.structures.annotation import Annotation
 from marie.extract.structures.line_with_meta import LineWithMeta
 from marie.extract.structures.serializable import Serializable
-from marie.models.pix2pix.models import BaseModel
 
 
 class CellWithMeta(Serializable):
