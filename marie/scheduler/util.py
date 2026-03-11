@@ -1,9 +1,12 @@
 import random
 from collections import defaultdict
+from typing import Callable, Sequence
 
 from marie.job.common import JobStatus
 from marie.scheduler.state import WorkState
 from marie.state.semaphore_store import SemaphoreStore
+
+CONTROL_FLOW_EXECUTORS = frozenset({"noop", "branch", "switch", "merger", "guardrail"})
 
 
 def convert_job_status_to_work_state(job_status: JobStatus) -> WorkState:
@@ -63,6 +66,46 @@ def available_slots_by_executor(sem: SemaphoreStore) -> dict[str, int]:
     Equivalent to: capacities - used_count, based on holders/count keys.
     """
     return sem.available_count_all()
+
+
+def executor_name(entrypoint: str) -> str:
+    if "://" in entrypoint:
+        return entrypoint.split("://", 1)[0].lower()
+    return entrypoint.lower()
+
+
+def is_control_flow_entrypoint(entrypoint: str) -> bool:
+    return executor_name(entrypoint) in CONTROL_FLOW_EXECUTORS
+
+
+def frontier_candidate_window(
+    batch_size: int, slots_by_executor: dict[str, int]
+) -> int:
+    free_slots = sum(max(v, 0) for v in slots_by_executor.values())
+    return max(batch_size, min(2000, 4 * free_slots + 64))
+
+
+def frontier_slot_filter(
+    slots_by_executor: dict[str, int],
+) -> Callable[[object], bool]:
+    def _eligible(wi: object) -> bool:
+        data = getattr(wi, "data", {}) or {}
+        metadata = data.get("metadata", {}) if isinstance(data, dict) else {}
+        entrypoint = metadata.get("on", "") if isinstance(metadata, dict) else ""
+        executor = executor_name(entrypoint)
+
+        if not executor or executor in CONTROL_FLOW_EXECUTORS:
+            return True
+
+        return slots_by_executor.get(executor, 0) > 0
+
+    return _eligible
+
+
+def ordered_leased_jobs(
+    planned: Sequence[tuple[str, object]], leased_ids: set[str]
+) -> list[tuple[str, object]]:
+    return [(entrypoint, wi) for entrypoint, wi in planned if wi.id in leased_ids]
 
 
 # # Example Usage
