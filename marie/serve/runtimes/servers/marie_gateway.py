@@ -1698,7 +1698,7 @@ class MarieServerGateway(CompositeServer):
             self.logger.info(f"gateway status: {is_ready}")
             if is_ready:
                 break
-            time.sleep(1)
+            await asyncio.sleep(1)
             tries += 1
 
         if is_ready is False:
