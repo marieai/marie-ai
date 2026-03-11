@@ -16,6 +16,7 @@ class HRRNExecutionPlanner:
         slots: dict[str, int],
         active_dags: set[str],
         recently_activated_dags: set[str] = set(),
+        **kwargs,
     ) -> Sequence[FlatJob]:
         now = time.time()
 

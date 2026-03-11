@@ -725,3 +725,47 @@ async def test_large_frontier_stress_100k_jobs_with_mixed_slas():
         await frontier.peek_ready(50)
     repeated_peek_time = time.monotonic() - start
     assert repeated_peek_time < 5.0, f"10 repeated peeks took {repeated_peek_time:.2f}s"
+
+
+# ── dag_remaining_counts tests ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_dag_remaining_counts_basic(frontier: MemoryFrontier):
+    """Non-terminal jobs are counted per DAG."""
+    a = wi_factory("A1", dag_id="D1")
+    b = wi_factory("B1", dag_id="D1")
+    c = wi_factory("C1", dag_id="D2")
+    await add_ready_jobs(frontier, a, b, c)
+
+    counts = frontier.dag_remaining_counts()
+    assert counts == {"D1": 2, "D2": 1}
+
+
+@pytest.mark.asyncio
+async def test_dag_remaining_counts_all_terminal(frontier: MemoryFrontier):
+    """All-terminal DAG should report 0 remaining."""
+    a = wi_factory("A1", dag_id="D1")
+    b = wi_factory("B1", dag_id="D1")
+    await add_ready_jobs(frontier, a, b)
+
+    await frontier.on_job_completed("A1")
+    await frontier.on_job_completed("B1")
+
+    counts = frontier.dag_remaining_counts()
+    assert counts["D1"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dag_remaining_counts_mixed_terminal(frontier: MemoryFrontier):
+    """Mix of terminal and non-terminal states counted correctly."""
+    a = wi_factory("A1", dag_id="D1")
+    b = wi_factory("B1", dag_id="D1")
+    c = wi_factory("C1", dag_id="D1")
+    await add_ready_jobs(frontier, a, b, c)
+
+    await frontier.on_job_completed("A1")
+    await frontier.on_job_failed("B1")
+
+    counts = frontier.dag_remaining_counts()
+    assert counts["D1"] == 1

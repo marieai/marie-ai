@@ -566,6 +566,18 @@ class MemoryFrontier:
 
         return out
 
+    def dag_remaining_counts(self) -> dict[str, int]:
+        """Return {dag_id: count_of_non_terminal_jobs} for every tracked DAG."""
+        counts: dict[str, int] = {}
+        for dag_id, node_ids in self.dag_nodes.items():
+            remaining = 0
+            for jid in node_ids:
+                wi = self.jobs_by_id.get(jid)
+                if wi is not None and not is_terminal_state(wi.state):
+                    remaining += 1
+            counts[dag_id] = remaining
+        return counts
+
     async def finalize_dag(self, dag_id: str) -> dict[str, int]:
         """
         Permanently remove all in-memory state for a completed DAG.

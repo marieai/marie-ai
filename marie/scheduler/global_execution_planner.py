@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Sequence, Set, Tuple
 from marie.scheduler.execution_planner import FlatJob
 from marie.scheduler.sla import compute_sla_priority_bucket
 
+_DEFAULT_REMAINING = 2**31
+
 
 class GlobalPriorityExecutionPlanner:
     """
@@ -27,21 +29,22 @@ class GlobalPriorityExecutionPlanner:
         *,
         exclude_blocked: bool = False,
         now: datetime | None = None,
+        dag_remaining: dict[str, int] | None = None,
     ) -> Sequence[FlatJob]:
         """
         Pure ordering by default (returns all jobs). If exclude_blocked=True,
         blocked jobs (executors with 0 free slots) are filtered out.
         Order among returned jobs:
           runnable → blocked (if included)
-          then: priority ↓, SLA urgency ↓, existing DAGs, level ↓,
-          free_slots ↓, est_runtime ↑, FIFO
+          then: priority ↓, SLA urgency ↓, existing DAGs, remaining ↑,
+          level ↓, free_slots ↓, est_runtime ↑, FIFO
         """
         now_utc = now or datetime.now(timezone.utc)
 
-        # (endpoint, wi, is_blocked, priority, sla_bucket, is_new, level, free_slots, est_rt, fifo_idx)
-        annotated: List[Tuple[str, Any, bool, int, int, bool, int, int, float, int]] = (
-            []
-        )
+        # (endpoint, wi, is_blocked, priority, sla_bucket, is_new, remaining, level, free_slots, est_rt, fifo_idx)
+        annotated: List[
+            Tuple[str, Any, bool, int, int, bool, int, int, int, float, int]
+        ] = []
 
         for idx, (endpoint, wi) in enumerate(jobs):
             executor = endpoint.split("://", 1)[0]
@@ -54,6 +57,11 @@ class GlobalPriorityExecutionPlanner:
                 is_blocked = free <= 0
 
             is_new = wi.dag_id not in active_dags
+            remaining = (
+                dag_remaining.get(wi.dag_id, _DEFAULT_REMAINING)
+                if dag_remaining is not None
+                else 0
+            )
             level = wi.job_level
             priority = wi.priority
             sla_bucket = compute_sla_priority_bucket(
@@ -78,6 +86,7 @@ class GlobalPriorityExecutionPlanner:
                     int(priority),
                     sla_bucket,
                     is_new,
+                    remaining,
                     level,
                     free,
                     est_rt,
@@ -96,10 +105,11 @@ class GlobalPriorityExecutionPlanner:
                 -t[3],  # persisted manual priority desc
                 -t[4],  # SLA urgency desc
                 t[5],  # is_new: False < True     → existing DAGs first
-                -t[6],  # level desc
-                -t[7],  # free slots desc
-                t[8],  # est runtime asc
-                t[9],  # FIFO
+                t[6],  # remaining asc            → closer-to-done DAGs first
+                -t[7],  # level desc
+                -t[8],  # free slots desc
+                t[9],  # est runtime asc
+                t[10],  # FIFO
             )
         )
 

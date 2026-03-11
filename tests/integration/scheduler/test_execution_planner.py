@@ -569,3 +569,85 @@ def test_equal_priority_falls_back_to_sla_urgency(planner_fixture):
     planned = planner.plan([approaching, soft_overdue], slots, active_dags, now=now)
 
     assert [wi.id for _, wi in planned] == ["soft_overdue", "approaching"]
+
+
+# ── DAG-completion-proximity scheduling tests ──────────────────────────
+
+
+def test_closer_to_done_dag_wins(planner_fixture):
+    """DAG with fewer remaining jobs should be scheduled first."""
+    planner, slots, active_dags = planner_fixture
+    far = create_work_info("far", "dag_1", 2, 10)
+    close = create_work_info("close", "dag_2", 2, 10)
+
+    dag_remaining = {"dag_1": 20, "dag_2": 2}
+    planned = planner.plan([far, close], slots, active_dags, dag_remaining=dag_remaining)
+
+    assert [wi.id for _, wi in planned] == ["close", "far"]
+
+
+def test_dag_remaining_none_preserves_fifo(planner_fixture):
+    """When dag_remaining is None, original FIFO ordering is preserved."""
+    planner, slots, active_dags = planner_fixture
+    a = create_work_info("a", "dag_1", 2, 10)
+    b = create_work_info("b", "dag_2", 2, 10)
+
+    planned = planner.plan([a, b], slots, active_dags, dag_remaining=None)
+
+    assert [wi.id for _, wi in planned] == ["a", "b"]
+
+
+def test_priority_not_overridden_by_remaining(planner_fixture):
+    """Higher priority still wins regardless of remaining count."""
+    planner, slots, active_dags = planner_fixture
+    high_pri = create_work_info("high", "dag_1", 2, 100)
+    low_pri_close = create_work_info("close", "dag_2", 2, 5)
+
+    dag_remaining = {"dag_1": 50, "dag_2": 1}
+    planned = planner.plan(
+        [low_pri_close, high_pri], slots, active_dags, dag_remaining=dag_remaining
+    )
+
+    assert [wi.id for _, wi in planned] == ["high", "close"]
+
+
+def test_new_dag_deferral_preserved_with_remaining(planner_fixture):
+    """New DAGs are still deferred after existing ones, even if closer to done."""
+    planner, slots, active_dags = planner_fixture
+    existing = create_work_info("existing", "dag_1", 2, 10)
+    new_close = create_work_info("new_close", "dag_new", 2, 10)
+
+    dag_remaining = {"dag_1": 50, "dag_new": 1}
+    planned = planner.plan(
+        [new_close, existing], slots, active_dags, dag_remaining=dag_remaining
+    )
+
+    assert [wi.id for _, wi in planned] == ["existing", "new_close"]
+
+
+def test_equal_remaining_falls_to_level(planner_fixture):
+    """When remaining counts are equal, level (deeper first) breaks the tie."""
+    planner, slots, active_dags = planner_fixture
+    shallow = create_work_info("shallow", "dag_1", 1, 10)
+    deep = create_work_info("deep", "dag_2", 5, 10)
+
+    dag_remaining = {"dag_1": 10, "dag_2": 10}
+    planned = planner.plan(
+        [shallow, deep], slots, active_dags, dag_remaining=dag_remaining
+    )
+
+    assert [wi.id for _, wi in planned] == ["deep", "shallow"]
+
+
+def test_unknown_dag_sorts_last_in_remaining(planner_fixture):
+    """DAG not present in dag_remaining gets default large value and sorts last."""
+    planner, slots, active_dags = planner_fixture
+    known = create_work_info("known", "dag_1", 2, 10)
+    unknown = create_work_info("unknown", "dag_2", 2, 10)
+
+    dag_remaining = {"dag_1": 5}  # dag_2 missing
+    planned = planner.plan(
+        [unknown, known], slots, active_dags, dag_remaining=dag_remaining
+    )
+
+    assert [wi.id for _, wi in planned] == ["known", "unknown"]

@@ -23,7 +23,6 @@ from marie.messaging import mark_as_complete as mark_as_complete_toast
 from marie.messaging import mark_as_started as mark_as_started_toast
 from marie.query_planner.base import (
     QueryPlan,
-    QueryType,
 )
 from marie.query_planner.branching import (
     BranchQueryDefinition,
@@ -46,8 +45,6 @@ from marie.scheduler.job_scheduler import JobScheduler, JobSubmissionRequest
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import ExistingWorkPolicy, HeartbeatConfig, WorkInfo
 from marie.scheduler.planner_util import (
-    _is_branch_query_definition,
-    _is_noop_query_definition,
     debug_candidates_and_plan,
     get_node_from_dag,
     query_plan_work_items,
@@ -1498,11 +1495,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                 # Give the planner: candidates + a COPY of slots + active_dags
                 pick_slots = slots_by_executor.copy()
+                dag_remaining = self.frontier.dag_remaining_counts()
                 planned: list[tuple[str, WorkInfo]] = self.execution_planner.plan(
                     planner_candidates,
                     pick_slots,
                     self.active_dags,
                     exclude_blocked=True,
+                    dag_remaining=dag_remaining,
                 )
 
                 await debug_candidates_and_plan(
@@ -1666,7 +1665,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     # Normal job: check slots then dispatch
                     exe = entrypoint.split("://", 1)[0]
                     if slots_by_executor.get(exe, 0) <= 0:
-                        self.logger.warning(
+                        self.logger.debug(
                             f"[WORK_DIST] No slots available for executor={exe}, delaying job {wi.id}. "
                             f"Current slots_by_executor: {slots_by_executor}"
                         )
