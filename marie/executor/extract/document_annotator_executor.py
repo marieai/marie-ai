@@ -92,10 +92,6 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                 asset_tracking_enabled=asset_tracking,
             )
 
-        # Setup LLM tracking if configured (for executor process)
-        if llm_tracking is not None and llm_tracking.get("enabled", False):
-            self._setup_llm_tracking(llm_tracking, storage)
-
         self.root_config_dir = os.path.join(__config_dir__, "extract")
         self.logger.info(f"root_config_dir: {self.root_config_dir}")
 
@@ -130,34 +126,6 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         self.logger.info("processing request parameters")
         for key, value in parameters.items():
             self.logger.info("The value of {} is {}".format(key, value))
-
-    def _setup_llm_tracking(
-        self, llm_tracking_config: dict, storage_config: dict = None
-    ) -> None:
-        """
-        Configure LLM tracking for this executor process.
-
-        Executors run in separate processes (via SPAWN) and don't inherit the
-        gateway's configuration. This method calls configure_from_yaml() to
-        initialize LLM tracking settings, then ensures a global TracerProvider
-        exists for OTel export.
-        """
-        try:
-            from marie.instrumentation.config import ExporterType, configure_from_yaml
-
-            settings = configure_from_yaml(llm_tracking_config, storage_config)
-
-            if settings.EXPORTER == ExporterType.OTEL:
-                from marie.utils.server_runtime import _ensure_tracer_provider
-
-                _ensure_tracer_provider(
-                    require_openinference=True,
-                    console_export=settings.CONSOLE_SPANS,
-                )
-
-            self.logger.info("LLM tracking configured for executor process")
-        except Exception as e:
-            self.logger.warning(f"Failed to configure LLM tracking: {e}")
 
     async def _process_annotation_request(
         self,

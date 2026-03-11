@@ -70,6 +70,12 @@ class MarieExecutor(Executor, StorageMixin):
         }
         self.setup_executor(config)
 
+        # ---- LLM tracking setup
+        llm_tracking = kwargs.get("llm_tracking")
+        storage = kwargs.get("storage")
+        if llm_tracking is not None and llm_tracking.get("enabled", False):
+            self._setup_llm_tracking(llm_tracking, storage)
+
         # ---- Health monitor config (default off; enable explicitly)
         health_cfg = kwargs.get("health", {}) or {}
 
@@ -140,6 +146,34 @@ class MarieExecutor(Executor, StorageMixin):
             self.logger.info(f"GPU monitor not running ({why})")
 
     # ---------------------- Setup ----------------------
+
+    def _setup_llm_tracking(
+        self, llm_tracking_config: dict, storage_config: dict = None
+    ) -> None:
+        """
+        Configure LLM tracking for this executor process.
+
+        Executors run in separate processes (via SPAWN) and don't inherit the
+        gateway's configuration. This method calls configure_from_yaml() to
+        initialize LLM tracking settings, then ensures a global TracerProvider
+        exists for OTel export.
+        """
+        try:
+            from marie.instrumentation.config import ExporterType, configure_from_yaml
+
+            settings = configure_from_yaml(llm_tracking_config, storage_config)
+
+            if settings.EXPORTER == ExporterType.OTEL:
+                from marie.utils.server_runtime import _ensure_tracer_provider
+
+                _ensure_tracer_provider(
+                    require_openinference=True,
+                    console_export=settings.CONSOLE_SPANS,
+                )
+
+            self.logger.info("LLM tracking configured for executor process")
+        except Exception as e:
+            self.logger.warning(f"Failed to configure LLM tracking: {e}")
 
     def setup_executor(self, config: Dict[str, Any]) -> None:
         """Setup executor with toast events, storage, and asset tracking"""
