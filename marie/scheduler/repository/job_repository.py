@@ -963,6 +963,41 @@ class JobRepository(PostgresqlMixin):
 
         return await self._loop.run_in_executor(self._db_executor, _load)
 
+    async def get_job_priorities(self, job_ids: List[str]) -> Dict[str, int]:
+        """
+        Load current persisted priorities for the given jobs.
+        """
+
+        if not job_ids:
+            return {}
+
+        def _load() -> Dict[str, int]:
+            conn = None
+            cur = None
+            try:
+                conn = self._get_connection()
+                cur = conn.cursor()
+                cur.execute(
+                    f"""
+                    SELECT id, priority
+                    FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                    WHERE id = ANY(%s::uuid[])
+                    """,
+                    (job_ids,),
+                )
+                rows = cur.fetchall()
+                conn.commit()
+                return {str(job_id): int(priority) for job_id, priority in rows}
+            except Exception:
+                if conn:
+                    conn.rollback()
+                raise
+            finally:
+                self._close_cursor(cur)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, _load)
+
     # ==================== State Counting ====================
 
     async def count_job_states(self) -> Dict[str, Dict[str, int]]:

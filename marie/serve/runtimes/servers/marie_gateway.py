@@ -1049,30 +1049,18 @@ class MarieServerGateway(CompositeServer):
         ref_type = metadata.get("ref_type", None)
         ref_id = metadata.get("ref_id", None)
         submission_policy = metadata.get("policy", None)
-        soft_sla = metadata.get("soft_sla", None)
-        hard_sla = metadata.get("hard_sla", None)
         retry = DEFAULT_RETRY_POLICY
         event_name = submission_model.name
 
-        if soft_sla is None:
-            soft_sla = now
-            hard_sla = now + timedelta(hours=4)
-        else:
-            if isinstance(soft_sla, str):
-                soft_sla = datetime.fromisoformat(soft_sla)
-                # Ensure timezone-aware: if naive, assume UTC
-                if soft_sla.tzinfo is None:
-                    soft_sla = soft_sla.replace(tzinfo=timezone.utc)
-            if isinstance(hard_sla, str):
-                hard_sla = datetime.fromisoformat(hard_sla)
-                # Ensure timezone-aware: if naive, assume UTC
-                if hard_sla.tzinfo is None:
-                    hard_sla = hard_sla.replace(tzinfo=timezone.utc)
-
-        if soft_sla > hard_sla:
-            return self.error_response(
-                "Soft SLA must be before Hard SLA", None, silence_exceptions
+        try:
+            priority = self._parse_priority(metadata.get("priority", 0))
+            soft_sla, hard_sla = self._normalize_slas(
+                now,
+                metadata.get("soft_sla"),
+                metadata.get("hard_sla"),
             )
+        except ValueError as exc:
+            return self.error_response(str(exc), None, silence_exceptions)
 
         # ensure that project_id, ref_type, ref_id are int  metadata of the submission model
         # we need this as this what we will use for Toast events
@@ -1099,7 +1087,8 @@ class MarieServerGateway(CompositeServer):
 
         work_info = WorkInfo(
             name=event_name,
-            priority=0,  # calculated based of the sla criteria and updated via cron
+            # Persisted priority is the operator override. SLA urgency is derived later in the planner.
+            priority=priority,
             data=message,
             state=WorkState.CREATED,
             retry_limit=retry.retry_limit,
@@ -1158,6 +1147,43 @@ class MarieServerGateway(CompositeServer):
         finally:
             elapsed_time = time.time() - start_time
             self.logger.debug(f"Job submission completed in {elapsed_time:.2f} seconds")
+
+    @staticmethod
+    def _parse_priority(raw: Any) -> int:
+        try:
+            return int(raw if raw is not None else 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("priority must be an integer") from exc
+
+    @staticmethod
+    def _parse_optional_datetime(raw: Any) -> Optional[datetime]:
+        if raw is None:
+            return None
+        if isinstance(raw, datetime):
+            value = raw
+        elif isinstance(raw, str):
+            value = datetime.fromisoformat(raw)
+        else:
+            raise ValueError("SLA values must be datetimes or ISO-8601 strings")
+
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    @classmethod
+    def _normalize_slas(
+        cls,
+        now: datetime,
+        soft_sla_raw: Any,
+        hard_sla_raw: Any,
+    ) -> tuple[datetime, datetime]:
+        soft_sla = cls._parse_optional_datetime(soft_sla_raw) or now
+        hard_sla = cls._parse_optional_datetime(hard_sla_raw) or (
+            soft_sla + timedelta(hours=4)
+        )
+        if soft_sla > hard_sla:
+            raise ValueError("Soft SLA must be before Hard SLA")
+        return soft_sla, hard_sla
 
     def error_response(
         self, msg: str, exception: Optional[Exception], silence_exceptions: bool = False

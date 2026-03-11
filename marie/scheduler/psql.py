@@ -65,6 +65,10 @@ from marie.scheduler.util import (
     adjust_backoff,
     available_slots_by_executor,
     convert_job_status_to_work_state,
+    frontier_candidate_window,
+    frontier_slot_filter,
+    is_control_flow_entrypoint,
+    ordered_leased_jobs,
 )
 from marie.serve.discovery.registry import _is_known_connection_error
 from marie.serve.runtimes.servers.cluster_state import ClusterState
@@ -229,6 +233,29 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self.max_concurrent_dags = max_concurrent_dags
         self._start_time = datetime.now(timezone.utc)
+        self.hard_sla_policy = str(config.get("hard_sla_policy", "track_only")).lower()
+        if self.hard_sla_policy not in {
+            "track_only",
+            "escalate_only",
+            "expire_unfinished",
+        }:
+            self.logger.warning(
+                f"Unknown hard_sla_policy='{self.hard_sla_policy}', falling back to 'track_only'"
+            )
+            self.hard_sla_policy = "track_only"
+        self.sla_warning_top_n = int(config.get("sla_warning_top_n", 5))
+        self.priority_refresh_interval = int(
+            config.get("priority_refresh_interval", 10)
+        )
+        self.priority_refresh_interval_seconds = float(
+            config.get("priority_refresh_interval_seconds", 5.0)
+        )
+        self.priority_refresh_hydrate_limit = int(
+            config.get("priority_refresh_hydrate_limit", 100)
+        )
+        self._next_priority_refresh_at = (
+            time.monotonic() + self.priority_refresh_interval_seconds
+        )
 
         self.frontier_batch_size = int(dag_config.get("frontier_batch_size", 1000))
         self.lease_ttl_seconds: int = int(config.get("lease_ttl_seconds", 5))
@@ -809,10 +836,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     branch_metadata=skip_branch_metadata,
                 )
 
-            # Update frontier to mark these as skipped
+            # Update frontier to mark these as skipped (without unblocking children)
             for node_id in node_ids:
-                await self.frontier.update_job_state(node_id, WorkState.SKIPPED)
-                await self.frontier.on_job_completed(node_id)  # Remove from ready queue
+                await self.frontier.on_job_skipped(node_id)
 
             # Cascade skip to all descendants
             await self._cascade_skip_to_descendants(
@@ -1315,6 +1341,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 except asyncio.TimeoutError:
                     pass
 
+                if time.monotonic() >= self._next_priority_refresh_at:
+                    await self._refresh_job_priorities()
+
                 # Check if gateway is ready before attempting to dispatch work
                 if (
                     self._gateway_ready_event is not None
@@ -1357,10 +1386,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                 self.logger.debug(f"[WORK_DIST] Available slots: {slots_by_executor}")
 
-                # FETCH READY CANDIDATES (executor-agnostic)
-                # frontier should not filter by executors; let planner decide
+                # Fetch a wider, slot-aware candidate window so blocked heads
+                # do not crowd runnable work out of the planner input.
+                candidate_window = frontier_candidate_window(
+                    batch_size, slots_by_executor
+                )
+                slot_filter = frontier_slot_filter(slots_by_executor)
                 candidates_wi: list[WorkInfo] = await self.frontier.peek_ready(
-                    batch_size,  # filter_fn=slot_filter
+                    candidate_window,
+                    filter_fn=slot_filter,
                 )
 
                 if not candidates_wi or len(candidates_wi) == 0:
@@ -1368,6 +1402,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.debug(
                         f"[WORK_DIST] No ready work in frontier. Short sleep. "
                         f"Batch size: {batch_size} | "
+                        f"Candidate window: {candidate_window} | "
                         f"Frontier summary: {frontier_summary} | "
                         f"Idle streak: {idle_streak} | "
                         f"Wait time: {wait_time:.2f}s"
@@ -1399,9 +1434,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         )
                         continue
 
-                    # Check if this is a control flow node (noop, branch, switch, merger)
-                    exe = ep.split("://", 1)[0].lower()
-                    if exe in ("noop", "branch", "switch", "merger"):
+                    if is_control_flow_entrypoint(ep):
                         control_flow_jobs.append(wi)
                     else:
                         regular_candidates.append(wi)
@@ -1524,7 +1557,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         f"[WORK_DIST] Successfully took {taken} jobs from frontier for soft-lease"
                     )
 
-                planned_by_id = {wi.id: (ep, wi) for ep, wi in planned}
                 ids_by_job_name: dict[str, list[str]] = defaultdict(list)
 
                 for wi in selected_wis:
@@ -1582,9 +1614,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         await self.frontier.release_lease_local(wi.id)
 
                 # only process those that we leased in DB
-                leased_jobs: list[tuple[str, WorkInfo]] = [
-                    planned_by_id[jid] for jid in leased_ids if jid in planned_by_id
-                ]
+                leased_jobs: list[tuple[str, WorkInfo]] = ordered_leased_jobs(
+                    planned, leased_ids
+                )
 
                 #  PROCESS LEASED JOBS
                 scheduled_any = False
@@ -1936,6 +1968,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             "execution_planning": {
                 "execution_planner_available": self.execution_planner is not None,
             },
+            "sla_policy": {
+                "hard_sla_policy": self.hard_sla_policy,
+                "warning_top_n": self.sla_warning_top_n,
+            },
         }
 
         # Add active DAGs information if available
@@ -1955,6 +1991,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             debug_data["queue_status"] = self.get_queue_status()
         except Exception as e:
             debug_data["queue_status_error"] = str(e)
+
+        try:
+            debug_data["frontier_summary"] = self.frontier.summary(detail=True)
+        except Exception as e:
+            debug_data["frontier_summary_error"] = str(e)
 
         try:
             debug_data["job_state_counts"] = self._db.count_job_states()
@@ -2181,7 +2222,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def _handle_priority_refresh(self):
         """Handle priority refresh"""
-        refresh_interval = getattr(self, 'priority_refresh_interval', 10)
+        refresh_interval = self.priority_refresh_interval
 
         if self._submission_count % refresh_interval == 0:
             await self._refresh_job_priorities()
@@ -2307,14 +2348,73 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         return submission_id
 
     async def _refresh_job_priorities(self):
-        """Execute the job priority refresh SQL function"""
+        """Sync DB priority edits into memory and log current SLA pressure."""
         try:
-            self.logger.info(
-                f'Refreshing job priorities...  : {self._submission_count}'
+            refresh_stats = await self.dag_service.refresh_frontier_priorities(
+                hydrate_missing_limit=self.priority_refresh_hydrate_limit
             )
-            #   SELECT marie_scheduler.refresh_job_priority();
+            await self.frontier.refresh_ready_ordering()
+            self._next_priority_refresh_at = (
+                time.monotonic() + self.priority_refresh_interval_seconds
+            )
+            frontier_summary = self.frontier.summary(
+                detail=True, top_n=self.sla_warning_top_n
+            )
+            sla_summary = frontier_summary.get("sla", {})
+            if not sla_summary:
+                self.logger.info(
+                    "[SLA] Refresh checkpoint: "
+                    f"db_tracked={refresh_stats.get('tracked', 0)}, "
+                    f"db_fetched={refresh_stats.get('fetched', 0)}, "
+                    f"changed={refresh_stats.get('changed', 0)}, "
+                    f"hydrated_missing={refresh_stats.get('hydrated_missing', 0)}, "
+                    "no frontier-tracked jobs"
+                )
+                return
+
+            self.logger.info(
+                "[SLA] Refresh checkpoint: "
+                f"db_tracked={refresh_stats.get('tracked', 0)}, "
+                f"db_fetched={refresh_stats.get('fetched', 0)}, "
+                f"changed={refresh_stats.get('changed', 0)}, "
+                f"hydrated_missing={refresh_stats.get('hydrated_missing', 0)}, "
+                f"frontier_tracked={sla_summary.get('tracked', 0)}, "
+                f"approaching={sla_summary.get('approaching_soft', 0)}, "
+                f"soft_missed={sla_summary.get('soft_missed', 0)}, "
+                f"hard_missed={sla_summary.get('hard_missed', 0)}, "
+                f"highest_bucket={sla_summary.get('highest_bucket', 0)}"
+            )
+            top_urgent = sla_summary.get("top_urgent", [])
+            if top_urgent:
+                self.logger.warning(f"[SLA] Top urgent jobs: {top_urgent}")
+
+            await self._handle_hard_sla_policy(sla_summary)
         except Exception as e:
             self.logger.error(f"Failed to refresh job priorities: {e}")
+
+    async def _handle_hard_sla_policy(self, sla_summary: Dict[str, Any]) -> None:
+        """Current hard-SLA behavior hook for the in-memory scheduler."""
+        hard_missed = int(sla_summary.get("hard_missed", 0))
+        if hard_missed <= 0:
+            return
+
+        if self.hard_sla_policy == "track_only":
+            self.logger.warning(
+                f"[SLA] {hard_missed} jobs have missed hard SLA; policy=track_only"
+            )
+            return
+
+        if self.hard_sla_policy == "escalate_only":
+            self.logger.warning(
+                f"[SLA] {hard_missed} jobs have missed hard SLA; policy=escalate_only "
+                "and planner ranking will continue to prefer them"
+            )
+            return
+
+        self.logger.error(
+            f"[SLA] {hard_missed} jobs have missed hard SLA; policy=expire_unfinished "
+            "is configured but not yet implemented in the in-memory scheduler"
+        )
 
     async def mark_as_active(self, work_info: WorkInfo) -> bool:
         """

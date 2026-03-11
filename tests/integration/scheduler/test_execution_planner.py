@@ -1,6 +1,6 @@
 import copy
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -113,6 +113,8 @@ def create_work_info(
         priority: int,
         estimated_runtime: float = float("inf"),
         endpoint: str = "executor_a://endpoint",
+        soft_sla: datetime | None = None,
+        hard_sla: datetime | None = None,
         **kwargs,
 ) -> FlatJob:
     """Helper function to create a FlatJob object for tests."""
@@ -130,6 +132,8 @@ def create_work_info(
         keep_until=datetime.now() + timedelta(days=1),
         dag_id=dag_id,
         job_level=job_level,
+        soft_sla=soft_sla,
+        hard_sla=hard_sla,
     )
     return endpoint, wi
 
@@ -167,6 +171,37 @@ def test_sort_by_priority(planner_fixture):
 
     assert planned_jobs[0][1].id == "job2"
     assert planned_jobs[1][1].id == "job1"
+
+
+def test_zero_priority_falls_back_to_level_and_fifo(planner_fixture):
+    """Default priority=0 should not break ordering; level and FIFO still apply."""
+    planner, slots, active_dags = planner_fixture
+    older = create_work_info("older", "dag_1", 2, 0)
+    newer = create_work_info("newer", "dag_1", 2, 0)
+    shallower = create_work_info("shallower", "dag_1", 1, 0)
+
+    planned_jobs = planner.plan([older, newer, shallower], slots, active_dags)
+
+    assert [wi.id for _, wi in planned_jobs] == ["older", "newer", "shallower"]
+
+
+def test_zero_priority_allows_sla_to_drive_ordering(planner_fixture):
+    """When manual priority is 0, SLA urgency should be the deciding signal."""
+    planner, slots, active_dags = planner_fixture
+    now = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    hard_missed = create_work_info(
+        "hard_missed",
+        "dag_1",
+        1,
+        0,
+        soft_sla=now - timedelta(hours=2),
+        hard_sla=now - timedelta(minutes=31),
+    )
+    no_sla = create_work_info("no_sla", "dag_1", 5, 0)
+
+    planned_jobs = planner.plan([no_sla, hard_missed], slots, active_dags, now=now)
+
+    assert [wi.id for _, wi in planned_jobs] == ["hard_missed", "no_sla"]
 
 
 def test_sort_by_free_slots(planner_fixture):
@@ -209,8 +244,8 @@ def test_sort_by_estimated_runtime(planner_fixture):
 
 
 def test_complex_plan(planner_fixture):
-    """Pure ordering: runnable(exist) → runnable(new) → blocked, with tie-breaks:
-       level ↓, priority ↓, free_slots ↓, est_runtime ↑, FIFO."""
+    """Pure ordering: runnable → blocked, then priority ↓, SLA ↓,
+       existing/new, level ↓, free_slots ↓, est_runtime ↑, FIFO."""
     planner, slots, active_dags = planner_fixture
 
     # job1: higher level
@@ -228,13 +263,13 @@ def test_complex_plan(planner_fixture):
     planned_jobs = planner.plan(jobs, slots, active_dags)
     planned_ids = [wi.id for _, wi in planned_jobs]
 
-    # Expected order with new logic:
-    # 1. j1 (existing, highest level)
-    # 2. j2 (existing, higher priority than j3/j5)
-    # 3. j3 (existing, ties j5 on prio; wins on more free slots)
-    # 4. j5 (existing, loses to j3 on free slots; runtime tie-breaker would apply if needed)
-    # 5. j4 (new DAG)
-    assert planned_ids == ["j1", "j2", "j3", "j5", "j4"]
+    # Expected order with manual-priority-first logic:
+    # 1. j2 (highest priority)
+    # 2. j3 (priority 10, existing, more slots)
+    # 3. j5 (priority 10, existing)
+    # 4. j4 (priority 10, new DAG)
+    # 5. j1 (lowest priority despite higher level)
+    assert planned_ids == ["j2", "j3", "j5", "j4", "j1"]
 
 
 def test_blocked_jobs_last(planner_fixture):
@@ -252,8 +287,8 @@ def test_blocked_jobs_last(planner_fixture):
 
 
 def test_another_complex_plan(planner_fixture):
-    """Pure ordering: runnable(existing) → runnable(new) → blocked.
-       Within each: level ↓, priority ↓, free_slots ↓, est_runtime ↑, FIFO."""
+    """Pure ordering: runnable → blocked, then priority ↓, SLA ↓,
+       existing/new, level ↓, free_slots ↓, est_runtime ↑, FIFO."""
     planner, slots, active_dags = planner_fixture
 
     jA = create_work_info("jA", "dag_1", 2, 20, endpoint="executor_a://ep")
@@ -267,13 +302,13 @@ def test_another_complex_plan(planner_fixture):
     planned_jobs = planner.plan(jobs, slots, active_dags)
     planned_ids = [wi.id for _, wi in planned_jobs]
 
-    # Expected: existing first (C, A, E), then new (D, B, F).
-    assert planned_ids == ["jC", "jA", "jE", "jD", "jB", "jF"]
+    # Expected: highest priority first, then ties break on existing/new and level.
+    assert planned_ids == ["jA", "jC", "jE", "jD", "jB", "jF"]
 
 
 def test_large_complex_plan_top_6(planner_fixture):
-    """Pure ordering: runnable(existing) → runnable(new) → blocked.
-       Within each: level ↓, priority ↓, free_slots ↓, est_runtime ↑, FIFO."""
+    """Pure ordering: runnable → blocked, then priority ↓, SLA ↓,
+       existing/new, level ↓, free_slots ↓, est_runtime ↑, FIFO."""
     planner, slots, active_dags = planner_fixture
     jobs = []
 
@@ -294,12 +329,12 @@ def test_large_complex_plan_top_6(planner_fixture):
     top_6_planned_ids = [wi.id for _, wi in planned_jobs[:6]]
 
     expected_top_6_ids = [
-        "top1_level",
-        "top2_prio",  # priority outranks free-slots within same level
+        "top2_prio",  # highest manual priority wins first
         "top3_slots",
-        "top5_runtime",  # same prio/level/executor as top4 → shorter runtime first
+        "top5_runtime",  # same prio/level as top4 → shorter runtime first
         "top4_existing",
-        "top6_boosted",  # new DAGs come after all existing
+        "top6_boosted",  # same priority tier, but new DAG after existing
+        "top1_level",  # lower priority despite deepest level
     ]
 
     assert top_6_planned_ids == expected_top_6_ids
@@ -471,3 +506,66 @@ def test_noop_jobs_are_not_blocked(planner_fixture):
     planned_jobs = planner.plan(jobs, slots, active_dags, exclude_blocked=True)
 
     assert len(planned_jobs) == 1
+
+
+def test_manual_priority_outranks_existing_dag_preference(planner_fixture):
+    planner, slots, active_dags = planner_fixture
+
+    existing = create_work_info("existing", "dag_1", 3, 10)
+    manual_override = create_work_info("manual", "dag_new", 3, 100)
+
+    planned = planner.plan([existing, manual_override], slots, active_dags)
+
+    assert [wi.id for _, wi in planned] == ["manual", "existing"]
+
+
+def test_manual_priority_outranks_hard_sla_escalation(planner_fixture):
+    planner, slots, active_dags = planner_fixture
+    now = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+
+    manual_override = create_work_info(
+        "manual",
+        "dag_new",
+        2,
+        100,
+        soft_sla=now + timedelta(hours=4),
+        hard_sla=now + timedelta(hours=8),
+    )
+    hard_overdue = create_work_info(
+        "hard_overdue",
+        "dag_1",
+        2,
+        10,
+        soft_sla=now - timedelta(hours=2),
+        hard_sla=now - timedelta(minutes=10),
+    )
+
+    planned = planner.plan([hard_overdue, manual_override], slots, active_dags, now=now)
+
+    assert [wi.id for _, wi in planned] == ["manual", "hard_overdue"]
+
+
+def test_equal_priority_falls_back_to_sla_urgency(planner_fixture):
+    planner, slots, active_dags = planner_fixture
+    now = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+
+    soft_overdue = create_work_info(
+        "soft_overdue",
+        "dag_1",
+        2,
+        50,
+        soft_sla=now - timedelta(minutes=10),
+        hard_sla=now + timedelta(hours=1),
+    )
+    approaching = create_work_info(
+        "approaching",
+        "dag_new",
+        2,
+        50,
+        soft_sla=now + timedelta(minutes=20),
+        hard_sla=now + timedelta(hours=2),
+    )
+
+    planned = planner.plan([approaching, soft_overdue], slots, active_dags, now=now)
+
+    assert [wi.id for _, wi in planned] == ["soft_overdue", "approaching"]
