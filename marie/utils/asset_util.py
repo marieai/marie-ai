@@ -139,6 +139,11 @@ def prepare_asset_directory(
         s3_file_path=f"{ref_id}.meta.json",
         overwrite=True,
     )
+    if metadata_file is None:
+        raise FileNotFoundError(
+            f"Failed to download metadata file '{ref_id}.meta.json' from S3 "
+            f"for ref_id={ref_id}, ref_type={ref_type}"
+        )
     logger.info(f"Metadata file downloaded and stored at: '{metadata_file}'")
     time.sleep(0.1)  # Ensure file system operations are completed
 
@@ -432,5 +437,10 @@ def download_asset(
     uri = f"{s3_root_path}/{s3_file_path}"
     logger.info(f"Restoring assets from {uri} to {root_asset_dir}")
     output_file_path = os.path.join(root_asset_dir, s3_file_path)
-    StorageManager.read_to_file(uri, output_file_path, overwrite=overwrite)
+    success = StorageManager.read_to_file(uri, output_file_path, overwrite=overwrite)
+    if success is False:
+        logger.error(
+            f"Failed to download file '{s3_file_path}' from S3 for ref_id={ref_id}, ref_type={ref_type}"
+        )
+        return None
     return output_file_path
