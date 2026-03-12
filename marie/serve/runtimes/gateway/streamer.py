@@ -37,7 +37,6 @@ if TYPE_CHECKING:  # pragma: no cover
         OpenTelemetryClientInterceptor,
     )
     from opentelemetry.metrics import Meter
-    from prometheus_client import CollectorRegistry
 
 
 class GatewayStreamer:
@@ -58,7 +57,6 @@ class GatewayStreamer:
         runtime_name: str = "custom gateway",
         prefetch: int = 0,
         logger: Optional["MarieLogger"] = None,
-        metrics_registry: Optional["CollectorRegistry"] = None,
         meter: Optional["Meter"] = None,
         aio_tracing_client_interceptors: Optional[Sequence["ClientInterceptor"]] = None,
         tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
@@ -80,7 +78,6 @@ class GatewayStreamer:
         :param runtime_name: Name to be used for monitoring.
         :param prefetch: How many Requests are processed from the Client at the same time.
         :param logger: Optional logger that can be used for logging
-        :param metrics_registry: optional metrics registry for prometheus used if we need to expose metrics
         :param meter: optional OpenTelemetry meter that can provide instruments for collecting metrics
         :param aio_tracing_client_interceptors: Optional list of aio grpc tracing server interceptors.
         :param tracing_client_interceptor: Optional gprc tracing server interceptor.
@@ -106,7 +103,6 @@ class GatewayStreamer:
         self._connection_pool = self._create_connection_pool(
             executor_addresses,
             compression,
-            metrics_registry,
             meter,
             logger,
             aio_tracing_client_interceptors,
@@ -114,9 +110,7 @@ class GatewayStreamer:
             grpc_channel_options,
             load_balancer_type,
         )
-        request_handler = AsyncRequestResponseHandler(
-            metrics_registry, meter, runtime_name, logger
-        )
+        request_handler = AsyncRequestResponseHandler(meter, runtime_name, logger)
         self._single_doc_request_handler = (
             request_handler.handle_single_document_request(
                 graph=self.topology_graph, connection_pool=self._connection_pool
@@ -137,7 +131,6 @@ class GatewayStreamer:
         self,
         deployments_addresses,
         compression,
-        metrics_registry,
         meter,
         logger,
         aio_tracing_client_interceptors,
@@ -150,7 +143,6 @@ class GatewayStreamer:
             runtime_name=self.runtime_name,
             logger=logger,
             compression=compression,
-            metrics_registry=metrics_registry,
             meter=meter,
             aio_tracing_client_interceptors=aio_tracing_client_interceptors,
             tracing_client_interceptor=tracing_client_interceptor,

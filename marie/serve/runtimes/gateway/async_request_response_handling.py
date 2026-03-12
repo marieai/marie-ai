@@ -18,7 +18,6 @@ if TYPE_CHECKING:  # pragma: no cover
     from asyncio import Future
 
     from opentelemetry.metrics import Meter
-    from prometheus_client import CollectorRegistry
 
     from marie.types_core.request import Request
 
@@ -27,18 +26,17 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
     """
     Class that handles the requests arriving to the gateway and the result extracted from the requests future.
 
-    :param metrics_registry: optional metrics registry for prometheus used if we need to expose metrics from the executor or from the data request handler
+    :param meter: optional OpenTelemetry meter for metrics
     :param runtime_name: optional runtime_name that will be registered during monitoring
     """
 
     def __init__(
         self,
-        metrics_registry: Optional["CollectorRegistry"] = None,
         meter: Optional["Meter"] = None,
         runtime_name: Optional[str] = None,
         logger: Optional[MarieLogger] = None,
     ):
-        super().__init__(metrics_registry, meter, runtime_name)
+        super().__init__(meter, runtime_name)
         self._endpoint_discovery_finished = False
         self._gathering_endpoints = False
         self.logger = logger or MarieLogger(self.__class__.__name__)

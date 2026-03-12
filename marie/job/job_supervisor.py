@@ -15,7 +15,7 @@ from marie.job.job_distributor import JobDistributor
 from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.discovery.etcd_client import EtcdClient
-from marie.serve.networking import _NetworkingHistograms, _NetworkingMetrics
+from marie.serve.networking import _NetworkingHistograms
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
 from marie.state.state_store import DesiredStore, StatusStore
@@ -92,11 +92,6 @@ class JobSupervisor:
                 address=address,
                 channel=channel,
                 deployment_name=deployment,
-                metrics=_NetworkingMetrics(
-                    sending_requests_time_metrics=None,
-                    received_response_bytes=None,
-                    send_requests_bytes_metrics=None,
-                ),
                 histograms=_NetworkingHistograms(),
             )
 

@@ -44,7 +44,6 @@ packaging>=20.0:            standard,core
 # docarray v2 is required (v1 support removed), pinned to <=0.40.0 for compatibility
 docarray>=0.30,<=0.40.0:  core
 
-prometheus_client:          standard,perf
 psutil:                     perf,standard,devel
 uvloop:                     perf,standard,devel
 
@@ -53,12 +52,10 @@ opentelemetry-api>=1.20.0:                      perf,standard,devel
 opentelemetry-sdk>=1.20.0:                      perf,standard,devel
 opentelemetry-instrumentation-grpc>=0.41b0:     perf,standard,devel
 opentelemetry-exporter-otlp>=1.20.0:            perf,standard,devel
-opentelemetry-exporter-prometheus>=0.41b0:      perf,standard,devel
 opentelemetry-semantic-conventions>=0.41b0:     perf,standard,devel
 opentelemetry-instrumentation-aiohttp-client>=0.41b0:    perf,standard,devel
 opentelemetry-instrumentation-fastapi>=0.41b0:  perf,standard,devel
 opentelemetry-exporter-otlp-proto-grpc>=1.20.0: perf,standard,devel
-prometheus_client>=0.12.0:                      perf,standard,devel
 openinference-instrumentation>=0.1.46:          perf,standard,devel
 
 fastapi>=0.100.1:            standard,devel

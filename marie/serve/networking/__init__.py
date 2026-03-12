@@ -21,7 +21,6 @@ from grpc.aio import AioRpcError
 from marie.constants import __default_endpoint__
 from marie.enums import PollingType
 from marie.excepts import InternalNetworkError
-from marie.importer import ImportExtensions
 from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.helper import format_grpc_error
@@ -29,10 +28,7 @@ from marie.serve.networking.balancer.circuit_breaker import CircuitBreakerConfig
 from marie.serve.networking.balancer.load_balancer import LoadBalancer
 from marie.serve.networking.connection_pool_map import _ConnectionPoolMap
 from marie.serve.networking.connection_stub import create_async_channel_stub
-from marie.serve.networking.instrumentation import (
-    _NetworkingHistograms,
-    _NetworkingMetrics,
-)
+from marie.serve.networking.instrumentation import _NetworkingHistograms
 from marie.serve.networking.replica_list import _ReplicaList
 from marie.serve.networking.utils import DEFAULT_MINIMUM_RETRIES
 from marie.types_core.request import Request
@@ -44,7 +40,6 @@ if TYPE_CHECKING:  # pragma: no cover
         OpenTelemetryClientInterceptor,
     )
     from opentelemetry.metrics import Meter
-    from prometheus_client import CollectorRegistry, Summary
 
 import asyncio
 import inspect
@@ -71,7 +66,6 @@ class GrpcConnectionPool:
         runtime_name,
         logger: Optional[MarieLogger] = None,
         compression: Optional[str] = None,
-        metrics_registry: Optional["CollectorRegistry"] = None,
         meter: Optional["Meter"] = None,
         aio_tracing_client_interceptors: Optional[Sequence["ClientInterceptor"]] = None,
         tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
@@ -86,47 +80,6 @@ class GrpcConnectionPool:
             getattr(grpc.Compression, compression)
             if compression
             else grpc.Compression.NoCompression
-        )
-
-        if metrics_registry:
-            with ImportExtensions(
-                required=True,
-                help_text="You need to install the `prometheus_client` to use the monitoring functionality of marie",
-            ):
-                from prometheus_client import Summary
-
-            sending_requests_time_metrics = Summary(
-                "sending_request_seconds",
-                "Time spent between sending a request to the Executor/Head and receiving the response",
-                registry=metrics_registry,
-                namespace="marie",
-                labelnames=("runtime_name",),
-            ).labels(runtime_name)
-
-            received_response_bytes = Summary(
-                "received_response_bytes",
-                "Size in bytes of the response returned from the Head/Executor",
-                registry=metrics_registry,
-                namespace="marie",
-                labelnames=("runtime_name",),
-            ).labels(runtime_name)
-
-            send_requests_bytes_metrics = Summary(
-                "sent_request_bytes",
-                "Size in bytes of the request sent to the Head/Executor",
-                registry=metrics_registry,
-                namespace="marie",
-                labelnames=("runtime_name",),
-            ).labels(runtime_name)
-        else:
-            sending_requests_time_metrics = None
-            received_response_bytes = None
-            send_requests_bytes_metrics = None
-
-        self._metrics = _NetworkingMetrics(
-            sending_requests_time_metrics,
-            received_response_bytes,
-            send_requests_bytes_metrics,
         )
 
         if meter:
@@ -156,7 +109,6 @@ class GrpcConnectionPool:
         self._connections = _ConnectionPoolMap(
             runtime_name=runtime_name,
             logger=self._logger,
-            metrics=self._metrics,
             histograms=self._histograms,
             aio_tracing_client_interceptors=self.aio_tracing_client_interceptors,
             tracing_client_interceptor=self.tracing_client_interceptor,

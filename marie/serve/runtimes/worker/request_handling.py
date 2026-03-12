@@ -58,7 +58,6 @@ if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry import metrics, trace
     from opentelemetry.context.context import Context
     from opentelemetry.propagate import Context
-    from prometheus_client import CollectorRegistry
 
     from marie.logging_core.logger import MarieLogger
     from marie.types_core.request import Request
@@ -100,7 +99,6 @@ class WorkerRequestHandler:
         self,
         args: "argparse.Namespace",
         logger: "MarieLogger",
-        metrics_registry: Optional["CollectorRegistry"] = None,
         tracer_provider: Optional["trace.TracerProvider"] = None,
         meter_provider: Optional["metrics.MeterProvider"] = None,
         meter=None,
@@ -113,7 +111,6 @@ class WorkerRequestHandler:
 
         :param args: args from CLI
         :param logger: the logger provided by the user
-        :param metrics_registry: optional metrics registry for prometheus used if we need to expose metrics from the executor of from the data request handler
         :param tracer_provider: Optional tracer_provider that will be provided to the executor for tracing
         :param meter_provider: Optional meter_provider that will be provided to the executor for metrics
         :param meter: meter object from runtime
@@ -124,7 +121,6 @@ class WorkerRequestHandler:
         """
         super().__init__()
         self.meter = meter
-        self.metrics_registry = metrics_registry
         self.tracer = tracer
         self.args = args
         self.logger = logger
@@ -135,42 +131,6 @@ class WorkerRequestHandler:
         host = node_info.get('host')
         node_info['host'] = get_internal_ip() if host and host_is_local(host) else host
         self.node_info = node_info
-
-        if self.metrics_registry:
-            with ImportExtensions(
-                required=True,
-                help_text="You need to install the `prometheus_client` to use the monitoring functionality of marie",
-            ):
-                from prometheus_client import Counter, Summary
-
-            self._summary = Summary(
-                "receiving_request_seconds",
-                "Time spent processing request",
-                registry=self.metrics_registry,
-                namespace="marie",
-                labelnames=("runtime_name",),
-            ).labels(self.args.name)
-
-            self._failed_requests_metrics = Counter(
-                "failed_requests",
-                "Number of failed requests",
-                registry=self.metrics_registry,
-                namespace="marie",
-                labelnames=("runtime_name",),
-            ).labels(self.args.name)
-
-            self._successful_requests_metrics = Counter(
-                "successful_requests",
-                "Number of successful requests",
-                registry=self.metrics_registry,
-                namespace="marie",
-                labelnames=("runtime_name",),
-            ).labels(self.args.name)
-
-        else:
-            self._summary = None
-            self._failed_requests_metrics = None
-            self._successful_requests_metrics = None
 
         if self.meter:
             self._receiving_request_seconds = self.meter.create_histogram(
@@ -192,7 +152,6 @@ class WorkerRequestHandler:
             self._successful_requests_counter = None
         self._metric_attributes = {"runtime_name": self.args.name}
         self._load_executor(
-            metrics_registry=metrics_registry,
             tracer_provider=tracer_provider,
             meter_provider=meter_provider,
         )
@@ -201,7 +160,7 @@ class WorkerRequestHandler:
             if meter_provider
             else None
         )
-        self._init_monitoring(metrics_registry, meter)
+        self._init_monitoring(meter)
         self.deployment_name = deployment_name
         # In order to support batching parameters separately, we have to lazily create batch queues
         # So we store the config for each endpoint in the initialization
@@ -451,54 +410,12 @@ class WorkerRequestHandler:
 
     def _init_monitoring(
         self,
-        metrics_registry: Optional["CollectorRegistry"] = None,
         meter: Optional["metrics.Meter"] = None,
     ):
         """Initialize the monitoring system.
 
-        :param metrics_registry: Optional prometheus metrics registry for monitoring
         :param meter: Optional metrics meter for monitoring
         """
-
-        if metrics_registry:
-
-            with ImportExtensions(
-                required=True,
-                help_text="You need to install the `prometheus_client` to use the montitoring functionality of marie",
-            ):
-                from prometheus_client import Counter, Summary
-
-                from marie.serve.monitoring import _SummaryDeprecated
-
-                self._document_processed_metrics = Counter(
-                    "document_processed",
-                    "Number of Documents that have been processed by the executor",
-                    namespace="marie",
-                    labelnames=("executor_endpoint", "executor", "runtime_name"),
-                    registry=metrics_registry,
-                )
-
-                self._request_size_metrics = _SummaryDeprecated(
-                    old_name="request_size_bytes",
-                    name="received_request_bytes",
-                    documentation="The size in bytes of the request returned to the gateway",
-                    namespace="marie",
-                    labelnames=("executor_endpoint", "executor", "runtime_name"),
-                    registry=metrics_registry,
-                )
-
-                self._sent_response_size_metrics = Summary(
-                    "sent_response_bytes",
-                    "The size in bytes of the response sent to the gateway",
-                    namespace="marie",
-                    labelnames=("executor_endpoint", "executor", "runtime_name"),
-                    registry=metrics_registry,
-                )
-        else:
-            self._document_processed_metrics = None
-            self._request_size_metrics = None
-            self._sent_response_size_metrics = None
-
         if meter:
             self._document_processed_counter = meter.create_counter(
                 name="marie_document_processed",
@@ -521,13 +438,11 @@ class WorkerRequestHandler:
 
     def _load_executor(
         self,
-        metrics_registry: Optional["CollectorRegistry"] = None,
         tracer_provider: Optional["trace.TracerProvider"] = None,
         meter_provider: Optional["metrics.MeterProvider"] = None,
     ):
         """
         Load the executor to this runtime, specified by ``uses`` CLI argument.
-        :param metrics_registry: Optional prometheus metrics registry that will be passed to the executor so that it can expose metrics
         :param tracer_provider: Optional tracer_provider that will be provided to the executor for tracing
         :param meter_provider: Optional meter_provider that will be provided to the executor for metrics
         """
@@ -546,7 +461,6 @@ class WorkerRequestHandler:
                     "name": self.args.name,
                     "provider": self.args.provider,
                     "provider_endpoint": self.args.provider_endpoint,
-                    "metrics_registry": metrics_registry,
                     "tracer_provider": tracer_provider,
                     "meter_provider": meter_provider,
                     "allow_concurrent": self.args.allow_concurrent,
@@ -646,14 +560,8 @@ class WorkerRequestHandler:
         }
 
     def _record_request_size_monitoring(self, requests):
-        for req in requests:
-            if self._request_size_metrics:
-                self._request_size_metrics.labels(
-                    requests[0].header.exec_endpoint,
-                    self._executor.__class__.__name__,
-                    self.args.name,
-                ).observe(req.nbytes)
-            if self._request_size_histogram:
+        if self._request_size_histogram:
+            for req in requests:
                 attributes = WorkerRequestHandler._metric_attributes(
                     requests[0].header.exec_endpoint,
                     self._executor.__class__.__name__,
@@ -662,33 +570,15 @@ class WorkerRequestHandler:
                 self._request_size_histogram.record(req.nbytes, attributes=attributes)
 
     def _record_docs_processed_monitoring(self, requests, len_docs: int):
-        if self._document_processed_metrics:
-            self._document_processed_metrics.labels(
-                requests[0].header.exec_endpoint,
-                self._executor.__class__.__name__,
-                self.args.name,
-            ).inc(
-                len_docs
-            )  # TODO we can optimize here and access the
-            # lenght of the da without loading the da in memory
-
         if self._document_processed_counter:
             attributes = WorkerRequestHandler._metric_attributes(
                 requests[0].header.exec_endpoint,
                 self._executor.__class__.__name__,
                 self.args.name,
             )
-            self._document_processed_counter.add(
-                len_docs, attributes=attributes
-            )  # TODO same as above
+            self._document_processed_counter.add(len_docs, attributes=attributes)
 
     def _record_response_size_monitoring(self, requests):
-        if self._sent_response_size_metrics:
-            self._sent_response_size_metrics.labels(
-                requests[0].header.exec_endpoint,
-                self._executor.__class__.__name__,
-                self.args.name,
-            ).observe(requests[0].nbytes)
         if self._sent_response_size_histogram:
             attributes = WorkerRequestHandler._metric_attributes(
                 requests[0].header.exec_endpoint,
@@ -1328,9 +1218,7 @@ class WorkerRequestHandler:
         :param is_generator: whether the request should be handled with streaming
         :returns: the response request
         """
-        with MetricsTimer(
-            self._summary, self._receiving_request_seconds, self._metric_attributes
-        ):
+        with MetricsTimer(self._receiving_request_seconds, self._metric_attributes):
             try:
                 if self.logger.debug_enabled:
                     self.logger.debug(

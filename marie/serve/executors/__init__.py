@@ -470,29 +470,6 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         pass
 
     def _init_monitoring(self):
-        if (
-            hasattr(self.runtime_args, "metrics_registry")
-            and self.runtime_args.metrics_registry
-        ):
-            with ImportExtensions(
-                required=True,
-                help_text="You need to install the `prometheus_client` to use the monitoring functionality of marie",
-            ):
-                from prometheus_client import Summary
-
-            self._summary_method = Summary(
-                "process_request_seconds",
-                "Time spent when calling the executor request method",
-                registry=self.runtime_args.metrics_registry,
-                namespace="marie",
-                labelnames=("executor", "executor_endpoint", "runtime_name"),
-            )
-            self._metrics_buffer = {"process_request_seconds": self._summary_method}
-
-        else:
-            self._summary_method = None
-            self._metrics_buffer = None
-
         if self.meter:
             self._process_request_histogram = self.meter.create_histogram(
                 name="marie_process_request_seconds",
@@ -817,9 +794,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             "completion_callback", _noop_completion_callback
         )
 
-        async def exec_func(
-            summary, histogram, histogram_metric_labels, tracing_context
-        ):
+        async def exec_func(histogram, histogram_metric_labels, tracing_context):
             try:
                 # wrap the func to allow for capturing a return value and calling our completion
                 # callback to indicate that the job has completed
@@ -857,7 +832,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
                         return arg_wrapper
 
-                with MetricsTimer(summary, histogram, histogram_metric_labels):
+                with MetricsTimer(histogram, histogram_metric_labels):
                     if iscoroutinefunction(func):
                         wrapped_func = completion_function_wrapper(func)
                         return await wrapped_func(
@@ -888,13 +863,6 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             self.runtime_args.name if hasattr(self.runtime_args, "name") else None
         )
 
-        _summary = (
-            self._summary_method.labels(
-                self.__class__.__name__, req_endpoint, runtime_name
-            )
-            if self._summary_method
-            else None
-        )
         _histogram_metric_labels = {
             "executor": self.__class__.__name__,
             "executor_endpoint": req_endpoint,
@@ -913,14 +881,12 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                 tracing_carrier_context = {}
                 TraceContextTextMapPropagator().inject(tracing_carrier_context)
                 return await exec_func(
-                    _summary,
                     self._process_request_histogram,
                     _histogram_metric_labels,
                     extract(tracing_carrier_context),
                 )
         else:
             return await exec_func(
-                _summary,
                 self._process_request_histogram,
                 _histogram_metric_labels,
                 None,
@@ -1126,7 +1092,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         :param metrics: If set, the sdk implementation of the OpenTelemetry metrics will be available for default monitoring and custom measurements. Otherwise a no-op implementation will be provided.
         :param metrics_exporter_host: If tracing is enabled, this hostname will be used to configure the metrics exporter agent.
         :param metrics_exporter_port: If tracing is enabled, this port will be used to configure the metrics exporter agent.
-        :param monitoring: If set, spawn an http server with a prometheus endpoint to expose metrics
+        :param monitoring: If set, enable OpenTelemetry metrics for monitoring (deprecated, use metrics instead)
         :param name: The name of this object.
 
               This will be used in the following places:
@@ -1152,7 +1118,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
               JSON dict, {endpoint: PollingType}
               {'/custom': 'ALL', '/search': 'ANY', '*': 'ANY'}
         :param port: The port for input data to bind to, default is a random port between [49152, 65535]. In the case of an external Executor (`--external` or `external=True`) this can be a list of ports. Then, every resulting address will be considered as one replica of the Executor.
-        :param port_monitoring: The port on which the prometheus server is exposed, default is a random port between [49152, 65535]
+        :param port_monitoring: Deprecated. Port monitoring is no longer used with OpenTelemetry metrics.
         :param prefer_platform: The preferred target Docker platform. (e.g. "linux/amd64", "linux/arm64")
         :param protocol: Communication protocol of the server exposed by the Executor. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
         :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER', 'AZURE'].
@@ -1374,40 +1340,24 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         self, name: Optional[str] = None, documentation: Optional[str] = None
     ) -> Optional[MetricsTimer]:
         """
-        Get a given prometheus metric, if it does not exist yet, it will create it and store it in a buffer.
+        Get a given OTel histogram metric, if it does not exist yet, it will create it and store it in a buffer.
         :param name: the name of the metrics
         :param documentation:  the description of the metrics
 
-        :return: the given prometheus metrics or None if monitoring is not enable.
+        :return: the given MetricsTimer or None if monitoring is not enabled.
         """
-        _summary = (
-            self._metrics_buffer.get(name, None) if self._metrics_buffer else None
-        )
         _histogram = (
             self._histogram_buffer.get(name, None) if self._histogram_buffer else None
         )
 
-        if self._metrics_buffer and not _summary:
-            from prometheus_client import Summary
-
-            _summary = Summary(
-                name,
-                documentation,
-                registry=self.runtime_args.metrics_registry,
-                namespace="jina",
-                labelnames=("runtime_name",),
-            ).labels(self.runtime_args.name)
-            self._metrics_buffer[name] = _summary
-
         if self._histogram_buffer and not _histogram:
             _histogram = self.meter.create_histogram(
-                name=f"jina_{name}", description=documentation
+                name=f"marie_{name}", description=documentation
             )
             self._histogram_buffer[name] = _histogram
 
-        if _summary or _histogram:
+        if _histogram:
             return MetricsTimer(
-                _summary,
                 _histogram,
                 histogram_metric_labels={"runtime_name": self.runtime_args.name},
             )

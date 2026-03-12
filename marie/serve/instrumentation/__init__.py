@@ -11,7 +11,6 @@ if TYPE_CHECKING:  # pragma: no cover
         OpenTelemetryClientInterceptor,
     )
     from opentelemetry.metrics import Histogram
-    from prometheus_client import Summary
 
 ENV_RESOURCE_ATTRIBUTES = [
     'K8S_NAMESPACE_NAME',
@@ -153,26 +152,22 @@ class InstrumentationMixin:
 
 class MetricsTimer:
     """
-    Helper dataclass that accepts optional Summary or Histogram recorders which are used to record the time take to execute
-    the decorated or context managed function
+    Helper class that accepts an optional Histogram recorder to record the time taken to execute
+    the decorated or context managed function using OpenTelemetry.
     """
 
     def __init__(
         self,
-        summary_metric: Optional['Summary'],
         histogram: Optional['Histogram'],
         histogram_metric_labels: Optional[Dict[str, str]] = None,
     ) -> None:
         if histogram_metric_labels is None:
             histogram_metric_labels = {}
-        self._summary_metric = summary_metric
         self._histogram = histogram
         self._histogram_metric_labels = histogram_metric_labels
 
     def _new_timer(self):
-        return self.__class__(
-            self._summary_metric, self._histogram, self._histogram_metric_labels
-        )
+        return self.__class__(self._histogram, self._histogram_metric_labels)
 
     def __enter__(self):
         self._start = default_timer()
@@ -180,13 +175,11 @@ class MetricsTimer:
 
     def __exit__(self, *exc):
         duration = max(default_timer() - self._start, 0)
-        if self._summary_metric:
-            self._summary_metric.observe(duration)
         if self._histogram:
             self._histogram.record(duration, attributes=self._histogram_metric_labels)
 
     def __call__(self, f):
-        """function that gets called when this class is used as a decortor
+        """function that gets called when this class is used as a decorator
         :param f: function that is decorated
         :return: wrapped function
         """
