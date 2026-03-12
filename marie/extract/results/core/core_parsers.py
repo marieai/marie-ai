@@ -344,12 +344,18 @@ def parse_region_builder(
     """
     Build StructuredRegion objects from JSON data using config-driven section mapping.
 
-    Reads the `data_source` config from each layer's region_parser configuration
-    and creates regions from the corresponding JSON files in agent-output/{data_source}/.
+    Reads the ``data_source`` config from each layer's region_parser configuration
+    and creates regions from the corresponding JSON files in ``agent-output/{data_source}/``.
 
-    The section titles and parse types are read from region_parser.sections config:
+    Config reference::
+
         region_parser:
-          data_source: claim-extract  # folder name in agent-output/
+          data_source: claim-extract      # folder name in agent-output/
+          envelope_key: claims            # optional — JSON key wrapping the
+                                          # records array.  When omitted the
+                                          # format is auto-detected (bare array,
+                                          # first list-of-dicts key, or single
+                                          # object at root).
           sections:
             - title: CLAIM INFORMATION
               role: claim_information
@@ -396,11 +402,17 @@ def parse_region_builder(
         )
         logging.info(f"Building regions from {len(json_files)} files in {data_source}")
 
+        envelope_key = region_parser_conf.get("envelope_key", None)
+
         for json_file in json_files:
             file_path = os.path.join(data_source_dir, json_file)
             try:
                 regions = _build_regions_from_json(
-                    doc, file_path, layer_name, section_config
+                    doc,
+                    file_path,
+                    layer_name,
+                    section_config,
+                    envelope_key=envelope_key,
                 )
                 for region in regions:
                     doc.insert_region(region)
@@ -456,16 +468,69 @@ def _build_region_section_config(sections_conf: list) -> Dict:
     }
 
 
+def _extract_records_from_json(json_data, envelope_key: str = None) -> list:
+    """Extract a list of record dicts from parsed JSON data.
+
+    The function is domain-agnostic — it does not assume any specific
+    envelope key (like ``"claims"``).  Instead, the caller can provide
+    an explicit *envelope_key* via config, or the function will
+    auto-detect using the following resolution order:
+
+    1. **Bare array** — ``[{...}, {...}]`` at root level.
+    2. **Explicit envelope** — ``envelope_key`` is set and present in the dict.
+    3. **Auto-detect envelope** — find the first dict key whose value is a
+       non-empty list of dicts.
+    4. **Single object** — the root dict itself looks like a record
+       (has ``"source"`` key).
+
+    Args:
+        json_data: Parsed JSON (list or dict).
+        envelope_key: Optional key name for the records array
+            (e.g. ``"claims"``, ``"records"``).  When provided the
+            function looks for this key first before falling back to
+            auto-detection.
+
+    Returns:
+        List of record dicts, or empty list if nothing matched.
+    """
+    # Format 1: bare array at root
+    if isinstance(json_data, list):
+        return json_data
+
+    if not isinstance(json_data, dict):
+        return []
+
+    # Format 2: explicit envelope key from config
+    if envelope_key and envelope_key in json_data:
+        val = json_data[envelope_key]
+        return val if isinstance(val, list) else [val]
+
+    # Format 3: auto-detect — first key whose value is a list of dicts
+    for key, val in json_data.items():
+        if isinstance(val, list) and val and isinstance(val[0], dict):
+            return val
+
+    # Format 4: single record at root (has "source" or known record markers)
+    if "source" in json_data:
+        return [json_data]
+
+    return []
+
+
 def _build_regions_from_json(
     doc: UnstructuredDocument,
     json_path: str,
     layer_name: str,
     section_config: Dict,
+    envelope_key: str = None,
 ) -> List[StructuredRegion]:
     """
-    Build StructuredRegion objects from a claim-extract JSON file.
+    Build StructuredRegion objects from a JSON data file.
 
     Uses section_config to determine which sections to parse and how.
+    The ``envelope_key`` parameter (from ``region_parser.envelope_key``
+    in config) tells the function which dict key wraps the record list.
+    When omitted the format is auto-detected.
 
     Page determination uses standard agent-output naming convention:
     - Filename format is "NNNNN_tX.json" where NNNNN is 1-indexed page number
@@ -475,22 +540,12 @@ def _build_regions_from_json(
     if not json_data:
         return []
 
-    # Handle both multi-claim and single-claim formats
-    # Multi-claim format: { "claims": [ {...}, {...} ] } - multiple claims per page
-    # Single-claim format: { "claim_uid": "...", "source": {...}, ... } - one claim per file
-    claims = []
-    if "claims" in json_data:
-        claims = json_data.get("claims", [])
-    elif "claim_uid" in json_data or "source" in json_data:
-        # New single-claim format - wrap in list for uniform processing
-        claims = [json_data]
-    else:
+    records = _extract_records_from_json(json_data, envelope_key=envelope_key)
+    if not records:
         logging.warning(
-            f"Unrecognized JSON format in {json_path}: missing 'claims' array or single claim fields"
+            f"No records found in {json_path} "
+            f"(envelope_key={envelope_key!r}, type={type(json_data).__name__})"
         )
-        return []
-
-    if not claims:
         return []
 
     # Determine page and table suffix from filename using standard agent-output naming convention
@@ -511,9 +566,9 @@ def _build_regions_from_json(
     json_key_mapping = section_config["json_key_mapping"]
     role_mapping = section_config["role_mapping"]
 
-    for claim in claims:
-        claim_uid = claim.get("claim_uid", "unknown")
-        source = claim.get("source", {})
+    for record in records:
+        record_uid = record.get("claim_uid", "unknown")
+        source = record.get("source", {})
         # Use filename-derived page as primary, fall back to JSON page_index
         page_index = (
             page_from_filename
@@ -523,17 +578,17 @@ def _build_regions_from_json(
         ocr_line_range = source.get("ocr_line_range", [0, 0])
 
         if len(ocr_line_range) < 2:
-            logging.warning(f"Invalid ocr_line_range for claim {claim_uid}")
+            logging.warning(f"Invalid ocr_line_range for record {record_uid}")
             continue
 
         start_line = ocr_line_range[0]
         end_line = ocr_line_range[1]
 
         # Build region data structure for JsonRegionParser
-        # Map claim JSON keys to section titles using config
+        # Map record JSON keys to section titles using config
         region_data = {}
 
-        for json_key, value in claim.items():
+        for json_key, value in record.items():
             if json_key in ("claim_uid", "source"):
                 continue  # Skip metadata fields
 
@@ -546,7 +601,7 @@ def _build_regions_from_json(
                 region_data[json_key.upper().replace("_", " ")] = value
 
         if not region_data:
-            logging.debug(f"Claim {claim_uid} has no extractable sections")
+            logging.debug(f"Record {record_uid} has no extractable sections")
             continue
 
         try:
@@ -560,10 +615,10 @@ def _build_regions_from_json(
             # e.g., p1_t0_L37-66 for page 1, table 0, lines 37-66
             region_id = f"p{page_index}_{table_suffix}_L{start_line}-{end_line}"
 
-            # Aggregated claims consolidate rows from multiple pages under
+            # Aggregated records consolidate rows from multiple pages under
             # one parent span.  Use relaxed span_mode so rows are not
             # filtered by the parent's original OCR line range.
-            is_aggregated = bool(claim.get("_aggregated_sources"))
+            is_aggregated = bool(record.get("_aggregated_sources"))
 
             # Build the region using the parser
             region = parser.build_single_page_region(
@@ -578,7 +633,7 @@ def _build_regions_from_json(
             # Add required tags for traceability
             region.tags["source"] = "region-builder"
             region.tags["source_layer"] = layer_name
-            region.tags["claim_uid"] = claim_uid
+            region.tags["record_uid"] = record_uid
             region.tags["table_suffix"] = table_suffix
             if is_aggregated:
                 region.tags["aggregated"] = "true"
@@ -591,10 +646,12 @@ def _build_regions_from_json(
                     section.tags["role_hint"] = role
 
             regions.append(region)
-            logging.debug(f"Created region for claim {claim_uid} on page {page_index}")
+            logging.debug(
+                f"Created region for record {record_uid} on page {page_index}"
+            )
 
         except Exception as e:
-            logging.error(f"Failed to build region for claim {claim_uid}: {e}")
+            logging.error(f"Failed to build region for record {record_uid}: {e}")
             continue
 
     return regions
