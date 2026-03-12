@@ -7,10 +7,7 @@ from grpc.aio import ClientInterceptor
 from marie.serve.networking.balancer.circuit_breaker import CircuitBreakerConfig
 from marie.serve.networking.balancer.load_balancer import LoadBalancer, LoadBalancerType
 from marie.serve.networking.connection_stub import create_async_channel_stub
-from marie.serve.networking.instrumentation import (
-    _NetworkingHistograms,
-    _NetworkingMetrics,
-)
+from marie.serve.networking.instrumentation import _NetworkingHistograms
 from marie.serve.networking.utils import TLS_PROTOCOL_SCHEMES
 
 if TYPE_CHECKING:
@@ -26,7 +23,6 @@ class _ReplicaList:
 
     def __init__(
         self,
-        metrics: _NetworkingMetrics,
         histograms: _NetworkingHistograms,
         logger,
         runtime_name: str,
@@ -43,7 +39,6 @@ class _ReplicaList:
         self._connections = []
         self._address_to_connection_idx = {}
         self._address_to_channel = {}
-        self._metrics = metrics
         self._histograms = histograms
         self._logger = logger
         self.aio_tracing_client_interceptors = aio_tracing_client_interceptors
@@ -201,7 +196,6 @@ class _ReplicaList:
         stubs, channel = create_async_channel_stub(
             address,
             deployment_name=deployment_name,
-            metrics=self._metrics,
             histograms=self._histograms,
             tls=use_tls,
             aio_tracing_client_interceptors=self.aio_tracing_client_interceptors,

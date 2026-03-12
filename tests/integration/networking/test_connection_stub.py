@@ -9,7 +9,7 @@ from tests.integration.networking import DummyExecutor
 
 
 @pytest.mark.asyncio
-async def test_init_stubs(metrics, port_generator):
+async def test_init_stubs(port_generator):
     executor_port = port_generator()
     flow = Flow().add(name="executor0", port=executor_port, uses=DummyExecutor)
     with flow:
@@ -19,7 +19,6 @@ async def test_init_stubs(metrics, port_generator):
             address=address,
             channel=channel,
             deployment_name="executor0",
-            metrics=metrics,
             histograms=_NetworkingHistograms(),
         )
         assert not connection_stub._initialized
@@ -28,7 +27,7 @@ async def test_init_stubs(metrics, port_generator):
 
 
 @pytest.mark.asyncio
-async def test_send_discover_endpoint(metrics, port_generator):
+async def test_send_discover_endpoint(port_generator):
     executor_port = port_generator()
     flow = Flow().add(name="executor0", port=executor_port, uses=DummyExecutor)
     with flow:
@@ -38,7 +37,6 @@ async def test_send_discover_endpoint(metrics, port_generator):
             address="executor0",
             channel=channel,
             deployment_name="executor-0",
-            metrics=metrics,
             histograms=_NetworkingHistograms(),
         )
 
@@ -47,7 +45,7 @@ async def test_send_discover_endpoint(metrics, port_generator):
 
 
 @pytest.mark.asyncio
-async def test_send_info_rpc(metrics, port_generator):
+async def test_send_info_rpc(port_generator):
     executor_port = port_generator()
     flow = Flow().add(name="executor0", port=executor_port, uses=DummyExecutor)
     with flow:
@@ -57,7 +55,6 @@ async def test_send_info_rpc(metrics, port_generator):
             address="executor0",
             channel=channel,
             deployment_name="executor-0",
-            metrics=metrics,
             histograms=_NetworkingHistograms(),
         )
 
@@ -67,7 +64,7 @@ async def test_send_info_rpc(metrics, port_generator):
 
 
 @pytest.mark.asyncio
-async def test_send_requests(metrics, port_generator):
+async def test_send_requests(port_generator):
     executor_port = port_generator()
     flow = Flow().add(name="executor0", port=executor_port, uses=DummyExecutor)
     with flow:
@@ -77,7 +74,6 @@ async def test_send_requests(metrics, port_generator):
             address="executor0",
             channel=channel,
             deployment_name="executor-0",
-            metrics=metrics,
             histograms=_NetworkingHistograms(),
         )
 

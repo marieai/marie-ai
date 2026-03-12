@@ -520,7 +520,7 @@ def monitor(
 
     You can access these metrics by enabling
     monitoring on your Executor. It will track the time spent calling the function and the number of times it has been
-    called. Under the hood it will create a prometheus Summary : https://prometheus.io/docs/practices/histograms/.
+    called. Under the hood it will create an OpenTelemetry Histogram.
 
     EXAMPLE USAGE
 

@@ -26,8 +26,6 @@ if docarray_v2:
 
 
 if TYPE_CHECKING:  # pragma: no cover
-    from prometheus_client import CollectorRegistry
-
     from marie.logging_core.logger import MarieLogger
     from marie.types_core.request import Request
     from marie.types_core.request.data import DataRequest
@@ -37,7 +35,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
     """
     Class that handles the requests arriving to the head and the results extracted from the requests future.
 
-    :param metrics_registry: optional metrics registry for prometheus. Used if we need to expose metrics from the executor or from the data request handler
+    :param meter: optional OpenTelemetry meter for metrics
     :param runtime_name: optional runtime_name that will be registered during monitoring
     """
 
@@ -47,7 +45,6 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         self,
         args: "argparse.Namespace",
         logger: "MarieLogger",
-        metrics_registry: Optional["CollectorRegistry"] = None,
         meter=None,
         runtime_name: Optional[str] = None,
         aio_tracing_client_interceptors=None,
@@ -59,7 +56,6 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         self.logger = logger
         self.args = args
         self.meter = meter
-        self.metrics_registry = metrics_registry
         self.name = args.name
         self._deployment_name = os.getenv("JINA_DEPLOYMENT_NAME", "worker")
         self.aio_tracing_client_interceptors = aio_tracing_client_interceptors
@@ -68,7 +64,6 @@ class HeaderRequestHandler(MonitoringRequestMixin):
             runtime_name=self.name,
             logger=self.logger,
             compression=args.compression,
-            metrics_registry=self.metrics_registry,
             meter=self.meter,
             aio_tracing_client_interceptors=self.aio_tracing_client_interceptors,
             tracing_client_interceptor=self.tracing_client_interceptor,
@@ -135,7 +130,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                 deployment="uses_after", address=self.uses_after_address
             )
         self._reduce = not args.no_reduce
-        super().__init__(metrics_registry, meter, runtime_name)
+        super().__init__(meter, runtime_name)
         self.logger = logger
         self._executor_endpoint_mapping = None
         self._gathering_endpoints = False

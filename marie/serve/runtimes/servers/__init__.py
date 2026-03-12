@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Dict, Optional, Union
 
 from marie.logging_core.logger import MarieLogger
 from marie.serve.instrumentation import InstrumentationMixin
-from marie.serve.runtimes.monitoring import MonitoringMixin
 
 __all__ = ["BaseServer"]
 
@@ -18,7 +17,7 @@ if TYPE_CHECKING:
     from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 
 
-class BaseServer(MonitoringMixin, InstrumentationMixin):
+class BaseServer(InstrumentationMixin):
     """
     BaseServer class that is handled by AsyncNewLoopRuntime. It makes sure that the Request Handler is exposed via a server.
     """
@@ -88,11 +87,6 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
             self.logger.warning(f"Exception during instrumentation teardown, {str(ex)}")
 
     def _get_request_handler(self):
-        self._setup_monitoring(
-            monitoring=self.runtime_args.monitoring,
-            port_monitoring=self.runtime_args.port_monitoring,
-        )
-
         node_info = {
             "runtime_name": self.name,
             "port": self.port,
@@ -102,7 +96,6 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
         return self.req_handler_cls(
             args=self.runtime_args,
             logger=self.logger,
-            metrics_registry=self.metrics_registry,
             meter_provider=self.meter_provider,
             tracer_provider=self.tracer_provider,
             tracer=self.tracer,
@@ -130,7 +123,6 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
             "tracer_provider": None,
             "grpc_tracing_server_interceptors": None,
             "runtime_name": _runtime_args.get("name", "test"),
-            "metrics_registry": None,
             "meter": None,
             "aio_tracing_client_interceptors": None,
             "tracing_client_interceptor": None,

@@ -1,22 +1,8 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import Dict, Optional
 
 import grpc
 from opentelemetry.metrics import Histogram
-
-if TYPE_CHECKING:
-    from prometheus_client import Summary
-
-
-@dataclass
-class _NetworkingMetrics:
-    """
-    dataclass that contain the metrics used in the networking part
-    """
-
-    sending_requests_time_metrics: Optional['Summary']
-    received_response_bytes: Optional['Summary']
-    send_requests_bytes_metrics: Optional['Summary']
 
 
 @dataclass

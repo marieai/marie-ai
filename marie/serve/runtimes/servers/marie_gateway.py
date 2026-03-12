@@ -47,6 +47,7 @@ from marie.serve.discovery import JsonAddress
 from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
 from marie.serve.discovery.registry import _is_known_connection_error
 from marie.serve.discovery.resolver import EtcdServiceResolver
+from marie.serve.instrumentation import MetricsTimer
 from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.networking.utils import get_grpc_channel
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
@@ -179,6 +180,15 @@ class MarieServerGateway(CompositeServer):
         self._deployments_lock = asyncio.Lock()
         self.event_queue = asyncio.Queue(maxsize=512)
         self.ready_event = asyncio.Event()
+
+        # OTel metrics for gateway request tracking
+        self._gateway_request_seconds = None
+        if self.meter:
+            self._gateway_request_seconds = self.meter.create_histogram(
+                name="marie_gateway_request_seconds",
+                description="Time spent processing gateway API requests",
+                unit="s",
+            )
 
         self.desired_map: Dict[tuple[str, str], DesiredDoc] = {}
         self.status_map: Dict[tuple[str, str], StatusDoc] = {}
@@ -482,70 +492,75 @@ class MarieServerGateway(CompositeServer):
             ):
                 self.logger.info(f"Received request at {datetime.now(timezone.utc)}")
                 self.logger.debug(f"Token : {token}")
-                # For testing purposes, we can return a mock response
-                # if False:
-                #     return {"header": {}, "parameters": {
-                #         "job_id" : "12345",
-                #     }, "data": None}
 
-                # Parse request payload with error handling
-                try:
-                    payload = await request.json()
-                except Exception as e:
-                    self.logger.error(f"Failed to parse JSON payload: {str(e)}")
-                    raise HTTPException(status_code=400, detail="Invalid JSON payload")
+                metric_labels = {"endpoint": "/api/v1/invoke", "status": "success"}
 
-                header = payload.get("header", {})
-                message = payload.get("parameters", {})
-
-                if "api_key" not in message or message["api_key"] is None:
-                    message["api_key"] = token
-
-                req = DataRequest()
-                req.parameters = message
-
-                async def caller(req: DataRequest):
+                with MetricsTimer(self._gateway_request_seconds, metric_labels):
+                    # Parse request payload with error handling
                     try:
-                        decoded = await self.decode_request(req)
-                        if isinstance(decoded, AsyncIterator):
-                            async for response in decoded:
-                                yield response
-                        else:
-                            yield decoded
+                        payload = await request.json()
                     except Exception as e:
-                        self.logger.error(f"Error in caller function: {str(e)}")
-                        raise
-
-                try:
-                    event_generator = caller(req)
-                    response = await event_generator.__anext__()
-
-                    # Validate response structure
-                    if not hasattr(response, 'parameters'):
-                        self.logger.error(
-                            "Response object missing parameters attribute"
+                        self.logger.error(f"Failed to parse JSON payload: {str(e)}")
+                        metric_labels["status"] = "error"
+                        raise HTTPException(
+                            status_code=400, detail="Invalid JSON payload"
                         )
+
+                    header = payload.get("header", {})
+                    message = payload.get("parameters", {})
+
+                    if "api_key" not in message or message["api_key"] is None:
+                        message["api_key"] = token
+
+                    req = DataRequest()
+                    req.parameters = message
+
+                    async def caller(req: DataRequest):
+                        try:
+                            decoded = await self.decode_request(req)
+                            if isinstance(decoded, AsyncIterator):
+                                async for response in decoded:
+                                    yield response
+                            else:
+                                yield decoded
+                        except Exception as e:
+                            self.logger.error(f"Error in caller function: {str(e)}")
+                            raise
+
+                    try:
+                        event_generator = caller(req)
+                        response = await event_generator.__anext__()
+
+                        # Validate response structure
+                        if not hasattr(response, 'parameters'):
+                            self.logger.error(
+                                "Response object missing parameters attribute"
+                            )
+                            metric_labels["status"] = "error"
+                            raise HTTPException(
+                                status_code=500,
+                                detail="Invalid response format from processing",
+                            )
+
+                        return {
+                            "header": {},
+                            "parameters": response.parameters,
+                            "data": None,
+                        }
+
+                    except StopAsyncIteration:
+                        self.logger.error("No response generated from event generator")
+                        metric_labels["status"] = "error"
                         raise HTTPException(
                             status_code=500,
-                            detail="Invalid response format from processing",
+                            detail="No response generated from processing",
                         )
-
-                    return {
-                        "header": {},
-                        "parameters": response.parameters,
-                        "data": None,
-                    }
-
-                except StopAsyncIteration:
-                    self.logger.error("No response generated from event generator")
-                    raise HTTPException(
-                        status_code=500, detail="No response generated from processing"
-                    )
-                except Exception as e:
-                    self.logger.error(f"Error processing request: {str(e)}")
-                    raise HTTPException(
-                        status_code=500, detail=f"Processing error: {str(e)}"
-                    )
+                    except Exception as e:
+                        self.logger.error(f"Error processing request: {str(e)}")
+                        metric_labels["status"] = "error"
+                        raise HTTPException(
+                            status_code=500, detail=f"Processing error: {str(e)}"
+                        )
 
                 # event_generator = _gen_dict_documents(caller(req))
                 # return EventSourceResponse(event_generator)

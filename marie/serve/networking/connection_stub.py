@@ -1,14 +1,11 @@
 from collections import defaultdict
+from timeit import default_timer
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import grpc
 
 from marie.proto import jina_pb2, jina_pb2_grpc
-from marie.serve.instrumentation import MetricsTimer
-from marie.serve.networking.instrumentation import (
-    _NetworkingHistograms,
-    _NetworkingMetrics,
-)
+from marie.serve.networking.instrumentation import _NetworkingHistograms
 from marie.serve.networking.utils import get_available_services, get_grpc_channel
 from marie.types_core.request import Request
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
@@ -36,21 +33,21 @@ class _ConnectionStubs:
         address,
         channel,
         deployment_name: str,
-        metrics: _NetworkingMetrics,
         histograms: _NetworkingHistograms,
     ):
         self.address = address
         self.channel = channel
         self.deployment_name = deployment_name
-        self._metrics = metrics
         self._histograms = histograms
         self._initialized = False
 
-        if self._histograms:
+        if self._histograms and self._histograms.histogram_metric_labels is not None:
             self.stub_specific_labels = {
                 "deployment": deployment_name,
                 "address": address,
             }
+        else:
+            self.stub_specific_labels = None
 
     # This has to be done lazily, because the target endpoint may not be available
     # when a connection is added
@@ -93,31 +90,28 @@ class _ConnectionStubs:
         )
         return response, metadata
 
-    def _get_metric_timer(self):
-        if self._histograms.histogram_metric_labels is None:
-            labels = None
-        else:
-            labels = {
-                **self._histograms.histogram_metric_labels,
-                **self.stub_specific_labels,
-            }
+    def _get_metric_labels(self):
+        if (
+            self._histograms.histogram_metric_labels is None
+            or self.stub_specific_labels is None
+        ):
+            return None
+        return {
+            **self._histograms.histogram_metric_labels,
+            **self.stub_specific_labels,
+        }
 
-        return MetricsTimer(
-            self._metrics.sending_requests_time_metrics,
-            self._histograms.sending_requests_time_metrics,
-            labels,
+    def _record_request_time_metric(self, duration: float):
+        self._histograms.record_sending_requests_time_metrics(
+            duration, self.stub_specific_labels
         )
 
     def _record_request_bytes_metric(self, nbytes: int):
-        if self._metrics.send_requests_bytes_metrics:
-            self._metrics.send_requests_bytes_metrics.observe(nbytes)
         self._histograms.record_send_requests_bytes_metrics(
             nbytes, self.stub_specific_labels
         )
 
     def _record_received_bytes_metric(self, nbytes: int):
-        if self._metrics.received_response_bytes:
-            self._metrics.received_response_bytes.observe(nbytes)
         self._histograms.record_received_response_bytes(
             nbytes, self.stub_specific_labels
         )
@@ -143,19 +137,20 @@ class _ConnectionStubs:
         if not self._initialized:
             await self._init_stubs()
 
-        timer = self._get_metric_timer()
         if self.stream_doc_stub:
             self._record_request_bytes_metric(request.nbytes)
 
-            with timer:
-                async for response in self.stream_doc_stub.stream_doc(
-                    request,
-                    compression=compression,
-                    timeout=timeout,
-                    metadata=metadata,
-                ):
-                    self._record_received_bytes_metric(response.nbytes)
-                    yield response, None
+            start = default_timer()
+            async for response in self.stream_doc_stub.stream_doc(
+                request,
+                compression=compression,
+                timeout=timeout,
+                metadata=metadata,
+            ):
+                self._record_received_bytes_metric(response.nbytes)
+                yield response, None
+            duration = max(default_timer() - start, 0)
+            self._record_request_time_metric(duration)
         else:
             raise ValueError(
                 "Can not send SingleDocumentRequest. gRPC endpoint not available."
@@ -182,7 +177,6 @@ class _ConnectionStubs:
         if not self._initialized:
             await self._init_stubs()
         request_type = type(requests[0])
-        timer = self._get_metric_timer()
         if request_type == DataRequest and len(requests) == 1:
             request = requests[0]
             if self.single_data_stub:
@@ -194,26 +188,30 @@ class _ConnectionStubs:
                     compression=compression,
                     timeout=timeout,
                 )
-                with timer:
-                    metadata, response = (
-                        await call_result.trailing_metadata(),
-                        await call_result,
-                    )
-                    self._record_received_bytes_metric(response.nbytes)
+                start = default_timer()
+                metadata, response = (
+                    await call_result.trailing_metadata(),
+                    await call_result,
+                )
+                duration = max(default_timer() - start, 0)
+                self._record_request_time_metric(duration)
+                self._record_received_bytes_metric(response.nbytes)
                 return response, metadata
 
             elif self.stream_stub:
                 self._record_request_bytes_metric(request.nbytes)
 
-                with timer:
-                    async for response in self.stream_stub.Call(
-                        iter(requests),
-                        compression=compression,
-                        timeout=timeout,
-                        metadata=metadata,
-                    ):
-                        self._record_received_bytes_metric(response.nbytes)
-                        return response, None
+                start = default_timer()
+                async for response in self.stream_stub.Call(
+                    iter(requests),
+                    compression=compression,
+                    timeout=timeout,
+                    metadata=metadata,
+                ):
+                    duration = max(default_timer() - start, 0)
+                    self._record_request_time_metric(duration)
+                    self._record_received_bytes_metric(response.nbytes)
+                    return response, None
 
         if request_type == DataRequest and len(requests) > 1:
             if self.data_list_stub:
@@ -225,12 +223,14 @@ class _ConnectionStubs:
                     compression=compression,
                     timeout=timeout,
                 )
-                with timer:
-                    metadata, response = (
-                        await call_result.trailing_metadata(),
-                        await call_result,
-                    )
-                    self._record_received_bytes_metric(response.nbytes)
+                start = default_timer()
+                metadata, response = (
+                    await call_result.trailing_metadata(),
+                    await call_result,
+                )
+                duration = max(default_timer() - start, 0)
+                self._record_request_time_metric(duration)
+                self._record_received_bytes_metric(response.nbytes)
                 return response, metadata
             else:
                 raise ValueError(
@@ -261,7 +261,6 @@ class _ConnectionStubs:
 def create_async_channel_stub(
     address,
     deployment_name: str,
-    metrics: _NetworkingMetrics,
     histograms: _NetworkingHistograms,
     tls=False,
     root_certificates: Optional[str] = None,
@@ -273,10 +272,9 @@ def create_async_channel_stub(
 
     :param address: the address to create the connection to, like 126.0.0.0.1:8080
     :param deployment_name: the name of the deployment (e.g. executor-1)
+    :param histograms: NetworkingHistograms object that optionally record metrics
     :param tls: if True, use tls for the grpc channel
     :param root_certificates: the path to the root certificates for tls, only u
-    :param metrics: NetworkingMetrics object that contain optional metrics
-    :param histograms: NetworkingHistograms object that optionally record metrics
     :param aio_tracing_client_interceptors: List of async io gprc client tracing interceptors for tracing requests for asycnio channel
     :param channel_options: gRPC channel options
     :returns: DataRequest stubs and an async grpc channel
@@ -291,6 +289,6 @@ def create_async_channel_stub(
     )
 
     return (
-        _ConnectionStubs(address, channel, deployment_name, metrics, histograms),
+        _ConnectionStubs(address, channel, deployment_name, histograms),
         channel,
     )

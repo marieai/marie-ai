@@ -4,10 +4,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 from marie.logging_core.logger import MarieLogger
 from marie.serve.networking.balancer.circuit_breaker import CircuitBreakerConfig
-from marie.serve.networking.instrumentation import (
-    _NetworkingHistograms,
-    _NetworkingMetrics,
-)
+from marie.serve.networking.instrumentation import _NetworkingHistograms
 from marie.serve.networking.replica_list import _ReplicaList
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -23,7 +20,6 @@ class _ConnectionPoolMap:
         self,
         runtime_name: str,
         logger: Optional[MarieLogger],
-        metrics: _NetworkingMetrics,
         histograms: _NetworkingHistograms,
         aio_tracing_client_interceptors: Optional[Sequence["ClientInterceptor"]] = None,
         tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
@@ -36,7 +32,6 @@ class _ConnectionPoolMap:
         self._deployments: Dict[str, Dict[str, Dict[int, _ReplicaList]]] = {}
         # dict stores last entity id used for a particular deployment, used for round robin
         self._access_count: Dict[str, int] = {}
-        self._metrics = metrics
         self._histograms = histograms
         self.runtime_name = runtime_name
         if os.name != "nt":
@@ -160,7 +155,6 @@ class _ConnectionPoolMap:
         self._add_deployment(deployment)
         if entity_id not in self._deployments[deployment][type]:
             connection_list = _ReplicaList(
-                metrics=self._metrics,
                 histograms=self._histograms,
                 logger=self._logger,
                 runtime_name=self.runtime_name,
