@@ -38,6 +38,7 @@ class JsonRegionParser(BaseRegionParser):
         page: int,
         page_y: int,
         page_h: int,
+        span_mode: str = "strict",
     ) -> StructuredRegion:
         """
         Parse JSON into a single-page StructuredRegion. All table rows live on the given page.
@@ -48,6 +49,7 @@ class JsonRegionParser(BaseRegionParser):
             page=page,
             page_y=page_y,
             page_h=page_h,
+            span_mode=span_mode,
         )
 
     def build_multi_page_region(

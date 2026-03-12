@@ -179,9 +179,14 @@ class BaseRegionParser(ABC):
         page: int,
         page_y: int,
         page_h: int,
+        span_mode: str = "strict",
     ) -> StructuredRegion:
         """
         Parse data into a single-page StructuredRegion. All table rows live on the given page.
+
+        *span_mode* controls table row filtering:
+          - ``"strict"``: rows must fall within the page span's line range.
+          - ``"relaxed"``: rows matched by page only (for aggregated claims).
         """
         sections_seq = self._parse_and_validate_sections(data)
 
@@ -211,6 +216,7 @@ class BaseRegionParser(ABC):
                     headers=headers,
                     row_segments=segments,
                     header_on_first_only=True,
+                    span_mode=span_mode,
                 )
                 if tbl_sec is not None:
                     if role_hint:
@@ -369,6 +375,7 @@ class BaseRegionParser(ABC):
         headers: List[str],
         row_segments: List[Dict[str, object]],
         header_on_first_only: bool,
+        span_mode: str = "strict",
     ) -> Optional[Section]:
         """
         DRY builder for a table-backed Section.
@@ -463,6 +470,7 @@ class BaseRegionParser(ABC):
             table=table_obj,
             all_rows=table_rows,
             header_binding=headers if header_on_first_only else None,
+            span_mode=span_mode,
         )
 
         return Section(
