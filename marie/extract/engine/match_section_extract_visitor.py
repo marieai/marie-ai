@@ -220,6 +220,16 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
             for region in regions_by_page:
                 try:
+                    # Aggregated regions (cross-page consolidated claims) bypass
+                    # scoping entirely — they are always in scope.
+                    if region.tags.get("aggregated") == "true":
+                        self.logger.info(
+                            f"    Region '{region.region_id}': aggregated=true, "
+                            f"bypassing scope check (always in scope)"
+                        )
+                        regions_in_scope.add(region)
+                        continue
+
                     # Compute region line range from its parts' spans on this page
                     mins: List[int] = []
                     maxs: List[int] = []

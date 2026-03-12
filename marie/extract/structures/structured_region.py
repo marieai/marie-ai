@@ -331,19 +331,34 @@ def slice_rows_by_pagespan(
     return buckets
 
 
+def _row_on_same_page(row: TableRow, s: Span) -> bool:
+    """Relaxed intersect: only checks page membership, ignores line range."""
+    if row.source_page is not None and row.source_page != s.page:
+        return False
+    return True
+
+
 def build_table_series_from_pagespan(
     series_id: str,
     pagespan: PageSpan,
     table: "Table",
     all_rows: List[TableRow],
     header_binding: Optional[List[str]] = None,
+    span_mode: str = "strict",
 ) -> TableSeries:
     """
     Split a table across the given PageSpan into TableBlock segments and
     tag each as start/middle/end/single.
+
+    *span_mode* controls how rows are matched to page spans:
+      - ``"strict"`` (default): rows must fall within ``[y, y+h)`` of the span.
+      - ``"relaxed"``: rows are matched by page number only (no line-range
+        filtering).  Use for aggregated claims whose rows originate from
+        multiple pages but are consolidated under a single parent span.
     """
     spans = normalize_pagespan(pagespan)
-    page_to_rows = slice_rows_by_pagespan(all_rows, pagespan)
+    intersect_fn = _row_on_same_page if span_mode == "relaxed" else None
+    page_to_rows = slice_rows_by_pagespan(all_rows, pagespan, intersects=intersect_fn)
 
     segments: List[TableBlock] = []
     for idx, s in enumerate(spans):

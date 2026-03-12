@@ -560,6 +560,11 @@ def _build_regions_from_json(
             # e.g., p1_t0_L37-66 for page 1, table 0, lines 37-66
             region_id = f"p{page_index}_{table_suffix}_L{start_line}-{end_line}"
 
+            # Aggregated claims consolidate rows from multiple pages under
+            # one parent span.  Use relaxed span_mode so rows are not
+            # filtered by the parent's original OCR line range.
+            is_aggregated = bool(claim.get("_aggregated_sources"))
+
             # Build the region using the parser
             region = parser.build_single_page_region(
                 json_data=region_data,
@@ -567,6 +572,7 @@ def _build_regions_from_json(
                 page=page_index,
                 page_y=start_line,
                 page_h=end_line - start_line,
+                span_mode="relaxed" if is_aggregated else "strict",
             )
 
             # Add required tags for traceability
@@ -574,6 +580,8 @@ def _build_regions_from_json(
             region.tags["source_layer"] = layer_name
             region.tags["claim_uid"] = claim_uid
             region.tags["table_suffix"] = table_suffix
+            if is_aggregated:
+                region.tags["aggregated"] = "true"
 
             # Add role_hint tags to sections from config
             for section in region.sections_flat():
