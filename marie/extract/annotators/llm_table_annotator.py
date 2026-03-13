@@ -88,6 +88,7 @@ class LLMTableAnnotator(LLMAnnotator):
             expect_output=self.expect_output,
             completion_params=self.completion_params,
             mm_processor_kwargs=self.mm_processor_kwargs,
+            mini_batch_size=self.mini_batch_size,
         )
 
     async def aannotate(self, document: UnstructuredDocument, frames: List) -> None:
@@ -125,6 +126,7 @@ class LLMTableAnnotator(LLMAnnotator):
             expect_output=self.expect_output,
             completion_params=self.completion_params,
             mm_processor_kwargs=self.mm_processor_kwargs,
+            mini_batch_size=self.mini_batch_size,
         )
 
     def parse_output(self, raw_output: str):
