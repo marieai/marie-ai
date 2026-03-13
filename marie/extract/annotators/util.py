@@ -733,6 +733,7 @@ def scan_and_process_images(
     context_manager: Optional["ContextProviderManager"] = None,
     completion_params: Optional[Dict[str, Any]] = None,
     mm_processor_kwargs: Optional[Dict[str, Any]] = None,
+    mini_batch_size: int = 16,
 ) -> None:
     """
     Synchronous wrapper for the ascan_and_process_images function.
@@ -752,6 +753,8 @@ def scan_and_process_images(
         context_manager: Optional ContextProviderManager for injecting context
                         into prompts and determining eligible pages.
         mm_processor_kwargs: Optional dict with min_pixels/max_pixels for image preprocessing.
+        mini_batch_size: Number of items per processing batch. Different annotators
+                        may need different sizes depending on model memory and image complexity.
     Returns:
         None
     """
@@ -766,6 +769,7 @@ def scan_and_process_images(
         context_manager=context_manager,
         completion_params=completion_params,
         mm_processor_kwargs=mm_processor_kwargs,
+        mini_batch_size=mini_batch_size,
     )
 
     return run_async(coroutine)
@@ -800,6 +804,7 @@ async def ascan_and_process_images(
     context_manager: Optional["ContextProviderManager"] = None,
     completion_params: Optional[Dict[str, Any]] = None,
     mm_processor_kwargs: Optional[Dict[str, Any]] = None,
+    mini_batch_size: int = 16,
 ) -> None:
     """
     Scans the source directory for image files, processes each image
@@ -820,6 +825,8 @@ async def ascan_and_process_images(
         expect_output: Expected output format ("json", "markdown", "none").
         context_manager: Optional ContextProviderManager for injecting context
                         into prompts and determining eligible pages.
+        mini_batch_size: Number of items per processing batch. Different annotators
+                        may need different sizes depending on model memory and image complexity.
     """
     if not os.path.exists(source_dir):
         raise FileNotFoundError(f"Source directory {source_dir} does not exist.")
@@ -912,7 +919,6 @@ async def ascan_and_process_images(
     }
     frames = [file_to_frame[item.file_name] for item in processing_items]
 
-    mini_batch_size = 16
     batched_items = list(batchify(processing_items, mini_batch_size))
     logging.info(
         "Batching %d processing items into %d batches.",

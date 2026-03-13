@@ -77,6 +77,7 @@ class LLMAnnotator(DocumentAnnotator):
         self.extra_body = self.model_config.get('extra_body', None)
         self.min_pixels = self.model_config.get('min_pixels', 512 * 28 * 28)
         self.max_pixels = self.model_config.get('max_pixels', 2048 * 28 * 28)
+        self.mini_batch_size = self.model_config.get('mini_batch_size', 16)
 
         # Build completion_params dict from config
         self.completion_params = {
@@ -106,6 +107,7 @@ class LLMAnnotator(DocumentAnnotator):
         self.logger.info(f"Extra Body: {self.extra_body}")
         self.logger.info(f"Min Pixels: {self.min_pixels}")
         self.logger.info(f"Max Pixels: {self.max_pixels}")
+        self.logger.info(f"Mini Batch Size: {self.mini_batch_size}")
         self.logger.info(f"Multimodal: {self.multimodal}")
         self.logger.info(f"Expected Output: {self.expect_output}")
 
@@ -196,6 +198,7 @@ class LLMAnnotator(DocumentAnnotator):
             context_manager=self.context_manager,
             completion_params=self.completion_params,
             mm_processor_kwargs=self.mm_processor_kwargs,
+            mini_batch_size=self.mini_batch_size,
         )
 
     async def aannotate(self, document: UnstructuredDocument, frames: List) -> None:
@@ -262,6 +265,7 @@ class LLMAnnotator(DocumentAnnotator):
             context_manager=self.context_manager,
             completion_params=self.completion_params,
             mm_processor_kwargs=self.mm_processor_kwargs,
+            mini_batch_size=self.mini_batch_size,
         )
 
         # self.parse_output(raw_output)
