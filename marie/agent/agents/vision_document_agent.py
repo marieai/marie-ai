@@ -335,7 +335,7 @@ Please follow the pattern structure to accomplish this task efficiently.
         if pattern:
             logger.debug(f"Using pattern for: {category}")
 
-        # Get function definitions
+        # Get function definitions (use exposed tools for searchable toolset)
         functions = self._get_tool_definitions() if self.function_map else None
 
         # Log suggested tools for debugging
@@ -351,6 +351,11 @@ Please follow the pattern structure to accomplish this task efficiently.
 
         while iteration < self.max_iterations:
             iteration += 1
+
+            # Refresh tool definitions if tools were modified (e.g., via search_tools)
+            if self._check_tools_dirty():
+                functions = self._get_tool_definitions(use_exposed=False)
+                logger.debug(f"Refreshed tool definitions: {len(functions)} tools")
 
             extra_cfg = {"lang": lang}
             if kwargs.get("seed") is not None:

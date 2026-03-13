@@ -3,12 +3,14 @@
 This module provides routing logic to match user messages to
 appropriate skills, supporting both explicit invocation (/skill-name)
 and automatic matching.
+
+Enhanced with BM25 search for faster and more accurate skill matching.
 """
 
 from __future__ import annotations
 
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from marie.agent.skills.models import Skill, SkillContext
 from marie.agent.skills.registry import (
@@ -16,6 +18,7 @@ from marie.agent.skills.registry import (
     SkillNotFoundError,
     SkillRegistry,
 )
+from marie.agent.skills.search import SkillSearchIndex
 from marie.logging_core.logger import MarieLogger
 
 logger = MarieLogger("marie.agent.skills.router")
@@ -52,15 +55,35 @@ class SkillRouter:
         self,
         registry: Optional[SkillRegistry] = None,
         auto_match_threshold: float = 0.3,
+        use_bm25: bool = True,
     ):
         """Initialize router.
 
         Args:
             registry: Skill registry to use (defaults to global)
             auto_match_threshold: Minimum score for auto-matching
+            use_bm25: Use BM25 search for skill matching (faster, more accurate)
         """
         self.registry = registry or SKILL_REGISTRY
         self.auto_match_threshold = auto_match_threshold
+        self._use_bm25 = use_bm25
+        self._search_index = SkillSearchIndex()
+        self._index_built = False
+
+    def _ensure_index(self) -> None:
+        """Ensure BM25 index is built (lazy initialization)."""
+        if self._use_bm25 and not self._index_built:
+            skills = self.registry.list_skills()
+            self._search_index.build_index(skills)
+            self._index_built = True
+
+    def rebuild_index(self) -> None:
+        """Rebuild the BM25 index (call after skills change)."""
+        if self._use_bm25:
+            skills = self.registry.list_skills()
+            self._search_index.build_index(skills)
+            self._index_built = True
+            logger.debug(f"Rebuilt BM25 index with {len(skills)} skills")
 
     def parse_slash_command(self, message: str) -> tuple[Optional[str], str]:
         """Parse /skill-name from message.
@@ -106,11 +129,79 @@ class SkillRouter:
         self,
         message: str,
         provider: Optional[str] = None,
-    ) -> Optional[tuple[Skill, float]]:
+    ) -> Optional[Tuple[Skill, float]]:
         """Auto-match skill based on message content.
 
-        Uses keyword matching against skill descriptions and tags.
-        For more sophisticated matching, an LLM can be used externally.
+        Uses BM25 search for ranking when available, falling back to
+        keyword matching. Filters by provider compatibility and
+        disable_model_invocation DURING iteration to ensure compatible
+        lower-scoring skills are still considered.
+
+        CRITICAL: Evaluates ALL skills, not just top-k, to avoid missing
+        compatible skills ranked beyond an arbitrary cutoff.
+
+        Args:
+            message: User message to match
+            provider: Optional provider to filter compatible skills
+
+        Returns:
+            Tuple of (matched_skill, score) or None
+        """
+        if self._use_bm25:
+            return self._match_skill_bm25(message, provider)
+        else:
+            return self._match_skill_linear(message, provider)
+
+    def _match_skill_bm25(
+        self,
+        message: str,
+        provider: Optional[str] = None,
+    ) -> Optional[Tuple[Skill, float]]:
+        """Match skill using BM25 search.
+
+        Args:
+            message: User message to match
+            provider: Optional provider to filter compatible skills
+
+        Returns:
+            Tuple of (matched_skill, score) or None
+        """
+        self._ensure_index()
+
+        # Get ALL candidates - do NOT truncate before compatibility filtering
+        # This matches the original behavior where all skills are evaluated
+        num_skills = self._search_index.num_skills
+        if num_skills == 0:
+            return None
+
+        candidates = self._search_index.search(
+            query=message,
+            top_k=num_skills,  # Get ALL skills
+            threshold=0.0,  # Filter by auto_match_threshold after compatibility
+        )
+
+        # Filter during iteration (matches original router behavior)
+        for skill, score in candidates:
+            # Skip if model invocation is disabled
+            if skill.metadata.disable_model_invocation:
+                continue
+
+            # Skip if provider not compatible
+            if provider and provider not in skill.metadata.providers:
+                continue
+
+            # Check threshold after compatibility filtering
+            if score >= self.auto_match_threshold:
+                return (skill, score)
+
+        return None
+
+    def _match_skill_linear(
+        self,
+        message: str,
+        provider: Optional[str] = None,
+    ) -> Optional[Tuple[Skill, float]]:
+        """Match skill using linear keyword matching (original behavior).
 
         Args:
             message: User message to match
@@ -141,6 +232,53 @@ class SkillRouter:
             return best_skill, best_score
 
         return None
+
+    def search_skills(
+        self,
+        query: str,
+        top_k: int = 5,
+        tags: Optional[List[str]] = None,
+        provider: Optional[str] = None,
+    ) -> List[Tuple[Skill, float]]:
+        """Search skills with optional filtering.
+
+        CRITICAL: Searches ALL skills before filtering to avoid missing
+        valid results ranked beyond an arbitrary cutoff.
+
+        Args:
+            query: Search query string
+            top_k: Maximum number of results to return
+            tags: Filter by tags (any match)
+            provider: Filter by provider compatibility
+
+        Returns:
+            List of (skill, score) tuples
+        """
+        self._ensure_index()
+
+        # Get ALL candidates - filter during iteration
+        num_skills = self._search_index.num_skills
+        if num_skills == 0:
+            return []
+
+        candidates = self._search_index.search(query, top_k=num_skills)
+
+        results = []
+        for skill, score in candidates:
+            # Apply provider filter
+            if provider and provider not in skill.metadata.providers:
+                continue
+
+            # Apply tag filter
+            if tags and not any(tag in skill.metadata.tags for tag in tags):
+                continue
+
+            results.append((skill, score))
+
+            if len(results) >= top_k:
+                break
+
+        return results
 
     async def route(
         self,

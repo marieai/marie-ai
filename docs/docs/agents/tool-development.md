@@ -658,6 +658,7 @@ def test_tool_metadata():
 
 ## Next Steps
 
+- **[Dynamic Tool Discovery](./tool-discovery.md)**: Scale to 100+ tools with BM25 search
 - **[Built-in Agents](./built-in-agents.md)**: Learn about available agent types
 - **[Examples](./examples.md)**: See complete tool implementations
 - **[API Reference](./api-reference.md)**: Detailed API documentation

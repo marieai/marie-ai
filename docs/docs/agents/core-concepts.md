@@ -237,6 +237,33 @@ TOOL_REGISTRY.get("my_tool")  # Returns AgentTool instance
 TOOL_REGISTRY.has("my_tool")  # True
 ```
 
+### Dynamic Tool Discovery
+
+For large tool catalogs (100+ tools), exposing all tools to the LLM is expensive and can reduce accuracy. Marie-AI provides a `SearchableToolset` that uses BM25 search to dynamically discover relevant tools:
+
+```python
+from marie.agent import ReactAgent
+from marie.agent.tools import SearchableToolset
+
+# Create searchable toolset from large catalog
+toolset = SearchableToolset(
+    tools=[... 100+ tools ...],
+    passthrough_threshold=5,  # Passthrough mode if ≤5 tools
+    top_k=3,                  # Return top 3 matches
+)
+
+# Pass to agent - clean API
+agent = ReactAgent(llm=llm, tools=toolset)
+```
+
+With `SearchableToolset`:
+1. The agent receives a single `search_tools` function
+2. It calls `search_tools("capability I need")` to discover relevant tools
+3. Matching tools become available for the next LLM call
+4. Tools are automatically cleaned up after each request
+
+See **[Dynamic Tool Discovery](./tool-discovery.md)** for details.
+
 ## LLM Backends
 
 LLM backends handle communication with language models.

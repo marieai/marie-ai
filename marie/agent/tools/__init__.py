@@ -60,6 +60,9 @@ from marie.agent.tools.registry import (
     register_tool,
     resolve_tools,
 )
+from marie.agent.tools.searchable import (
+    SearchableToolset,
+)
 
 # Utility tools
 from marie.agent.tools.utilities import (
@@ -86,6 +89,8 @@ __all__ = [
     "get_tool",
     "list_tools",
     "resolve_tools",
+    # Searchable toolset
+    "SearchableToolset",
     # Database tools
     "AsyncDatabaseTool",
     "GroupMemoryAction",

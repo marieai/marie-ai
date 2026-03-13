@@ -12,6 +12,8 @@ from __future__ import annotations
 import copy
 import re
 from abc import ABC, abstractmethod
+
+# Import SearchableToolset for type checking
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -39,6 +41,9 @@ from marie.agent.message import (
 from marie.agent.tools.base import AgentTool, ToolOutput
 from marie.agent.tools.registry import resolve_tools
 from marie.logging_core.logger import MarieLogger
+
+if TYPE_CHECKING:
+    from marie.agent.tools.searchable import SearchableToolset
 
 from marie.agent.cancellation import AbortSignal  # isort:skip circular with marie.agent
 from marie.agent.streaming import StreamChunk  # isort:skip circular with marie.agent
@@ -101,6 +106,7 @@ class BaseAgent(ABC):
         auto_match_skills: bool = True,
         default_skills: Optional[List[str]] = None,
         middlewares: Optional["MiddlewareList"] = None,
+        tools: Optional["SearchableToolset"] = None,
         **kwargs: Any,
     ):
         """Initialize the agent.
@@ -120,6 +126,9 @@ class BaseAgent(ABC):
             auto_match_skills: Auto-match skills from message content
             default_skills: Skills to always load (by name)
             middlewares: Optional list of middleware to apply to runs
+            tools: Optional SearchableToolset for dynamic tool discovery.
+                When provided, enables BM25-based tool search instead of
+                exposing all tools. See SearchableToolset documentation.
             **kwargs: Additional configuration
         """
         self.llm = llm
@@ -136,6 +145,12 @@ class BaseAgent(ABC):
         self.default_skills = default_skills or []
         self._skill_router: Optional["SkillRouter"] = None
 
+        # Searchable toolset (passed directly, Haystack-style)
+        self._searchable_toolset: Optional["SearchableToolset"] = tools
+
+        # Track tools dirty state for schema refresh
+        self._tools_dirty = False
+
         # Initialize memory
         self._mem0 = None
         if memory and memory.enabled:
@@ -143,7 +158,12 @@ class BaseAgent(ABC):
 
         # Initialize tools
         self.function_map: Dict[str, AgentTool] = {}
-        if function_list:
+
+        if self._searchable_toolset is not None:
+            # Use SearchableToolset - bind it and populate function_map
+            self._init_searchable_toolset()
+        elif function_list:
+            # Use traditional function_list
             self._init_tools(function_list)
 
         # Initialize skill router if enabled
@@ -180,6 +200,45 @@ class BaseAgent(ABC):
         except Exception as e:
             logger.warning(f"Failed to initialize skill router: {e}")
             self.skills_enabled = False
+
+    def _init_searchable_toolset(self) -> None:
+        """Initialize the searchable toolset for dynamic tool discovery."""
+        from marie.agent.tools.searchable import SearchableToolset
+
+        if self._searchable_toolset is None:
+            return
+
+        # Bind the toolset to this agent
+        self._searchable_toolset.bind(
+            register_callback=self._register_discovered_tool,
+            tools_dirty_callback=self._mark_tools_dirty,
+        )
+
+        # Populate function_map with all tools from the toolset
+        # This allows tool execution even before discovery
+        self.function_map = self._searchable_toolset.get_all_tools()
+
+        logger.debug(
+            f"SearchableToolset bound with {self._searchable_toolset.tool_count} tools "
+            f"(passthrough={self._searchable_toolset.is_passthrough})"
+        )
+
+    def _register_discovered_tool(self, tool: AgentTool) -> None:
+        """Callback to register a tool discovered via search_tools.
+
+        This is called by SearchableToolset when a tool is discovered.
+        The tool is added to function_map so it can be executed.
+
+        Args:
+            tool: Tool to register for execution
+        """
+        if tool.metadata.name not in self.function_map:
+            self.function_map[tool.metadata.name] = tool
+            logger.debug(f"Registered discovered tool: {tool.metadata.name}")
+
+    def _mark_tools_dirty(self) -> None:
+        """Mark tools as dirty to trigger schema refresh."""
+        self._tools_dirty = True
 
     @property
     def emitter(self) -> Optional["Emitter"]:
@@ -433,13 +492,21 @@ class BaseAgent(ABC):
     def add_tool(self, tool: Union[str, Dict, AgentTool, Callable]) -> None:
         """Add a tool to the agent.
 
+        Note: If using SearchableToolset, adding tools at runtime is not
+        recommended as the BM25 index won't be updated. Create a new
+        SearchableToolset with all tools instead.
+
         Args:
             tool: Tool specification (name, config, instance, or callable)
         """
         self._init_tools([tool])
+        self._tools_dirty = True
 
     def remove_tool(self, name: str) -> bool:
         """Remove a tool from the agent.
+
+        Note: If using SearchableToolset, removing tools at runtime is not
+        recommended. Create a new SearchableToolset without the tool instead.
 
         Args:
             name: Tool name to remove
@@ -449,8 +516,23 @@ class BaseAgent(ABC):
         """
         if name in self.function_map:
             del self.function_map[name]
+            self._tools_dirty = True
             return True
         return False
+
+    def _get_exposed_tools(self) -> List[AgentTool]:
+        """Get tools to expose to the LLM.
+
+        When searchable toolset is enabled and not in passthrough mode,
+        returns only the search_tools meta-function. Otherwise returns
+        all tools in function_map.
+
+        Returns:
+            List of tools to include in LLM prompt
+        """
+        if self._searchable_toolset and not self._searchable_toolset.is_passthrough:
+            return self._searchable_toolset.get_exposed_tools()
+        return list(self.function_map.values())
 
     def run(
         self,
@@ -578,10 +660,19 @@ class BaseAgent(ABC):
                         ContentItem(text=system_message + "\n\n")
                     ] + existing_content
 
+        # Save original tools for cleanup (always, for both skill and searchable tools)
+        original_tools = self.function_map.copy()
+
+        # Clear searchable toolset tracking for this request
+        if self._searchable_toolset:
+            self._searchable_toolset.clear_dynamic_tools()
+
         # Merge skill tools with agent tools
         if skill_tools:
-            original_tools = self.function_map.copy()
             self.function_map.update(skill_tools)
+
+        # Reset tools dirty flag for this run
+        self._tools_dirty = False
 
         # Set up emitter and bind middleware
         run_emitter = None
@@ -669,9 +760,10 @@ class BaseAgent(ABC):
                 source=self.name,
             )
 
-            # Restore original tools if skill tools were added
-            if skill_tools:
-                self.function_map = original_tools
+            # Always restore original tools to prevent leakage across requests
+            # This handles both skill tools and dynamically discovered tools
+            self.function_map = original_tools
+            self._tools_dirty = False
 
     def _sync_route_to_skill(
         self,
@@ -946,21 +1038,58 @@ class BaseAgent(ABC):
             tool_call_id,
         )
 
-    def _get_tool_definitions(self) -> List[Dict[str, Any]]:
-        """Get OpenAI-compatible function definitions for all tools.
+    def _get_tool_definitions(
+        self,
+        use_exposed: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Get OpenAI-compatible function definitions for tools.
+
+        Args:
+            use_exposed: If True and searchable toolset is active, returns
+                only exposed tools (search_tools in non-passthrough mode).
+                If False, returns all tools in function_map.
 
         Returns:
             List of function definitions
         """
-        return [tool.get_function_definition() for tool in self.function_map.values()]
+        if use_exposed:
+            tools = self._get_exposed_tools()
+        else:
+            tools = list(self.function_map.values())
+        return [tool.get_function_definition() for tool in tools]
 
-    def _get_tool_definitions_openai(self) -> List[Dict[str, Any]]:
+    def _get_tool_definitions_openai(
+        self,
+        use_exposed: bool = True,
+    ) -> List[Dict[str, Any]]:
         """Get OpenAI tool format definitions.
+
+        Args:
+            use_exposed: If True and searchable toolset is active, returns
+                only exposed tools. If False, returns all tools.
 
         Returns:
             List of tool definitions in OpenAI format
         """
-        return [tool.to_openai_tool() for tool in self.function_map.values()]
+        if use_exposed:
+            tools = self._get_exposed_tools()
+        else:
+            tools = list(self.function_map.values())
+        return [tool.to_openai_tool() for tool in tools]
+
+    def _check_tools_dirty(self) -> bool:
+        """Check if tools have been modified and need schema refresh.
+
+        Call this in agent loops before making LLM calls. If True,
+        recompute tool schemas for the next LLM call.
+
+        Returns:
+            True if tools have changed since last check
+        """
+        dirty = self._tools_dirty
+        if dirty:
+            self._tools_dirty = False
+        return dirty
 
 
 class BasicAgent(BaseAgent):

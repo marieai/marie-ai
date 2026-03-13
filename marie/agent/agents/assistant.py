@@ -188,6 +188,7 @@ When you have enough information to answer, provide a clear and helpful response
             )
 
         # Get function definitions if we have tools
+        # Use exposed tools (respects searchable toolset mode)
         functions = self._get_tool_definitions() if self.function_map else None
 
         # Track conversation for this run
@@ -197,6 +198,12 @@ When you have enough information to answer, provide a clear and helpful response
 
         while iteration < self.max_iterations:
             iteration += 1
+
+            # Refresh tool definitions if tools were modified (e.g., via search_tools)
+            if self._check_tools_dirty():
+                # Use use_exposed=False to get ALL tools including discovered ones
+                functions = self._get_tool_definitions(use_exposed=False)
+                logger.debug(f"Refreshed tool definitions: {len(functions)} tools")
 
             # Call LLM
             extra_cfg = {"lang": lang}
@@ -349,7 +356,7 @@ When you have enough information to answer, provide a clear and helpful response
         if self.system_message and (not normalized or normalized[0].role != "system"):
             normalized.insert(0, Message.system(self.system_message))
 
-        # Get function definitions
+        # Get function definitions (use exposed tools for searchable toolset)
         functions = self._get_tool_definitions() if self.function_map else None
 
         conversation = list(normalized)
@@ -361,6 +368,11 @@ When you have enough information to answer, provide a clear and helpful response
         for iteration in range(self.max_iterations):
             if abort_signal and abort_signal.aborted:
                 break
+
+            # Refresh tool definitions if tools were modified (e.g., via search_tools)
+            if self._check_tools_dirty():
+                functions = self._get_tool_definitions(use_exposed=False)
+                logger.debug(f"Refreshed tool definitions: {len(functions)} tools")
 
             # Stream LLM response
             chunks: List[StreamChunk] = []
@@ -503,6 +515,7 @@ class FunctionCallingAgent(BaseAgent):
             )
 
         # Get OpenAI-style tool definitions
+        # Use exposed tools (respects searchable toolset mode)
         tools = self._get_tool_definitions_openai() if self.function_map else None
 
         conversation = list(messages)
@@ -511,6 +524,12 @@ class FunctionCallingAgent(BaseAgent):
 
         while iteration < self.max_iterations:
             iteration += 1
+
+            # Refresh tool definitions if tools were modified (e.g., via search_tools)
+            if self._check_tools_dirty():
+                # Use use_exposed=False to get ALL tools including discovered ones
+                tools = self._get_tool_definitions_openai(use_exposed=False)
+                logger.debug(f"Refreshed tool definitions: {len(tools)} tools")
 
             # Call LLM with tools
             extra_cfg = {"lang": lang}
@@ -740,6 +759,7 @@ When all steps are complete, provide a FINAL ANSWER."""
                 agent_id=agent_id,
             )
 
+        # Use exposed tools (respects searchable toolset mode)
         functions = self._get_tool_definitions() if self.function_map else None
         conversation = list(messages)
         iteration = 0
@@ -747,6 +767,12 @@ When all steps are complete, provide a FINAL ANSWER."""
 
         while iteration < self.max_iterations:
             iteration += 1
+
+            # Refresh tool definitions if tools were modified (e.g., via search_tools)
+            if self._check_tools_dirty():
+                # Use use_exposed=False to get ALL tools including discovered ones
+                functions = self._get_tool_definitions(use_exposed=False)
+                logger.debug(f"Refreshed tool definitions: {len(functions)} tools")
 
             extra_cfg = {"lang": lang}
             if kwargs.get("seed") is not None:

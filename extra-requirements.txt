@@ -169,8 +169,12 @@ python-dotenv:                 standard,devel
 
 # A2A (Agent-to-Agent) Protocol SDK
 a2a-sdk>=0.3.9:                standard,core
+# Google GenAI SDK for Gemini embeddings
+google-generativeai>=0.5.0:    standard,core
 # Memory integration (Mem0 SDK for agent memory)
 # mem0ai>=0.1.0:                 standard,core
+# BM25 search for agent skill/tool discovery (500x faster than rank-bm25)
+bm25s[core]>=0.2.0:            standard,core
 
 python-docx>=1.1.2:           standard,core
 python-pptx>=1.0.2:           standard,core

@@ -21,6 +21,7 @@ The Agent Framework enables you to:
 |---------|-------------|
 | **Multiple Agent Types** | ReactAgent (ReAct), PlanAndExecuteAgent, ChatAgent, VisionDocumentAgent |
 | **Tool System** | Registry-based tools with schema validation and automatic discovery |
+| **Dynamic Tool Discovery** | BM25-based SearchableToolset for large tool catalogs (100+ tools) |
 | **LLM Backends** | Support for Marie Engine (vLLM), OpenAI, and compatible APIs |
 | **Multimodal Support** | Handle text, images, and documents natively |
 | **Streaming** | Yield-based streaming API for real-time responses |
@@ -146,7 +147,11 @@ marie/agent/
 │   └── vision_document_agent.py
 ├── tools/               # Tool system
 │   ├── base.py
-│   └── registry.py
+│   ├── registry.py
+│   └── searchable.py    # SearchableToolset
+├── skills/              # Skill system
+│   ├── router.py        # SkillRouter with BM25
+│   └── search.py        # SkillSearchIndex
 ├── backends/            # Execution backends
 └── state/               # State management
 ```
@@ -156,5 +161,6 @@ marie/agent/
 1. **[Getting Started](./getting-started.md)**: Set up your first agent
 2. **[Core Concepts](./core-concepts.md)**: Understand agents, tools, and messages
 3. **[Tool Development](./tool-development.md)**: Create custom tools
-4. **[Built-in Agents](./built-in-agents.md)**: Reference for all agent types
-5. **[Examples](./examples.md)**: Complete working examples
+4. **[Dynamic Tool Discovery](./tool-discovery.md)**: Scale to 100+ tools with BM25 search
+5. **[Built-in Agents](./built-in-agents.md)**: Reference for all agent types
+6. **[Examples](./examples.md)**: Complete working examples

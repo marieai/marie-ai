@@ -1,5 +1,5 @@
 ---
-sidebar_position: 5
+sidebar_position: 6
 ---
 
 # Built-in Agents
@@ -60,10 +60,13 @@ for responses in agent.run(messages=messages):
 |-----------|------|---------|-------------|
 | `llm` | BaseLLMWrapper | required | LLM backend instance |
 | `function_list` | List | `[]` | Tools (names, instances, or functions) |
+| `tools` | SearchableToolset | `None` | Optional searchable toolset for dynamic discovery |
 | `name` | str | `"Assistant"` | Agent name |
 | `description` | str | `""` | Agent description |
 | `system_message` | str | `""` | System prompt |
 | `max_iterations` | int | `10` | Max tool-call cycles |
+
+See **[Dynamic Tool Discovery](./tool-discovery.md)** for using `SearchableToolset` to scale to 100+ tools.
 
 ### Execution Flow
 

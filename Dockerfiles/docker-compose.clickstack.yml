@@ -70,7 +70,7 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://marie-hyperdx:4318
       - DEPLOYMENT_ENV=${STACK_NAME:-dev}
     volumes:
-      - ./config/clickstack/log-collector-config.yml:/etc/otel/config.yml:ro
+      - ../config/clickstack/log-collector-config.yml:/etc/otel/config.yml:ro
       # Docker container logs (JSON format)
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       # Docker socket for container metadata (optional)

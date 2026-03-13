@@ -83,6 +83,9 @@ from marie.agent.skills.registry import (
 from marie.agent.skills.router import (
     SkillRouter,
 )
+from marie.agent.skills.search import (
+    SkillSearchIndex,
+)
 from marie.agent.skills.validator import (
     ValidationError,
     ValidationResult,
@@ -109,6 +112,8 @@ __all__ = [
     "list_skills",
     # Router
     "SkillRouter",
+    # Search
+    "SkillSearchIndex",
     # Loader
     "SkillLoader",
     "get_skill_loader",
