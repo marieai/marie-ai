@@ -5,6 +5,7 @@ from .psql_handler import PsqlToastHandler  # isort:skip depends on Toast
 from .rabbit_handler import RabbitMQToastHandler  # isort:skip depends on Toast
 from .grpc_event_broker import GrpcEventBroker  # isort:skip
 from .grpc_toast_handler import GrpcToastHandler  # isort:skip depends on Toast
+from .otel_toast_handler import OTELToastHandler  # isort:skip depends on Toast
 
 from .publisher import (  # isort:skip depends on Toast
     mark_as_complete,
@@ -20,6 +21,7 @@ __all__ = [
     "PsqlToastHandler",
     "GrpcEventBroker",
     "GrpcToastHandler",
+    "OTELToastHandler",
     "mark_as_complete",
     "mark_as_started",
     "mark_as_scheduled",
