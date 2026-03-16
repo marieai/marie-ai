@@ -220,16 +220,6 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
             for region in regions_by_page:
                 try:
-                    # Aggregated regions (cross-page consolidated claims) bypass
-                    # scoping entirely — they are always in scope.
-                    if region.tags.get("aggregated") == "true":
-                        self.logger.info(
-                            f"    Region '{region.region_id}': aggregated=true, "
-                            f"bypassing scope check (always in scope)"
-                        )
-                        regions_in_scope.add(region)
-                        continue
-
                     # Compute region line range from its parts' spans on this page
                     mins: List[int] = []
                     maxs: List[int] = []
@@ -259,7 +249,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         overlap_ratio = (
                             overlap_length / region_length if region_length > 0 else 0.0
                         )
-                        is_in_scope = overlap_ratio > 0.5
+                        is_in_scope = overlap_ratio >= 0.5
                         self.logger.info(
                             f"    Region '{region.region_id}': lines {region_start}-{region_end}, "
                             f"scoping=relaxed, overlap={overlap_length}/{region_length} ({overlap_ratio:.1%}), "
