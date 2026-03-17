@@ -9,7 +9,8 @@ from PIL import Image
 
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
-from marie.components import TransformersDocumentClassifier, TransformersDocumentIndexer
+from marie.components.document_classifier import TransformersDocumentClassifier
+from marie.components.document_indexer import TransformersDocumentIndexer
 from marie.components.document_indexer.llm import MMLLMDocumentIndexer
 from marie.components.document_registration.unilm_dit import (
     NoopDocumentBoundaryRegistration,

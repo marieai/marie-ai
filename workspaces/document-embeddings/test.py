@@ -6,9 +6,9 @@ from util import process_image
 
 from marie.boxes import BoxProcessorUlimDit
 from marie.document import TrOcrProcessor
-from marie.executor.ner.utils import normalize_bbox
 from marie.ocr.util import get_words_and_boxes
 from marie.utils.docs import convert_frames
+from marie.utils.visualization import normalize_bbox
 
 
 def build_ocr_engine():

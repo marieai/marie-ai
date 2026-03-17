@@ -11,9 +11,9 @@ from torch.nn import Module
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from marie.constants import __marie_home__, __model_path__
-from marie.executor.ner.utils import normalize_bbox, visualize_prediction
 from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
+from marie.utils.visualization import normalize_bbox, visualize_prediction
 
 from ...api.docs import BatchableMarieDoc, MarieDoc
 from ...ocr import OcrEngine

@@ -9,10 +9,10 @@ from verbalizers import verbalizers
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
 from marie.document import TrOcrProcessor
-from marie.executor.ner.utils import normalize_bbox
 from marie.utils.docs import frames_from_file
 from marie.utils.json import to_json
 from marie.utils.utils import batchify
+from marie.utils.visualization import normalize_bbox
 
 use_cuda = torch.cuda.is_available()
 

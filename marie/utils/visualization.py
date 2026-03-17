@@ -77,18 +77,13 @@ def visualize_prediction(
         raise ValueError("frame should be a PIL image")
     image = frame.copy()
 
-    # https://stackoverflow.com/questions/54165439/what-are-the-exact-color-names-available-in-pils-imagedraw
-    # label2color = get_label_colors()
     draw = ImageDraw.Draw(image, "RGBA")
     font = get_font(10)
 
     for prediction, box, score in zip(true_predictions, true_boxes, true_scores):
-        # don't draw other
         label = prediction[2:]
         if not label:
             continue
-        # xywh -> x1y1x2y2
-        # if box_format == "xywh":
         box = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
 
         predicted_label = iob_to_label(prediction).lower()
@@ -105,7 +100,6 @@ def visualize_prediction(
             width=1,
         )
 
-    # image.show()
     image.save(output_filename)
     del draw
 
@@ -140,14 +134,12 @@ def visualize_extract_kv(output_filename, frame, kv_results):
             __draw(kv["value"]["answer"]["bbox"])
 
     image.save(output_filename)
-    # FIXME(flake8) :  F821 undefined name 'draw'
-    # del draw
 
 
 def get_font(size):
     try:
         font = ImageFont.truetype(os.path.join("./assets/fonts", "FreeSans.ttf"), size)
-    except Exception as ex:
+    except Exception:
         font = ImageFont.load_default()
 
     return font
@@ -156,22 +148,12 @@ def get_font(size):
 def visualize_icr(
     frames: Union[np.ndarray, List[Image.Image]], results: Dict[str, Any], filename=None
 ):
-    """Visualize ICR results
-    :param frames:
-    :param results:
-    :param filename:
-    :return:
-    """
+    """Visualize ICR results"""
     assert len(frames) == len(results)
     ensure_exists("/tmp/tensors/")
 
     for page_idx, (image, result) in enumerate(zip(frames, results)):
-        # convert from numpy to PIL
-        # if page_idx != 8:
-        #     continue
-
         img = image.copy()
-        # we can have frames as both PIL and CV images
         if not isinstance(img, Image.Image):
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             viz_img = Image.fromarray(img)
@@ -191,18 +173,13 @@ def visualize_icr(
                 text = f'({i}){item["text"]}'
                 words_all.append(text)
 
-                # get text size
-                # text_size = font.getsize(text) #  Use getbbox or getlength instead.
                 text_size = font.getbbox(text)
                 text_w = text_size[2] - text_size[0]
                 text_h = text_size[3] - text_size[1]
 
                 button_size = (text_w + 8, text_h + 8)
-                # button_size = (text_size[0] + 8, text_size[1] + 8)
 
-                # create image with correct size and black background
                 button_img = Image.new("RGBA", button_size, color=(150, 255, 150, 150))
-                # put text on button with 10px margins
                 button_draw = ImageDraw.Draw(button_img, "RGBA")
                 button_draw.text(
                     (4, 4),
@@ -212,16 +189,13 @@ def visualize_icr(
                     fill=(0, 0, 0, 0),
                     width=1,
                 )
-                # draw.rectangle(box, outline="red", width=1)
-                # draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
-                # put button on source image in position (0, 0)
                 viz_img.paste(button_img, (box[0], box[1]))
 
         for i, box in enumerate(lines_bboxes):
             draw_box(
                 draw,
                 box,
-                None,  # f"{q_text} : {q_confidence}",
+                None,
                 get_random_color(),
                 font,
             )
@@ -233,6 +207,16 @@ def visualize_icr(
 
         del viz_img
         st = " ".join(words_all)
-        # print(st)
 
-    # viz_img.show()
+
+__all__ = [
+    "draw_box",
+    "get_font",
+    "get_random_color",
+    "iob_to_label",
+    "normalize_bbox",
+    "unnormalize_box",
+    "visualize_extract_kv",
+    "visualize_icr",
+    "visualize_prediction",
+]

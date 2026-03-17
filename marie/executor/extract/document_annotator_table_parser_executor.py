@@ -7,7 +7,9 @@ from omegaconf import OmegaConf
 
 from marie import requests
 from marie.api.docs import AssetKeyDoc
-from marie.executor.extract import DocumentAnnotatorExecutor
+from marie.executor.extract.document_annotator_executor import (
+    DocumentAnnotatorExecutor,
+)
 from marie.executor.extract.util import layout_config, setup_table_directories
 from marie.extract.readers.meta_reader.meta_reader import MetaReader
 from marie.extract.results.core.core_parsers import parse_tables

@@ -17,9 +17,9 @@ from marie.boxes import PSMode
 from marie.boxes.box_processor import BoxProcessor
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
 from marie.document.ocr_processor import OcrProcessor
-from marie.executor.ner.utils import normalize_bbox
 from marie.ocr.util import meta_to_text
 from marie.utils.json import to_json
+from marie.utils.visualization import normalize_bbox
 
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
