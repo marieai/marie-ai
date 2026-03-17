@@ -925,6 +925,80 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     f"ROWS DEBUG: Now has: {len(match_section_to_populate.matched_field_rows)} rows"
                 )
 
+            # Apply value_lookup (claim-level → service-line fallback)
+            dist_columns = {
+                fn: cfg
+                for fn, cfg in columns_cfg.items()
+                if isinstance(cfg, dict) and "value_lookup" in cfg
+            }
+            if dist_columns:
+                self._apply_value_lookup(
+                    match_section_to_populate,
+                    columns_cfg,
+                    matched_field_rows,
+                )
+
+    def _apply_value_lookup(
+        self,
+        match_section: MatchSection,
+        columns_cfg: Dict[str, Dict],
+        matched_field_rows: List[MatchFieldRow],
+    ) -> None:
+        """Look up values from non-repeating fields to fill table row fields.
+
+        For each column config with a ``value_lookup`` entry, resolve the
+        dot-path source (e.g. ``claim_information.CLAIM_REMARK_CODE``) from
+        matched_non_repeating_fields and fill empty target fields.
+        """
+        non_repeating = match_section.matched_non_repeating_fields or []
+        if not non_repeating or not matched_field_rows:
+            return
+
+        # Build lookup: field_name -> value from non-repeating fields
+        nr_lookup: Dict[str, str] = {}
+        for f in non_repeating:
+            if f.field_name and f.value:
+                nr_lookup[f.field_name] = f.value
+
+        distributed_count = 0
+        for field_name, col_cfg in columns_cfg.items():
+            dist_cfg = (
+                col_cfg.get("value_lookup") if isinstance(col_cfg, dict) else None
+            )
+            if not dist_cfg:
+                continue
+
+            source_path = dist_cfg.get("source", "")
+            strategy = dist_cfg.get("strategy", "fill_empty")
+
+            # Parse dot-path: "claim_information.CLAIM_REMARK_CODE" → field_name
+            # The section prefix scopes intent; lookup is by field_name since
+            # matched_non_repeating_fields are flat on the MatchSection.
+            source_field_name = (
+                source_path.rsplit(".", 1)[-1] if "." in source_path else source_path
+            )
+            source_value = nr_lookup.get(source_field_name)
+
+            if not source_value:
+                self.logger.debug(
+                    f"value_lookup: source '{source_path}' not found or empty"
+                )
+                continue
+
+            for row in matched_field_rows:
+                for field in row.fields:
+                    if field.field_name != field_name:
+                        continue
+                    if strategy == "fill_empty" and field.value:
+                        continue  # Target already has a value, skip
+                    field.value = source_value
+                    if not field.value_original:
+                        field.value_original = source_value
+                    distributed_count += 1
+
+        if distributed_count:
+            self.logger.info(f"value_lookup: filled {distributed_count} field(s)")
+
     def _build_matched_field_rows(
         self,
         document: UnstructuredDocument,
