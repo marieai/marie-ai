@@ -175,9 +175,6 @@ sample_dataset = TableExtractionResult(
     ]
 )
 
-print(sample_dataset.model_dump())
-print(sample_dataset.model_json_schema())
-
 
 class GroupedEntry(BaseModel):
     value: str
@@ -191,6 +188,3 @@ class GroupedData(BaseModel):
     MEMBER_ID: List[GroupedEntry] = []
     PATIENT_ACCOUNT: List[GroupedEntry] = []
     MEMBER: List[GroupedEntry] = []
-
-
-print(ExtractionResult.model_json_schema())

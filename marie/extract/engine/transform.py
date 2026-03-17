@@ -1,14 +1,43 @@
 import importlib
+import os
 import re
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional, TypeAlias, Union
 
+from marie.constants import __model_path__
 from marie.extract.structures import UnstructuredDocument
 from marie.logging_core.predefined import default_logger as logger
 
 TransformMapping: TypeAlias = Dict[str, Union[str, float, list, None]]
 TransformReturnType: TypeAlias = Union[TransformMapping, List[TransformMapping]]
+
+_KNOWN_FIRST_NAMES: frozenset[str] | None = None
+
+
+def _load_first_names() -> frozenset[str]:
+    """Load US census first-name set from model_zoo (lazy, cached)."""
+    global _KNOWN_FIRST_NAMES
+    if _KNOWN_FIRST_NAMES is not None:
+        return _KNOWN_FIRST_NAMES
+
+    path = os.path.join(__model_path__, "names_dataset", "first_names_us.txt")
+    try:
+        with open(path) as fh:
+            _KNOWN_FIRST_NAMES = frozenset(line.strip() for line in fh if line.strip())
+        logger.info(f"Loaded {len(_KNOWN_FIRST_NAMES)} first names from {path}")
+    except FileNotFoundError:
+        logger.warning(
+            f"First-names file not found: {path} — name-order heuristic disabled"
+        )
+        _KNOWN_FIRST_NAMES = frozenset()
+
+    return _KNOWN_FIRST_NAMES
+
+
+def _is_known_first_name(token: str) -> bool:
+    """Check whether *token* is a known US first name."""
+    return token.upper() in _load_first_names()
 
 
 def convert_name_format(value: str, field_def: Dict[str, Any]) -> dict[str, None] | str:
@@ -18,7 +47,26 @@ def convert_name_format(value: str, field_def: Dict[str, Any]) -> dict[str, None
     string_format = field_def.get(
         'name_format', '{title} {first} {middle} {last} {suffix} ({nickname})'
     )
-    full_name = value
+    full_name = trim_name_suffix_honorific(trim_name_prefix(value))
+
+    # Use first-name lookup to normalize 2-token names into "LAST,FIRST"
+    # format for nameparser.  Handles both comma and space-separated input.
+    if ',' in full_name:
+        parts = [p.strip() for p in full_name.split(',', 1)]
+        if len(parts) == 2 and ' ' not in parts[0] and ' ' not in parts[1]:
+            t0_is_first = _is_known_first_name(parts[0])
+            t1_is_first = _is_known_first_name(parts[1])
+            if t0_is_first and not t1_is_first:
+                # "JOHN,CASHE" → FIRST,LAST — swap to "CASHE,JOHN"
+                full_name = f"{parts[1]},{parts[0]}"
+    else:
+        tokens = full_name.split()
+        if len(tokens) == 2:
+            t0_is_first = _is_known_first_name(tokens[0])
+            t1_is_first = _is_known_first_name(tokens[1])
+            if t1_is_first and not t0_is_first:
+                # "CASHE JOHN" → LAST FIRST — reorder as "CASHE,JOHN"
+                full_name = f"{tokens[0]},{tokens[1]}"
 
     from nameparser import HumanName
 
@@ -350,37 +398,56 @@ def convert_to_alphanumeric(
     return re.sub(r'[^a-zA-Z0-9,]', '', normalized)
 
 
+NAME_HONORIFICS = [
+    "MR",
+    "MRS",
+    "MS",
+    "DR",
+    "MISS",
+    "SIR",
+    "PROF",
+    "REV",
+    "FR",
+    "SR",
+    "HON",
+    "MR.",
+    "MRS.",
+    "MS.",
+    "DR.",
+    "MISS.",
+    "SIR.",
+    "PROF.",
+    "REV.",
+    "FR.",
+    "SR.",
+    "HON.",
+]
+
+
 def trim_name_prefix(field_value: str) -> str:
     if field_value is None:
         return None
     if not isinstance(field_value, str):
         field_value = str(field_value)
 
-    honorifics = [
-        "MR",
-        "MRS",
-        "MS",
-        "DR",
-        "MISS",
-        "SIR",
-        "PROF",
-        "REV",
-        "FR",
-        "SR",
-        "HON",
-        "MR.",
-        "MRS.",
-        "MS.",
-        "DR.",
-        "MISS.",
-        "SIR.",
-        "PROF.",
-        "REV.",
-        "FR.",
-        "SR.",
-        "HON.",
-    ]
-    pattern = r'^(?:' + '|'.join(re.escape(h) for h in honorifics) + r')\s+'
+    pattern = r'^(?:' + '|'.join(re.escape(h) for h in NAME_HONORIFICS) + r')\s+'
+
+    return re.sub(pattern, '', field_value, flags=re.IGNORECASE)
+
+
+def trim_name_suffix_honorific(field_value: str) -> str:
+    """Remove a trailing honorific from a name string.
+
+    Claim data frequently arrives in ``FIRST LAST TITLE`` order, e.g.
+    ``"JOHN CASHE MR"`` or ``"JOHN CASHE MR."``.  This strips the
+    trailing title so downstream parsing is not confused.
+    """
+    if field_value is None:
+        return None
+    if not isinstance(field_value, str):
+        field_value = str(field_value)
+
+    pattern = r'\s+(?:' + '|'.join(re.escape(h) for h in NAME_HONORIFICS) + r')$'
 
     return re.sub(pattern, '', field_value, flags=re.IGNORECASE)
 
