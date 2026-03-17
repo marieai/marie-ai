@@ -1,1 +1,6 @@
-from .ner_extraction_executor import NerExtractionExecutor
+"""
+Avoid re-exporting the NER executor here.
+
+Importing submodules under ``marie.executor.ner`` should not eagerly import the
+full OCR and box-processing stack.
+"""

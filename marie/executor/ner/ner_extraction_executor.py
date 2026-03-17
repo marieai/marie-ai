@@ -21,16 +21,6 @@ from marie.boxes import PSMode
 from marie.boxes.line_processor import find_line_number
 from marie.constants import __marie_home__
 from marie.executor.mixin import StorageMixin
-from marie.executor.ner.utils import (
-    draw_box,
-    get_font,
-    get_random_color,
-    normalize_bbox,
-    unnormalize_box,
-    visualize_extract_kv,
-    visualize_icr,
-    visualize_prediction,
-)
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.ocr import CoordinateFormat, DefaultOcrEngine
@@ -41,6 +31,16 @@ from marie.utils.json import load_json_file, store_json_object
 from marie.utils.network import get_ip_address
 from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
 from marie.utils.utils import ensure_exists
+from marie.utils.visualization import (
+    draw_box,
+    get_font,
+    get_random_color,
+    normalize_bbox,
+    unnormalize_box,
+    visualize_extract_kv,
+    visualize_icr,
+    visualize_prediction,
+)
 
 check_min_version("4.5.0")
 

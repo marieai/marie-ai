@@ -9,12 +9,12 @@ from PIL import Image
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
 from marie.document import TrOcrProcessor
-from marie.executor.ner.utils import normalize_bbox
 from marie.ocr.util import meta_to_text
 from marie.renderer import TextRenderer
 from marie.utils.docs import frames_from_file
 from marie.utils.json import store_json_object, to_json
 from marie.utils.utils import current_milli_time, ensure_exists
+from marie.utils.visualization import normalize_bbox
 
 use_cuda = torch.cuda.is_available()
 

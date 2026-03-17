@@ -4,7 +4,7 @@ from typing import Callable, Optional
 import cv2
 from PIL import Image, ImageDraw
 
-from marie.executor.ner.utils import draw_box, get_font
+from marie.utils.visualization import draw_box, get_font
 
 
 class AnnotationHighlighter:

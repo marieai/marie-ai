@@ -7,10 +7,10 @@ from marie.boxes import BoxProcessorUlimDit
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
 from marie.document import TrOcrProcessor
 from marie.document.layoutreader import TextLayout
-from marie.executor.ner.utils import normalize_bbox, unnormalize_box
 from marie.logger import setup_logger
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.utils import ensure_exists
+from marie.utils.visualization import normalize_bbox, unnormalize_box
 
 logger = setup_logger(__name__)
 

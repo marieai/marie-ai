@@ -14,7 +14,6 @@ from pydantic import ValidationError
 
 from marie.components.table_rec import TableRecPredictor
 from marie.constants import __model_path__
-from marie.executor.ner.utils import draw_box, get_font, visualize_icr
 from marie.extract.models.match import SubzeroResult
 from marie.extract.readers.meta_reader.meta_reader import MetaReader
 from marie.extract.registry import component_registry
@@ -37,6 +36,7 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.utils.docs import frames_from_file
 from marie.utils.json import load_json_file
 from marie.utils.overlap import merge_bboxes_as_block
+from marie.utils.visualization import draw_box, get_font, visualize_icr
 
 
 @lru_cache(maxsize=None)

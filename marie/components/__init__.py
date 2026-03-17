@@ -1,8 +1,6 @@
-from marie.components.document_classifier import (
-    BaseDocumentClassifier,
-    TransformersDocumentClassifier,
-)
-from marie.components.document_indexer import (
-    BaseDocumentIndexer,
-    TransformersDocumentIndexer,
-)
+"""
+Avoid package-level re-exports here.
+
+Importing a specific component submodule should not eagerly import unrelated
+classifiers, indexers, OCR helpers, or TroCR dependencies.
+"""

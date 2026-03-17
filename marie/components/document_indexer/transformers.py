@@ -16,7 +16,10 @@ from transformers import (
 )
 
 from marie.constants import __marie_home__, __model_path__
-from marie.executor.ner.utils import (
+from marie.logging_core.logger import MarieLogger
+from marie.models.utils import initialize_device_settings
+from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
+from marie.utils.visualization import (
     draw_box,
     get_font,
     get_random_color,
@@ -25,9 +28,6 @@ from marie.executor.ner.utils import (
     visualize_extract_kv,
     visualize_prediction,
 )
-from marie.logging_core.logger import MarieLogger
-from marie.models.utils import initialize_device_settings
-from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
 
 from ...api.docs import BatchableMarieDoc, MarieDoc
 from ...boxes import PSMode

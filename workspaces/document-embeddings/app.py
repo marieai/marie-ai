@@ -23,8 +23,8 @@ from marie.components.document_taxonomy.util import (
     merge_annotations,
 )
 from marie.document import TrOcrProcessor
-from marie.executor.ner.utils import normalize_bbox
 from marie.utils.docs import docs_from_image, frames_from_file
+from marie.utils.visualization import normalize_bbox
 
 use_cuda = torch.cuda.is_available()
 max_input_length = 8192
