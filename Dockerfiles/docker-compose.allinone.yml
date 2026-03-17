@@ -1,0 +1,582 @@
+# ############### Marie-AI All-in-One Docker Compose ###############
+#
+# Consolidated compose file for the entire Marie-AI stack.
+# Replaces the individual docker-compose.*.yml files with a single
+# declarative file using tiered startup via depends_on conditions.
+#
+# Prerequisites:
+#   - Docker network: docker network create --driver=bridge marie_default
+#   - Environment file: config/.env (see docker/allinone/.env.example)
+#
+# Usage:
+#   # Core infrastructure only (psql, s3, rabbitmq, etcd)
+#   docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.allinone.yml --project-directory . up -d
+#
+#   # With observability (+ clickhouse, hyperdx, log-collector)
+#   docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.allinone.yml --project-directory . --profile observability up -d
+#
+#   # With application services (+ gateway, gitea, litellm)
+#   docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.allinone.yml --project-directory . --profile application up -d
+#
+#   # Full stack (all profiles)
+#   docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.allinone.yml --project-directory . --profile observability --profile application up -d
+#
+#   # With GPU compute
+#   docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.allinone.yml --project-directory . --profile observability --profile application --profile gpu up -d
+#
+# Wrapper scripts:
+#   ./docker/allinone/start.sh infra-only|observability|application|full|gpu
+#   ./docker/allinone/stop.sh
+
+# =====================================================================
+# Tier 0 - Core Infrastructure (no dependencies)
+# =====================================================================
+
+services:
+
+  # --------------- PostgreSQL with DocumentDB Extensions ---------------
+  psql:
+    container_name: marie-psql-server
+    init: true
+    image: ghcr.io/ferretdb/postgres-documentdb:17-0.103.0
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_preload_libraries=pg_stat_statements,pg_cron,pg_documentdb
+      -c pg_stat_statements.track=all
+      -c pg_stat_statements.max=10000
+      -c pg_stat_statements.track_utility=off
+      -c pg_stat_statements.save=on
+      -c enable_partition_pruning=on
+      -c constraint_exclusion=partition
+    restart: on-failure
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_HOST_AUTH_METHOD=trust
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=postgres
+      - POSTGRES_SHARED_PRELOAD_LIBRARIES=pg_stat_statements,pg_cron,pg_documentdb
+    volumes:
+      - psql_data:/var/lib/postgresql/data
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - marie_default
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------- MinIO S3 Object Storage ---------------
+  s3server:
+    image: minio/minio:latest
+    container_name: marie-s3-server
+    init: true
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+      - "8001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      SERVER_SIDE_ENCRYPTION: "off"
+      MINIO_KMS_AUTO_ENCRYPTION: "off"
+    command: server /data --address ":8000" --console-address ":9001"
+    volumes:
+      - ${DATA_DIR:-/mnt/data}/s3:/data
+    networks:
+      - marie_default
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/minio/health/live"]
+      interval: 10s
+      timeout: 20s
+      retries: 3
+
+  # --------------- RabbitMQ Message Broker ---------------
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    init: true
+    restart: unless-stopped
+    container_name: marie-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBIT_MQ_USERNAME:-marie}
+      - RABBITMQ_DEFAULT_PASS=${RABBIT_MQ_PASSWORD:-mariepassword}
+      - RABBITMQ_DEFAULT_VHOST=/
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - rabbitmq_log:/var/log/rabbitmq
+    networks:
+      - marie_default
+
+  # --------------- etcd Distributed Key-Value Store ---------------
+  etcd-single:
+    image: quay.io/coreos/etcd:v3.6.1
+    container_name: etcd-single
+    init: true
+    restart: on-failure
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    volumes:
+      - etcd_data:/etcd-data
+    command:
+      - /usr/local/bin/etcd
+      - --name=single
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://127.0.0.1:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://127.0.0.1:2380
+      - --initial-cluster=single=http://127.0.0.1:2380
+      - --initial-cluster-state=new
+    networks:
+      - marie_default
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # =====================================================================
+  # Tier 1 - Init Containers (depends on Tier 0)
+  # =====================================================================
+
+  # --------------- MinIO Client Setup ---------------
+  mc-setup:
+    image: minio/mc:latest
+    container_name: marie-mc-setup
+    depends_on:
+      s3server:
+        condition: service_healthy
+    environment:
+      MC_HOST_localminio: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@marie-s3-server:8000
+    volumes:
+      - mc_config:/root/.mc
+    networks:
+      - marie_default
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "mc", "alias", "list", "localminio"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Starting MinIO setup...';
+      mc alias set localminio http://marie-s3-server:8000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
+      mc admin user add localminio ${MARIE_ACCESS_KEY} ${MARIE_SECRET_ACCESS_KEY} || echo 'User may already exist';
+      mc admin policy attach localminio readwrite --user ${MARIE_ACCESS_KEY} || echo 'Policy may already be attached';
+      mc mb localminio/marie --ignore-existing;
+      mc encrypt clear localminio/marie 2>/dev/null || true;
+      mc admin policy remove localminio default-encryption 2>/dev/null || true;
+      echo 'MinIO setup completed successfully!';
+      echo 'Setup container exiting...';
+      "
+
+  # --------------- Database Initialization ---------------
+  db-init:
+    image: ghcr.io/ferretdb/postgres-documentdb:17-0.103.0
+    container_name: marie-db-init
+    depends_on:
+      psql:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - marie_default
+    environment:
+      - PGUSER=${POSTGRES_USER:-postgres}
+      - PGHOST=psql
+      - PGPORT=5432
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        echo "Initializing databases..."
+
+        # Create gitea database if it does not exist
+        psql -U "$${PGUSER}" -h "$${PGHOST}" -tc \
+          "SELECT 1 FROM pg_database WHERE datname = 'gitea'" \
+          | grep -q 1 || \
+          psql -U "$${PGUSER}" -h "$${PGHOST}" -c "CREATE DATABASE gitea"
+        echo "Database 'gitea' ready."
+
+        # Create litellm database if it does not exist
+        psql -U "$${PGUSER}" -h "$${PGHOST}" -tc \
+          "SELECT 1 FROM pg_database WHERE datname = 'litellm'" \
+          | grep -q 1 || \
+          psql -U "$${PGUSER}" -h "$${PGHOST}" -c "CREATE DATABASE litellm"
+        echo "Database 'litellm' ready."
+
+        # Create mem0 database if it does not exist
+        psql -U "$${PGUSER}" -h "$${PGHOST}" -tc \
+          "SELECT 1 FROM pg_database WHERE datname = 'mem0'" \
+          | grep -q 1 || \
+          psql -U "$${PGUSER}" -h "$${PGHOST}" -c "CREATE DATABASE mem0"
+
+        # Enable pgvector extension on mem0 database
+        psql -U "$${PGUSER}" -h "$${PGHOST}" -d mem0 -c \
+          "CREATE EXTENSION IF NOT EXISTS vector"
+        echo "Database 'mem0' ready (pgvector enabled)."
+
+        echo "All databases initialized successfully."
+
+  # =====================================================================
+  # Tier 2 - Application Services (depends on db-init)
+  # =====================================================================
+
+  # --------------- ClickHouse Analytics Database ---------------
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: marie-clickhouse
+    init: true
+    restart: unless-stopped
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=${CLICKHOUSE_ACCESS_MANAGEMENT:-1}
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB:-marie}
+      - CLICKHOUSE_MAX_MEMORY_USAGE=${CLICKHOUSE_MAX_MEMORY:-4000000000}
+      - CLICKHOUSE_MAX_MEMORY_USAGE_FOR_USER=${CLICKHOUSE_MAX_MEMORY_USER:-3000000000}
+    ports:
+      - "${CLICKHOUSE_HTTP_PORT:-8123}:8123"
+      - "${CLICKHOUSE_NATIVE_PORT:-9000}:9000"
+      - "${CLICKHOUSE_MYSQL_PORT:-9004}:9004"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+      nproc:
+        soft: 65535
+        hard: 65535
+    networks:
+      - marie_default
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: ${CLICKHOUSE_MEMORY_LIMIT:-8G}
+        reservations:
+          memory: ${CLICKHOUSE_MEMORY_RESERVATION:-2G}
+    profiles:
+      - observability
+
+  # --------------- Gitea Git Service ---------------
+  gitea:
+    image: gitea/gitea:latest
+    container_name: marie-gitea
+    init: true
+    restart: unless-stopped
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__database__DB_TYPE=postgres
+      - GITEA__database__HOST=${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}
+      - GITEA__database__NAME=${GITEA_DB_NAME:-gitea}
+      - GITEA__database__USER=${POSTGRES_USER:-postgres}
+      - GITEA__database__PASSWD=${POSTGRES_PASSWORD:-postgres}
+      - GITEA__database__SSL_MODE=disable
+      - GITEA__server__DOMAIN=${GITEA_DOMAIN:-localhost}
+      - GITEA__server__SSH_DOMAIN=${GITEA_DOMAIN:-localhost}
+      - GITEA__server__ROOT_URL=${GITEA_ROOT_URL:-http://localhost:3001}
+      - GITEA__server__SSH_PORT=2222
+      - GITEA__server__SSH_LISTEN_PORT=22
+      - GITEA__server__HTTP_PORT=3000
+      - GITEA__security__INSTALL_LOCK=${GITEA_INSTALL_LOCK:-false}
+      - GITEA__security__SECRET_KEY=${GITEA_SECRET_KEY:-}
+      - GITEA__service__DISABLE_REGISTRATION=${GITEA_DISABLE_REGISTRATION:-false}
+      - GITEA__service__REQUIRE_SIGNIN_VIEW=${GITEA_REQUIRE_SIGNIN:-false}
+      - GITEA__log__MODE=console
+      - GITEA__log__LEVEL=${GITEA_LOG_LEVEL:-info}
+    ports:
+      - "${GITEA_HTTP_PORT:-3001}:3000"
+      - "${GITEA_SSH_PORT:-2222}:22"
+    volumes:
+      - gitea_data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - marie_default
+    healthcheck:
+      test: ["CMD", "/usr/bin/wget", "-q", "--spider", "http://localhost:3000/api/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    profiles:
+      - application
+
+  # --------------- LiteLLM Proxy Server ---------------
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: marie-litellm
+    init: true
+    restart: unless-stopped
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    ports:
+      - "4000:4000"
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-1234}
+      - LITELLM_SALT_KEY=${LITELLM_SALT_KEY:-sk-1234}
+      - DATABASE_URL=${LITELLM_DATABASE_URL:-}
+      - STORE_MODEL_IN_DB=${LITELLM_STORE_MODEL_IN_DB:-false}
+      - LITELLM_LOG=${LITELLM_LOG:-INFO}
+      - LITELLM_PORT=${LITELLM_PORT:-4000}
+      - LITELLM_PROXY_CONFIG_PATH=${LITELLM_PROXY_CONFIG_PATH:-/app/config.yaml}
+    volumes:
+      - ./litellm:/app/config:ro
+      - litellm_logs:/app/logs
+    networks:
+      - marie_default
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "marie.service=litellm"
+      - "marie.description=LiteLLM proxy server for AI model routing"
+    profiles:
+      - application
+
+  # =====================================================================
+  # Tier 3 - Observability (depends on clickhouse)
+  # =====================================================================
+
+  # --------------- HyperDX Observability UI ---------------
+  hyperdx:
+    image: docker.hyperdx.io/hyperdx/hyperdx-local:latest
+    container_name: marie-hyperdx
+    init: true
+    restart: unless-stopped
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      - HYPERDX_LOG_LEVEL=${HYPERDX_LOG_LEVEL:-info}
+      - HYPERDX_API_KEY=${HYPERDX_API_KEY:-}
+    ports:
+      - "${HYPERDX_UI_PORT:-8080}:8080"
+      - "${HYPERDX_API_PORT:-8002}:8000"
+      - "${OTEL_GRPC_PORT:-4317}:4317"
+      - "${OTEL_HTTP_PORT:-4318}:4318"
+      - "${FLUENTD_PORT:-24225}:24225"
+    volumes:
+      - hyperdx_data:/var/lib/hyperdx
+    networks:
+      - marie_default
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: ${HYPERDX_MEMORY_LIMIT:-4G}
+        reservations:
+          memory: ${HYPERDX_MEMORY_RESERVATION:-1G}
+    profiles:
+      - observability
+
+  # --------------- OpenTelemetry Log Collector ---------------
+  log-collector:
+    image: otel/opentelemetry-collector-contrib:0.114.0
+    container_name: marie-log-collector
+    init: true
+    restart: unless-stopped
+    depends_on:
+      hyperdx:
+        condition: service_healthy
+    command: ["--config=/etc/otel/config.yml"]
+    user: "0:0"
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://marie-hyperdx:4318
+      - DEPLOYMENT_ENV=${STACK_NAME:-dev}
+    volumes:
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config/clickstack/log-collector-config.yml:/etc/otel/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - marie_default
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${LOG_COLLECTOR_MEMORY_LIMIT:-512M}
+        reservations:
+          memory: ${LOG_COLLECTOR_MEMORY_RESERVATION:-128M}
+    profiles:
+      - observability
+
+  # =====================================================================
+  # Tier 4 - Application Gateway (depends on core infrastructure)
+  # =====================================================================
+
+  # --------------- Marie-AI Gateway ---------------
+  marie-gateway:
+    image: marieai/marie-gateway:${GATEWAY_IMAGE_TAG:-4.0.0-cpu}
+    restart: unless-stopped
+    container_name: marieai-gateway
+    init: true
+    tty: true
+    network_mode: host
+    depends_on:
+      psql:
+        condition: service_healthy
+      s3server:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+      etcd-single:
+        condition: service_healthy
+    command: >
+      gateway
+      --uses /etc/marie/config/service/${GATEWAY_CONFIG_TAG:-marie-gateway-4.0.0.yml}
+      --protocols HTTP GRPC
+      --ports 51000 52000
+      --extra-search-paths /etc/marie/config/config/extra_py_modules
+    environment:
+      - MARIE_CACHE_SKIP_LOAD=true
+      - MARIE_DEFAULT_MOUNT=/etc/marie
+      - MARIE_LOG_CONFIG=docker
+      - MARIE_DEPLOYMENT_NAME=marie
+      - COLUMNS=180
+      - JINA_MP_START_METHOD=fork
+      - JINA_LOG_LEVEL=${GATEWAY_LOG_LEVEL:-DEBUG}
+    volumes:
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config:/etc/marie/config:ro
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo:/etc/marie/model_zoo:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
+    logging:
+      driver: local
+      options:
+        max-size: "100m"
+        max-file: "10"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:51000/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "marie.service=gateway"
+      - "marie.version=${GATEWAY_IMAGE_TAG:-4.0.0-cpu}"
+    profiles:
+      - application
+
+  # =====================================================================
+  # Tier 5 - GPU Compute (depends on gateway)
+  # =====================================================================
+
+  # --------------- Marie-AI Extract Executor (GPU) ---------------
+  marie-extract-executor:
+    image: marieai/marie:${EXTRACT_IMAGE_TAG:-4.0.0-cuda}
+    restart: unless-stopped
+    container_name: marieai-${EXTRACT_STACK_NAME:-dev}-server
+    init: true
+    tty: true
+    network_mode: host
+    depends_on:
+      marie-gateway:
+        condition: service_healthy
+    command: >
+      server --start
+      --uses /etc/marie/config/service/extract/${EXTRACT_CONFIG_TAG:-marie-extract-4.0.0.yml}
+    environment:
+      - MARIE_CACHE_SKIP_LOAD=true
+      - MARIE_DEFAULT_MOUNT=/etc/marie
+      - MARIE_LOG_CONFIG=docker
+      - MARIE_DEPLOYMENT_NAME=marie
+      - COLUMNS=180
+      - JINA_MP_START_METHOD=spawn
+      - JINA_LOG_LEVEL=${EXTRACT_LOG_LEVEL:-DEBUG}
+    volumes:
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config:/etc/marie/config:ro
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo:/etc/marie/model_zoo:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
+                - compute
+                - utility
+        limits:
+          memory: 32G
+    logging:
+      driver: local
+      options:
+        max-size: "100m"
+        max-file: "10"
+    labels:
+      - "marie.service=extract-executor"
+      - "marie.version=${EXTRACT_IMAGE_TAG:-4.0.0-cuda}"
+    profiles:
+      - gpu
+
+# =====================================================================
+# Volumes
+# =====================================================================
+
+volumes:
+  psql_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  rabbitmq_log:
+    driver: local
+  etcd_data:
+    driver: local
+  mc_config:
+  clickhouse_data:
+    driver: local
+  clickhouse_logs:
+    driver: local
+  gitea_data:
+    driver: local
+  litellm_logs:
+    driver: local
+  hyperdx_data:
+    driver: local
+
+# =====================================================================
+# Networks
+# =====================================================================
+
+networks:
+  marie_default:
+    external: true
