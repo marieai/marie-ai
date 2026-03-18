@@ -1,6 +1,9 @@
+import glob
+import json
 import os
 import os.path
-from typing import TYPE_CHECKING, Any, List, Optional
+import shutil
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from marie.constants import __config_dir__
 from marie.extract.annotators.base import AnnotatorCapabilities, DocumentAnnotator
@@ -52,6 +55,7 @@ class LLMAnnotator(DocumentAnnotator):
         self.logger.info(f"Initializing {self.__class__.__name__}...")
 
         # should we merge layout_conf and annotator_conf ?
+        self.annotator_conf = annotator_conf
         self.layout_conf = layout_conf
         self.layout_id = layout_conf.get('layout_id', None)
         if self.layout_id is None:
@@ -149,6 +153,13 @@ class LLMAnnotator(DocumentAnnotator):
         self.prompt_text = self.load_prompt(full_prompt_path)
         self.engine = route_llm_engine(self.model_name, self.multimodal)
 
+        # Output transform: a dotted path to a callable applied in-place to each
+        # output file after LLM inference.
+        # Signature: fn(data: dict, annotator_conf: dict) -> dict
+        self.output_transform: Optional[str] = annotator_conf.get(
+            'output_transform', None
+        )
+
         # Get processing mode from annotator config (per-page or per-table)
         self.processing_mode = annotator_conf.get('mode', 'per-table')
         self.logger.info(f"Processing mode: {self.processing_mode}")
@@ -200,6 +211,9 @@ class LLMAnnotator(DocumentAnnotator):
             mm_processor_kwargs=self.mm_processor_kwargs,
             mini_batch_size=self.mini_batch_size,
         )
+
+        if self.output_transform:
+            self._apply_output_transform()
 
     async def aannotate(self, document: UnstructuredDocument, frames: List) -> None:
         """
@@ -268,7 +282,69 @@ class LLMAnnotator(DocumentAnnotator):
             mini_batch_size=self.mini_batch_size,
         )
 
-        # self.parse_output(raw_output)
+        if self.output_transform:
+            self._apply_output_transform()
+
+    def _apply_output_transform(self) -> None:
+        """Apply the configured output_transform function in-place to each JSON output file.
+
+        The transform is a dotted Python path (e.g.
+        ``.extract.core.transforms.normalize_labels``)
+        resolved via importlib.  Signature::
+
+            fn(data: dict, annotator_conf: dict) -> dict
+        """
+        import importlib
+
+        json_files = sorted(glob.glob(os.path.join(self.output_dir, "*.json")))
+        if not json_files:
+            return
+
+        # Resolve the callable once
+        transform_path = self.output_transform
+        try:
+            module_name, func_name = transform_path.rsplit(".", 1)
+            module = importlib.import_module(module_name)
+            transform_fn = getattr(module, func_name)
+        except (ImportError, AttributeError, ValueError) as e:
+            self.logger.error(
+                f"Could not resolve output_transform '{transform_path}': {e}"
+            )
+            return
+
+        self.logger.info(
+            f"Applying output_transform '{transform_path}' to {len(json_files)} file(s)"
+        )
+
+        # Preserve original files before any transforms are applied
+        pre_transform_dir = os.path.join(self.output_dir, "pre-transform")
+        os.makedirs(pre_transform_dir, exist_ok=True)
+        for filepath in json_files:
+            shutil.copy2(
+                filepath, os.path.join(pre_transform_dir, os.path.basename(filepath))
+            )
+        self.logger.info(
+            f"Saved {len(json_files)} original file(s) to {pre_transform_dir}"
+        )
+
+        for filepath in json_files:
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                self.logger.warning(f"Skipping {filepath}: {e}")
+                continue
+
+            try:
+                data = transform_fn(data, self.annotator_conf)
+            except Exception as e:
+                self.logger.error(
+                    f"output_transform '{transform_path}' failed on {filepath}: {e}"
+                )
+                continue
+
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
 
     def parse_output(self, raw_output: str):
         """
