@@ -1241,8 +1241,6 @@ class WorkerRequestHandler:
                         requests=requests, http=http, tracing_context=tracing_context
                     )
 
-                if self._successful_requests_metrics:
-                    self._successful_requests_metrics.inc()
                 if self._successful_requests_counter:
                     self._successful_requests_counter.add(
                         1, attributes=self._metric_attributes
@@ -1267,8 +1265,6 @@ class WorkerRequestHandler:
                 requests[0].add_exception(ex, self._executor)
                 if context is not None:
                     context.set_trailing_metadata((("is-error", "true"),))
-                if self._failed_requests_metrics:
-                    self._failed_requests_metrics.inc()
                 if self._failed_requests_counter:
                     self._failed_requests_counter.add(
                         1, attributes=self._metric_attributes
