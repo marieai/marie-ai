@@ -356,7 +356,7 @@ class S3StorageHandler(PathHandler):
             # If S3 object_name was not specified, use file_name
             if key == "" and not file_like:
                 key = os.path.basename(src_path)
-            logger.info(f"Uploading to {bucket}/{key}")
+            logger.debug(f"Uploading to {bucket}/{key}")
             # Upload the file
             self.s3.Bucket(bucket).put_object(Key=key, Body=body, **extra_args)
         except Exception as e:
