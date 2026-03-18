@@ -6,7 +6,6 @@ from typing import Any, Optional, Union
 import numpy as np
 import torch
 from docarray import DocList
-
 from marie import Executor, requests, safely_encoded
 from marie.api import value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc, StorageDoc
@@ -26,6 +25,7 @@ from marie.models.utils import (
     setup_torch_optimizations,
     torch_gc,
 )
+from marie.numpyencoder import NumpyEncoder
 from marie.ocr import CoordinateFormat
 from marie.pipe import ExtractPipeline
 from marie.storage import StorageManager
@@ -381,7 +381,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
                                 bboxes.append(line["bbox"])
 
                 if bboxes:
-                    bbox_bytes = json.dumps(bboxes).encode("utf-8")
+                    bbox_bytes = json.dumps(bboxes, cls=NumpyEncoder).encode("utf-8")
                     bbox_version = AssetTracker.compute_asset_version(
                         payload_bytes=bbox_bytes,
                         code_fingerprint=getattr(self, "code_version", "unknown"),
