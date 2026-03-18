@@ -656,6 +656,86 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 # from other regions in the same MatchSection
                 populated_fields.add(field_name)
 
+        # ---- value_lookup for KV fields ----
+        # Fields with a value_lookup config that were not populated by
+        # selector matching can be resolved from the source record (the
+        # raw claim-extract JSON attached as a tag on the section).
+        vl_fields = {
+            fn: cfg
+            for fn, cfg in fields_cfg.items()
+            if isinstance(cfg, dict)
+            and "value_lookup" in cfg
+            and fn not in populated_fields
+        }
+        if vl_fields:
+            source_record_json = structured_section.tags.get("source_record_json")
+            source_record = (
+                json.loads(source_record_json) if source_record_json else None
+            )
+            vl_count = 0
+            for field_name, field_cfg in vl_fields.items():
+                vl_cfg = field_cfg["value_lookup"]
+                source_path = vl_cfg.get("source", "")
+                strategy = vl_cfg.get("strategy", "fill_empty")
+
+                # Resolve value
+                source_value: Optional[str] = None
+                if source_path.startswith("$"):
+                    source_value = self._resolve_jsonpath(source_path, source_record)
+                else:
+                    # Simple dot-path: look up from already-extracted KV fields
+                    source_field_name = (
+                        source_path.rsplit(".", 1)[-1]
+                        if "." in source_path
+                        else source_path
+                    )
+                    for ef in extracted_fields:
+                        if ef.field_name == source_field_name and ef.value:
+                            source_value = ef.value
+                            break
+
+                if not source_value:
+                    self.logger.debug(
+                        f"value_lookup(kv): source '{source_path}' not found or empty for field '{field_name}'"
+                    )
+                    continue
+
+                # Resolve field definition for the target field
+                field_def: Dict[str, Any] = {}
+                if context.conf is not None:
+                    config_fields = context.conf.get("fields", {})
+                    if field_name in config_fields.get("non_repeating", {}):
+                        field_def = OmegaConf.to_container(
+                            config_fields.non_repeating[field_name], resolve=True
+                        )
+                    elif field_name in config_fields.get("repeating", {}):
+                        field_def = OmegaConf.to_container(
+                            config_fields.repeating[field_name], resolve=True
+                        )
+                field_def = dict(field_def) if field_def else {}
+                field_def["name"] = field_name
+                field_def.setdefault("type", "MONEY")
+
+                transformed_value = transform_field_value(field_def, source_value)
+                faux_line = LineWithMeta(
+                    line=source_value, metadata=None, annotations=[]
+                )
+                created = self.create_fields(
+                    field_def, source_value, transformed_value, faux_line
+                )
+                extracted_fields.extend(created)
+                populated_fields.add(field_name)
+                vl_count += len(created)
+
+                self.logger.info(
+                    f"value_lookup(kv): resolved '{field_name}' = '{source_value}' from '{source_path}'"
+                )
+
+            if vl_count:
+                self.logger.info(
+                    f"value_lookup(kv): filled {vl_count} field(s) for section '{structured_section.title}'"
+                )
+
         # Attach kv fields to the matched section.
         # TODO: we will change this to a dictionary of field types
         if match_section.matched_non_repeating_fields is None:
@@ -852,6 +932,22 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         f"Selectors tried: {selectors}. Headers: {header_texts}"
                     )
 
+            # Add virtual columns for value_lookup fields that did not match
+            # any header.  These carry no physical cell — they are populated
+            # later by _apply_value_lookup from the source record.
+            for field_name, header_cfg in field_to_header_map.items():
+                if field_name in columns_to_process:
+                    continue
+                col_cfg = columns_cfg.get(field_name, {})
+                if isinstance(col_cfg, dict) and "value_lookup" in col_cfg:
+                    columns_to_process[field_name] = {
+                        "cell_index": -1,  # virtual: no physical cell
+                        "header_config": header_cfg,
+                    }
+                    self.logger.info(
+                        f"Added virtual column for value_lookup field '{field_name}'"
+                    )
+
             # columns_to_process now maps field_name -> {cell_index, header_cfg}
             # Next step (not shown here): iterate body_rows and use columns_to_process indices to extract values
 
@@ -932,10 +1028,18 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 if isinstance(cfg, dict) and "value_lookup" in cfg
             }
             if dist_columns:
+                # Recover the raw source record from the section tag so
+                # that JSONPath-style value_lookup sources (``$.…``) can
+                # resolve against the full claim record.
+                source_record_json = structured_section.tags.get("source_record_json")
+                source_record = (
+                    json.loads(source_record_json) if source_record_json else None
+                )
                 self._apply_value_lookup(
                     match_section_to_populate,
                     columns_cfg,
                     matched_field_rows,
+                    source_record=source_record,
                 )
 
     def _apply_value_lookup(
@@ -943,15 +1047,22 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         match_section: MatchSection,
         columns_cfg: Dict[str, Dict],
         matched_field_rows: List[MatchFieldRow],
+        source_record: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Look up values from non-repeating fields to fill table row fields.
+        """Look up values from non-repeating fields or the source record
+        to fill table row fields.
 
-        For each column config with a ``value_lookup`` entry, resolve the
-        dot-path source (e.g. ``claim_information.CLAIM_REMARK_CODE``) from
-        matched_non_repeating_fields and fill empty target fields.
+        For each column config with a ``value_lookup`` entry:
+
+        - **Simple dot-path** (e.g. ``claim_information.CLAIM_REMARK_CODE``):
+          resolved from ``matched_non_repeating_fields``.
+        - **JSONPath** (starts with ``$``, e.g.
+          ``$.adjustments[?(@.reason_code == "OA-23")].amount``):
+          resolved from the raw *source_record* dict using ``jsonpath_ng``.
         """
         non_repeating = match_section.matched_non_repeating_fields or []
-        if not non_repeating or not matched_field_rows:
+
+        if not matched_field_rows:
             return
 
         # Build lookup: field_name -> value from non-repeating fields
@@ -971,13 +1082,19 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             source_path = dist_cfg.get("source", "")
             strategy = dist_cfg.get("strategy", "fill_empty")
 
-            # Parse dot-path: "claim_information.CLAIM_REMARK_CODE" → field_name
-            # The section prefix scopes intent; lookup is by field_name since
-            # matched_non_repeating_fields are flat on the MatchSection.
-            source_field_name = (
-                source_path.rsplit(".", 1)[-1] if "." in source_path else source_path
-            )
-            source_value = nr_lookup.get(source_field_name)
+            # ----- Resolve the source value -----
+            if source_path.startswith("$"):
+                # JSONPath mode: resolve from the raw claim record
+                source_value = self._resolve_jsonpath(source_path, source_record)
+            else:
+                # Simple dot-path mode (existing behaviour)
+                # "claim_information.CLAIM_REMARK_CODE" → field_name
+                source_field_name = (
+                    source_path.rsplit(".", 1)[-1]
+                    if "." in source_path
+                    else source_path
+                )
+                source_value = nr_lookup.get(source_field_name)
 
             if not source_value:
                 self.logger.debug(
@@ -998,6 +1115,38 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
         if distributed_count:
             self.logger.info(f"value_lookup: filled {distributed_count} field(s)")
+
+    @staticmethod
+    def _resolve_jsonpath(path: str, data: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Resolve a JSONPath expression against a record dict.
+
+        Uses ``jsonpath_ng.ext`` which supports filter expressions::
+
+            $.adjustments[?(@.reason_code == "OA-23" && @.type == "CLAIMS_ADJUSTMENT")].amount
+
+        Returns the first matching scalar as a string, or ``None``.
+        """
+        if not path or not data:
+            return None
+
+        try:
+            from jsonpath_ng.ext import parse as jsonpath_parse
+
+            # jsonpath_ng.ext uses single ``&`` for logical AND in filters;
+            # normalize the common ``&&`` shorthand from YAML configs.
+            normalized = path.replace("&&", "&")
+            expr = jsonpath_parse(normalized)
+            matches = [match.value for match in expr.find(data)]
+            if matches:
+                return str(matches[0])
+        except Exception as e:
+            # Import available at module level for type-checking, but
+            # guard runtime so a bad expression doesn't crash the pipeline.
+            import logging
+
+            logging.warning(f"value_lookup JSONPath error for '{path}': {e}")
+
+        return None
 
     def _build_matched_field_rows(
         self,
@@ -1130,6 +1279,27 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 column_def = columns_to_process[field_name]
                 column_index = int(column_def["cell_index"])
                 header_config = column_def["header_config"]
+
+                # Virtual column (cell_index == -1): value_lookup field with
+                # no physical table cell.  Create an empty Field placeholder
+                # that _apply_value_lookup will populate later.
+                if column_index == -1:
+                    field_def = dict(
+                        template_fields_repeating.get(field_name, {}) or {}
+                    )
+                    field_def["name"] = field_name
+                    stub_field = Field(
+                        field_name=field_name,
+                        field_type=field_def.get("type", "MONEY"),
+                        is_required=False,
+                        value="",
+                        value_original="",
+                        page=page_id,
+                        confidence=1,
+                        scrubbed=True,
+                    )
+                    extracted_cells.append(stub_field)
+                    continue
 
                 if column_index < 0 or column_index >= len(cells):
                     self.logger.debug(

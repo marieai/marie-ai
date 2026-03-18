@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from typing import Dict, List
@@ -636,12 +637,17 @@ def _build_regions_from_json(
             region.tags["record_uid"] = record_uid
             region.tags["table_suffix"] = table_suffix
 
-            # Add role_hint tags to sections from config
+            # Add role_hint tags to sections from config.
+            # Also attach the serialized source record so that
+            # downstream value_lookup can resolve JSONPath expressions
+            # (e.g. ``$.adjustments[?(@.reason_code == "OA-23")].amount``).
+            source_record_json = json.dumps(record)
             for section in region.sections_flat():
                 title_upper = (section.title or "").upper()
                 role = role_mapping.get(title_upper)
                 if role:
                     section.tags["role_hint"] = role
+                section.tags["source_record_json"] = source_record_json
 
             regions.append(region)
             logging.debug(
