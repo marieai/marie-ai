@@ -473,7 +473,7 @@ def _extract_records_from_json(json_data, envelope_key: str = None) -> list:
     """Extract a list of record dicts from parsed JSON data.
 
     The function is domain-agnostic — it does not assume any specific
-    envelope key (like ``"claims"``).  Instead, the caller can provide
+    envelope key (like ``"extraction"``).  Instead, the caller can provide
     an explicit *envelope_key* via config, or the function will
     auto-detect using the following resolution order:
 
@@ -487,7 +487,7 @@ def _extract_records_from_json(json_data, envelope_key: str = None) -> list:
     Args:
         json_data: Parsed JSON (list or dict).
         envelope_key: Optional key name for the records array
-            (e.g. ``"claims"``, ``"records"``).  When provided the
+            (e.g. ``"extraction"``, ``"records"``).  When provided the
             function looks for this key first before falling back to
             auto-detection.
 
