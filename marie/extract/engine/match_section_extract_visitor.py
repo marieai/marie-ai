@@ -296,6 +296,22 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             )
             return
 
+        # When multiple regions fall within a single MatchSection, each region
+        # represents an independent record.  Split the parent into per-region
+        # child MatchSections so that each record is processed and rendered
+        # separately.  Children receive spans derived from RegionPart.span
+        # (which carries the exact OCR line ranges from the source JSON), so
+        # the normal BFS path (process_fields → process_regions) handles them
+        # without any special flags or guards.
+        if len(sorted_regions) > 1:
+            self._split_multi_region_section(
+                context=context,
+                document=document,
+                section=section,
+                sorted_regions=sorted_regions,
+            )
+            return
+
         # SECOND BASIC METHOD USED FOR TESTING ONLY : Process all regions on the pages covered by the section's spans
         if False:
             parser_sections_rules = region_parser_cfg.get("sections", [])
@@ -343,7 +359,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
         # DEBUG: Dump merged sections as JSON for review
         for role_hint, structured_sections in sections_by_role.items():
-            self.logger.info(
+            self.logger.debug(
                 f"=== DEBUG MERGED SECTIONS JSON for role_hint '{role_hint}' ==="
             )
             for idx, ss in enumerate(structured_sections):
@@ -382,7 +398,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     else:
                         block_dump = {"type": type(block).__name__}
                     section_dump["blocks"].append(block_dump)
-                self.logger.info(
+                self.logger.debug(
                     f"Section[{idx}]: {json.dumps(section_dump, indent=2)}"
                 )
 
@@ -454,6 +470,65 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     self.logger.warning(
                         f"Unsupported parse method '{parse_method}' for role_hint '{role_hint}'."
                     )
+
+    def _split_multi_region_section(
+        self,
+        context: ExecutionContext,
+        document,
+        section: MatchSection,
+        sorted_regions: List,
+    ) -> None:
+        """Split a MatchSection containing multiple StructuredRegions into
+        per-region child MatchSections.
+
+        Each child receives spans derived from its region's ``RegionPart.span``
+        (which carries the exact OCR line ranges from the source JSON).  This
+        means the standard BFS path — ``process_fields`` then
+        ``process_regions`` — handles each child naturally:
+
+        * ``process_fields`` extracts annotation-based fields scoped to the
+          child's OCR lines.
+        * ``process_regions`` finds exactly one region via strict containment
+          (``region_start >= start_line and region_end <= end_line``), so it
+          follows the normal single-region code path with no re-splitting.
+
+        The parent is converted to WRAPPER so the rendering visitor skips it
+        while still traversing its children.
+        """
+        self.logger.info(
+            f"Multi-region MatchSection detected: {len(sorted_regions)} regions "
+            f"in section '{section.label}'. Splitting into per-region children."
+        )
+
+        for region in sorted_regions:
+            child_spans = [part.span for part in region.parts]
+            if not child_spans:
+                self.logger.warning(
+                    f"Region {region.region_id} has no parts; skipping."
+                )
+                continue
+
+            child = MatchSection()
+            child.type = MatchSectionType.CONTENT
+            child.owner_layer = section.owner_layer
+            child.label = f"{section.label}::region-{region.region_id}"
+            child.span = child_spans
+            child.parent = section
+
+            section.add_section(child)
+            self.logger.info(
+                f"Created child MatchSection '{child.label}' with spans "
+                f"{[(s.page, s.y, s.h) for s in child_spans]}"
+            )
+
+        # Convert parent to WRAPPER so renderer skips it
+        section.type = MatchSectionType.WRAPPER
+        section.matched_non_repeating_fields = None
+        section.matched_field_rows = None
+        self.logger.info(
+            f"Converted section '{section.label}' to WRAPPER with "
+            f"{len(section.sections)} per-region children."
+        )
 
     def _process_region_as_kv(
         self,
@@ -609,7 +684,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 matched_value, matched_item, matched_selector = first_match
                 value_text = matched_item.value or ""
 
-                self.logger.info(
+                self.logger.debug(
                     f"Extracting KV field `{field_name}` = '{value_text}' via selector '{matched_selector}' (key='{matched_item.key}')"
                 )
 
@@ -959,7 +1034,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 )
             )
 
-            self.logger.info(f"Columns to process mapping: {columns_to_process}")
+            self.logger.debug(f"Columns to process mapping: {columns_to_process}")
 
             # Detect primary column and ROW_TYPE column indices for multiline row support
             primary_col_index = -1
@@ -1568,7 +1643,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                             "header_config": header_config,
                         }
 
-                self.logger.info(f"Columns to process mapping: {columns_to_process}")
+                self.logger.debug(f"Columns to process mapping: {columns_to_process}")
                 # TODO: Add footer detection logic from annotations as primary, and fallback to field_match if needed
 
                 footer_config = table_config.get("footer", {}).get("detect_by", {})
@@ -1610,7 +1685,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                             match_type == "all"
                             and match_count == len(field_match_criteria)
                         ) or (match_type == "any" and match_count > 0):
-                            self.logger.info(
+                            self.logger.debug(
                                 f"Footer row detected based on criteria: {field_match_criteria} with match_type: {match_type}."
                             )
                             has_footer = True
@@ -1629,7 +1704,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         ):
                             has_footer = True
                             footer_row = row
-                            self.logger.info(
+                            self.logger.debug(
                                 "Footer row detected based on empty first two cells."
                             )
 
@@ -1653,7 +1728,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                                 if re.search(
                                     fallback_pattern, cell_value, re.IGNORECASE
                                 ):  # Match against regex
-                                    self.logger.info(
+                                    self.logger.debug(
                                         f"Footer row detected using flexible match with pattern: {fallback_pattern}."
                                     )
                                     has_footer = True
@@ -1664,15 +1739,11 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
                 # If a footer is still not found but always_present is True
                 if not has_footer and footer_config.get("always_present", False):
-                    self.logger.info(
+                    self.logger.debug(
                         "Footer row detected (default fallback: always present)."
                     )
                     has_footer = True
                     footer_row = rows[-1]  # Assume last row as footer if unspecified
-
-                self.logger.info("Footer detection results:")
-                self.logger.info(f"has_footer: {has_footer}")
-                self.logger.info(f"footer_row: {footer_row}")
 
                 # Data rows (exclude header and footer if present)
                 data_rows = rows[1:-1] if has_footer else rows[1:]  # Skip header row
@@ -1688,7 +1759,6 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
                 for row in data_rows:
                     extracted_cells = []
-                    self.logger.info("row : *******************")
                     for field_name, column_def in columns_to_process.items():
                         column_index = int(column_def['cell_index'])
                         header_config = column_def['header_config']
@@ -1721,11 +1791,8 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
                 # Footer Row Processing
                 if has_footer and footer_row:
-                    self.logger.info(f"Processing footer row: {footer_row}")
-
                     extracted_footer_fields = []
                     for field_name, footer_def in field_to_footer_map.items():
-                        self.logger.info(f"Processing footer field: {field_name}")
                         selectors = footer_def.get("selectors", [])
                         matched_column_index = None
 
@@ -1744,11 +1811,8 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         if matched_column_index is not None:
                             cell = footer_row[matched_column_index]
                             cell_value = cell.lines[0].line if cell.lines else ""
-                            self.logger.info(
-                                f"Extracting footer field `{field_name}` = '{cell_value}' from column {matched_column_index}"
-                            )
-
                             template_field_mappings = {}
+
                             for mapping in field_mappings:
                                 field_def = mapping.field_def
                                 template_field_mappings[field_def['name']] = field_def
@@ -1831,7 +1895,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         ]
 
         if not field_mappings_filtered:
-            self.logger.info("No layer-level fields to process.")
+            self.logger.warning("No layer-level fields to process.")
 
         for span in spans:
             self.logger.info(f"Processing span: {span}")
