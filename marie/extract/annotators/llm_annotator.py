@@ -180,19 +180,7 @@ class LLMAnnotator(DocumentAnnotator):
 
         prompt_dir = kwargs.get("prompt_dir")
         safe_prompt_path = sanitize_path(self.prompt_path) if self.prompt_path else None
-
-        if prompt_dir and safe_prompt_path:
-            full_prompt_path = os.path.join(prompt_dir, safe_prompt_path)
-        elif safe_prompt_path:
-            full_prompt_path = os.path.join(
-                __config_dir__,
-                "extract",
-                f"TID-{self.layout_id}/annotator",
-                safe_prompt_path,
-            )
-        else:
-            full_prompt_path = None
-
+        full_prompt_path = self._resolve_prompt_path(safe_prompt_path, prompt_dir)
         self.prompt_text = self.load_prompt(full_prompt_path)
         self.engine = route_llm_engine(self.model_name, self.multimodal)
 
@@ -207,17 +195,7 @@ class LLMAnnotator(DocumentAnnotator):
         self.refine_prompt_text: Optional[str] = None
         if self.refine_passes > 0 and self.refine_prompt_path:
             safe_refine = sanitize_path(self.refine_prompt_path)
-            if prompt_dir and safe_refine:
-                full_refine_path = os.path.join(prompt_dir, safe_refine)
-            elif safe_refine:
-                full_refine_path = os.path.join(
-                    __config_dir__,
-                    "extract",
-                    f"TID-{self.layout_id}/annotator",
-                    safe_refine,
-                )
-            else:
-                full_refine_path = None
+            full_refine_path = self._resolve_prompt_path(safe_refine, prompt_dir)
             if full_refine_path:
                 self.refine_prompt_text = self.load_prompt(full_refine_path)
 
@@ -248,6 +226,52 @@ class LLMAnnotator(DocumentAnnotator):
             )
         else:
             self.context_manager = None
+
+    def _resolve_prompt_path(
+        self, safe_prompt_path: Optional[str], prompt_dir: Optional[str]
+    ) -> Optional[str]:
+        """Resolve prompt path with TID-specific -> base fallback.
+
+        Resolution order:
+          1. TID-specific: {root}/TID-{layout_id}/annotator/{prompt}
+          2. Base fallback: {root}/base/{prompt}
+          3. Returns the path as-is if neither exists (load_prompt will raise)
+        """
+        if not safe_prompt_path:
+            return None
+
+        if prompt_dir:
+            full_path = os.path.join(prompt_dir, safe_prompt_path)
+            if not os.path.exists(full_path):
+                # prompt_dir is .../TID-X/annotator/ -> go up two levels to reach base/
+                base_dir = os.path.join(
+                    os.path.dirname(os.path.dirname(prompt_dir)), "base"
+                )
+                fallback = os.path.join(base_dir, safe_prompt_path)
+                if os.path.exists(fallback):
+                    self.logger.info(
+                        f"Prompt '{safe_prompt_path}' not in TID dir, "
+                        f"using base: {fallback}"
+                    )
+                    return fallback
+            return full_path
+
+        # Production executor path: derive from __config_dir__
+        full_path = os.path.join(
+            __config_dir__,
+            "extract",
+            f"TID-{self.layout_id}/annotator",
+            safe_prompt_path,
+        )
+        if not os.path.exists(full_path):
+            fallback = os.path.join(__config_dir__, "extract", "base", safe_prompt_path)
+            if os.path.exists(fallback):
+                self.logger.info(
+                    f"Prompt '{safe_prompt_path}' not in TID dir, "
+                    f"using base: {fallback}"
+                )
+                return fallback
+        return full_path
 
     @property
     def capabilities(self) -> list:
