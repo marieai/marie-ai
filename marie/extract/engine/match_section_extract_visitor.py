@@ -1,3 +1,4 @@
+import importlib
 import json
 import re
 import uuid
@@ -731,6 +732,78 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 # from other regions in the same MatchSection
                 populated_fields.add(field_name)
 
+        # ---- Qualified selector fallback for KV fields ----
+        # Fields with qualified selectors (SOURCE:section_path format) that were
+        # not populated by regular KV block matching can be resolved from the
+        # source record JSON attached as a tag on the section.
+        qs_fields = {
+            fn: selectors
+            for fn, (selectors, _) in kv_specs.items()
+            if fn not in populated_fields
+            and any(self._parse_qualified_selector(s) for s in selectors)
+        }
+        if qs_fields:
+            qs_source_json = structured_section.tags.get("source_record_json")
+            qs_source_record = json.loads(qs_source_json) if qs_source_json else None
+            if qs_source_record:
+                qs_count = 0
+                for field_name, selectors in qs_fields.items():
+                    for sel in selectors:
+                        parsed = self._parse_qualified_selector(sel)
+                        if not parsed:
+                            continue
+                        source_name, section_path = parsed
+                        resolved = self._resolve_qualified_selector(
+                            field_name, section_path, qs_source_record
+                        )
+                        if resolved is None:
+                            continue
+
+                        # Resolve field definition
+                        field_def = template_field_mappings.get(field_name, {}) or {}
+                        if not field_def:
+                            if context.conf is not None:
+                                config_fields = context.conf.get("fields", {})
+                                if field_name in config_fields.get("non_repeating", {}):
+                                    field_def = OmegaConf.to_container(
+                                        config_fields.non_repeating[field_name],
+                                        resolve=True,
+                                    )
+                                elif field_name in config_fields.get("repeating", {}):
+                                    field_def = OmegaConf.to_container(
+                                        config_fields.repeating[field_name],
+                                        resolve=True,
+                                    )
+                            if not field_def:
+                                field_def = {}
+
+                        field_def = dict(field_def)
+                        field_def["name"] = field_name
+                        field_def.setdefault("type", "ALPHA")
+
+                        transformed_value = transform_field_value(field_def, resolved)
+                        faux_line = LineWithMeta(
+                            line=resolved, metadata=None, annotations=[]
+                        )
+                        created = self.create_fields(
+                            field_def, resolved, transformed_value, faux_line
+                        )
+                        extracted_fields.extend(created)
+                        populated_fields.add(field_name)
+                        qs_count += len(created)
+
+                        self.logger.debug(
+                            f"Extracting KV field `{field_name}` = '{resolved}' "
+                            f"via qualified selector '{sel}'"
+                        )
+                        break  # Found a match, stop trying selectors for this field
+
+                if qs_count:
+                    self.logger.info(
+                        f"qualified_selector(kv): resolved {qs_count} field(s) "
+                        f"for section '{structured_section.title}'"
+                    )
+
         # ---- value_lookup for KV fields ----
         # Fields with a value_lookup config that were not populated by
         # selector matching can be resolved from the source record (the
@@ -1115,6 +1188,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     columns_cfg,
                     matched_field_rows,
                     source_record=source_record,
+                    document=document,
                 )
 
     def _apply_value_lookup(
@@ -1123,9 +1197,10 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         columns_cfg: Dict[str, Dict],
         matched_field_rows: List[MatchFieldRow],
         source_record: Optional[Dict[str, Any]] = None,
+        document: Optional[UnstructuredDocument] = None,
     ) -> None:
-        """Look up values from non-repeating fields or the source record
-        to fill table row fields.
+        """Look up values from non-repeating fields, the source record,
+        or cross-region resolvers to fill table row fields.
 
         For each column config with a ``value_lookup`` entry:
 
@@ -1134,6 +1209,8 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         - **JSONPath** (starts with ``$``, e.g.
           ``$.adjustments[?(@.reason_code == "OA-23")].amount``):
           resolved from the raw *source_record* dict using ``jsonpath_ng``.
+        - **Region source** (``region:<role_hint>``): delegates to a pluggable
+          resolver function that maps region data to per-row values.
         """
         non_repeating = match_section.matched_non_repeating_fields or []
 
@@ -1156,6 +1233,38 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
             source_path = dist_cfg.get("source", "")
             strategy = dist_cfg.get("strategy", "fill_empty")
+
+            # ----- Region-based resolver (cross-region lookup) -----
+            if source_path.startswith("region:"):
+                role_hint = source_path.split(":", 1)[1]
+                resolver_path = dist_cfg.get("resolver", "")
+                args = dist_cfg.get("args", [])
+
+                if document and resolver_path:
+                    regions = document.regions_by_role(role_hint)
+                    if regions:
+                        resolver_fn = self._import_resolver(resolver_path)
+                        lookup_map = resolver_fn(regions, dist_cfg, matched_field_rows)
+
+                        for row_idx, row in enumerate(matched_field_rows):
+                            row_key = self._get_row_match_key(
+                                row, args, source_record, row_idx
+                            )
+                            if row_key and row_key in lookup_map:
+                                for field in row.fields:
+                                    if field.field_name != field_name:
+                                        continue
+                                    if strategy == "fill_empty" and field.value:
+                                        continue
+                                    field.value = lookup_map[row_key]
+                                    if not field.value_original:
+                                        field.value_original = lookup_map[row_key]
+                                    distributed_count += 1
+                    else:
+                        self.logger.debug(
+                            f"value_lookup: no regions found for role '{role_hint}'"
+                        )
+                continue  # Skip normal dot-path/JSONPath resolution
 
             # ----- Resolve the source value -----
             if source_path.startswith("$"):
@@ -1222,6 +1331,114 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             logging.warning(f"value_lookup JSONPath error for '{path}': {e}")
 
         return None
+
+    @staticmethod
+    def _import_resolver(dotted_path: str):
+        """Dynamically import a resolver function from a dotted module path.
+
+        Args:
+            dotted_path: Fully qualified path like
+                ``grapnel_g5.extract.core.resolvers.remark_line_resolver.resolve_remarks_by_line``
+
+        Returns:
+            The callable resolver function.
+        """
+        module_path, func_name = dotted_path.rsplit(".", 1)
+        module = importlib.import_module(module_path)
+        return getattr(module, func_name)
+
+    def _get_row_match_key(
+        self,
+        row: MatchFieldRow,
+        args: List[str],
+        source_record: Optional[Dict[str, Any]],
+        row_idx: int,
+    ) -> Optional[str]:
+        """Get the match key for a row using a selector list.
+
+        Each selector in *args* is tried in order:
+
+        1. As a **field name** — resolved from the row's matched fields.
+        2. As a **column name** — resolved from ``source_record``
+           (e.g. ``service_lines.rows[row_idx]``).
+        3. As a **literal value** — used as-is.
+
+        The first selector that produces a non-empty value wins.
+        If *args* is empty, falls back to 1-based row index.
+        """
+        for selector in args:
+            # 1. Try from matched row fields
+            for f in row.fields:
+                if f.field_name == selector and f.value:
+                    return f.value.strip()
+
+            # 2. Try from source_record
+            if source_record:
+                sl = source_record.get("service_lines", {})
+                columns = sl.get("columns", [])
+                rows = sl.get("rows", [])
+                if selector in columns and row_idx < len(rows):
+                    col_idx = columns.index(selector)
+                    val = (
+                        rows[row_idx][col_idx] if col_idx < len(rows[row_idx]) else None
+                    )
+                    if val:
+                        return str(val).strip()
+
+            # 3. Literal — use the selector string directly
+            return selector
+
+        # Fallback: 1-based index
+        return str(row_idx + 1)
+
+    @staticmethod
+    def _parse_qualified_selector(selector: str) -> Optional[tuple[str, str]]:
+        """Parse a qualified annotation selector in ``SOURCE:section_path`` format.
+
+        Qualified selectors reference data from a specific annotator source's
+        section (e.g. ``CLAIM-EXTRACT:claim_information``) rather than matching
+        against KV block item keys.
+
+        Returns ``(source_name, section_path)`` if qualified, ``None`` otherwise.
+        """
+        if ":" not in selector:
+            return None
+        # Skip regex-hinted selectors (re:pattern)
+        if selector.startswith("re:"):
+            return None
+        parts = selector.split(":", 1)
+        source_name, section_path = parts[0].strip(), parts[1].strip()
+        if source_name and section_path:
+            return source_name, section_path
+        return None
+
+    def _resolve_qualified_selector(
+        self,
+        field_name: str,
+        section_path: str,
+        source_record: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Resolve a field value from a source record using a qualified selector.
+
+        Navigates to ``source_record[section_path][field_name]`` and extracts
+        the value.  The field data may be a plain string or a dict with a
+        ``"value"`` key (the standard claim-extract format).
+        """
+        if not source_record or not section_path:
+            return None
+
+        section_data = source_record.get(section_path)
+        if not section_data or not isinstance(section_data, dict):
+            return None
+
+        field_data = section_data.get(field_name)
+        if field_data is None:
+            return None
+
+        if isinstance(field_data, dict):
+            value = field_data.get("value")
+            return str(value) if value is not None else None
+        return str(field_data)
 
     def _build_matched_field_rows(
         self,
