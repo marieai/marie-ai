@@ -211,8 +211,86 @@ fields:
 
 
 Notes:
-- The exact schema for selectors and field definitions should match your project’s selector/annotation conventions.
+- The exact schema for selectors and field definitions should match your project's selector/annotation conventions.
 - Keep layer names stable; they are used across configs, code integration, and tests.
+
+## Annotation Selector Resolution Chain
+
+When the extraction engine processes KV fields from structured regions, it resolves field values through a three-stage chain. Each stage only activates for fields not yet populated by a prior stage:
+
+```
+1. Regular KV block matching   (exact → substring/regex against KV item keys)
+2. Qualified selectors          (SOURCE:section_path lookup in source record)
+3. value_lookup                 (explicit JSONPath/dot-path config)
+```
+
+### Stage 1: Regular KV Block Matching
+
+The engine iterates over `KVList` blocks in the section and matches `annotation_selectors` against each item's key using a two-pass strategy (exact match first, then substring/regex). This is the primary resolution method and handles most fields.
+
+```yaml
+CLAIM_NUMBER:
+  annotation_selectors: ["CLAIM_NUMBER", "CLAIM NUMBER"]
+```
+
+### Stage 2: Qualified Selectors
+
+When regular KV matching fails to populate a field, the engine checks for **qualified selectors** — selectors in `SOURCE:section_path` format that resolve the value directly from the raw source record JSON attached to the section.
+
+**Syntax:**
+
+```
+SOURCE:section_path
+```
+
+- **SOURCE**: Annotator source name (e.g., `CLAIM-EXTRACT`). Serves as documentation/namespace — not validated against a registry.
+- **section_path**: Key into the source record dict (e.g., `claim_information`, `totals`).
+- **Field name**: Inferred from the config field name (the YAML key).
+
+**Example:**
+
+```yaml
+CLAIM_NUMBER:
+  annotation_selectors: ["CLAIM_NUMBER", "CLAIM-EXTRACT:claim_information"]
+```
+
+This means: try matching `CLAIM_NUMBER` against KV block item keys first; if not found, look up `source_record["claim_information"]["CLAIM_NUMBER"]["value"]` from the section's `source_record_json` tag.
+
+**Value formats supported:**
+
+The source record field data can be either a dict with a `"value"` key or a plain string:
+
+```json
+// Dict format — value is extracted from the "value" key
+{"CLAIM_NUMBER": {"value": "12345", "confidence": 0.95}}
+
+// Plain string format — used directly
+{"CLAIM_NUMBER": "12345"}
+```
+
+**When to use qualified selectors vs `value_lookup`:**
+
+| Scenario | Use |
+|----------|-----|
+| Config field name matches the source record field name | Qualified selector (`SOURCE:section`) |
+| Config field name differs from source record field name | `value_lookup` with explicit path |
+| Need JSONPath expressions or complex navigation | `value_lookup` |
+| Lightweight fallback for a KV field | Qualified selector |
+
+**Collision avoidance with regex selectors:**
+
+- `re:CLAIM.*` starts with `re:` — explicitly excluded from qualified selector parsing.
+- `/pattern/` uses slashes, no colon — not matched as qualified.
+
+**Limitations:**
+
+1. The config field name (YAML key) must match the field name in the source record section. If they differ, use `value_lookup` instead.
+2. Only applies to KV sections — table column selectors do not support qualified syntax.
+3. Sections without a `source_record_json` tag silently skip qualified selectors.
+
+### Stage 3: value_lookup
+
+Fields still unpopulated after stages 1 and 2 can use explicit `value_lookup` config with JSONPath or dot-path expressions. See the field configuration reference for details.
 
 ## Quality Bar and Acceptance Criteria
 

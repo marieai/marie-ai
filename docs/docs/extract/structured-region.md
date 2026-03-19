@@ -304,7 +304,10 @@ layers:
 1. **Configuration Parse**: Role strings converted via `normalize_role()`
 2. **Section Creation**: Sections created with proper SectionRole + role_hint tags
 3. **Content Processing**: Different processors handle sections based on role_hints
-4. **Field Mapping**: Annotation selectors applied based on semantic roles
+4. **Field Mapping**: Annotation selectors applied via the resolution chain:
+   - **KV block matching**: selectors matched against KVList item keys (exact → substring/regex)
+   - **Qualified selectors**: `SOURCE:section_path` selectors resolved from the section's `source_record_json` tag (see [Layout Providers — Annotation Selector Resolution Chain](layouts/layout-providers.md#annotation-selector-resolution-chain))
+   - **value_lookup**: explicit JSONPath/dot-path resolution from source record
 5. **Output Generation**: Structured data ready for downstream consumers
 
 ---
