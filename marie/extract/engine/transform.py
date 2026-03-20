@@ -13,6 +13,7 @@ TransformMapping: TypeAlias = Dict[str, Union[str, float, list, None]]
 TransformReturnType: TypeAlias = Union[TransformMapping, List[TransformMapping]]
 
 _KNOWN_FIRST_NAMES: frozenset[str] | None = None
+_KNOWN_LAST_NAMES: frozenset[str] | None = None
 
 
 def _load_first_names() -> frozenset[str]:
@@ -35,9 +36,34 @@ def _load_first_names() -> frozenset[str]:
     return _KNOWN_FIRST_NAMES
 
 
+def _load_last_names() -> frozenset[str]:
+    """Load last-name set from model_zoo (lazy, cached)."""
+    global _KNOWN_LAST_NAMES
+    if _KNOWN_LAST_NAMES is not None:
+        return _KNOWN_LAST_NAMES
+
+    path = os.path.join(__model_path__, "names_dataset", "last_names_us.txt")
+    try:
+        with open(path) as fh:
+            _KNOWN_LAST_NAMES = frozenset(line.strip() for line in fh if line.strip())
+        logger.info(f"Loaded {len(_KNOWN_LAST_NAMES)} last names from {path}")
+    except FileNotFoundError:
+        logger.warning(
+            f"Last-names file not found: {path} — last-name heuristic disabled"
+        )
+        _KNOWN_LAST_NAMES = frozenset()
+
+    return _KNOWN_LAST_NAMES
+
+
 def _is_known_first_name(token: str) -> bool:
     """Check whether *token* is a known US first name."""
     return token.upper() in _load_first_names()
+
+
+def _is_known_last_name(token: str) -> bool:
+    """Check whether *token* is a known last name."""
+    return token.upper() in _load_last_names()
 
 
 def convert_name_format(value: str, field_def: Dict[str, Any]) -> dict[str, None] | str:
@@ -49,14 +75,19 @@ def convert_name_format(value: str, field_def: Dict[str, Any]) -> dict[str, None
     )
     full_name = trim_name_suffix_honorific(trim_name_prefix(value))
 
-    # Use first-name lookup to normalize 2-token names into "LAST,FIRST"
-    # format for nameparser.  Handles both comma and space-separated input.
+    # Use first-name and last-name lookups to normalize 2-token names into
+    # "LAST,FIRST" format for nameparser.  Handles both comma and space-separated
+    # input.  When the second token is a known last name we assume natural
+    # FIRST LAST order and do NOT swap — this prevents "ARIN JONES" from being
+    # misread as "LAST=ARIN, FIRST=JONES" just because JONES also appears in
+    # the first-names census.
     if ',' in full_name:
         parts = [p.strip() for p in full_name.split(',', 1)]
         if len(parts) == 2 and ' ' not in parts[0] and ' ' not in parts[1]:
             t0_is_first = _is_known_first_name(parts[0])
             t1_is_first = _is_known_first_name(parts[1])
-            if t0_is_first and not t1_is_first:
+            t1_is_last = _is_known_last_name(parts[1])
+            if t0_is_first and not t1_is_first and not t1_is_last:
                 # "JOHN,CASHE" → FIRST,LAST — swap to "CASHE,JOHN"
                 full_name = f"{parts[1]},{parts[0]}"
     else:
@@ -64,7 +95,8 @@ def convert_name_format(value: str, field_def: Dict[str, Any]) -> dict[str, None
         if len(tokens) == 2:
             t0_is_first = _is_known_first_name(tokens[0])
             t1_is_first = _is_known_first_name(tokens[1])
-            if t1_is_first and not t0_is_first:
+            t1_is_last = _is_known_last_name(tokens[1])
+            if t1_is_first and not t0_is_first and not t1_is_last:
                 # "CASHE JOHN" → LAST FIRST — reorder as "CASHE,JOHN"
                 full_name = f"{tokens[0]},{tokens[1]}"
 
