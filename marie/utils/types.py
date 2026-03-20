@@ -22,3 +22,17 @@ def strtobool(val: Union[bool, str]) -> bool:
         return False
     else:
         raise ValueError(f"Invalid truth value: {val}")
+
+
+def to_bool(val, default: bool = False) -> bool:
+    """Convert a value to bool, returning *default* for ``None`` or empty strings."""
+    if isinstance(val, bool):
+        return val
+    if val is None:
+        return default
+    if isinstance(val, str):
+        val = val.strip().lower()
+        if not val:
+            return default
+        return val in ("1", "true", "yes", "on")
+    return bool(val)
