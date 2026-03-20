@@ -16,6 +16,7 @@ from marie.extract.annotators.util import (
 from marie.extract.results.result_parser import render_document_markdown
 from marie.extract.structures.unstructured_document import UnstructuredDocument
 from marie.logging_core.logger import MarieLogger
+from marie.utils.types import to_bool
 from marie.utils.utils import ensure_exists
 
 if TYPE_CHECKING:
@@ -227,10 +228,18 @@ class LLMAnnotator(DocumentAnnotator):
 
         # Check if output directory contains results
         if os.listdir(self.output_dir):
-            self.logger.info(
-                f"Output directory '{self.output_dir}' contains results. Skipping annotation..."
-            )
-            return
+            purge = to_bool(os.environ.get("MARIE_PURGE_OUTPUT"))
+            if purge:
+                self.logger.info(
+                    f"MARIE_PURGE_OUTPUT is set — clearing output directory '{self.output_dir}'"
+                )
+                shutil.rmtree(self.output_dir)
+                os.makedirs(self.output_dir, exist_ok=True)
+            else:
+                self.logger.info(
+                    f"Output directory '{self.output_dir}' contains results. Skipping annotation..."
+                )
+                return
 
         scan_and_process_images(
             self.frames_dir,

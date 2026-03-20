@@ -21,19 +21,10 @@ from marie.logging_core.filters import EnsureFieldsFilter
 from marie.logging_core.log_bus import GLOBAL_LOG_BUS
 from marie.logging_core.mdc_filter import MDCContextFilter
 from marie.utils.json import to_json
+from marie.utils.types import to_bool
 
 # TODO : Implement MDC like context for logging
 # https://stackoverflow.com/questions/6618513/python-logging-with-context
-
-
-def _to_bool(val, default=False):
-    if isinstance(val, bool):
-        return val
-    if isinstance(val, str):
-        return val.strip().lower() in ("1", "true", "yes", "on")
-    if val is None:
-        return default
-    return bool(val)
 
 
 BACKFILL_TAG_LENGTH = 8
@@ -413,8 +404,8 @@ class MarieLogger:
         # If use_queue is set to False, then it will not use the queue handler
         # This was contributing to the memory growth
         use_queue_param = kwargs.pop("use_queue", None)
-        use_queue_env = _to_bool(os.getenv("MARIE_LOG_USE_QUEUE", "1"), default=True)
-        use_queue = _to_bool(use_queue_param, default=use_queue_env)
+        use_queue_env = to_bool(os.getenv("MARIE_LOG_USE_QUEUE", "1"), default=True)
+        use_queue = to_bool(use_queue_param, default=use_queue_env)
 
         # Detach and close existing handlers from this logger only (do not touch global sinks)
         for h in list(self.logger.handlers):
