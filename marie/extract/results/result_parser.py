@@ -313,7 +313,7 @@ def process_extractions(
         # Normalize spaces into underscores
         key = re.sub(r"\s+", "_", key) if key else None
         if key not in grounding_keys:
-            logging.warning(
+            logging.debug(
                 f"Not a grounded Key:\n"
                 f"  Key: {key}\n"
                 f"  Annotation Type: {annotation_type}\n"

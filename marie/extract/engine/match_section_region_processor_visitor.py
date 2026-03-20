@@ -27,19 +27,19 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
         self.fail_fast = fail_fast
 
     def visit(self, context: ExecutionContext, parent: MatchSection) -> None:
-        self.logger.info("----------------------------------------")
-        self.logger.info("Processing MatchSectionRegionParserVisitor")
+        self.logger.debug("----------------------------------------")
+        self.logger.debug("Processing MatchSectionRegionParserVisitor")
         queue = deque([parent])
         while queue:
             current = queue.popleft()
             if current is None:
                 continue
-            self.logger.info(f'---- Extracting from : {current.type}')
+            self.logger.debug(f'---- Extracting from : {current.type}')
             if current.type == MatchSectionType.CONTENT:
                 self.process_section(context, parent, current)
             queue.extend(current.sections)
-        self.logger.info("Finished processing MatchSectionRegionParserVisitor")
-        self.logger.info("----------------------------------------")
+        self.logger.debug("Finished processing MatchSectionRegionParserVisitor")
+        self.logger.debug("----------------------------------------")
 
     def process_section(
         self, context: ExecutionContext, parent: MatchSection, section: MatchSection
@@ -76,7 +76,7 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
     def process_regions(
         self, context: ExecutionContext, parent: MatchSection, section: MatchSection
     ) -> None:
-        self.logger.info("Processing regions section")
+        self.logger.debug("Processing regions section")
         assert context is not None, "Execution context must not be None."
         assert section is not None, "Section must not be None."
         assert parent is not None, "Parent section must not be None."

@@ -52,19 +52,19 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         # TODO : Add dynamic engine loading and extraction
 
     def visit(self, context: ExecutionContext, parent: MatchSection) -> None:
-        self.logger.info("----------------------------------------")
-        self.logger.info("Processing MatchSectionExtractionProcessingVisitor")
+        self.logger.debug("----------------------------------------")
+        self.logger.debug("Processing MatchSectionExtractionProcessingVisitor")
         queue = deque([parent])
         while queue:
             current = queue.popleft()
             if current is None:
                 continue
-            self.logger.info(f'---- Extracting from : {current.type}')
+            self.logger.debug(f'---- Extracting from : {current.type}')
             if current.type == MatchSectionType.CONTENT:
                 self.process_section(context, parent, current)
             queue.extend(current.sections)
-        self.logger.info("Finished processing MatchSectionExtractionProcessingVisitor")
-        self.logger.info("----------------------------------------")
+        self.logger.debug("Finished processing MatchSectionExtractionProcessingVisitor")
+        self.logger.debug("----------------------------------------")
 
     def process_section(
         self, context: ExecutionContext, parent: MatchSection, section: MatchSection
@@ -152,7 +152,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         Currently supports type: table regions and reuses the same extraction flow by
         building header/footer mappings from the region entry matching the section title.
         """
-        self.logger.info("Processing regions section")
+        self.logger.debug("Processing regions section")
         assert context is not None, "Execution context must not be None."
         assert section is not None, "Section must not be None."
         assert parent is not None, "Parent section must not be None."
@@ -210,12 +210,12 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 end_line += 1
 
             # DEBUG: Log span details
-            self.logger.info(
+            self.logger.debug(
                 f"  Checking page {page_id}: start_line={start_line}, end_line={end_line}"
             )
 
             regions_by_page = document.regions_for_page(page_id)
-            self.logger.info(
+            self.logger.debug(
                 f"  Found {len(regions_by_page)} regions on page {page_id}"
             )
 
@@ -251,7 +251,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                             overlap_length / region_length if region_length > 0 else 0.0
                         )
                         is_in_scope = overlap_ratio >= 0.5
-                        self.logger.info(
+                        self.logger.debug(
                             f"    Region '{region.region_id}': lines {region_start}-{region_end}, "
                             f"scoping=relaxed, overlap={overlap_length}/{region_length} ({overlap_ratio:.1%}), "
                             f"in_scope={is_in_scope}"
@@ -261,7 +261,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         is_in_scope = (
                             region_start >= start_line and region_end <= end_line
                         )
-                        self.logger.info(
+                        self.logger.debug(
                             f"    Region '{region.region_id}': lines {region_start}-{region_end}, "
                             f"check: {region_start} >= {start_line} AND {region_end} <= {end_line} = {is_in_scope}"
                         )
@@ -442,7 +442,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             for structured_section in structured_sections:
                 # Delegate to the appropriate processor based on the parse method.
                 if parse_method == "table":
-                    self.logger.info(
+                    self.logger.debug(
                         f"Table processing for region with role_hint '{role_hint}'."
                     )
                     self._process_region_as_table(
@@ -453,7 +453,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         template_fields_repeating,
                     )
                 elif parse_method == "kv":
-                    self.logger.info(
+                    self.logger.debug(
                         f"KV processing for region with role_hint '{role_hint}' ."
                     )
 
@@ -966,10 +966,6 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         "level": "DOCUMENT",  # Footer values are at document level
                     }
 
-        # Process each span in the section
-        self.logger.info(f'field_to_header_map: {field_to_header_map}')
-        self.logger.info(f'field_to_footer_map: {field_to_footer_map}')
-
         # Now process each TableBlock
         self.logger.info(
             f"Identified {len(table_blocks)} table block(s) to process in this region"
@@ -1038,7 +1034,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         if col_index in claimed_columns or not header_text:
                             continue
                         if self._ci(selector) == self._ci(header_text):
-                            self.logger.info(
+                            self.logger.debug(
                                 f"Matched header '{selector}' for field '{field_name}' at column {col_index} "
                                 f"(header='{header_text}', exact)"
                             )
@@ -1058,7 +1054,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                             if self._selector_matches_text(
                                 selector, header_text, use_regex_flag
                             ):
-                                self.logger.info(
+                                self.logger.debug(
                                     f"Matched header '{selector}' for field '{field_name}' at column {col_index} "
                                     f"(header='{header_text}')"
                                 )
@@ -1848,7 +1844,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                             # Check if the selector is present in the header row
                             for cell_index, cell in enumerate(header_row):
                                 if selector in cell.lines[0].line:
-                                    self.logger.info(
+                                    self.logger.debug(
                                         f"Matched header '{selector}' for field '{field_name}'"
                                     )
                                     processed_column = cell_index
@@ -2236,7 +2232,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     # derived fields can be None if the parsing did not find a value for it
                     # we are skipping those fields
                     if map_value is None:
-                        self.logger.warning(f"Derived key '{derived_key}' has no value")
+                        self.logger.debug(f"Derived key '{derived_key}' has no value")
                         continue
 
                     child_field = Field(

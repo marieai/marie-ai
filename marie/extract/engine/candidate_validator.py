@@ -86,13 +86,13 @@ class CandidateValidator:
             locations, key=lambda x: (x.line.metadata.page_id, x.line.metadata.line_id)
         )
 
-        print('--' * 50)
-        print(f"Total locations: {len(locations)}")
-        for loc in locations:
-            print(
-                f"Page {loc.page}, Line {loc.line.metadata.line_id}, Type: {loc.location_type}"
-            )
-            print(loc)
+        # print('--' * 50)
+        # print(f"Total locations: {len(locations)}")
+        # for loc in locations:
+        #     print(
+        #         f"Page {loc.page}, Line {loc.line.metadata.line_id}, Type: {loc.location_type}"
+        #     )
+        #     print(loc)
 
         # build our adaptive dfa, THIS NEED TO BE CONFIGURED via the config per layer/layout
         first_line = document.lines[0]
@@ -133,9 +133,9 @@ class CandidateValidator:
         # create the dfa states to process the locations
         states = []  # do not add the BEGIN as it is the initial state
         for loc in locations:
-            print(
-                f"Page {loc.page}, Line {loc.line.metadata.line_id}, Type: {loc.location_type}"
-            )
+            # print(
+            #     f"Page {loc.page}, Line {loc.line.metadata.line_id}, Type: {loc.location_type}"
+            # )
             label = loc.location_type.name
             # state = State(label, f"STATE-{loc.page}-{loc.line.metadata.line_id}")
             state = State(label, loc)
@@ -144,24 +144,24 @@ class CandidateValidator:
 
         dfa.process_transitions(*states)
         dfa.generate_state_diagram()
-        dfa.print_transition_history()
+        # dfa.print_transition_history()
 
-        print("\n✅ Valid Transitions:")
+        # print("\n✅ Valid Transitions:")
         valid_transitions = []
         for t in dfa.get_all_transitions():
             if t.label == "VALID":
                 print(f"Step {t.step}: {t.from_state.name} -> {t.to_state.name}")
                 valid_transitions.append(t)
 
-        print('Converting to valid transitions to match sections')
+        # print('Converting to valid transitions to match sections')
         # we will create a match section for each valid transition
         match_sections = []
         for tran in valid_transitions:
             from_state = tran.from_state
             to_state = tran.to_state
-            print(
-                f"Valid Transition: {from_state.name} -> {to_state.name} : > {from_state.payload} -> {to_state.payload}"
-            )
+            # print(
+            #     f"Valid Transition: {from_state.name} -> {to_state.name} : > {from_state.payload} -> {to_state.payload}"
+            # )
             section = self.extract_match_section(from_state.payload, to_state.payload)
             section.owner_layer = layer
 
