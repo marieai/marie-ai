@@ -20,6 +20,7 @@ from marie.job.job_manager import JobManager
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import mark_as_complete as mark_as_complete_toast
+from marie.messaging import mark_as_failed as mark_as_failed_toast
 from marie.messaging import mark_as_started as mark_as_started_toast
 from marie.query_planner.base import (
     QueryPlan,
@@ -2230,6 +2231,35 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"(interval: {refresh_interval})"
             )
 
+    async def _send_submission_failure_toast(self, work_info, error: Exception) -> None:
+        """Send a failed toast event when job submission fails."""
+        try:
+            event_name = work_info.data.get("name", work_info.name)
+            api_key = work_info.data.get("api_key", None)
+            metadata = work_info.data.get("metadata", {})
+            ref_type = metadata.get("ref_type")
+
+            if not api_key or not event_name:
+                self.logger.warning(
+                    f"Cannot send failure toast for {work_info.id}: "
+                    f"missing api_key={api_key} or event_name={event_name}"
+                )
+                return
+
+            await mark_as_failed_toast(
+                api_key=api_key,
+                job_id=work_info.id,
+                event_name=event_name,
+                job_tag=ref_type,
+                status="FAILED",
+                timestamp=int(time.time()),
+                payload={**metadata, "error": str(error)},
+            )
+        except Exception as toast_err:
+            self.logger.error(
+                f"Failed to send failure toast for {work_info.id}: {toast_err}"
+            )
+
     async def _process_submission_queue(self, worker_id: int) -> None:
         """Background worker that processes queued job submissions"""
         self.logger.info(f"Background job submission worker started # {worker_id}")
@@ -2265,6 +2295,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.error(
                         f"Failed to process job {request.work_info.id}: {e}"
                     )
+                    await self._send_submission_failure_toast(request.work_info, e)
                 finally:
                     self._pending_requests.pop(request.request_id, None)
 
