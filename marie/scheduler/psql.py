@@ -13,6 +13,8 @@ from typing import Any, Dict, List
 
 import psycopg2
 
+from marie.connectors.builtin import register_all_known_connectors
+from marie.connectors.model import ConnectorsConf
 from marie.excepts import BadConfigSource, RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobStatus
@@ -193,6 +195,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.execution_planner = GlobalPriorityExecutionPlanner()
         register_all_known_planners(
             QueryPlannersConf.from_dict(config.get("query_planners", {}))
+        )
+
+        register_all_known_connectors(
+            ConnectorsConf.from_dict(config.get("connectors", {}))
         )
 
         # Initialize BranchEvaluator for conditional branching
