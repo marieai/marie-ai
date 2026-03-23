@@ -627,7 +627,7 @@ def _build_regions_from_json(
                 region_id=region_id,
                 page=page_index,
                 page_y=start_line,
-                page_h=end_line - start_line,
+                page_h=max(end_line - start_line, 1),
                 span_mode="relaxed" if has_aggregated_sources else "strict",
             )
 

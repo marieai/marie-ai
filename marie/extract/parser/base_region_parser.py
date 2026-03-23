@@ -418,9 +418,19 @@ class BaseRegionParser(ABC):
             ):
                 continue
 
-            # Add span for this segment
+            # Add span for this segment.
+            # Ensure span height covers at least header (1) + body rows so
+            # that strict-mode filtering in build_table_series_from_pagespan
+            # does not discard rows that we just created.  This guards against
+            # degenerate ocr_line_range values like [40, 40] (h=0).
+            effective_h = max(seg_h, 1 + len(seg_rows))
             series_span.add(
-                Span(page=seg_page, y=seg_y, h=seg_h, msg=f"{self._as_title(title_uc)}")
+                Span(
+                    page=seg_page,
+                    y=seg_y,
+                    h=effective_h,
+                    msg=f"{self._as_title(title_uc)}",
+                )
             )
 
             # Optional header row only on the first segment
