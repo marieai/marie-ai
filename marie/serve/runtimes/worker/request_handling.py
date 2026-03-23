@@ -263,6 +263,8 @@ class WorkerRequestHandler:
         )
         # Active tickets we should keep alive: job_id -> {"slot": str, "ttl": int, "last": float}
         self._active_sem_tickets: dict[str, dict] = {}
+        # Deferred releases that failed (e.g. during etcd disconnect): job_id -> {"slot": str, "owner": str}
+        self._pending_sem_releases: dict[str, dict] = {}
         self._sem_renew_fraction = 0.4
 
         self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
@@ -1022,6 +1024,7 @@ class WorkerRequestHandler:
             self._is_closed = True
 
         self._sem_untrack_all(release=True)
+        self._replay_pending_sem_releases()
         self.logger.debug(f"Request Handler closed")
 
     @staticmethod
@@ -1927,6 +1930,12 @@ class WorkerRequestHandler:
                     except Exception as e:
                         self.logger.error(f"[sem] renew loop error: {e}")
                         raise e
+
+                    # replay any deferred semaphore releases
+                    try:
+                        self._replay_pending_sem_releases()
+                    except Exception as e:
+                        self.logger.error(f"[sem] deferred release replay error: {e}")
                 except Exception as e:
                     # If lease is missing/expired, attempt to re-claim and re-publish current state
                     if _is_missing_lease_error(e):
@@ -2035,6 +2044,14 @@ class WorkerRequestHandler:
         self.logger.info("Request handler: etcd connection established")
         current_state = self._etcd_client.get_connection_state()
         self.logger.info(f"Event handler - connection state is now: {current_state}")
+
+        # Replay any semaphore releases that were deferred during disconnect
+        try:
+            self._replay_pending_sem_releases()
+        except Exception as e:
+            self.logger.warning(
+                f"post-reconnect deferred sem release replay failed: {e}"
+            )
 
         # ALWAYS re-claim on reconnect to refresh the lease.
         # Even if the status key exists in ETCD, the lease may be dead/stale
@@ -2261,8 +2278,9 @@ class WorkerRequestHandler:
             self.logger.info(f"[sem] released ticket {job_id}@{slot} -> {released}")
         except Exception as e:
             self.logger.error(
-                f"[sem] release failed for {job_id}@{slot}: {e}", exc_info=True
+                f"[sem] release failed for {job_id}@{slot}: {e}, deferring for retry"
             )
+            self._pending_sem_releases[job_id] = {"slot": slot, "owner": owner}
 
     def _sem_untrack_all(self, release: bool = True):
         for jid in list(self._active_sem_tickets.keys()):
@@ -2299,3 +2317,34 @@ class WorkerRequestHandler:
                         )
                 except Exception as e:
                     self.logger.error(f"[sem] renew error for {jid}@{slot}: {e}")
+
+    def _replay_pending_sem_releases(self):
+        """Retry deferred semaphore releases that failed during etcd disconnect."""
+        if not self._pending_sem_releases:
+            return
+
+        snapshot = dict(self._pending_sem_releases)
+        self.logger.info(f"[sem] replaying {len(snapshot)} deferred release(s)")
+
+        for job_id, meta in snapshot.items():
+            slot = meta["slot"]
+            owner = meta.get("owner") or job_id
+            try:
+                released = self._semaphore.release_owned(slot, job_id, owner=owner)
+                if not released:
+                    released = self._semaphore.release(slot, job_id)
+                self.logger.info(
+                    f"[sem] deferred release replayed: {job_id}@{slot} -> {released}"
+                )
+                self._pending_sem_releases.pop(job_id, None)
+            except Exception as e:
+                if "not found" in str(e).lower():
+                    # Holder already expired / GC'd — nothing to release
+                    self.logger.info(
+                        f"[sem] deferred release {job_id}@{slot} holder expired, removing"
+                    )
+                    self._pending_sem_releases.pop(job_id, None)
+                else:
+                    self.logger.warning(
+                        f"[sem] deferred release retry failed for {job_id}@{slot}: {e}"
+                    )
