@@ -1079,11 +1079,25 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             # Add virtual columns for value_lookup fields that did not match
             # any header.  These carry no physical cell — they are populated
             # later by _apply_value_lookup from the source record.
+            # Also include columns that are targets of another column's
+            # value_lookup.derived_fields (they need a Field stub in each
+            # row so the derived-fields distribution can fill them).
+            derived_targets: set = set()
+            for _fn, _cc in columns_cfg.items():
+                if isinstance(_cc, dict):
+                    vl = _cc.get("value_lookup")
+                    if isinstance(vl, dict):
+                        df = vl.get("derived_fields")
+                        if isinstance(df, dict):
+                            derived_targets.update(df.values())
+
             for field_name, header_cfg in field_to_header_map.items():
                 if field_name in columns_to_process:
                     continue
                 col_cfg = columns_cfg.get(field_name, {})
-                if isinstance(col_cfg, dict) and "value_lookup" in col_cfg:
+                if isinstance(col_cfg, dict) and (
+                    "value_lookup" in col_cfg or field_name in derived_targets
+                ):
                     columns_to_process[field_name] = {
                         "cell_index": -1,  # virtual: no physical cell
                         "header_config": header_cfg,
@@ -1235,6 +1249,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 role_hint = source_path.split(":", 1)[1]
                 resolver_path = dist_cfg.get("resolver", "")
                 args = dist_cfg.get("args", [])
+                derived_fields = dist_cfg.get("derived_fields", None)
 
                 if document and resolver_path:
                     regions = document.regions_by_role(role_hint)
@@ -1247,15 +1262,38 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                                 row, args, source_record, row_idx
                             )
                             if row_key and row_key in lookup_map:
-                                for field in row.fields:
-                                    if field.field_name != field_name:
-                                        continue
-                                    if strategy == "fill_empty" and field.value:
-                                        continue
-                                    field.value = lookup_map[row_key]
-                                    if not field.value_original:
-                                        field.value_original = lookup_map[row_key]
-                                    distributed_count += 1
+                                resolved_value = lookup_map[row_key]
+
+                                if derived_fields and isinstance(resolved_value, dict):
+                                    # Derived-fields mode: resolver returned a dict
+                                    # — distribute each key to its target column.
+                                    for (
+                                        derived_key,
+                                        target_col,
+                                    ) in derived_fields.items():
+                                        derived_val = resolved_value.get(derived_key)
+                                        if derived_val is None:
+                                            continue
+                                        for field in row.fields:
+                                            if field.field_name != target_col:
+                                                continue
+                                            if strategy == "fill_empty" and field.value:
+                                                continue
+                                            field.value = derived_val
+                                            if not field.value_original:
+                                                field.value_original = derived_val
+                                            distributed_count += 1
+                                else:
+                                    # Legacy mode: resolver returned a plain str.
+                                    for field in row.fields:
+                                        if field.field_name != field_name:
+                                            continue
+                                        if strategy == "fill_empty" and field.value:
+                                            continue
+                                        field.value = resolved_value
+                                        if not field.value_original:
+                                            field.value_original = resolved_value
+                                        distributed_count += 1
                     else:
                         self.logger.debug(
                             f"value_lookup: no regions found for role '{role_hint}'"
