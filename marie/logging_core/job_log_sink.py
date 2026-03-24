@@ -134,7 +134,7 @@ class JobLogSink(logging.Handler):
 
             with self._lock:
                 handle.write(log_line + "\n")
-                handle.flush()
+                # flush is implicit: file opened with buffering=1 (line-buffered)
 
         except Exception:
             self.handleError(record)

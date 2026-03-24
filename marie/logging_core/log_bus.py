@@ -32,6 +32,8 @@ class NonBlockingQueueHandler(QueueHandler):
     - Uses lock-free queue operations and avoids logging recursively on failure.
     """
 
+    _WARN_INTERVAL = 5.0  # seconds between stderr warnings
+
     def __init__(
         self,
         q: queue.Queue,
@@ -43,6 +45,8 @@ class NonBlockingQueueHandler(QueueHandler):
         self._on_drop = on_drop
         self._drop_counter = drop_counter
         self._stop_event = stop_event
+        self._last_warn: float = 0.0
+        self._drops_since_warn: int = 0
 
     def enqueue(self, record: logging.LogRecord) -> None:
         # During shutdown: drop immediately (avoid re-enqueue loops)
@@ -53,9 +57,17 @@ class NonBlockingQueueHandler(QueueHandler):
         try:
             self.queue.put_nowait(record)
         except queue.Full:
-            _stderr("[logbus] enqueue failed: queue.Full\n")
             if self._drop_counter is not None:
                 self._drop_counter[0] += 1
+            self._drops_since_warn += 1
+            now = time.monotonic()
+            if now - self._last_warn >= self._WARN_INTERVAL:
+                _stderr(
+                    f"[logbus] enqueue failed: queue.Full"
+                    f" (dropped {self._drops_since_warn} since last warning)\n"
+                )
+                self._last_warn = now
+                self._drops_since_warn = 0
             if self._on_drop:
                 try:
                     self._on_drop(record)
@@ -181,8 +193,9 @@ class BatchingQueueListener:
                     if rec is not self._SENTINEL and rec is not None:
                         with self._buf_lock:
                             self._buf.append(rec)
-                            # drain up to batch_size
-                            for _ in range(self.batch_size - 1):
+                            # drain everything available so we keep up
+                            # under bursts instead of capping at batch_size
+                            while True:
                                 nxt = self.q.get_nowait()
                                 if nxt is self._SENTINEL:
                                     continue
