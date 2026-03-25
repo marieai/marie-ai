@@ -291,12 +291,12 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         sorted_regions = sorted(regions_in_scope, key=region_sort_key)
 
         # DEBUG: Log collected regions (now sorted)
-        self.logger.info(
+        self.logger.debug(
             f"  RESULT: Collected {len(sorted_regions)} regions in scope (sorted): {[r.region_id for r in sorted_regions]}"
         )
 
         if not sorted_regions:
-            self.logger.warning(
+            self.logger.debug(
                 f"No structured regions found within spans for section '{section.label}'"
             )
             return
@@ -358,7 +358,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     sections_by_role[role_hint] = []
                 sections_by_role[role_hint].append(structured_section)
 
-        self.logger.info(
+        self.logger.debug(
             f"Collected sections by role: {list(sections_by_role.keys())} from {len(sorted_regions)} regions"
         )
 
@@ -434,7 +434,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 continue
 
             parse_method = section_rule.get("parse")
-            self.logger.info(
+            self.logger.debug(
                 f"Processing {len(structured_sections)} merged sections with role_hint '{role_hint}'. Parsing as '{parse_method}'."
             )
 
@@ -500,7 +500,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         The parent is converted to WRAPPER so the rendering visitor skips it
         while still traversing its children.
         """
-        self.logger.info(
+        self.logger.debug(
             f"Multi-region MatchSection detected: {len(sorted_regions)} regions "
             f"in section '{section.label}'. Splitting into per-region children."
         )
@@ -975,7 +975,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         self.logger.info(f'field_to_footer_map: {field_to_footer_map}')
 
         # Now process each TableBlock
-        self.logger.info(
+        self.logger.debug(
             f"Identified {len(table_blocks)} table block(s) to process in this region"
         )
 
@@ -1010,7 +1010,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 if header_row
                 else (body_rows[0].source_page if body_rows else -1)
             )
-            self.logger.info(f"Processing table block for page: {page_id}")
+            self.logger.debug(f"Processing table block for page: {page_id}")
 
             # Prefer canonical headers from header_binding; otherwise, fallback to header row cell strings
             if tb.header_binding and len(tb.header_binding) > 0:
@@ -1134,14 +1134,14 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         break
 
             if row_types_config:
-                self.logger.info(
+                self.logger.debug(
                     f"Row types config detected: primary_col_index={primary_col_index}, "
                     f"type_col_index={type_col_index}, config={row_types_config}"
                 )
 
             # DEBUG: Log region info and body_rows count
             region_id = structured_section.tags.get("source_region_id", "unknown")
-            self.logger.info(
+            self.logger.debug(
                 f"TABLE DEBUG: Processing region '{region_id}' with {len(body_rows)} body_rows for page {page_id}"
             )
 
@@ -1159,17 +1159,17 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
             if not match_section_to_populate.matched_field_rows:
                 match_section_to_populate.matched_field_rows = matched_field_rows
-                self.logger.info(
+                self.logger.debug(
                     f"ROWS DEBUG: Assigned {len(matched_field_rows)} rows to MatchSection '{match_section_to_populate.label}' "
                     f"(id={id(match_section_to_populate)}). Total rows now: {len(match_section_to_populate.matched_field_rows)}"
                 )
             else:  # MatchSection has collected rows from a previous region in scope
-                self.logger.info(
+                self.logger.debug(
                     f"ROWS DEBUG: Extending MatchSection '{match_section_to_populate.label}' (id={id(match_section_to_populate)}) "
                     f"with {len(matched_field_rows)} rows. Had: {len(match_section_to_populate.matched_field_rows)}"
                 )
                 match_section_to_populate.matched_field_rows.extend(matched_field_rows)
-                self.logger.info(
+                self.logger.debug(
                     f"ROWS DEBUG: Now has: {len(match_section_to_populate.matched_field_rows)} rows"
                 )
 
@@ -2108,7 +2108,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         field_mappings = layer.non_repeating_field_mappings
         spans: List[Span] = section.span
         extracted_fields = []
-        self.logger.info(f"Processing layer: {layer.layer_name}")
+        self.logger.debug(f"Processing layer: {layer.layer_name}")
 
         # Filter for fields that are defined at the LAYER scope.
         field_mappings_filtered = [
@@ -2116,10 +2116,10 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         ]
 
         if not field_mappings_filtered:
-            self.logger.warning("No layer-level fields to process.")
+            self.logger.debug("No layer-level fields to process.")
 
         for span in spans:
-            self.logger.info(f"Processing span: {span}")
+            self.logger.debug(f"Processing span: {span}")
             plucked_lines = pluck_lines_by_span(document, span)
 
             for line in plucked_lines:
@@ -2169,9 +2169,9 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                                     extracted_fields.append(field)
 
         section.matched_non_repeating_fields = extracted_fields
-        self.logger.info(f"Extracted match fields for section '{section.label}':")
+        self.logger.debug(f"Extracted match fields for section '{section.label}':")
         for field in extracted_fields:
-            self.logger.info(f"  -  {field}")
+            self.logger.debug(f"  -  {field}")
 
     def create_fields(
         self,

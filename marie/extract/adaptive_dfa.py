@@ -87,9 +87,10 @@ class AdaptiveDFA:
 
         output_file = os.path.expanduser("~/dfa_diagram.png")
         dot.render(output_file, format="png", cleanup=True)
-        print(f"📌 State diagram saved as {output_file}.png")
 
     def print_transition_history(self):
+        if True:
+            return
         print("📜 Transition History:")
         for record in self.transition_history:
             print(

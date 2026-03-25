@@ -335,7 +335,7 @@ class EtcdServiceRegistry(ServiceRegistry):
                 try:
                     refresh_result = run_with_timeout(
                         lambda: lease.refresh(),
-                        timeout=3.0,  # 3 second timeout for lease refresh
+                        timeout=2.0,  # 3 second timeout for lease refresh
                         operation_name=f"lease_refresh_{svc_addr}",
                     )
                 except OperationTimeoutError:

@@ -713,8 +713,8 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
     validation_enabled = conf.get("validation", {}).get("enabled", True)
     fail_on_validation_errors = conf.get("validation", {}).get("fail_on_errors", False)
 
-    logger.info(f"Validation  enabled: {validation_enabled}")
-    logger.info(f"Fail on validation errors: {fail_on_validation_errors}")
+    logger.debug(f"Validation  enabled: {validation_enabled}")
+    logger.debug(f"Fail on validation errors: {fail_on_validation_errors}")
 
     for name, ann_conf in enabled_annotators.items():
         target = ann_conf.get("parser", name)
@@ -725,7 +725,7 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
             raise ValueError(f"Parser '{target}' not found in registry")
 
         try:
-            logging.info(f"Running parser '{target}' for '{name}'")
+            logging.debug(f"Running parser '{target}' for '{name}'")
             parser_fn(doc, working_dir, DIRS[name], conf)
 
             # Validate parser output if validation is enabled
