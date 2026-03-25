@@ -296,8 +296,8 @@ def process_extractions(
     lines_for_page: list[LineWithMeta] = sorted(
         doc.lines_for_page(page_id), key=lambda ln: ln.metadata.line_id
     )
-    logger.info(f"lines => {len(lines_for_page)} >")
-    logger.info(f"Detailed extraction result for page {page_id}")
+    logger.debug(f"lines => {len(lines_for_page)} >")
+    logger.debug(f"Detailed extraction result for page {page_id}")
 
     first_emitted = False
     last_meta_line: LineWithMeta | None = None
@@ -346,7 +346,7 @@ def process_extractions(
             _annotate_segment(annotation_type, meta_line, segment_start)
             first_emitted = True
 
-        logger.info(f"   --> Line : {meta_line}")
+        logger.debug(f"   --> Line : {meta_line}")
         _annotate_segment(annotation_type, meta_line, segment)
 
         last_meta_line = meta_line
@@ -667,8 +667,6 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
 
     os.makedirs(agent_output_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
-
-    print(f'conf : {conf}')
 
     # Filter to only enabled annotators (enabled defaults to True if not specified)
     enabled_annotators = {

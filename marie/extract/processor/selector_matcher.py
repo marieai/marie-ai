@@ -16,7 +16,6 @@ class SelectorMatcher:
         self.parent = parent
 
     def visit(self, selector: Selector) -> List[ScanResult]:
-        print(f"Checking selector: {selector}")
         doc = self.context.document
         # start = self.parent.start
         # stop = self.parent.stop

@@ -29,10 +29,6 @@ class CutpointMatchingEngine:
         cutpoint_strategy: Optional[CutpointStrategy] = None,
     ) -> List[ScanResult]:
         # if cutpoint_strategy == CutpointStrategy.ANNOTATION:
-        print("\n===== Start of Cutpoint Matching =====")
-        print("Selector Sets:", selector_sets)
-        print("Parent:", parent)
-
         cutpoints = []
         selector_matcher = SelectorMatcher(context, parent)
         handler = AnnotationHandler()
@@ -64,11 +60,8 @@ class CutpointMatchingEngine:
             grouped_by_page = dict(sorted(grouped_by_page.items()))
 
             # Print grouped candidates
-            print("----------------------------")
             for pageIndex, candidates_on_page in grouped_by_page.items():
-                print(f"Page {pageIndex}: {len(candidates_on_page)} candidates")
                 cutpoints_by_page = matcher.match(candidates_on_page, selectors)
-                print(cutpoints_by_page)
 
                 for smr in cutpoints_by_page:
                     if not smr.items:
@@ -111,10 +104,6 @@ class CutpointMatchingEngine:
                         )  # TODO : implement findCutpointArea, this could be derived from lines
 
                         cutpoints.append(cutpoint)
-
-            print("----------------------------")
-        print("Cutpoints found:", len(cutpoints))
-        print("===== End of Cutpoint Matching =====\n")
         return cutpoints
 
 

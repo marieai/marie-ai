@@ -110,6 +110,10 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
         if section is None:
             return False
 
+        # Skip record-backed sections — handled by population visitor
+        if section.tags.get("match_section_source_strategy") == "record_backed":
+            return False
+
         layer = section.owner_layer
         if layer.regions_config_raw is None:
             return False
@@ -225,7 +229,7 @@ class MatchSectionRegionProcessorVisitor(BaseProcessingVisitor):
                 processed_results.append(processor_result)
                 processing_stats["successful"] += 1
 
-                self.logger.info(
+                self.logger.debug(
                     f"Processor parsed '{processor_name}' > {processor_result} regions"
                 )
 

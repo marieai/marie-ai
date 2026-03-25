@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from marie.extract.models.base import Location, Page, PageDetails, Rectangle
 from marie.extract.models.definition import Layer, RowExtractionStrategy
@@ -144,6 +144,9 @@ class MatchSection:
     # Unifying matched fields
     fields: List[Field] = field(default_factory=list)
     field_rows: List[MatchFieldRow] = field(default_factory=list)
+
+    # Provenance tags for record-backed sections
+    tags: Dict[str, Any] = field(default_factory=dict)
 
     def set_pages(self, pages: List[Page]) -> None:
         self.pages = pages
