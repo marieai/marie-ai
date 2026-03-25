@@ -172,13 +172,18 @@ class BatchingQueueListener:
         except Exception:
             pass
 
+        worker = self._thr
         try:
-            if self._thr and self._thr.is_alive():
-                self._thr.join(timeout=timeout)
+            if worker and worker.is_alive():
+                worker.join(timeout=timeout)
         except Exception:
             pass
-        finally:
-            self._thr = None
+
+        if worker and worker.is_alive():
+            _stderr("[logbus] listener stop timed out; leaving worker alive\n")
+            return
+
+        self._thr = None
 
         self.flush()
 
@@ -191,29 +196,13 @@ class BatchingQueueListener:
                 try:
                     rec = self.q.get(timeout=self.flush_interval)
                     if rec is not self._SENTINEL and rec is not None:
-                        with self._buf_lock:
-                            self._buf.append(rec)
-                            # drain everything available so we keep up
-                            # under bursts instead of capping at batch_size
-                            while True:
-                                nxt = self.q.get_nowait()
-                                if nxt is self._SENTINEL:
-                                    continue
-                                if nxt is not None:
-                                    self._buf.append(nxt)
+                        self._push_batch_to_buffer(rec)
                 except queue.Empty:
                     pass
 
                 now = time.monotonic()
-                do_flush = False
-                with self._buf_lock:
-                    if self._buf and (
-                        len(self._buf) >= self.batch_size
-                        or (now - last_flush) >= self.flush_interval
-                    ):
-                        recs, self._buf = list(self._buf), deque()
-                        do_flush = True
-                if do_flush:
+                recs = self._pop_ready_batch(now, last_flush)
+                if recs:
                     self._flush_safe(recs)
                     last_flush = now
 
@@ -222,6 +211,7 @@ class BatchingQueueListener:
 
         # Final flush when stop is set
         recs = self._pop_buffer()
+        recs.extend(self._drain_queue())
         if recs:
             try:
                 self._flush_safe(recs)
@@ -238,16 +228,56 @@ class BatchingQueueListener:
             batch, self._buf = list(self._buf), deque()
             return batch
 
+    def _drain_queue(self, limit: Optional[int] = None) -> List[logging.LogRecord]:
+        recs: List[logging.LogRecord] = []
+        while limit is None or len(recs) < limit:
+            try:
+                rec = self.q.get_nowait()
+            except queue.Empty:
+                break
+            if rec is self._SENTINEL or rec is None:
+                continue
+            recs.append(rec)
+        return recs
+
+    def _push_batch_to_buffer(self, first: logging.LogRecord) -> None:
+        recs = [first]
+        if self.batch_size > 1:
+            recs.extend(self._drain_queue(limit=self.batch_size - 1))
+        with self._buf_lock:
+            self._buf.extend(recs)
+
+    def _pop_ready_batch(
+        self, now: float, last_flush: float
+    ) -> List[logging.LogRecord]:
+        with self._buf_lock:
+            if not self._buf:
+                return []
+            if (
+                len(self._buf) < self.batch_size
+                and (now - last_flush) < self.flush_interval
+            ):
+                return []
+            batch_len = min(len(self._buf), self.batch_size)
+            return [self._buf.popleft() for _ in range(batch_len)]
+
     def _emit_to_handlers(
         self, recs: List[logging.LogRecord], sinks: Iterable[logging.Handler]
     ) -> None:
-        for r in recs:
-            for h in sinks:
-                if r.levelno >= getattr(h, "level", logging.NOTSET):
-                    try:
+        for h in sinks:
+            level = getattr(h, "level", logging.NOTSET)
+            handler_recs = [r for r in recs if r.levelno >= level]
+            if not handler_recs:
+                continue
+            try:
+                handle_many = getattr(h, "handle_many", None)
+                if callable(handle_many):
+                    handle_many(handler_recs)
+                else:
+                    for r in handler_recs:
                         h.handle(r)
-                    except Exception as e:
-                        _stderr(f"[logbus] sink {h.__class__.__name__} failed: {e}\n")
+            except Exception as e:
+                _stderr(f"[logbus] sink {h.__class__.__name__} failed: {e}\n")
 
     def _flush_sinks(self, sinks: Optional[Iterable[logging.Handler]] = None) -> None:
         targets = list(sinks if sinks is not None else self.handlers)
@@ -260,13 +290,7 @@ class BatchingQueueListener:
                 pass
 
     def _flush_safe(self, recs: List[logging.LogRecord]) -> None:
-        for r in recs:
-            for h in self.handlers:
-                if r.levelno >= getattr(h, "level", logging.NOTSET):
-                    try:
-                        h.handle(r)
-                    except Exception as e:
-                        _stderr(f"[logbus] sink {h.__class__.__name__} failed: {e}\n")
+        self._emit_to_handlers(recs, self.handlers)
 
 
 class _GlobalLogBus:
@@ -355,6 +379,6 @@ class _GlobalLogBus:
 
 GLOBAL_LOG_BUS = _GlobalLogBus(
     maxsize=int(os.getenv("MARIE_LOG_QUEUE_MAXSIZE", "50000")),
-    batch_size=int(os.getenv("MARIE_LOG_BATCH_SIZE", "256")),
-    flush_interval=float(os.getenv("MARIE_LOG_FLUSH_INTERVAL", "0.02")),
+    batch_size=int(os.getenv("MARIE_LOG_BATCH_SIZE", "512")),
+    flush_interval=float(os.getenv("MARIE_LOG_FLUSH_INTERVAL", "0.05")),
 )
