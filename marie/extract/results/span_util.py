@@ -110,10 +110,6 @@ def pagespan_from_start_stop(
 ) -> PageSpan:
     assert context.document is not None
     doc = context.document
-    print('Creating PAGE SPAN')
-    print('Start:', start)
-    print('Stop:', stop)
-
     page_span = PageSpan()
     sp = start.page
     ep = stop.page
@@ -160,12 +156,6 @@ def pagespan_from_start_stop(
     #     page_span.add(span)
 
     # Format and output the page spans
-    print("Page spans:")
-    for span in page_span.spanned_pages:
-        print(
-            f"Page: {span.page}, Start Y: {span.y}, Height: {span.h}, Message: {span.msg}"
-        )
-
     return page_span
 
 
