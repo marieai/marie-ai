@@ -97,9 +97,9 @@ receivers:
       # Extract duration in seconds (0.26s, 2.65s format)
       - type: regex_parser
         id: extract_duration_seconds
-        if: 'body matches "[\d.]+s\s"'
+        if: 'body matches "[0-9.]+s "'
         parse_from: body
-        regex: '(?:in\s+)?(?P<duration_seconds>[\d.]+)s(?:\s|$|,)'
+        regex: '(?:in\s+)?(?P<duration_seconds>[0-9.]+)s(?:\s|$|,)'
         on_error: send
 
       # Extract timing breakdown (signal=0.011s, post-signal=0.010s)
@@ -107,7 +107,7 @@ receivers:
         id: extract_timing_breakdown
         if: 'body matches "signal="'
         parse_from: body
-        regex: 'signal=(?P<signal_time>[\d.]+)s.*?post-signal=(?P<post_signal_time>[\d.]+)s'
+        regex: 'signal=(?P<signal_time>[0-9.]+)s.*?post-signal=(?P<post_signal_time>[0-9.]+)s'
         on_error: send
 
       # Extract etcd timing
@@ -115,7 +115,7 @@ receivers:
         id: extract_etcd_timing
         if: 'body matches "Etcd update"'
         parse_from: body
-        regex: 'lease=(?P<etcd_lease_time>[\d.]+)s\s+put=(?P<etcd_put_time>[\d.]+)s\s+total=(?P<etcd_total_time>[\d.]+)s'
+        regex: 'lease=(?P<etcd_lease_time>[0-9.]+)s\s+put=(?P<etcd_put_time>[0-9.]+)s\s+total=(?P<etcd_total_time>[0-9.]+)s'
         on_error: send
 
       # ############### Extract Scheduler Information ###############
@@ -245,9 +245,9 @@ processors:
   #         - ".*scheduled.*"
 
 exporters:
-  # Export to HyperDX via OTLP
+  # Export to OTel Collector (which exports to ClickHouse)
   otlphttp:
-    endpoint: http://marie-hyperdx:4318
+    endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
     tls:
       insecure: true
 

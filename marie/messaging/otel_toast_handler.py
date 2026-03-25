@@ -14,11 +14,10 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from opentelemetry._logs import set_logger_provider
+from opentelemetry._logs import SeverityNumber, set_logger_provider
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-from opentelemetry.sdk._logs import LoggerProvider, LogRecord
+from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from opentelemetry.trace import INVALID_SPAN_CONTEXT
 
 from marie.messaging.events import EventMessage
 from marie.messaging.toast_handler import ToastHandler
@@ -186,13 +185,13 @@ class OTELToastHandler(ToastHandler):
         try:
             # Map status to severity
             severity_map = {
-                "INFO": 9,
-                "WARN": 13,
-                "WARNING": 13,
-                "ERROR": 17,
-                "FATAL": 21,
+                "INFO": SeverityNumber.INFO,
+                "WARN": SeverityNumber.WARN,
+                "WARNING": SeverityNumber.WARN,
+                "ERROR": SeverityNumber.ERROR,
+                "FATAL": SeverityNumber.FATAL,
             }
-            severity_number = severity_map.get(msg.status.upper(), 9)
+            severity_number = severity_map.get(msg.status.upper(), SeverityNumber.INFO)
             severity_text = msg.status.upper()
 
             # Build log attributes
@@ -217,19 +216,15 @@ class OTELToastHandler(ToastHandler):
             else:
                 attributes["payload"] = self._safe_json_dumps(msg.payload)
 
-            # Create and emit log record
-            log_record = LogRecord(
+            # Emit log record using kwargs API (SDK 1.39+)
+            self._otel_logger.emit(
                 timestamp=msg.timestamp * 1_000_000,  # ms to ns
                 observed_timestamp=int(time.time_ns()),
-                trace_id=INVALID_SPAN_CONTEXT.trace_id,
-                span_id=INVALID_SPAN_CONTEXT.span_id,
-                trace_flags=INVALID_SPAN_CONTEXT.trace_flags,
                 severity_text=severity_text,
                 severity_number=severity_number,
                 body=f"[{msg.event}] {msg.jobtag}: {self._get_message_summary(msg)}",
                 attributes=attributes,
             )
-            self._otel_logger.emit(log_record)
 
         except Exception as e:
             logger.error(f"Failed to emit OTEL log for event {msg.id}: {e}")

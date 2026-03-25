@@ -84,6 +84,7 @@ class InstrumentationMixin:
             metric_reader = PeriodicExportingMetricReader(
                 OTLPMetricExporter(
                     endpoint=f'{metrics_exporter_host}:{metrics_exporter_port}',
+                    insecure=True,  # Required for non-TLS connections
                 )
             )
             meter_provider = MeterProvider(

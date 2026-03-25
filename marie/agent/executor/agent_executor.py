@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
 
 if TYPE_CHECKING:
     from marie.agent.base import BaseAgent
+    from marie.agent.guardrails.chain import GuardrailChain
 
 from docarray import DocList
 from docarray.documents import TextDoc
@@ -152,6 +153,11 @@ class AgentExecutor(MarieExecutor):
         self._initialized = False
         self._sub_agents: Dict[str, "BaseAgent"] = {}
 
+        # Guardrail chains (built lazily in _ensure_initialized)
+        self._before_chain: Optional["GuardrailChain"] = None
+        self._after_chain: Optional["GuardrailChain"] = None
+        self._tool_call_chain: Optional["GuardrailChain"] = None
+
     def _ensure_initialized(self) -> None:
         """Ensure backend and tools are initialized."""
         if self._initialized:
@@ -163,6 +169,46 @@ class AgentExecutor(MarieExecutor):
             logger.info(
                 f"Initialized {len(self._tools)} tools: {list(self._tools.keys())}"
             )
+
+        # Initialize guardrails from config
+        if self._config and self._config.guardrails:
+            from marie.agent.guardrails.chain import GuardrailChain
+            from marie.agent.guardrails.registry import resolve_guardrails_for_phase
+
+            gc = self._config.guardrails
+
+            # Build before guardrails
+            if gc.before:
+                before_guards = resolve_guardrails_for_phase(
+                    "before", [e.model_dump() for e in gc.before]
+                )
+                self._before_chain = GuardrailChain(before_guards)
+                logger.info(f"Initialized {len(before_guards)} before-guardrails")
+
+            # Build after guardrails
+            if gc.after:
+                after_guards = resolve_guardrails_for_phase(
+                    "after", [e.model_dump() for e in gc.after]
+                )
+                self._after_chain = GuardrailChain(after_guards)
+                logger.info(f"Initialized {len(after_guards)} after-guardrails")
+
+            # Build tool-call guardrails and wrap tools
+            if gc.tool_call:
+                from marie.agent.guardrails.guarded_tool import GuardedTool
+
+                tool_guards = resolve_guardrails_for_phase(
+                    "tool_call", [e.model_dump() for e in gc.tool_call]
+                )
+                self._tool_call_chain = GuardrailChain(tool_guards)
+                logger.info(f"Initialized {len(tool_guards)} tool-call guardrails")
+
+                # Wrap all tools with guardrails
+                self._tools = {
+                    name: GuardedTool(tool, self._tool_call_chain)
+                    for name, tool in self._tools.items()
+                }
+                logger.info("Wrapped tools with tool-call guardrails")
 
         # Initialize backend
         self._backend = self._create_backend()
@@ -226,6 +272,16 @@ class AgentExecutor(MarieExecutor):
             DocList with coordinated response
         """
         conversation_id = parameters.get("conversation_id", str(uuid.uuid4()))
+
+        # ── BEFORE GUARDRAILS ──
+        docs, before_results, early_return = await self._run_before_guardrails(
+            docs,
+            conversation_id,
+            parameters,
+        )
+        if early_return is not None:
+            return early_return
+
         messages = await self._build_messages(docs, conversation_id, parameters)
 
         start_time = time.time()
@@ -278,24 +334,33 @@ class AgentExecutor(MarieExecutor):
             # Convert to AgentResult for API compatibility
             result = coordination_result_to_agent_result(coord_result)
 
-        # Update conversation store
+        # ── AFTER GUARDRAILS ──
+        response_text, after_results = await self._run_after_guardrails(
+            result.output_text,
+            conversation_id,
+            parameters,
+        )
+
+        # Update conversation store with SANITIZED text
         if self._conversation_store:
-            user_content = docs[0].text if docs else ""
+            user_content = (
+                "\n".join(doc.text for doc in docs if doc.text) if docs else ""
+            )
             await self._conversation_store.add_message(
                 conversation_id,
                 Message.user(user_content),
             )
-            if result.output:
+            if response_text:
                 await self._conversation_store.add_message(
                     conversation_id,
-                    Message.assistant(result.output_text),
+                    Message.assistant(response_text),
                 )
 
         # Build response
         duration_ms = (time.time() - start_time) * 1000
 
         response_doc = TextDoc(
-            text=result.output_text,
+            text=response_text,
             tags={
                 "conversation_id": conversation_id,
                 "status": result.status.value,
@@ -304,6 +369,10 @@ class AgentExecutor(MarieExecutor):
                     "topology": coord_result.topology,
                     "success_count": coord_result.success_count,
                     "failure_count": coord_result.failure_count,
+                },
+                "guardrails": {
+                    "before": before_results,
+                    "after": after_results,
                 },
             },
         )
@@ -388,6 +457,15 @@ class AgentExecutor(MarieExecutor):
         # Extract conversation ID
         conversation_id = parameters.get("conversation_id", str(uuid.uuid4()))
 
+        # ── BEFORE GUARDRAILS ──
+        docs, before_results, early_return = await self._run_before_guardrails(
+            docs,
+            conversation_id,
+            parameters,
+        )
+        if early_return is not None:
+            return early_return
+
         # Build messages from docs and conversation history
         messages = await self._build_messages(docs, conversation_id, parameters)
 
@@ -416,28 +494,36 @@ class AgentExecutor(MarieExecutor):
                 error="Execution timeout",
             )
 
-        # Update conversation store
+        # ── AFTER GUARDRAILS ──
+        response_text, after_results = await self._run_after_guardrails(
+            result.output_text,
+            conversation_id,
+            parameters,
+            extra_ctx={
+                "iterations": result.iterations,
+                "tool_calls_count": len(result.tool_calls),
+            },
+        )
+
+        # Update conversation store with SANITIZED text
         if self._conversation_store:
             # Add user message
-            user_content = docs[0].text if docs else ""
+            user_content = (
+                "\n".join(doc.text for doc in docs if doc.text) if docs else ""
+            )
             await self._conversation_store.add_message(
                 conversation_id,
                 Message.user(user_content),
             )
-            # Add assistant response
-            if result.output:
+            # Add assistant response (sanitized)
+            if response_text:
                 await self._conversation_store.add_message(
                     conversation_id,
-                    (
-                        result.output
-                        if isinstance(result.output, Message)
-                        else Message.assistant(result.output_text)
-                    ),
+                    Message.assistant(response_text),
                 )
 
         # Build response
         duration_ms = (time.time() - start_time) * 1000
-        response_text = result.output_text
 
         response_doc = TextDoc(
             text=response_text,
@@ -447,6 +533,10 @@ class AgentExecutor(MarieExecutor):
                 "iterations": result.iterations,
                 "duration_ms": duration_ms,
                 "tool_calls": len(result.tool_calls),
+                "guardrails": {
+                    "before": before_results,
+                    "after": after_results,
+                },
             },
         )
 
@@ -470,6 +560,16 @@ class AgentExecutor(MarieExecutor):
         parameters = parameters or {}
 
         conversation_id = parameters.get("conversation_id", str(uuid.uuid4()))
+
+        # ── BEFORE GUARDRAILS ──
+        docs, before_results, early_return = await self._run_before_guardrails(
+            docs,
+            conversation_id,
+            parameters,
+        )
+        if early_return is not None:
+            return early_return
+
         messages = await self._build_messages(docs, conversation_id, parameters)
 
         # Build abort signal from optional timeout
@@ -512,9 +612,18 @@ class AgentExecutor(MarieExecutor):
         duration_ms = (time.time() - start_time) * 1000
         response_text = "".join(collected_text_parts)
 
-        # Update conversation store
+        # ── AFTER GUARDRAILS ──
+        response_text, after_results = await self._run_after_guardrails(
+            response_text,
+            conversation_id,
+            parameters,
+        )
+
+        # Update conversation store with SANITIZED text
         if self._conversation_store:
-            user_content = docs[0].text if docs else ""
+            user_content = (
+                "\n".join(doc.text for doc in docs if doc.text) if docs else ""
+            )
             await self._conversation_store.add_message(
                 conversation_id, Message.user(user_content)
             )
@@ -534,6 +643,10 @@ class AgentExecutor(MarieExecutor):
                         "status": status,
                         "duration_ms": duration_ms,
                         "streamed": True,
+                        "guardrails": {
+                            "before": before_results,
+                            "after": after_results,
+                        },
                     },
                 )
             ]
@@ -648,6 +761,152 @@ class AgentExecutor(MarieExecutor):
 
         return messages
 
+    async def _run_before_guardrails(
+        self,
+        docs: DocList[TextDoc],
+        conversation_id: str,
+        parameters: Dict[str, Any],
+    ) -> tuple[DocList[TextDoc], List[Dict[str, Any]], Optional[DocList[TextDoc]]]:
+        """Run before-guardrails on input docs.
+
+        Args:
+            docs: Input documents
+            conversation_id: Conversation identifier
+            parameters: Request parameters
+
+        Returns:
+            Tuple of (possibly_modified_docs, guardrail_results, early_return_or_None).
+            If early_return is not None, the caller should return it immediately.
+        """
+        from marie.agent.guardrails.result import GuardrailAction
+
+        results: List[Dict[str, Any]] = []
+
+        if not self._before_chain or self._before_chain.is_empty:
+            return docs, results, None
+
+        # Guard the FULL joined input, matching _build_messages
+        user_text = "\n".join(doc.text for doc in docs if doc.text)
+
+        ctx = {
+            "phase": "before",
+            "agent_name": self._backend_name,
+            "conversation_id": conversation_id,
+            "user_id": parameters.get("user_id"),
+        }
+
+        chain_result = await self._before_chain.run(user_text, ctx)
+        results = [
+            {"name": r.guardrail_name, "action": r.action.value, "score": r.score}
+            for r in chain_result.results
+        ]
+
+        if chain_result.action == GuardrailAction.BLOCK:
+            blocked = chain_result.results[-1] if chain_result.results else None
+            return (
+                docs,
+                results,
+                DocList[TextDoc](
+                    [
+                        TextDoc(
+                            text=(
+                                blocked.message
+                                if blocked
+                                else "Request blocked by safety policy."
+                            ),
+                            tags={
+                                "conversation_id": conversation_id,
+                                "status": "blocked",
+                                "guardrail": (
+                                    blocked.guardrail_name if blocked else "unknown"
+                                ),
+                            },
+                        )
+                    ]
+                ),
+            )
+
+        if chain_result.action == GuardrailAction.ESCALATE:
+            escalated = chain_result.results[-1] if chain_result.results else None
+            return (
+                docs,
+                results,
+                DocList[TextDoc](
+                    [
+                        TextDoc(
+                            text="This request requires human review.",
+                            tags={
+                                "conversation_id": conversation_id,
+                                "status": "escalated",
+                                "guardrail": (
+                                    escalated.guardrail_name if escalated else "unknown"
+                                ),
+                            },
+                        )
+                    ]
+                ),
+            )
+
+        # MODIFY: rebuild docs with sanitized content
+        if chain_result.final_content != user_text:
+            docs = DocList[TextDoc]([TextDoc(text=chain_result.final_content)])
+
+        return docs, results, None
+
+    async def _run_after_guardrails(
+        self,
+        response_text: str,
+        conversation_id: str,
+        parameters: Dict[str, Any],
+        extra_ctx: Optional[Dict[str, Any]] = None,
+    ) -> tuple[str, List[Dict[str, Any]]]:
+        """Run after-guardrails on response text.
+
+        Args:
+            response_text: Agent response text
+            conversation_id: Conversation identifier
+            parameters: Request parameters
+            extra_ctx: Additional context (iterations, tool_calls_count, etc.)
+
+        Returns:
+            Tuple of (possibly_modified_response_text, guardrail_results)
+        """
+        from marie.agent.guardrails.result import GuardrailAction
+
+        results: List[Dict[str, Any]] = []
+
+        if not self._after_chain or self._after_chain.is_empty:
+            return response_text, results
+
+        ctx = {
+            "phase": "after",
+            "agent_name": self._backend_name,
+            "conversation_id": conversation_id,
+            "user_id": parameters.get("user_id"),
+        }
+        if extra_ctx:
+            ctx.update(extra_ctx)
+
+        chain_result = await self._after_chain.run(response_text, ctx)
+        results = [
+            {"name": r.guardrail_name, "action": r.action.value, "score": r.score}
+            for r in chain_result.results
+        ]
+
+        if chain_result.action == GuardrailAction.BLOCK:
+            blocked = chain_result.results[-1] if chain_result.results else None
+            logger.warning(
+                "After-guardrail blocked: guardrail=%s score=%.2f",
+                blocked.guardrail_name if blocked else "unknown",
+                blocked.score if blocked else 0.0,
+            )
+            return "I'm unable to provide that response.", results
+
+        if chain_result.final_content != response_text:
+            return chain_result.final_content, results
+
+        return response_text, results
+
     def add_tool(self, tool: Union[str, Dict, AgentTool]) -> None:
         """Add a tool to the executor.
 
@@ -655,6 +914,16 @@ class AgentExecutor(MarieExecutor):
             tool: Tool name, config, or instance
         """
         resolved = resolve_tools([tool])
+
+        # Wrap with tool-call guardrails if active
+        if self._tool_call_chain:
+            from marie.agent.guardrails.guarded_tool import GuardedTool
+
+            resolved = {
+                name: GuardedTool(t, self._tool_call_chain)
+                for name, t in resolved.items()
+            }
+
         self._tools.update(resolved)
 
     def remove_tool(self, name: str) -> bool:
@@ -682,13 +951,18 @@ class AgentExecutor(MarieExecutor):
         Returns:
             Configured AgentExecutor
         """
-        return cls(
+        instance = cls(
             backend=config.backend,
             backend_config=config.llm.model_dump(),
             tools=config.get_tool_list(),
             system_message=config.system_message,
             **kwargs,
         )
+        # Preserve full config for coordination AND guardrails.
+        # __init__ only sets self._config when config_path is provided,
+        # so from_config must set it explicitly.
+        instance._config = config
+        return instance
 
     @classmethod
     def register_backend(

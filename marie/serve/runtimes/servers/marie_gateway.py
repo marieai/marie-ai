@@ -184,11 +184,30 @@ class MarieServerGateway(CompositeServer):
 
         # OTel metrics for gateway request tracking
         self._gateway_request_seconds = None
+        self._slot_capacity_gauge = None
+        self._slot_used_gauge = None
+        self._slot_available_gauge = None
         if self.meter:
             self._gateway_request_seconds = self.meter.create_histogram(
                 name="marie_gateway_request_seconds",
                 description="Time spent processing gateway API requests",
                 unit="s",
+            )
+            # Slot capacity metrics (gauges for current state)
+            self._slot_capacity_gauge = self.meter.create_gauge(
+                name="marie_executor_slot_capacity",
+                description="Total slot capacity per executor",
+                unit="{slots}",
+            )
+            self._slot_used_gauge = self.meter.create_gauge(
+                name="marie_executor_slot_used",
+                description="Currently used slots per executor",
+                unit="{slots}",
+            )
+            self._slot_available_gauge = self.meter.create_gauge(
+                name="marie_executor_slot_available",
+                description="Available slots per executor",
+                unit="{slots}",
             )
 
         self.desired_map: Dict[tuple[str, str], DesiredDoc] = {}
@@ -1160,12 +1179,18 @@ class MarieServerGateway(CompositeServer):
         """
         self.logger.debug(f"intercepting stream : custom_stream")
         async for request in request_iterator:
-            decoded = await self.decode_request(request)
-            if isinstance(decoded, AsyncIterator):
-                async for response in decoded:
-                    yield response
-            else:
-                yield decoded
+            metric_labels = {"endpoint": "grpc", "status": "success"}
+            with MetricsTimer(self._gateway_request_seconds, metric_labels):
+                try:
+                    decoded = await self.decode_request(request)
+                    if isinstance(decoded, AsyncIterator):
+                        async for response in decoded:
+                            yield response
+                    else:
+                        yield decoded
+                except Exception:
+                    metric_labels["status"] = "error"
+                    raise
 
     async def decode_request(
         self, request: Request
@@ -1559,6 +1584,24 @@ class MarieServerGateway(CompositeServer):
                 self.deployment_nodes
             )
             self.logger.info(summary)
+
+            # Record OTel metrics for slot capacity
+            # rows: [(slot, capacity, target, used, available, holders, notes), ...]
+            if self._slot_capacity_gauge:
+                for row in rows:
+                    slot, cap, tgt, used, avail, holders, notes = row
+                    labels = {"executor": slot}
+                    self._slot_capacity_gauge.set(cap, labels)
+                    self._slot_used_gauge.set(used, labels)
+                    self._slot_available_gauge.set(avail, labels)
+                # Also record totals
+                self._slot_capacity_gauge.set(
+                    totals["capacity"], {"executor": "_total"}
+                )
+                self._slot_used_gauge.set(totals["used"], {"executor": "_total"})
+                self._slot_available_gauge.set(
+                    totals["available"], {"executor": "_total"}
+                )
 
             capacity_stats = (rows, totals)
             self.logger.debug(f"Publishing capacity stats: {capacity_stats}")

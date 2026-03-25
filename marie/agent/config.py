@@ -183,6 +183,61 @@ class SkillsConfig(BaseModel):
     )
 
 
+class GuardrailEntry(BaseModel):
+    """Single guardrail configuration entry.
+
+    Attributes:
+        type: Guardrail type name (e.g., 'pii', 'prompt_injection')
+        config: Guardrail-specific configuration
+    """
+
+    type: str = Field(..., description="Guardrail type name")
+    config: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Guardrail-specific configuration",
+    )
+
+
+class GuardrailsConfig(BaseModel):
+    """Phase-separated guardrail configuration.
+
+    Guardrails run at three phases:
+    - before: Before agent processes input
+    - after: After agent generates output
+    - tool_call: Before a tool is executed
+
+    Example YAML:
+        ```yaml
+        guardrails:
+          before:
+            - type: prompt_injection
+            - type: pii
+              config:
+                check_email: true
+          after:
+            - type: pii
+            - type: secrets
+          tool_call:
+            - type: tool_scope
+              config:
+                allowed: [search, calculator]
+        ```
+    """
+
+    before: List[GuardrailEntry] = Field(
+        default_factory=list,
+        description="Guardrails to run before agent processes input",
+    )
+    after: List[GuardrailEntry] = Field(
+        default_factory=list,
+        description="Guardrails to run after agent generates output",
+    )
+    tool_call: List[GuardrailEntry] = Field(
+        default_factory=list,
+        description="Guardrails to run before tool execution",
+    )
+
+
 class CoordinationConfig(BaseModel):
     """Configuration for agent coordination.
 
@@ -370,6 +425,10 @@ class AgentConfig(BaseModel):
     sub_agents: Optional[List[str]] = Field(
         default=None,
         description="List of sub-agent names for coordination (resolved at runtime)",
+    )
+    guardrails: Optional[GuardrailsConfig] = Field(
+        default=None,
+        description="Guardrails configuration for input/output validation",
     )
 
     @field_validator("tools", mode="before")

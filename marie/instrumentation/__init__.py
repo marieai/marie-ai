@@ -102,7 +102,7 @@ def register(
             OTLPSpanExporter,
         )
 
-        exporter = OTLPSpanExporter(endpoint=otlp_endpoint)
+        exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
         processor = (
             BatchSpanProcessor(exporter) if batch else SimpleSpanProcessor(exporter)
         )

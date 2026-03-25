@@ -1,7 +1,7 @@
 -- ############### ClickStack Observability Schema ###############
 --
 -- Tables for storing observability data (logs, traces, metrics)
--- Used by OpenTelemetry Collector and HyperDX
+-- Compatible with OpenTelemetry Collector ClickHouse Exporter v0.114.0+
 --
 -- Usage:
 --   docker exec -i marie-clickhouse clickhouse-client < config/clickstack/schema/observability.sql
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS otel.otel_logs (
     ScopeName String CODEC(ZSTD(1)),
     ScopeVersion String CODEC(ZSTD(1)),
     ScopeAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    ScopeDroppedAttrCount UInt32 DEFAULT 0 CODEC(ZSTD(1)),
     LogAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
 
     INDEX idx_trace_id TraceId TYPE bloom_filter(0.001) GRANULARITY 1,
@@ -50,8 +51,11 @@ CREATE TABLE IF NOT EXISTS otel.otel_traces (
     SpanKind LowCardinality(String) CODEC(ZSTD(1)),
     ServiceName LowCardinality(String) CODEC(ZSTD(1)),
     ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    ResourceSchemaUrl String CODEC(ZSTD(1)),
     ScopeName String CODEC(ZSTD(1)),
     ScopeVersion String CODEC(ZSTD(1)),
+    ScopeAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    ScopeDroppedAttrCount UInt32 DEFAULT 0 CODEC(ZSTD(1)),
     SpanAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
     Duration Int64 CODEC(ZSTD(1)),
     StatusCode LowCardinality(String) CODEC(ZSTD(1)),
@@ -85,6 +89,7 @@ CREATE TABLE IF NOT EXISTS otel.otel_metrics_gauge (
     ScopeName String CODEC(ZSTD(1)),
     ScopeVersion String CODEC(ZSTD(1)),
     ScopeAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    ScopeDroppedAttrCount UInt32 DEFAULT 0 CODEC(ZSTD(1)),
     ScopeSchemaUrl String CODEC(ZSTD(1)),
     ServiceName LowCardinality(String) CODEC(ZSTD(1)),
     MetricName String CODEC(ZSTD(1)),
@@ -116,6 +121,7 @@ CREATE TABLE IF NOT EXISTS otel.otel_metrics_sum (
     ScopeName String CODEC(ZSTD(1)),
     ScopeVersion String CODEC(ZSTD(1)),
     ScopeAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    ScopeDroppedAttrCount UInt32 DEFAULT 0 CODEC(ZSTD(1)),
     ScopeSchemaUrl String CODEC(ZSTD(1)),
     ServiceName LowCardinality(String) CODEC(ZSTD(1)),
     MetricName String CODEC(ZSTD(1)),
@@ -149,6 +155,7 @@ CREATE TABLE IF NOT EXISTS otel.otel_metrics_histogram (
     ScopeName String CODEC(ZSTD(1)),
     ScopeVersion String CODEC(ZSTD(1)),
     ScopeAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    ScopeDroppedAttrCount UInt32 DEFAULT 0 CODEC(ZSTD(1)),
     ScopeSchemaUrl String CODEC(ZSTD(1)),
     ServiceName LowCardinality(String) CODEC(ZSTD(1)),
     MetricName String CODEC(ZSTD(1)),
@@ -172,6 +179,78 @@ CREATE TABLE IF NOT EXISTS otel.otel_metrics_histogram (
         SpanId String,
         TraceId String
     ) CODEC(ZSTD(1))
+)
+ENGINE = MergeTree()
+PARTITION BY toDate(TimeUnix)
+ORDER BY (ServiceName, MetricName, Attributes, TimeUnix)
+TTL toDateTime(TimeUnix) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+-- Exponential Histogram metrics (for high-cardinality distributions)
+CREATE TABLE IF NOT EXISTS otel.otel_metrics_exponential_histogram (
+    ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    ResourceSchemaUrl String CODEC(ZSTD(1)),
+    ScopeName String CODEC(ZSTD(1)),
+    ScopeVersion String CODEC(ZSTD(1)),
+    ScopeAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    ScopeDroppedAttrCount UInt32 DEFAULT 0 CODEC(ZSTD(1)),
+    ScopeSchemaUrl String CODEC(ZSTD(1)),
+    ServiceName LowCardinality(String) CODEC(ZSTD(1)),
+    MetricName String CODEC(ZSTD(1)),
+    MetricDescription String CODEC(ZSTD(1)),
+    MetricUnit String CODEC(ZSTD(1)),
+    Attributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    StartTimeUnix DateTime64(9) CODEC(Delta, ZSTD(1)),
+    TimeUnix DateTime64(9) CODEC(Delta, ZSTD(1)),
+    Count UInt64 CODEC(ZSTD(1)),
+    Sum Float64 CODEC(ZSTD(1)),
+    Scale Int32 CODEC(ZSTD(1)),
+    ZeroCount UInt64 CODEC(ZSTD(1)),
+    PositiveOffset Int32 CODEC(ZSTD(1)),
+    PositiveBucketCounts Array(UInt64) CODEC(ZSTD(1)),
+    NegativeOffset Int32 CODEC(ZSTD(1)),
+    NegativeBucketCounts Array(UInt64) CODEC(ZSTD(1)),
+    Flags UInt32 CODEC(ZSTD(1)),
+    Min Float64 CODEC(ZSTD(1)),
+    Max Float64 CODEC(ZSTD(1)),
+    AggregationTemporality Int32 CODEC(ZSTD(1)),
+    Exemplars Nested (
+        FilteredAttributes Map(LowCardinality(String), String),
+        TimeUnix DateTime64(9),
+        Value Float64,
+        SpanId String,
+        TraceId String
+    ) CODEC(ZSTD(1))
+)
+ENGINE = MergeTree()
+PARTITION BY toDate(TimeUnix)
+ORDER BY (ServiceName, MetricName, Attributes, TimeUnix)
+TTL toDateTime(TimeUnix) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+-- Summary metrics
+CREATE TABLE IF NOT EXISTS otel.otel_metrics_summary (
+    ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    ResourceSchemaUrl String CODEC(ZSTD(1)),
+    ScopeName String CODEC(ZSTD(1)),
+    ScopeVersion String CODEC(ZSTD(1)),
+    ScopeAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    ScopeDroppedAttrCount UInt32 DEFAULT 0 CODEC(ZSTD(1)),
+    ScopeSchemaUrl String CODEC(ZSTD(1)),
+    ServiceName LowCardinality(String) CODEC(ZSTD(1)),
+    MetricName String CODEC(ZSTD(1)),
+    MetricDescription String CODEC(ZSTD(1)),
+    MetricUnit String CODEC(ZSTD(1)),
+    Attributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    StartTimeUnix DateTime64(9) CODEC(Delta, ZSTD(1)),
+    TimeUnix DateTime64(9) CODEC(Delta, ZSTD(1)),
+    Count UInt64 CODEC(ZSTD(1)),
+    Sum Float64 CODEC(ZSTD(1)),
+    ValueAtQuantiles Nested (
+        Quantile Float64,
+        Value Float64
+    ) CODEC(ZSTD(1)),
+    Flags UInt32 CODEC(ZSTD(1))
 )
 ENGINE = MergeTree()
 PARTITION BY toDate(TimeUnix)
@@ -236,12 +315,13 @@ WHERE StatusCode = 'ERROR';
 --   ORDER BY Duration DESC
 --   LIMIT 20;
 --
--- Error rate by service:
+-- Gateway request metrics (last hour):
 --   SELECT
---     ServiceName,
---     countIf(StatusCode = 'ERROR') as errors,
---     count() as total,
---     round(errors / total * 100, 2) as error_rate_pct
---   FROM otel.otel_traces
---   WHERE Timestamp > now() - INTERVAL 1 HOUR
---   GROUP BY ServiceName;
+--     toStartOfMinute(TimeUnix) as minute,
+--     sum(Count) as requests,
+--     avg(Sum / Count) * 1000 as avg_latency_ms
+--   FROM otel.otel_metrics_histogram
+--   WHERE MetricName = 'marie_gateway_request_seconds'
+--     AND TimeUnix > now() - INTERVAL 1 HOUR
+--   GROUP BY minute
+--   ORDER BY minute DESC;
