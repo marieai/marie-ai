@@ -86,6 +86,10 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         ), "Section must be associated with a layer."
         assert context.document is not None, "Context must include a document."
 
+        # Skip record-backed sections — handled by RecordBackedMatchSectionPopulationVisitor
+        if section.tags.get("match_section_source_strategy") == "record_backed":
+            return
+
         self.process_fields(context, parent, section)
         self.process_regions(context, parent, section)
         # self.process_tables(context, parent, section)
@@ -194,10 +198,10 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             return
 
         # DEBUG: Log section and span info
-        self.logger.info(
+        self.logger.debug(
             f"=== SCOPING DEBUG: Processing MatchSection '{section.label}' ==="
         )
-        self.logger.info(
+        self.logger.debug(
             f"  Section spans: {[(s.page, s.y, s.h, s.start_line_id, s.end_line_id) for s in spans]}"
         )
 
@@ -517,7 +521,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             child.parent = section
 
             section.add_section(child)
-            self.logger.info(
+            self.logger.debug(
                 f"Created child MatchSection '{child.label}' with spans "
                 f"{[(s.page, s.y, s.h) for s in child_spans]}"
             )
@@ -526,7 +530,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         section.type = MatchSectionType.WRAPPER
         section.matched_non_repeating_fields = None
         section.matched_field_rows = None
-        self.logger.info(
+        self.logger.debug(
             f"Converted section '{section.label}' to WRAPPER with "
             f"{len(section.sections)} per-region children."
         )
@@ -875,12 +879,12 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 populated_fields.add(field_name)
                 vl_count += len(created)
 
-                self.logger.info(
+                self.logger.debug(
                     f"value_lookup(kv): resolved '{field_name}' = '{source_value}' from '{source_path}'"
                 )
 
             if vl_count:
-                self.logger.info(
+                self.logger.debug(
                     f"value_lookup(kv): filled {vl_count} field(s) for section '{structured_section.title}'"
                 )
 

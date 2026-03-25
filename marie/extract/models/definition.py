@@ -120,6 +120,28 @@ class Layer(BaseModel):
     )
     regions_config_raw: Optional[Dict[str, Any]] = None
 
+    # Record-backed match section strategy configuration.
+    # When present, controls how MatchSections are created for this layer.
+    #   strategy: "selectors" (default) or "record_backed"
+    #   data_source: folder name in agent-output/ (defaults to region_parser.data_source)
+    #   envelope_key: JSON key wrapping the records array
+    match_section_source: Optional[Dict[str, Any]] = None
+
+    _VALID_MATCH_SECTION_STRATEGIES = frozenset({"selectors", "record_backed"})
+
+    @property
+    def match_section_source_strategy(self) -> str:
+        if self.match_section_source and isinstance(self.match_section_source, dict):
+            strategy = self.match_section_source.get("strategy", "selectors")
+            if strategy not in self._VALID_MATCH_SECTION_STRATEGIES:
+                raise ValueError(
+                    f"Invalid match_section_source.strategy '{strategy}' "
+                    f"on layer '{self.layer_name}'. "
+                    f"Valid options: {sorted(self._VALID_MATCH_SECTION_STRATEGIES)}"
+                )
+            return strategy
+        return "selectors"
+
 
 class Template(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)

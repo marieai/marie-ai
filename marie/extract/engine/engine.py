@@ -9,6 +9,12 @@ from marie.extract.engine.match_section_region_processor_visitor import (
     MatchSectionRegionProcessorVisitor,
 )
 from marie.extract.engine.processing_visitor import ProcessingVisitor
+from marie.extract.engine.record_backed_match_section_builder_visitor import (
+    RecordBackedMatchSectionBuilderVisitor,
+)
+from marie.extract.engine.record_backed_match_section_population_visitor import (
+    RecordBackedMatchSectionPopulationVisitor,
+)
 from marie.extract.engine.template_validator_visitor import TemplateValidatorVisitor
 from marie.extract.models.exec_context import ExecutionContext
 from marie.extract.models.match import SubzeroResult
@@ -52,8 +58,10 @@ class DocumentExtractEngine:
         # TODO : This should be configurable so the client can add change/visitors
         self.visitors.append(TemplateValidatorVisitor(True))
         self.visitors.append(CutpointProcessingVisitor())
+        self.visitors.append(RecordBackedMatchSectionBuilderVisitor(True))
         self.visitors.append(MatchSectionRegionProcessorVisitor(True))
         self.visitors.append(MatchSectionExtractionProcessingVisitor(True))
+        self.visitors.append(RecordBackedMatchSectionPopulationVisitor(True))
         # self.visitors.append(MatchSectionRenderingVisitor(True))
         # self.visitors.append(PrintVisitor(True))
 

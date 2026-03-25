@@ -137,7 +137,7 @@ def parse_tables(
     for file in files:
         try:
             page_id = extract_page_id(file) - 1  # Files indexed at 1, doc indexed at 0
-            logging.info(f"Processing Tables file: {file} with page_id: {page_id}")
+            logging.debug(f"Processing Tables file: {file} with page_id: {page_id}")
 
             result_json_file = os.path.join(src_dir, file)
             json_result = load_json_file(result_json_file, safe_parse=True)
@@ -277,7 +277,7 @@ def update_document_tables(
     )
 
     extractions = result.extractions
-    logging.info(f"Processing {len(extractions)} table(s) for page {page_id}")
+    logging.debug(f"Processing {len(extractions)} table(s) for page {page_id}")
 
     for segment_index, table in enumerate(extractions):
         header_rows = table.header_rows

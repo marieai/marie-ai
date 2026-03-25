@@ -33,6 +33,8 @@ class CutpointProcessingVisitor(BaseProcessingVisitor):
 
         if layers:
             for layer in layers:
+                if layer.match_section_source_strategy == "record_backed":
+                    continue
                 self.process_layer(context, layer, parent, None)
 
     def process_layer(
