@@ -20,7 +20,7 @@ import threading
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, TextIO
+from typing import Any, Dict, Iterable, Optional, TextIO
 
 
 class JobLogSink(logging.Handler):
@@ -68,27 +68,32 @@ class JobLogSink(logging.Handler):
         safe_id = "".join(c for c in request_id if c.isalnum() or c in "-_")
         return os.path.join(self._log_dir, f"job-{safe_id}.log")
 
+    def _open_handle(self, file_path: str) -> TextIO:
+        return open(file_path, "a", encoding="utf-8", buffering=1)
+
     def _get_or_create_handle(self, request_id: str) -> TextIO:
         """Get existing file handle or create new one with LRU eviction."""
-        current_time = time.time()
-
         with self._lock:
-            if request_id in self._file_handles:
-                handle, _ = self._file_handles.pop(request_id)
-                self._file_handles[request_id] = (handle, current_time)
-                return handle
+            return self._get_or_create_handle_locked(request_id)
 
-            while len(self._file_handles) >= self._max_handles:
-                _, (old_handle, _) = self._file_handles.popitem(last=False)
-                try:
-                    old_handle.close()
-                except Exception:
-                    pass
-
-            file_path = self.get_log_file_path(request_id)
-            handle = open(file_path, "a", encoding="utf-8", buffering=1)
+    def _get_or_create_handle_locked(self, request_id: str) -> TextIO:
+        current_time = time.time()
+        if request_id in self._file_handles:
+            handle, _ = self._file_handles.pop(request_id)
             self._file_handles[request_id] = (handle, current_time)
             return handle
+
+        while len(self._file_handles) >= self._max_handles:
+            _, (old_handle, _) = self._file_handles.popitem(last=False)
+            try:
+                old_handle.close()
+            except Exception:
+                pass
+
+        file_path = self.get_log_file_path(request_id)
+        handle = self._open_handle(file_path)
+        self._file_handles[request_id] = (handle, current_time)
+        return handle
 
     def _format_json(self, record: logging.LogRecord) -> str:
         """Format a log record as a JSON line."""
@@ -130,14 +135,55 @@ class JobLogSink(logging.Handler):
 
         try:
             log_line = self._format_json(record)
-            handle = self._get_or_create_handle(request_id)
-
             with self._lock:
+                if self._closed:
+                    return
+                handle = self._get_or_create_handle_locked(request_id)
                 handle.write(log_line + "\n")
                 # flush is implicit: file opened with buffering=1 (line-buffered)
 
         except Exception:
             self.handleError(record)
+
+    def handle_many(self, records: Iterable[logging.LogRecord]) -> None:
+        """Write a batch of records grouped by request_id."""
+        if self._closed:
+            return
+
+        grouped_lines: OrderedDict[str, list[str]] = OrderedDict()
+        grouped_records: OrderedDict[str, list[logging.LogRecord]] = OrderedDict()
+
+        for record in records:
+            if not self.filter(record):
+                continue
+
+            request_id = getattr(record, "request_id", None)
+            if not request_id or request_id in ("-", ""):
+                continue
+
+            try:
+                log_line = self._format_json(record)
+            except Exception:
+                self.handleError(record)
+                continue
+
+            grouped_lines.setdefault(request_id, []).append(log_line)
+            grouped_records.setdefault(request_id, []).append(record)
+
+        if not grouped_lines:
+            return
+
+        with self._lock:
+            if self._closed:
+                return
+
+            for request_id, lines in grouped_lines.items():
+                try:
+                    handle = self._get_or_create_handle_locked(request_id)
+                    handle.write("\n".join(lines) + "\n")
+                except Exception:
+                    for record in grouped_records[request_id]:
+                        self.handleError(record)
 
     def close_handle(self, request_id: str) -> None:
         """Close the file handle for a specific job."""
