@@ -308,7 +308,12 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         # (which carries the exact OCR line ranges from the source JSON), so
         # the normal BFS path (process_fields → process_regions) handles them
         # without any special flags or guards.
-        if len(sorted_regions) > 1:
+        #
+        # Guard: only split sections that were NOT already created by a
+        # previous split.  Without this, a child whose spans still overlap
+        # a large region (e.g. remarks) would re-split infinitely.
+        already_split = section.tags.get("_split_child", False)
+        if len(sorted_regions) > 1 and not already_split:
             self._split_multi_region_section(
                 context=context,
                 document=document,
@@ -428,9 +433,9 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     raise ValueError(
                         f"No rule for role_hint `{role_hint}` so we can't process it on layer `{layer.layer_name}`."
                     )
-                self.logger.warning(
-                    f"No rule for role_hint `{role_hint}` so we can't process it on layer `{layer.layer_name}`."
-                )
+                    self.logger.info(
+                        f"No rule for role_hint `{role_hint}` so we can't process it on layer `{layer.layer_name}`."
+                    )
                 continue
 
             parse_method = section_rule.get("parse")
@@ -519,6 +524,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             child.label = f"{section.label}::region-{region.region_id}"
             child.span = child_spans
             child.parent = section
+            child.tags["_split_child"] = True
 
             section.add_section(child)
             self.logger.debug(
