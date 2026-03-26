@@ -9,6 +9,7 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.messaging.grpc_event_broker import GrpcEventBroker
 from marie.messaging.grpc_toast_handler import GrpcToastHandler
 from marie.messaging.native_handler import NativeToastHandler
+from marie.messaging.otel_toast_handler import OTELToastHandler
 from marie.messaging.psql_handler import PsqlToastHandler
 from marie.messaging.rabbit_handler import RabbitMQToastHandler
 from marie.messaging.toast_registry import Toast
@@ -63,6 +64,12 @@ def setup_toast_events(toast_config: Dict[str, Any]) -> Optional[GrpcEventBroker
     if rabbitmq_cfg is not None:
         if bool(rabbitmq_cfg.get("enabled", False)):
             Toast.register(RabbitMQToastHandler(rabbitmq_cfg), native=False)
+
+    otel_cfg = toast_config.get("otel")
+    if otel_cfg is not None:
+        if bool(otel_cfg.get("enabled", False)):
+            logger.info("Setting up OTEL toast handler")
+            Toast.register(OTELToastHandler(otel_cfg), native=False)
 
     grpc_broker = None
     if grpc_cfg is not None:

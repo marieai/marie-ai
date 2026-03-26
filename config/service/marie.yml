@@ -12,6 +12,7 @@ shared_config:
       username: postgres
       password: 123456
       database: postgres
+      schema: marie_scheduler
       default_table: shared_docs
 
   message: &message

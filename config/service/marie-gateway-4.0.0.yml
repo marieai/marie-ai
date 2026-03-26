@@ -15,8 +15,6 @@ py_modules:
 #  - 54000
 #  - 55000
 
-port_monitoring:
-  - 57706
 
 # Shared configuration
 shared_config:
@@ -51,6 +49,15 @@ shared_config:
 
 # this will be passed in as runtime arguments in kwargs
 with:
+  # Enable OTel metrics
+  metrics: true
+  metrics_exporter_host: localhost  # or marie-hyperdx if in Docker
+  metrics_exporter_port: 4317       # OTLP gRPC port
+
+  # Optional: Enable tracing too
+  tracing: true
+  traces_exporter_host: localhost
+  traces_exporter_port: 4317
 
   discovery: true
   discovery_host: 0.0.0.0
@@ -126,6 +133,18 @@ with:
       default_table: event_tracking
       enabled : True
 
+    # OTEL toast handler for ClickHouse event storage
+    otel:
+      enabled: True
+      endpoint: "http://localhost:4317"  # or marie-hyperdx:4317 in Docker
+      service_name: "marie-ai"
+      queue:
+        maxsize: 4096
+        drop_if_full: false
+      batch:
+        max_export_batch_size: 512
+        schedule_delay_millis: 5000
+
     # SSE backend for real-time UI via /sse/{api_key}
     sse:
       enabled: False
@@ -192,7 +211,7 @@ with:
 
   llm_tracking:
     enabled: true
-    exporter: rabbitmq
+    exporter: console
     project_id: my-project
     worker:
       enabled: true

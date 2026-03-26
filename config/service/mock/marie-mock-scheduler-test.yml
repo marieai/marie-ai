@@ -91,16 +91,14 @@ scheduler:
 # LLM Tracking configuration
 llm_tracking:
   enabled: true
-  exporter: rabbitmq
+  exporter: otel
   project_id: marie-extract
   worker:
     enabled: true
   postgres:
     <<: *psql_conf_shared
     schema: marie_scheduler
-  rabbitmq:
-    <<: *rabbitmq_conf_shared
-    exchange: llm-events
+
   clickhouse:
     host: localhost
     port: 9000

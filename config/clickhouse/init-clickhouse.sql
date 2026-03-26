@@ -1,3 +1,25 @@
+-- ClickHouse User Bootstrap Script
+-- Creates application users for Marie AI stack
+-- This script runs on container initialization
+
+-- Create otel database if not exists
+CREATE DATABASE IF NOT EXISTS otel;
+
+-- Create marie user for application access
+CREATE USER IF NOT EXISTS marie
+    IDENTIFIED BY 'marie123'
+    SETTINGS PROFILE 'default';
+
+-- Grant permissions to marie user
+GRANT ALL ON otel.* TO marie;
+GRANT ALL ON marie.* TO marie;
+GRANT SHOW DATABASES ON *.* TO marie;
+GRANT SHOW TABLES ON *.* TO marie;
+GRANT CREATE DATABASE ON *.* TO marie;
+GRANT CREATE TABLE ON *.* TO marie;
+
+-- Grant access to system tables (for DataGrip/IDE introspection)
+GRANT SELECT ON system.* TO marie;
 -- ############### ClickStack Observability Schema ###############
 --
 -- Tables for storing observability data (logs, traces, metrics)
@@ -296,37 +318,6 @@ AS SELECT
 FROM otel.otel_traces
 WHERE StatusCode = 'ERROR';
 
--- ############### Useful Queries ###############
---
--- Recent errors:
---   SELECT * FROM otel.error_logs_mv ORDER BY Timestamp DESC LIMIT 100;
---
--- Error count by service (last hour):
---   SELECT ServiceName, count() as error_count
---   FROM otel.error_logs_mv
---   WHERE Timestamp > now() - INTERVAL 1 HOUR
---   GROUP BY ServiceName
---   ORDER BY error_count DESC;
---
--- Slowest traces (last hour):
---   SELECT ServiceName, SpanName, TraceId, Duration/1000000 as duration_ms
---   FROM otel.otel_traces
---   WHERE Timestamp > now() - INTERVAL 1 HOUR
---   ORDER BY Duration DESC
---   LIMIT 20;
---
--- Gateway request metrics (last hour):
---   SELECT
---     toStartOfMinute(TimeUnix) as minute,
---     sum(Count) as requests,
---     avg(Sum / Count) * 1000 as avg_latency_ms
---   FROM otel.otel_metrics_histogram
---   WHERE MetricName = 'marie_gateway_request_seconds'
---     AND TimeUnix > now() - INTERVAL 1 HOUR
---   GROUP BY minute
---   ORDER BY minute DESC;
-
-
 -- ############### Event Viewer Materialized Views ###############
 -- Pre-compute expensive extractions at insert time, not query time
 
@@ -421,3 +412,43 @@ ALTER TABLE otel.otel_logs
 ALTER TABLE otel.otel_logs
     ADD INDEX IF NOT EXISTS idx_api_key (LogAttributes['api_key'])
     TYPE bloom_filter GRANULARITY 4;
+
+-- ############### Useful Queries ###############
+--
+-- Recent errors:
+--   SELECT * FROM otel.error_logs_mv ORDER BY Timestamp DESC LIMIT 100;
+--
+-- Error count by service (last hour):
+--   SELECT ServiceName, count() as error_count
+--   FROM otel.error_logs_mv
+--   WHERE Timestamp > now() - INTERVAL 1 HOUR
+--   GROUP BY ServiceName
+--   ORDER BY error_count DESC;
+--
+-- Slowest traces (last hour):
+--   SELECT ServiceName, SpanName, TraceId, Duration/1000000 as duration_ms
+--   FROM otel.otel_traces
+--   WHERE Timestamp > now() - INTERVAL 1 HOUR
+--   ORDER BY Duration DESC
+--   LIMIT 20;
+--
+-- Gateway request metrics (last hour):
+--   SELECT
+--     toStartOfMinute(TimeUnix) as minute,
+--     sum(Count) as requests,
+--     avg(Sum / Count) * 1000 as avg_latency_ms
+--   FROM otel.otel_metrics_histogram
+--   WHERE MetricName = 'marie_gateway_request_seconds'
+--     AND TimeUnix > now() - INTERVAL 1 HOUR
+--   GROUP BY minute
+--   ORDER BY minute DESC;
+--
+-- Event viewer queries (use events_mv for fast filtering):
+--   SELECT * FROM otel.events_mv
+--   WHERE source_type = 'gateway' AND timestamp > now() - INTERVAL 1 HOUR
+--   ORDER BY timestamp DESC LIMIT 50;
+--
+--   SELECT source_type, event_type, sum(count) as total
+--   FROM otel.event_counts_mv
+--   WHERE timestamp_hour > now() - INTERVAL 24 HOUR
+--   GROUP BY source_type, event_type;

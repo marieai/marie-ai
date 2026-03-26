@@ -14,10 +14,11 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from opentelemetry._logs import SeverityNumber, set_logger_provider
+from opentelemetry._logs import SeverityNumber
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
 from marie.messaging.events import EventMessage
 from marie.messaging.toast_handler import ToastHandler
@@ -74,17 +75,19 @@ class OTELToastHandler(ToastHandler):
         self._max_export_batch_size = int(b_cfg.get("max_export_batch_size", 512))
         self._schedule_delay_millis = int(b_cfg.get("schedule_delay_millis", 5000))
 
-        # Initialize OTEL logger
+        # Initialize OTEL logger (lazy - set up on first emit)
         self._logger_provider: Optional[LoggerProvider] = None
         self._otel_logger = None
+        self._otel_initialized = False
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=self._queue_maxsize)
         self._worker_task: Optional[asyncio.Task] = None
         self._shutdown_event = asyncio.Event()
 
-        self._setup_otel_logger()
+        # Don't setup OTEL logger here - do it lazily on first emit
+        # This ensures the event loop is running when gRPC exporter is created
 
         logger.info(
-            f"OTELToastHandler initialized: endpoint={self._endpoint}, "
+            f"OTELToastHandler initialized (lazy): endpoint={self._endpoint}, "
             f"service={self._service_name}"
         )
 
@@ -99,12 +102,21 @@ class OTELToastHandler(ToastHandler):
 
     def _setup_otel_logger(self) -> None:
         """Initialize OTEL logger provider and exporter."""
+        # Strip http:// or https:// prefix for gRPC endpoint
+        endpoint = self._endpoint
+        if endpoint.startswith("http://"):
+            endpoint = endpoint[7:]
+        elif endpoint.startswith("https://"):
+            endpoint = endpoint[8:]
+
         exporter = OTLPLogExporter(
-            endpoint=self._endpoint,
+            endpoint=endpoint,
             insecure=self._insecure,
         )
 
-        self._logger_provider = LoggerProvider()
+        # Create resource with service name for proper ServiceName in ClickHouse
+        resource = Resource.create({SERVICE_NAME: self._service_name})
+        self._logger_provider = LoggerProvider(resource=resource)
         self._logger_provider.add_log_record_processor(
             BatchLogRecordProcessor(
                 exporter,
@@ -183,6 +195,11 @@ class OTELToastHandler(ToastHandler):
     def _emit_log(self, msg: EventMessage) -> None:
         """Emit an OTEL log record for the event."""
         try:
+            # Lazy initialization of OTEL logger (ensures event loop is running)
+            if not self._otel_initialized:
+                self._setup_otel_logger()
+                self._otel_initialized = True
+
             # Map status to severity
             severity_map = {
                 "INFO": SeverityNumber.INFO,
@@ -194,11 +211,17 @@ class OTELToastHandler(ToastHandler):
             severity_number = severity_map.get(msg.status.upper(), SeverityNumber.INFO)
             severity_text = msg.status.upper()
 
+            # Extract source type from URI (gateway://, job://, etc.)
+            source_type = (
+                msg.source.split("://")[0] if "://" in msg.source else "unknown"
+            )
+
             # Build log attributes
             attributes: Dict[str, Any] = {
                 "event.id": msg.id,
                 "event.type": msg.event,
                 "event.source": msg.source,
+                "event.source_type": source_type,
                 "job.id": msg.jobid,
                 "job.tag": msg.jobtag,
                 "status": msg.status,
@@ -218,7 +241,7 @@ class OTELToastHandler(ToastHandler):
 
             # Emit log record using kwargs API (SDK 1.39+)
             self._otel_logger.emit(
-                timestamp=msg.timestamp * 1_000_000,  # ms to ns
+                timestamp=msg.timestamp * 1_000_000_000,  # seconds to ns
                 observed_timestamp=int(time.time_ns()),
                 severity_text=severity_text,
                 severity_number=severity_number,

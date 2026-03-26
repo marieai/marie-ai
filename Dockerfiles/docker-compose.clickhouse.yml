@@ -38,9 +38,8 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - clickhouse_logs:/var/log/clickhouse-server
-      # Optional: custom configuration
-      # - ./config/clickhouse/config.xml:/etc/clickhouse-server/config.d/custom.xml:ro
-      # - ./config/clickhouse/users.xml:/etc/clickhouse-server/users.d/custom.xml:ro
+      # Bootstrap: create users, databases, and OTel schema on init
+      - ./config/clickhouse/init-clickhouse.sql:/docker-entrypoint-initdb.d/init-clickhouse.sql:ro
     ulimits:
       nofile:
         soft: 262144
