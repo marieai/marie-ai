@@ -8,7 +8,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from marie.utils.json import load_json_file
+from marie.utils.json import extract_records_from_json, load_json_file
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ def load_extracted_records(
             json_data = load_json_file(file_path, safe_parse=True)
             if not json_data:
                 continue
-            records = _extract_records_from_json(json_data, envelope_key)
+            records = extract_records_from_json(json_data, envelope_key)
             all_records.extend(records)
         except Exception as e:
             logger.error(f"Error loading records from {json_file}: {e}")
@@ -73,38 +73,6 @@ def load_extracted_records(
         f"{len(json_files)} file(s) in {data_source}"
     )
     return all_records
-
-
-def _extract_records_from_json(
-    json_data: Any, envelope_key: Optional[str] = None
-) -> List[Dict[str, Any]]:
-    """Extract a list of record dicts from parsed JSON data.
-
-    Resolution order mirrors ``core_parsers._extract_records_from_json``:
-
-    1. **Bare array** at root level.
-    2. **Explicit envelope** key from config.
-    3. **Auto-detect** — first dict key whose value is a list of dicts.
-    4. **Single object** at root with a ``"source"`` marker.
-    """
-    if isinstance(json_data, list):
-        return json_data
-
-    if not isinstance(json_data, dict):
-        return []
-
-    if envelope_key and envelope_key in json_data:
-        val = json_data[envelope_key]
-        return val if isinstance(val, list) else [val]
-
-    for _key, val in json_data.items():
-        if isinstance(val, list) and val and isinstance(val[0], dict):
-            return val
-
-    if "source" in json_data:
-        return [json_data]
-
-    return []
 
 
 def _resolve_data_source_dir(output_dir: str, data_source: str) -> Optional[str]:

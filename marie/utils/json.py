@@ -3,7 +3,7 @@ import io
 import json
 import logging
 import os.path
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from marie.numpyencoder import NumpyEncoder
 
@@ -76,3 +76,45 @@ def to_json(results, **json_kwargs) -> str:
         raise TypeError(
             f"Object of type {type(results)} with value of {str(results)} is not JSON serializable"
         ) from e
+
+
+def extract_records_from_json(
+    json_data: Any, envelope_key: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Extract a list of record dicts from parsed JSON data.
+
+    Domain-agnostic envelope detection with the following resolution order:
+
+    1. **Bare array** at root level.
+    2. **Explicit envelope** key from caller/config.
+    3. **Auto-detect** — first dict key whose value is a list of dicts.
+    4. **Single object** at root with a ``"source"`` marker.
+
+    Args:
+        json_data: Parsed JSON (list or dict).
+        envelope_key: Optional key name for the records array
+            (e.g. ``"wrapper"``, ``"extraction"``).  When provided the
+            function looks for this key first before falling back to
+            auto-detection.
+
+    Returns:
+        List of record dicts, or empty list if nothing matched.
+    """
+    if isinstance(json_data, list):
+        return json_data
+
+    if not isinstance(json_data, dict):
+        return []
+
+    if envelope_key and envelope_key in json_data:
+        val = json_data[envelope_key]
+        return val if isinstance(val, list) else [val]
+
+    for _key, val in json_data.items():
+        if isinstance(val, list) and val and isinstance(val[0], dict):
+            return val
+
+    if "source" in json_data:
+        return [json_data]
+
+    return []
