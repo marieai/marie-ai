@@ -159,6 +159,7 @@ class EtcdServiceRegistry(ServiceRegistry):
                     ttl,
                     addr_cls=addr_cls,
                     metadata=metadata,
+                    force=True,
                 )
                 logger.info(f"Re-registered services {service_names} at {service_addr}")
             except Exception as e:
@@ -233,8 +234,14 @@ class EtcdServiceRegistry(ServiceRegistry):
         service_ttl: int,
         addr_cls=None,
         metadata=None,
+        force: bool = False,
     ):
-        """Register services with the same address. Returns the lease object."""
+        """Register services with the same address. Returns the lease object.
+
+        :param force: If True, skip the existence check and always rebind the
+            key with a fresh lease.  Used during reconnection and lease-expired
+            re-registration so the key is never left bound to a dead lease.
+        """
         with self._lock:
             if isinstance(service_names, str):
                 service_names = [service_names]
@@ -249,17 +256,18 @@ class EtcdServiceRegistry(ServiceRegistry):
 
             for service_name in service_names:
                 key = form_service_key(service_name, service_addr)
-                resolved = self._etcd_client.get(key)
-                if resolved:
-                    logger.info(
-                        f"Service already registered : {service_name}@{service_addr}"
-                    )
-                    # still ensure we track it locally
-                    try:
-                        self._services[service_addr].add(service_name)
-                    except KeyError:
-                        self._services[service_addr] = {service_name}
-                    continue
+                if not force:
+                    resolved = self._etcd_client.get(key)
+                    if resolved:
+                        logger.info(
+                            f"Service already registered : {service_name}@{service_addr}"
+                        )
+                        # still ensure we track it locally
+                        try:
+                            self._services[service_addr].add(service_name)
+                        except KeyError:
+                            self._services[service_addr] = {service_name}
+                        continue
 
                 if addr_cls == JsonAddress:
                     addr_obj = addr_cls(service_addr, metadata=metadata)
@@ -376,6 +384,7 @@ class EtcdServiceRegistry(ServiceRegistry):
                         fallback_ttl,
                         addr_cls=reg_info.get('addr_cls'),
                         metadata=reg_info.get('metadata'),
+                        force=True,
                     )
 
             except Exception as e:

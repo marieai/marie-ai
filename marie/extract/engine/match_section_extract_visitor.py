@@ -52,19 +52,19 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         # TODO : Add dynamic engine loading and extraction
 
     def visit(self, context: ExecutionContext, parent: MatchSection) -> None:
-        self.logger.info("----------------------------------------")
-        self.logger.info("Processing MatchSectionExtractionProcessingVisitor")
+        self.logger.debug("----------------------------------------")
+        self.logger.debug("Processing MatchSectionExtractionProcessingVisitor")
         queue = deque([parent])
         while queue:
             current = queue.popleft()
             if current is None:
                 continue
-            self.logger.info(f'---- Extracting from : {current.type}')
+            self.logger.debug(f'---- Extracting from : {current.type}')
             if current.type == MatchSectionType.CONTENT:
                 self.process_section(context, parent, current)
             queue.extend(current.sections)
-        self.logger.info("Finished processing MatchSectionExtractionProcessingVisitor")
-        self.logger.info("----------------------------------------")
+        self.logger.debug("Finished processing MatchSectionExtractionProcessingVisitor")
+        self.logger.debug("----------------------------------------")
 
     def process_section(
         self, context: ExecutionContext, parent: MatchSection, section: MatchSection
@@ -156,7 +156,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         Currently supports type: table regions and reuses the same extraction flow by
         building header/footer mappings from the region entry matching the section title.
         """
-        self.logger.info("Processing regions section")
+        self.logger.debug("Processing regions section")
         assert context is not None, "Execution context must not be None."
         assert section is not None, "Section must not be None."
         assert parent is not None, "Parent section must not be None."
@@ -214,12 +214,12 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 end_line += 1
 
             # DEBUG: Log span details
-            self.logger.info(
+            self.logger.debug(
                 f"  Checking page {page_id}: start_line={start_line}, end_line={end_line}"
             )
 
             regions_by_page = document.regions_for_page(page_id)
-            self.logger.info(
+            self.logger.debug(
                 f"  Found {len(regions_by_page)} regions on page {page_id}"
             )
 
@@ -255,7 +255,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                             overlap_length / region_length if region_length > 0 else 0.0
                         )
                         is_in_scope = overlap_ratio >= 0.5
-                        self.logger.info(
+                        self.logger.debug(
                             f"    Region '{region.region_id}': lines {region_start}-{region_end}, "
                             f"scoping=relaxed, overlap={overlap_length}/{region_length} ({overlap_ratio:.1%}), "
                             f"in_scope={is_in_scope}"
@@ -265,7 +265,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         is_in_scope = (
                             region_start >= start_line and region_end <= end_line
                         )
-                        self.logger.info(
+                        self.logger.debug(
                             f"    Region '{region.region_id}': lines {region_start}-{region_end}, "
                             f"check: {region_start} >= {start_line} AND {region_end} <= {end_line} = {is_in_scope}"
                         )
@@ -308,7 +308,12 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         # (which carries the exact OCR line ranges from the source JSON), so
         # the normal BFS path (process_fields → process_regions) handles them
         # without any special flags or guards.
-        if len(sorted_regions) > 1:
+        #
+        # Guard: only split sections that were NOT already created by a
+        # previous split.  Without this, a child whose spans still overlap
+        # a large region (e.g. remarks) would re-split infinitely.
+        already_split = section.tags.get("_split_child", False)
+        if len(sorted_regions) > 1 and not already_split:
             self._split_multi_region_section(
                 context=context,
                 document=document,
@@ -428,9 +433,9 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     raise ValueError(
                         f"No rule for role_hint `{role_hint}` so we can't process it on layer `{layer.layer_name}`."
                     )
-                self.logger.warning(
-                    f"No rule for role_hint `{role_hint}` so we can't process it on layer `{layer.layer_name}`."
-                )
+                    self.logger.info(
+                        f"No rule for role_hint `{role_hint}` so we can't process it on layer `{layer.layer_name}`."
+                    )
                 continue
 
             parse_method = section_rule.get("parse")
@@ -446,7 +451,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             for structured_section in structured_sections:
                 # Delegate to the appropriate processor based on the parse method.
                 if parse_method == "table":
-                    self.logger.info(
+                    self.logger.debug(
                         f"Table processing for region with role_hint '{role_hint}'."
                     )
                     self._process_region_as_table(
@@ -457,7 +462,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         template_fields_repeating,
                     )
                 elif parse_method == "kv":
-                    self.logger.info(
+                    self.logger.debug(
                         f"KV processing for region with role_hint '{role_hint}' ."
                     )
 
@@ -519,6 +524,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             child.label = f"{section.label}::region-{region.region_id}"
             child.span = child_spans
             child.parent = section
+            child.tags["_split_child"] = True
 
             section.add_section(child)
             self.logger.debug(
@@ -970,10 +976,6 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         "level": "DOCUMENT",  # Footer values are at document level
                     }
 
-        # Process each span in the section
-        self.logger.info(f'field_to_header_map: {field_to_header_map}')
-        self.logger.info(f'field_to_footer_map: {field_to_footer_map}')
-
         # Now process each TableBlock
         self.logger.debug(
             f"Identified {len(table_blocks)} table block(s) to process in this region"
@@ -1042,7 +1044,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         if col_index in claimed_columns or not header_text:
                             continue
                         if self._ci(selector) == self._ci(header_text):
-                            self.logger.info(
+                            self.logger.debug(
                                 f"Matched header '{selector}' for field '{field_name}' at column {col_index} "
                                 f"(header='{header_text}', exact)"
                             )
@@ -1062,7 +1064,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                             if self._selector_matches_text(
                                 selector, header_text, use_regex_flag
                             ):
-                                self.logger.info(
+                                self.logger.debug(
                                     f"Matched header '{selector}' for field '{field_name}' at column {col_index} "
                                     f"(header='{header_text}')"
                                 )
@@ -1087,11 +1089,25 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             # Add virtual columns for value_lookup fields that did not match
             # any header.  These carry no physical cell — they are populated
             # later by _apply_value_lookup from the source record.
+            # Also include columns that are targets of another column's
+            # value_lookup.derived_fields (they need a Field stub in each
+            # row so the derived-fields distribution can fill them).
+            derived_targets: set = set()
+            for _fn, _cc in columns_cfg.items():
+                if isinstance(_cc, dict):
+                    vl = _cc.get("value_lookup")
+                    if isinstance(vl, dict):
+                        df = vl.get("derived_fields")
+                        if isinstance(df, dict):
+                            derived_targets.update(df.values())
+
             for field_name, header_cfg in field_to_header_map.items():
                 if field_name in columns_to_process:
                     continue
                 col_cfg = columns_cfg.get(field_name, {})
-                if isinstance(col_cfg, dict) and "value_lookup" in col_cfg:
+                if isinstance(col_cfg, dict) and (
+                    "value_lookup" in col_cfg or field_name in derived_targets
+                ):
                     columns_to_process[field_name] = {
                         "cell_index": -1,  # virtual: no physical cell
                         "header_config": header_cfg,
@@ -1243,6 +1259,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 role_hint = source_path.split(":", 1)[1]
                 resolver_path = dist_cfg.get("resolver", "")
                 args = dist_cfg.get("args", [])
+                derived_fields = dist_cfg.get("derived_fields", None)
 
                 if document and resolver_path:
                     regions = document.regions_by_role(role_hint)
@@ -1255,15 +1272,38 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                                 row, args, source_record, row_idx
                             )
                             if row_key and row_key in lookup_map:
-                                for field in row.fields:
-                                    if field.field_name != field_name:
-                                        continue
-                                    if strategy == "fill_empty" and field.value:
-                                        continue
-                                    field.value = lookup_map[row_key]
-                                    if not field.value_original:
-                                        field.value_original = lookup_map[row_key]
-                                    distributed_count += 1
+                                resolved_value = lookup_map[row_key]
+
+                                if derived_fields and isinstance(resolved_value, dict):
+                                    # Derived-fields mode: resolver returned a dict
+                                    # — distribute each key to its target column.
+                                    for (
+                                        derived_key,
+                                        target_col,
+                                    ) in derived_fields.items():
+                                        derived_val = resolved_value.get(derived_key)
+                                        if derived_val is None:
+                                            continue
+                                        for field in row.fields:
+                                            if field.field_name != target_col:
+                                                continue
+                                            if strategy == "fill_empty" and field.value:
+                                                continue
+                                            field.value = derived_val
+                                            if not field.value_original:
+                                                field.value_original = derived_val
+                                            distributed_count += 1
+                                else:
+                                    # Legacy mode: resolver returned a plain str.
+                                    for field in row.fields:
+                                        if field.field_name != field_name:
+                                            continue
+                                        if strategy == "fill_empty" and field.value:
+                                            continue
+                                        field.value = resolved_value
+                                        if not field.value_original:
+                                            field.value_original = resolved_value
+                                        distributed_count += 1
                     else:
                         self.logger.debug(
                             f"value_lookup: no regions found for role '{role_hint}'"
@@ -1852,7 +1892,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                             # Check if the selector is present in the header row
                             for cell_index, cell in enumerate(header_row):
                                 if selector in cell.lines[0].line:
-                                    self.logger.info(
+                                    self.logger.debug(
                                         f"Matched header '{selector}' for field '{field_name}'"
                                     )
                                     processed_column = cell_index
@@ -2240,7 +2280,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                     # derived fields can be None if the parsing did not find a value for it
                     # we are skipping those fields
                     if map_value is None:
-                        self.logger.warning(f"Derived key '{derived_key}' has no value")
+                        self.logger.debug(f"Derived key '{derived_key}' has no value")
                         continue
 
                     child_field = Field(

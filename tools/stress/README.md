@@ -155,6 +155,51 @@ python networking_stresser.py --no-chaos --duration 60
 
 ---
 
+### 3. `etcd_outage_simulator.py`
+
+Injects ETCD outages by calling `docker pause` / `docker unpause` against a
+running ETCD container such as `etcd-single`.
+
+#### Features
+
+- **Repeatable outage cycles**: Pause/recover ETCD for a fixed number of cycles
+- **Safe cleanup**: Attempts to unpause the container if the script is interrupted
+- **Jitter support**: Add randomness to outage and recovery windows
+- **Dry-run mode**: Validate timing and workflow without touching Docker
+
+#### Usage
+
+```bash
+# Single 10 second ETCD outage against the default etcd-single container
+python tools/stress/etcd_outage_simulator.py --pause-seconds 10 --recover-seconds 20
+
+# Three outage cycles with jitter
+python tools/stress/etcd_outage_simulator.py \
+    --cycles 3 \
+    --pause-seconds 8 \
+    --recover-seconds 15 \
+    --pause-jitter 2 \
+    --recover-jitter 3
+
+# Preview the outage schedule without running docker commands
+python tools/stress/etcd_outage_simulator.py --dry-run --cycles 2
+```
+
+#### Typical workflow for reconnect testing
+
+```bash
+# Terminal 1: keep gateway traffic flowing
+python tools/stress/gateway_stresser.py --protocol http --http-port 51000 --duration 120
+
+# Terminal 2: inject ETCD outages
+python tools/stress/etcd_outage_simulator.py --cycles 3 --pause-seconds 10 --recover-seconds 20
+
+# Terminal 3: watch logs or ETCD keys
+docker exec etcd-single etcdctl get "/marie/gateway/marie" --prefix=true
+```
+
+---
+
 ## Prerequisites
 
 1. **Marie gateway must be running**:
