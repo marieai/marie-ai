@@ -1,4 +1,5 @@
 import json
+import json_repair
 from typing import Any
 
 import yaml
@@ -37,7 +38,7 @@ def parse_json_markdown(text: str) -> Any:
     json_string = _marshal_llm_to_json(text)
 
     try:
-        json_obj = json.loads(json_string)
+        json_obj = json_repair.loads(json_string)
     except json.JSONDecodeError as e_json:
         try:
             import json5
