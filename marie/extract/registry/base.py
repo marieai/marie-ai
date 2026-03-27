@@ -184,7 +184,6 @@ class ComponentRegistry:
                 # Import built-in context providers for registration
                 import marie.extract.annotators.context_providers  # noqa: F401
                 import marie.extract.results.core.core_parsers  # noqa: F401
-                import marie.extract.results.core.core_processing_visitors  # noqa: F401
                 import marie.extract.results.core.core_regions_processors  # noqa: F401
                 import marie.extract.results.core.core_template_builders  # noqa: F401
                 import marie.extract.results.core.core_validators  # noqa: F401
