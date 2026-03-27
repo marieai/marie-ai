@@ -109,10 +109,22 @@ class OpenAIEngine(EngineLM):
         self.logger = MarieLogger(self.__class__.__name__).logger
         processor_kwargs = processor_kwargs or {}
         api_key = os.getenv("OPENAI_API_KEY")
+
+        import httpx
+
+        http_client = httpx.AsyncClient(
+            limits=httpx.Limits(
+                max_connections=40,
+                max_keepalive_connections=20,
+            ),
+        )
+
         if not base_url:
-            self.client = AsyncOpenAI(api_key=api_key)
+            self.client = AsyncOpenAI(api_key=api_key, http_client=http_client)
         else:
-            self.client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+            self.client = AsyncOpenAI(
+                base_url=base_url, api_key=api_key, http_client=http_client
+            )
 
         models = self.client.models.list()
         self.model_string = model_name
