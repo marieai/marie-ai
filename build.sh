@@ -19,6 +19,12 @@ declare -A PROFILES=(
     ["marie-cuda"]="marieai/marie:${VERSION}-cuda:./Dockerfiles/cuda-312.Dockerfile"
 )
 
+# Map profile keys to extra-requirements.txt variant suffix
+declare -A REQUIREMENTS_VARIANT=(
+    ["marie-gateway-cpu"]="CPU"
+    ["marie-cuda"]="CUDA"
+)
+
 # Default configuration (will be overridden by profile selection)
 DOCKERFILE_PATH=""
 IMAGE_NAME=""
@@ -203,10 +209,41 @@ execute_post_commit_hook() {
     fi
 }
 
+# Stage a lightweight build context to avoid scanning the full repo (model_zoo alone is 81GB+).
+# Only the directories/files referenced by the Dockerfile are copied.
+stage_build_context() {
+    local context_dir
+    context_dir=$(mktemp -d "${TMPDIR:-/tmp}/marie-build-ctx.XXXXXX")
+
+    log_info "Staging build context in $context_dir ..."
+
+    # Directories
+    cp -a marie/          "$context_dir/marie/"
+    cp -a marie_server/   "$context_dir/marie_server/"   2>/dev/null || true
+    cp -a marie_cli/      "$context_dir/marie_cli/"      2>/dev/null || true
+    cp -a hubble/         "$context_dir/hubble/"         2>/dev/null || true
+    cp -a daemon/         "$context_dir/daemon/"         2>/dev/null || true
+    cp -a docarray/       "$context_dir/docarray/"       2>/dev/null || true
+    cp -a wheels/         "$context_dir/wheels/"
+    cp -a patches/        "$context_dir/patches/"
+    cp -a packages/       "$context_dir/packages/"
+
+    # Individual files
+    cp setup.py           "$context_dir/"
+    cp *requirements.txt  "$context_dir/"                2>/dev/null || true
+    cp README.md          "$context_dir/"                2>/dev/null || true
+    cp MANIFEST.in        "$context_dir/"                2>/dev/null || true
+    cp im-policy.xml      "$context_dir/"                2>/dev/null || true
+    cp fastentrypoints.py "$context_dir/"                2>/dev/null || true
+
+    echo "$context_dir"
+}
+
 # Build Docker image
 build_image() {
     local dockerfile_path=$1
     local full_image_name=$2
+    local req_variant=${3:-}
 
     if [[ ! -f "$dockerfile_path" ]]; then
         log_error "Dockerfile not found at: $dockerfile_path"
@@ -218,11 +255,32 @@ build_image() {
     log_info "PIP tag: $PIP_TAG"
     log_info "Version: $VERSION"
 
-    # Debug: List what's actually in the build context
-    log_info "Contents of build context:"
-    ls -la patches/ wheels/ || log_warn "Some directories might be missing"
+    # Stage a clean build context (~300MB instead of scanning 86GB)
+    local build_context
+    build_context=$(stage_build_context)
+    trap "rm -rf '$build_context'" EXIT
 
-    DOCKER_BUILDKIT=1 docker build . \
+    # Copy the correct extra-requirements variant into the staged context
+    if [[ -n "$req_variant" ]]; then
+        local variant_file="extra-requirements.txt-${req_variant}"
+        if [[ -f "$variant_file" ]]; then
+            log_info "Using requirements variant: ${variant_file} -> extra-requirements.txt"
+            cp "$variant_file" "$build_context/extra-requirements.txt"
+        else
+            log_error "Requirements variant file not found: $variant_file"
+            rm -rf "$build_context"
+            trap - EXIT
+            return 1
+        fi
+    else
+        log_warn "No requirements variant specified, using default extra-requirements.txt"
+    fi
+
+    log_info "Contents of build context:"
+    ls -la "$build_context/patches/" "$build_context/wheels/" || log_warn "Some directories might be missing"
+    log_info "Build context size: $(du -sh "$build_context" | cut -f1)"
+
+    DOCKER_BUILDKIT=1 docker build "$build_context" \
         --progress=plain \
         --network=host \
         --cpuset-cpus="0-$CPU_COUNT" \
@@ -235,7 +293,11 @@ build_image() {
         -f "$dockerfile_path" \
         -t "$full_image_name"
 
-    if [[ $? -eq 0 ]]; then
+    local build_exit=$?
+    rm -rf "$build_context"
+    trap - EXIT
+
+    if [[ $build_exit -eq 0 ]]; then
         log_info "Docker image built successfully: $full_image_name"
         return 0
     else
@@ -265,11 +327,12 @@ verify_image() {
 # Build single profile
 build_single_profile() {
     local profile_key=$1
+    local variant="${REQUIREMENTS_VARIANT[$profile_key]:-}"
 
     log_info "Building profile: $profile_key (Version: $VERSION)"
     parse_profile_config "$profile_key"
 
-    if build_image "$DOCKERFILE_PATH" "$FULL_IMAGE_NAME"; then
+    if build_image "$DOCKERFILE_PATH" "$FULL_IMAGE_NAME" "$variant"; then
         verify_image "$FULL_IMAGE_NAME"
         return $?
     else

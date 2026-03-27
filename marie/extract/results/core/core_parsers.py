@@ -16,7 +16,7 @@ from marie.extract.schema import ExtractionResult, Segment, TableExtractionResul
 from marie.extract.structures import UnstructuredDocument
 from marie.extract.structures.line_with_meta import LineWithMeta
 from marie.extract.structures.structured_region import StructuredRegion
-from marie.utils.json import load_json_file
+from marie.utils.json import extract_records_from_json, load_json_file
 
 
 @register_parser("noop")
@@ -469,55 +469,6 @@ def _build_region_section_config(sections_conf: list) -> Dict:
     }
 
 
-def _extract_records_from_json(json_data, envelope_key: str = None) -> list:
-    """Extract a list of record dicts from parsed JSON data.
-
-    The function is domain-agnostic — it does not assume any specific
-    envelope key (like ``"extraction"``).  Instead, the caller can provide
-    an explicit *envelope_key* via config, or the function will
-    auto-detect using the following resolution order:
-
-    1. **Bare array** — ``[{...}, {...}]`` at root level.
-    2. **Explicit envelope** — ``envelope_key`` is set and present in the dict.
-    3. **Auto-detect envelope** — find the first dict key whose value is a
-       non-empty list of dicts.
-    4. **Single object** — the root dict itself looks like a record
-       (has ``"source"`` key).
-
-    Args:
-        json_data: Parsed JSON (list or dict).
-        envelope_key: Optional key name for the records array
-            (e.g. ``"extraction"``, ``"records"``).  When provided the
-            function looks for this key first before falling back to
-            auto-detection.
-
-    Returns:
-        List of record dicts, or empty list if nothing matched.
-    """
-    # Format 1: bare array at root
-    if isinstance(json_data, list):
-        return json_data
-
-    if not isinstance(json_data, dict):
-        return []
-
-    # Format 2: explicit envelope key from config
-    if envelope_key and envelope_key in json_data:
-        val = json_data[envelope_key]
-        return val if isinstance(val, list) else [val]
-
-    # Format 3: auto-detect — first key whose value is a list of dicts
-    for key, val in json_data.items():
-        if isinstance(val, list) and val and isinstance(val[0], dict):
-            return val
-
-    # Format 4: single record at root (has "source" or known record markers)
-    if "source" in json_data:
-        return [json_data]
-
-    return []
-
-
 def _build_regions_from_json(
     doc: UnstructuredDocument,
     json_path: str,
@@ -541,7 +492,7 @@ def _build_regions_from_json(
     if not json_data:
         return []
 
-    records = _extract_records_from_json(json_data, envelope_key=envelope_key)
+    records = extract_records_from_json(json_data, envelope_key=envelope_key)
     if not records:
         logging.warning(
             f"No records found in {json_path} "
@@ -627,7 +578,7 @@ def _build_regions_from_json(
                 region_id=region_id,
                 page=page_index,
                 page_y=start_line,
-                page_h=end_line - start_line,
+                page_h=max(end_line - start_line, 1),
                 span_mode="relaxed" if has_aggregated_sources else "strict",
             )
 

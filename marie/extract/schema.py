@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ReasoningMixin:
@@ -26,6 +26,19 @@ class Segment(BaseModel, ReasoningMixin):
         ...,
         description='A string formatted as `"Found in row X"`, where X is the current line number that was matched to in the OCR Data.',
     )
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def coerce_none_value(cls, v):
+        """Coerce null values from LLM output to empty string.
+
+        LLMs may return null for fields not found in the document.
+        Rather than rejecting the entire page's extractions, convert
+        null to empty string so downstream processing can continue.
+        """
+        if v is None:
+            return ""
+        return v
 
 
 class ExtractionResult(BaseModel):

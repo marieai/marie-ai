@@ -430,16 +430,25 @@ class EtcdClient(object):
                 now_mono = time.monotonic()
                 cur_state = self.get_connection_state()
 
-                # Reset counters when recovering from FAILED to CONNECTED
-                # (recovery happened externally, reset our local tracking)
+                if self._in_recovery:
+                    consecutive_failures = 0
+                    consecutive_successes = 0
+                    last_ok_monotonic = now_mono
+                    prev_state = cur_state
+                    self._monitor_stop.wait(check_interval)
+                    continue
+
+                # Reset counters on any clean transition back into CONNECTED
+                # so stale failures from the prior client/session do not
+                # immediately flap the state back to DISCONNECTED.
                 if (
-                    prev_state == ConnectionState.FAILED
+                    prev_state != ConnectionState.CONNECTED
                     and cur_state == ConnectionState.CONNECTED
                 ):
                     consecutive_failures = 0
                     consecutive_successes = 0
                     last_ok_monotonic = now_mono
-                    logger.debug("Health monitor: reset counters after recovery")
+                    logger.debug("Health monitor: reset counters after reconnect")
 
                 prev_state = cur_state
 
@@ -1368,6 +1377,7 @@ class EtcdClient(object):
         This method is called when explicit reconnection is needed.
         """
         try:
+            self._in_recovery = True
             self._set_connection_state(ConnectionState.RECONNECTING)
             logger.debug("Closing existing etcd client...")
             if self.client:
@@ -1402,6 +1412,8 @@ class EtcdClient(object):
             # Don't log here - connect() already logged the error
             self._set_connection_state(ConnectionState.FAILED, e)
             raise
+        finally:
+            self._in_recovery = False
 
     def connect(self, _from_reconnect: bool = False) -> bool:
         """Connect to etcd using the appropriate client type with connection state management.
