@@ -51,6 +51,7 @@ Annotators exist to:
 - LLM Annotator
   - Purpose: Use a language model to interpret content and extract fields, labels, or regions—optionally multimodal (image + text).
   - Strengths: Robust to variation, can infer semantics, good for complex or loosely structured documents.
+  - Refinement passes: Optionally run multiple sequential extraction rounds. Each refinement pass feeds the previous accepted output back into the prompt so the model can correct errors and fill gaps. Only the last known good pass is promoted to the live output directory. See [Configuration: Refinement Passes](annotators-config.md#refinement-passes) for details.
   - Use when: Layouts vary, semantics matter, or you need flexible reasoning beyond strict patterns.
 
 - LLM Table Annotator

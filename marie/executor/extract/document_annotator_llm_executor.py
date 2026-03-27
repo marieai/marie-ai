@@ -9,6 +9,7 @@ from marie.executor.extract.document_annotator_executor import (
     DocumentAnnotatorExecutor,
 )
 from marie.extract.annotators.llm_annotator import LLMAnnotator
+from marie.extract.registry.loader import initialize_components_from_config
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 
@@ -23,6 +24,7 @@ class DocumentAnnotatorLLMExecutor(DocumentAnnotatorExecutor):
         num_worker_preprocess: int = 4,
         storage: dict[str, any] = None,
         llm_tracking: dict[str, any] = None,
+        parsers: dict[str, any] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ) -> None:
@@ -33,6 +35,14 @@ class DocumentAnnotatorLLMExecutor(DocumentAnnotatorExecutor):
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
         ).logger
+
+        if parsers:
+            result = initialize_components_from_config(parsers)
+            logger.info(f"Loaded modules: {result['loaded']}")
+            logger.info(f"Failed modules: {result['failed']}")
+            logger.info(
+                f"Total context providers: {result.get('total_context_providers', 0)}"
+            )
 
         logger.info(f"Started executor : {self.__class__.__name__}")
 
@@ -70,4 +80,5 @@ class DocumentAnnotatorLLMExecutor(DocumentAnnotatorExecutor):
             # we log the error and return an error message, later we can improve this to mark the job as failed
             # by introducing an improved error handling mechanism
             self.logger.error(f"Error during annotation: {e}")
+            raise e
             return {'status': 'error', 'message': str(e)}

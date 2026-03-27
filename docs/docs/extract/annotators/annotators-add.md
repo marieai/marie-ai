@@ -75,13 +75,45 @@ Tip: Start with default parser + a minimal validator. Add stricter validators on
 - Prompt iteration:
   - Adjust the Jinja2 prompt iteratively to stabilize field names, formats, and structure.
 
-### 8) Performance and cost tips
+### 8) Enable refinement passes (optional)
+
+For LLM annotators where extraction quality benefits from iterative correction, enable refinement passes. This runs the extraction multiple times, feeding each accepted result back into the prompt:
+
+```yaml
+annotators:
+  my-new-annotator:
+    annotator_type: "llm"
+    model_config:
+      model_name: your_model_name
+      prompt_path: "./my-new-annotator.j2"
+      expect_output: "json"
+
+      refine_passes: 1                          # one refinement pass after initial extraction
+      refine_prompt_path: "./my-new-annotator-refine.j2"  # optional separate refinement prompt
+      pass_temperatures: [0.0, 0.2]             # optional per-pass temperature
+      pass_models: [fast_model, accurate_model]  # optional: cheap model first, better model for refinement
+
+      refinement_validation:
+        require_same_units: true
+        max_segment_drop_ratio: 0.2
+```
+
+Key considerations:
+- `refine_passes: N` means `N + 1` total LLM calls per annotator run. Start with `1` and measure quality gain before adding more.
+- Use `pass_models` to optimize cost: a cheap/fast model for initial extraction and a more capable model for refinement.
+- The refinement prompt should include a `PREVIOUS_EXTRACTION` placeholder for prior-result injection.
+- Refinement applies only to `annotator_type: "llm"`, not `"llm_table"`.
+- Only enable refinement for layouts where measured quality improves — it increases both cost and latency.
+
+See [Configuration: Refinement Passes](annotators-config.md#refinement-passes) for full details.
+
+### 9) Performance and cost tips
 - Keep prompts concise and deterministic; anchor field names and expected schema.
 - Set top_p conservatively (e.g., 1.0 or lower) for more predictable outputs.
 - For large documents, consider page/region batching if supported by your workflow.
 - For tables, prefer llm_table with multimodal: true when visual structure matters.
 
-### 9) Troubleshooting
+### 10) Troubleshooting
 - Prompt not found:
   - Verify prompt_path is correct and relative to TID-layout_id/annotator/.
 - Output not parseable:
@@ -91,7 +123,7 @@ Tip: Start with default parser + a minimal validator. Add stricter validators on
 - Cross-layout confusion:
   - Ensure the correct layout_id is selected at runtime so the correct config and prompts load.
 
-### 10) Minimal templates to copy
+### 11) Minimal templates to copy
 - New LLM annotator skeleton:
 
 ```yaml
