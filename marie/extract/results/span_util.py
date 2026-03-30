@@ -114,7 +114,6 @@ def pagespan_from_start_stop(
     sp = start.page
     ep = stop.page
 
-    print(f"Start page = Page {sp}, Stop page = Page {ep}")
     # TODO: Implement two different strategies for start and stop (LINE and COORDINATE)
 
     for i in range(sp, ep + 1):
