@@ -89,10 +89,14 @@ class TableContextProvider(ContextProvider):
             # Sort tables by their starting line number for deterministic order
             # This ensures consistent _t0, _t1, etc. assignment across runs
             def get_table_start_line(table: Dict[str, Any]) -> int:
-                """Get the first header line number for sorting."""
+                """Get the first header/row line number for sorting."""
                 header_rows = table.get("header_rows", [])
+                rows = table.get("rows", [])
                 if header_rows and isinstance(header_rows[0], dict):
                     return header_rows[0].get("line_number", float("inf"))
+                elif rows and isinstance(rows[0], dict):
+                    # use row line number if header is missing (e.g. continuation table)
+                    return rows[0].get("line_number", float("inf"))
                 return float("inf")
 
             filtered.sort(key=get_table_start_line)
