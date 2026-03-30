@@ -1,9 +1,12 @@
 import json
+import logging
 import os
 from dataclasses import dataclass
 from typing import List
 
 from graphviz import Digraph
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -64,8 +67,8 @@ class AdaptiveDFA:
                 self.transition_history.append(record)
                 self.current_state = next_state
             else:
-                print(
-                    f"❌ Error: No valid transition from '{self.current_state.name}' to '{next_state.name}', stopping."
+                logger.error(
+                    f"No valid transition from '{self.current_state.name}' to '{next_state.name}', stopping."
                 )
                 break
 
@@ -73,7 +76,7 @@ class AdaptiveDFA:
         self.current_state = State("BEGIN")
         self.transition_history.clear()
         self._step_counter = 0
-        print("🔄 DFA has been reset to the BEGIN state.")
+        logger.debug("DFA has been reset to the BEGIN state.")
 
     def generate_state_diagram(self, output_file="dfa_diagram"):
         dot = Digraph()
@@ -91,12 +94,12 @@ class AdaptiveDFA:
     def print_transition_history(self):
         if True:
             return
-        print("📜 Transition History:")
+        logger.debug("Transition History:")
         for record in self.transition_history:
-            print(
-                f"[{record.step}] ➡️ {record.from_state.name} -> {record.to_state.name} on '{record.label}'"
+            logger.debug(
+                f"[{record.step}] {record.from_state.name} -> {record.to_state.name} on '{record.label}'"
             )
-        print(f"🏁 Final State: {self.current_state.name}")
+        logger.debug(f"Final State: {self.current_state.name}")
 
     def get_all_transitions(self) -> List[TransitionRecord]:
         return self.transition_history

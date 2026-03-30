@@ -24,6 +24,7 @@ from marie.extract.annotators.util import (
     scan_and_process_images,
 )
 from marie.extract.structures.unstructured_document import UnstructuredDocument
+from marie.helper import run_async
 from marie.logging_core.logger import MarieLogger
 from marie.utils.types import to_bool
 from marie.utils.utils import ensure_exists
@@ -36,7 +37,7 @@ SYSTEM_PROMPT = ""
 _SUCCESS_MARKER = "_SUCCESS.yaml"
 
 
-def sanitize_path(path: str) -> str:
+def sanitize_path(path: str) -> Optional[str]:
     """Remove any path traversal attempts from the given path"""
     return os.path.basename(path) if path else None
 
@@ -125,18 +126,15 @@ class LLMAnnotator(DocumentAnnotator):
 
         if self.refine_passes < 0:
             raise ValueError("refine_passes must be >= 0")
-        if (
-            self.pass_temperatures
-            and len(self.pass_temperatures) < self.refine_passes + 1
-        ):
+        if self.pass_temperatures and len(self.pass_temperatures) < self.refine_passes:
             raise ValueError(
                 f"pass_temperatures length ({len(self.pass_temperatures)}) must be "
-                f">= refine_passes + 1 ({self.refine_passes + 1})"
+                f">= refine_passes ({self.refine_passes})"
             )
-        if self.pass_models and len(self.pass_models) < self.refine_passes + 1:
+        if self.pass_models and len(self.pass_models) < self.refine_passes:
             raise ValueError(
                 f"pass_models length ({len(self.pass_models)}) must be "
-                f">= refine_passes + 1 ({self.refine_passes + 1})"
+                f">= refine_passes ({self.refine_passes})"
             )
 
         # Output all parameters for debugging purposes
@@ -333,10 +331,17 @@ class LLMAnnotator(DocumentAnnotator):
     # ------------------------------------------------------------------
 
     def _completion_params_for_pass(self, pass_index: int) -> dict:
-        """Return completion params with optional per-pass temperature override."""
+        """Return completion params with optional per-pass temperature override.
+
+        Pass 0 (initial extraction) always uses the base temperature.
+        Refinement passes (1..N) index into ``pass_temperatures`` using
+        ``pass_index - 1``, so the config only lists refinement entries.
+        """
         params = dict(self.completion_params)
-        if self.pass_temperatures and pass_index < len(self.pass_temperatures):
-            params["temperature"] = self.pass_temperatures[pass_index]
+        if pass_index > 0 and self.pass_temperatures:
+            refine_idx = pass_index - 1
+            if refine_idx < len(self.pass_temperatures):
+                params["temperature"] = self.pass_temperatures[refine_idx]
         return params
 
     # ------------------------------------------------------------------
@@ -346,13 +351,16 @@ class LLMAnnotator(DocumentAnnotator):
     def _engine_for_pass(self, pass_index: int) -> EngineLM:
         """Get the LLM engine for a specific pass.
 
-        If ``pass_models`` is configured and has an entry for this pass,
-        returns the engine for that model via ``route_llm_engine()`` (cached).
-        Otherwise returns ``self.engine``.
+        Pass 0 (initial extraction) always uses ``self.engine`` (the base
+        model configured on the annotator).  Refinement passes (1..N) index
+        into ``pass_models`` using ``pass_index - 1``, so the config only
+        lists refinement-specific models.
         """
-        if self.pass_models and pass_index < len(self.pass_models):
-            model_name = self.pass_models[pass_index]
-            return route_llm_engine(model_name, self.multimodal)
+        if pass_index > 0 and self.pass_models:
+            refine_idx = pass_index - 1
+            if refine_idx < len(self.pass_models):
+                model_name = self.pass_models[refine_idx]
+                return route_llm_engine(model_name, self.multimodal)
         return self.engine
 
     # ------------------------------------------------------------------
@@ -700,10 +708,6 @@ class LLMAnnotator(DocumentAnnotator):
         except Exception as e:
             self.logger.warning(f"Failed to write context debug: {e}")
 
-    # ------------------------------------------------------------------
-    # Refinement orchestration (Step 2l)
-    # ------------------------------------------------------------------
-
     async def _arun_refine_passes(self, document: UnstructuredDocument) -> None:
         """Run initial extraction + N refinement passes, then promote the winner."""
         # Recovery
@@ -716,7 +720,7 @@ class LLMAnnotator(DocumentAnnotator):
             f"({self.refine_passes} refinement pass(es))"
         )
 
-        # ---- Pass 0: initial extraction ----
+        # Pass 0: initial extraction
         pass0_dir = ensure_exists(self._pass_dir(run_id, 0))
         pass0_prompt = self.prompt_text.replace("PREVIOUS_EXTRACTION", "")
         pass0_engine = self._engine_for_pass(0)
@@ -744,7 +748,7 @@ class LLMAnnotator(DocumentAnnotator):
             f"{last_good_report.total_element_count} elements"
         )
 
-        # ---- Refinement passes 1..N ----
+        # Refinement passes 1..N
         for i in range(1, self.refine_passes + 1):
             try:
                 pass_dir = ensure_exists(self._pass_dir(run_id, i))
@@ -778,14 +782,13 @@ class LLMAnnotator(DocumentAnnotator):
                     self.logger.info(
                         f"Pass {i} rejected; keeping pass {last_good_pass}"
                     )
-            except Exception:
+            except Exception as e:
                 self.logger.warning(
-                    f"Pass {i} failed with exception; "
+                    f"Pass {i} failed with exception: {e}; "
                     f"keeping pass {last_good_pass}",
                     exc_info=True,
                 )
 
-        # ---- Atomic promotion ----
         winner_dir = self._pass_dir(run_id, last_good_pass)
         self._promote_pass_atomically(winner_dir, run_id)
 
@@ -805,10 +808,6 @@ class LLMAnnotator(DocumentAnnotator):
                 )
         except OSError:
             pass  # Non-critical
-
-    # ------------------------------------------------------------------
-    # Public annotation methods (Step 2m)
-    # ------------------------------------------------------------------
 
     def annotate(self, document: UnstructuredDocument, frames: List) -> None:
         """
@@ -835,24 +834,21 @@ class LLMAnnotator(DocumentAnnotator):
             os.makedirs(self.output_dir, exist_ok=True)
 
         if self.refine_passes > 0:
-            from marie.helper import run_async
-
             run_async(self._arun_refine_passes(document))
-            return
-
-        scan_and_process_images(
-            self.frames_dir,
-            self.output_dir,
-            self.prompt_text,
-            document,
-            engine=self.engine,
-            is_multimodal=self.multimodal,
-            expect_output=self.expect_output,
-            context_manager=self.context_manager,
-            completion_params=self.completion_params,
-            mm_processor_kwargs=self.mm_processor_kwargs,
-            mini_batch_size=self.mini_batch_size,
-        )
+        else:
+            scan_and_process_images(
+                self.frames_dir,
+                self.output_dir,
+                self.prompt_text,
+                document,
+                engine=self.engine,
+                is_multimodal=self.multimodal,
+                expect_output=self.expect_output,
+                context_manager=self.context_manager,
+                completion_params=self.completion_params,
+                mm_processor_kwargs=self.mm_processor_kwargs,
+                mini_batch_size=self.mini_batch_size,
+            )
 
         if self.output_transform:
             self._apply_output_transform()
@@ -878,21 +874,20 @@ class LLMAnnotator(DocumentAnnotator):
 
         if self.refine_passes > 0:
             await self._arun_refine_passes(document)
-            return
-
-        await ascan_and_process_images(
-            self.frames_dir,
-            self.output_dir,
-            self.prompt_text,
-            document,
-            engine=self.engine,
-            is_multimodal=self.multimodal,
-            expect_output=self.expect_output,
-            context_manager=self.context_manager,
-            completion_params=self.completion_params,
-            mm_processor_kwargs=self.mm_processor_kwargs,
-            mini_batch_size=self.mini_batch_size,
-        )
+        else:
+            await ascan_and_process_images(
+                self.frames_dir,
+                self.output_dir,
+                self.prompt_text,
+                document,
+                engine=self.engine,
+                is_multimodal=self.multimodal,
+                expect_output=self.expect_output,
+                context_manager=self.context_manager,
+                completion_params=self.completion_params,
+                mm_processor_kwargs=self.mm_processor_kwargs,
+                mini_batch_size=self.mini_batch_size,
+            )
 
         if self.output_transform:
             self._apply_output_transform()

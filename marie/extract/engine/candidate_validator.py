@@ -146,11 +146,9 @@ class CandidateValidator:
         dfa.generate_state_diagram()
         # dfa.print_transition_history()
 
-        # print("\n✅ Valid Transitions:")
         valid_transitions = []
         for t in dfa.get_all_transitions():
             if t.label == "VALID":
-                print(f"Step {t.step}: {t.from_state.name} -> {t.to_state.name}")
                 valid_transitions.append(t)
 
         # print('Converting to valid transitions to match sections')

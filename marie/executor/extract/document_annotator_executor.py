@@ -205,6 +205,18 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
 
             if annotator_conf is None:
                 raise ValueError(f"Invalid annotator key: {op_key}")
+
+            # Skip disabled annotators — enabled defaults to True if not set
+            if not annotator_conf.get("enabled", True):
+                self.logger.info(
+                    f"Annotator '{op_key}' is disabled in config, skipping."
+                )
+                return {
+                    "status": "success",
+                    "runtime_info": self.runtime_info,
+                    "error": None,
+                }
+
             # remove any dependencies on OmegaConf to avoid issues with index access
             annotator_conf = OmegaConf.to_container(annotator_conf, resolve=True)
 

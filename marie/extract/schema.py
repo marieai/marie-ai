@@ -22,7 +22,7 @@ class Segment(BaseModel, ReasoningMixin):
         description="The extracted value. Can be a string for simple fields or a structured dict for complex fields like remarks.",
     )
 
-    label_found_at: str = Field(
+    label_found_at: Union[str, int] = Field(
         ...,
         description='A string formatted as `"Found in row X"`, where X is the current line number that was matched to in the OCR Data.',
     )
@@ -50,7 +50,7 @@ class ExtractionResult(BaseModel):
 class LineSegment(BaseModel, ReasoningMixin):
     line_number: int = Field(..., description="Exact row number from the OCR input.")
     value: str  # the rest of the line's content
-    found_at: str = Field(..., description="Formatted as 'Found in row X'.")
+    found_at: Union[str, int] = Field(..., description="Formatted as 'Found in row X'.")
 
 
 class TableContinuation(BaseModel):
