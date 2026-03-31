@@ -26,6 +26,7 @@ from marie.extract.annotators.util import (
 from marie.extract.structures.unstructured_document import UnstructuredDocument
 from marie.helper import run_async
 from marie.logging_core.logger import MarieLogger
+from marie.prompt import PromptTemplate
 from marie.utils.types import to_bool
 from marie.utils.utils import ensure_exists
 
@@ -178,9 +179,14 @@ class LLMAnnotator(DocumentAnnotator):
             )
 
         prompt_dir = kwargs.get("prompt_dir")
-        safe_prompt_path = sanitize_path(self.prompt_path) if self.prompt_path else None
-        full_prompt_path = self._resolve_prompt_path(safe_prompt_path, prompt_dir)
-        self.prompt_text = self.load_prompt(full_prompt_path)
+        self.prompt_template: PromptTemplate = PromptTemplate.from_file_with_fallback(
+            self.prompt_path,
+            prompt_dir=prompt_dir,
+            layout_id=self.layout_id,
+            config_dir=__config_dir__,
+            name=f"{self.name}-prompt",
+        )
+        self.prompt_text = self.prompt_template.source  # backward compat
         self.engine = route_llm_engine(self.model_name, self.multimodal)
 
         # Output transform: a dotted path to a callable applied in-place to each
@@ -191,17 +197,22 @@ class LLMAnnotator(DocumentAnnotator):
         )
 
         # Load refinement prompt if configured
+        self.refine_prompt_template: Optional[PromptTemplate] = None
         self.refine_prompt_text: Optional[str] = None
         if self.refine_passes > 0 and self.refine_prompt_path:
-            safe_refine = sanitize_path(self.refine_prompt_path)
-            full_refine_path = self._resolve_prompt_path(safe_refine, prompt_dir)
-            if full_refine_path:
-                self.refine_prompt_text = self.load_prompt(full_refine_path)
+            self.refine_prompt_template = PromptTemplate.from_file_with_fallback(
+                self.refine_prompt_path,
+                prompt_dir=prompt_dir,
+                layout_id=self.layout_id,
+                config_dir=__config_dir__,
+                name=f"{self.name}-refine-prompt",
+            )
+            self.refine_prompt_text = self.refine_prompt_template.source
 
         # Warn if refinement is enabled but prompt lacks PREVIOUS_EXTRACTION
         if self.refine_passes > 0:
-            refine_text = self.refine_prompt_text or self.prompt_text
-            if refine_text and "PREVIOUS_EXTRACTION" not in refine_text:
+            refine_tmpl = self.refine_prompt_template or self.prompt_template
+            if "PREVIOUS_EXTRACTION" not in refine_tmpl.expected_variables:
                 self.logger.warning(
                     f"Refinement is enabled ({self.refine_passes} passes) but the "
                     "prompt does not contain 'PREVIOUS_EXTRACTION'. "
@@ -371,7 +382,7 @@ class LLMAnnotator(DocumentAnnotator):
         self,
         frames_dir: str,
         output_dir: str,
-        prompt_text: str,
+        prompt_text: PromptTemplate,
         document: UnstructuredDocument,
         completion_params: dict,
         context_manager: Optional[ContextProviderManager],
@@ -720,16 +731,16 @@ class LLMAnnotator(DocumentAnnotator):
             f"({self.refine_passes} refinement pass(es))"
         )
 
-        # Pass 0: initial extraction
+        # Pass 0: initial extraction — fork with empty PREVIOUS_EXTRACTION
         pass0_dir = ensure_exists(self._pass_dir(run_id, 0))
-        pass0_prompt = self.prompt_text.replace("PREVIOUS_EXTRACTION", "")
+        pass0_template = self.prompt_template.fork(defaults={"PREVIOUS_EXTRACTION": ""})
         pass0_engine = self._engine_for_pass(0)
         pass0_params = self._completion_params_for_pass(0)
 
         await self._arun_single_extraction(
             frames_dir=self.frames_dir,
             output_dir=pass0_dir,
-            prompt_text=pass0_prompt,
+            prompt_text=pass0_template,
             document=document,
             completion_params=pass0_params,
             context_manager=self.context_manager,
@@ -758,7 +769,12 @@ class LLMAnnotator(DocumentAnnotator):
                 provider = RefinementContextProvider(previous_results, self.name)
                 pass_ctx = self._build_pass_context_manager(provider)
 
-                prompt = self.refine_prompt_text or self.prompt_text
+                # Use refine template if configured, otherwise main template
+                refine_base = (
+                    self.refine_prompt_template
+                    if self.refine_prompt_template is not None
+                    else self.prompt_template
+                )
                 engine = self._engine_for_pass(i)
                 params = self._completion_params_for_pass(i)
 
@@ -766,7 +782,7 @@ class LLMAnnotator(DocumentAnnotator):
                 await self._arun_single_extraction(
                     frames_dir=self.frames_dir,
                     output_dir=pass_dir,
-                    prompt_text=prompt,
+                    prompt_text=refine_base,
                     document=document,
                     completion_params=params,
                     context_manager=pass_ctx,
@@ -839,7 +855,7 @@ class LLMAnnotator(DocumentAnnotator):
             scan_and_process_images(
                 self.frames_dir,
                 self.output_dir,
-                self.prompt_text,
+                self.prompt_template,
                 document,
                 engine=self.engine,
                 is_multimodal=self.multimodal,
@@ -878,7 +894,7 @@ class LLMAnnotator(DocumentAnnotator):
             await ascan_and_process_images(
                 self.frames_dir,
                 self.output_dir,
-                self.prompt_text,
+                self.prompt_template,
                 document,
                 engine=self.engine,
                 is_multimodal=self.multimodal,

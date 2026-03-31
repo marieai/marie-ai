@@ -316,6 +316,42 @@ class ContextProviderManager:
         """
         return self.inject_all(prompt, document, unit.page_number, unit)
 
+    def collect_all_variables(
+        self,
+        document: "UnstructuredDocument",
+        page_number: int,
+        unit: Optional[ProcessingUnit] = None,
+    ) -> Dict[str, str]:
+        """Collect variables from all providers without injecting into a prompt.
+
+        Enables template-based rendering by returning a merged dict.
+
+        Collision semantics: first-provider-wins (deterministic).
+        Providers are iterated in registration order (same as inject_all).
+        If two providers emit the same key, a WARNING is logged and the
+        first provider's value is kept.
+        """
+        merged: Dict[str, str] = {}
+        for provider in self.providers:
+            variables = provider.get_variables(document, page_number, unit)
+            for key, value in variables.items():
+                if key in merged:
+                    self._logger.warning(
+                        f"Variable '{key}' emitted by multiple providers; "
+                        f"keeping first provider's value."
+                    )
+                else:
+                    merged[key] = value
+        return merged
+
+    def collect_for_unit(
+        self,
+        document: "UnstructuredDocument",
+        unit: ProcessingUnit,
+    ) -> Dict[str, str]:
+        """Convenience: collect_all_variables using unit.page_number."""
+        return self.collect_all_variables(document, unit.page_number, unit)
+
     def has_providers(self) -> bool:
         """Check if any providers are configured."""
         return len(self.providers) > 0

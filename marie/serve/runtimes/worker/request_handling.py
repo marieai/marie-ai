@@ -785,7 +785,8 @@ class WorkerRequestHandler:
                 raised_exception: Exception,
             ):
                 self.logger.info(
-                    f"[callback] executor_completion_callback invoked for job_id={job_id}, has_exception={raised_exception is not None}"
+                    f"[callback] executor_completion_callback invoked for job_id={job_id}, "
+                    f"has_exception={raised_exception is not None}"
                 )
                 self.logger.debug(f"executor_completion_callback : {job_id}")
                 self.logger.debug(f"requests FROM MONITOR : {requests}")
@@ -793,17 +794,29 @@ class WorkerRequestHandler:
                 # TODO : add support for handling client disconnect rejects
                 additional_metadata = {"client_disconnected": client_disconnected}
 
-                if raised_exception:
-                    val = "".join(
-                        traceback.format_exception(
-                            raised_exception, limit=None, chain=True
+                # Detect failure from raised exception OR from a returned error status
+                failed = raised_exception is not None or (
+                    isinstance(return_data, dict)
+                    and return_data.get("status") == "error"
+                )
+
+                if failed:
+                    if raised_exception:
+                        val = "".join(
+                            traceback.format_exception(
+                                raised_exception, limit=None, chain=True
+                            )
                         )
-                    )
-                    self.logger.error(
-                        f"{raised_exception!r} during  executor handling"
-                        + f'\n add "--quiet-error" to suppress the exception details'
-                        + f"\n {val}"
-                    )
+                        self.logger.error(
+                            f"{raised_exception!r} during  executor handling"
+                            + f'\n add "--quiet-error" to suppress the exception details'
+                            + f"\n {val}"
+                        )
+                    else:
+                        self.logger.error(
+                            f"Executor returned error status for job_id={job_id}: "
+                            f"{return_data.get('error')}"
+                        )
 
                     await self._record_failed_job(
                         job_id, requests, raised_exception, additional_metadata

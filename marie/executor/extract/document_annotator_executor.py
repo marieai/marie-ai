@@ -177,106 +177,105 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         )
         frames = frames_from_docs(docs)
 
-        try:
-            job_id = parameters.get("job_id")
-            ref_id = parameters.get("ref_id")
-            ref_type = parameters.get("ref_type")
-            payload = parameters.get("payload")
-            op_params = payload.get(
-                "op_params"
-            )  # These are operator parameters (Layout, Config Key, etc.)
+        # --- Setup / init: let config and construction errors propagate ---
+        job_id = parameters.get("job_id")
+        ref_id = parameters.get("ref_id")
+        ref_type = parameters.get("ref_type")
+        payload = parameters.get("payload")
+        op_params = payload.get(
+            "op_params"
+        )  # These are operator parameters (Layout, Config Key, etc.)
 
-            op_key = op_params.get('key')
-            op_layout = op_params.get('layout')
+        op_key = op_params.get('key')
+        op_layout = op_params.get('layout')
 
-            self.logger.info(f"Executing operation with params : {op_params}")
-            self.logger.info(f"Extracted op_key: {op_key}")
-            self.logger.info(f"Extracted op_layout: {op_layout}")
+        self.logger.info(f"Executing operation with params : {op_params}")
+        self.logger.info(f"Extracted op_key: {op_key}")
+        self.logger.info(f"Extracted op_layout: {op_layout}")
 
-            cfg = layout_config(self.root_config_dir, op_layout)
+        cfg = layout_config(self.root_config_dir, op_layout)
 
-            annotator_conf = None
-            for annotator in cfg.annotators:
-                if annotator == op_key:
-                    annotator_conf = cfg.annotators[annotator]
-                    # we need to set the name of the annotator as they are keys in conf
-                    annotator_conf['name'] = annotator
-                    break
+        annotator_conf = None
+        for annotator in cfg.annotators:
+            if annotator == op_key:
+                annotator_conf = cfg.annotators[annotator]
+                # we need to set the name of the annotator as they are keys in conf
+                annotator_conf['name'] = annotator
+                break
 
-            if annotator_conf is None:
-                raise ValueError(f"Invalid annotator key: {op_key}")
+        if annotator_conf is None:
+            raise ValueError(f"Invalid annotator key: {op_key}")
 
-            # Skip disabled annotators — enabled defaults to True if not set
-            if not annotator_conf.get("enabled", True):
-                self.logger.info(
-                    f"Annotator '{op_key}' is disabled in config, skipping."
-                )
-                return {
-                    "status": "success",
-                    "runtime_info": self.runtime_info,
-                    "error": None,
-                }
-
-            # remove any dependencies on OmegaConf to avoid issues with index access
-            annotator_conf = OmegaConf.to_container(annotator_conf, resolve=True)
-
-            root_asset_dir, frames_dir, metadata_file = prepare_asset_directory(
-                frames=frames,
-                local_path=local_downloaded_s3_path,
-                ref_id=ref_id,
-                ref_type=ref_type,
-                logger=self.logger,
-            )
-            self.logger.info(f"root_asset_dir = {root_asset_dir}")
-
-            # self.logger.info(f"Downloaded assets to {metadata_file}")
-            metadata = load_json_file(metadata_file)
-            unstructured_meta = {
-                'ref_id': ref_id,
-                'ref_type': ref_type,
-                'job_id': job_id,
-                'source_metadata': metadata,
+        # Skip disabled annotators — enabled defaults to True if not set
+        if not annotator_conf.get("enabled", True):
+            self.logger.info(f"Annotator '{op_key}' is disabled in config, skipping.")
+            return {
+                "status": "success",
+                "runtime_info": self.runtime_info,
+                "error": None,
             }
 
-            doc: UnstructuredDocument = MetaReader.from_data(
-                frames=frames,
-                ocr_meta=metadata["ocr"],
-                unstructured_meta=unstructured_meta,
-            )
-            self.logger.info(f"Doc : {doc}")
-            self.logger.info(f"Doc page_count: {doc.page_count}")
+        # remove any dependencies on OmegaConf to avoid issues with index access
+        annotator_conf = OmegaConf.to_container(annotator_conf, resolve=True)
 
-            # Create RunContext for execution context support
-            run_context = None
-            if MARIE_KERNEL_AVAILABLE:
-                try:
-                    backend = FileSystemStateBackend(base_path=root_asset_dir)
-                    ti = TaskInstanceRef(
-                        tenant_id="default",
-                        dag_name="annotation",
-                        dag_id=job_id,
-                        task_id=op_key,
-                        try_number=1,
-                    )
-                    run_context = RunContext(ti, backend)
-                    self.logger.info(
-                        f"Created RunContext for task '{op_key}' with FileSystemStateBackend"
-                    )
-                except Exception as e:
-                    self.logger.warning(
-                        f"Failed to create RunContext: {e}. "
-                        "Execution context will not be available."
-                    )
+        root_asset_dir, frames_dir, metadata_file = prepare_asset_directory(
+            frames=frames,
+            local_path=local_downloaded_s3_path,
+            ref_id=ref_id,
+            ref_type=ref_type,
+            logger=self.logger,
+        )
+        self.logger.info(f"root_asset_dir = {root_asset_dir}")
 
-            annotator = annotator_class(
-                working_dir=root_asset_dir,
-                annotator_conf=annotator_conf,
-                layout_conf={
-                    "layout_id": op_layout,
-                },
-                run_context=run_context,
-            )
+        metadata = load_json_file(metadata_file)
+        unstructured_meta = {
+            'ref_id': ref_id,
+            'ref_type': ref_type,
+            'job_id': job_id,
+            'source_metadata': metadata,
+        }
 
+        doc: UnstructuredDocument = MetaReader.from_data(
+            frames=frames,
+            ocr_meta=metadata["ocr"],
+            unstructured_meta=unstructured_meta,
+        )
+        self.logger.info(f"Doc : {doc}")
+        self.logger.info(f"Doc page_count: {doc.page_count}")
+
+        # Create RunContext for execution context support
+        run_context = None
+        if MARIE_KERNEL_AVAILABLE:
+            try:
+                backend = FileSystemStateBackend(base_path=root_asset_dir)
+                ti = TaskInstanceRef(
+                    tenant_id="default",
+                    dag_name="annotation",
+                    dag_id=job_id,
+                    task_id=op_key,
+                    try_number=1,
+                )
+                run_context = RunContext(ti, backend)
+                self.logger.info(
+                    f"Created RunContext for task '{op_key}' with FileSystemStateBackend"
+                )
+            except Exception as e:
+                self.logger.warning(
+                    f"Failed to create RunContext: {e}. "
+                    "Execution context will not be available."
+                )
+
+        annotator = annotator_class(
+            working_dir=root_asset_dir,
+            annotator_conf=annotator_conf,
+            layout_conf={
+                "layout_id": op_layout,
+            },
+            run_context=run_context,
+        )
+
+        # --- Execution: catch task-level errors only ---
+        try:
             await annotator.aannotate(doc, frames)
             del annotator
 
@@ -309,7 +308,7 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                 "error": None,
             }
             return response
-        except BaseException as error:
+        except Exception as error:
             # If GPU failure is detected, escalate to RuntimeTerminated so the worker can restart
             try:
                 if hasattr(self, "_is_gpu_failure") and self._is_gpu_failure(error):
