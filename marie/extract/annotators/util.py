@@ -36,6 +36,7 @@ from marie.engine.output_parser import (
 from marie.extract.structures.unstructured_document import UnstructuredDocument
 from marie.helper import run_async
 from marie.logging_core.predefined import default_logger as logger
+from marie.prompt.template import PromptTemplate
 from marie.utils.docs import frames_from_file
 from marie.utils.utils import batchify
 
@@ -437,7 +438,7 @@ def prepare_batch_with_meta(
     batched_files: list,
     frames: list[ndarray],
     doc: UnstructuredDocument,
-    prompt: str,
+    prompt: PromptTemplate,
     source_dir: str,
     context_manager: Optional["ContextProviderManager"] = None,
     units_by_file: Optional[Dict[str, "ProcessingUnit"]] = None,
@@ -509,10 +510,8 @@ def prepare_batch_with_meta(
                         # "\n" is added to separate the injected text from the OCR data
                         # also we can't do STRIP here as we have new lines in the injected alignment
                         INJECTED_TEXT = "\n" + injected_file.read()
-                updated_prompt = prompt.replace("INJECTED_TEXT", INJECTED_TEXT)
 
-                # will be used most of the time
-                # content = doc.to_text(page_number=page_number - 1, decorator=decorator)
+                # Build OCR content
                 lines_by_page = decorated_lines_by_page.get(page_number - 1, [])
                 decorated_lines = []
                 for line_id, line in enumerate(lines_by_page):
@@ -521,26 +520,24 @@ def prepare_batch_with_meta(
                     decorated_lines.append(decorated_line)
                 content = "\n".join(decorated_lines)
 
-                updated_prompt = updated_prompt.replace("OCR_DATA", content).replace(
-                    "OCR_TEXT", content
-                )
-
                 # Get the ProcessingUnit for this file if in per-unit mode
                 file_name = os.path.basename(name)
                 unit = units_by_file.get(file_name) if units_by_file else None
 
-                # Inject context from providers (e.g., TABLE_CONTEXT_ALL)
+                variables = {
+                    "INJECTED_TEXT": INJECTED_TEXT,
+                    "OCR_DATA": content,
+                    "OCR_TEXT": content,
+                    "FILTERED_OCR_DATA": content,
+                }
                 if context_manager:
                     if unit:
-                        # Per-unit mode: inject with unit context
-                        updated_prompt = context_manager.inject_for_unit(
-                            updated_prompt, doc, unit
-                        )
+                        variables.update(context_manager.collect_for_unit(doc, unit))
                     else:
-                        # Legacy mode: inject all context for page
-                        updated_prompt = context_manager.inject_all(
-                            updated_prompt, doc, page_number
+                        variables.update(
+                            context_manager.collect_all_variables(doc, page_number)
                         )
+                updated_prompt = prompt.render(variables)
 
                 prompts.append(updated_prompt)
                 output_suffixes.append(unit.output_suffix if unit else "")
@@ -568,7 +565,7 @@ def prepare_batch_with_meta_units(
     units_by_index: Dict[int, Optional["ProcessingUnit"]],
     frames: list[ndarray],
     doc: UnstructuredDocument,
-    prompt: str,
+    prompt: PromptTemplate,
     source_dir: str,
     context_manager: Optional["ContextProviderManager"] = None,
     mm_processor_kwargs: Optional[Dict[str, Any]] = None,
@@ -627,7 +624,6 @@ def prepare_batch_with_meta_units(
             if os.path.exists(injected_filename):
                 with open(injected_filename, "r", encoding="utf-8") as injected_file:
                     INJECTED_TEXT = "\n" + injected_file.read()
-            updated_prompt = prompt.replace("INJECTED_TEXT", INJECTED_TEXT)
 
             # Get the ProcessingUnit for this batch item BEFORE building OCR content
             # so we can build filtered OCR for table-specific extraction
@@ -674,28 +670,20 @@ def prepare_batch_with_meta_units(
                 else content
             )
 
-            # Replace OCR placeholders
-            # FILTERED_OCR_DATA: only lines within table range (for table-specific extraction)
-            # OCR_DATA/OCR_TEXT: full page content (for legacy compatibility)
-            updated_prompt = updated_prompt.replace(
-                "FILTERED_OCR_DATA", filtered_content
-            )
-            updated_prompt = updated_prompt.replace("OCR_DATA", content).replace(
-                "OCR_TEXT", content
-            )
-
-            # Inject context from providers
+            variables = {
+                "INJECTED_TEXT": INJECTED_TEXT,
+                "OCR_DATA": content,
+                "OCR_TEXT": content,
+                "FILTERED_OCR_DATA": filtered_content,
+            }
             if context_manager:
                 if unit:
-                    # Per-unit mode: inject with unit context
-                    updated_prompt = context_manager.inject_for_unit(
-                        updated_prompt, doc, unit
-                    )
+                    variables.update(context_manager.collect_for_unit(doc, unit))
                 else:
-                    # Legacy mode: inject all context for page
-                    updated_prompt = context_manager.inject_all(
-                        updated_prompt, doc, page_number
+                    variables.update(
+                        context_manager.collect_all_variables(doc, page_number)
                     )
+            updated_prompt = prompt.render(variables)
 
             prompts.append(updated_prompt)
             output_suffixes.append(unit.output_suffix if unit else "")
@@ -725,7 +713,7 @@ def prepare_batch_with_meta_units(
 def scan_and_process_images(
     source_dir: str,
     output_dir: str,
-    prompt: str,
+    prompt: PromptTemplate,
     document: UnstructuredDocument,
     engine: EngineLM = None,
     is_multimodal: bool = False,
@@ -796,7 +784,7 @@ class ProcessingItem:
 async def ascan_and_process_images(
     source_dir: str,
     output_dir: str,
-    prompt: str,
+    prompt: PromptTemplate,
     document: UnstructuredDocument,
     engine: EngineLM = None,
     is_multimodal: bool = False,

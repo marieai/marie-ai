@@ -81,7 +81,7 @@ class LLMTableAnnotator(LLMAnnotator):
         scan_and_process_images(
             table_annotated_fragments_dir,
             table_output_dir,
-            self.prompt_text,
+            self.prompt_template,
             document,
             engine=engine,
             is_multimodal=self.multimodal,
@@ -119,7 +119,7 @@ class LLMTableAnnotator(LLMAnnotator):
         await ascan_and_process_images(
             table_annotated_fragments_dir,
             table_output_dir,
-            self.prompt_text,
+            self.prompt_template,
             document,
             engine=engine,
             is_multimodal=self.multimodal,

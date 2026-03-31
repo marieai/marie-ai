@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from marie.extract.annotators.base import AnnotatorCapabilities, DocumentAnnotator
 from marie.extract.annotators.util import route_llm_engine
 from marie.logging_core.logger import MarieLogger
+from marie.prompt import PromptTemplate
 from marie.utils.utils import ensure_exists
 
 if TYPE_CHECKING:
@@ -230,7 +231,9 @@ class SchemaBasedExtractor(DocumentAnnotator):
         if not self.model_name:
             self.model_name = "gpt-4-vision"
         self.engine = route_llm_engine(self.model_name, self.multimodal)
-        self.prompt_template = self._build_extraction_prompt()
+        self.prompt_template = PromptTemplate.from_str(
+            self._build_extraction_prompt(), name="schema-extract"
+        )
 
     def _init_fine_tune_engine(self) -> None:
         """Initialize fine-tuned LayoutLM extraction."""

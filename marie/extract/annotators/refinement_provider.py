@@ -37,17 +37,19 @@ class ProcessingKey:
     page_number: int
     unit_index: Optional[int] = None
 
-    # Pattern: frame_0001.json  or  frame_0001_t0.json
-    _FILENAME_RE = re.compile(r"^frame_(\d+?)(?:_t(\d+))?\.json$", re.IGNORECASE)
+    # Pattern: frame_0001.json, frame_0001_t0.json, 0001.json, 0001_t0.json
+    _FILENAME_RE = re.compile(r"^(?:frame_)?(\d+?)(?:_t(\d+))?\.json$", re.IGNORECASE)
 
     @classmethod
     def from_filename(cls, filename: str) -> "ProcessingKey":
         """Parse page number and optional unit index from an output filename.
 
         Supported patterns:
-            frame_0001.json   -> ProcessingKey(1, None)
+            frame_0001.json    -> ProcessingKey(1, None)
             frame_0001_t0.json -> ProcessingKey(1, 0)
             frame_0002_t1.json -> ProcessingKey(2, 1)
+            0001.json          -> ProcessingKey(1, None)
+            0001_t0.json       -> ProcessingKey(1, 0)
 
         Raises:
             ValueError: If the filename does not match the expected pattern.
@@ -90,16 +92,7 @@ class RefinementContextProvider(ContextProvider):
             unit_index=unit.index if unit else None,
         )
         payload = self._results.get(key, "")
-        if not payload:
-            return {"PREVIOUS_EXTRACTION": ""}
-        return {
-            "PREVIOUS_EXTRACTION": (
-                "## Previous Extraction Results\n"
-                "Review and refine the following extraction. "
-                "Fix errors, preserve correct results, and fill missing fields.\n"
-                f"{payload}"
-            ),
-        }
+        return {"PREVIOUS_EXTRACTION": payload}
 
 
 # ---------------------------------------------------------------------------
