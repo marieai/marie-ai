@@ -57,8 +57,12 @@ class JobLogSink(logging.Handler):
         self._log_dir = log_dir or os.getenv(
             "MARIE_JOB_LOGS_DIR", "/var/log/marie/jobs"
         )
-        self._max_handles = max_handles
-        self._idle_timeout = idle_timeout
+        self._max_handles = int(
+            os.getenv("MARIE_JOB_LOG_MAX_OPEN_FILES", str(max_handles))
+        )
+        self._idle_timeout = float(
+            os.getenv("MARIE_JOB_LOG_IDLE_TIMEOUT", str(idle_timeout))
+        )
         self._file_handles: OrderedDict[str, tuple[TextIO, float, int, int]] = (
             OrderedDict()
         )  # request_id -> (handle, last_access, dev, ino)
