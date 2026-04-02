@@ -420,6 +420,44 @@ class MarieServerGateway(CompositeServer):
                         "result": f"Failed to reset active DAGs: {str(e)}",
                     }
 
+            @app.api_route(
+                path="/api/scheduler/pause",
+                methods=["POST"],
+                summary="Pause the scheduler — stops dispatching new jobs",
+            )
+            async def pause_scheduler():
+                self.logger.info(
+                    f"Scheduler pause requested at {datetime.now(timezone.utc)}"
+                )
+                try:
+                    result = self.job_scheduler.pause()
+                    return {"status": "OK", "result": result}
+                except Exception as e:
+                    self.logger.error(f"Error pausing scheduler: {str(e)}")
+                    return {
+                        "status": "error",
+                        "result": f"Failed to pause scheduler: {str(e)}",
+                    }
+
+            @app.api_route(
+                path="/api/scheduler/unpause",
+                methods=["POST"],
+                summary="Unpause the scheduler — resumes job dispatching",
+            )
+            async def unpause_scheduler():
+                self.logger.info(
+                    f"Scheduler unpause requested at {datetime.now(timezone.utc)}"
+                )
+                try:
+                    result = self.job_scheduler.unpause()
+                    return {"status": "OK", "result": result}
+                except Exception as e:
+                    self.logger.error(f"Error unpausing scheduler: {str(e)}")
+                    return {
+                        "status": "error",
+                        "result": f"Failed to unpause scheduler: {str(e)}",
+                    }
+
             async def list_jobs_handler(request: Request):
                 try:
                     self.logger.info(
