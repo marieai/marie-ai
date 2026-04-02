@@ -117,6 +117,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self.known_queues = set(config.get("queue_names", []))
         self.running = False
+        self._paused = False
         self._poll_task = None
         self._producer_task = None
         self._consumer_task = None
@@ -1361,6 +1362,22 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
                     continue
 
+                # Check if scheduler is paused before dispatching work
+                if self._paused:
+                    if _cycle_idx % 10 == 0:
+                        self.logger.info(
+                            f"[WORK_DIST] Scheduler is paused. Skipping dispatch. "
+                            f"Queue size: {self._event_queue.qsize()}"
+                        )
+                    idle_streak += 1
+                    wait_time = adjust_backoff(
+                        wait_time,
+                        idle_streak,
+                        scheduled=False,
+                        min_poll_period=MIN_POLL_PERIOD,
+                    )
+                    continue
+
                 t_active_start = time.perf_counter()
                 slots_by_executor = available_slots_by_executor(
                     self._semaphore_store
@@ -1939,6 +1956,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         debug_data = {
             "scheduler_info": {
                 "running": self.running,
+                "paused": self._paused,
                 "scheduler_mode": self.scheduler_mode,
                 "max_concurrent_dags": self.max_concurrent_dags,
                 "known_queues": list(self.known_queues) if self.known_queues else [],

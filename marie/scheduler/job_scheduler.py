@@ -34,6 +34,20 @@ class JobScheduler(abc.ABC):
         stopped_state = 0
         return stopped_state
 
+    def pause(self) -> dict:
+        """Pause the scheduler — stops dispatching new jobs, loop stays alive."""
+        self._paused = True
+        return {"paused": True, "message": "Scheduler paused"}
+
+    def unpause(self) -> dict:
+        """Unpause the scheduler — resumes job dispatching."""
+        self._paused = False
+        return {"paused": False, "message": "Scheduler unpaused"}
+
+    @property
+    def paused(self) -> bool:
+        return getattr(self, '_paused', False)
+
     @abc.abstractmethod
     def debug_info(self) -> str:
         """Returns debug information about the scheduler."""
