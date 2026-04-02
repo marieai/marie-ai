@@ -11,6 +11,10 @@ import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, runtime_checkable
 
+from opentelemetry import context as otel_context
+from opentelemetry import trace as trace_api
+from opentelemetry.trace import StatusCode
+
 from marie.agent.coordination.audit import AuditEvent, AuditEventType
 from marie.agent.coordination.execution import execute_agent_with_timeout
 from marie.agent.coordination.message import (
@@ -29,6 +33,7 @@ from marie.agent.coordination.topology import (
     BaseCoordinator,
     CoordinationResult,
 )
+from marie.instrumentation import start_span as oi_start_span
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
@@ -280,118 +285,145 @@ class WorkflowCoordinator(BaseCoordinator):
         initial_agent = kwargs.get("initial_agent")
         restore_checkpoint = kwargs.get("restore_checkpoint", False)
 
-        # Build agent map
-        self._agent_map = {agent.name: agent for agent in self._agents}
-        available_agents = list(self._agent_map.keys())
+        # OTel CHAIN span for workflow orchestration
+        _tracer = trace_api.get_tracer("marie.agent.coordination")
+        _span = oi_start_span(
+            _tracer,
+            f"workflow:{workflow_id or 'anonymous'}",
+            span_kind="chain",
+        )
+        _span.set_attribute("marie.workflow_id", workflow_id or "")
+        _span.set_attribute("marie.agent_count", len(self._agents))
+        _span_token = otel_context.attach(trace_api.set_span_in_context(_span))
 
-        if not available_agents:
+        try:
+            # Build agent map
+            self._agent_map = {agent.name: agent for agent in self._agents}
+            available_agents = list(self._agent_map.keys())
+
+            if not available_agents:
+                _span.set_status(StatusCode.OK)
+                return CoordinationResult(
+                    results=[],
+                    merged_output=None,
+                    topology="workflow",
+                    merge_strategy=self.config.merge_strategy,
+                    total_duration_ms=0.0,
+                    started_at=started_at,
+                    completed_at=datetime.now(timezone.utc),
+                )
+
+            # Initialize or restore state
+            self._state = await self._initialize_state(
+                workflow_id=workflow_id,
+                goal=goal,
+                initial_agent=initial_agent or available_agents[0],
+                restore_checkpoint=restore_checkpoint,
+            )
+            self._retry_counts = {}
+
+            # Create initial task message if no mailbox messages
+            if not self._state.mailbox:
+                content = self._extract_user_content(messages)
+                initial_msg = create_task_message(
+                    sender="coordinator",
+                    receiver=initial_agent or available_agents[0],
+                    content=content,
+                )
+                self._state.post_message(initial_msg)
+
+            agent_results: List[AgentResult] = []
+
+            # Main workflow loop
+            step_count = 0
+            max_steps = self.config.max_steps
+
+            while step_count < max_steps:
+                # Select next agent via routing policy
+                next_agent = await self._routing_policy.select_next_agent(
+                    self._state,
+                    available_agents,
+                )
+
+                # Check for workflow completion
+                if next_agent is None:
+                    break
+
+                # Check for broadcast (fan-out signal)
+                if next_agent == "__broadcast__":
+                    logger.info(
+                        f"Workflow {self._state.workflow_id}: broadcast not implemented, ending"
+                    )
+                    break
+
+                # Execute agent with retry
+                result = await self._execute_with_retry(
+                    agent_name=next_agent,
+                    messages=messages,
+                    step=step_count,
+                    **kwargs,
+                )
+                agent_results.append(result)
+
+                # Post result message to state
+                await self._post_result_message(next_agent, result)
+
+                # Checkpoint if enabled
+                if self._checkpoint_store:
+                    await self._checkpoint_store.save(
+                        self._state.workflow_id, self._state
+                    )
+
+                # Check for terminal condition
+                if self._state.is_terminal():
+                    break
+
+                step_count += 1
+
+            # Mark workflow complete if not already terminal
+            if not self._state.is_terminal():
+                self._state.complete()
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            merged = self._merge_results(agent_results)
+
+            # Audit log workflow completion
+            if self._audit_logger:
+                await self._audit_logger.log(
+                    AuditEvent(
+                        event_type=AuditEventType.WORKFLOW_COMPLETED,
+                        workflow_id=self._state.workflow_id,
+                        timestamp=datetime.now(timezone.utc),
+                        details={
+                            "status": self._state.status.value,
+                            "total_steps": step_count,
+                            "total_duration_ms": elapsed_ms,
+                        },
+                    )
+                )
+
+            _span.set_attribute("marie.workflow_steps", step_count)
+            _span.set_status(StatusCode.OK)
+
             return CoordinationResult(
-                results=[],
-                merged_output=None,
+                results=agent_results,
+                merged_output=merged,
                 topology="workflow",
                 merge_strategy=self.config.merge_strategy,
-                total_duration_ms=0.0,
+                total_duration_ms=elapsed_ms,
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc),
+                workflow_state=self._state,
             )
 
-        # Initialize or restore state
-        self._state = await self._initialize_state(
-            workflow_id=workflow_id,
-            goal=goal,
-            initial_agent=initial_agent or available_agents[0],
-            restore_checkpoint=restore_checkpoint,
-        )
-        self._retry_counts = {}
+        except Exception as exc:
+            _span.set_status(StatusCode.ERROR, str(exc))
+            _span.record_exception(exc)
+            raise
 
-        # Create initial task message if no mailbox messages
-        if not self._state.mailbox:
-            content = self._extract_user_content(messages)
-            initial_msg = create_task_message(
-                sender="coordinator",
-                receiver=initial_agent or available_agents[0],
-                content=content,
-            )
-            self._state.post_message(initial_msg)
-
-        agent_results: List[AgentResult] = []
-
-        # Main workflow loop
-        step_count = 0
-        max_steps = self.config.max_steps
-
-        while step_count < max_steps:
-            # Select next agent via routing policy
-            next_agent = await self._routing_policy.select_next_agent(
-                self._state,
-                available_agents,
-            )
-
-            # Check for workflow completion
-            if next_agent is None:
-                break
-
-            # Check for broadcast (fan-out signal)
-            if next_agent == "__broadcast__":
-                logger.info(
-                    f"Workflow {self._state.workflow_id}: broadcast not implemented, ending"
-                )
-                break
-
-            # Execute agent with retry
-            result = await self._execute_with_retry(
-                agent_name=next_agent,
-                messages=messages,
-                step=step_count,
-                **kwargs,
-            )
-            agent_results.append(result)
-
-            # Post result message to state
-            await self._post_result_message(next_agent, result)
-
-            # Checkpoint if enabled
-            if self._checkpoint_store:
-                await self._checkpoint_store.save(self._state.workflow_id, self._state)
-
-            # Check for terminal condition
-            if self._state.is_terminal():
-                break
-
-            step_count += 1
-
-        # Mark workflow complete if not already terminal
-        if not self._state.is_terminal():
-            self._state.complete()
-
-        elapsed_ms = (time.perf_counter() - start_time) * 1000
-        merged = self._merge_results(agent_results)
-
-        # Audit log workflow completion
-        if self._audit_logger:
-            await self._audit_logger.log(
-                AuditEvent(
-                    event_type=AuditEventType.WORKFLOW_COMPLETED,
-                    workflow_id=self._state.workflow_id,
-                    timestamp=datetime.now(timezone.utc),
-                    details={
-                        "status": self._state.status.value,
-                        "total_steps": step_count,
-                        "total_duration_ms": elapsed_ms,
-                    },
-                )
-            )
-
-        return CoordinationResult(
-            results=agent_results,
-            merged_output=merged,
-            topology="workflow",
-            merge_strategy=self.config.merge_strategy,
-            total_duration_ms=elapsed_ms,
-            started_at=started_at,
-            completed_at=datetime.now(timezone.utc),
-            workflow_state=self._state,
-        )
+        finally:
+            otel_context.detach(_span_token)
+            _span.end()
 
     async def _initialize_state(
         self,

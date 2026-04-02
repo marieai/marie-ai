@@ -25,8 +25,11 @@ from typing import (
     get_type_hints,
 )
 
+from opentelemetry import trace as trace_api
+from opentelemetry.trace import StatusCode
 from pydantic import BaseModel, Field
 
+from marie.instrumentation import start_span as oi_start_span
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
@@ -316,6 +319,15 @@ class AgentTool(ABC):
         """
         from marie.agent.emitter import emit_sync
 
+        # OTel TOOL span
+        _tool_tracer = trace_api.get_tracer("marie.agent.tools")
+        _tool_span = oi_start_span(
+            _tool_tracer,
+            f"tool:{self.name}",
+            span_kind="tool",
+        )
+        _tool_span.set_attribute("tool.name", self.name or "")
+
         start_time = time.perf_counter()
         parsed_args = self._parse_input(tool_args)
         parsed_args.update(kwargs)
@@ -328,34 +340,53 @@ class AgentTool(ABC):
             source=self.name,
         )
 
-        # Validate arguments against schema
-        validated_args, validation_error = self._validate_args(parsed_args)
-        if validation_error:
-            logger.warning(f"Tool {self.name} validation failed: {validation_error}")
-            duration_ms = (time.perf_counter() - start_time) * 1000
-            emit_sync(
-                self._emitter,
-                "error",
-                {"tool_name": self.name, "error": validation_error},
-                source=self.name,
-            )
-            emit_sync(
-                self._emitter,
-                "finish",
-                {"tool_name": self.name, "success": False, "duration_ms": duration_ms},
-                source=self.name,
-            )
-            return ToolOutput(
-                content=validation_error,
-                tool_name=self.name,
-                raw_input=parsed_args,
-                raw_output=None,
-                is_error=True,
-            )
-
         try:
+            # Validate arguments against schema
+            validated_args, validation_error = self._validate_args(parsed_args)
+            if validation_error:
+                logger.warning(
+                    f"Tool {self.name} validation failed: {validation_error}"
+                )
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                emit_sync(
+                    self._emitter,
+                    "error",
+                    {"tool_name": self.name, "error": validation_error},
+                    source=self.name,
+                )
+                emit_sync(
+                    self._emitter,
+                    "finish",
+                    {
+                        "tool_name": self.name,
+                        "success": False,
+                        "duration_ms": duration_ms,
+                    },
+                    source=self.name,
+                )
+                _tool_span.set_status(StatusCode.ERROR, validation_error)
+                return ToolOutput(
+                    content=validation_error,
+                    tool_name=self.name,
+                    raw_input=parsed_args,
+                    raw_output=None,
+                    is_error=True,
+                )
+
             result = self.call(**validated_args)
             duration_ms = (time.perf_counter() - start_time) * 1000
+
+            # Hardened output recording — never let serialization crash the tool
+            try:
+                _tool_span.set_attribute("output.value", str(result.content)[:2000])
+            except Exception:
+                pass
+
+            if result.is_error:
+                _tool_span.set_status(StatusCode.ERROR, str(result.content)[:200])
+            else:
+                _tool_span.set_status(StatusCode.OK)
+
             emit_sync(
                 self._emitter,
                 "success",
@@ -377,6 +408,8 @@ class AgentTool(ABC):
             error_message = self._format_error(ex)
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.warning(f"Tool {self.name} failed: {error_message}")
+            _tool_span.set_status(StatusCode.ERROR, error_message)
+            _tool_span.record_exception(ex)
             emit_sync(
                 self._emitter,
                 "error",
@@ -396,6 +429,8 @@ class AgentTool(ABC):
                 raw_output=None,
                 is_error=True,
             )
+        finally:
+            _tool_span.end()
 
     async def safe_acall(
         self, tool_args: Union[str, Dict[str, Any]] = "{}", **kwargs: Any
@@ -415,6 +450,15 @@ class AgentTool(ABC):
         Returns:
             ToolOutput, with is_error=True if validation or execution failed
         """
+        # OTel TOOL span
+        _tool_tracer = trace_api.get_tracer("marie.agent.tools")
+        _tool_span = oi_start_span(
+            _tool_tracer,
+            f"tool:{self.name}",
+            span_kind="tool",
+        )
+        _tool_span.set_attribute("tool.name", self.name or "")
+
         start_time = time.perf_counter()
         parsed_args = self._parse_input(tool_args)
         parsed_args.update(kwargs)
@@ -427,37 +471,52 @@ class AgentTool(ABC):
                 source=self.name,
             )
 
-        # Validate arguments against schema
-        validated_args, validation_error = self._validate_args(parsed_args)
-        if validation_error:
-            logger.warning(f"Tool {self.name} validation failed: {validation_error}")
-            duration_ms = (time.perf_counter() - start_time) * 1000
-            if self._emitter:
-                await self._emitter.emit(
-                    "error",
-                    {"tool_name": self.name, "error": validation_error},
-                    source=self.name,
-                )
-                await self._emitter.emit(
-                    "finish",
-                    {
-                        "tool_name": self.name,
-                        "success": False,
-                        "duration_ms": duration_ms,
-                    },
-                    source=self.name,
-                )
-            return ToolOutput(
-                content=validation_error,
-                tool_name=self.name,
-                raw_input=parsed_args,
-                raw_output=None,
-                is_error=True,
-            )
-
         try:
+            # Validate arguments against schema
+            validated_args, validation_error = self._validate_args(parsed_args)
+            if validation_error:
+                logger.warning(
+                    f"Tool {self.name} validation failed: {validation_error}"
+                )
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                if self._emitter:
+                    await self._emitter.emit(
+                        "error",
+                        {"tool_name": self.name, "error": validation_error},
+                        source=self.name,
+                    )
+                    await self._emitter.emit(
+                        "finish",
+                        {
+                            "tool_name": self.name,
+                            "success": False,
+                            "duration_ms": duration_ms,
+                        },
+                        source=self.name,
+                    )
+                _tool_span.set_status(StatusCode.ERROR, validation_error)
+                return ToolOutput(
+                    content=validation_error,
+                    tool_name=self.name,
+                    raw_input=parsed_args,
+                    raw_output=None,
+                    is_error=True,
+                )
+
             result = await self.acall(**validated_args)
             duration_ms = (time.perf_counter() - start_time) * 1000
+
+            # Hardened output recording — never let serialization crash the tool
+            try:
+                _tool_span.set_attribute("output.value", str(result.content)[:2000])
+            except Exception:
+                pass
+
+            if result.is_error:
+                _tool_span.set_status(StatusCode.ERROR, str(result.content)[:200])
+            else:
+                _tool_span.set_status(StatusCode.OK)
+
             if self._emitter:
                 await self._emitter.emit(
                     "success",
@@ -482,6 +541,8 @@ class AgentTool(ABC):
             error_message = self._format_error(ex)
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.warning(f"Tool {self.name} failed: {error_message}")
+            _tool_span.set_status(StatusCode.ERROR, error_message)
+            _tool_span.record_exception(ex)
             if self._emitter:
                 await self._emitter.emit(
                     "error",
@@ -504,6 +565,8 @@ class AgentTool(ABC):
                 raw_output=None,
                 is_error=True,
             )
+        finally:
+            _tool_span.end()
 
     def _format_error(self, ex: Exception) -> str:
         """Format an exception into an error message."""

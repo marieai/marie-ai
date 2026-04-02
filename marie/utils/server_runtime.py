@@ -168,9 +168,9 @@ def _ensure_tracer_provider(
             hasattr(tracer, attr) for attr in ("agent", "chain", "tool", "llm")
         )
         if not is_openinference:
-            raise RuntimeError(
-                "Global TracerProvider already exists but does not expose "
-                "OpenInference tracer capabilities required by exporter=otel."
+            logger.warning(
+                "Global TracerProvider exists but is not OpenInference-capable. "
+                "Falling back to console span export for LLM tracking."
             )
 
 

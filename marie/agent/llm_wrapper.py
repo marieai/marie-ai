@@ -21,6 +21,9 @@ from typing import (
     Union,
 )
 
+from opentelemetry import trace as trace_api
+from opentelemetry.trace import StatusCode
+
 from marie.agent.cancellation import AbortSignal
 from marie.agent.message import (
     ASSISTANT,
@@ -34,6 +37,9 @@ from marie.agent.message import (
 )
 from marie.agent.streaming import StreamChunk, ToolCallAccumulator
 from marie.agent.tool_call_parser import ToolCallTextParser
+from marie.instrumentation import start_as_current_span as oi_start_as_current_span
+from marie.instrumentation import start_span as oi_start_span
+from marie.instrumentation.openinference import infer_llm_system
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
@@ -387,41 +393,67 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
                 "Returning complete response."
             )
 
-        # Check for multimodal content
-        is_multimodal = self._has_multimodal_content(messages)
-
-        # Prepare generation kwargs
-        gen_kwargs = {}
-        if extra_generate_cfg:
-            gen_kwargs.update(extra_generate_cfg)
-
-        # Handle guided generation (JSON schema, etc.)
-        guided_json = gen_kwargs.pop("guided_json", None)
-        guided_regex = gen_kwargs.pop("guided_regex", None)
-
-        if is_multimodal:
-            # Build multimodal content (images + text)
-            content, system_prompt = self._build_multimodal_content(messages, functions)
-            logger.debug(
-                f"Using multimodal path with {sum(1 for c in content if not isinstance(c, str))} images"
-            )
-        else:
-            # Build text-only prompt
-            content, system_prompt = self._build_prompt(messages, functions)
-
-        # Generate response
-        response = self.engine.generate(
-            content=content,
-            system_prompt=system_prompt,
-            guided_json=guided_json,
-            guided_regex=guided_regex,
-            **gen_kwargs,
+        # OTel LLM span — manual lifecycle because chat() is a generator
+        _llm_tracer = trace_api.get_tracer("marie.agent.llm")
+        _model_name = self.engine_name or "unknown"
+        _llm_span = oi_start_span(
+            _llm_tracer,
+            f"llm:{_model_name}",
+            span_kind="llm",
         )
+        _llm_span.set_attribute("llm.model_name", _model_name)
+        _llm_span.set_attribute("llm.system", infer_llm_system(_model_name))
 
-        # Parse response and detect function calls
-        message = self._parse_response(response, functions)
+        try:
+            # Check for multimodal content
+            is_multimodal = self._has_multimodal_content(messages)
 
-        yield [message]
+            # Prepare generation kwargs
+            gen_kwargs = {}
+            if extra_generate_cfg:
+                gen_kwargs.update(extra_generate_cfg)
+
+            # Handle guided generation (JSON schema, etc.)
+            guided_json = gen_kwargs.pop("guided_json", None)
+            guided_regex = gen_kwargs.pop("guided_regex", None)
+
+            if is_multimodal:
+                # Build multimodal content (images + text)
+                content, system_prompt = self._build_multimodal_content(
+                    messages, functions
+                )
+                logger.debug(
+                    f"Using multimodal path with {sum(1 for c in content if not isinstance(c, str))} images"
+                )
+            else:
+                # Build text-only prompt
+                content, system_prompt = self._build_prompt(messages, functions)
+
+            # Generate response
+            response = self.engine.generate(
+                content=content,
+                system_prompt=system_prompt,
+                guided_json=guided_json,
+                guided_regex=guided_regex,
+                **gen_kwargs,
+            )
+
+            # Parse response and detect function calls
+            message = self._parse_response(response, functions)
+
+            _llm_span.set_status(StatusCode.OK)
+            yield [message]
+
+        except GeneratorExit:
+            _llm_span.set_status(StatusCode.OK)
+
+        except Exception as exc:
+            _llm_span.set_status(StatusCode.ERROR, str(exc))
+            _llm_span.record_exception(exc)
+            raise
+
+        finally:
+            _llm_span.end()
 
     async def achat(
         self,
@@ -460,31 +492,55 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
 
         Real engine-level streaming can be added when ``EngineLM`` supports it.
         """
-        if abort_signal:
-            abort_signal.throw_if_aborted()
-
-        message = await self.achat(messages, functions, extra_generate_cfg)
-
-        tool_calls = message.tool_calls if message.tool_calls else None
-        function_call = message.function_call
-
-        # Convert legacy function_call to tool_calls for consistent API
-        if function_call and not tool_calls:
-            from marie.agent.message import ToolCall
-
-            tool_calls = [
-                ToolCall(
-                    id="call_0",
-                    type="function",
-                    function=function_call,
-                )
-            ]
-
-        yield StreamChunk(
-            content=message.text_content or None,
-            finish_reason="stop",
-            tool_calls=tool_calls,
+        _llm_tracer = trace_api.get_tracer("marie.agent.llm")
+        _model_name = self.engine_name or "unknown"
+        _llm_span = oi_start_span(
+            _llm_tracer,
+            f"llm:{_model_name}",
+            span_kind="llm",
         )
+        _llm_span.set_attribute("llm.model_name", _model_name)
+        _llm_span.set_attribute("llm.system", infer_llm_system(_model_name))
+
+        try:
+            if abort_signal:
+                abort_signal.throw_if_aborted()
+
+            message = await self.achat(messages, functions, extra_generate_cfg)
+
+            tool_calls = message.tool_calls if message.tool_calls else None
+            function_call = message.function_call
+
+            # Convert legacy function_call to tool_calls for consistent API
+            if function_call and not tool_calls:
+                from marie.agent.message import ToolCall
+
+                tool_calls = [
+                    ToolCall(
+                        id="call_0",
+                        type="function",
+                        function=function_call,
+                    )
+                ]
+
+            _llm_span.set_status(StatusCode.OK)
+            yield StreamChunk(
+                content=message.text_content or None,
+                finish_reason="stop",
+                tool_calls=tool_calls,
+            )
+
+        except GeneratorExit:
+            _llm_span.set_attribute("marie.stream_cancelled", True)
+            _llm_span.set_status(StatusCode.OK)
+
+        except Exception as exc:
+            _llm_span.set_status(StatusCode.ERROR, str(exc))
+            _llm_span.record_exception(exc)
+            raise
+
+        finally:
+            _llm_span.end()
 
     def _build_prompt(
         self,
@@ -781,13 +837,41 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         extra_generate_cfg: Optional[Dict[str, Any]] = None,
     ) -> Message:
         """Generate response asynchronously."""
-        async_client = self._get_async_client()
-        kwargs = self._build_api_kwargs(messages, functions, extra_generate_cfg)
+        _llm_tracer = trace_api.get_tracer("marie.agent.llm")
+        _model_name = self.model or "unknown"
 
-        response = await async_client.chat.completions.create(**kwargs)
-        choice = response.choices[0]
+        with oi_start_as_current_span(
+            _llm_tracer,
+            f"llm:{_model_name}",
+            span_kind="llm",
+        ) as _llm_span:
+            _llm_span.set_attribute("llm.model_name", _model_name)
+            _llm_span.set_attribute("llm.system", infer_llm_system(_model_name))
 
-        return self._openai_to_message(choice.message)
+            try:
+                async_client = self._get_async_client()
+                kwargs = self._build_api_kwargs(messages, functions, extra_generate_cfg)
+
+                response = await async_client.chat.completions.create(**kwargs)
+                choice = response.choices[0]
+
+                # Extract token usage from response
+                if response.usage:
+                    _llm_span.set_attribute(
+                        "llm.token_count.prompt", response.usage.prompt_tokens or 0
+                    )
+                    _llm_span.set_attribute(
+                        "llm.token_count.completion",
+                        response.usage.completion_tokens or 0,
+                    )
+
+                _llm_span.set_status(StatusCode.OK)
+                return self._openai_to_message(choice.message)
+
+            except Exception as exc:
+                _llm_span.set_status(StatusCode.ERROR, str(exc))
+                _llm_span.record_exception(exc)
+                raise
 
     async def achat_stream(
         self,
@@ -822,11 +906,23 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
                 source="llm",
             )
 
+        # OTel LLM span — manual lifecycle for async generator
+        _llm_tracer = trace_api.get_tracer("marie.agent.llm")
+        _model_name = self.model or "unknown"
+        _llm_span = oi_start_span(
+            _llm_tracer,
+            f"llm:{_model_name}",
+            span_kind="llm",
+        )
+        _llm_span.set_attribute("llm.model_name", _model_name)
+        _llm_span.set_attribute("llm.system", infer_llm_system(_model_name))
+
         async_client = self._get_async_client()
         kwargs = self._build_api_kwargs(messages, functions, extra_generate_cfg)
         kwargs["stream"] = True
 
         accumulated_content = ""
+        _provider_usage = None
 
         try:
             response = await async_client.chat.completions.create(**kwargs)
@@ -840,10 +936,17 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
                     break
 
                 if not chunk.choices:
+                    # Some providers send usage in a final chunk with no choices
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        _provider_usage = chunk.usage
                     continue
 
                 delta = chunk.choices[0].delta
                 finish_reason = chunk.choices[0].finish_reason
+
+                # Capture usage from the final chunk if provider sends it
+                if hasattr(chunk, "usage") and chunk.usage:
+                    _provider_usage = chunk.usage
 
                 # Yield text content if present (finding #5: don't skip content
                 # just because tool_calls are also present in this delta)
@@ -896,7 +999,15 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
                         event_type="done",
                     )
 
+            _llm_span.set_status(StatusCode.OK)
+
+        except GeneratorExit:
+            _llm_span.set_attribute("marie.stream_cancelled", True)
+            _llm_span.set_status(StatusCode.OK)
+
         except Exception as e:
+            _llm_span.set_status(StatusCode.ERROR, str(e))
+            _llm_span.record_exception(e)
             # Emit error event
             if self._emitter:
                 await self._emitter.emit(
@@ -909,6 +1020,28 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
                     source="llm",
                 )
             raise
+
+        finally:
+            # Token counting: prefer provider usage, fall back to tiktoken estimation
+            if _provider_usage:
+                _llm_span.set_attribute(
+                    "llm.token_count.completion",
+                    getattr(_provider_usage, "completion_tokens", 0) or 0,
+                )
+                _llm_span.set_attribute(
+                    "llm.token_count.prompt",
+                    getattr(_provider_usage, "prompt_tokens", 0) or 0,
+                )
+            elif accumulated_content:
+                try:
+                    from marie.instrumentation.token_counter import count_tokens_text
+
+                    estimated = count_tokens_text(accumulated_content, self.model)
+                    _llm_span.set_attribute("llm.token_count.completion", estimated)
+                    _llm_span.set_attribute("marie.token_count_estimated", True)
+                except Exception:
+                    pass
+            _llm_span.end()
 
     def _message_to_openai(self, msg: Message) -> Dict[str, Any]:
         """Convert Message to OpenAI format.

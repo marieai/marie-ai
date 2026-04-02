@@ -27,6 +27,10 @@ from typing import (
     Union,
 )
 
+from opentelemetry import context as otel_context
+from opentelemetry import trace as trace_api
+from opentelemetry.trace import StatusCode
+
 from marie.agent.message import (
     ASSISTANT,
     CONTENT,
@@ -40,6 +44,7 @@ from marie.agent.message import (
 )
 from marie.agent.tools.base import AgentTool, ToolOutput
 from marie.agent.tools.registry import resolve_tools
+from marie.instrumentation import start_span as oi_start_span
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
@@ -691,6 +696,18 @@ class BaseAgent(ABC):
             source=self.name,
         )
 
+        # OTel AGENT span — manual lifecycle because run() is a generator
+        _otel_tracer = trace_api.get_tracer("marie.agent")
+        _otel_span = oi_start_span(
+            _otel_tracer,
+            f"agent:{self.name}",
+            span_kind="agent",
+        )
+        _otel_span.set_attribute("agent.name", self.name or "")
+        _otel_span_token = otel_context.attach(
+            trace_api.set_span_in_context(_otel_span)
+        )
+
         last_responses: List[Message] = []
         success = False
         error_exc: Optional[Exception] = None
@@ -717,6 +734,7 @@ class BaseAgent(ABC):
                     ]
 
             success = True
+            _otel_span.set_status(StatusCode.OK)
 
             # Emit success event
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -731,8 +749,14 @@ class BaseAgent(ABC):
                 source=self.name,
             )
 
+        except GeneratorExit:
+            # Consumer stopped iterating — clean exit, not an error
+            _otel_span.set_status(StatusCode.OK)
+
         except Exception as e:
             error_exc = e
+            _otel_span.set_status(StatusCode.ERROR, str(e))
+            _otel_span.record_exception(e)
             # Emit error event
             emit_sync(
                 run_emitter,
@@ -747,6 +771,9 @@ class BaseAgent(ABC):
             raise
 
         finally:
+            otel_context.detach(_otel_span_token)
+            _otel_span.end()
+
             # Emit finish event
             duration_ms = (time.perf_counter() - start_time) * 1000
             emit_sync(

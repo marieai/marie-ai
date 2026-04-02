@@ -138,12 +138,98 @@ def get_tracer(name: str = "marie.instrumentation") -> OITracer:
     return trace.get_tracer(name)
 
 
+_OI_SPAN_KIND_ATTR = "openinference.span.kind"
+
+
+def start_as_current_span(
+    tracer,
+    name: str,
+    *,
+    span_kind: str | None = None,
+    **kwargs,
+):
+    """Create an OTel span with OI span kind, compatible with any tracer.
+
+    Args:
+        tracer: An OTel or OITracer instance.
+        name: Span name.
+        span_kind: Lowercase OI kind (e.g. "chain", "agent", "llm", "tool").
+        **kwargs: Forwarded to tracer.start_as_current_span().
+
+    Returns:
+        A context-manager span.
+    """
+    try:
+        return tracer.start_as_current_span(
+            name, openinference_span_kind=span_kind, **kwargs
+        )
+    except TypeError:
+        cm = tracer.start_as_current_span(name, **kwargs)
+        return _OISpanKindContextManager(cm, span_kind)
+
+
+def start_span(
+    tracer,
+    name: str,
+    *,
+    span_kind: str | None = None,
+    **kwargs,
+):
+    """Create an OTel span with OI span kind, compatible with any tracer.
+
+    Args:
+        tracer: An OTel or OITracer instance.
+        name: Span name.
+        span_kind: Lowercase OI kind (e.g. "chain", "agent", "llm", "tool").
+        **kwargs: Forwarded to tracer.start_span().
+
+    Returns:
+        A Span object.
+    """
+    try:
+        return tracer.start_span(name, openinference_span_kind=span_kind, **kwargs)
+    except TypeError:
+        span = tracer.start_span(name, **kwargs)
+        if span_kind:
+            span.set_attribute(_OI_SPAN_KIND_ATTR, span_kind.upper())
+        return span
+
+
+class _OISpanKindContextManager:
+    """Wraps start_as_current_span context manager to inject OI span kind."""
+
+    def __init__(self, cm, kind):
+        self._cm = cm
+        self._kind = kind
+
+    def __enter__(self):
+        span = self._cm.__enter__()
+        if self._kind:
+            span.set_attribute(_OI_SPAN_KIND_ATTR, self._kind.upper())
+        return span
+
+    def __exit__(self, *args):
+        return self._cm.__exit__(*args)
+
+    async def __aenter__(self):
+        span = await self._cm.__aenter__()
+        if self._kind:
+            span.set_attribute(_OI_SPAN_KIND_ATTR, self._kind.upper())
+        return span
+
+    async def __aexit__(self, *args):
+        return await self._cm.__aexit__(*args)
+
+
 __all__ = [
     # Setup
     "register",
     "get_tracer",
     "get_tracker",
     "configure_from_yaml",
+    # Span helpers
+    "start_span",
+    "start_as_current_span",
     # OI primitives
     "TracerProvider",
     "OITracer",
