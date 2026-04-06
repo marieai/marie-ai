@@ -25,6 +25,7 @@ from marie.scheduler.repository.plans import (
     count_dag_states,
     count_job_states,
     create_queue,
+    delete_dags_and_jobs,
     fail_jobs_by_id,
     insert_dag,
     insert_job,
@@ -150,6 +151,60 @@ class JobRepository(PostgresqlMixin):
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
+    async def get_jobs_by_policy(
+        self, ref_type: str, ref_id: str
+    ) -> Optional[WorkInfo]:
+        """
+        Find a job by its reference type and reference ID.
+
+        :param ref_type: Reference type from job metadata
+        :param ref_id: Reference ID from job metadata
+        :return: WorkInfo object if found, None otherwise
+        """
+
+        def db_call():
+            cursor = None
+            conn = None
+            results = []
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                        SELECT
+                        id,
+                        name,
+                        priority,
+                        state,
+                        retry_limit,
+                        start_after,
+                        expire_in,
+                        data,
+                        retry_delay,
+                        retry_backoff,
+                        keep_until,
+                        dag_id,
+                        job_level
+                    FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                    WHERE data->'metadata'->>'ref_type' = '{ref_type}'
+                    AND data->'metadata'->>'ref_id' = '{ref_id}'
+                    """
+                )
+                results = [
+                    self._record_to_work_info(record) for record in cursor.fetchall()
+                ]
+                conn.commit()
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error getting job: {error}")
+                if conn:
+                    conn.rollback()
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+            return results
 
         return await self._loop.run_in_executor(self._db_executor, db_call)
 
@@ -1561,6 +1616,27 @@ class JobRepository(PostgresqlMixin):
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error completing job: {error}")
                 return 0
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
+    async def delete_dag(self, dag_id: str) -> bool:
+        self.logger.info(f"Deleting dag_id : {dag_id}")
+
+        def db_call():
+            cursor = None
+            conn = None
+            try:
+                conn = self._get_connection()
+                self._execute_sql_gracefully(
+                    delete_dags_and_jobs(DEFAULT_SCHEMA, [dag_id]), connection=conn
+                )
+                return True
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error completing failed job: {error}")
+                return False
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)

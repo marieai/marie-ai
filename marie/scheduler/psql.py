@@ -2205,43 +2205,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         ref_type = work_info.data.get("metadata", {}).get("ref_type", "")
         ref_id = work_info.data.get("metadata", {}).get("ref_id", "")
 
-        return await self.repository.get_job_by_policy(ref_type, ref_id)
-        # todo
-        # results = []
-        # try:
-        #     conn = self._get_connection()
-        #     cursor = conn.cursor()
-        #     cursor.execute(
-        #         f"""
-        #             SELECT
-        #             id,
-        #             name,
-        #             priority,
-        #             state,
-        #             retry_limit,
-        #             start_after,
-        #             expire_in,
-        #             data,
-        #             retry_delay,
-        #             retry_backoff,
-        #             keep_until,
-        #             dag_id,
-        #             job_level
-        #         FROM {schema}.{table}
-        #         WHERE data->'metadata'->>'ref_type' = '{ref_type}'
-        #         AND data->'metadata'->>'ref_id' = '{ref_id}'
-        #         """
-        #     )
-        #     for record in cursor:
-        #         results.append(self.record_to_work_info(record))
-        #     conn.commit()
-        # except (Exception, psycopg2.Error) as error:
-        #     self.logger.error(f"Error getting job: {error}")
-        #     conn.rollback()
-        # finally:
-        #     self._close_cursor(cursor)
-        #     self._close_connection(conn)
-        # return results
+        return await self.repository.get_jobs_by_policy(ref_type, ref_id)
 
     async def list_jobs(
         self, state: Optional[str | list[str]] = None, batch_size: int = 0
@@ -2634,9 +2598,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             if policy == ExistingWorkPolicy.REJECT_ALL:
                 return False
 
-            existing_jobs = await self._loop.run_in_executor(
-                self._db_executor, self.get_jobs_for_policy, work_info
-            )
+            existing_jobs = await self.get_jobs_for_policy(work_info)
 
             if policy == ExistingWorkPolicy.REJECT_DUPLICATE:
                 return len(existing_jobs) == 0
@@ -2648,16 +2610,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 distinct_dag_ids = {
                     job.dag_id for job in existing_jobs if job.dag_id is not None
                 }
+                ref_id = work_info.data.get("metadata", {}).get("ref_id", "")
+                self.logger.warning(
+                    f"Job: {work_info.id}. {len(distinct_dag_ids)} existing dags with ref_id: {ref_id}"
+                )
                 for dag_id in distinct_dag_ids:
-                    dag_state = self._resolve_dag_status_sync(dag_id)
+                    dag_state = await self.repository.resolve_dag_state(dag_id)
                     if dag_state not in ("completed", "failed"):
                         self.logger.warning(
                             f"Removing DAG to due to 'replace' policy: {dag_id}, state: {dag_state}"
                         )
-                        self._remove_dag_from_memory(
-                            dag_id, "Existing Work Policy: 'replace'"
-                        )
-                        is_deleted = await self.delete_dag(dag_id)
+                        is_deleted = await self.repository.delete_dag(dag_id)
                         if not is_deleted:
                             self.logger.warning(f"Failed to delete DAG: {dag_id}")
                             return False
@@ -2672,28 +2635,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"with policy '{policy}': {str(e)}"
             )
             return False
-
-    async def delete_dag(self, dag_id: str) -> bool:
-        self.logger.info(f"Deleting dag_id : {dag_id}")
-
-        # todo
-        def db_call():
-            cursor = None
-            conn = None
-            try:
-                conn = self._get_connection()
-                self._execute_sql_gracefully(
-                    delete_dags_and_jobs(DEFAULT_SCHEMA, [dag_id]), connection=conn
-                )
-                return True
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error completing failed job: {error}")
-                return False
-            finally:
-                self._close_cursor(cursor)
-                self._close_connection(conn)
-
-        return await self._loop.run_in_executor(self._db_executor, db_call)
 
     def stop_job(self, job_id: str) -> bool:
         """Request a job to exit, fire and forget.
