@@ -21,10 +21,10 @@ shared_config:
   storage: &storage
     psql: &psql_conf_shared
       provider: postgresql
-      hostname: 127.0.0.1
+      hostname: ${{ ENV.POSTGRES_HOSTNAME }}
       port: 5432
-      username: postgres
-      password: 123456
+      username: ${{ ENV.POSTGRES_USER }}
+      password: ${{ ENV.POSTGRES_PASSWORD }}
       database: postgres
       default_table: shared_docs
 
@@ -60,11 +60,26 @@ with:
   traces_exporter_port: 4317
 
   discovery: true
-  discovery_host: 0.0.0.0
+#  discovery_host: mariectl-002:2379,mariectl-003:2379,mariectl-004:2379 # SINGLE HOST OR A LIST OF HOSTS
+  discovery_host: 0.0.0.0 # SINGLE HOST OR A LIST OF HOSTS
   discovery_port: 2379
-  discovery_watchdog_interval: 2
+  discovery_watchdog_interval: 5 # DEPRECATED replace by discovery_heartbeat_sec
   discovery_service_name: gateway/marie
+  discovery_namespace: marie
+  discovery_lease_sec: 6
+  discovery_heartbeat_sec: 1.5
+  discovery_timeout_sec: 10
+  discovery_retry_times : 5
 
+#  discovery_ca_cert: "/path/to/ca.crt"
+#  discovery_cert_key: "/path/to/client.key"
+#  discovery_cert_cert: "/path/to/client.crt"
+#  discovery_grpc_options: "grpc.keepalive_time_ms:30000,grpc.keepalive_timeout_ms:5000"
+
+  discovery_ca_cert:
+  discovery_cert_key:
+  discovery_cert_cert:
+  discovery_grpc_options:
   # Key Value Store
   kv_store_kwargs:
     <<: *psql_conf_shared
@@ -77,6 +92,7 @@ with:
   job_scheduler_kwargs:
     <<: *psql_conf_shared
     default_table: job_scheduler
+    max_workers: 2
     max_pool_size: 5
     max_connections: 5
     queue_names: [extract,classify,transform,load, gen5_extract] # Queue names for the job scheduler to monitor
@@ -209,10 +225,23 @@ with:
       default_table: store_metadata
       enabled : False
 
+  # LLM Tracking / Instrumentation configuration
+  #
+  # Console span output (OTel spans printed to stdout) can be enabled 3 ways:
+  #
+  #   1. Set exporter to "console" — automatically enables console spans:
+  #        exporter: console
+  #
+  #   2. Explicit opt-in alongside any exporter (e.g. otel + console):
+  #        console_spans: true
+  #
+  #   3. Env var (applies to gateway infra spans, independent of this section):
+  #        MARIE_OTEL_CONSOLE_EXPORT=true
+  #
   llm_tracking:
     enabled: true
     exporter: console
-    project_id: my-project
+    project_id: marie-ai
     worker:
       enabled: true
     # Postgres is REQUIRED for rabbitmq exporter (stores event metadata)

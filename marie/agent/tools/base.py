@@ -25,11 +25,12 @@ from typing import (
     get_type_hints,
 )
 
+from openinference.semconv.trace import SpanAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import StatusCode
 from pydantic import BaseModel, Field
 
-from marie.instrumentation import start_span as oi_start_span
+from marie.instrumentation import start_span
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
@@ -321,12 +322,12 @@ class AgentTool(ABC):
 
         # OTel TOOL span
         _tool_tracer = trace_api.get_tracer("marie.agent.tools")
-        _tool_span = oi_start_span(
+        _tool_span = start_span(
             _tool_tracer,
             f"tool:{self.name}",
             span_kind="tool",
         )
-        _tool_span.set_attribute("tool.name", self.name or "")
+        _tool_span.set_attribute(SpanAttributes.TOOL_NAME, self.name or "")
 
         start_time = time.perf_counter()
         parsed_args = self._parse_input(tool_args)
@@ -378,7 +379,9 @@ class AgentTool(ABC):
 
             # Hardened output recording — never let serialization crash the tool
             try:
-                _tool_span.set_attribute("output.value", str(result.content)[:2000])
+                _tool_span.set_attribute(
+                    SpanAttributes.OUTPUT_VALUE, str(result.content)[:2000]
+                )
             except Exception:
                 pass
 
@@ -452,12 +455,12 @@ class AgentTool(ABC):
         """
         # OTel TOOL span
         _tool_tracer = trace_api.get_tracer("marie.agent.tools")
-        _tool_span = oi_start_span(
+        _tool_span = start_span(
             _tool_tracer,
             f"tool:{self.name}",
             span_kind="tool",
         )
-        _tool_span.set_attribute("tool.name", self.name or "")
+        _tool_span.set_attribute(SpanAttributes.TOOL_NAME, self.name or "")
 
         start_time = time.perf_counter()
         parsed_args = self._parse_input(tool_args)
@@ -508,7 +511,9 @@ class AgentTool(ABC):
 
             # Hardened output recording — never let serialization crash the tool
             try:
-                _tool_span.set_attribute("output.value", str(result.content)[:2000])
+                _tool_span.set_attribute(
+                    SpanAttributes.OUTPUT_VALUE, str(result.content)[:2000]
+                )
             except Exception:
                 pass
 

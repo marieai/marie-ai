@@ -303,6 +303,7 @@ async def process_batch(
     is_multimodal: bool = False,
     expect_output: str = None,
     completion_params: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, str]] = None,
 ) -> list[Any] | None:
     """
     Processes a batch of images using the specified engine.
@@ -395,6 +396,8 @@ async def process_batch(
             call_kwargs = {"max_tokens": 4096 * 4, "on_result": on_result}
             if completion_params:
                 call_kwargs["completion_params"] = completion_params
+            if metadata:
+                call_kwargs["metadata"] = metadata
 
             if is_multimodal:
                 batch_t = [[b[0], b[1]] for b in batch]
@@ -722,6 +725,7 @@ def scan_and_process_images(
     completion_params: Optional[Dict[str, Any]] = None,
     mm_processor_kwargs: Optional[Dict[str, Any]] = None,
     mini_batch_size: int = 16,
+    metadata: Optional[Dict[str, str]] = None,
 ) -> None:
     """
     Synchronous wrapper for the ascan_and_process_images function.
@@ -758,6 +762,7 @@ def scan_and_process_images(
         completion_params=completion_params,
         mm_processor_kwargs=mm_processor_kwargs,
         mini_batch_size=mini_batch_size,
+        metadata=metadata,
     )
 
     return run_async(coroutine)
@@ -793,6 +798,7 @@ async def ascan_and_process_images(
     completion_params: Optional[Dict[str, Any]] = None,
     mm_processor_kwargs: Optional[Dict[str, Any]] = None,
     mini_batch_size: int = 16,
+    metadata: Optional[Dict[str, str]] = None,
 ) -> None:
     """
     Scans the source directory for image files, processes each image
@@ -942,6 +948,7 @@ async def ascan_and_process_images(
                 is_multimodal=is_multimodal,
                 expect_output=expect_output,
                 completion_params=completion_params,
+                metadata=metadata,
             )
 
     tasks = [asyncio.create_task(_worker(batch)) for batch in batched_items]

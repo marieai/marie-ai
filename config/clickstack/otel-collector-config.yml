@@ -84,6 +84,16 @@ processors:
         value: marie-ai
         action: upsert
 
+  # Default UNSET status to OK for non-error spans
+  # The OTel SDK leaves status as UNSET (0) when the app doesn't explicitly
+  # call set_status(). This transform promotes UNSET → OK (1) so ClickHouse
+  # and dashboards show meaningful status values.
+  transform/status:
+    trace_statements:
+      - context: span
+        statements:
+          - set(status.code, 1) where status.code == 0
+
 exporters:
   # ClickHouse exporter for all telemetry data
   clickhouse:
@@ -93,7 +103,18 @@ exporters:
     password: marie123
     logs_table_name: otel_logs
     traces_table_name: otel_traces
-    metrics_table_name: otel_metrics
+    # Per-type metric tables (metrics_table_name was removed in collector 0.116+)
+    metrics_tables:
+      gauge:
+        name: otel_metrics_gauge
+      sum:
+        name: otel_metrics_sum
+      summary:
+        name: otel_metrics_summary
+      histogram:
+        name: otel_metrics_histogram
+      exponential_histogram:
+        name: otel_metrics_exp_histogram
     ttl: 72h
     create_schema: true
     timeout: 10s
@@ -141,7 +162,7 @@ service:
     # Traces pipeline
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, resourcedetection, resource, batch]
+      processors: [memory_limiter, resourcedetection, resource, transform/status, batch]
       exporters: [clickhouse, debug]
 
     # Metrics pipeline
@@ -154,4 +175,9 @@ service:
     logs:
       level: info
     metrics:
-      address: 0.0.0.0:8888
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888

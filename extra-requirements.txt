@@ -47,15 +47,15 @@ docarray>=0.30,<=0.40.0:  core
 psutil:                     perf,standard,devel
 uvloop:                     perf,standard,devel
 
-# OpenTelemetry packages - aligned to compatible versions
-opentelemetry-api>=1.20.0:                      perf,standard,devel
-opentelemetry-sdk>=1.20.0:                      perf,standard,devel
-opentelemetry-instrumentation-grpc>=0.41b0:     perf,standard,devel
-opentelemetry-exporter-otlp>=1.20.0:            perf,standard,devel
-opentelemetry-semantic-conventions>=0.41b0:     perf,standard,devel
-opentelemetry-instrumentation-aiohttp-client>=0.41b0:    perf,standard,devel
-opentelemetry-instrumentation-fastapi>=0.41b0:  perf,standard,devel
-opentelemetry-exporter-otlp-proto-grpc>=1.20.0: perf,standard,devel
+# OpenTelemetry packages - aligned to compatible versions (>=1.22 for create_gauge support)
+opentelemetry-api>=1.22.0:                      perf,standard,devel
+opentelemetry-sdk>=1.22.0:                      perf,standard,devel
+opentelemetry-instrumentation-grpc>=0.43b0:     perf,standard,devel
+opentelemetry-exporter-otlp>=1.22.0:            perf,standard,devel
+opentelemetry-semantic-conventions>=0.43b0:     perf,standard,devel
+opentelemetry-instrumentation-aiohttp-client>=0.43b0:    perf,standard,devel
+opentelemetry-instrumentation-fastapi>=0.43b0:  perf,standard,devel
+opentelemetry-exporter-otlp-proto-grpc>=1.22.0: perf,standard,devel
 openinference-instrumentation>=0.1.46:          perf,standard,devel
 
 fastapi>=0.100.1:            standard,devel

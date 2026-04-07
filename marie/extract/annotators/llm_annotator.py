@@ -169,6 +169,11 @@ class LLMAnnotator(DocumentAnnotator):
         # Usage: self.run_context.get("ANNOTATOR_RESULTS", from_task="tables")
         self.run_context = run_context
 
+        # DAG tracking parameters for span metadata
+        self.job_id = kwargs.get("job_id")
+        self.dag_id = kwargs.get("dag_id")
+        self.node_task_id = kwargs.get("node_task_id")
+
         if self.model_name is None:
             raise ValueError("Model name must be provided in the configuration.")
 
@@ -287,10 +292,6 @@ class LLMAnnotator(DocumentAnnotator):
     def capabilities(self) -> list:
         return [AnnotatorCapabilities.EXTRACTOR, AnnotatorCapabilities.SEGMENTER]
 
-    # ------------------------------------------------------------------
-    # Skip / completion logic (Step 2b)
-    # ------------------------------------------------------------------
-
     def _has_completed_results(self, live_output_dir: str) -> bool:
         """Check whether a completed run exists in the live output directory.
 
@@ -308,7 +309,7 @@ class LLMAnnotator(DocumentAnnotator):
         if not entries:
             return False
 
-        # Legacy mode: no refinement → any content means done
+        # Legacy mode: no refinement - any content means done
         if self.refine_passes <= 0:
             return True
 
@@ -321,10 +322,6 @@ class LLMAnnotator(DocumentAnnotator):
         )
         return has_marker and has_result
 
-    # ------------------------------------------------------------------
-    # Path helpers (Step 2c)
-    # ------------------------------------------------------------------
-
     def _scratch_root(self) -> str:
         return os.path.join(self.working_dir, "agent-output", f".{self.name}-refine")
 
@@ -336,10 +333,6 @@ class LLMAnnotator(DocumentAnnotator):
 
     def _success_marker_path(self, live_output_dir: str) -> str:
         return os.path.join(live_output_dir, _SUCCESS_MARKER)
-
-    # ------------------------------------------------------------------
-    # Per-pass completion params (Step 2d)
-    # ------------------------------------------------------------------
 
     def _completion_params_for_pass(self, pass_index: int) -> dict:
         """Return completion params with optional per-pass temperature override.
@@ -354,10 +347,6 @@ class LLMAnnotator(DocumentAnnotator):
             if refine_idx < len(self.pass_temperatures):
                 params["temperature"] = self.pass_temperatures[refine_idx]
         return params
-
-    # ------------------------------------------------------------------
-    # Per-pass engine (Step 2d2)
-    # ------------------------------------------------------------------
 
     def _engine_for_pass(self, pass_index: int) -> EngineLM:
         """Get the LLM engine for a specific pass.
@@ -374,9 +363,21 @@ class LLMAnnotator(DocumentAnnotator):
                 return route_llm_engine(model_name, self.multimodal)
         return self.engine
 
-    # ------------------------------------------------------------------
-    # Single extraction helper (Step 2e)
-    # ------------------------------------------------------------------
+    def _build_span_metadata(self, engine: Optional[EngineLM] = None) -> Dict[str, str]:
+        """Build metadata dict for span attribution."""
+        actual_engine = engine or self.engine
+        meta: Dict[str, str] = {
+            "annotator_name": self.name,
+            "layout_id": self.layout_id,
+            "model_name": actual_engine.model_string,
+        }
+        if self.job_id:
+            meta["job_id"] = self.job_id
+        if self.dag_id:
+            meta["dag_id"] = self.dag_id
+        if self.node_task_id:
+            meta["node_task_id"] = self.node_task_id
+        return meta
 
     async def _arun_single_extraction(
         self,
@@ -389,23 +390,21 @@ class LLMAnnotator(DocumentAnnotator):
         engine: Optional[EngineLM] = None,
     ) -> None:
         """Run a single extraction pass into *output_dir*."""
+        actual_engine = engine or self.engine
         await ascan_and_process_images(
             frames_dir,
             output_dir,
             prompt_text,
             document,
-            engine=engine or self.engine,
+            engine=actual_engine,
             is_multimodal=self.multimodal,
             expect_output=self.expect_output,
             context_manager=context_manager,
             completion_params=completion_params,
             mm_processor_kwargs=self.mm_processor_kwargs,
             mini_batch_size=self.mini_batch_size,
+            metadata=self._build_span_metadata(actual_engine),
         )
-
-    # ------------------------------------------------------------------
-    # Context manager builder (Step 2f)
-    # ------------------------------------------------------------------
 
     def _build_pass_context_manager(
         self,
@@ -426,10 +425,6 @@ class LLMAnnotator(DocumentAnnotator):
         mgr.providers.append(refinement_provider)
         return mgr
 
-    # ------------------------------------------------------------------
-    # Read pass results (Step 2g)
-    # ------------------------------------------------------------------
-
     def _read_pass_results(self, pass_dir: str) -> Dict[ProcessingKey, str]:
         """Read top-level .json files from *pass_dir* and return raw JSON strings."""
         results: Dict[ProcessingKey, str] = {}
@@ -448,10 +443,6 @@ class LLMAnnotator(DocumentAnnotator):
             with open(fpath, "r", encoding="utf-8") as f:
                 results[key] = f.read()
         return results
-
-    # ------------------------------------------------------------------
-    # Validation (Step 2h)
-    # ------------------------------------------------------------------
 
     def _validate_pass_outputs(self, pass_dir: str) -> PassValidationReport:
         """Validate all output files in *pass_dir* and return a report."""
@@ -516,10 +507,6 @@ class LLMAnnotator(DocumentAnnotator):
 
         return report
 
-    # ------------------------------------------------------------------
-    # Report comparison (Step 2i)
-    # ------------------------------------------------------------------
-
     def _compare_pass_reports(
         self,
         previous: PassValidationReport,
@@ -573,10 +560,6 @@ class LLMAnnotator(DocumentAnnotator):
 
         return True
 
-    # ------------------------------------------------------------------
-    # Atomic promotion (Step 2j)
-    # ------------------------------------------------------------------
-
     def _promote_pass_atomically(self, winning_pass_dir: str, run_id: str) -> None:
         """Atomically promote *winning_pass_dir* into the live output directory."""
         live = self.output_dir
@@ -624,10 +607,6 @@ class LLMAnnotator(DocumentAnnotator):
             f"Promoted {os.path.basename(winning_pass_dir)} "
             f"({len(promoted_files)} files) → {live}"
         )
-
-    # ------------------------------------------------------------------
-    # Rerun / recovery helpers (Step 2k)
-    # ------------------------------------------------------------------
 
     def _start_refinement_run(self) -> str:
         """Generate a fresh run_id and create the scratch run directory."""
@@ -677,10 +656,6 @@ class LLMAnnotator(DocumentAnnotator):
                     os.remove(path)
                 elif os.path.isdir(path):
                     shutil.rmtree(path, ignore_errors=True)
-
-    # ------------------------------------------------------------------
-    # Debug helpers (Step 2n)
-    # ------------------------------------------------------------------
 
     def _write_context_debug(
         self, document: UnstructuredDocument, context_mgr: ContextProviderManager
@@ -864,6 +839,7 @@ class LLMAnnotator(DocumentAnnotator):
                 completion_params=self.completion_params,
                 mm_processor_kwargs=self.mm_processor_kwargs,
                 mini_batch_size=self.mini_batch_size,
+                metadata=self._build_span_metadata(),
             )
 
         if self.output_transform:
@@ -903,6 +879,7 @@ class LLMAnnotator(DocumentAnnotator):
                 completion_params=self.completion_params,
                 mm_processor_kwargs=self.mm_processor_kwargs,
                 mini_batch_size=self.mini_batch_size,
+                metadata=self._build_span_metadata(),
             )
 
         if self.output_transform:

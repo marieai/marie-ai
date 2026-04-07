@@ -413,6 +413,73 @@ ALTER TABLE otel.otel_logs
     ADD INDEX IF NOT EXISTS idx_api_key (LogAttributes['api_key'])
     TYPE bloom_filter GRANULARITY 4;
 
+-- ############### OpenInference Materialized Columns ###############
+-- Fast OI queries without Map access on otel_traces
+
+ALTER TABLE otel.otel_traces ADD COLUMN IF NOT EXISTS
+    oi_span_kind LowCardinality(String) MATERIALIZED SpanAttributes['openinference.span.kind'];
+ALTER TABLE otel.otel_traces ADD COLUMN IF NOT EXISTS
+    llm_system LowCardinality(String) MATERIALIZED SpanAttributes['llm.system'];
+ALTER TABLE otel.otel_traces ADD COLUMN IF NOT EXISTS
+    llm_model_name LowCardinality(String) MATERIALIZED SpanAttributes['llm.model_name'];
+ALTER TABLE otel.otel_traces ADD COLUMN IF NOT EXISTS
+    llm_token_prompt Nullable(Int64) MATERIALIZED toInt64OrNull(SpanAttributes['llm.token_count.prompt']);
+ALTER TABLE otel.otel_traces ADD COLUMN IF NOT EXISTS
+    llm_token_completion Nullable(Int64) MATERIALIZED toInt64OrNull(SpanAttributes['llm.token_count.completion']);
+ALTER TABLE otel.otel_traces ADD COLUMN IF NOT EXISTS
+    llm_token_total Nullable(Int64) MATERIALIZED toInt64OrNull(SpanAttributes['llm.token_count.total']);
+ALTER TABLE otel.otel_traces ADD COLUMN IF NOT EXISTS
+    llm_cost_total Nullable(Float64) MATERIALIZED toFloat64OrNull(SpanAttributes['llm.cost.total']);
+ALTER TABLE otel.otel_traces ADD COLUMN IF NOT EXISTS
+    llm_cost_prompt Nullable(Float64) MATERIALIZED toFloat64OrNull(SpanAttributes['llm.cost.prompt']);
+ALTER TABLE otel.otel_traces ADD COLUMN IF NOT EXISTS
+    llm_cost_completion Nullable(Float64) MATERIALIZED toFloat64OrNull(SpanAttributes['llm.cost.completion']);
+ALTER TABLE otel.otel_traces ADD COLUMN IF NOT EXISTS
+    marie_project_id LowCardinality(String) MATERIALIZED SpanAttributes['marie.project_id'];
+ALTER TABLE otel.otel_traces ADD COLUMN IF NOT EXISTS
+    marie_observation_type LowCardinality(String) MATERIALIZED SpanAttributes['marie.observation_type'];
+ALTER TABLE otel.otel_traces ADD COLUMN IF NOT EXISTS
+    oi_session_id String MATERIALIZED SpanAttributes['session.id'];
+ALTER TABLE otel.otel_traces ADD COLUMN IF NOT EXISTS
+    oi_user_id String MATERIALIZED SpanAttributes['user.id'];
+
+-- Indexes for common OI query patterns
+ALTER TABLE otel.otel_traces ADD INDEX IF NOT EXISTS
+    idx_oi_span_kind oi_span_kind TYPE set(10) GRANULARITY 4;
+ALTER TABLE otel.otel_traces ADD INDEX IF NOT EXISTS
+    idx_marie_project_id marie_project_id TYPE bloom_filter(0.001) GRANULARITY 1;
+ALTER TABLE otel.otel_traces ADD INDEX IF NOT EXISTS
+    idx_llm_model_name llm_model_name TYPE set(50) GRANULARITY 4;
+ALTER TABLE otel.otel_traces ADD INDEX IF NOT EXISTS
+    idx_oi_session_id oi_session_id TYPE bloom_filter(0.001) GRANULARITY 1;
+
+-- ############### Span Annotations ###############
+-- Evaluations, feedback, scores (Phoenix-compatible annotation model)
+
+CREATE TABLE IF NOT EXISTS otel.span_annotations (
+    id UUID DEFAULT generateUUIDv4(),
+    trace_id String,
+    span_id String,
+    project_id String,
+    name String,
+    label Nullable(String),
+    score Nullable(Float64),
+    explanation Nullable(String),
+    metadata String DEFAULT '{}',
+    annotator_kind LowCardinality(String) DEFAULT 'HUMAN',
+    source LowCardinality(String) DEFAULT 'API',
+    created_at DateTime64(3) DEFAULT now64(3),
+    updated_at DateTime64(3) DEFAULT now64(3),
+
+    INDEX idx_trace_id trace_id TYPE bloom_filter(0.001) GRANULARITY 1,
+    INDEX idx_span_id span_id TYPE bloom_filter(0.001) GRANULARITY 1,
+    INDEX idx_project_id project_id TYPE bloom_filter(0.001) GRANULARITY 1,
+    INDEX idx_name name TYPE set(100) GRANULARITY 4
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (project_id, trace_id, name, id)
+TTL toDateTime(created_at) + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192;
+
 -- ############### Useful Queries ###############
 --
 -- Recent errors:

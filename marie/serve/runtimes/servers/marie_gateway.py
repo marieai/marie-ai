@@ -184,28 +184,48 @@ class MarieServerGateway(CompositeServer):
 
         # OTel metrics for gateway request tracking
         self._gateway_request_seconds = None
-        self._slot_capacity_gauge = None
-        self._slot_used_gauge = None
-        self._slot_available_gauge = None
+        # Observable gauge observations — updated by refresh, read by OTel callbacks
+        self._slot_observations = {"capacity": {}, "used": {}, "available": {}}
         if self.meter:
             self._gateway_request_seconds = self.meter.create_histogram(
                 name="marie_gateway_request_seconds",
                 description="Time spent processing gateway API requests",
                 unit="s",
             )
-            # Slot capacity metrics (gauges for current state)
-            self._slot_capacity_gauge = self.meter.create_gauge(
+            # Slot capacity metrics (observable gauges — callback-based for
+            # compatibility with all OTel exporters including ClickHouse/Prometheus)
+            from opentelemetry.metrics import Observation
+
+            self.meter.create_observable_gauge(
                 name="marie_executor_slot_capacity",
+                callbacks=[
+                    lambda _: [
+                        Observation(v, {"executor": k})
+                        for k, v in self._slot_observations["capacity"].items()
+                    ]
+                ],
                 description="Total slot capacity per executor",
                 unit="{slots}",
             )
-            self._slot_used_gauge = self.meter.create_gauge(
+            self.meter.create_observable_gauge(
                 name="marie_executor_slot_used",
+                callbacks=[
+                    lambda _: [
+                        Observation(v, {"executor": k})
+                        for k, v in self._slot_observations["used"].items()
+                    ]
+                ],
                 description="Currently used slots per executor",
                 unit="{slots}",
             )
-            self._slot_available_gauge = self.meter.create_gauge(
+            self.meter.create_observable_gauge(
                 name="marie_executor_slot_available",
+                callbacks=[
+                    lambda _: [
+                        Observation(v, {"executor": k})
+                        for k, v in self._slot_observations["available"].items()
+                    ]
+                ],
                 description="Available slots per executor",
                 unit="{slots}",
             )
@@ -1431,6 +1451,14 @@ class MarieServerGateway(CompositeServer):
         try:
             job_id = await self.job_scheduler.submit_job(work_info)
 
+            # Tag the active ASGI span with session.id = job_id (the dag_id)
+            # so ClickHouse materializes oi_session_id for session grouping.
+            from opentelemetry import trace as otel_trace
+
+            active_span = otel_trace.get_current_span()
+            if active_span and active_span.is_recording():
+                active_span.set_attribute("session.id", job_id)
+
             response = Response()
             response.parameters = {
                 "status": "ok",
@@ -1623,23 +1651,19 @@ class MarieServerGateway(CompositeServer):
             )
             self.logger.info(summary)
 
-            # Record OTel metrics for slot capacity
+            # Update observable gauge observations (read by OTel callbacks)
             # rows: [(slot, capacity, target, used, available, holders, notes), ...]
-            if self._slot_capacity_gauge:
+            if self._slot_observations is not None:
+                obs = {"capacity": {}, "used": {}, "available": {}}
                 for row in rows:
                     slot, cap, tgt, used, avail, holders, notes = row
-                    labels = {"executor": slot}
-                    self._slot_capacity_gauge.set(cap, labels)
-                    self._slot_used_gauge.set(used, labels)
-                    self._slot_available_gauge.set(avail, labels)
-                # Also record totals
-                self._slot_capacity_gauge.set(
-                    totals["capacity"], {"executor": "_total"}
-                )
-                self._slot_used_gauge.set(totals["used"], {"executor": "_total"})
-                self._slot_available_gauge.set(
-                    totals["available"], {"executor": "_total"}
-                )
+                    obs["capacity"][slot] = cap
+                    obs["used"][slot] = used
+                    obs["available"][slot] = avail
+                obs["capacity"]["_total"] = totals["capacity"]
+                obs["used"]["_total"] = totals["used"]
+                obs["available"]["_total"] = totals["available"]
+                self._slot_observations = obs
 
             capacity_stats = (rows, totals)
             self.logger.debug(f"Publishing capacity stats: {capacity_stats}")

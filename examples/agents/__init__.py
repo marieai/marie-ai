@@ -8,6 +8,7 @@ Examples:
     - agent_assistant.py: Full-featured assistant with real tools
     - planning_agent.py: Multi-step planning agent with tool orchestration
     - multi_agent_router.py: Router that delegates to specialized agents
+    - document_review_workflow.py: Routed, concurrent, debate-style workflow
     - vision_document_agent.py: Vision-language agent for document analysis
     - document_agent.py: Document processing with Marie API
 

@@ -102,6 +102,12 @@ class StartAgentWorkflowRequest(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(
         default=None, description="Custom metadata"
     )
+    session_id: Optional[str] = Field(
+        default=None, description="Session ID for trace correlation"
+    )
+    user_id: Optional[str] = Field(
+        default=None, description="User ID for trace correlation"
+    )
 
 
 class StartAgentWorkflowResponse(BaseModel):
@@ -316,6 +322,8 @@ class AgentWorkflowRouter:
                 goal=request.goal,
                 initial_agent=request.initial_agent,
                 metadata=request.metadata,
+                session_id=request.session_id,
+                user_id=request.user_id,
             )
         )
 
@@ -333,6 +341,8 @@ class AgentWorkflowRouter:
         goal: str,
         initial_agent: Optional[str],
         metadata: Optional[Dict[str, Any]],
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> None:
         """Execute workflow and broadcast events."""
         try:
@@ -351,6 +361,8 @@ class AgentWorkflowRouter:
                 workflow_id=workflow_id,
                 goal=goal,
                 initial_agent=initial_agent,
+                session_id=session_id,
+                user_id=user_id,
                 **(metadata or {}),
             )
 

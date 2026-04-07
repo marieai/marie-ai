@@ -7,10 +7,12 @@ FanOutCoordinator (parallel) or ChainCoordinator (sequential).
 
 from __future__ import annotations
 
+import contextlib
 import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, runtime_checkable
 
+from openinference.semconv.trace import SpanAttributes
 from opentelemetry import context as otel_context
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import StatusCode
@@ -33,7 +35,7 @@ from marie.agent.coordination.topology import (
     BaseCoordinator,
     CoordinationResult,
 )
-from marie.instrumentation import start_span as oi_start_span
+from marie.instrumentation import start_span
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
@@ -284,17 +286,32 @@ class WorkflowCoordinator(BaseCoordinator):
         goal = kwargs.get("goal", "")
         initial_agent = kwargs.get("initial_agent")
         restore_checkpoint = kwargs.get("restore_checkpoint", False)
+        session_id = kwargs.get("session_id")
+        user_id = kwargs.get("user_id")
 
         # OTel CHAIN span for workflow orchestration
         _tracer = trace_api.get_tracer("marie.agent.coordination")
-        _span = oi_start_span(
+        _span = start_span(
             _tracer,
             f"workflow:{workflow_id or 'anonymous'}",
             span_kind="chain",
         )
         _span.set_attribute("marie.workflow_id", workflow_id or "")
         _span.set_attribute("marie.agent_count", len(self._agents))
+        if session_id:
+            _span.set_attribute(SpanAttributes.SESSION_ID, session_id)
+        if user_id:
+            _span.set_attribute(SpanAttributes.USER_ID, user_id)
         _span_token = otel_context.attach(trace_api.set_span_in_context(_span))
+
+        # Activate OI context so auto-instrumented LLM calls also get tagged
+        from marie.instrumentation.context import using_session, using_user
+
+        _oi_ctx = contextlib.ExitStack()
+        if session_id:
+            _oi_ctx.enter_context(using_session(session_id))
+        if user_id:
+            _oi_ctx.enter_context(using_user(user_id))
 
         try:
             # Build agent map
@@ -422,6 +439,7 @@ class WorkflowCoordinator(BaseCoordinator):
             raise
 
         finally:
+            _oi_ctx.close()
             otel_context.detach(_span_token)
             _span.end()
 

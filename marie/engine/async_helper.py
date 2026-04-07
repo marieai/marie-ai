@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import queue
 import threading
 
@@ -17,34 +18,39 @@ def run_coroutine_in_current_loop(coroutine):
     except RuntimeError:
         return asyncio.run(coroutine)
 
+    # Capture caller's OTel context so the child thread inherits trace_id.
+    ctx = contextvars.copy_context()
     result_q = queue.Queue()
 
     def _thread_target():
-        new_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(new_loop)
+        def _run():
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
 
-        async def _runner():
-            result = await coroutine
-            # 2) clean up any async generators
-            await new_loop.shutdown_asyncgens()
+            async def _runner():
+                result = await coroutine
+                # 2) clean up any async generators
+                await new_loop.shutdown_asyncgens()
 
-            # 3) drain *other* pending tasks, excluding this one
-            current = asyncio.current_task()
-            pending = [
-                t for t in asyncio.all_tasks() if not t.done() and t is not current
-            ]
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+                # 3) drain *other* pending tasks, excluding this one
+                current = asyncio.current_task()
+                pending = [
+                    t for t in asyncio.all_tasks() if not t.done() and t is not current
+                ]
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
 
-            return result
+                return result
 
-        try:
-            res = new_loop.run_until_complete(_runner())
-            result_q.put((True, res))
-        except Exception as exc:
-            result_q.put((False, exc))
-        finally:
-            new_loop.close()
+            try:
+                res = new_loop.run_until_complete(_runner())
+                result_q.put((True, res))
+            except Exception as exc:
+                result_q.put((False, exc))
+            finally:
+                new_loop.close()
+
+        ctx.run(_run)
 
     t = threading.Thread(target=_thread_target)
     t.start()

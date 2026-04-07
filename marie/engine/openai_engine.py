@@ -344,6 +344,8 @@ class OpenAIEngine(EngineLM):
             bp_kwargs = {}
             if "completion_params" in kwargs:
                 bp_kwargs["completion_params"] = kwargs["completion_params"]
+            if "metadata" in kwargs:
+                bp_kwargs["metadata"] = kwargs["metadata"]
 
             ordered_outputs = self.batch_processor.batch_generate(
                 messages_list,

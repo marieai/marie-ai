@@ -35,18 +35,23 @@ config/
 ## Quick Start
 
 ```bash
-cd /home/greg/dev/marieai/marie-ai
+cd ~/dev/marieai/marie-ai
 
 # Create network (if not exists)
 docker network create --driver=bridge marie_default 2>/dev/null || true
 
 # Start ClickHouse (includes bootstrap)
+# NOTE: --project-directory . is REQUIRED because the compose file lives in
+# Dockerfiles/ but volume mounts use paths relative to the repo root.
+# Without it, Docker creates empty directories instead of mounting files.
 docker compose --env-file ./config/.env.dev \
-  -f ./Dockerfiles/docker-compose.clickhouse.yml up -d
+  -f ./Dockerfiles/docker-compose.clickhouse.yml \
+  --project-directory . up -d
 
 # Start ClickStack (HyperDX + OTel Collector)
 docker compose --env-file ./config/.env.dev \
-  -f ./Dockerfiles/docker-compose.clickstack.yml up -d
+  -f ./Dockerfiles/docker-compose.clickstack.yml \
+  --project-directory . up -d
 
 # Verify services
 docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
@@ -210,9 +215,10 @@ docker exec -i marie-clickhouse clickhouse-client \
 ### Reset ClickHouse (WARNING: deletes all data)
 ```bash
 docker compose -f ./Dockerfiles/docker-compose.clickhouse.yml down --volumes
-docker volume rm marie-ai_clickhouse_data marie-ai_clickhouse_logs 2>/dev/null
+docker volume rm marie_clickhouse_data marie_clickhouse_logs 2>/dev/null
 docker compose --env-file ./config/.env.dev \
-  -f ./Dockerfiles/docker-compose.clickhouse.yml up -d
+  -f ./Dockerfiles/docker-compose.clickhouse.yml \
+  --project-directory . up -d
 ```
 
 ## Data Retention

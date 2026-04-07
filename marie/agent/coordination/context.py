@@ -55,6 +55,8 @@ class AgentExecutionContext:
     group_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     parent_id: Optional[str] = None
     workflow_id: Optional[str] = None
+    session_id: Optional[str] = None
+    user_id: Optional[str] = None
     agent_name: Optional[str] = None
     context: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -121,6 +123,8 @@ class AgentExecutionContext:
             group_id=self.group_id,  # Inherited for tracing
             parent_id=self.run_id,
             workflow_id=self.workflow_id,
+            session_id=self.session_id,  # Inherited for correlation
+            user_id=self.user_id,  # Inherited for correlation
             agent_name=agent_name,
             context=child_context,
             emitter=child_emitter,
@@ -141,6 +145,8 @@ class AgentExecutionContext:
             "X-Group-ID": self.group_id,
             "X-Parent-ID": self.parent_id or "",
             "X-Workflow-ID": self.workflow_id or "",
+            "X-Session-ID": self.session_id or "",
+            "X-User-ID": self.user_id or "",
         }
 
     @classmethod
@@ -151,4 +157,6 @@ class AgentExecutionContext:
             group_id=headers.get("X-Group-ID", str(uuid.uuid4())),
             parent_id=headers.get("X-Parent-ID") or None,
             workflow_id=headers.get("X-Workflow-ID") or None,
+            session_id=headers.get("X-Session-ID") or None,
+            user_id=headers.get("X-User-ID") or None,
         )

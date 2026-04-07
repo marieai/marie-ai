@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from openinference.semconv.trace import SpanAttributes
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
@@ -84,6 +85,20 @@ def otel_setup():
     """Set up an in-memory span exporter for testing OTel spans."""
     exporter = _InMemoryExporter()
     provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    trace.set_tracer_provider(provider)
+    yield exporter
+    exporter.clear()
+
+
+@pytest.fixture
+def otel_setup_with_processor():
+    """Set up span exporter WITH OpenInferenceSpanProcessor for context tests."""
+    from marie.instrumentation.processor import OpenInferenceSpanProcessor
+
+    exporter = _InMemoryExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(OpenInferenceSpanProcessor())
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
     yield exporter
@@ -250,7 +265,7 @@ def test_agent_creates_agent_span(otel_setup, sample_messages):
 
     span = agent_spans[0]
     assert span.name == "agent:my-agent"
-    assert span.attributes.get("agent.name") == "my-agent"
+    assert span.attributes.get(SpanAttributes.AGENT_NAME) == "my-agent"
     assert span.status.status_code == StatusCode.OK
 
 
@@ -283,8 +298,8 @@ def test_llm_wrapper_creates_generation_span(otel_setup):
 
     span = llm_spans[0]
     assert span.name == "llm:gpt-4"
-    assert span.attributes.get("llm.model_name") == "gpt-4"
-    assert span.attributes.get("llm.system") == "openai"
+    assert span.attributes.get(SpanAttributes.LLM_MODEL_NAME) == "gpt-4"
+    assert span.attributes.get(SpanAttributes.LLM_SYSTEM) == "openai"
     assert span.status.status_code == StatusCode.OK
 
 
@@ -379,7 +394,7 @@ async def test_streaming_span_tiktoken_fallback(otel_setup):
     assert span.status.status_code == StatusCode.OK
     # Should have estimated token count since no provider usage
     assert span.attributes.get("marie.token_count_estimated") is True
-    assert span.attributes.get("llm.token_count.completion", 0) > 0
+    assert span.attributes.get(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 0) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -402,8 +417,8 @@ def test_tool_creates_tool_span(otel_setup):
 
     span = tool_spans[0]
     assert span.name == "tool:search"
-    assert span.attributes.get("tool.name") == "search"
-    assert span.attributes.get("output.value") == "hello"
+    assert span.attributes.get(SpanAttributes.TOOL_NAME) == "search"
+    assert span.attributes.get(SpanAttributes.OUTPUT_VALUE) == "hello"
     assert span.status.status_code == StatusCode.OK
 
 
@@ -563,5 +578,166 @@ async def test_async_tool_creates_tool_span(otel_setup):
 
     span = tool_spans[0]
     assert span.name == "tool:async_search"
-    assert span.attributes.get("tool.name") == "async_search"
+    assert span.attributes.get(SpanAttributes.TOOL_NAME) == "async_search"
     assert span.status.status_code == StatusCode.OK
+
+
+# ---------------------------------------------------------------------------
+# 13. session_id on CHAIN (workflow) span
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_session_id_on_workflow_span(otel_setup, sample_messages):
+    """CHAIN span carries session.id when passed via kwargs."""
+    exporter = otel_setup
+
+    from marie.agent.config import CoordinationConfig
+    from marie.agent.coordination import WorkflowCoordinator
+
+    config = CoordinationConfig(topology="workflow", max_steps=5, timeout=10.0)
+    coordinator = WorkflowCoordinator(config)
+    coordinator.add_agent(_MockAgent(name="worker"))
+
+    await coordinator.run(
+        sample_messages,
+        workflow_id="wf-session-test",
+        goal="test",
+        session_id="sess-abc-123",
+    )
+
+    spans = exporter.get_finished_spans()
+    chain_spans = [s for s in spans if "workflow:" in s.name]
+    assert len(chain_spans) == 1
+
+    span = chain_spans[0]
+    assert span.attributes.get(SpanAttributes.SESSION_ID) == "sess-abc-123"
+
+
+# ---------------------------------------------------------------------------
+# 14. user_id on CHAIN (workflow) span
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_user_id_on_workflow_span(otel_setup, sample_messages):
+    """CHAIN span carries user.id when passed via kwargs."""
+    exporter = otel_setup
+
+    from marie.agent.config import CoordinationConfig
+    from marie.agent.coordination import WorkflowCoordinator
+
+    config = CoordinationConfig(topology="workflow", max_steps=5, timeout=10.0)
+    coordinator = WorkflowCoordinator(config)
+    coordinator.add_agent(_MockAgent(name="worker"))
+
+    await coordinator.run(
+        sample_messages,
+        workflow_id="wf-user-test",
+        goal="test",
+        user_id="user-xyz-789",
+    )
+
+    spans = exporter.get_finished_spans()
+    chain_spans = [s for s in spans if "workflow:" in s.name]
+    assert len(chain_spans) == 1
+
+    span = chain_spans[0]
+    assert span.attributes.get(SpanAttributes.USER_ID) == "user-xyz-789"
+
+
+# ---------------------------------------------------------------------------
+# 15. session_id on AGENT span
+# ---------------------------------------------------------------------------
+
+
+def test_session_id_on_agent_span(otel_setup, sample_messages):
+    """AGENT span carries session.id when passed via kwargs."""
+    exporter = otel_setup
+    agent = _SimpleAgent(name="session-agent")
+
+    for responses in agent._impl.run(sample_messages, session_id="sess-agent-001"):
+        pass
+
+    spans = exporter.get_finished_spans()
+    agent_spans = [s for s in spans if "agent:" in s.name]
+    assert len(agent_spans) == 1
+
+    span = agent_spans[0]
+    assert span.attributes.get(SpanAttributes.SESSION_ID) == "sess-agent-001"
+
+
+# ---------------------------------------------------------------------------
+# 16. session_id propagates via SpanProcessor from using_session() context
+# ---------------------------------------------------------------------------
+
+
+def test_session_id_propagates_via_processor(otel_setup_with_processor):
+    """SpanProcessor stamps session.id from using_session() onto vanilla spans."""
+    from marie.instrumentation.context import using_session
+
+    exporter = otel_setup_with_processor
+
+    tracer = trace.get_tracer("test.processor")
+
+    with using_session("sess-ctx-001"):
+        with tracer.start_as_current_span("test-span") as span:
+            pass  # span should get session.id from processor
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes.get(SpanAttributes.SESSION_ID) == "sess-ctx-001"
+
+
+# ---------------------------------------------------------------------------
+# 17. user_id propagates via SpanProcessor from using_user() context
+# ---------------------------------------------------------------------------
+
+
+def test_user_id_propagates_via_processor(otel_setup_with_processor):
+    """SpanProcessor stamps user.id from using_user() onto vanilla spans."""
+    from marie.instrumentation.context import using_user
+
+    exporter = otel_setup_with_processor
+
+    tracer = trace.get_tracer("test.processor")
+
+    with using_user("user-ctx-002"):
+        with tracer.start_as_current_span("test-span") as span:
+            pass
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes.get(SpanAttributes.USER_ID) == "user-ctx-002"
+
+
+# ---------------------------------------------------------------------------
+# 18. No session_id when not provided
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_no_session_id_when_not_provided(otel_setup, sample_messages):
+    """No session.id attribute set when session_id kwarg is omitted."""
+    exporter = otel_setup
+
+    from marie.agent.config import CoordinationConfig
+    from marie.agent.coordination import WorkflowCoordinator
+
+    config = CoordinationConfig(topology="workflow", max_steps=5, timeout=10.0)
+    coordinator = WorkflowCoordinator(config)
+    coordinator.add_agent(_MockAgent(name="worker"))
+
+    await coordinator.run(
+        sample_messages,
+        workflow_id="wf-no-session",
+        goal="test",
+    )
+
+    spans = exporter.get_finished_spans()
+    chain_spans = [s for s in spans if "workflow:" in s.name]
+    assert len(chain_spans) == 1
+
+    span = chain_spans[0]
+    assert span.attributes.get(SpanAttributes.SESSION_ID) is None
+    assert span.attributes.get(SpanAttributes.USER_ID) is None

@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import functools
 from typing import Callable, Dict, List, Optional, Union
 
@@ -165,23 +166,23 @@ class MultimodalLLMCall(Function):
                 **kwargs,
             )
         else:
+            # Capture OTel context so the thread inherits the current trace.
             loop = asyncio.get_running_loop()
-            response_text = await loop.run_in_executor(
-                None,
-                functools.partial(
-                    self.forward,
-                    inputs,
-                    guided_json=guided_json,
-                    guided_regex=guided_regex,
-                    guided_choice=guided_choice,
-                    guided_grammar=guided_grammar,
-                    guided_json_object=guided_json_object,
-                    guided_backend=guided_backend,
-                    guided_whitespace_pattern=guided_whitespace_pattern,
-                    on_result=on_result,
-                    **kwargs,
-                ),
+            ctx = contextvars.copy_context()
+            fn = functools.partial(
+                self.forward,
+                inputs,
+                guided_json=guided_json,
+                guided_regex=guided_regex,
+                guided_choice=guided_choice,
+                guided_grammar=guided_grammar,
+                guided_json_object=guided_json_object,
+                guided_backend=guided_backend,
+                guided_whitespace_pattern=guided_whitespace_pattern,
+                on_result=on_result,
+                **kwargs,
             )
+            response_text = await loop.run_in_executor(None, ctx.run, fn)
 
         logger.info(
             "MultimodalLLMCall function aforward",

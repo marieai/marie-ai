@@ -27,7 +27,7 @@ class MonitoringRequestMixin:
         if meter:
             self._receiving_request_histogram = meter.create_histogram(
                 name='marie_receiving_request_seconds',
-                description='Time spent processing successful request',
+                description='Time spent processing request',
             )
 
             self._pending_requests_up_down_counter = meter.create_up_down_counter(

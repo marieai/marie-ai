@@ -21,6 +21,7 @@ from typing import (
     Union,
 )
 
+from openinference.semconv.trace import SpanAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import StatusCode
 
@@ -37,8 +38,7 @@ from marie.agent.message import (
 )
 from marie.agent.streaming import StreamChunk, ToolCallAccumulator
 from marie.agent.tool_call_parser import ToolCallTextParser
-from marie.instrumentation import start_as_current_span as oi_start_as_current_span
-from marie.instrumentation import start_span as oi_start_span
+from marie.instrumentation import start_as_current_span, start_span
 from marie.instrumentation.openinference import infer_llm_system
 from marie.logging_core.logger import MarieLogger
 
@@ -396,13 +396,15 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
         # OTel LLM span — manual lifecycle because chat() is a generator
         _llm_tracer = trace_api.get_tracer("marie.agent.llm")
         _model_name = self.engine_name or "unknown"
-        _llm_span = oi_start_span(
+        _llm_span = start_span(
             _llm_tracer,
             f"llm:{_model_name}",
             span_kind="llm",
         )
-        _llm_span.set_attribute("llm.model_name", _model_name)
-        _llm_span.set_attribute("llm.system", infer_llm_system(_model_name))
+        _llm_span.set_attribute(SpanAttributes.LLM_MODEL_NAME, _model_name)
+        _llm_span.set_attribute(
+            SpanAttributes.LLM_SYSTEM, infer_llm_system(_model_name)
+        )
 
         try:
             # Check for multimodal content
@@ -494,13 +496,15 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
         """
         _llm_tracer = trace_api.get_tracer("marie.agent.llm")
         _model_name = self.engine_name or "unknown"
-        _llm_span = oi_start_span(
+        _llm_span = start_span(
             _llm_tracer,
             f"llm:{_model_name}",
             span_kind="llm",
         )
-        _llm_span.set_attribute("llm.model_name", _model_name)
-        _llm_span.set_attribute("llm.system", infer_llm_system(_model_name))
+        _llm_span.set_attribute(SpanAttributes.LLM_MODEL_NAME, _model_name)
+        _llm_span.set_attribute(
+            SpanAttributes.LLM_SYSTEM, infer_llm_system(_model_name)
+        )
 
         try:
             if abort_signal:
@@ -840,13 +844,15 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         _llm_tracer = trace_api.get_tracer("marie.agent.llm")
         _model_name = self.model or "unknown"
 
-        with oi_start_as_current_span(
+        with start_as_current_span(
             _llm_tracer,
             f"llm:{_model_name}",
             span_kind="llm",
         ) as _llm_span:
-            _llm_span.set_attribute("llm.model_name", _model_name)
-            _llm_span.set_attribute("llm.system", infer_llm_system(_model_name))
+            _llm_span.set_attribute(SpanAttributes.LLM_MODEL_NAME, _model_name)
+            _llm_span.set_attribute(
+                SpanAttributes.LLM_SYSTEM, infer_llm_system(_model_name)
+            )
 
             try:
                 async_client = self._get_async_client()
@@ -857,12 +863,19 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
 
                 # Extract token usage from response
                 if response.usage:
+                    prompt_tokens = response.usage.prompt_tokens or 0
+                    completion_tokens = response.usage.completion_tokens or 0
                     _llm_span.set_attribute(
-                        "llm.token_count.prompt", response.usage.prompt_tokens or 0
+                        SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
+                        prompt_tokens,
                     )
                     _llm_span.set_attribute(
-                        "llm.token_count.completion",
-                        response.usage.completion_tokens or 0,
+                        SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
+                        completion_tokens,
+                    )
+                    _llm_span.set_attribute(
+                        SpanAttributes.LLM_TOKEN_COUNT_TOTAL,
+                        prompt_tokens + completion_tokens,
                     )
 
                 _llm_span.set_status(StatusCode.OK)
@@ -909,17 +922,20 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         # OTel LLM span — manual lifecycle for async generator
         _llm_tracer = trace_api.get_tracer("marie.agent.llm")
         _model_name = self.model or "unknown"
-        _llm_span = oi_start_span(
+        _llm_span = start_span(
             _llm_tracer,
             f"llm:{_model_name}",
             span_kind="llm",
         )
-        _llm_span.set_attribute("llm.model_name", _model_name)
-        _llm_span.set_attribute("llm.system", infer_llm_system(_model_name))
+        _llm_span.set_attribute(SpanAttributes.LLM_MODEL_NAME, _model_name)
+        _llm_span.set_attribute(
+            SpanAttributes.LLM_SYSTEM, infer_llm_system(_model_name)
+        )
 
         async_client = self._get_async_client()
         kwargs = self._build_api_kwargs(messages, functions, extra_generate_cfg)
         kwargs["stream"] = True
+        kwargs["stream_options"] = {"include_usage": True}
 
         accumulated_content = ""
         _provider_usage = None
@@ -1024,20 +1040,30 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         finally:
             # Token counting: prefer provider usage, fall back to tiktoken estimation
             if _provider_usage:
-                _llm_span.set_attribute(
-                    "llm.token_count.completion",
-                    getattr(_provider_usage, "completion_tokens", 0) or 0,
+                prompt_tokens = getattr(_provider_usage, "prompt_tokens", 0) or 0
+                completion_tokens = (
+                    getattr(_provider_usage, "completion_tokens", 0) or 0
                 )
                 _llm_span.set_attribute(
-                    "llm.token_count.prompt",
-                    getattr(_provider_usage, "prompt_tokens", 0) or 0,
+                    SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
+                    prompt_tokens,
+                )
+                _llm_span.set_attribute(
+                    SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
+                    completion_tokens,
+                )
+                _llm_span.set_attribute(
+                    SpanAttributes.LLM_TOKEN_COUNT_TOTAL,
+                    prompt_tokens + completion_tokens,
                 )
             elif accumulated_content:
                 try:
                     from marie.instrumentation.token_counter import count_tokens_text
 
                     estimated = count_tokens_text(accumulated_content, self.model)
-                    _llm_span.set_attribute("llm.token_count.completion", estimated)
+                    _llm_span.set_attribute(
+                        SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, estimated
+                    )
                     _llm_span.set_attribute("marie.token_count_estimated", True)
                 except Exception:
                     pass

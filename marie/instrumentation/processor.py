@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from openinference.instrumentation import get_attributes_from_context
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 from opentelemetry.sdk.trace import SpanProcessor
 
@@ -10,7 +11,15 @@ class OpenInferenceSpanProcessor(SpanProcessor):
     def on_start(self, span, parent_context=None):
         if not span.is_recording():
             return
-        # Skip if already has OI span kind (set by OITracer or OTelExporter)
+
+        # Stamp OI context attributes (session.id, user.id, tags, etc.)
+        # so ANY span created inside using_session()/using_user() gets tagged —
+        # even vanilla SDK spans that don't go through OITracer.
+        for key, value in get_attributes_from_context():
+            if not (span.attributes and key in span.attributes):
+                span.set_attribute(key, value)
+
+        # Skip OI kind inference if already has OI span kind
         if (
             span.attributes
             and SpanAttributes.OPENINFERENCE_SPAN_KIND in span.attributes

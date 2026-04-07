@@ -474,7 +474,11 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             self._process_request_histogram = self.meter.create_histogram(
                 name="marie_process_request_seconds",
                 description="Time spent when calling the executor request method",
+                unit="s",
             )
+            # Seed with a zero-value record so the metric is never exported
+            # with an Empty data type before the first real request arrives.
+            self._process_request_histogram.record(0)
             self._histogram_buffer = {
                 "marie_process_request_seconds": self._process_request_histogram
             }
@@ -869,22 +873,46 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             "runtime_name": runtime_name,
         }
 
+        # Resolve session_id from request parameters so executor spans
+        # are grouped into the correct observability session.
+        params = kwargs.get("parameters") or {}
+        session_id = params.get("dag_id") or params.get("job_id")
+
         if self.tracer:
             with self.tracer.start_as_current_span(
                 req_endpoint, context=tracing_context
-            ):
+            ) as span:
                 from opentelemetry.propagate import extract
+                from opentelemetry.trace import StatusCode
                 from opentelemetry.trace.propagation.tracecontext import (
                     TraceContextTextMapPropagator,
                 )
 
+                # Set session.id directly on this span
+                if session_id:
+                    span.set_attribute("session.id", session_id)
+
                 tracing_carrier_context = {}
                 TraceContextTextMapPropagator().inject(tracing_carrier_context)
-                return await exec_func(
-                    self._process_request_histogram,
-                    _histogram_metric_labels,
-                    extract(tracing_carrier_context),
-                )
+
+                if session_id:
+                    from marie.instrumentation.context import using_attributes
+
+                    # Also set context so child spans inherit session.id
+                    with using_attributes(session_id=session_id):
+                        result = await exec_func(
+                            self._process_request_histogram,
+                            _histogram_metric_labels,
+                            extract(tracing_carrier_context),
+                        )
+                else:
+                    result = await exec_func(
+                        self._process_request_histogram,
+                        _histogram_metric_labels,
+                        extract(tracing_carrier_context),
+                    )
+                span.set_status(StatusCode.OK)
+                return result
         else:
             return await exec_func(
                 self._process_request_histogram,
@@ -1352,8 +1380,9 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
         if self._histogram_buffer and not _histogram:
             _histogram = self.meter.create_histogram(
-                name=f"marie_{name}", description=documentation
+                name=f"marie_{name}", description=documentation, unit="s"
             )
+            _histogram.record(0)
             self._histogram_buffer[name] = _histogram
 
         if _histogram:

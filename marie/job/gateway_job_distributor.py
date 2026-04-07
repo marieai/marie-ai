@@ -9,6 +9,7 @@ from docarray import DocList
 from marie.api import AssetKeyDoc, parse_payload_to_docs
 from marie.constants import __default_endpoint__
 from marie.excepts import ExecutorError, InternalNetworkError
+from marie.instrumentation.context import using_attributes
 from marie.job.common import JobInfo, JobStatus
 from marie.job.job_distributor import DocumentArray, JobDistributor, SendCb
 from marie.logging_core.logger import MarieLogger
@@ -135,6 +136,12 @@ class GatewayJobDistributor(JobDistributor):
             f"Available: {avail}"
         )
 
+    def _resolve_session_id(self, submission_id: str, job_info: JobInfo) -> str:
+        """Resolve the OTel session ID: prefer dag_id, fall back to submission_id."""
+        if job_info.metadata and "dag_id" in job_info.metadata:
+            return job_info.metadata["dag_id"]
+        return submission_id
+
     async def send(
         self,
         submission_id: str,
@@ -158,12 +165,16 @@ class GatewayJobDistributor(JobDistributor):
         request.parameters = parameters
         request.data.docs = DocList[AssetKeyDoc]([asset_doc])
 
-        self.logger.info(f"[{submission_id}] Publishing job via single-send")
-        return await self.streamer.process_single_data(
-            request=request,
-            # send_callback=wrapped_cb
-            send_callback=send_callback,
+        session_id = self._resolve_session_id(submission_id, job_info)
+        self.logger.info(
+            f"[{submission_id}] Publishing job via single-send (session={session_id})"
         )
+        with using_attributes(session_id=session_id):
+            return await self.streamer.process_single_data(
+                request=request,
+                # send_callback=wrapped_cb
+                send_callback=send_callback,
+            )
 
     async def send_stream(
         self,
@@ -179,45 +190,49 @@ class GatewayJobDistributor(JobDistributor):
             submission_id, job_info.entrypoint
         )
 
-        self.logger.info(f"[{submission_id}] Publishing job via stream_send")
+        session_id = self._resolve_session_id(submission_id, job_info)
+        self.logger.info(
+            f"[{submission_id}] Publishing job via stream_send (session={session_id})"
+        )
         docs = DocList[AssetKeyDoc]([asset_doc])
 
-        try:
-            async for item, err in self.streamer.stream_docs(
-                docs=docs,
-                return_results=False,
-                exec_endpoint=endpoint,
-                target_executor=target_exec,
-                parameters=parameters,
-                request_id=submission_id,
-                # send_callback=wrapped_cb,
-                send_callback=send_callback,
-            ):
-                self.logger.info(
-                    f"[{submission_id}] Stream send job published successfully"
-                )
-                yield item, err
+        with using_attributes(session_id=session_id):
+            try:
+                async for item, err in self.streamer.stream_docs(
+                    docs=docs,
+                    return_results=False,
+                    exec_endpoint=endpoint,
+                    target_executor=target_exec,
+                    parameters=parameters,
+                    request_id=submission_id,
+                    # send_callback=wrapped_cb,
+                    send_callback=send_callback,
+                ):
+                    self.logger.info(
+                        f"[{submission_id}] Stream send job published successfully"
+                    )
+                    yield item, err
 
-        except InternalNetworkError as err:
-            import grpc
+            except InternalNetworkError as err:
+                import grpc
 
-            if (
-                err.code() == grpc.StatusCode.UNAVAILABLE
-                or err.code() == grpc.StatusCode.NOT_FOUND
-            ):
-                self.logger.error(
-                    f"Error while getting responses from deployments SERVICE_UNAVAILABLE: {err.details()}"
-                )
-            elif err.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
-                self.logger.error(
-                    f"Error while getting responses from deployments DEADLINE_EXCEEDED: {err.details()}"
-                )
-            else:
-                self.logger.error(
-                    f"Error while getting responses from deployments: {err.details()}"
-                )
+                if (
+                    err.code() == grpc.StatusCode.UNAVAILABLE
+                    or err.code() == grpc.StatusCode.NOT_FOUND
+                ):
+                    self.logger.error(
+                        f"Error while getting responses from deployments SERVICE_UNAVAILABLE: {err.details()}"
+                    )
+                elif err.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                    self.logger.error(
+                        f"Error while getting responses from deployments DEADLINE_EXCEEDED: {err.details()}"
+                    )
+                else:
+                    self.logger.error(
+                        f"Error while getting responses from deployments: {err.details()}"
+                    )
 
-            raise err
+                raise err
 
     async def send_nowait(
         self,

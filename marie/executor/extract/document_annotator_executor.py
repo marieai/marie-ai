@@ -272,6 +272,9 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                 "layout_id": op_layout,
             },
             run_context=run_context,
+            job_id=job_id,
+            dag_id=parameters.get("dag_id"),
+            node_task_id=parameters.get("node_task_id"),
         )
 
         # --- Execution: catch task-level errors only ---

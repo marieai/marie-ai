@@ -27,6 +27,7 @@ from typing import (
     Union,
 )
 
+from openinference.semconv.trace import SpanAttributes
 from opentelemetry import context as otel_context
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import StatusCode
@@ -44,7 +45,7 @@ from marie.agent.message import (
 )
 from marie.agent.tools.base import AgentTool, ToolOutput
 from marie.agent.tools.registry import resolve_tools
-from marie.instrumentation import start_span as oi_start_span
+from marie.instrumentation import start_span
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
@@ -698,12 +699,18 @@ class BaseAgent(ABC):
 
         # OTel AGENT span — manual lifecycle because run() is a generator
         _otel_tracer = trace_api.get_tracer("marie.agent")
-        _otel_span = oi_start_span(
+        _otel_span = start_span(
             _otel_tracer,
             f"agent:{self.name}",
             span_kind="agent",
         )
-        _otel_span.set_attribute("agent.name", self.name or "")
+        _otel_span.set_attribute(SpanAttributes.AGENT_NAME, self.name or "")
+        _session_id = kwargs.get("session_id")
+        _user_id = kwargs.get("user_id")
+        if _session_id:
+            _otel_span.set_attribute(SpanAttributes.SESSION_ID, _session_id)
+        if _user_id:
+            _otel_span.set_attribute(SpanAttributes.USER_ID, _user_id)
         _otel_span_token = otel_context.attach(
             trace_api.set_span_in_context(_otel_span)
         )

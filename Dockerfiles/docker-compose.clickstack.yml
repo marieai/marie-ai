@@ -31,14 +31,14 @@ services:
   # ############### OTel Collector - Telemetry Ingestion ###############
   # Receives OTLP data and exports to ClickHouse
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.114.0
+    image: otel/opentelemetry-collector-contrib:0.149.0
     container_name: marie-otel-collector
     restart: unless-stopped
     command: ["--config=/etc/otel/config.yml"]
     environment:
       - DEPLOYMENT_ENV=${STACK_NAME:-dev}
     volumes:
-      - ../config/clickstack/otel-collector-config.yml:/etc/otel/config.yml:ro
+      - ./config/clickstack/otel-collector-config.yml:/etc/otel/config.yml:ro
     ports:
       - "${OTEL_GRPC_PORT:-4317}:4317"        # OTLP gRPC receiver
       - "${OTEL_HTTP_PORT:-4318}:4318"        # OTLP HTTP receiver
@@ -63,7 +63,7 @@ services:
   # ############### Log Collector Sidecar ###############
   # Collects Docker container logs and forwards to OTel Collector
   log-collector:
-    image: otel/opentelemetry-collector-contrib:0.114.0
+    image: otel/opentelemetry-collector-contrib:0.149.0
     container_name: marie-log-collector
     restart: unless-stopped
     command: ["--config=/etc/otel/config.yml"]
@@ -72,7 +72,7 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://marie-otel-collector:4318
       - DEPLOYMENT_ENV=${STACK_NAME:-dev}
     volumes:
-      - ../config/clickstack/log-collector-config.yml:/etc/otel/config.yml:ro
+      - ./config/clickstack/log-collector-config.yml:/etc/otel/config.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:

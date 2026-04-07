@@ -1347,23 +1347,22 @@ initialize_databases() {
         if [ $ch_attempt -gt $ch_attempts ]; then
             echo -e "${YELLOW}⚠️  ClickHouse not ready, skipping database creation${NC}"
         else
-            # Create marie database for LLM tracking and analytics
-            local ch_db="${CLICKHOUSE_DB:-marie}"
-            echo "  Creating ClickHouse database '$ch_db'..."
-            docker exec marie-clickhouse clickhouse-client --query \
-                "CREATE DATABASE IF NOT EXISTS $ch_db" >/dev/null 2>&1
-            echo -e "${GREEN}  ✅ ClickHouse database '$ch_db' ready${NC}"
-
-            # Initialize schema (tables)
-            local schema_file="./config/clickhouse/schema/llm_tracking.sql"
-            if [ -f "$schema_file" ]; then
-                echo "  Initializing ClickHouse schema..."
+            # Apply OpenInference materialized columns on otel.otel_traces
+            local oi_schema="./config/clickhouse/schema/openinference_columns.sql"
+            if [ -f "$oi_schema" ]; then
+                echo "  Applying OpenInference columns..."
                 docker exec -i marie-clickhouse clickhouse-client \
-                    --database "$ch_db" \
-                    < "$schema_file" >/dev/null 2>&1
-                echo -e "${GREEN}  ✅ ClickHouse schema initialized (traces, observations, scores)${NC}"
-            else
-                echo -e "${YELLOW}  ⚠️  Schema file not found: $schema_file${NC}"
+                    < "$oi_schema" >/dev/null 2>&1
+                echo -e "${GREEN}  ✅ OpenInference columns applied${NC}"
+            fi
+
+            # Create span_annotations table in otel database
+            local annotations_schema="./config/clickhouse/schema/span_annotations.sql"
+            if [ -f "$annotations_schema" ]; then
+                echo "  Creating span_annotations table..."
+                docker exec -i marie-clickhouse clickhouse-client \
+                    < "$annotations_schema" >/dev/null 2>&1
+                echo -e "${GREEN}  ✅ Span annotations table created${NC}"
             fi
         fi
     fi

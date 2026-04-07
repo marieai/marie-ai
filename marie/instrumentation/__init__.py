@@ -117,7 +117,10 @@ def register(
     return provider
 
 
-def get_tracer(name: str = "marie.instrumentation") -> OITracer:
+def get_tracer(
+    name: str = "marie.instrumentation",
+    config: TraceConfig | None = None,
+) -> OITracer:
     """
     Get an OITracer from the global provider.
 
@@ -135,10 +138,14 @@ def get_tracer(name: str = "marie.instrumentation") -> OITracer:
     """
     from opentelemetry import trace
 
-    return trace.get_tracer(name)
+    return OITracer(trace.get_tracer(name), config or TraceConfig())
 
 
-_OI_SPAN_KIND_ATTR = "openinference.span.kind"
+import json as _json
+
+from openinference.semconv.trace import SpanAttributes
+
+_OI_SPAN_KIND_ATTR = SpanAttributes.OPENINFERENCE_SPAN_KIND
 
 
 def start_as_current_span(
@@ -149,6 +156,11 @@ def start_as_current_span(
     **kwargs,
 ):
     """Create an OTel span with OI span kind, compatible with any tracer.
+
+    With an OI tracer the returned span has ``set_input`` / ``set_output``
+    natively.  With a vanilla SDK tracer the span is wrapped so those
+    convenience methods still work (they fall back to setting the
+    ``input.value`` / ``output.value`` attributes directly).
 
     Args:
         tracer: An OTel or OITracer instance.
@@ -165,7 +177,7 @@ def start_as_current_span(
         )
     except TypeError:
         cm = tracer.start_as_current_span(name, **kwargs)
-        return _OISpanKindContextManager(cm, span_kind)
+        return _FallbackSpanContextManager(cm, span_kind)
 
 
 def start_span(
@@ -177,6 +189,10 @@ def start_span(
 ):
     """Create an OTel span with OI span kind, compatible with any tracer.
 
+    With an OI tracer the returned span has ``set_input`` / ``set_output``
+    natively.  With a vanilla SDK tracer the span is wrapped so those
+    convenience methods still work.
+
     Args:
         tracer: An OTel or OITracer instance.
         name: Span name.
@@ -184,7 +200,7 @@ def start_span(
         **kwargs: Forwarded to tracer.start_span().
 
     Returns:
-        A Span object.
+        A Span object (or a thin wrapper that adds set_input/set_output).
     """
     try:
         return tracer.start_span(name, openinference_span_kind=span_kind, **kwargs)
@@ -192,30 +208,75 @@ def start_span(
         span = tracer.start_span(name, **kwargs)
         if span_kind:
             span.set_attribute(_OI_SPAN_KIND_ATTR, span_kind.upper())
+        return _ensure_oi_api(span)
+
+
+# ---------------------------------------------------------------------------
+# Fallback helpers — give vanilla SDK spans set_input / set_output
+# ---------------------------------------------------------------------------
+
+
+def _serialise(value):
+    """Serialize a value for span attributes, auto-detecting mime type."""
+    if isinstance(value, str):
+        return value, "text/plain"
+    try:
+        return _json.dumps(value), "application/json"
+    except (TypeError, ValueError):
+        return str(value), "text/plain"
+
+
+def _ensure_oi_api(span):
+    """Add set_input / set_output if the span doesn't already have them."""
+    if hasattr(span, "set_input"):
         return span
+    return _FallbackSpan(span)
 
 
-class _OISpanKindContextManager:
-    """Wraps start_as_current_span context manager to inject OI span kind."""
+class _FallbackSpan:
+    """Thin proxy that adds set_input/set_output to a vanilla OTel Span."""
+
+    def __init__(self, span):
+        self._span = span
+
+    # --- OI convenience API ------------------------------------------------
+
+    def set_input(self, value, *, mime_type=None):
+        text, detected = _serialise(value)
+        self._span.set_attribute(SpanAttributes.INPUT_VALUE, text)
+        self._span.set_attribute(SpanAttributes.INPUT_MIME_TYPE, mime_type or detected)
+
+    def set_output(self, value, *, mime_type=None):
+        text, detected = _serialise(value)
+        self._span.set_attribute(SpanAttributes.OUTPUT_VALUE, text)
+        self._span.set_attribute(SpanAttributes.OUTPUT_MIME_TYPE, mime_type or detected)
+
+    # --- Forward everything else to the real span --------------------------
+
+    def __getattr__(self, name):
+        return getattr(self._span, name)
+
+
+class _FallbackSpanContextManager:
+    """Wraps start_as_current_span to inject OI span kind + set_input/set_output."""
 
     def __init__(self, cm, kind):
         self._cm = cm
         self._kind = kind
 
-    def __enter__(self):
-        span = self._cm.__enter__()
+    def _prepare(self, span):
         if self._kind:
             span.set_attribute(_OI_SPAN_KIND_ATTR, self._kind.upper())
-        return span
+        return _ensure_oi_api(span)
+
+    def __enter__(self):
+        return self._prepare(self._cm.__enter__())
 
     def __exit__(self, *args):
         return self._cm.__exit__(*args)
 
     async def __aenter__(self):
-        span = await self._cm.__aenter__()
-        if self._kind:
-            span.set_attribute(_OI_SPAN_KIND_ATTR, self._kind.upper())
-        return span
+        return self._prepare(await self._cm.__aenter__())
 
     async def __aexit__(self, *args):
         return await self._cm.__aexit__(*args)

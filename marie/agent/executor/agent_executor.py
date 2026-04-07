@@ -290,6 +290,8 @@ class AgentExecutor(MarieExecutor):
         with AgentExecutionContext(
             workflow_id=f"coord-{conversation_id}",
             agent_name="coordinator",
+            session_id=parameters.get("session_id"),
+            user_id=parameters.get("user_id"),
         ) as ctx:
             # Get coordinator
             coord_config = self._config.coordination
@@ -314,7 +316,11 @@ class AgentExecutor(MarieExecutor):
             # Run coordination
             try:
                 coord_result = await asyncio.wait_for(
-                    coordinator.run(messages),
+                    coordinator.run(
+                        messages,
+                        session_id=parameters.get("session_id"),
+                        user_id=parameters.get("user_id"),
+                    ),
                     timeout=coord_config.timeout,
                 )
             except asyncio.TimeoutError:
