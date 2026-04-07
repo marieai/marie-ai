@@ -381,6 +381,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
                                 bboxes.append(line["bbox"])
 
                 if bboxes:
+                    bboxes = safely_encoded(lambda x: x)(bboxes)
                     bbox_bytes = json.dumps(bboxes).encode("utf-8")
                     bbox_version = AssetTracker.compute_asset_version(
                         payload_bytes=bbox_bytes,

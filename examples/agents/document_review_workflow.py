@@ -7,8 +7,9 @@ This example mirrors a common production pattern:
 3. Hold a short approval-vs-escalation debate
 4. Emit structured JSON for downstream automation
 
-The agents are deterministic so the example is runnable in CI and local
-development without a live model backend.
+The default mode is deterministic so the example is runnable in CI and local
+development without a live model backend. A live mode is also available when
+you want the specialists, debate, and judge to use a real provider-backed LLM.
 """
 
 from __future__ import annotations
@@ -88,6 +89,21 @@ class SpecialistAgent:
         del messages
         request: WorkflowInput = kwargs["request"]
         finding = self.handler(request)
+        return {
+            "output": finding.model_dump(),
+            "metadata": {"confidence": max(0.25, 1.0 - finding.risk_score * 0.15)},
+        }
+
+
+@dataclass
+class LiveSpecialistAgent:
+    name: str
+    llm: Any
+
+    async def arun(self, messages: list[Message], **kwargs: Any) -> dict[str, Any]:
+        del messages
+        request: WorkflowInput = kwargs["request"]
+        finding = await build_live_specialist_finding(self.llm, self.name, request)
         return {
             "output": finding.model_dump(),
             "metadata": {"confidence": max(0.25, 1.0 - finding.risk_score * 0.15)},
@@ -296,6 +312,163 @@ def build_missing_evidence(findings: list[SpecialistFinding]) -> list[str]:
     return missing
 
 
+def parse_json_message_content(content: Any) -> dict[str, Any]:
+    if isinstance(content, dict):
+        return content
+    if not isinstance(content, str):
+        raise ValueError("Expected string or dict content from LLM response.")
+
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        raise
+
+
+async def generate_structured_model(
+    llm: Any,
+    schema: type[BaseModel],
+    *,
+    system_prompt: str,
+    user_prompt: str,
+) -> BaseModel:
+    response = await llm.achat(
+        [
+            Message.system(system_prompt),
+            Message.user(user_prompt),
+        ],
+        extra_generate_cfg={"guided_json": schema.model_json_schema()},
+    )
+    payload = parse_json_message_content(response.content)
+    return schema.model_validate(payload)
+
+
+def render_json(value: Any) -> str:
+    if isinstance(value, BaseModel):
+        value = value.model_dump()
+    elif isinstance(value, list):
+        value = [
+            item.model_dump() if isinstance(item, BaseModel) else item for item in value
+        ]
+    return json.dumps(value, indent=2, sort_keys=True)
+
+
+def build_live_specialist_prompt(name: str, request: WorkflowInput) -> tuple[str, str]:
+    rules = {
+        "extraction": (
+            "Resolve the packet fields from the request text. Check whether the packet "
+            "contains valid signature language. Use blockers for missing required fields "
+            "or a missing signature marker."
+        ),
+        "policy": (
+            f"Check the packet against the auto-approval limit of ${AUTO_APPROVAL_LIMIT:,.2f}. "
+            "If the customer tier is regulated, require explicit compliance approval in the text."
+        ),
+        "risk": (
+            "Scan the text for manual-review indicators such as manual override, urgent wire, "
+            "refund outside cycle, and handwritten changes. Large transaction amounts should "
+            "also increase risk."
+        ),
+        "history": (
+            "Review vendor risk and prior review flags. Repeated flags and watch-list vendors "
+            "should be treated as blockers."
+        ),
+    }
+    system_prompt = (
+        f"You are the {name} specialist in a document review workflow. "
+        "Return only JSON that matches the schema."
+    )
+    user_prompt = (
+        f"Specialist: {name}\n"
+        f"Task: {rules[name]}\n\n"
+        "Workflow input:\n"
+        f"{render_json(request)}\n\n"
+        "Return a SpecialistFinding. Use the exact specialist name provided."
+    )
+    return system_prompt, user_prompt
+
+
+async def build_live_specialist_finding(
+    llm: Any, name: str, request: WorkflowInput
+) -> SpecialistFinding:
+    system_prompt, user_prompt = build_live_specialist_prompt(name, request)
+    finding = await generate_structured_model(
+        llm,
+        SpecialistFinding,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+    return finding.model_copy(update={"specialist": name})
+
+
+async def build_live_debate_turn(
+    llm: Any,
+    position: Literal["approve", "escalate"],
+    findings: list[SpecialistFinding],
+) -> DebateTurn:
+    system_prompt = (
+        "You are participating in a short document-review debate. "
+        "Return only JSON that matches the schema."
+    )
+    user_prompt = (
+        f"Take the {position} side.\n\n"
+        "Specialist findings:\n"
+        f"{render_json(findings)}\n\n"
+        "Return a DebateTurn. Use approve_agent for approve and challenge_agent for escalate."
+    )
+    turn = await generate_structured_model(
+        llm,
+        DebateTurn,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+    expected_agent = "approve_agent" if position == "approve" else "challenge_agent"
+    return turn.model_copy(update={"agent": expected_agent, "position": position})
+
+
+async def build_live_decision(
+    llm: Any,
+    request: WorkflowInput,
+    selected_specialists: list[str],
+    findings: list[SpecialistFinding],
+    debate: list[DebateTurn],
+) -> DecisionEnvelope:
+    system_prompt = (
+        "You are the final judge in a document review workflow. "
+        "Return only JSON that matches the schema."
+    )
+    user_prompt = (
+        "Review the workflow input, specialist findings, and debate. "
+        "Decide whether the packet should be approved or escalated.\n\n"
+        f"Workflow input:\n{render_json(request)}\n\n"
+        f"Selected specialists:\n{render_json(selected_specialists)}\n\n"
+        f"Specialist findings:\n{render_json(findings)}\n\n"
+        f"Debate turns:\n{render_json(debate)}\n\n"
+        "Return a DecisionEnvelope."
+    )
+    decision = await generate_structured_model(
+        llm,
+        DecisionEnvelope,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+    return decision.model_copy(
+        update={
+            "document_id": request.document_id,
+            "selected_specialists": selected_specialists,
+            "specialist_findings": findings,
+            "debate": debate,
+        }
+    )
+
+
 def judge(
     request: WorkflowInput,
     selected_specialists: list[str],
@@ -342,15 +515,37 @@ def judge(
 
 
 class DocumentReviewWorkflow:
-    def __init__(self) -> None:
-        self._agent_builders = {
-            "extraction": lambda: SpecialistAgent(
-                "extraction", build_extraction_finding
-            ),
-            "policy": lambda: SpecialistAgent("policy", build_policy_finding),
-            "risk": lambda: SpecialistAgent("risk", build_risk_finding),
-            "history": lambda: SpecialistAgent("history", build_history_finding),
-        }
+    def __init__(
+        self,
+        *,
+        mode: Literal["deterministic", "live"] = "deterministic",
+        backend: str = "openai",
+        model: str | None = None,
+        llm: Any | None = None,
+    ) -> None:
+        self.mode = mode
+        self.llm = llm
+        if self.mode == "live" and self.llm is None:
+            from examples.agents.utils import create_llm
+
+            self.llm = create_llm(backend=backend, model=model)
+
+        if self.mode == "live":
+            self._agent_builders = {
+                "extraction": lambda: LiveSpecialistAgent("extraction", self.llm),
+                "policy": lambda: LiveSpecialistAgent("policy", self.llm),
+                "risk": lambda: LiveSpecialistAgent("risk", self.llm),
+                "history": lambda: LiveSpecialistAgent("history", self.llm),
+            }
+        else:
+            self._agent_builders = {
+                "extraction": lambda: SpecialistAgent(
+                    "extraction", build_extraction_finding
+                ),
+                "policy": lambda: SpecialistAgent("policy", build_policy_finding),
+                "risk": lambda: SpecialistAgent("risk", build_risk_finding),
+                "history": lambda: SpecialistAgent("history", build_history_finding),
+            }
         self._coordination_config = CoordinationConfig(
             topology="parallel",
             merge_strategy="aggregate",
@@ -378,10 +573,20 @@ class DocumentReviewWorkflow:
             key=lambda finding: selected_specialists.index(finding.specialist)
         )
 
-        debate = [
-            build_approve_turn(findings),
-            build_escalate_turn(findings),
-        ]
+        if self.mode == "live":
+            debate = [
+                await build_live_debate_turn(self.llm, "approve", findings),
+                await build_live_debate_turn(self.llm, "escalate", findings),
+            ]
+            return await build_live_decision(
+                self.llm,
+                request,
+                selected_specialists,
+                findings,
+                debate,
+            )
+
+        debate = [build_approve_turn(findings), build_escalate_turn(findings)]
         return judge(request, selected_specialists, findings, debate)
 
 
@@ -413,8 +618,20 @@ SAMPLE_REQUESTS = {
 }
 
 
-async def run_document_review_workflow(request: WorkflowInput) -> DecisionEnvelope:
-    workflow = DocumentReviewWorkflow()
+async def run_document_review_workflow(
+    request: WorkflowInput,
+    *,
+    mode: Literal["deterministic", "live"] = "deterministic",
+    backend: str = "openai",
+    model: str | None = None,
+    llm: Any | None = None,
+) -> DecisionEnvelope:
+    workflow = DocumentReviewWorkflow(
+        mode=mode,
+        backend=backend,
+        model=model,
+        llm=llm,
+    )
     return await workflow.run(request)
 
 
@@ -453,6 +670,18 @@ def build_request_from_args(args: argparse.Namespace) -> WorkflowInput:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sample", choices=sorted(SAMPLE_REQUESTS), default="safe")
+    parser.add_argument(
+        "--mode",
+        choices=["deterministic", "live"],
+        default="deterministic",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=["marie", "openai"],
+        default="openai",
+        help="LLM backend for live mode.",
+    )
+    parser.add_argument("--model", help="Optional model override for live mode.")
     parser.add_argument("--document-id")
     parser.add_argument("--reviewer-goal")
     parser.add_argument("--document-text")
@@ -469,7 +698,12 @@ def parse_args() -> argparse.Namespace:
 async def _main() -> None:
     args = parse_args()
     request = build_request_from_args(args)
-    decision = await run_document_review_workflow(request)
+    decision = await run_document_review_workflow(
+        request,
+        mode=args.mode,
+        backend=args.backend,
+        model=args.model,
+    )
     print(json.dumps(decision.model_dump(), indent=2))
 
 
