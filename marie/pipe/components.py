@@ -430,7 +430,10 @@ def burst_frames(
     :return:
     """
     output_dir = ensure_exists(os.path.join(root_asset_dir, "burst"))
+    # NOTE: filename = prefix = refId when refId is not a filename
     filename, prefix, suffix = split_filename(ref_id)
+    suffix = suffix or "tif"
+
     filename_generator = partial(filename_supplier_page, filename, prefix, suffix)
 
     file_count = get_file_count(output_dir)

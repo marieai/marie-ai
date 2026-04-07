@@ -575,6 +575,7 @@ class ExtractPipeline(BasePipeline):
         adlib_dir = ensure_exists(os.path.join(root_asset_dir, "adlib"))
         self.logger.info(f"Rendering adlib : {adlib_dir}")
 
+        # NOTE: filename = prefix = refId when refId is not a filename
         filename, prefix, suffix = split_filename(ref_id)
         renderer = AdlibRenderer(summary_filename=f"{filename}.xml", config={})
 
@@ -582,7 +583,9 @@ class ExtractPipeline(BasePipeline):
             frames,
             results,
             adlib_dir,
-            filename_generator=lambda x: f"{prefix}_{x}.{suffix}.xml",
+            filename_generator=lambda x: (
+                f"{prefix}_{x}.xml" if not suffix else f"{prefix}_{x}.{suffix}.xml"
+            ),
         )
 
     def pack_assets(
@@ -597,8 +600,12 @@ class ExtractPipeline(BasePipeline):
 
         filename, prefix, suffix = split_filename(ref_id)
 
-        merge_zip(adlib_dir, os.path.join(assets_dir, f"{prefix}.ocr.zip"))
-        merge_zip(blob_dir, os.path.join(assets_dir, f"{prefix}.blobs.xml.zip"))
+        merge_zip(
+            adlib_dir, os.path.join(assets_dir, f"{prefix}.ocr.zip"), f"{prefix}*"
+        )
+        merge_zip(
+            blob_dir, os.path.join(assets_dir, f"{prefix}.blobs.xml.zip"), f"{prefix}*"
+        )
 
         # convert multiple to G4 standard (mulitpage) TIFF
         clean_filename = os.path.join(assets_dir, f"{prefix}.clean.tif")
