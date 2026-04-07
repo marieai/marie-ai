@@ -265,6 +265,28 @@ class SkillRegistry:
             self._skills.clear()
             self._discovery_paths.clear()
 
+    def clear_source(self, source: SkillSource) -> int:
+        """Remove all skills from a specific source.
+
+        Useful for refreshing workspace skills without clearing built-in skills.
+
+        Args:
+            source: Source type to clear (e.g., SkillSource.WORKSPACE)
+
+        Returns:
+            Number of skills removed
+        """
+        with self._lock:
+            to_remove = [
+                name
+                for name, skill in self._skills.items()
+                if skill.metadata.source == source
+            ]
+            for name in to_remove:
+                del self._skills[name]
+            logger.debug(f"Cleared {len(to_remove)} skills from source: {source.value}")
+            return len(to_remove)
+
     def __len__(self) -> int:
         """Return number of registered skills."""
         with self._lock:

@@ -202,11 +202,13 @@ class SkillResources:
 
     Loaded only when explicitly requested. Contains additional
     files like scripts, templates, and reference documentation.
+
+    All resource types are keyed by filename for path-addressable access.
     """
 
     scripts: Dict[str, str] = field(default_factory=dict)
     templates: Dict[str, str] = field(default_factory=dict)
-    references: List[str] = field(default_factory=list)
+    references: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -296,7 +298,7 @@ class Skill:
 
         scripts: Dict[str, str] = {}
         templates: Dict[str, str] = {}
-        references: List[str] = []
+        references: Dict[str, str] = {}
 
         # Load scripts
         scripts_dir = self._skill_path / "scripts"
@@ -312,12 +314,12 @@ class Skill:
                 if asset_file.is_file():
                     templates[asset_file.name] = asset_file.read_text()
 
-        # Load references
+        # Load references (keyed by filename for path-addressable access)
         refs_dir = self._skill_path / "references"
         if refs_dir.exists():
             for ref_file in refs_dir.iterdir():
                 if ref_file.is_file() and ref_file.suffix == ".md":
-                    references.append(ref_file.read_text())
+                    references[ref_file.name] = ref_file.read_text()
 
         self._resources = SkillResources(
             scripts=scripts,

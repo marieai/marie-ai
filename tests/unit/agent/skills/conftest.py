@@ -122,6 +122,64 @@ def skill_router(populated_registry):
 
 
 @pytest.fixture
+def skill_with_instructions():
+    """Skill with loaded instructions."""
+    return Skill(
+        metadata=SkillMetadata(
+            name="test-skill-with-instructions",
+            description="A skill with full instructions",
+            version="1.0.0",
+            tags=["test"],
+            user_invokable=True,
+            allowed_tools=["read", "write"],
+        ),
+        _instructions=SkillInstructions(
+            when_to_use="Use this skill when testing instructions loading",
+            instructions="Follow these detailed testing instructions:\n1. Do this\n2. Then that",
+            examples=[
+                SkillExample(
+                    user_input="Test the feature",
+                    expected_action="Run the test suite",
+                ),
+                SkillExample(
+                    user_input="Validate output",
+                    expected_action="Check the results",
+                ),
+            ],
+            full_content="# Full Content\nThis is the full markdown content.",
+        ),
+    )
+
+
+@pytest.fixture
+def skill_with_resources():
+    """Skill with loaded resources (Dict-based references)."""
+    return Skill(
+        metadata=SkillMetadata(
+            name="test-skill-with-resources",
+            description="A skill with resources",
+            version="1.0.0",
+            tags=["test", "resources"],
+            user_invokable=True,
+        ),
+        _resources=SkillResources(
+            scripts={
+                "helper.py": "#!/usr/bin/env python\nprint('Hello from helper')",
+                "process.py": "#!/usr/bin/env python\nprint('Processing...')",
+            },
+            templates={
+                "output.template": "Template content: {{ value }}",
+                "report.template": "Report: {{ data }}",
+            },
+            references={
+                "guide.md": "# Guide Content\n\nThis is the reference guide.",
+                "api.md": "# API Reference\n\nAPI documentation here.",
+            },
+        ),
+    )
+
+
+@pytest.fixture
 def skill_dir(tmp_path):
     """Temporary directory structure for skill discovery."""
     skill_path = tmp_path / "test-skill"

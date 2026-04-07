@@ -86,6 +86,12 @@ from marie.agent.skills.router import (
 from marie.agent.skills.search import (
     SkillSearchIndex,
 )
+from marie.agent.skills.toolset import (
+    SkillToolset,
+    discover_skills,
+    load_skill,
+    load_skill_resource,
+)
 from marie.agent.skills.validator import (
     ValidationError,
     ValidationResult,
@@ -118,6 +124,11 @@ __all__ = [
     "SkillLoader",
     "get_skill_loader",
     "initialize_skills",
+    # Toolset (agent-facing tools)
+    "SkillToolset",
+    "discover_skills",
+    "load_skill",
+    "load_skill_resource",
     # Parser
     "parse_skill",
     "parse_skill_file",

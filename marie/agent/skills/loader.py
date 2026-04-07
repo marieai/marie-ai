@@ -190,6 +190,38 @@ class SkillLoader:
         """Check if loader has been initialized."""
         return self._initialized
 
+    def refresh_workspace_skills(self, workspace_path: str) -> int:
+        """Rediscover workspace skills without clearing built-in skills.
+
+        This method clears only workspace skills from the registry and
+        rediscovers them from disk, allowing runtime updates to workspace
+        skills without restarting the agent.
+
+        Args:
+            workspace_path: Path to workspace root
+
+        Returns:
+            Number of workspace skills discovered after refresh
+        """
+        # Clear only workspace skills from registry
+        removed = self.registry.clear_source(SkillSource.WORKSPACE)
+        logger.info(f"Cleared {removed} workspace skills for refresh")
+
+        # Rediscover from workspace path
+        workspace_skills_path = Path(workspace_path) / WORKSPACE_SKILL_PATH
+        if workspace_skills_path.exists():
+            count = self.registry.discover_skills(
+                [workspace_skills_path],
+                source=SkillSource.WORKSPACE,
+            )
+            logger.info(
+                f"Discovered {count} workspace skills from {workspace_skills_path}"
+            )
+            return count
+
+        logger.warning(f"Workspace skills path does not exist: {workspace_skills_path}")
+        return 0
+
 
 # Global loader instance
 _default_loader: Optional[SkillLoader] = None
