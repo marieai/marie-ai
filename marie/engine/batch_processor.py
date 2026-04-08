@@ -40,6 +40,7 @@ from PIL import Image
 from pydantic import BaseModel
 from tenacity import (
     retry,
+    retry_if_exception,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
@@ -64,6 +65,31 @@ class BatchResult:
     error: Optional[Exception]
 
 
+def _is_pool_timeout(exc: BaseException) -> bool:
+    """Check if an APITimeoutError was caused by httpx pool exhaustion."""
+    try:
+        import httpx
+
+        cause = exc.__cause__
+        return isinstance(cause, httpx.PoolTimeout)
+    except ImportError:
+        return False
+
+
+def _should_retry(exc: BaseException) -> bool:
+    """Return True if the exception is retryable.
+
+    Excludes httpx.PoolTimeout (wrapped as APITimeoutError) because retrying
+    when the connection pool is exhausted only makes things worse.
+    """
+    if isinstance(exc, APITimeoutError) and _is_pool_timeout(exc):
+        logger.warning(
+            "httpx.PoolTimeout detected — skipping retry to avoid pool exhaustion cascade"
+        )
+        return False
+    return True
+
+
 def _create_retry_decorator(max_retries: int) -> Callable[[Any], Any]:
     min_seconds = 4
     max_seconds = 10
@@ -80,22 +106,30 @@ def _create_retry_decorator(max_retries: int) -> Callable[[Any], Any]:
             | retry_if_exception_type(APIConnectionError)
             | retry_if_exception_type(APITimeoutError)
             | retry_if_exception_type(RateLimitError)
-        ),
+        )
+        & retry_if_exception(_should_retry),
         # before_sleep=before_sleep_log(logger, logging.WARNING),
     )
 
 
 class BatchProcessor:
+    # Maximum number of concurrent requests sent to the LLM backend.
+    # Keeps well under the httpx connection pool limit (40) so that retries
+    # and other callers always have headroom.
+    DEFAULT_MAX_CONCURRENCY = 20
+
     def __init__(
         self,
         client,
         model_string,
         logger: MarieLogger,
         default_completion_params: Optional[Dict[str, Any]] = None,
+        max_concurrency: Optional[int] = None,
     ):
         self.client = client
         self.model_string = model_string
         self.logger = logger
+        self.max_concurrency = max_concurrency or self.DEFAULT_MAX_CONCURRENCY
         if not isinstance(self.client, AsyncOpenAI):
             raise ValueError(
                 "Client must be an instance of OpenAI API client for async operations."
@@ -409,24 +443,29 @@ class BatchProcessor:
               raw_results: List[Tuple[task_id, Optional[str]]] - (task_id, response) pairs
         """
 
+        # Semaphore limits how many requests are in-flight simultaneously,
+        # preventing httpx connection pool exhaustion on large batches.
+        semaphore = asyncio.Semaphore(self.max_concurrency)
+
         async def safe_call(i, msgs):
             tid = f"{request_id}_task_{i}"
-            try:
-                resp = await self.acompletion_with_retry(
-                    max_retries=3,
-                    messages=msgs,
-                    task_id=tid,
-                    request_id=request_id,
-                    guided_json=guided_json,
-                    completion_params=completion_params,
-                    metadata=metadata,
-                )
-                return BatchResult(tid, resp, None)
-            except asyncio.CancelledError:
-                # allow cancellation to propagate
-                raise
-            except Exception as e:
-                return BatchResult(tid, None, e)
+            async with semaphore:
+                try:
+                    resp = await self.acompletion_with_retry(
+                        max_retries=3,
+                        messages=msgs,
+                        task_id=tid,
+                        request_id=request_id,
+                        guided_json=guided_json,
+                        completion_params=completion_params,
+                        metadata=metadata,
+                    )
+                    return BatchResult(tid, resp, None)
+                except asyncio.CancelledError:
+                    # allow cancellation to propagate
+                    raise
+                except Exception as e:
+                    return BatchResult(tid, None, e)
 
         # Create tasks so we can use as_completed for incremental processing
         tasks = [

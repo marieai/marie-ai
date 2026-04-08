@@ -803,9 +803,24 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
             except ImportError:
                 raise ImportError("openai package required")
 
+            import httpx
+
+            http_client = httpx.AsyncClient(
+                limits=httpx.Limits(
+                    max_connections=40,
+                    max_keepalive_connections=20,
+                ),
+                timeout=httpx.Timeout(
+                    connect=10.0,
+                    read=300.0,
+                    write=10.0,
+                    pool=30.0,
+                ),
+            )
             self._async_client = AsyncOpenAI(
                 api_key=self.client.api_key,
                 base_url=str(self.client.base_url) if self.client.base_url else None,
+                http_client=http_client,
             )
         return self._async_client
 

@@ -169,6 +169,9 @@ class LLMAnnotator(DocumentAnnotator):
         # Usage: self.run_context.get("ANNOTATOR_RESULTS", from_task="tables")
         self.run_context = run_context
 
+        # Selective purge list (annotator names to clear before skip check)
+        self.purge_annotators: list[str] = kwargs.get("purge_annotators") or []
+
         # DAG tracking parameters for span metadata
         self.job_id = kwargs.get("job_id")
         self.dag_id = kwargs.get("dag_id")
@@ -321,6 +324,32 @@ class LLMAnnotator(DocumentAnnotator):
             for f in entries
         )
         return has_marker and has_result
+
+    def _maybe_purge_output(self) -> None:
+        """Selectively purge output if this annotator is in the purge list,
+        or globally purge if MARIE_PURGE_OUTPUT is set.
+        Runs BEFORE _has_completed_results to fix the dead-code ordering."""
+        should_purge = self.name in self.purge_annotators or to_bool(
+            os.environ.get("MARIE_PURGE_OUTPUT")
+        )
+        if not should_purge:
+            return
+        reason = (
+            "purge_annotators list"
+            if self.name in self.purge_annotators
+            else "MARIE_PURGE_OUTPUT env"
+        )
+        self.logger.info(
+            f"Purging annotator '{self.name}' output ({reason}) — "
+            f"clearing '{self.output_dir}'"
+        )
+        if os.path.isdir(self.output_dir):
+            shutil.rmtree(self.output_dir)
+        os.makedirs(self.output_dir, exist_ok=True)
+        # Also clear refinement scratch dir
+        scratch = self._scratch_root()
+        if os.path.isdir(scratch):
+            shutil.rmtree(scratch)
 
     def _scratch_root(self) -> str:
         return os.path.join(self.working_dir, "agent-output", f".{self.name}-refine")
@@ -809,20 +838,14 @@ class LLMAnnotator(DocumentAnnotator):
         """
         self.logger.info(f"Annotating document with {self.name}...")
 
+        self._maybe_purge_output()
+
         if self._has_completed_results(self.output_dir):
             self.logger.info(
                 f"Output directory '{self.output_dir}' contains completed results. "
                 "Skipping annotation..."
             )
             return
-
-        purge = to_bool(os.environ.get("MARIE_PURGE_OUTPUT"))
-        if purge:
-            self.logger.info(
-                f"MARIE_PURGE_OUTPUT is set — clearing output directory '{self.output_dir}'"
-            )
-            shutil.rmtree(self.output_dir)
-            os.makedirs(self.output_dir, exist_ok=True)
 
         if self.refine_passes > 0:
             run_async(self._arun_refine_passes(document))
@@ -856,6 +879,8 @@ class LLMAnnotator(DocumentAnnotator):
 
         if self.context_manager:
             self._write_context_debug(document, self.context_manager)
+
+        self._maybe_purge_output()
 
         if self._has_completed_results(self.output_dir):
             self.logger.info(

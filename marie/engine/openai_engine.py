@@ -117,6 +117,12 @@ class OpenAIEngine(EngineLM):
                 max_connections=40,
                 max_keepalive_connections=20,
             ),
+            timeout=httpx.Timeout(
+                connect=10.0,  # connection establishment
+                read=300.0,  # reading response (vLLM inference can be slow)
+                write=10.0,  # sending request
+                pool=30.0,  # waiting for a connection from the pool
+            ),
         )
 
         if not base_url:

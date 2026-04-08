@@ -8,11 +8,12 @@
 # Components:
 #   - otel-collector: Receives OTLP and exports to ClickHouse
 #   - log-collector: Collects Docker container logs
-#   - hyperdx-local (optional): Bundled UI for ad-hoc exploration
+#   - hyperdx (optional): Observability UI connected to external ClickHouse (state in marie-psql-server)
 #
 # Prerequisites:
 #   - Network: docker network create --driver=bridge marie_default
 #   - ClickHouse: docker-compose.clickhouse.yml must be running
+#   - Storage: docker-compose.storage.yml must be running (marie-psql-server provides FerretDB for HyperDX state)
 #   - Schema: Apply schema/observability.sql to marie-clickhouse
 #
 # Usage:
@@ -91,16 +92,19 @@ services:
         limits:
           memory: ${LOG_COLLECTOR_MEMORY_LIMIT:-256M}
 
-  # ############### HyperDX Local (Optional) ###############
-  # Self-contained observability UI with bundled storage
+  # ############### HyperDX (Optional) ###############
+  # Observability UI connected to external marie-clickhouse
+  # Requires: docker-compose.storage.yml (marie-psql-server) for MongoDB-compatible state storage
   # Only starts with --profile ui
-  hyperdx-local:
-    image: docker.hyperdx.io/hyperdx/hyperdx-local:latest
+  hyperdx:
+    image: docker.hyperdx.io/hyperdx/hyperdx:2-beta
     container_name: marie-hyperdx
     restart: unless-stopped
     profiles:
       - ui
     environment:
+      # FerretDB on marie-psql-server provides MongoDB wire protocol on port 27017
+      - MONGO_URI=mongodb://${POSTGRES_USER}:${POSTGRES_PASSWORD}@marie-psql-server:27017/hyperdx?authMechanism=PLAIN
       - HYPERDX_LOG_LEVEL=${HYPERDX_LOG_LEVEL:-info}
     ports:
       - "${HYPERDX_UI_PORT:-8080}:8080"       # HyperDX Web UI
@@ -139,9 +143,15 @@ networks:
 # 4. (Optional) Start with HyperDX UI:
 #    docker compose --env-file ./config/.env.dev -f ./Dockerfiles/docker-compose.clickstack.yml --profile ui up -d
 #
-# 5. Configure Gateway to send metrics:
+# 5. (First-time only) Configure HyperDX → ClickHouse connection:
+#    Open http://localhost:8080, go to Team Settings → Connections, add ClickHouse:
+#      Host: marie-clickhouse    Port: 8123
+#      Username: marie           Password: marie123
+#      Database: otel
+#
+# 6. Configure Gateway to send metrics:
 #    marie gateway --uses config/service/gateway.yml \
 #      --metrics --metrics-exporter-host localhost --metrics-exporter-port 4317
 #
-# 6. View metrics in Studio:
+# 7. View metrics in Studio:
 #    http://localhost:3000/infrastructure

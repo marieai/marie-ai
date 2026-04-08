@@ -89,6 +89,32 @@ Marie-AI includes a production-grade job scheduling subsystem for managing and o
 
 ---
 
+## 🛠️ Skills
+
+Marie-AI includes a skill system for packaging domain expertise as reusable, discoverable capabilities. Skills follow the [ADK specification](https://agentskills.io) and use progressive disclosure to minimize token usage.
+
+**Agent-facing tools:**
+
+| Tool | Purpose | Token Cost |
+|------|---------|------------|
+| `discover_skills` | Search available skills by name, tags, or query | ~100 tokens/skill |
+| `load_skill` | Load full instructions for a specific skill | <5,000 tokens |
+| `load_skill_resource` | Load reference docs, scripts, or templates | Varies |
+
+**Quick usage:**
+```python
+from marie.agent.skills import toolset  # Auto-registers tools
+
+agent = BaseAgent(
+    function_list=["discover_skills", "load_skill", "load_skill_resource"],
+    llm=my_llm,
+)
+```
+
+Skills are stored in `.marie/skills/` (workspace) or `config/skills/` (built-in). See [Skills Documentation](./docs/docs/skills/index.md) for details.
+
+---
+
 ## 📚 Documentation
 
 See [**docs.marieai.co**](https://docs.marieai.co) for full guides and advanced usage.

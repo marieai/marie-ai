@@ -13,6 +13,7 @@ from marie.excepts import RuntimeTerminated
 from marie.executor.extract.util import layout_config
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
+from marie.executor.request_util import get_payload_features
 from marie.extract.annotators.types import AnnotatorClassType
 from marie.extract.readers.meta_reader.meta_reader import MetaReader
 from marie.extract.structures import UnstructuredDocument
@@ -189,6 +190,14 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         op_key = op_params.get('key')
         op_layout = op_params.get('layout')
 
+        # Extract purge_annotators from features (follows TextExtractionExecutor pattern)
+        pipeline_features = get_payload_features(payload, f_type="pipeline")
+        purge_annotators = []
+        for feat in pipeline_features:
+            if "purge_annotators" in feat:
+                purge_annotators = feat["purge_annotators"]
+                break
+
         self.logger.info(f"Executing operation with params : {op_params}")
         self.logger.info(f"Extracted op_key: {op_key}")
         self.logger.info(f"Extracted op_layout: {op_layout}")
@@ -275,6 +284,7 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             job_id=job_id,
             dag_id=parameters.get("dag_id"),
             node_task_id=parameters.get("node_task_id"),
+            purge_annotators=purge_annotators,
         )
 
         # --- Execution: catch task-level errors only ---
