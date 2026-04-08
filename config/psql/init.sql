@@ -20,6 +20,13 @@ BEGIN
     EXECUTE 'CREATE EXTENSION IF NOT EXISTS vector';
   END IF;
 
+
+  -- DocumentDB extension for MongoDB wire protocol compatibility (FerretDB)
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='documentdb') THEN
+    EXECUTE 'CREATE EXTENSION IF NOT EXISTS documentdb CASCADE';
+  END IF;
+
+
 END$$;
 
 

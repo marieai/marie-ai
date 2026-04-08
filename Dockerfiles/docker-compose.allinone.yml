@@ -368,7 +368,7 @@ services:
 
   # --------------- HyperDX Observability UI ---------------
   hyperdx:
-    image: docker.hyperdx.io/hyperdx/hyperdx-local:latest
+    image: docker.hyperdx.io/hyperdx/hyperdx:latest
     container_name: marie-hyperdx
     init: true
     restart: unless-stopped
@@ -378,6 +378,8 @@ services:
     environment:
       - HYPERDX_LOG_LEVEL=${HYPERDX_LOG_LEVEL:-info}
       - HYPERDX_API_KEY=${HYPERDX_API_KEY:-}
+      - HYPERDX_APP_PORT=${HYPERDX_APP_PORT:-8080}
+      - FRONTEND_URL=${FRONTEND_URL:-http://marie-hyperdx:8080}
     ports:
       - "${HYPERDX_UI_PORT:-8080}:8080"
       - "${HYPERDX_API_PORT:-8002}:8000"

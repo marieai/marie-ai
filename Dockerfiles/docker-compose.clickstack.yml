@@ -92,20 +92,46 @@ services:
         limits:
           memory: ${LOG_COLLECTOR_MEMORY_LIMIT:-256M}
 
+  # ############### FerretDB - MongoDB Wire Protocol ###############
+  # Translates MongoDB queries to PostgreSQL (required by HyperDX)
+  # Only starts with --profile ui
+  ferretdb:
+    image: ghcr.io/ferretdb/ferretdb:2.7.0
+    container_name: marie-ferretdb
+    restart: unless-stopped
+    profiles:
+      - ui
+    environment:
+      - FERRETDB_POSTGRESQL_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@marie-psql-server:5432/postgres?sslmode=disable
+    networks:
+      - marie_default
+    healthcheck:
+      test: ["CMD", "/ferretdb", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   # ############### HyperDX (Optional) ###############
   # Observability UI connected to external marie-clickhouse
-  # Requires: docker-compose.storage.yml (marie-psql-server) for MongoDB-compatible state storage
+  # Requires: FerretDB for MongoDB-compatible state storage
   # Only starts with --profile ui
   hyperdx:
-    image: docker.hyperdx.io/hyperdx/hyperdx:2-beta
+    image: docker.hyperdx.io/hyperdx/hyperdx:latest
     container_name: marie-hyperdx
     restart: unless-stopped
     profiles:
       - ui
     environment:
-      # FerretDB on marie-psql-server provides MongoDB wire protocol on port 27017
-      - MONGO_URI=mongodb://${POSTGRES_USER}:${POSTGRES_PASSWORD}@marie-psql-server:27017/hyperdx?authMechanism=PLAIN
+      # FerretDB provides MongoDB wire protocol on port 27017
+      # FerretDB delegates auth to PostgreSQL, only SCRAM-SHA-256 is supported
+      - MONGO_URI=mongodb://${POSTGRES_USER}:${POSTGRES_PASSWORD}@marie-ferretdb:27017/hyperdx?authMechanism=SCRAM-SHA-256
       - HYPERDX_LOG_LEVEL=${HYPERDX_LOG_LEVEL:-info}
+      - HYPERDX_APP_PORT=${HYPERDX_APP_PORT:-8080}
+      - FRONTEND_URL=${FRONTEND_URL:-http://marie-hyperdx:8080}
+    depends_on:
+      ferretdb:
+        condition: service_healthy
     ports:
       - "${HYPERDX_UI_PORT:-8080}:8080"       # HyperDX Web UI
       - "${HYPERDX_OTEL_PORT:-4327}:4317"     # HyperDX OTLP gRPC (separate from main collector)
@@ -113,7 +139,7 @@ services:
     networks:
       - marie_default
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -143,7 +169,12 @@ networks:
 # 4. (Optional) Start with HyperDX UI:
 #    docker compose --env-file ./config/.env.dev -f ./Dockerfiles/docker-compose.clickstack.yml --profile ui up -d
 #
-# 5. (First-time only) Configure HyperDX → ClickHouse connection:
+# 5. (First-time only) Initialize HyperDX admin user:
+#    ./tools/scripts/hyperdx-init-user.sh
+#    Or with custom credentials:
+#    HYPERDX_ADMIN_EMAIL=you@example.com HYPERDX_ADMIN_PASSWORD=secret ./tools/scripts/hyperdx-init-user.sh
+#
+# 6. (First-time only) Configure HyperDX → ClickHouse connection:
 #    Open http://localhost:8080, go to Team Settings → Connections, add ClickHouse:
 #      Host: marie-clickhouse    Port: 8123
 #      Username: marie           Password: marie123
