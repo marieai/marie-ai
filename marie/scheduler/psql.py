@@ -9,7 +9,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from math import inf
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import psycopg2
 
@@ -143,6 +143,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self._event_queue = Queue()
         self._status_update_lock = AsyncJobLock()
+        self._dag_resolution_lock = AsyncJobLock()
+        self._terminal_dag_states: dict[str, str] = {}
 
         self.max_workers = config.get("max_workers", 5)
         self._db_executor = ThreadPoolExecutor(
@@ -1064,6 +1066,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.logger.info(
                     f"DAG {dag_id} was deleted, removing from memory frontier"
                 )
+                self._terminal_dag_states.pop(dag_id, None)
                 stats = await self.frontier.finalize_dag(dag_id)
                 self.logger.info(f"Finalized DAG {dag_id} from memory: {stats}")
 
@@ -1081,6 +1084,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.warning(
                         f"DAG {dag_id} reset to 'created' - removing from memory and re-hydrating from DB"
                     )
+                    self._terminal_dag_states.pop(dag_id, None)
                     stats = await self.frontier.finalize_dag(dag_id)
                     self.logger.info(
                         f"Removed DAG {dag_id} from memory frontier: {stats}"
@@ -1127,6 +1131,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.info(
                         f"DAG {dag_id} finished with state '{new_state}' - cleaning up memory"
                     )
+                    self._terminal_dag_states.setdefault(dag_id, new_state)
                     stats = await self.frontier.finalize_dag(dag_id)
                     self.logger.info(
                         f"Cleaned up finished DAG {dag_id} from memory: {stats}"
@@ -2926,6 +2931,46 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             pass
         return True
 
+    async def _emit_dag_terminal_event(
+        self, dag_state: str, work_info: WorkInfo
+    ) -> None:
+        event_name = work_info.data.get("name", work_info.name)
+        api_key = work_info.data.get("api_key")
+        metadata = work_info.data.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        ref_type = metadata.get("ref_type")
+
+        if not api_key or not event_name:
+            self.logger.warning(
+                f"Skipping DAG terminal event for {work_info.dag_id}: "
+                f"missing api_key={api_key} or event_name={event_name}"
+            )
+            return
+
+        status = "OK" if dag_state == "completed" else "FAILED"
+        notifier = (
+            mark_as_complete_toast if dag_state == "completed" else mark_as_failed_toast
+        )
+
+        try:
+            await notifier(
+                api_key=api_key,
+                job_id=work_info.dag_id,
+                event_name=event_name,
+                job_tag=ref_type,
+                status=status,
+                timestamp=int(time.time()),
+                payload=metadata,
+            )
+            self.logger.debug(
+                f"DAG notification sent: {work_info.dag_id}, status={status}"
+            )
+        except Exception as toast_error:
+            self.logger.error(
+                f"Failed to send DAG terminal event for {work_info.dag_id}: {toast_error}"
+            )
+
     async def resolve_dag_status(
         self,
         job_id: str,
@@ -2939,59 +2984,74 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         the corresponding logic for the DAG lifecycle, including sending notification
         about the completion or failure of the DAG.
         """
-        self.logger.info(f"Resolving DAG status: {work_info.dag_id}")
+        dag_id = work_info.dag_id
+        self.logger.info(f"Resolving DAG status: {dag_id}")
 
+        if not dag_id:
+            self.logger.warning(
+                f"Skipping DAG status resolution for job without dag_id: {job_id}"
+            )
+            return False
+
+        dag_lock = self._dag_resolution_lock[dag_id]
         try:
-            # Delegate to repository to resolve DAG state
-            dag_state = await self.repository.resolve_dag_state(work_info.dag_id)
+            async with dag_lock:
+                claimed_terminal_state = False
+                try:
+                    dag_state = await self.repository.resolve_dag_state(dag_id)
 
-            self.logger.info(f"Resolved DAG state: {dag_state}")
-            if dag_state not in ("completed", "failed"):
-                self.logger.debug(f"DAG is still in progress: {work_info.dag_id}")
-                return False
+                    self.logger.info(f"Resolved DAG state: {dag_state}")
+                    if dag_state not in ("completed", "failed"):
+                        self.logger.debug(f"DAG is still in progress: {dag_id}")
+                        return False
 
-            if work_info.dag_id in self.active_dags:
-                del self.active_dags[work_info.dag_id]
-                self.logger.debug(
-                    f"Removed DAG from cache: {work_info.dag_id}, size = {len(self.active_dags)}"
-                )
+                    previous_state = self._terminal_dag_states.get(dag_id)
+                    if previous_state is not None:
+                        self.logger.debug(
+                            f"DAG {dag_id} already handled as terminal state "
+                            f"'{previous_state}', skipping duplicate resolution"
+                        )
+                        return False
 
-            self.logger.info(
-                f"Resolved DAG status: {work_info.dag_id}, status={dag_state}, active_dag = {len(self.active_dags)}"
-            )
-            # notification
-            event_name = work_info.data.get("name", work_info.name)
-            api_key = work_info.data.get("api_key", None)
-            metadata = work_info.data.get("metadata", {})
-            ref_type = metadata.get("ref_type")
+                    self._terminal_dag_states[dag_id] = dag_state
+                    claimed_terminal_state = True
 
-            if not api_key or not event_name:
-                self.logger.warning(
-                    f"Missing API key or event name: api_key={api_key}, event_name={event_name}"
-                )
-                raise ValueError(
-                    f"Missing API key or event name: api_key={api_key}, event_name={event_name}"
-                )
+                    if dag_id in self.active_dags:
+                        del self.active_dags[dag_id]
+                        self.logger.debug(
+                            f"Removed DAG from cache: {dag_id}, size = {len(self.active_dags)}"
+                        )
 
-            status = "OK" if dag_state == "completed" else "FAILED"
+                    if dag_state == "failed":
+                        cancelled = await self.repository.cancel_pending_jobs_for_dag(
+                            dag_id=dag_id,
+                            output_metadata={
+                                "on_complete": "failed",
+                                "cancel_reason": "dag_failed",
+                                "terminal_dag_state": dag_state,
+                                "resolved_by_job_id": job_id,
+                            },
+                        )
+                        self.logger.info(
+                            f"Cancelled {cancelled} pending jobs for failed DAG {dag_id}"
+                        )
 
-            if status == "OK":
-                fs = await self.frontier.finalize_dag(work_info.dag_id)
+                    dag_jobs = await self.frontier.get_jobs_by_dag_id(dag_id)
+                    stats = await self.frontier.finalize_dag(dag_id)
+                    for dag_job in dag_jobs:
+                        self._job_cache.pop(dag_job.id, None)
 
-            await mark_as_complete_toast(
-                api_key=api_key,
-                job_id=work_info.dag_id,
-                event_name=event_name,
-                job_tag=ref_type,
-                status=status,
-                timestamp=int(time.time()),
-                payload=metadata,
-            )
+                    self.logger.info(
+                        f"Resolved DAG status: {dag_id}, status={dag_state}, "
+                        f"active_dag = {len(self.active_dags)}, finalize_stats={stats}"
+                    )
 
-            self.logger.debug(
-                f"DAG notification sent: {work_info.dag_id}, status={status}"
-            )
-            return True
+                    await self._emit_dag_terminal_event(dag_state, work_info)
+                    return True
+                except (Exception, psycopg2.Error):
+                    if claimed_terminal_state:
+                        self._terminal_dag_states.pop(dag_id, None)
+                    raise
         except (Exception, psycopg2.Error) as error:
             self.logger.error(f"Error resolving DAG status: {error}")
             raise error

@@ -19,6 +19,7 @@ from marie.scheduler.fixtures import create_sql_from_file
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.repository.plans import (
     cancel_jobs,
+    cancel_pending_jobs_for_dag,
     complete_jobs,
     complete_jobs_by_id,
     count_dag_states,
@@ -1416,6 +1417,48 @@ class JobRepository(PostgresqlMixin):
                 self._close_connection(conn)
 
         await self._loop.run_in_executor(self._db_executor, db_call)
+
+    async def cancel_pending_jobs_for_dag(
+        self,
+        dag_id: str,
+        output_metadata: dict = None,
+        schema: str = DEFAULT_SCHEMA,
+    ) -> int:
+        """
+        Cancel all non-started jobs for a DAG.
+
+        :param dag_id: The DAG ID to cancel pending jobs for
+        :param output_metadata: Optional metadata to merge into job output
+        :param schema: The database schema (default: marie_scheduler)
+        :return: Number of jobs cancelled
+        """
+        self.logger.info(f"Cancelling pending jobs for DAG: {dag_id}")
+
+        def db_call() -> int:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                cursor = self._execute_sql_gracefully(
+                    cancel_pending_jobs_for_dag(
+                        schema,
+                        dag_id,
+                        output_metadata or {},
+                    ),
+                    return_cursor=True,
+                    connection=conn,
+                )
+                return cursor.fetchone()[0]
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(
+                    f"Error cancelling pending jobs for DAG {dag_id}: {error}"
+                )
+                return 0
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
 
     async def resume_job(
         self, job_id: str, queue_name: str, schema: str = DEFAULT_SCHEMA
