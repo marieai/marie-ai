@@ -60,6 +60,15 @@ class RecordingFrontier(MemoryFrontier):
         return await super().finalize_dag(dag_id)
 
 
+class RecordingSemaphoreStore:
+    def __init__(self):
+        self.release_calls: list[tuple[str, str, str]] = []
+
+    def release_owned(self, executor: str, ticket_id: str, owner: str):
+        self.release_calls.append((executor, ticket_id, owner))
+        return True
+
+
 def build_work_item(job_id: str, dag_id: str, name: str = "extract") -> WorkInfo:
     now = datetime.now(timezone.utc)
     return WorkInfo(
@@ -97,6 +106,7 @@ def build_scheduler(
     scheduler._job_cache = {}
     scheduler.notify_calls: list[bool] = []
     scheduler.hydrated_dag_ids: list[str] = []
+    scheduler._semaphore_store = RecordingSemaphoreStore()
 
     async def notify_event() -> bool:
         scheduler.notify_calls.append(True)
@@ -240,4 +250,109 @@ async def test_dag_state_notification_terminal_marks_dag_as_terminal():
     assert dag_id not in scheduler.active_dags
     assert frontier.finalize_calls == [dag_id]
     assert await frontier.get_jobs_by_dag_id(dag_id) == []
+    assert scheduler.notify_calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_handle_dispatch_failure_marks_job_for_retry_and_releases_semaphore():
+    dag_id = "dag-5"
+    work_item = build_work_item("job-6", dag_id)
+    frontier = RecordingFrontier()
+    await frontier.add_dag(None, [work_item])
+    await frontier.take([work_item.id])
+
+    repository = RecordingRepository(dag_state="failed")
+    scheduler = build_scheduler(repository, frontier)
+    fail_calls: list[dict] = []
+
+    async def fake_fail(job_id: str, wi: WorkInfo, output_metadata: dict | None = None):
+        fail_calls.append(
+            {
+                "job_id": job_id,
+                "output_metadata": output_metadata or {},
+            }
+        )
+        return WorkState.RETRY.value
+
+    async def fake_resolve_dag_status(*args, **kwargs):
+        pytest.fail("retry path should not resolve DAG status")
+
+    scheduler.fail = fake_fail
+    scheduler.resolve_dag_status = fake_resolve_dag_status
+
+    await scheduler._handle_dispatch_failure(
+        work_item,
+        "annotator_llm",
+        work_item.id,
+        RuntimeError("duplicate key"),
+    )
+
+    assert fail_calls == [
+        {
+            "job_id": work_item.id,
+            "output_metadata": {
+                "dispatch_failed": True,
+                "dispatch_error": "duplicate key",
+                "failure_stage": "enqueue",
+            },
+        }
+    ]
+    assert frontier.jobs_by_id[work_item.id].state == WorkState.RETRY
+    assert scheduler._semaphore_store.release_calls == [
+        ("annotator_llm", work_item.id, work_item.id)
+    ]
+    assert scheduler.notify_calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_handle_dispatch_failure_marks_job_failed_and_resolves_dag():
+    dag_id = "dag-6"
+    work_item = build_work_item("job-7", dag_id)
+    frontier = RecordingFrontier()
+    await frontier.add_dag(None, [work_item])
+    await frontier.take([work_item.id])
+
+    repository = RecordingRepository(dag_state="failed")
+    scheduler = build_scheduler(repository, frontier)
+    fail_calls: list[dict] = []
+    resolve_calls: list[tuple[str, str]] = []
+
+    async def fake_fail(job_id: str, wi: WorkInfo, output_metadata: dict | None = None):
+        fail_calls.append(
+            {
+                "job_id": job_id,
+                "output_metadata": output_metadata or {},
+            }
+        )
+        return WorkState.FAILED.value
+
+    async def fake_resolve_dag_status(job_id: str, wi: WorkInfo, *args, **kwargs):
+        resolve_calls.append((job_id, wi.dag_id))
+        return True
+
+    scheduler.fail = fake_fail
+    scheduler.resolve_dag_status = fake_resolve_dag_status
+
+    await scheduler._handle_dispatch_failure(
+        work_item,
+        "annotator_llm",
+        work_item.id,
+        RuntimeError("dispatch failed"),
+    )
+
+    assert fail_calls == [
+        {
+            "job_id": work_item.id,
+            "output_metadata": {
+                "dispatch_failed": True,
+                "dispatch_error": "dispatch failed",
+                "failure_stage": "enqueue",
+            },
+        }
+    ]
+    assert frontier.jobs_by_id[work_item.id].state == WorkState.FAILED
+    assert resolve_calls == [(work_item.id, dag_id)]
+    assert scheduler._semaphore_store.release_calls == [
+        ("annotator_llm", work_item.id, work_item.id)
+    ]
     assert scheduler.notify_calls == [True]
