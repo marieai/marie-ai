@@ -37,6 +37,7 @@ from marie.agent.tools.filesystem import (
     ShellInput,
     ShellTool,
 )
+from marie.agent.tools.mcp_tool import MCPRemoteTool
 
 # Query Plan tools (auto-registered via @register_tool decorator)
 from marie.agent.tools.query_plan_tools import (
@@ -106,6 +107,7 @@ __all__ = [
     "RAGTool",
     "RAGSearchTool",
     "RAGIngestTool",
+    "MCPRemoteTool",
     "RAGSearchInput",
     "RAGIngestInput",
     "RAGDeleteInput",

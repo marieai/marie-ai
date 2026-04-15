@@ -51,6 +51,7 @@ def get_fastapi_app(
     from docarray.base_doc.docarray_response import DocArrayResponse
 
     from marie import __version__
+    from marie.api.routes import create_mcp_router
 
     app = FastAPI(
         title=title or "My Marie Service",
@@ -78,6 +79,10 @@ def get_fastapi_app(
     @app.on_event("shutdown")
     async def _shutdown():
         await streamer.close()
+
+    mcp_router = create_mcp_router()
+    if mcp_router is not None:
+        app.include_router(mcp_router)
 
     import os
 

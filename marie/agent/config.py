@@ -127,9 +127,21 @@ class MCPServerConfig(BaseModel):
     """Configuration for an MCP server."""
 
     name: str = Field(..., description="Server name")
-    url: str = Field(..., description="Server URL")
+    url: Optional[str] = Field(default=None, description="Server URL")
+    server_id: Optional[str] = Field(
+        default=None,
+        description="Registered MCP server ID. Prefer this when using a persisted server registration.",
+    )
+    auth_type: Literal["none", "static_headers"] = Field(
+        default="none",
+        description="Authentication mode for direct MCP server access",
+    )
+    headers: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Static headers for direct MCP server access",
+    )
     enabled: bool = Field(default=True, description="Whether server is enabled")
-    tools: List[str] = Field(
+    tools: List[Union[str, Dict[str, Any]]] = Field(
         default_factory=list,
         description="List of tools to expose from this server",
     )
@@ -472,6 +484,44 @@ class AgentConfig(BaseModel):
                         result.append({"name": tool.name, **tool.config})
                     else:
                         result.append(tool.name)
+        if self.mcp.enabled:
+            for server in self.mcp.servers:
+                if not server.enabled:
+                    continue
+
+                for tool in server.tools:
+                    if isinstance(tool, str):
+                        result.append(
+                            {
+                                "type": "mcp",
+                                "tool_name": tool,
+                                "server_id": server.server_id,
+                                "server_name": server.name,
+                                "server_url": server.url,
+                                "auth_type": server.auth_type,
+                                "headers": server.headers,
+                            }
+                        )
+                        continue
+
+                    tool_name = tool.get("name")
+                    if not tool_name:
+                        raise ValueError("MCP tool configs must include a name")
+
+                    result.append(
+                        {
+                            "type": "mcp",
+                            "tool_name": tool_name,
+                            "server_id": server.server_id,
+                            "server_name": server.name,
+                            "server_url": server.url,
+                            "auth_type": server.auth_type,
+                            "headers": server.headers,
+                            "description": tool.get("description"),
+                            "input_schema": tool.get("input_schema")
+                            or tool.get("inputSchema"),
+                        }
+                    )
         return result
 
     @classmethod

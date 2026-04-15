@@ -374,13 +374,20 @@ def resolve_tools(
             result[tool.name] = tool
 
         elif isinstance(spec, dict):
-            # Configuration dict
-            name = spec.get("name")
-            if name is None:
-                raise ValueError("Tool config dict must have 'name' key")
-            config = {k: v for k, v in spec.items() if k != "name"}
-            tool = get_tool(name, config=config)
-            result[tool.name] = tool
+            from marie.mcp.runtime import MCPToolSpec, is_mcp_tool_spec
+
+            if is_mcp_tool_spec(spec):
+                from marie.agent.tools.mcp_tool import MCPRemoteTool
+
+                tool = MCPRemoteTool(MCPToolSpec.model_validate(spec))
+                result[tool.name] = tool
+            else:
+                name = spec.get("name")
+                if name is None:
+                    raise ValueError("Tool config dict must have 'name' key")
+                config = {k: v for k, v in spec.items() if k != "name"}
+                tool = get_tool(name, config=config)
+                result[tool.name] = tool
 
         elif isinstance(spec, AgentTool):
             # Direct instance
