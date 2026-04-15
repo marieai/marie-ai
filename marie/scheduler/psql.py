@@ -1774,25 +1774,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                                     True if isinstance(result, Exception) else False
                                 ),
                             )
-
-                            raise Exception(f"Dispatch failed for job {wi.id}")
-                            await self._release_lease_db([wi.id])
-                            await self.frontier.release_lease_local(wi.id)
-
-                            try:
-                                released = await asyncio.to_thread(
-                                    self._semaphore_store.release_owned,
-                                    exe,
-                                    wi.id,
-                                    owner=owner,
-                                )
-                                self.logger.debug(
-                                    f"[sem] release on dispatch-fail {wi.id}@{slot_type} -> {released}"
-                                )
-                            except Exception as e:
-                                self.logger.warning(
-                                    f"[sem] release error after dispatch-fail {wi.id}@{slot_type}: {e}"
-                                )
+                            await self._handle_dispatch_failure(wi, exe, owner, result)
                             continue
 
                         # runner accepted → activate from lease
@@ -2970,6 +2952,51 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.error(
                 f"Failed to send DAG terminal event for {work_info.dag_id}: {toast_error}"
             )
+
+    async def _handle_dispatch_failure(
+        self, wi: WorkInfo, executor: str, owner: str, error: Any
+    ) -> None:
+        error_message = str(error) if error is not None else "dispatch failed"
+
+        actual_work_state = await self.fail(
+            wi.id,
+            wi,
+            {
+                "dispatch_failed": True,
+                "dispatch_error": error_message,
+                "failure_stage": "enqueue",
+            },
+        )
+
+        if actual_work_state == WorkState.RETRY.value:
+            await self.frontier.on_job_retry(wi.id, wi)
+        elif actual_work_state == WorkState.FAILED.value:
+            await self.frontier.on_job_failed(wi.id)
+            await self.resolve_dag_status(wi.id, wi)
+        else:
+            self.logger.error(
+                f"Dispatch failure cleanup could not transition job {wi.id}; "
+                f"actual_work_state={actual_work_state}"
+            )
+            await self.frontier.release_lease_local(wi.id)
+
+        try:
+            released = await asyncio.to_thread(
+                self._semaphore_store.release_owned,
+                executor,
+                wi.id,
+                owner=owner,
+            )
+            self.logger.debug(
+                f"[sem] release on dispatch-fail {wi.id}@{executor} -> {released}"
+            )
+        except Exception as release_error:
+            self.logger.warning(
+                f"[sem] release error after dispatch-fail {wi.id}@{executor}: "
+                f"{release_error}"
+            )
+
+        await self.notify_event()
 
     async def resolve_dag_status(
         self,
