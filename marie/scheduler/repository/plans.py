@@ -238,6 +238,25 @@ def cancel_jobs(schema: str, name: str, ids: list):
     """
 
 
+def cancel_pending_jobs_for_dag(schema: str, dag_id: str, output: dict):
+    return f"""
+    WITH results AS (
+      UPDATE {schema}.job
+      SET completed_on = now(),
+          state = '{WorkState.CANCELLED.value}',
+          output = COALESCE(output, '{{}}'::jsonb) || {Json(output)}::jsonb,
+          lease_owner = NULL,
+          lease_expires_at = NULL,
+          run_owner = NULL,
+          run_lease_expires_at = NULL
+      WHERE dag_id = '{dag_id}'::uuid
+        AND state IN ('{WorkState.CREATED.value}', '{WorkState.RETRY.value}')
+      RETURNING id
+    )
+    SELECT COUNT(*) FROM results
+    """
+
+
 def resume_jobs(schema: str, name: str, ids: list):
     ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
 
