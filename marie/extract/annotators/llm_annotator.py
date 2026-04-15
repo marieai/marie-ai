@@ -25,10 +25,13 @@ from marie.extract.annotators.util import (
 )
 from marie.extract.structures.unstructured_document import UnstructuredDocument
 from marie.helper import run_async
+from marie.instrumentation import get_tracer, start_as_current_span
 from marie.logging_core.logger import MarieLogger
 from marie.prompt import PromptTemplate
 from marie.utils.types import to_bool
 from marie.utils.utils import ensure_exists
+
+_tracer = get_tracer("marie.extract.annotators.llm_annotator")
 
 if TYPE_CHECKING:
     from marie_kernel.context import RunContext
@@ -741,15 +744,22 @@ class LLMAnnotator(DocumentAnnotator):
         pass0_engine = self._engine_for_pass(0)
         pass0_params = self._completion_params_for_pass(0)
 
-        await self._arun_single_extraction(
-            frames_dir=self.frames_dir,
-            output_dir=pass0_dir,
-            prompt_text=pass0_template,
-            document=document,
-            completion_params=pass0_params,
-            context_manager=self.context_manager,
-            engine=pass0_engine,
-        )
+        with start_as_current_span(
+            _tracer, "LLMAnnotator._arun_refine_passes.initial", span_kind="chain"
+        ) as pass0_span:
+            pass0_span.set_attribute("marie.pass_index", "0")
+            pass0_span.set_attribute("marie.pass_type", "initial")
+            pass0_span.set_attribute("marie.model_name", pass0_engine.model_string)
+
+            await self._arun_single_extraction(
+                frames_dir=self.frames_dir,
+                output_dir=pass0_dir,
+                prompt_text=pass0_template,
+                document=document,
+                completion_params=pass0_params,
+                context_manager=self.context_manager,
+                engine=pass0_engine,
+            )
 
         last_good_report = self._validate_pass_outputs(pass0_dir)
         if not last_good_report.json_valid and self.expect_output == "json":
@@ -783,15 +793,25 @@ class LLMAnnotator(DocumentAnnotator):
                 params = self._completion_params_for_pass(i)
 
                 self.logger.info(f"Running refinement pass {i}/{self.refine_passes}")
-                await self._arun_single_extraction(
-                    frames_dir=self.frames_dir,
-                    output_dir=pass_dir,
-                    prompt_text=refine_base,
-                    document=document,
-                    completion_params=params,
-                    context_manager=pass_ctx,
-                    engine=engine,
-                )
+
+                with start_as_current_span(
+                    _tracer,
+                    f"LLMAnnotator._arun_refine_passes.refine_{i}",
+                    span_kind="chain",
+                ) as pass_span:
+                    pass_span.set_attribute("marie.pass_index", str(i))
+                    pass_span.set_attribute("marie.pass_type", "refinement")
+                    pass_span.set_attribute("marie.model_name", engine.model_string)
+
+                    await self._arun_single_extraction(
+                        frames_dir=self.frames_dir,
+                        output_dir=pass_dir,
+                        prompt_text=refine_base,
+                        document=document,
+                        completion_params=params,
+                        context_manager=pass_ctx,
+                        engine=engine,
+                    )
 
                 current_report = self._validate_pass_outputs(pass_dir)
                 if self._compare_pass_reports(last_good_report, current_report):
@@ -829,6 +849,23 @@ class LLMAnnotator(DocumentAnnotator):
         except OSError:
             pass  # Non-critical
 
+    def _set_annotator_span_attrs(self, span, engine=None) -> None:
+        """Set common annotator attributes on a span."""
+        meta = self._build_span_metadata(engine)
+        for k, v in meta.items():
+            try:
+                span.set_attribute(f"marie.{k}", str(v))
+            except Exception:
+                pass
+        try:
+            span.set_attribute("marie.refine_passes", str(self.refine_passes))
+            span.set_attribute(
+                "marie.processing_mode", self.processing_mode or "default"
+            )
+            span.set_attribute("marie.multimodal", str(self.multimodal))
+        except Exception:
+            pass
+
     def annotate(self, document: UnstructuredDocument, frames: List) -> None:
         """
         Perform value extraction on the given document.
@@ -838,35 +875,40 @@ class LLMAnnotator(DocumentAnnotator):
         """
         self.logger.info(f"Annotating document with {self.name}...")
 
-        self._maybe_purge_output()
+        with start_as_current_span(
+            _tracer, "LLMAnnotator.annotate", span_kind="chain"
+        ) as span:
+            self._set_annotator_span_attrs(span)
 
-        if self._has_completed_results(self.output_dir):
-            self.logger.info(
-                f"Output directory '{self.output_dir}' contains completed results. "
-                "Skipping annotation..."
-            )
-            return
+            self._maybe_purge_output()
 
-        if self.refine_passes > 0:
-            run_async(self._arun_refine_passes(document))
-        else:
-            scan_and_process_images(
-                self.frames_dir,
-                self.output_dir,
-                self.prompt_template,
-                document,
-                engine=self.engine,
-                is_multimodal=self.multimodal,
-                expect_output=self.expect_output,
-                context_manager=self.context_manager,
-                completion_params=self.completion_params,
-                mm_processor_kwargs=self.mm_processor_kwargs,
-                mini_batch_size=self.mini_batch_size,
-                metadata=self._build_span_metadata(),
-            )
+            if self._has_completed_results(self.output_dir):
+                self.logger.info(
+                    f"Output directory '{self.output_dir}' contains completed results. "
+                    "Skipping annotation..."
+                )
+                return
 
-        if self.output_transform:
-            self._apply_output_transform()
+            if self.refine_passes > 0:
+                run_async(self._arun_refine_passes(document))
+            else:
+                scan_and_process_images(
+                    self.frames_dir,
+                    self.output_dir,
+                    self.prompt_template,
+                    document,
+                    engine=self.engine,
+                    is_multimodal=self.multimodal,
+                    expect_output=self.expect_output,
+                    context_manager=self.context_manager,
+                    completion_params=self.completion_params,
+                    mm_processor_kwargs=self.mm_processor_kwargs,
+                    mini_batch_size=self.mini_batch_size,
+                    metadata=self._build_span_metadata(),
+                )
+
+            if self.output_transform:
+                self._apply_output_transform()
 
     async def aannotate(self, document: UnstructuredDocument, frames: List) -> None:
         """
@@ -877,38 +919,43 @@ class LLMAnnotator(DocumentAnnotator):
         """
         self.logger.info(f"Annotating document with {self.name}...")
 
-        if self.context_manager:
-            self._write_context_debug(document, self.context_manager)
+        with start_as_current_span(
+            _tracer, "LLMAnnotator.aannotate", span_kind="chain"
+        ) as span:
+            self._set_annotator_span_attrs(span)
 
-        self._maybe_purge_output()
+            if self.context_manager:
+                self._write_context_debug(document, self.context_manager)
 
-        if self._has_completed_results(self.output_dir):
-            self.logger.info(
-                f"Output directory '{self.output_dir}' contains completed results. "
-                "Skipping annotation..."
-            )
-            return
+            self._maybe_purge_output()
 
-        if self.refine_passes > 0:
-            await self._arun_refine_passes(document)
-        else:
-            await ascan_and_process_images(
-                self.frames_dir,
-                self.output_dir,
-                self.prompt_template,
-                document,
-                engine=self.engine,
-                is_multimodal=self.multimodal,
-                expect_output=self.expect_output,
-                context_manager=self.context_manager,
-                completion_params=self.completion_params,
-                mm_processor_kwargs=self.mm_processor_kwargs,
-                mini_batch_size=self.mini_batch_size,
-                metadata=self._build_span_metadata(),
-            )
+            if self._has_completed_results(self.output_dir):
+                self.logger.info(
+                    f"Output directory '{self.output_dir}' contains completed results. "
+                    "Skipping annotation..."
+                )
+                return
 
-        if self.output_transform:
-            self._apply_output_transform()
+            if self.refine_passes > 0:
+                await self._arun_refine_passes(document)
+            else:
+                await ascan_and_process_images(
+                    self.frames_dir,
+                    self.output_dir,
+                    self.prompt_template,
+                    document,
+                    engine=self.engine,
+                    is_multimodal=self.multimodal,
+                    expect_output=self.expect_output,
+                    context_manager=self.context_manager,
+                    completion_params=self.completion_params,
+                    mm_processor_kwargs=self.mm_processor_kwargs,
+                    mini_batch_size=self.mini_batch_size,
+                    metadata=self._build_span_metadata(),
+                )
+
+            if self.output_transform:
+                self._apply_output_transform()
 
     def _apply_output_transform(self) -> None:
         """Apply the configured output_transform function in-place to each JSON output file.

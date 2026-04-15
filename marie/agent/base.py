@@ -45,7 +45,7 @@ from marie.agent.message import (
 )
 from marie.agent.tools.base import AgentTool, ToolOutput
 from marie.agent.tools.registry import resolve_tools
-from marie.instrumentation import start_span
+from marie.instrumentation import MAX_FIELD_BYTES, start_span
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
@@ -711,6 +711,20 @@ class BaseAgent(ABC):
             _otel_span.set_attribute(SpanAttributes.SESSION_ID, _session_id)
         if _user_id:
             _otel_span.set_attribute(SpanAttributes.USER_ID, _user_id)
+
+        # Capture agent input: last user message as query preview
+        _agent_input = {"agent": self.name, "session_id": _session_id}
+        if new_messages:
+            _last_msg = new_messages[-1]
+            _content = (
+                _last_msg.get("content")
+                if isinstance(_last_msg, dict)
+                else getattr(_last_msg, "content", None)
+            )
+            if isinstance(_content, str):
+                _agent_input["query"] = _content[:MAX_FIELD_BYTES]
+        _otel_span.set_input(_agent_input)
+
         _otel_span_token = otel_context.attach(
             trace_api.set_span_in_context(_otel_span)
         )
@@ -741,6 +755,20 @@ class BaseAgent(ABC):
                     ]
 
             success = True
+            # Capture agent output summary
+            _output_summary = {"result_count": len(last_responses)}
+            if last_responses:
+                _last = last_responses[-1]
+                _resp_content = (
+                    _last.get("content")
+                    if isinstance(_last, dict)
+                    else getattr(_last, "content", None)
+                )
+                if isinstance(_resp_content, str):
+                    _output_summary["response_preview"] = _resp_content[
+                        :MAX_FIELD_BYTES
+                    ]
+            _otel_span.set_output(_output_summary)
             _otel_span.set_status(StatusCode.OK)
 
             # Emit success event

@@ -293,7 +293,7 @@ class WorkflowCoordinator(BaseCoordinator):
         _tracer = trace_api.get_tracer("marie.agent.coordination")
         _span = start_span(
             _tracer,
-            f"workflow:{workflow_id or 'anonymous'}",
+            "workflow.run",
             span_kind="chain",
         )
         _span.set_attribute("marie.workflow_id", workflow_id or "")

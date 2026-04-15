@@ -30,7 +30,7 @@ from opentelemetry import trace as trace_api
 from opentelemetry.trace import StatusCode
 from pydantic import BaseModel, Field
 
-from marie.instrumentation import start_span
+from marie.instrumentation import MAX_FIELD_BYTES, start_span
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
@@ -333,6 +333,17 @@ class AgentTool(ABC):
         parsed_args = self._parse_input(tool_args)
         parsed_args.update(kwargs)
 
+        # Capture tool input
+        _tool_span.set_attribute(
+            SpanAttributes.TOOL_PARAMETERS, str(parsed_args)[:MAX_FIELD_BYTES]
+        )
+        _tool_span.set_input(
+            {
+                "tool_name": self.name,
+                "args_preview": str(parsed_args)[:MAX_FIELD_BYTES],
+            }
+        )
+
         # Emit start event
         emit_sync(
             self._emitter,
@@ -465,6 +476,17 @@ class AgentTool(ABC):
         start_time = time.perf_counter()
         parsed_args = self._parse_input(tool_args)
         parsed_args.update(kwargs)
+
+        # Capture tool input
+        _tool_span.set_attribute(
+            SpanAttributes.TOOL_PARAMETERS, str(parsed_args)[:MAX_FIELD_BYTES]
+        )
+        _tool_span.set_input(
+            {
+                "tool_name": self.name,
+                "args_preview": str(parsed_args)[:MAX_FIELD_BYTES],
+            }
+        )
 
         # Emit start event
         if self._emitter:

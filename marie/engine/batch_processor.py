@@ -8,7 +8,12 @@ from opentelemetry.trace import StatusCode
 
 from marie.engine.async_helper import run_coroutine_in_current_loop
 from marie.excepts import MaxTokensExceededError, RepetitionError
-from marie.instrumentation import get_tracer, start_as_current_span, start_span
+from marie.instrumentation import (
+    get_tracer,
+    set_llm_io,
+    start_as_current_span,
+    start_span,
+)
 from marie.instrumentation.openinference import infer_llm_system
 
 _tracer = get_tracer("marie.engine.batch_processor")
@@ -238,7 +243,7 @@ class BatchProcessor:
 
         with start_as_current_span(
             _tracer,
-            f"openai_completion_{task_id}",
+            "BatchProcessor.completion",
             span_kind="llm",
         ) as span:
             span.set_attribute(SpanAttributes.LLM_MODEL_NAME, self.model_string)
@@ -248,10 +253,9 @@ class BatchProcessor:
             span.set_attribute("marie.task_id", task_id)
             span.set_attribute("marie.request_id", request_id)
             if metadata:
-                import json as _json
-
-                span.set_attribute("metadata", _json.dumps(metadata))
-            span.set_input(messages)
+                for mk, mv in metadata.items():
+                    span.set_attribute(f"marie.{mk}", str(mv))
+            set_llm_io(span, input_messages=messages)
 
             try:
                 # estimate/max tokens
@@ -338,7 +342,7 @@ class BatchProcessor:
                     full_response
                 )
 
-                span.set_output(extracted_text)
+                set_llm_io(span, output_messages=extracted_text)
                 span.set_attribute("marie.latency_seconds", total_time)
                 span.set_attribute("marie.has_reasoning", reasoning_content is not None)
 
@@ -547,16 +551,22 @@ class BatchProcessor:
         # is sync and runs an async event loop internally.
         batch_span = start_span(
             _tracer,
-            f"batch_generate_{self.model_string}",
+            "BatchProcessor.batch_generate",
             span_kind="chain",
         )
         batch_span.set_attribute(SpanAttributes.LLM_MODEL_NAME, self.model_string)
         batch_span.set_attribute("marie.request_id", request_id)
         batch_span.set_attribute("marie.batch_size", len(messages_list))
         if metadata:
-            import json as _json
-
-            batch_span.set_attribute("metadata", _json.dumps(metadata))
+            for mk, mv in metadata.items():
+                batch_span.set_attribute(f"marie.{mk}", str(mv))
+        batch_span.set_input(
+            {
+                "model": self.model_string,
+                "batch_size": len(messages_list),
+                "request_id": request_id,
+            }
+        )
 
         completion_params = kwargs.get("completion_params", None)
 
@@ -605,6 +615,13 @@ class BatchProcessor:
             batch_span.set_attribute("marie.latency_seconds", elapsed_time)
             batch_span.set_attribute("marie.successful_count", successful_count)
             batch_span.set_attribute("marie.failed_count", failed_count)
+            batch_span.set_output(
+                {
+                    "successful": successful_count,
+                    "failed": failed_count,
+                    "elapsed_seconds": round(elapsed_time, 2),
+                }
+            )
             batch_span.set_status(StatusCode.OK)
 
             return batch_outputs

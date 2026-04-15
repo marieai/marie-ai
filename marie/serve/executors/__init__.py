@@ -879,8 +879,24 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         session_id = params.get("dag_id") or params.get("job_id")
 
         if self.tracer:
-            with self.tracer.start_as_current_span(
-                req_endpoint, context=tracing_context
+            from marie.instrumentation import start_as_current_span
+
+            # Phoenix-style span name: ClassName.method_name
+            # e.g. "DocumentAnnotatorLLMExecutor.annotator_llm" instead of "/annotator/llm"
+            method_name = getattr(original_func, "__name__", None)
+            span_name = (
+                f"{self.__class__.__name__}.{method_name}"
+                if method_name
+                else req_endpoint
+            )
+
+            # CRITICAL: context=tracing_context MUST be preserved — it links
+            # this span to the incoming trace propagated from the gateway.
+            with start_as_current_span(
+                self.tracer,
+                span_name,
+                span_kind="chain",
+                context=tracing_context,
             ) as span:
                 from opentelemetry.propagate import extract
                 from opentelemetry.trace import StatusCode
@@ -891,6 +907,27 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                 # Set session.id directly on this span
                 if session_id:
                     span.set_attribute("session.id", session_id)
+
+                # Set executor and request context attributes for traceability
+                span.set_attribute("marie.executor", self.__class__.__name__)
+                span.set_attribute("marie.endpoint", req_endpoint)
+                payload = params.get("payload") or {}
+                op_params = payload.get("op_params") or {}
+                if op_params.get("key"):
+                    span.set_attribute("marie.annotator_name", op_params["key"])
+                if op_params.get("layout"):
+                    span.set_attribute("marie.layout_id", op_params["layout"])
+                if params.get("job_id"):
+                    span.set_attribute("marie.job_id", params["job_id"])
+
+                # Generic input: endpoint + executor class (always available)
+                span.set_input(
+                    {
+                        "endpoint": req_endpoint,
+                        "executor": self.__class__.__name__,
+                        "job_id": params.get("job_id"),
+                    }
+                )
 
                 tracing_carrier_context = {}
                 TraceContextTextMapPropagator().inject(tracing_carrier_context)
@@ -910,6 +947,14 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                         self._process_request_histogram,
                         _histogram_metric_labels,
                         extract(tracing_carrier_context),
+                    )
+
+                # Generic output: status from result dict if available
+                if isinstance(result, dict):
+                    span.set_output(
+                        {
+                            "status": result.get("status", "unknown"),
+                        }
                     )
                 span.set_status(StatusCode.OK)
                 return result

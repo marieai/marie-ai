@@ -38,7 +38,7 @@ from marie.agent.message import (
 )
 from marie.agent.streaming import StreamChunk, ToolCallAccumulator
 from marie.agent.tool_call_parser import ToolCallTextParser
-from marie.instrumentation import start_as_current_span, start_span
+from marie.instrumentation import set_llm_io, start_as_current_span, start_span
 from marie.instrumentation.openinference import infer_llm_system
 from marie.logging_core.logger import MarieLogger
 
@@ -405,6 +405,7 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
         _llm_span.set_attribute(
             SpanAttributes.LLM_SYSTEM, infer_llm_system(_model_name)
         )
+        set_llm_io(_llm_span, input_messages=messages)
 
         try:
             # Check for multimodal content
@@ -443,6 +444,13 @@ class MarieEngineLLMWrapper(BaseLLMWrapper):
             # Parse response and detect function calls
             message = self._parse_response(response, functions)
 
+            _resp_content = (
+                message.get("content")
+                if isinstance(message, dict)
+                else getattr(message, "content", None)
+            )
+            if isinstance(_resp_content, str):
+                set_llm_io(_llm_span, output_messages=_resp_content)
             _llm_span.set_status(StatusCode.OK)
             yield [message]
 
@@ -868,6 +876,7 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
             _llm_span.set_attribute(
                 SpanAttributes.LLM_SYSTEM, infer_llm_system(_model_name)
             )
+            set_llm_io(_llm_span, input_messages=messages)
 
             try:
                 async_client = self._get_async_client()
@@ -893,8 +902,16 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
                         prompt_tokens + completion_tokens,
                     )
 
+                result_msg = self._openai_to_message(choice.message)
+                _resp = (
+                    result_msg.get("content")
+                    if isinstance(result_msg, dict)
+                    else getattr(result_msg, "content", None)
+                )
+                if isinstance(_resp, str):
+                    set_llm_io(_llm_span, output_messages=_resp)
                 _llm_span.set_status(StatusCode.OK)
-                return self._openai_to_message(choice.message)
+                return result_msg
 
             except Exception as exc:
                 _llm_span.set_status(StatusCode.ERROR, str(exc))
@@ -946,6 +963,7 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         _llm_span.set_attribute(
             SpanAttributes.LLM_SYSTEM, infer_llm_system(_model_name)
         )
+        set_llm_io(_llm_span, input_messages=messages)
 
         async_client = self._get_async_client()
         kwargs = self._build_api_kwargs(messages, functions, extra_generate_cfg)
@@ -1030,10 +1048,14 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
                         event_type="done",
                     )
 
+            if accumulated_content:
+                set_llm_io(_llm_span, output_messages=accumulated_content)
             _llm_span.set_status(StatusCode.OK)
 
         except GeneratorExit:
             _llm_span.set_attribute("marie.stream_cancelled", True)
+            if accumulated_content:
+                set_llm_io(_llm_span, output_messages=accumulated_content)
             _llm_span.set_status(StatusCode.OK)
 
         except Exception as e:
