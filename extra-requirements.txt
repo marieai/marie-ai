@@ -68,6 +68,7 @@ requests:                   standard,devel
 websockets:                 standard,devel
 # Pydantic v2 is required (v1 patterns removed)
 # mcp package requires pydantic>=2.11.0
+mcp>=1.6.0:                core
 pydantic>=2.11.0:           core
 pydantic-settings>=2.0.0:   core
 python-multipart:           standard,devel
