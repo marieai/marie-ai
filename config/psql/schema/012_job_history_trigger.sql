@@ -1,6 +1,15 @@
 -- File: 012_job_history_trigger.sql
 -- Description: Trigger function and trigger for job history tracking
 -- Dependencies: 005_job.sql, 006_job_history.sql
+--
+-- History records are created for:
+--   - Every INSERT (new job creation)
+--   - UPDATEs that change meaningful state columns (state, retry_count,
+--     output, completed_on, started_on, branch_metadata)
+--
+-- Duration-only updates (from pg_cron refresh_job_durations) and
+-- lease-only updates (lease_owner, lease_expires_at, run_owner, etc.)
+-- are intentionally excluded to prevent history table bloat.
 
 -- Create the trigger function that populates job_history (idempotent)
 CREATE OR REPLACE FUNCTION {schema}.job_update_trigger_function()
@@ -25,9 +34,29 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Create the trigger (idempotent: drop first if exists)
+-- Drop the old unconditional trigger
 DROP TRIGGER IF EXISTS job_update_trigger ON {schema}.job;
-CREATE TRIGGER job_update_trigger
-AFTER UPDATE OR INSERT ON {schema}.job
+
+-- INSERT trigger: always fire for new job creation
+DROP TRIGGER IF EXISTS job_insert_trigger ON {schema}.job;
+CREATE TRIGGER job_insert_trigger
+AFTER INSERT ON {schema}.job
 FOR EACH ROW
+EXECUTE FUNCTION {schema}.job_update_trigger_function();
+
+-- UPDATE trigger: only fire on meaningful state changes
+-- Skips duration-only updates (refresh_job_durations cron) and
+-- lease-only updates (lease/release/extend operations)
+DROP TRIGGER IF EXISTS job_update_state_trigger ON {schema}.job;
+CREATE TRIGGER job_update_state_trigger
+AFTER UPDATE ON {schema}.job
+FOR EACH ROW
+WHEN (
+    OLD.state IS DISTINCT FROM NEW.state
+    OR OLD.retry_count IS DISTINCT FROM NEW.retry_count
+    OR OLD.output IS DISTINCT FROM NEW.output
+    OR OLD.completed_on IS DISTINCT FROM NEW.completed_on
+    OR OLD.started_on IS DISTINCT FROM NEW.started_on
+    OR OLD.branch_metadata IS DISTINCT FROM NEW.branch_metadata
+)
 EXECUTE FUNCTION {schema}.job_update_trigger_function();
