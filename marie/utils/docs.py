@@ -37,7 +37,8 @@ def get_document_type(file_path: str):
 
     if file_type is None:
         try:
-            PyPDF4.PdfFileReader(open(file_path, "rb"))
+            with open(file_path, "rb") as pdf_file:
+                PyPDF4.PdfFileReader(pdf_file)
             file_type = "pdf"
         except PdfReadError as e:
             print(f"invalid PDF file : {e}")
@@ -230,9 +231,8 @@ def load_image(img_path, img_format: str = "cv") -> (bool, List[np.ndarray]):
         del frames
         return loaded, converted
 
-    # img = skio.imread(img_path)  # RGB order
-    img = Image.open(img_path).convert('RGB')
-    img = np.array(img, dtype=np.uint8)
+    with Image.open(img_path) as pil_img:
+        img = np.array(pil_img.convert("RGB"), dtype=np.uint8)
 
     # return True, [img]
 

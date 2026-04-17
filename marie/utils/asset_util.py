@@ -124,9 +124,7 @@ def prepare_asset_directory(
         try:
             Image.fromarray(frame).save(frame_path)
             logger.debug(f"Frame {idx + 1} saved at '{frame_path}'.")
-
-            img = Image.open(frame_path)
-            logger.debug(f"Image dimensions: {img.size}")
+            logger.debug(f"Image dimensions: {(frame.shape[1], frame.shape[0])}")
         except Exception as e:
             logger.error(f"Error while processing frame {idx + 1} - {e}")
             raise
