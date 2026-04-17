@@ -20,7 +20,7 @@ import threading
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Optional, TextIO
+from typing import Any, Callable, Dict, Iterable, Optional, TextIO
 
 
 class JobLogSink(logging.Handler):
@@ -68,9 +68,10 @@ class JobLogSink(logging.Handler):
         )  # request_id -> (handle, last_access, dev, ino)
         self._lock = threading.RLock()
         self._closed = False
+        self._atexit_cleanup: Callable[[], None] | None = self._cleanup
 
         os.makedirs(self._log_dir, exist_ok=True)
-        atexit.register(self._cleanup)
+        atexit.register(self._atexit_cleanup)
 
     def get_log_file_path(self, request_id: str) -> str:
         """Get the file path for a job's log file."""
@@ -269,6 +270,7 @@ class JobLogSink(logging.Handler):
 
     def _cleanup(self) -> None:
         """Close all open file handles."""
+        self._unregister_atexit()
         if self._closed:
             return
         self._closed = True
@@ -281,3 +283,12 @@ class JobLogSink(logging.Handler):
                 except Exception:
                     pass
             self._file_handles.clear()
+
+    def _unregister_atexit(self) -> None:
+        if self._atexit_cleanup is None:
+            return
+        try:
+            atexit.unregister(self._atexit_cleanup)
+        except Exception:
+            pass
+        self._atexit_cleanup = None

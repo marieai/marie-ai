@@ -349,8 +349,30 @@ class _GlobalLogBus:
             logger.addHandler(qh)
 
     def set_sinks(self, sinks: Iterable[logging.Handler]) -> None:
+        new_handlers = list(sinks)
         with self._lock:
-            self._listener.handlers = list(sinks)
+            old_handlers = list(self._listener.handlers)
+            if not self._stopped:
+                try:
+                    self._listener.flush()
+                except Exception:
+                    pass
+            self._listener.handlers = new_handlers
+
+        stale_handlers = [
+            handler
+            for handler in old_handlers
+            if not any(handler is current for current in new_handlers)
+        ]
+        self._close_handlers(stale_handlers)
+
+    @staticmethod
+    def _close_handlers(handlers: Iterable[logging.Handler]) -> None:
+        for handler in handlers:
+            try:
+                handler.close()
+            except Exception:
+                pass
 
     def flush(self) -> None:
         """Drain queue + buffer and flush sinks without stopping (thread-safe)."""
