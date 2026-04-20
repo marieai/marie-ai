@@ -149,6 +149,18 @@ class BatchProcessor:
         if default_completion_params:
             _fallbacks.update(default_completion_params)
         self.default_completion_params = _fallbacks
+        self._shared_request_semaphore: Optional[asyncio.Semaphore] = None
+        self._shared_request_semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def _get_request_semaphore(self) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        if (
+            self._shared_request_semaphore is None
+            or self._shared_request_semaphore_loop is not loop
+        ):
+            self._shared_request_semaphore = asyncio.Semaphore(self.max_concurrency)
+            self._shared_request_semaphore_loop = loop
+        return self._shared_request_semaphore
 
     def extract_reasoning_content(
         self, model_output: str
@@ -447,9 +459,10 @@ class BatchProcessor:
               raw_results: List[Tuple[task_id, Optional[str]]] - (task_id, response) pairs
         """
 
-        # Semaphore limits how many requests are in-flight simultaneously,
-        # preventing httpx connection pool exhaustion on large batches.
-        semaphore = asyncio.Semaphore(self.max_concurrency)
+        # Share one limiter across all overlapping batch calls that use this
+        # engine/client instance. Per-call semaphores are not enough because
+        # concurrent mini-batches can otherwise multiply in-flight requests.
+        semaphore = self._get_request_semaphore()
 
         async def safe_call(i, msgs):
             tid = f"{request_id}_task_{i}"
