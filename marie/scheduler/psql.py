@@ -169,6 +169,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         # Initialize scheduler state (frontier and active_dags)
         self.frontier = MemoryFrontier()
         self.active_dags = {}
+        self._dag_admission_lock = asyncio.Lock()
+
+        dag_config = config.get("dag_manager", {})
+        self.max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
 
         # Initialize DAGManagementService for DAG lifecycle management
         # Service operates on scheduler's frontier and active_dags
@@ -179,6 +183,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             loop=self._loop,
             executor=self._db_executor,
             notify_callback=self.notify_event,
+            max_active_dags=self.max_concurrent_dags,
+            admission_lock=self._dag_admission_lock,
         )
 
         # Register handler for DAG state changes (delegate to DAGManagementService)
@@ -220,12 +226,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             "Initialized asset mapper (used for upstream asset queries only)"
         )
 
-        dag_config = config.get("dag_manager", {})
-        min_concurrent_dags = int(dag_config.get("min_concurrent_dags", 1))
-        max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
-        cache_ttl_seconds = int(dag_config.get("cache_ttl_seconds", 5))
-        cache_ttl_seconds = int(dag_config.get("cache_ttl_seconds", 5))
-
         dag_cache_size = int(
             dag_config.get("dag_cache_size", 5000)
         )  # 5000 entries as this is what our fetch_next_job uses
@@ -238,7 +238,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self, self.heartbeat_config, self._db, self.logger
         )
 
-        self.max_concurrent_dags = max_concurrent_dags
         self._start_time = datetime.now(timezone.utc)
         self.hard_sla_policy = str(config.get("hard_sla_policy", "track_only")).lower()
         if self.hard_sla_policy not in {
@@ -448,8 +447,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     await self.frontier.release_lease_local(wi.id)
                     return
 
-                await self.mark_as_active_dag(wi)
-                self.active_dags[dag_id] = dag
+                admitted = await self._admit_dag(
+                    wi, dag, source=f"control_flow:{node_type}"
+                )
+                if not admitted:
+                    await self._release_lease_db([wi.id])
+                    await self.frontier.release_lease_local(wi.id)
+                    return
 
             # Get the node from the DAG
             node = get_node_from_dag(wi.id, self.active_dags[dag_id])
@@ -1681,11 +1685,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             await self.frontier.release_lease_local(wi.id)
                             continue
 
-                        self.logger.debug(
-                            f"Marking active dag : {len(self.active_dags)}"
-                        )
-                        await self.mark_as_active_dag(wi)
-                        self.active_dags[dag_id] = dag
+                        admitted = await self._admit_dag(wi, dag, source="dispatch")
+                        if not admitted:
+                            await self._release_lease_db([wi.id])
+                            await self.frontier.release_lease_local(wi.id)
+                            continue
 
                     # NOTE: NOOP/BRANCH/SWITCH nodes are handled earlier in the pipeline
                     # (before planner) and should never reach this point.
@@ -2480,6 +2484,29 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return: True if successful, False otherwise
         """
         return await self.repository.mark_dag_as_active(work_info.dag_id)
+
+    async def _admit_dag(
+        self, work_info: WorkInfo, dag: QueryPlan, *, source: str
+    ) -> bool:
+        dag_id = work_info.dag_id
+
+        async with self._dag_admission_lock:
+            if dag_id in self.active_dags:
+                return True
+
+            if (
+                self.max_concurrent_dags > 0
+                and len(self.active_dags) >= self.max_concurrent_dags
+            ):
+                self.logger.debug(
+                    f"[DAG_ADMISSION] Skipping DAG {dag_id} from {source}; "
+                    f"active_dags={len(self.active_dags)}/{self.max_concurrent_dags}"
+                )
+                return False
+
+            await self.mark_as_active_dag(work_info)
+            self.active_dags[dag_id] = dag
+            return True
 
     async def is_valid_submission(
         self, work_info: WorkInfo, policy: ExistingWorkPolicy

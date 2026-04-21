@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -101,6 +102,8 @@ def build_scheduler(
     scheduler.repository = repository
     scheduler.frontier = frontier
     scheduler.active_dags = {}
+    scheduler.max_concurrent_dags = 16
+    scheduler._dag_admission_lock = asyncio.Lock()
     scheduler._dag_resolution_lock = AsyncJobLock()
     scheduler._terminal_dag_states = {}
     scheduler._job_cache = {}
@@ -229,6 +232,47 @@ async def test_dag_state_notification_created_clears_terminal_guard():
     assert dag_id not in scheduler.active_dags
     assert frontier.finalize_calls == [dag_id]
     assert scheduler.notify_calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_control_flow_node_requeues_when_active_dag_limit_is_full():
+    frontier = RecordingFrontier()
+    repository = RecordingRepository(dag_state="active")
+    scheduler = build_scheduler(repository, frontier)
+    scheduler.max_concurrent_dags = 1
+    scheduler.active_dags["existing-dag"] = object()
+
+    work_item = build_work_item("job-control", "new-dag")
+    work_item.data["metadata"]["on"] = "noop://control"
+
+    released_db: list[list[str]] = []
+    released_local: list[str] = []
+    activated: list[str] = []
+
+    async def get_dag_by_id(dag_id: str):
+        return object()
+
+    async def mark_as_active_dag(wi: WorkInfo) -> bool:
+        activated.append(wi.dag_id)
+        return True
+
+    async def release_lease_db(job_ids: list[str]) -> None:
+        released_db.append(job_ids)
+
+    async def release_lease_local(job_id: str) -> None:
+        released_local.append(job_id)
+
+    scheduler.get_dag_by_id = get_dag_by_id
+    scheduler.mark_as_active_dag = mark_as_active_dag
+    scheduler._release_lease_db = release_lease_db
+    frontier.release_lease_local = release_lease_local
+
+    await scheduler._process_control_flow_node(work_item)
+
+    assert activated == []
+    assert released_db == [[work_item.id]]
+    assert released_local == [work_item.id]
+    assert work_item.dag_id not in scheduler.active_dags
 
 
 @pytest.mark.asyncio

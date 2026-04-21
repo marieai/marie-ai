@@ -31,6 +31,8 @@ class DAGManagementService:
         loop: Optional[asyncio.AbstractEventLoop] = None,
         executor: Optional[ThreadPoolExecutor] = None,
         notify_callback: Optional[callable] = None,
+        max_active_dags: int = 0,
+        admission_lock: Optional[asyncio.Lock] = None,
     ):
         """
         Initialize the DAG management service.
@@ -49,12 +51,35 @@ class DAGManagementService:
         self._loop = loop or asyncio.get_event_loop()
         self._executor = executor
         self._notify_callback = notify_callback
+        self.max_active_dags = max_active_dags
+        self._admission_lock = admission_lock or asyncio.Lock()
 
         # Sync task
         self._sync_task: Optional[asyncio.Task] = None
         self._running = False
 
     # ==================== DAG Hydration ====================
+
+    async def _admit_hydrated_dag(
+        self, dag_id: str, dag: QueryPlan, nodes: List[WorkInfo], *, source: str
+    ) -> bool:
+        async with self._admission_lock:
+            if dag_id in self.active_dags:
+                return True
+
+            if (
+                self.max_active_dags > 0
+                and len(self.active_dags) >= self.max_active_dags
+            ):
+                self.logger.debug(
+                    f"Skipping DAG {dag_id} from {source}; "
+                    f"active_dags={len(self.active_dags)}/{self.max_active_dags}"
+                )
+                return False
+
+            await self.frontier.add_dag(dag, nodes)
+            self.active_dags[dag_id] = dag
+            return True
 
     async def hydrate_single_dag(self, dag_id: str) -> bool:
         """
@@ -118,11 +143,11 @@ class DAGManagementService:
                 self.logger.warning(f"No jobs found for DAG {dag_id}")
                 return False
 
-            # Add to frontier
-            await self.frontier.add_dag(dag, nodes)
-
-            # Track as active
-            self.active_dags[dag_id] = dag
+            admitted = await self._admit_hydrated_dag(
+                dag_id, dag, nodes, source="hydrate_single_dag"
+            )
+            if not admitted:
+                return False
 
             self.logger.info(
                 f"Successfully hydrated DAG {dag_id} with {len(nodes)} job(s)"
@@ -331,6 +356,7 @@ class DAGManagementService:
         self.logger.info(f"Hydrate: phase 3 (add to frontier) — {len(buckets)} DAG(s)")
         added = 0
         skipped = 0
+        deferred = 0
         for dag_id in dag_ids_ordered:
             if dag_id not in buckets:
                 skipped += 1
@@ -340,9 +366,13 @@ class DAGManagementService:
                 skipped += 1
                 continue
             try:
-                await self.frontier.add_dag(dags[dag_id], nodes)
-                self.active_dags[dag_id] = dags[dag_id]
-                added += 1
+                admitted = await self._admit_hydrated_dag(
+                    dag_id, dags[dag_id], nodes, source="hydrate_bulk"
+                )
+                if admitted:
+                    added += 1
+                else:
+                    deferred += 1
             except Exception as e:
                 self.logger.error(f"Hydrate: frontier.add_dag failed for {dag_id}: {e}")
                 skipped += 1
@@ -350,7 +380,8 @@ class DAGManagementService:
         total_elapsed = time.monotonic() - t0
         self.logger.info(
             f"Hydrate: complete — {added} DAG(s) added to frontier, "
-            f"{skipped} skipped, {processed_jobs} job(s) total. "
+            f"{deferred} deferred by active DAG limit, {skipped} skipped, "
+            f"{processed_jobs} job(s) total. "
             f"Total time: {total_elapsed:.2f}s."
         )
 
@@ -708,6 +739,15 @@ class DAGManagementService:
         for dag_id, _serialized_dag in hydratable_dags:
             if dag_id in self.active_dags:
                 continue
+            if (
+                self.max_active_dags > 0
+                and len(self.active_dags) >= self.max_active_dags
+            ):
+                self.logger.debug(
+                    f"Skipping DAG hydration refresh at capacity "
+                    f"{len(self.active_dags)}/{self.max_active_dags}"
+                )
+                break
             if await self.hydrate_single_dag(dag_id):
                 hydrated += 1
 
