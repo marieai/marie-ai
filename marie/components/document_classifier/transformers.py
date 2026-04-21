@@ -25,9 +25,23 @@ from marie.models.utils import initialize_device_settings
 from ...api.docs import BatchableMarieDoc, MarieDoc
 from ...helper import batch_iterator
 from ...logging_core.profile import TimeContext
+from ...models.multimodal.lmv3_document_classifier import LayoutLMv3DocumentClassifier
+from ...models.multimodal.lmv3_document_splitter import LayoutLMv3DocumentSplitter
 from ...registry.model_registry import ModelRegistry
 from ..document_classifier.base import BaseDocumentClassifier
 from ..util import scale_bounding_box
+
+ARCHITECTURE_REGISTRY = {
+    "LayoutLMv3DocumentClassifier": LayoutLMv3DocumentClassifier,
+    "LayoutLMv3DocumentSplitter": LayoutLMv3DocumentSplitter,
+}
+
+
+def resolve_architecture(name: str):
+    try:
+        return ARCHITECTURE_REGISTRY[name]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported architecture: {name}")
 
 
 class TransformersDocumentClassifier(BaseDocumentClassifier):
@@ -157,19 +171,53 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 # use_auth_token=use_auth_token,
             )
         elif task == "text-classification-multimodal":
-            self.model = AutoModelForSequenceClassification.from_pretrained(
-                model_name_or_path
+            config = ModelRegistry.config(model_name_or_path)
+            architecture = (
+                config["architecture"]
+                if "architecture" in config
+                else (config["architectures"][0] if "architectures" in config else None)
             )
-            self.model = self.optimize_model(self.model)
+            if architecture:
+                model_class = resolve_architecture(architecture)
+                # todo load based on architecture
+                # checkpoint = torch.load(model_name_or_path, map_location=self.device)
+                # self.model = LayoutLMv3DocumentClassifier(
+                #     self.model_parameters["model_name"],
+                #     self.model_parameters["num_classes"],
+                #     freeze_mode=self.model_parameters["freeze_mode"],
+                #     unfreeze_last_n=self.model_parameters["unfreeze_last_n"],
+                #     process_emb_mode=self.model_parameters["process_emb_mode"],
+                #     add_page_input=self.model_parameters["use_page_labels"],
+                #     num_page_classes=self.model_parameters["num_page_label_classes"],
+                #     page_emb_dim=self.model_parameters["page_label_dim"],
+                # )
+                # self.model = self.model.load_state_dict(checkpoint["model_state_dict"])
+            else:
+                self.model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name_or_path
+                )
+                self.model = self.optimize_model(self.model)
+
             self.model = self.model.eval().to(resolved_devices[0])
             self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
 
-            feature_extractor = LayoutLMv3ImageProcessor(
-                apply_ocr=False, do_resize=True, resample=Image.BILINEAR
-            )
-            self.processor = LayoutLMv3Processor(
-                feature_extractor, tokenizer=self.tokenizer
-            )
+            if os.path.exists(
+                os.path.join(model_name_or_path, "preprocessor_config.json")
+            ):
+                self.logger.info(
+                    "Found preprocessor_config.json, loading processor from %s",
+                    model_name_or_path,
+                )
+                self.processor = LayoutLMv3Processor.from_pretrained(
+                    model_name_or_path, tokenizer=self.tokenizer
+                )
+            else:
+                feature_extractor = LayoutLMv3ImageProcessor(
+                    apply_ocr=False, do_resize=True, resample=Image.BILINEAR
+                )
+                self.processor = LayoutLMv3Processor(
+                    feature_extractor, tokenizer=self.tokenizer
+                )
 
     def predict(
         self,
