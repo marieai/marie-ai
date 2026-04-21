@@ -432,7 +432,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             ep = wi.data.get("metadata", {}).get("on", "")
             node_type = ep.split("://", 1)[0].lower()
 
-            self.logger.info(
+            self.logger.debug(
                 f"[CONTROL_FLOW] Processing {node_type} node: {wi.id} in DAG {dag_id}"
             )
 
@@ -1471,7 +1471,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                 # Process control flow nodes immediately (they don't need slots)
                 if control_flow_jobs:
-                    self.logger.info(
+                    self.logger.debug(
                         f"[WORK_DIST] Processing {len(control_flow_jobs)} control flow nodes immediately"
                     )
                     for wi in control_flow_jobs:
@@ -1655,7 +1655,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 jobs_scheduled_this_cycle = defaultdict(int)
                 enqueue_tasks = []
 
-                self.logger.info(
+                self.logger.debug(
                     f"[WORK_DIST] Processing {len(leased_jobs)} leased jobs..."
                 )
 

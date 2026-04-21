@@ -338,7 +338,6 @@ class Toast:
         dotted = ev.event_type.as_event_name()  # e.g., "run.success", "engine.event"
         event_name = f"{ns}.{dotted}" if not dotted.startswith(f"{ns}.") else dotted
 
-        print('event_name : ', event_name)
         payload: dict[str, Any] = {"message": ev.message}
 
         source = ev.source
