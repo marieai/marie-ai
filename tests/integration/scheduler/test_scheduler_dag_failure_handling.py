@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import marie.scheduler.psql as scheduler_psql
+from marie.job.common import JobInfo, JobStatus
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import WorkInfo
@@ -400,3 +401,77 @@ async def test_handle_dispatch_failure_marks_job_failed_and_resolves_dag():
         ("annotator_llm", work_item.id, work_item.id)
     ]
     assert scheduler.notify_calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_sync_terminal_job_state_succeeded_unblocks_children_and_notifies():
+    dag_id = "dag-sync"
+    parent = build_work_item("job-parent", dag_id)
+    child = build_work_item("job-child", dag_id)
+    child.dependencies = [parent.id]
+    child.job_level = 1
+
+    frontier = RecordingFrontier()
+    await frontier.add_dag(None, [parent, child])
+
+    repository = RecordingRepository(dag_state="active")
+    scheduler = build_scheduler(repository, frontier)
+    scheduler._status_update_lock = AsyncJobLock()
+
+    complete_calls: list[dict] = []
+    resolve_calls: list[tuple[str, str]] = []
+
+    async def fake_complete(
+        job_id: str,
+        wi: WorkInfo,
+        output_metadata: dict | None = None,
+        force: bool = False,
+    ) -> None:
+        complete_calls.append(
+            {
+                "job_id": job_id,
+                "output_metadata": output_metadata or {},
+                "force": force,
+            }
+        )
+
+    async def fake_resolve_dag_status(job_id: str, wi: WorkInfo, *args, **kwargs):
+        resolve_calls.append((job_id, wi.dag_id))
+        return False
+
+    async def fake_get_dag_by_id(dag_id: str):
+        return None
+
+    scheduler.complete = fake_complete
+    scheduler.resolve_dag_status = fake_resolve_dag_status
+    scheduler.get_dag_by_id = fake_get_dag_by_id
+
+    old_end = int(
+        (datetime.now(timezone.utc) - timedelta(minutes=10)).timestamp() * 1000
+    )
+    job_info = JobInfo(
+        status=JobStatus.SUCCEEDED,
+        entrypoint="test-entrypoint",
+        end_time=old_end,
+    )
+
+    synced = await scheduler._sync_terminal_job_state(
+        parent.id,
+        parent,
+        job_info,
+        min_sync_interval_seconds=300,
+    )
+
+    assert synced is True
+    assert complete_calls == [
+        {
+            "job_id": parent.id,
+            "output_metadata": {"synced": True},
+            "force": True,
+        }
+    ]
+    assert resolve_calls == [(parent.id, dag_id)]
+    assert scheduler.notify_calls == [True]
+
+    ready = await frontier.peek_ready(10)
+    assert [wi.id for wi in ready] == [child.id]

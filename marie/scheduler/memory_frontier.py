@@ -237,6 +237,23 @@ class MemoryFrontier:
 
             return []
 
+    async def on_job_cancelled(self, job_id: str) -> list[WorkInfo]:
+        """
+        Handles permanent job cancellation. Updates state to CANCELLED and does
+        not re-add to the ready queue.
+        """
+        async with self._lock:
+            if job_id in self.jobs_by_id:
+                self.jobs_by_id[job_id].state = WorkState.CANCELLED
+                self._remove_from_ready_set(job_id)
+                self.leased_until.pop(job_id, None)
+            else:
+                logger.warning(
+                    f"Job with id {job_id} not found in memory frontier for cancellation."
+                )
+
+            return []
+
     async def on_job_skipped(self, job_id: str) -> None:
         """
         Handles a job being skipped (branch not taken).

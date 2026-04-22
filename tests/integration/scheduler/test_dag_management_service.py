@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -131,3 +132,24 @@ async def test_refresh_frontier_priorities_skips_hydration_when_active_dag_limit
         "hydrated_missing": 0,
     }
     assert hydrated == []
+
+
+@pytest.mark.asyncio
+async def test_handle_state_change_treats_active_as_live_state():
+    frontier = MemoryFrontier(higher_priority_wins=True, default_lease_ttl=0.25)
+    repo = FakeRepository(priorities={}, hydratable_dags=[])
+    service = DAGManagementService(
+        repository=repo,
+        frontier=frontier,
+        active_dags={},
+    )
+    service.logger.warning = MagicMock()
+
+    await service.handle_state_change(
+        {"op": "UPDATE", "dag_id": "dag-active", "state": "active"}
+    )
+
+    service.logger.warning.assert_called_once_with(
+        "DAG dag-active is in 'active' state but not in active_dags. "
+        "It will be hydrated on next scheduler cycle."
+    )

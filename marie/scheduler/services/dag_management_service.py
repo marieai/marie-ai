@@ -571,7 +571,7 @@ class DAGManagementService:
                             f"Removed finished DAG {dag_id} from active_dags"
                         )
 
-                elif new_state in ["running", "pending"]:
+                elif new_state in ["active", "running", "pending"]:
                     # DAG should be active - if not in memory, it might need hydration
                     if dag_id not in self.active_dags:
                         self.logger.warning(
