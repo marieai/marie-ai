@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS {schema}.job (
     soft_sla TIMESTAMP WITH TIME ZONE,
     hard_sla TIMESTAMP WITH TIME ZONE,
     sla_miss_logged BOOLEAN NOT NULL DEFAULT FALSE,
+    branch_metadata JSONB,
     -- Lease columns for job acquisition
     lease_owner TEXT,
     lease_expires_at TIMESTAMP WITH TIME ZONE,
