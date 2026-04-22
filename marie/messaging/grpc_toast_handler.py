@@ -152,7 +152,6 @@ class GrpcToastHandler(ToastHandler):
 
     async def _publish_once(self, msg: EventMessage) -> None:
         """Single publish attempt."""
-        print(f"Publishing event {msg.id} to gRPC broker")
         await self.broker.publish_event_message(msg)
 
     async def close(self, drain: bool = True, timeout: float = 5.0) -> None:
