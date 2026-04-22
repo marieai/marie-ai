@@ -221,6 +221,47 @@ class RepetitionError(Exception):
         super().__init__(message)
 
 
+class CircuitOpenError(Exception):
+    """
+    Raised when the circuit breaker is open for a backend address,
+    indicating intentional load shedding rather than a backend failure.
+    """
+
+    def __init__(self, address: str, message: str = ""):
+        self.address = address
+        super().__init__(message or f"Circuit breaker open for {address}")
+
+
+class BatchExecutionError(Exception):
+    """
+    Raised when one or more tasks in a batch failed after exhausting
+    per-task retries or being rejected by the circuit breaker.
+
+    Carries the request_id and the list of failed BatchResult objects
+    so callers can inspect individual failures without guessing from
+    a message string.
+    """
+
+    def __init__(
+        self,
+        request_id: str,
+        failed_results: list,
+        total: int,
+        message: str = "",
+    ):
+        self.request_id = request_id
+        self.failed_results = failed_results
+        self.total = total
+        failed_count = len(failed_results)
+        super().__init__(
+            message
+            or (
+                f"Batch inference failed: {failed_count}/{total} tasks failed "
+                f"(request_id={request_id})"
+            )
+        )
+
+
 class ProcessingError(Exception):
     """
     Raised when there is a problem processing extraction

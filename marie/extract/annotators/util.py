@@ -33,6 +33,7 @@ from marie.engine.output_parser import (
     parse_json_markdown,
     parse_markdown_markdown,
 )
+from marie.excepts import BatchExecutionError
 from marie.extract.structures.unstructured_document import UnstructuredDocument
 from marie.helper import run_async
 from marie.logging_core.predefined import default_logger as logger
@@ -403,7 +404,11 @@ async def process_batch(
                 batch_t = [b[1] for b in batch]
                 responses = await llm_call.acall(batch_t, **call_kwargs)
 
-            # Check for any errors that occurred during incremental writes
+            # Check for any errors that occurred during incremental writes.
+            # Write/parse errors (disk I/O, JSON formatting) are not
+            # transient LLM failures — replaying the batch would re-invoke
+            # the LLM and may duplicate side effects without fixing the root
+            # cause, so propagate immediately.
             if write_errors:
                 raise write_errors[0]
 
@@ -418,6 +423,29 @@ async def process_batch(
             # Return the converted list (populated by on_result callback)
             return converted
 
+        except BatchExecutionError:
+            # Individual tasks already exhausted tenacity retries or were
+            # intentionally rejected by the circuit breaker.  Replaying the
+            # entire batch would only amplify load.
+            raise
+
+        except asyncio.TimeoutError:
+            # Batch-level timeout is transient — eligible for retry.
+            retries += 1
+            logger.warning(f"Batch timeout (attempt {retries}/{max_retries})")
+            if retries >= max_retries:
+                logger.error("Max retries reached after batch timeout. Failing.")
+                raise
+            logger.warning("Retrying in 2 seconds...")
+            converted = [None] * len(batch)
+            write_errors.clear()
+            await asyncio.sleep(2)
+
+        except (AssertionError, ValueError, TypeError, KeyError, OSError):
+            # Non-transient errors: write/parse failures, assertion
+            # mismatches, etc.  Do not retry.
+            raise
+
         except Exception as e:
             retries += 1
             logger.warning(
@@ -431,7 +459,7 @@ async def process_batch(
                 # Reset state for retry
                 converted = [None] * len(batch)
                 write_errors.clear()
-                time.sleep(2)
+                await asyncio.sleep(2)
 
 
 def prepare_batch_with_meta(

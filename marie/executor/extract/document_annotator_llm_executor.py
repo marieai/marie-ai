@@ -68,12 +68,9 @@ class DocumentAnnotatorLLMExecutor(DocumentAnnotatorExecutor):
         :return:
         """
         try:
-            await self._process_annotation_request(
+            return await self._process_annotation_request(
                 docs, parameters, LLMAnnotator, *args, **kwargs
             )
-            # TODO: Handle the response properly
-            # we should be returning a Document Response here, but for now we just return a success message
-            return {'status': 'success', 'message': 'Documents annotated successfully'}
 
         except Exception as e:
             # Sinc we are not throwing an exception the job will be marked as successful
