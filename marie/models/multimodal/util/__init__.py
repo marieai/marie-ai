@@ -1,3 +1,3 @@
-from marie.components.document_classifier.models.util.attention_pooling import AttentionPooling
+from marie.models.multimodal.util.attention_pooling import AttentionPooling
 
 __all__ = ["AttentionPooling"]

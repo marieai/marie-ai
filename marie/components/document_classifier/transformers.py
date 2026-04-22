@@ -158,14 +158,14 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 tokenizer=tokenizer,
                 revision=model_version,
                 use_auth_token=use_auth_token,
-                device=resolved_devices[0],
+                device=self.device,
             )
         elif task == "text-classification":
             self.model = pipeline(
                 task=task,
                 model=model_name_or_path,
                 tokenizer=tokenizer,
-                device=resolved_devices[0],
+                device=self.device,
                 revision=model_version,
                 top_k=top_k,
                 # use_auth_token=use_auth_token,
@@ -177,28 +177,18 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 if "architecture" in config
                 else (config["architectures"][0] if "architectures" in config else None)
             )
-            if architecture:
-                model_class = resolve_architecture(architecture)
-                # todo load based on architecture
-                # checkpoint = torch.load(model_name_or_path, map_location=self.device)
-                # self.model = LayoutLMv3DocumentClassifier(
-                #     self.model_parameters["model_name"],
-                #     self.model_parameters["num_classes"],
-                #     freeze_mode=self.model_parameters["freeze_mode"],
-                #     unfreeze_last_n=self.model_parameters["unfreeze_last_n"],
-                #     process_emb_mode=self.model_parameters["process_emb_mode"],
-                #     add_page_input=self.model_parameters["use_page_labels"],
-                #     num_page_classes=self.model_parameters["num_page_label_classes"],
-                #     page_emb_dim=self.model_parameters["page_label_dim"],
-                # )
-                # self.model = self.model.load_state_dict(checkpoint["model_state_dict"])
-            else:
-                self.model = AutoModelForSequenceClassification.from_pretrained(
-                    model_name_or_path
-                )
-                self.model = self.optimize_model(self.model)
 
-            self.model = self.model.eval().to(resolved_devices[0])
+            model_class = (
+                resolve_architecture(architecture)
+                if architecture
+                else AutoModelForSequenceClassification
+            )
+
+            self.model = model_class.from_pretrained(model_name_or_path)
+            self.model = self.optimize_model(
+                self.model
+            )  # todo should we call this for all models
+            self.model = self.model.eval().to(self.device)
             self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
 
             if os.path.exists(

@@ -4,14 +4,18 @@ Using LayoutLMv3 to classify multipage documents
     LayoutLMv3ForSequenceClassification - LayoutLMv3Model + head (Linear) to classification tasks
 Warning: LayoutLMv3 has max of 512 tokens per sample (around 1 A4-page with full of text)
 """
+import inspect
+import json
+import os
+from pathlib import Path
+from types import SimpleNamespace
 import torch
 import torch.nn as nn
 from torch import Tensor
 from transformers import LayoutLMv3Model
 from typing import Any, Optional
 
-from marie.components.document_classifier.models.util.attention_pooling import AttentionPooling
-
+from marie.models.multimodal.util.attention_pooling import AttentionPooling
 
 class LayoutLMv3DocumentClassifier(nn.Module):
 
@@ -76,6 +80,93 @@ class LayoutLMv3DocumentClassifier(nn.Module):
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(self.hidden_size, self.num_classes)
+        )
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_name_or_path: str | os.PathLike,
+        map_location: str | torch.device = "cpu",
+        strict: bool = True,
+        **kwargs: Any,
+    ) -> "LayoutLMv3DocumentClassifier":
+        model_path = Path(model_name_or_path)
+        config_path = model_path / "config.json"
+        if not config_path.exists():
+            raise FileNotFoundError(f"Missing config file: {config_path}")
+
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+
+        model_kwargs = dict(config.get("custom_model_parameters", {}))
+        model_kwargs.update(kwargs)
+        model_kwargs = cls._filter_constructor_kwargs(model_kwargs)
+        cls._ensure_required_kwargs(model_kwargs)
+
+        model = cls(**model_kwargs)
+        checkpoint_path = cls._resolve_checkpoint_path(model_path)
+        state_dict = cls._load_state_dict(checkpoint_path, map_location=map_location)
+        model.load_state_dict(state_dict, strict=strict)
+        model.config = SimpleNamespace(id2label=config.get("id2label", {}))
+        return model
+
+    @classmethod
+    def _filter_constructor_kwargs(cls, kwargs: dict[str, Any]) -> dict[str, Any]:
+        signature = inspect.signature(cls.__init__)
+        valid_keys = {
+            name for name in signature.parameters.keys() if name != "self"
+        }
+        return {k: v for k, v in kwargs.items() if k in valid_keys}
+
+    @classmethod
+    def _ensure_required_kwargs(cls, kwargs: dict[str, Any]) -> None:
+        signature = inspect.signature(cls.__init__)
+        missing = []
+        for name, parameter in signature.parameters.items():
+            if name == "self":
+                continue
+            if parameter.default is inspect.Parameter.empty and name not in kwargs:
+                missing.append(name)
+        if missing:
+            raise ValueError(
+                f"Missing required custom model parameters for {cls.__name__}: "
+                f"{', '.join(missing)}"
+            )
+
+    @staticmethod
+    def _resolve_checkpoint_path(model_path: Path) -> Path:
+        for candidate in ("model.safetensors", "pytorch_model.bin"):
+            checkpoint = model_path / candidate
+            if checkpoint.exists():
+                return checkpoint
+        raise FileNotFoundError(
+            f"Could not find model weights in {model_path}. "
+            "Expected one of: model.safetensors, pytorch_model.bin"
+        )
+
+    @staticmethod
+    def _load_state_dict(
+        checkpoint_path: Path, map_location: str | torch.device = "cpu"
+    ) -> dict[str, torch.Tensor]:
+        if checkpoint_path.suffix == ".safetensors":
+            try:
+                from safetensors.torch import load_file
+            except ImportError as exc:
+                raise ImportError(
+                    "Loading .safetensors checkpoints requires the `safetensors` package."
+                ) from exc
+            return load_file(str(checkpoint_path), device=str(map_location))
+
+        raw_checkpoint = torch.load(str(checkpoint_path), map_location=map_location)
+        if isinstance(raw_checkpoint, dict):
+            return (
+                raw_checkpoint.get("state_dict")
+                or raw_checkpoint.get("model_state_dict")
+                or raw_checkpoint
+            )
+        raise ValueError(
+            f"Unsupported checkpoint format in {checkpoint_path}: "
+            f"{type(raw_checkpoint)}"
         )
 
     def forward(self, input_ids: Tensor, attention_mask: Tensor, bbox: Tensor, pixel_values: Tensor, page_mask: Tensor,
