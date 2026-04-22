@@ -7,7 +7,12 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.trace import StatusCode
 
 from marie.engine.async_helper import run_coroutine_in_current_loop
-from marie.excepts import MaxTokensExceededError, RepetitionError
+from marie.excepts import (
+    BatchExecutionError,
+    CircuitOpenError,
+    MaxTokensExceededError,
+    RepetitionError,
+)
 from marie.instrumentation import (
     get_tracer,
     set_llm_io,
@@ -53,6 +58,11 @@ from tenacity import (
 
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
+from marie.serve.networking.balancer.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitState,
+)
 
 MISSING_API_KEY_ERROR_MESSAGE = """No API key found for LLM.
 E.g. to use openai Please set the OPENAI_API_KEY environment variable or \
@@ -122,6 +132,7 @@ class BatchProcessor:
     # Keeps well under the httpx connection pool limit (40) so that retries
     # and other callers always have headroom.
     DEFAULT_MAX_CONCURRENCY = 20
+    DEFAULT_BATCH_TIMEOUT = 600.0  # seconds
 
     def __init__(
         self,
@@ -130,11 +141,15 @@ class BatchProcessor:
         logger: MarieLogger,
         default_completion_params: Optional[Dict[str, Any]] = None,
         max_concurrency: Optional[int] = None,
+        batch_timeout: Optional[float] = None,
+        backend_address: Optional[str] = None,
     ):
         self.client = client
         self.model_string = model_string
         self.logger = logger
         self.max_concurrency = max_concurrency or self.DEFAULT_MAX_CONCURRENCY
+        self.batch_timeout = batch_timeout or self.DEFAULT_BATCH_TIMEOUT
+        self.backend_address = backend_address or "unknown"
         if not isinstance(self.client, AsyncOpenAI):
             raise ValueError(
                 "Client must be an instance of OpenAI API client for async operations."
@@ -152,6 +167,15 @@ class BatchProcessor:
         self._shared_request_semaphore: Optional[asyncio.Semaphore] = None
         self._shared_request_semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
 
+        # Circuit breaker keyed by backend_address
+        self._circuit_breaker = CircuitBreaker(
+            config=CircuitBreakerConfig(),
+            logger=MarieLogger("BatchProcessor.CircuitBreaker"),
+        )
+        # Async gate lock so HALF_OPEN slot reservation is serialized
+        self._gate_lock: Optional[asyncio.Lock] = None
+        self._gate_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+
     def _get_request_semaphore(self) -> asyncio.Semaphore:
         loop = asyncio.get_running_loop()
         if (
@@ -161,6 +185,14 @@ class BatchProcessor:
             self._shared_request_semaphore = asyncio.Semaphore(self.max_concurrency)
             self._shared_request_semaphore_loop = loop
         return self._shared_request_semaphore
+
+    def _get_gate_lock(self) -> asyncio.Lock:
+        """Per-event-loop async lock for serializing HALF_OPEN slot reservation."""
+        loop = asyncio.get_running_loop()
+        if self._gate_lock is None or self._gate_lock_loop is not loop:
+            self._gate_lock = asyncio.Lock()
+            self._gate_lock_loop = loop
+        return self._gate_lock
 
     def extract_reasoning_content(
         self, model_output: str
@@ -246,10 +278,6 @@ class BatchProcessor:
         Asynchronously performs inference for a single request,
         streaming and stopping as soon as finish_reason is set.
         """
-
-        # FIXME: HANDLE CONNECTION ERRORS
-        # we should retry on connection errors
-
         start = time.time()
         self.logger.info(f"Request {request_id} - Task {task_id} - Starting inference.")
 
@@ -376,6 +404,7 @@ class BatchProcessor:
                     )
 
                 span.set_status(StatusCode.OK)
+                self._circuit_breaker.record_success(self.backend_address)
 
                 return task_id, extracted_text
             except (RepetitionError, MaxTokensExceededError) as e:
@@ -391,14 +420,17 @@ class BatchProcessor:
                 )
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
+                self._circuit_breaker.record_failure(self.backend_address)
                 raise  # Let tenacity retry these
-            except Exception as e:  # swallow all other exceptions for now
+            except Exception as e:
                 self.logger.error(
                     f"Request {request_id} - Task {task_id} - Error in completion_non_streaming: {e}"
                 )
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
-                return task_id, None
+                # Propagate unexpected exceptions so the batch layer records the
+                # task as failed instead of misclassifying it as a None response.
+                raise
 
     async def save_debug_msg(self, full_response: str, task_id: str, tag: str):
         os.makedirs("/tmp/marie/llm-engine", exist_ok=True)
@@ -456,33 +488,60 @@ class BatchProcessor:
         Returns:
             Tuple of (ordered_responses, raw_results):
               ordered_responses: List[Optional[str]] - responses in original order
-              raw_results: List[Tuple[task_id, Optional[str]]] - (task_id, response) pairs
+              raw_results: List[BatchResult] - full BatchResult objects
+
+        Raises:
+            asyncio.TimeoutError: If the batch exceeds batch_timeout seconds.
         """
 
         # Share one limiter across all overlapping batch calls that use this
         # engine/client instance. Per-call semaphores are not enough because
         # concurrent mini-batches can otherwise multiply in-flight requests.
         semaphore = self._get_request_semaphore()
+        gate_lock = self._get_gate_lock()
+        address = self.backend_address
+        cb = self._circuit_breaker
 
         async def safe_call(i, msgs):
             tid = f"{request_id}_task_{i}"
-            async with semaphore:
-                try:
-                    resp = await self.acompletion_with_retry(
-                        max_retries=3,
-                        messages=msgs,
-                        task_id=tid,
-                        request_id=request_id,
-                        guided_json=guided_json,
-                        completion_params=completion_params,
-                        metadata=metadata,
-                    )
-                    return BatchResult(tid, resp, None)
-                except asyncio.CancelledError:
-                    # allow cancellation to propagate
-                    raise
-                except Exception as e:
-                    return BatchResult(tid, None, e)
+            reserved_half_open = False
+            try:
+                # Check circuit breaker before acquiring semaphore
+                async with gate_lock:
+                    if not cb.is_available(address):
+                        raise CircuitOpenError(address)
+                    # Reserve HALF_OPEN probe slot if applicable
+                    if cb.get_state(address) == CircuitState.HALF_OPEN:
+                        cb.increment_half_open_calls(address)
+                        reserved_half_open = True
+
+                async with semaphore:
+                    try:
+                        resp = await self.acompletion_with_retry(
+                            max_retries=3,
+                            messages=msgs,
+                            task_id=tid,
+                            request_id=request_id,
+                            guided_json=guided_json,
+                            completion_params=completion_params,
+                            metadata=metadata,
+                        )
+                        return BatchResult(tid, resp, None)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        return BatchResult(tid, None, e)
+            except CircuitOpenError as e:
+                # Intentional load shedding — do not count as backend failure
+                self.logger.warning(
+                    f"Task {tid} rejected: circuit breaker open for {address}"
+                )
+                return BatchResult(tid, None, e)
+            except asyncio.CancelledError:
+                raise
+            finally:
+                if reserved_half_open:
+                    cb.decrement_half_open_calls(address)
 
         # Create tasks so we can use as_completed for incremental processing
         tasks = [
@@ -490,42 +549,37 @@ class BatchProcessor:
             for i, msgs in enumerate(messages_list)
         ]
 
-        # Process as each completes, invoking callback immediately
+        # Wrap with batch-level timeout
         results: List[Optional[BatchResult]] = [None] * len(messages_list)
         try:
-            for completed_future in asyncio.as_completed(tasks):
-                try:
-                    batch_result = await completed_future
-                    # Extract index from task_id (format: {request_id}_task_{index})
-                    idx = int(batch_result.task_id.rsplit("_", 1)[-1])
-                    results[idx] = batch_result
+            async with asyncio.timeout(self.batch_timeout):
+                for completed_future in asyncio.as_completed(tasks):
+                    try:
+                        batch_result = await completed_future
+                        idx = int(batch_result.task_id.rsplit("_", 1)[-1])
+                        results[idx] = batch_result
 
-                    # Invoke callback immediately when result is ready
-                    if on_result:
-                        # Extract just the response text from the tuple if needed
-                        response_text = (
-                            batch_result.response[1]
-                            if isinstance(batch_result.response, tuple)
-                            else batch_result.response
-                        )
-                        on_result(batch_result.task_id, response_text)
-                except asyncio.CancelledError:
-                    raise
-        except asyncio.CancelledError:
-            # Cancel remaining tasks
+                        # Invoke callback immediately when result is ready
+                        if on_result and batch_result.error is None:
+                            response_text = (
+                                batch_result.response[1]
+                                if isinstance(batch_result.response, tuple)
+                                else batch_result.response
+                            )
+                            on_result(batch_result.task_id, response_text)
+                    except asyncio.CancelledError:
+                        raise
+        except (asyncio.CancelledError, TimeoutError):
+            # Cancel remaining tasks and drain them
             for task in tasks:
                 if not task.done():
                     task.cancel()
-            raise
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise asyncio.TimeoutError(
+                f"Batch {request_id} timed out after {self.batch_timeout}s"
+            )
 
-        # Convert BatchResult to (task_id, response) tuples
-        raw_results: List[Tuple[str, Optional[str]]] = [
-            (br.task_id, br.response) if br else (f"{request_id}_task_{i}", None)
-            for i, br in enumerate(results)
-        ]
-        ordered_responses: List[Optional[str]] = [resp for (_tid, resp) in raw_results]
-
-        return ordered_responses, raw_results
+        return results
 
     def batch_generate(
         self,
@@ -550,6 +604,11 @@ class BatchProcessor:
 
         Returns:
             List of generated responses in original order
+
+        Raises:
+            BatchExecutionError: When one or more tasks failed after retries
+                or were rejected by the circuit breaker.
+            asyncio.TimeoutError: When the batch exceeds the configured timeout.
         """
         request_id = str(uuid.uuid4())
         system_prompt = (
@@ -588,7 +647,7 @@ class BatchProcessor:
         ctx_token = otel_context.attach(otel_trace.set_span_in_context(batch_span))
 
         try:
-            batch_outputs, task_results = run_coroutine_in_current_loop(
+            batch_results: List[Optional[BatchResult]] = run_coroutine_in_current_loop(
                 self.load_batched_request(
                     messages_list,
                     request_id,
@@ -601,29 +660,27 @@ class BatchProcessor:
 
             successful_count = 0
             failed_count = 0
-            for task_id, response in task_results:
-                if response:
+            failed_results: List[BatchResult] = []
+            for i, br in enumerate(batch_results):
+                if br is None:
+                    # Should not happen but treat as failure
+                    failed_count += 1
+                    failed_results.append(
+                        BatchResult(f"{request_id}_task_{i}", None, None)
+                    )
+                elif br.error is not None:
+                    self.logger.error(
+                        f"Request {request_id} - Task {br.task_id} - Failed: {br.error!r}"
+                    )
+                    failed_count += 1
+                    failed_results.append(br)
+                else:
                     self.logger.info(
-                        f"Request {request_id} - Task {task_id} - Response received."
+                        f"Request {request_id} - Task {br.task_id} - Response received."
                     )
                     successful_count += 1
-                else:
-                    self.logger.error(
-                        f"Request {request_id} - Task {task_id} - Response failed."
-                    )
-                    self.logger.error(response)
-                    failed_count += 1
-
-            if failed_count > 0:
-                raise RuntimeError(
-                    f"Batch inference failed: {failed_count}/{len(messages_list)} tasks failed "
-                    f"(request_id={request_id})"
-                )
 
             elapsed_time = time.time() - start_time
-            self.logger.info(
-                f"Request {request_id} - Batch inference completed in {elapsed_time:.2f} sec"
-            )
 
             batch_span.set_attribute("marie.latency_seconds", elapsed_time)
             batch_span.set_attribute("marie.successful_count", successful_count)
@@ -635,9 +692,33 @@ class BatchProcessor:
                     "elapsed_seconds": round(elapsed_time, 2),
                 }
             )
+
+            if failed_count > 0:
+                raise BatchExecutionError(
+                    request_id=request_id,
+                    failed_results=failed_results,
+                    total=len(messages_list),
+                )
+
+            self.logger.info(
+                f"Request {request_id} - Batch inference completed in {elapsed_time:.2f} sec"
+            )
             batch_span.set_status(StatusCode.OK)
 
-            return batch_outputs
+            # Extract ordered responses from BatchResult objects
+            ordered_responses: List[Optional[str]] = []
+            for br in batch_results:
+                if br and br.response is not None:
+                    resp = (
+                        br.response[1]
+                        if isinstance(br.response, tuple)
+                        else br.response
+                    )
+                    ordered_responses.append(resp)
+                else:
+                    ordered_responses.append(None)
+
+            return ordered_responses
         except Exception as exc:
             batch_span.set_status(StatusCode.ERROR, str(exc))
             batch_span.record_exception(exc)

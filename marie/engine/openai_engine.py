@@ -97,6 +97,8 @@ class OpenAIEngine(EngineLM):
         cache: Union[dc.Cache, bool] = False,
         processor_kwargs: Dict = None,
         base_url: str = None,
+        max_concurrency: Optional[int] = None,
+        batch_timeout: Optional[float] = None,
         **kwargs,
     ):
         self.validate()
@@ -125,18 +127,34 @@ class OpenAIEngine(EngineLM):
             ),
         )
 
+        # Disable OpenAI SDK internal retries — tenacity already handles
+        # retries with pool-timeout awareness.  The SDK's own retries are
+        # redundant and cause connection doubling under pressure.
         if not base_url:
-            self.client = AsyncOpenAI(api_key=api_key, http_client=http_client)
+            self.client = AsyncOpenAI(
+                api_key=api_key, http_client=http_client, max_retries=0
+            )
         else:
             self.client = AsyncOpenAI(
-                base_url=base_url, api_key=api_key, http_client=http_client
+                base_url=base_url,
+                api_key=api_key,
+                http_client=http_client,
+                max_retries=0,
             )
+
+        # Derive backend address for the circuit breaker key
+        backend_address = base_url or "https://api.openai.com"
 
         models = self.client.models.list()
         self.model_string = model_name
 
         self.batch_processor = BatchProcessor(
-            self.client, self.model_string, logger=self.logger
+            self.client,
+            self.model_string,
+            logger=self.logger,
+            max_concurrency=max_concurrency,
+            batch_timeout=batch_timeout,
+            backend_address=backend_address,
         )
 
     def validate(self) -> None:

@@ -1,6 +1,14 @@
 import asyncio
 
-from marie.engine.batch_processor import BatchProcessor
+import pytest
+
+from marie.engine.batch_processor import BatchProcessor, BatchResult
+from marie.excepts import BatchExecutionError, CircuitOpenError
+from marie.serve.networking.balancer.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitState,
+)
 
 
 class _Logger:
@@ -13,19 +21,37 @@ class _Logger:
     def error(self, *args, **kwargs):
         pass
 
+    def debug(self, *args, **kwargs):
+        pass
 
-def _build_processor(max_concurrency: int) -> BatchProcessor:
+
+def _build_processor(
+    max_concurrency: int = 20,
+    batch_timeout: float = 600.0,
+    backend_address: str = "http://test-backend:8000",
+) -> BatchProcessor:
     processor = object.__new__(BatchProcessor)
     processor.client = None
     processor.model_string = "test-model"
     processor.logger = _Logger()
     processor.max_concurrency = max_concurrency
+    processor.batch_timeout = batch_timeout
+    processor.backend_address = backend_address
     processor.default_completion_params = {}
     processor._shared_request_semaphore = None
     processor._shared_request_semaphore_loop = None
+    processor._circuit_breaker = CircuitBreaker(
+        config=CircuitBreakerConfig(),
+        logger=_Logger(),
+    )
+    processor._gate_lock = None
+    processor._gate_lock_loop = None
     return processor
 
 
+# ---------------------------------------------------------------------------
+# Existing test: shared concurrency limit across overlapping calls
+# ---------------------------------------------------------------------------
 def test_load_batched_request_shares_concurrency_limit_across_overlapping_calls():
     processor = _build_processor(max_concurrency=2)
     active = 0
@@ -65,3 +91,343 @@ def test_load_batched_request_shares_concurrency_limit_across_overlapping_calls(
         assert peak == 2
 
     asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# Test: SDK retries disabled (max_retries=0)
+# ---------------------------------------------------------------------------
+def test_openai_sdk_retries_disabled():
+    """Verify that OpenAIEngine sets max_retries=0 on the AsyncOpenAI client."""
+    import os
+    import unittest.mock as mock
+
+    from openai import AsyncOpenAI
+
+    with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        with mock.patch("marie.engine.openai_engine.AsyncOpenAI") as mock_cls:
+            mock_client = mock.MagicMock(spec=AsyncOpenAI)
+            mock_client.models.list.return_value = []
+            mock_cls.return_value = mock_client
+
+            from marie.engine.openai_engine import OpenAIEngine
+
+            engine = OpenAIEngine(
+                model_name="test-model",
+                base_url="http://localhost:8000",
+            )
+
+            # Check that AsyncOpenAI was called with max_retries=0
+            call_kwargs = mock_cls.call_args[1]
+            assert call_kwargs["max_retries"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Test: Circuit breaker fast-fail when circuit is open
+# ---------------------------------------------------------------------------
+def test_circuit_breaker_fast_fail_when_open():
+    """Tasks should fail fast with CircuitOpenError when the circuit is open."""
+    processor = _build_processor(max_concurrency=10)
+    cb = processor._circuit_breaker
+    address = processor.backend_address
+
+    # Force circuit open by recording enough failures
+    for _ in range(5):
+        cb.record_failure(address)
+    assert cb.get_state(address) == CircuitState.OPEN
+
+    async def fake_completion(**kwargs):
+        # Should never be called
+        raise AssertionError("Should not reach completion when circuit is open")
+
+    processor.acompletion_with_retry = fake_completion
+
+    async def run():
+        results = await processor.load_batched_request(
+            messages_list=[["a"], ["b"], ["c"]],
+            request_id="req-cb-open",
+            guided_json=None,
+        )
+
+        # All tasks should have CircuitOpenError
+        for br in results:
+            assert br is not None
+            assert isinstance(br.error, CircuitOpenError)
+            assert br.response is None
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# Test: HALF_OPEN probe slot reservation and release
+# ---------------------------------------------------------------------------
+def test_half_open_probe_slot_reservation():
+    """In HALF_OPEN state, only half_open_max_calls tasks should proceed."""
+    processor = _build_processor(max_concurrency=10)
+    cb = processor._circuit_breaker
+    address = processor.backend_address
+
+    # Force circuit open then let recovery timeout pass
+    for _ in range(5):
+        cb.record_failure(address)
+    assert cb.get_state(address) == CircuitState.OPEN
+
+    # Manually transition to HALF_OPEN
+    import time as _time
+
+    stats = cb._stats[address]
+    stats.open_time = _time.monotonic() - 60  # 60s ago, recovery_timeout=30s
+
+    completion_count = 0
+
+    async def fake_completion(**kwargs):
+        nonlocal completion_count
+        completion_count += 1
+        await asyncio.sleep(0.01)
+        task_id = kwargs["task_id"]
+        return task_id, f"response:{task_id}"
+
+    processor.acompletion_with_retry = fake_completion
+
+    async def run():
+        results = await processor.load_batched_request(
+            messages_list=[["a"], ["b"], ["c"]],
+            request_id="req-half-open",
+            guided_json=None,
+        )
+
+        # With half_open_max_calls=1, only 1 task should proceed to completion
+        # The rest should get CircuitOpenError
+        succeeded = [br for br in results if br and br.error is None]
+        circuit_rejected = [
+            br for br in results if br and isinstance(br.error, CircuitOpenError)
+        ]
+
+        assert len(succeeded) == 1
+        assert len(circuit_rejected) == 2
+
+        # The half_open_calls counter should be released back to 0
+        final_stats = cb.get_stats(address)
+        assert final_stats.half_open_calls == 0
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# Test: BatchExecutionError raised instead of generic RuntimeError
+# ---------------------------------------------------------------------------
+def test_batch_execution_error_raised_on_failure():
+    """batch_generate should raise BatchExecutionError when tasks fail."""
+    processor = _build_processor(max_concurrency=10)
+
+    async def failing_completion(**kwargs):
+        task_id = kwargs["task_id"]
+        raise RuntimeError(f"Simulated failure for {task_id}")
+
+    processor.acompletion_with_retry = failing_completion
+
+    # batch_generate is sync; it internally runs the event loop
+    with pytest.raises(BatchExecutionError) as exc_info:
+        processor.batch_generate(
+            messages_list=[["msg1"], ["msg2"]],
+            guided_json=None,
+        )
+
+    err = exc_info.value
+    assert err.request_id  # Should have a request_id
+    assert err.total == 2
+    assert len(err.failed_results) == 2
+    # Each failed result should have the exception
+    for fr in err.failed_results:
+        assert fr.error is not None
+
+
+# ---------------------------------------------------------------------------
+# Test: unexpected completion exceptions propagate as task failures
+# ---------------------------------------------------------------------------
+def test_completion_non_streaming_reraises_unexpected_exception():
+    """Unexpected task errors must propagate so the batch marks failure."""
+    import os
+    import unittest.mock as mock
+    from types import SimpleNamespace
+
+    processor = object.__new__(BatchProcessor)
+    processor.client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=mock.AsyncMock(side_effect=ValueError("unexpected failure"))
+            )
+        )
+    )
+    processor.model_string = "test-model"
+    processor.logger = _Logger()
+    processor.backend_address = "http://test-backend:8000"
+    processor.default_completion_params = {}
+    processor._circuit_breaker = CircuitBreaker(
+        config=CircuitBreakerConfig(),
+        logger=_Logger(),
+    )
+
+    async def run():
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            with pytest.raises(ValueError, match="unexpected failure"):
+                await processor.completion_non_streaming(
+                    messages=[{"role": "user", "content": "hello"}],
+                    task_id="task-1",
+                    request_id="req-1",
+                    guided_json=None,
+                )
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# Test: Batch timeout cancels and drains pending tasks
+# ---------------------------------------------------------------------------
+def test_batch_timeout_cancels_tasks():
+    """Batch should raise asyncio.TimeoutError and cancel tasks on timeout."""
+    processor = _build_processor(max_concurrency=10, batch_timeout=0.1)
+
+    async def slow_completion(**kwargs):
+        await asyncio.sleep(10)  # Way longer than timeout
+        task_id = kwargs["task_id"]
+        return task_id, "done"
+
+    processor.acompletion_with_retry = slow_completion
+
+    async def run():
+        with pytest.raises(asyncio.TimeoutError):
+            await processor.load_batched_request(
+                messages_list=[["a"], ["b"]],
+                request_id="req-timeout",
+                guided_json=None,
+            )
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# Test: process_batch does not retry BatchExecutionError
+# ---------------------------------------------------------------------------
+def test_process_batch_does_not_retry_batch_execution_error():
+    """process_batch should propagate BatchExecutionError without retrying."""
+    import unittest.mock as mock
+
+    call_count = 0
+
+    async def fake_acall(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise BatchExecutionError(
+            request_id="test-req",
+            failed_results=[BatchResult("t0", None, RuntimeError("fail"))],
+            total=1,
+        )
+
+    from marie.extract.annotators.util import process_batch
+
+    mock_engine = mock.MagicMock()
+    batch = [(mock.MagicMock(), "prompt", "img.png")]
+
+    async def run():
+        nonlocal call_count
+        # We patch the llm_call.acall to raise BatchExecutionError
+        with mock.patch(
+            "marie.engine.llm_ops.LLMCall.acall", side_effect=fake_acall
+        ):
+            with pytest.raises(BatchExecutionError):
+                await process_batch(
+                    batch=batch,
+                    engine=mock_engine,
+                    output_path="/tmp/test",
+                    is_multimodal=False,
+                    expect_output="json",
+                )
+
+        # Should have been called exactly once (no retries)
+        assert call_count == 1
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# Test: process_batch uses await asyncio.sleep instead of time.sleep
+# ---------------------------------------------------------------------------
+def test_process_batch_uses_async_sleep_on_retry():
+    """Verify process_batch does not block the event loop on retry backoff."""
+    import inspect
+    import textwrap
+
+    from marie.extract.annotators import util
+
+    source = inspect.getsource(util.process_batch)
+
+    # Should NOT contain time.sleep
+    assert "time.sleep" not in source, (
+        "process_batch still uses blocking time.sleep for retry backoff"
+    )
+    # Should contain asyncio.sleep
+    assert "asyncio.sleep" in source, (
+        "process_batch should use asyncio.sleep for retry backoff"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test: load_batched_request returns BatchResult objects
+# ---------------------------------------------------------------------------
+def test_load_batched_request_returns_batch_results():
+    """load_batched_request should return List[BatchResult] with full metadata."""
+    processor = _build_processor(max_concurrency=10)
+
+    async def fake_completion(**kwargs):
+        task_id = kwargs["task_id"]
+        return task_id, f"response:{task_id}"
+
+    processor.acompletion_with_retry = fake_completion
+
+    async def run():
+        results = await processor.load_batched_request(
+            messages_list=[["a"], ["b"]],
+            request_id="req-br",
+            guided_json=None,
+        )
+
+        assert len(results) == 2
+        for br in results:
+            assert isinstance(br, BatchResult)
+            assert br.error is None
+            assert br.response is not None
+            assert br.task_id.startswith("req-br_task_")
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# Test: CircuitOpenError not counted as backend failure
+# ---------------------------------------------------------------------------
+def test_circuit_open_error_not_counted_as_failure():
+    """CircuitOpenError should not increment failure count on the breaker."""
+    processor = _build_processor(max_concurrency=10)
+    cb = processor._circuit_breaker
+    address = processor.backend_address
+
+    # Force circuit open
+    for _ in range(5):
+        cb.record_failure(address)
+    initial_failures = cb.get_stats(address).total_failures
+
+    async def fake_completion(**kwargs):
+        raise AssertionError("Should not be called")
+
+    processor.acompletion_with_retry = fake_completion
+
+    async def run():
+        await processor.load_batched_request(
+            messages_list=[["a"]],
+            request_id="req-no-count",
+            guided_json=None,
+        )
+
+    asyncio.run(run())
+
+    # Total failures should not have increased
+    assert cb.get_stats(address).total_failures == initial_failures
