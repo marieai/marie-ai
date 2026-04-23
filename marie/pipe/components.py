@@ -122,6 +122,7 @@ def setup_classifiers(
         task = config["task"] if "task" in config else "text-classification"
         batch_size = config["batch_size"] if "batch_size" in config else 1
         model_filter = config["filter"] if "filter" in config else {}
+        max_pages = config["max_pages"] if "max_pages" in config else None
 
         if "group" not in config:
             raise BadConfigSource(f"Missing group in classifier config : {config}")
@@ -149,6 +150,7 @@ def setup_classifiers(
                 use_gpu=use_cuda,
                 task=task,
                 id2label=id2label,
+                max_pages=max_pages,
             )
 
             document_classifiers[group][name] = {

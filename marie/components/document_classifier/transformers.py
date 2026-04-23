@@ -65,6 +65,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         devices: Optional[List[Union[str, "torch.device"]]] = None,
         show_error: Optional[Union[str, bool]] = True,
         id2label: Optional[dict[int, str]] = None,
+        max_pages: Optional[int] = None,
         **kwargs,
     ):
         """
@@ -112,6 +113,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         self.top_k = top_k
         self.progress_bar = False
         self.id2label = id2label
+        self.max_pages = max_pages
         # Keys are always strings in JSON/YAML so convert ids to int here.
         if id2label is not None:
             self.id2label = {int(key): value for key, value in self.id2label.items()}
@@ -219,7 +221,8 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         if batch_size is None:
             batch_size = self.batch_size
 
-        if len(documents) == 0:
+        page_count = len(documents)
+        if page_count == 0:
             return documents
 
         if self.task == "text-classification-multimodal":
@@ -231,7 +234,6 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             ), "documents, words and boxes must have the same length"
 
         # create a named tuple of (document, words, boxes) for each document
-
         batchable_docs = DocList(
             BatchableMarieDoc(
                 tensor=doc.tensor,
@@ -240,6 +242,14 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             )
             for doc, word, box in zip(documents, words, boxes)
         )
+
+        # truncate to max_pages
+        if self.max_pages is not None and page_count > self.max_pages:
+            self.logger.warning(
+                f"The classifier determines the class based on a maximum of {self.max_pages} relevant pages. "
+                f"Pages {self.max_pages + 1} - {page_count} will not be considered."
+            )
+            batchable_docs = batchable_docs[: self.max_pages]
 
         batches = batch_iterator(batchable_docs, batch_size)
         predictions = []
