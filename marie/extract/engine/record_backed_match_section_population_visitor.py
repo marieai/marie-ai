@@ -370,9 +370,8 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
             )
             return
 
-        columns_cfg = (
-            region_entry.get("table", {}).get("body", {}).get("columns", {}) or {}
-        )
+        table_body_config = region_entry.get("table", {}).get("body", {}) or {}
+        columns_cfg = table_body_config.get("columns", {}) or {}
         if not columns_cfg:
             return
 
@@ -430,15 +429,86 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
             logger.warning(f"No columns mapped for table role '{role}'; skipping.")
             return
 
+        # ROW_TYPE
+        row_types_config = table_body_config.get("grouping", {}).get("row_types")
+        type_defs: Dict[str, Dict[str, Any]] = {}
+        type_active_columns: Dict[str, set] = {}
+        type_col_index = -1
+        primary_col_index = -1
+
+        if row_types_config:
+            type_col_name = row_types_config.get("type_column", "ROW_TYPE")
+            type_col_index = json_col_lower.get(type_col_name.casefold(), -1)
+
+            for t_name, t_def in row_types_config.get("types", {}).items():
+                upper_name = t_name.upper()
+                type_defs[upper_name] = t_def
+                if "active_columns" in t_def:
+                    type_active_columns[upper_name] = set(t_def["active_columns"])
+
+            logger.debug(
+                f"Row types config detected: primary_col_index={primary_col_index}, "
+                f"type_col_index={type_col_index}, config={row_types_config}"
+            )
+
+        # Detect the primary column index
+        for fn, cc in columns_cfg.items():
+            if isinstance(cc, dict) and cc.get("primary"):
+                primary_col_index = column_map.get(fn, {}).get("col_index", -1)
+                break
+
         # Build rows
         matched_field_rows: List[MatchFieldRow] = []
         source = claim_record.get("source", {})
         page_id = source.get("page_index", 0)
 
+        current_parent: Optional[MatchFieldRow] = None
+
         for row_data in json_rows:
+            # Detect child row
+            is_child_row = False
+            if primary_col_index >= 0 and row_types_config:
+                prim_val = str(row_data[primary_col_index]).strip() if primary_col_index < len(row_data) else ""
+                is_child_row = (prim_val == "")
+
+            # Resolve type and action
+            child_type_value = ""
+            child_type_def: Dict[str, Any] = {}
+            active_columns: Optional[set] = None  # None = all columns (default/main row)
+
+            if is_child_row and type_col_index >= 0:
+                child_type_value = str(row_data[type_col_index]).strip().upper() if type_col_index < len(row_data) else ""
+                child_type_def = type_defs.get(child_type_value, {})
+
+                action = child_type_def.get("action", "merge")
+                if action == "discard":
+                    logger.debug(f"Discarding child row with ROW_TYPE='{child_type_value}'")
+                    continue
+
+                active_columns = type_active_columns.get(child_type_value)
+                if active_columns is None:
+                    logger.debug(
+                        f"Child row detected: ROW_TYPE='{child_type_value}', "
+                        f"active_columns={active_columns}, action={action}"
+                    )
+                else:
+                    logger.debug(
+                        f"Child row detected: ROW_TYPE='{child_type_value}', "
+                        f"no active_columns filter, action={action}"
+                    )
+
             row_fields: List[Field] = []
 
+            # Extract columns
             for field_name, col_def in column_map.items():
+                # Skip ROW_TYPE classification column from output
+                if row_types_config and field_name == row_types_config.get("type_column", "ROW_TYPE"):
+                    continue
+
+                # Skip non-active columns for typed child rows
+                if active_columns is not None and field_name not in active_columns:
+                    continue
+
                 col_index = col_def["col_index"]
                 col_cfg = col_def["config"]
 
@@ -478,7 +548,30 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                 )
                 row_fields.extend(created)
 
-            matched_field_rows.append(MatchFieldRow(fields=row_fields))
+            if not is_child_row:
+                # Parent row — create new MatchFieldRow and track it
+                matched_row = MatchFieldRow(fields=row_fields)
+                matched_field_rows.append(matched_row)
+                if row_types_config:
+                    current_parent = matched_row
+            else:
+                # Child row — action/type already resolved in Step 2 (discard handled via continue above)
+                action = child_type_def.get("action", "merge")
+                if action == "standalone" or current_parent is None:
+                    logger.debug(f"Emitting child row ROW_TYPE='{child_type_value}' as standalone (action=standalone)")
+                    matched_field_rows.append(MatchFieldRow(fields=row_fields))
+                else: # action == "merge" (default)
+                    merge_strategies = child_type_def.get("merge_strategies", {})
+                    column_mapping = child_type_def.get("column_mapping", {})
+                    default_merge = row_types_config.get("default_merge", "append") if row_types_config else "append"
+
+                    self._merge_child_fields_into_parent(
+                        current_parent,
+                        row_fields,
+                        merge_strategies,
+                        column_mapping,
+                        default_merge
+                    )
 
         # Apply value_lookup for table columns
         dist_columns = {
@@ -504,6 +597,84 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
         logger.info(
             f"Populated {len(matched_field_rows)} table rows for "
             f"section '{match_section.label}' role '{role}'"
+        )
+
+    # ------------------------------------------------------------------
+    # row_types (merge table rows) — reused from legacy visitor logic
+    # ------------------------------------------------------------------
+
+    def _merge_child_fields_into_parent(
+        self,
+        parent_row: MatchFieldRow,
+        child_fields: List[Field],
+        merge_strategies: Optional[Dict[str, str]] = None,
+        column_mapping: Optional[Dict[str, str]] = None,
+        default_merge: str = "append",
+    ) -> None:
+        """Merge active-column fields from a child row into the parent row.
+
+        Args:
+            parent_row: The parent SERVICE_LINE MatchFieldRow to merge into.
+            child_fields: Fields extracted from the child (ADJUSTMENT) row.
+            merge_strategies: Per-column merge strategy overrides
+                (child_column_name -> "append"|"replace").
+            column_mapping: Remap child field names to different parent field names
+                (child_column_name -> target_field_name). When a mapping exists, the
+                child value is merged into (or creates) the target field instead of
+                the same-named field. Useful when child row values should appear as
+                a new column in the parent (e.g., REMARK_CODE -> ADJUSTMENT_REMARK_CODE).
+            default_merge: Default merge strategy when no per-column override exists.
+        """
+        if merge_strategies is None:
+            merge_strategies = {}
+        if column_mapping is None:
+            column_mapping = {}
+
+        parent_field_map: Dict[str, Field] = {
+            f.field_name: f for f in parent_row.fields
+        }
+
+        for child_field in child_fields:
+            child_name = child_field.field_name
+            # Apply column_mapping: remap child field to a different target name
+            target_name = column_mapping.get(child_name, child_name)
+            strategy = merge_strategies.get(child_name, default_merge)
+            parent_field = parent_field_map.get(target_name)
+
+            child_val = (child_field.value or "").strip()
+            if not child_val:
+                continue
+
+            if parent_field is not None:
+                if strategy == "replace":
+                    parent_field.value = child_val
+                    child_orig = (child_field.value_original or "").strip()
+                    if child_orig:
+                        parent_field.value_original = child_orig
+                else:  # "append" (default)
+                    parent_val = (parent_field.value or "").strip()
+                    if parent_val:
+                        parent_field.value = f"{parent_val}, {child_val}"
+                    else:
+                        parent_field.value = child_val
+
+                    child_orig = (child_field.value_original or "").strip()
+                    if child_orig:
+                        parent_orig = (parent_field.value_original or "").strip()
+                        if parent_orig:
+                            parent_field.value_original = f"{parent_orig}, {child_orig}"
+                        else:
+                            parent_field.value_original = child_orig
+            else:
+                # Parent doesn't have this field — add it (with remapped name)
+                if target_name != child_name:
+                    child_field.field_name = target_name
+                parent_row.fields.append(child_field)
+                parent_field_map[target_name] = child_field
+
+        logger.info(
+            f"Merged {len(child_fields)} child field(s) into parent row "
+            f"(strategy: {default_merge}, mapping: {column_mapping})"
         )
 
     # ------------------------------------------------------------------
