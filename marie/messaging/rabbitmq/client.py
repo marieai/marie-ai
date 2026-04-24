@@ -50,12 +50,16 @@ class BlockingPikaClient:
         else:
             vhost_part = "/" + urllib.parse.quote(vhost, safe="")
 
-        # Use shorter heartbeat (60s) to detect dead connections faster
-        # b-ff3d0999-a25b-4a5a-9775-e7ba76f8fa3d.mq.us-east-1.amazonaws.com
+        # Use a long heartbeat (3600s) so idle connections survive during
+        # long-running LLM calls (600s+).  Pika's BlockingConnection only
+        # services heartbeats during active I/O; a short heartbeat causes
+        # the RabbitMQ server to close idle connections while the process
+        # is busy streaming LLM responses, leading to ConnectionResetError
+        # on the next publish.  Matches AsyncPikaClient's heartbeat=3600.
         if tls_enabled:
-            url = f"amqps://{username}:{password}@{hostname}:{port}{vhost_part}?connection_attempts=3&heartbeat=60"
+            url = f"amqps://{username}:{password}@{hostname}:{port}{vhost_part}?connection_attempts=3&heartbeat=3600"
         else:
-            url = f"amqp://{username}:{password}@{hostname}:{port}{vhost_part}?connection_attempts=3&heartbeat=60"
+            url = f"amqp://{username}:{password}@{hostname}:{port}{vhost_part}?connection_attempts=3&heartbeat=3600"
 
         self._parameters = pika.URLParameters(url)
         if provider == "amazon-rabbitmq":
@@ -473,7 +477,6 @@ class AsyncPikaClient:
                 )
                 try:
                     await asyncio.sleep(delay)
-                    # Attempt a fresh connect
                     await self.connect()
                 except Exception as e:
                     self._logger.error(

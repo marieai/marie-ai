@@ -83,7 +83,7 @@ MIN_POLL_PERIOD = 0.250
 MAX_POLL_PERIOD = 8
 
 MONITORING_POLL_PERIOD = 5.0  # 5s
-SYNC_POLL_PERIOD = 5.0  # 5s
+SYNC_POLL_PERIOD = 60.0  # 60s — safety net, not primary dispatch path
 
 DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
@@ -1403,26 +1403,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self._semaphore_store
                 ).copy()
 
-                if not any(slots_by_executor.values()):
-                    self.logger.debug(
-                        f"[WORK_DIST] No available executor slots. Backing off. "
-                        f"Slots by executor: {slots_by_executor} | "
-                        f"Idle streak: {idle_streak} | "
-                        f"Wait time: {wait_time:.2f}s"
-                    )
-                    idle_streak += 1
-                    wait_time = adjust_backoff(
-                        wait_time,
-                        idle_streak,
-                        scheduled=False,
-                        min_poll_period=MIN_POLL_PERIOD,
-                    )
-                    continue
-
+                no_executor_slots = not any(slots_by_executor.values())
                 self.logger.debug(f"[WORK_DIST] Available slots: {slots_by_executor}")
 
-                # Fetch a wider, slot-aware candidate window so blocked heads
-                # do not crowd runnable work out of the planner input.
+                # Fetch candidates from frontier.  Even when no executor slots
+                # are available we must still peek so that control flow nodes
+                # (NOOP/BRANCH/SWITCH) — which do NOT consume slots — can be
+                # dispatched.  Skipping the peek previously caused a deadlock
+                # where noops starved while all executor slots were occupied.
                 candidate_window = frontier_candidate_window(
                     batch_size, slots_by_executor
                 )
@@ -1433,15 +1421,23 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 )
 
                 if not candidates_wi or len(candidates_wi) == 0:
-                    frontier_summary = self.frontier.summary(detail=False)
-                    self.logger.debug(
-                        f"[WORK_DIST] No ready work in frontier. Short sleep. "
-                        f"Batch size: {batch_size} | "
-                        f"Candidate window: {candidate_window} | "
-                        f"Frontier summary: {frontier_summary} | "
-                        f"Idle streak: {idle_streak} | "
-                        f"Wait time: {wait_time:.2f}s"
-                    )
+                    if no_executor_slots:
+                        self.logger.debug(
+                            f"[WORK_DIST] No available executor slots and no control flow nodes. Backing off. "
+                            f"Slots by executor: {slots_by_executor} | "
+                            f"Idle streak: {idle_streak} | "
+                            f"Wait time: {wait_time:.2f}s"
+                        )
+                    else:
+                        frontier_summary = self.frontier.summary(detail=False)
+                        self.logger.debug(
+                            f"[WORK_DIST] No ready work in frontier. Short sleep. "
+                            f"Batch size: {batch_size} | "
+                            f"Candidate window: {candidate_window} | "
+                            f"Frontier summary: {frontier_summary} | "
+                            f"Idle streak: {idle_streak} | "
+                            f"Wait time: {wait_time:.2f}s"
+                        )
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
                     idle_streak += 1
                     wait_time = adjust_backoff(
@@ -1520,12 +1516,21 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     f"Executors needed: {set(ep for ep, _ in planner_candidates)}"
                 )
 
-                # If all candidates were control flow nodes, skip planner and continue
+                # If no regular jobs to plan (either all were control flow or
+                # no executor slots were available), skip the planner.
                 if not planner_candidates:
                     if scheduled_any:
                         # We processed control flow nodes, reset idle streak
                         idle_streak = 0
                         wait_time = MIN_POLL_PERIOD
+                    elif no_executor_slots:
+                        idle_streak += 1
+                        wait_time = adjust_backoff(
+                            wait_time,
+                            idle_streak,
+                            scheduled=False,
+                            min_poll_period=MIN_POLL_PERIOD,
+                        )
                     self.logger.debug(
                         f"[WORK_DIST] No regular jobs to plan (processed {len(control_flow_jobs)} control flow nodes)"
                     )
@@ -2772,9 +2777,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.info(f"Syncing job status every {wait_time} seconds")
             await asyncio.sleep(wait_time)
             try:
-                active_jobs = await self.list_jobs(
-                    state=[WorkState.ACTIVE.value, WorkState.CREATED.value]
-                )
+                active_jobs = await self.list_jobs(state=[WorkState.ACTIVE.value])
                 if not active_jobs:
                     continue
 
