@@ -1,9 +1,11 @@
 from datetime import datetime, timezone
 from typing import Any, Dict
 
+from psycopg2.extensions import adapt
 from psycopg2.extras import Json
 
 from marie.scheduler.models import WorkInfo
+from marie.scheduler.search_documents import JobSearchDocument
 from marie.scheduler.state import WorkState
 
 
@@ -46,6 +48,12 @@ def try_set_timestamp(schema: str, column: str, interval: int) -> str:
     WHERE EXTRACT(EPOCH FROM (now() - COALESCE({column}, now() - interval '1 week'))) > {interval}
     RETURNING true
     """
+
+
+def _literal(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    return adapt(value).getquoted().decode("utf-8")
 
 
 def insert_job(schema: str, work_info: WorkInfo) -> str:
@@ -178,7 +186,72 @@ def insert_dag(
             {planner_str}
             )
         ON CONFLICT DO NOTHING
-        RETURNING id
+    RETURNING id
+    """
+
+
+def insert_job_search_document(schema: str, document: JobSearchDocument) -> str:
+    return f"""
+        INSERT INTO {schema}.job_search_document (
+            job_id,
+            queue_name,
+            dag_id,
+            planner,
+            job_name,
+            node_label,
+            ref_id,
+            ref_type,
+            asset_uri,
+            metadata_queue_id,
+            layout,
+            mode,
+            policy,
+            method,
+            endpoint,
+            executor,
+            model_name,
+            search_text
+        )
+        VALUES (
+            {_literal(document.job_id)}::uuid,
+            {_literal(document.queue_name)}::text,
+            {_literal(document.dag_id)}::uuid,
+            {_literal(document.planner)}::text,
+            {_literal(document.job_name)}::text,
+            {_literal(document.node_label)}::text,
+            {_literal(document.ref_id)}::text,
+            {_literal(document.ref_type)}::text,
+            {_literal(document.asset_uri)}::text,
+            {_literal(document.metadata_queue_id)}::text,
+            {_literal(document.layout)}::text,
+            {_literal(document.mode)}::text,
+            {_literal(document.policy)}::text,
+            {_literal(document.method)}::text,
+            {_literal(document.endpoint)}::text,
+            {_literal(document.executor)}::text,
+            {_literal(document.model_name)}::text,
+            {_literal(document.search_text)}::text
+        )
+        ON CONFLICT (queue_name, job_id) DO UPDATE
+        SET
+            dag_id = EXCLUDED.dag_id,
+            planner = EXCLUDED.planner,
+            job_name = EXCLUDED.job_name,
+            node_label = EXCLUDED.node_label,
+            ref_id = EXCLUDED.ref_id,
+            ref_type = EXCLUDED.ref_type,
+            asset_uri = EXCLUDED.asset_uri,
+            metadata_queue_id = EXCLUDED.metadata_queue_id,
+            layout = EXCLUDED.layout,
+            mode = EXCLUDED.mode,
+            policy = EXCLUDED.policy,
+            method = EXCLUDED.method,
+            endpoint = EXCLUDED.endpoint,
+            executor = EXCLUDED.executor,
+            model_name = EXCLUDED.model_name,
+            search_text = EXCLUDED.search_text,
+            updated_on = now()
+        RETURNING job_id
     """
 
 

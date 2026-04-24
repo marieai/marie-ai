@@ -28,6 +28,7 @@ from marie.scheduler.repository.plans import (
     fail_jobs_by_id,
     insert_dag,
     insert_job,
+    insert_job_search_document,
     insert_version,
     load_dag,
     mark_as_active_dags,
@@ -35,6 +36,7 @@ from marie.scheduler.repository.plans import (
     resume_jobs,
     version_table_exists,
 )
+from marie.scheduler.search_documents import build_job_search_documents
 from marie.scheduler.state import WorkState
 from marie.storage.database.postgres import PostgresqlMixin
 
@@ -710,8 +712,12 @@ class JobRepository(PostgresqlMixin):
             new_key_added = False
             try:
                 json_serialized_dag = plan.model_dump()
-                # Extract planner name from work_info metadata
                 planner_name = work_info.data.get("metadata", {}).get("planner", None)
+                search_documents = build_job_search_documents(
+                    plan=plan,
+                    dag_nodes=dag_nodes,
+                    planner=planner_name,
+                )
 
                 connection = self._get_connection()
                 cursor = self._execute_sql_gracefully(
@@ -735,9 +741,17 @@ class JobRepository(PostgresqlMixin):
                 self._close_cursor(cursor)
 
                 # Insert all jobs in the DAG
-                for i, dag_work_info in enumerate(dag_nodes):
+                for dag_work_info in dag_nodes:
                     cursor = self._execute_sql_gracefully(
                         insert_job(DEFAULT_SCHEMA, dag_work_info),
+                        connection=connection,
+                        return_cursor=True,
+                    )
+                    self._close_cursor(cursor)
+
+                for search_document in search_documents:
+                    cursor = self._execute_sql_gracefully(
+                        insert_job_search_document(DEFAULT_SCHEMA, search_document),
                         connection=connection,
                         return_cursor=True,
                     )
