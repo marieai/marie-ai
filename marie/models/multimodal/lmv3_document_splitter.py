@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import torch
 import torch.nn as nn
-from transformers import LayoutLMv3Model
+import transformers
 
 from marie.models.multimodal.util.attention_pooling import AttentionPooling
 
@@ -32,7 +32,7 @@ class LayoutLMv3DocumentSplitter(nn.Module):
         self.context_len = context_pages_num
 
         # backbone LayoutLMv3 INIT
-        self.backbone = LayoutLMv3Model.from_pretrained(self.model_name)
+        self.backbone = transformers.LayoutLMv3Model.from_pretrained(self.model_name)
         self.hidden_size: int = self.backbone.config.hidden_size
         self._set_trainable()
         self.sequence_encoder = None
@@ -98,9 +98,7 @@ class LayoutLMv3DocumentSplitter(nn.Module):
     @classmethod
     def _filter_constructor_kwargs(cls, kwargs: dict[str, Any]) -> dict[str, Any]:
         signature = inspect.signature(cls.__init__)
-        valid_keys = {
-            name for name in signature.parameters.keys() if name != "self"
-        }
+        valid_keys = {name for name in signature.parameters.keys() if name != "self"}
         return {k: v for k, v in kwargs.items() if k in valid_keys}
 
     @classmethod

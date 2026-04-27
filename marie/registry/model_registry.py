@@ -319,7 +319,7 @@ class ModelRegistry:
         version: Optional[str] = None,
         raise_exceptions_for_missing_entries: Optional[bool] = True,
         **kwargs: Any,
-    ) -> Union[str, None]:
+    ) -> Union[dict, str, None]:
         """
         Get a configuration for the model.
 

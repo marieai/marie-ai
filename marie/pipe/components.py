@@ -9,7 +9,10 @@ from PIL import Image
 
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
-from marie.components.document_classifier import TransformersDocumentClassifier
+from marie.components.document_classifier import (
+    TransformersDocumentLevelClassifier,
+    TransformersPageLevelClassifier,
+)
 from marie.components.document_indexer import TransformersDocumentIndexer
 from marie.components.document_indexer.llm import MMLLMDocumentIndexer
 from marie.components.document_registration.unilm_dit import (
@@ -144,7 +147,22 @@ def setup_classifiers(
             )
 
         if model_type == "transformers":
-            classifier = TransformersDocumentClassifier(
+            classifier = TransformersPageLevelClassifier(
+                model_name_or_path=model_name_or_path,
+                batch_size=batch_size,
+                use_gpu=use_cuda,
+                task=task,
+                id2label=id2label,
+                max_pages=max_pages,
+            )
+
+            document_classifiers[group][name] = {
+                "classifier": classifier,
+                "group": group,
+                "filter": model_filter,
+            }
+        elif model_type == "transformers_document_level":
+            classifier = TransformersDocumentLevelClassifier(
                 model_name_or_path=model_name_or_path,
                 batch_size=batch_size,
                 use_gpu=use_cuda,
