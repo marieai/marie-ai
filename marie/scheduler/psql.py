@@ -1284,7 +1284,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.error(f"Error starting MaintenanceService: {e}")
             # Non-critical - continue without maintenance service
 
-        # self._sync_dag_task = asyncio.create_task(self._sync_dag())
+        self._sync_dag_task = asyncio.create_task(self._sync_dag())
         await self.notify_event()
 
     async def _poll(self):
@@ -2508,7 +2508,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 )
                 return False
 
-            await self.mark_as_active_dag(work_info)
+            marked_active = await self.mark_as_active_dag(work_info)
+            if not marked_active:
+                self.logger.warning(
+                    f"[DAG_ADMISSION] Failed to mark DAG {dag_id} as active in DB "
+                    f"from {source}; leaving it out of active_dags"
+                )
+                return False
             self.active_dags[dag_id] = dag
             return True
 
@@ -2926,6 +2932,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     for dag_id in invalid_dags:
                         self._remove_dag_from_memory(
                             dag_id, "no longer active or deleted in database"
+                        )
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            self.notify_event(), self._loop
+                        ).result(timeout=5)
+                    except Exception as notify_error:
+                        self.logger.debug(
+                            f"[DAG_SYNC] Failed to notify scheduler after DAG cleanup: "
+                            f"{notify_error}"
                         )
                 else:
                     self.logger.debug("All DAGs in memory are still valid")
