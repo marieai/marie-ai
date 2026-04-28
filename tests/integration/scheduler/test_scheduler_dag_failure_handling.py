@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -475,3 +476,83 @@ async def test_sync_terminal_job_state_succeeded_unblocks_children_and_notifies(
 
     ready = await frontier.peek_ready(10)
     assert [wi.id for wi in ready] == [child.id]
+
+
+@pytest.mark.asyncio
+async def test_admit_dag_requires_db_activation_success():
+    dag_id = "dag-admit"
+    work_item = build_work_item("job-admit", dag_id)
+    frontier = RecordingFrontier()
+    repository = RecordingRepository(dag_state="active")
+    scheduler = build_scheduler(repository, frontier)
+
+    async def mark_as_active_dag(_work_info: WorkInfo) -> bool:
+        return False
+
+    scheduler.mark_as_active_dag = mark_as_active_dag
+
+    admitted = await scheduler._admit_dag(work_item, object(), source="test")
+
+    assert admitted is False
+    assert dag_id not in scheduler.active_dags
+
+
+@pytest.mark.asyncio
+async def test_blocking_sync_dag_reaps_stale_memory_dags_and_notifies(monkeypatch):
+    repository = RecordingRepository(dag_state="active")
+    frontier = RecordingFrontier()
+    scheduler = build_scheduler(repository, frontier)
+    scheduler.running = True
+    scheduler._loop = object()
+    scheduler.active_dags = {
+        "dag-valid": object(),
+        "dag-stale": object(),
+    }
+    scheduler._terminal_dag_states = {"dag-stale": "completed"}
+
+    removed: list[tuple[str, str]] = []
+
+    def remove_dag(dag_id: str, reason: str) -> bool:
+        removed.append((dag_id, reason))
+        scheduler.active_dags.pop(dag_id, None)
+        return True
+
+    scheduler.dag_service = SimpleNamespace(remove_dag=remove_dag)
+
+    async def get_active_dag_ids(_dag_ids: list[str]) -> set[str]:
+        return {"dag-valid"}
+
+    scheduler.repository.get_active_dag_ids = get_active_dag_ids
+
+    class FakeFuture:
+        def __init__(self, value):
+            self._value = value
+
+        def result(self, timeout=None):
+            return self._value
+
+    def fake_run_coroutine_threadsafe(coro, _loop):
+        try:
+            coro_name = coro.cr_code.co_name
+            if coro_name == "get_active_dag_ids":
+                return FakeFuture({"dag-valid"})
+            if coro_name == "notify_event":
+                scheduler.notify_calls.append(True)
+                return FakeFuture(True)
+            raise AssertionError(f"Unexpected coroutine submitted: {coro_name}")
+        finally:
+            coro.close()
+
+    def fake_sleep(_interval: float) -> None:
+        scheduler.running = False
+
+    monkeypatch.setattr(scheduler_psql.asyncio, "run_coroutine_threadsafe", fake_run_coroutine_threadsafe)
+    monkeypatch.setattr(scheduler_psql.time, "sleep", fake_sleep)
+
+    scheduler._blocking_sync_dag(interval=0)
+
+    assert removed == [
+        ("dag-stale", "no longer active or deleted in database")
+    ]
+    assert "dag-stale" not in scheduler.active_dags
+    assert scheduler.notify_calls == [True]
