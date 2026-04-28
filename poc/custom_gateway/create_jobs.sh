@@ -120,8 +120,14 @@ echo "$metadata"
 # ("mock_hitl_complete_workflow", "Complete HITL Workflow (All Node Types)"),
 
 for i in $(seq 1 "$2"); do
+    request_id="job-$i"
+    rendered_metadata="${metadata//\{\{job_index\}\}/$i}"
+    rendered_metadata="${rendered_metadata//\{\{request_id\}\}/$request_id}"
+    rendered_metadata="${rendered_metadata//\{\{timestamp\}\}/$(date +%s)}"
+    rendered_metadata="${rendered_metadata//\{\{random\}\}/$RANDOM}"
+
     echo "Submitting job $i"
-    python ./send_request_to_gateway.py job submit extract --metadata-json "$metadata" --address "$host" --protocol "$protocol" --api_key "$api_key" &
+    python ./send_request_to_gateway.py job submit extract --metadata-json "$rendered_metadata" --address "$host" --protocol "$protocol" --api_key "$api_key" &
     echo "Job $i submitted"
     sleep 1
 done

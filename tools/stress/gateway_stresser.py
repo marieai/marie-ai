@@ -231,6 +231,78 @@ class GatewayStresser:
         else:
             return await self._send_grpc_request(request_id)
 
+    @staticmethod
+    def _render_template_value(value: Any, template_vars: Dict[str, str]) -> Any:
+        """Recursively replace {{placeholders}} in request payload values."""
+        if isinstance(value, dict):
+            return {
+                key: GatewayStresser._render_template_value(item, template_vars)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [
+                GatewayStresser._render_template_value(item, template_vars)
+                for item in value
+            ]
+        if isinstance(value, str):
+            rendered = value
+            for key, template_value in template_vars.items():
+                rendered = rendered.replace(f"{{{{{key}}}}}", template_value)
+            return rendered
+        return value
+
+    def _render_request_parameters(self, request_id: str) -> Dict[str, Any]:
+        template_vars = {
+            "request_id": request_id,
+            "timestamp": str(int(time.time())),
+            "timestamp_ms": str(int(time.time() * 1000)),
+            "api_key": self.api_key or "",
+        }
+        return self._render_template_value(self.request_parameters or {}, template_vars)
+
+    @staticmethod
+    def _interpret_gateway_response(
+        response_payload: Optional[Dict[str, Any]],
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
+        """
+        Interpret `/api/v1/invoke` style gateway responses.
+
+        The gateway often returns HTTP 200 even when command handling failed, with
+        the real status embedded in `parameters`.
+        """
+        if not isinstance(response_payload, dict):
+            return True, None, None
+
+        parameters = response_payload.get("parameters")
+        if not isinstance(parameters, dict):
+            return True, None, None
+
+        if parameters.get("status") == "error":
+            error_msg = (
+                parameters.get("msg") or parameters.get("error") or str(parameters)
+            )
+            return False, "APP_ERROR", str(error_msg)
+
+        if "error" in parameters:
+            return False, "APP_ERROR", str(parameters["error"])
+
+        invoke_action = response_payload.get("request_parameters", {}).get(
+            "invoke_action", {}
+        )
+        is_submit = (
+            isinstance(invoke_action, dict)
+            and invoke_action.get("command") == "job"
+            and invoke_action.get("action") == "submit"
+        )
+        if (
+            is_submit
+            and parameters.get("status") == "ok"
+            and not parameters.get("job_id")
+        ):
+            return False, "APP_ERROR", "Submit response missing job_id"
+
+        return True, None, None
+
     async def _send_http_request(self, request_id: str) -> RequestResult:
         """Send a single HTTP request to the gateway using aiohttp."""
         start_time = time.time()
@@ -256,7 +328,7 @@ class GatewayStresser:
             # Marie gateway expects: data, parameters, header (optional)
             payload = {
                 "data": docs_data,
-                "parameters": self.request_parameters or {},
+                "parameters": self._render_request_parameters(request_id),
                 "header": {
                     "requestId": request_id,
                     "targetExecutor": self.target_executor or "",
@@ -283,8 +355,31 @@ class GatewayStresser:
             ) as response:
                 response_text = await response.text()
                 latency_ms = (time.time() - start_time) * 1000
+                response_json = None
+                try:
+                    response_json = json.loads(response_text)
+                except json.JSONDecodeError:
+                    response_json = None
 
                 if response.status >= 200 and response.status < 300:
+                    ok, error_type, error_message = self._interpret_gateway_response(
+                        {
+                            "parameters": (
+                                response_json.get("parameters")
+                                if isinstance(response_json, dict)
+                                else None
+                            ),
+                            "request_parameters": payload["parameters"],
+                        }
+                    )
+                    if not ok:
+                        return RequestResult(
+                            request_id=request_id,
+                            success=False,
+                            latency_ms=latency_ms,
+                            error_type=error_type,
+                            error_message=(error_message or response_text)[:200],
+                        )
                     return RequestResult(
                         request_id=request_id,
                         success=True,
@@ -365,7 +460,7 @@ class GatewayStresser:
             async for response in client.post(
                 self.endpoint,
                 inputs=docs,
-                parameters=self.request_parameters,
+                parameters=self._render_request_parameters(request_id),
                 request_size=self.batch_size,
                 timeout=self.timeout,
                 **request_kwargs,
@@ -373,6 +468,25 @@ class GatewayStresser:
                 response_docs = response
 
             latency_ms = (time.time() - start_time) * 1000
+            response_parameters = (
+                getattr(response_docs, "parameters", {})
+                if response_docs is not None
+                else {}
+            )
+            ok, error_type, error_message = self._interpret_gateway_response(
+                {
+                    "parameters": response_parameters,
+                    "request_parameters": self._render_request_parameters(request_id),
+                }
+            )
+            if not ok:
+                return RequestResult(
+                    request_id=request_id,
+                    success=False,
+                    latency_ms=latency_ms,
+                    error_type=error_type,
+                    error_message=(error_message or str(response_parameters))[:200],
+                )
 
             return RequestResult(
                 request_id=request_id,

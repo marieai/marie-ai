@@ -36,6 +36,13 @@ python gateway_stresser.py --protocol http --http-port 51000 --endpoint /extract
 python gateway_stresser.py --protocol http --http-port 51000 \
     --parameters '{"invoke_action": {"action_type": "command", "command": "job", "action": "submit", "name": "test"}}'
 
+# With reusable mock planner payload
+python gateway_stresser.py --protocol http --http-port 51000 \
+    --parameters "$(cat tools/stress/mock_parallel_subgraphs.invoke.json)"
+
+# The payload can vary values per request
+# Supported placeholders: {{request_id}}, {{timestamp}}, {{timestamp_ms}}, {{api_key}}
+
 # Compare gRPC vs HTTP performance
 python gateway_stresser.py --protocol grpc --gateway-port 52000 --duration 60
 python gateway_stresser.py --protocol http --http-port 51000 --duration 60
@@ -62,6 +69,16 @@ python gateway_stresser.py --protocol http --http-port 51000 --duration 60
 | `-v, --verbose` | `False` | Enable verbose logging |
 
 #### Output
+
+For `/api/v1/invoke` job submissions, the tool now treats gateway application
+errors as failures even when the HTTP status is `200`. This catches cases where
+the gateway returns:
+
+```json
+{"parameters":{"status":"error","msg":"..."}}
+```
+
+instead of silently counting them as successful requests.
 
 The tool provides real-time progress updates and a final report:
 
