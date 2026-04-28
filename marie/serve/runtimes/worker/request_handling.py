@@ -1553,16 +1553,23 @@ class WorkerRequestHandler:
 
         if job_id is not None and self._job_info_client is not None:
             try:
-                # Extract the traceback information from the exception
-                tb = e.__traceback__
-                while tb.tb_next:
-                    tb = tb.tb_next
+                # Extract traceback info when available. The exception can be
+                # None when the executor signals failure via a return-data
+                # status dict rather than raising, so guard both e and
+                # e.__traceback__ before walking the frame chain.
+                filename = "unknown"
+                name = "unknown"
+                line_no = 0
 
-                filename = tb.tb_frame.f_code.co_filename
-                name = tb.tb_frame.f_code.co_name
-                line_no = tb.tb_lineno
-                # Clear the frames after extracting the information to avoid memory leaks
-                traceback.clear_frames(tb)
+                if e is not None and e.__traceback__ is not None:
+                    tb = e.__traceback__
+                    while tb.tb_next:
+                        tb = tb.tb_next
+                    filename = tb.tb_frame.f_code.co_filename
+                    name = tb.tb_frame.f_code.co_name
+                    line_no = tb.tb_lineno
+                    # Clear the frames after extracting the information to avoid memory leaks
+                    traceback.clear_frames(tb)
 
                 detail = "Internal Server Error - request handler failed"
                 silence_exceptions = strtobool(
@@ -1570,10 +1577,10 @@ class WorkerRequestHandler:
                 )
 
                 if not silence_exceptions:
-                    detail = str(e)
+                    detail = str(e) if e is not None else detail
 
                 exc = {
-                    "type": type(e).__name__,
+                    "type": type(e).__name__ if e is not None else "RuntimeError",
                     "message": detail,
                     "filename": filename.split("/")[-1],
                     "name": name,
