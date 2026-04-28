@@ -1,0 +1,17 @@
+{
+  "invoke_action": {
+    "action_type": "command",
+    "command": "job",
+    "action": "submit",
+    "name": "mock_parallel_subgraphs",
+    "api_key": "{{api_key}}",
+    "metadata": {
+      "planner": "mock_parallel_subgraphs",
+      "project_id": "REPLACE_WITH_API_KEY_OR_PROJECT_ID",
+      "ref_type": "stress",
+      "ref_id": "stress-run-{{request_id}}",
+      "policy": "allow_all",
+      "uri": "s3://dummy/stress.txt"
+    }
+  }
+}

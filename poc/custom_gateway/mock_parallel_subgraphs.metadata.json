@@ -1,0 +1,9 @@
+{
+  "planner": "mock_parallel_subgraphs",
+  "project_id": "REPLACE_WITH_API_KEY_OR_PROJECT_ID",
+  "ref_id": "stress-burst-{{request_id}}",
+  "ref_type": "stress",
+  "uri": "s3://dummy/stress.txt",
+  "policy": "allow_all",
+  "on": "noop://noop"
+}

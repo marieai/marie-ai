@@ -1,6 +1,7 @@
 import asyncio
 import json
 import select
+import time
 from typing import Any, Callable, Dict, Optional
 
 import psycopg2
@@ -38,6 +39,13 @@ class NotificationService:
 
         # Channels to listen on
         self._channels: set[str] = set()
+        self._ready_event = asyncio.Event()
+        self._connected = False
+        self._ever_connected = False
+        self._last_notification_at: Optional[float] = None
+        self._reconnect_base_delay = 1.0
+        self._reconnect_max_delay = 30.0
+        self._select_timeout = 1.0
 
     def register_handler(self, channel: str, handler: Callable) -> None:
         """
@@ -79,6 +87,10 @@ class NotificationService:
                 port=int(config["port"]),
                 options='-c timezone=UTC',
                 application_name=f"{config.get('application_name', 'marie_scheduler')}_listener",
+                keepalives=1,
+                keepalives_idle=60,
+                keepalives_interval=10,
+                keepalives_count=5,
             )
 
             # Set isolation level to autocommit for LISTEN/NOTIFY
@@ -130,15 +142,23 @@ class NotificationService:
 
         self.logger.info("Starting NotificationService")
         self.running = True
+        self._ready_event.clear()
+        self._connected = False
+        self._ever_connected = False
 
         # Start the listener task
         self._listener_task = asyncio.create_task(self._listen_for_notifications())
 
-        # Wait briefly to catch early failures
-        await asyncio.sleep(0.5)
-        if self._listener_task.done():
-            # Re-raise any exception from the listener task
-            await self._listener_task
+        ready_task = asyncio.create_task(self._ready_event.wait())
+        done, _pending = await asyncio.wait(
+            {ready_task, self._listener_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if ready_task in done:
+            return
+
+        ready_task.cancel()
+        await self._listener_task
 
     async def stop(self) -> None:
         """
@@ -149,6 +169,8 @@ class NotificationService:
 
         self.logger.info("Stopping NotificationService")
         self.running = False
+        self._connected = False
+        self._ready_event.clear()
 
         # Cancel the listener task
         if self._listener_task and not self._listener_task.done():
@@ -164,6 +186,14 @@ class NotificationService:
 
         self.logger.info("NotificationService stopped")
 
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
+    @property
+    def last_notification_at(self) -> Optional[float]:
+        return self._last_notification_at
+
     async def _listen_for_notifications(self) -> None:
         """
         Main listening loop for PostgreSQL notifications.
@@ -172,76 +202,101 @@ class NotificationService:
         notifications from the database. It uses select() in a thread pool
         to avoid blocking the event loop.
         """
+        loop = asyncio.get_event_loop()
+        reconnect_delay = self._reconnect_base_delay
+
         try:
-            # Set up the connection in executor (blocking operation)
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._setup_connection)
-
-            self.logger.info("Notification listener loop started")
-
             while self.running:
-                # Use select() in executor to wait for notifications without blocking
-                # Timeout of 1.0 second allows checking self.running regularly
-                ready = await loop.run_in_executor(
-                    None, lambda: select.select([self._listen_connection], [], [], 1.0)
-                )
+                try:
+                    await loop.run_in_executor(None, self._setup_connection)
+                    self._connected = True
+                    self._ever_connected = True
+                    reconnect_delay = self._reconnect_base_delay
+                    self._ready_event.set()
+                    self.logger.info("Notification listener loop started")
 
-                # If select() returned empty, no notification arrived
-                if ready == ([], [], []):
-                    continue
+                    while self.running:
+                        if (
+                            self._listen_connection is None
+                            or self._listen_connection.closed
+                        ):
+                            raise RuntimeError("LISTEN connection is closed")
 
-                # Poll for notifications (also in executor to avoid blocking)
-                await loop.run_in_executor(None, self._listen_connection.poll)
-
-                # Process all pending notifications
-                while self._listen_connection.notifies:
-                    notify = self._listen_connection.notifies.pop(0)
-
-                    try:
-                        # Parse JSON payload
-                        payload = json.loads(notify.payload)
-                        channel = notify.channel
-
-                        self.logger.debug(
-                            f"Received notification on channel '{channel}': {payload}"
+                        ready = await loop.run_in_executor(
+                            None,
+                            lambda: select.select(
+                                [self._listen_connection], [], [], self._select_timeout
+                            ),
                         )
 
-                        # Route to registered handler
-                        if channel in self._handlers:
-                            handler = self._handlers[channel]
+                        if ready == ([], [], []):
+                            continue
+
+                        await loop.run_in_executor(None, self._listen_connection.poll)
+
+                        while self._listen_connection.notifies:
+                            notify = self._listen_connection.notifies.pop(0)
+                            self._last_notification_at = time.monotonic()
+
                             try:
-                                # Call handler (should be async)
-                                await handler(payload)
+                                payload = json.loads(notify.payload)
+                                channel = notify.channel
+
+                                self.logger.debug(
+                                    f"Received notification on channel '{channel}': {payload}"
+                                )
+
+                                if channel in self._handlers:
+                                    handler = self._handlers[channel]
+                                    try:
+                                        await handler(payload)
+                                    except Exception as e:
+                                        self.logger.error(
+                                            f"Error in handler for channel '{channel}': {e}",
+                                            exc_info=True,
+                                        )
+                                else:
+                                    self.logger.warning(
+                                        f"No handler registered for channel '{channel}'"
+                                    )
+
+                            except json.JSONDecodeError as e:
+                                self.logger.error(
+                                    f"Failed to parse notification payload: {e}"
+                                )
                             except Exception as e:
                                 self.logger.error(
-                                    f"Error in handler for channel '{channel}': {e}",
+                                    f"Error processing notification: {e}",
                                     exc_info=True,
                                 )
-                        else:
-                            self.logger.warning(
-                                f"No handler registered for channel '{channel}'"
-                            )
-
-                    except json.JSONDecodeError as e:
-                        self.logger.error(f"Failed to parse notification payload: {e}")
-                    except Exception as e:
+                except asyncio.CancelledError:
+                    self.logger.info("Notification listener task cancelled")
+                    raise
+                except Exception as e:
+                    self._connected = False
+                    await loop.run_in_executor(None, self._close_connection)
+                    if not self._ever_connected:
                         self.logger.error(
-                            f"Error processing notification: {e}", exc_info=True
+                            f"Fatal error in notification listener: {e}",
+                            exc_info=True,
                         )
+                        raise RuntimeFailToStart(
+                            f"Notification listener failed: {e}"
+                        ) from e
 
-        except asyncio.CancelledError:
-            self.logger.info("Notification listener task cancelled")
-            raise
+                    if not self.running:
+                        break
 
-        except Exception as e:
-            self.logger.error(
-                f"Fatal error in notification listener: {e}", exc_info=True
-            )
-            # Re-raise to fail the start() call
-            raise RuntimeFailToStart(f"Notification listener failed: {e}")
-
+                    self.logger.warning(
+                        "Notification listener lost connection: "
+                        f"{e}. Reconnecting in {reconnect_delay:.1f}s"
+                    )
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(
+                        reconnect_delay * 2, self._reconnect_max_delay
+                    )
         finally:
-            # Ensure connection is closed
+            self._connected = False
             await asyncio.get_event_loop().run_in_executor(None, self._close_connection)
 
     async def send_notification(self, channel: str, payload: Dict[str, Any]) -> bool:

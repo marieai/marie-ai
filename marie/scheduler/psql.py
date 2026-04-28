@@ -173,6 +173,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         dag_config = config.get("dag_manager", {})
         self.max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
+        self._dag_resolution_retry_limit = int(
+            dag_config.get("dag_resolution_retry_limit", 3)
+        )
+        self._dag_resolution_retry_delay = float(
+            dag_config.get("dag_resolution_retry_delay", 1.0)
+        )
+        self._dag_resolution_retry_backoff = bool(
+            dag_config.get("dag_resolution_retry_backoff", True)
+        )
+        self._dag_resolution_retry_max_delay = float(
+            dag_config.get("dag_resolution_retry_max_delay", 30.0)
+        )
 
         # Initialize DAGManagementService for DAG lifecycle management
         # Service operates on scheduler's frontier and active_dags
@@ -375,7 +387,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 )
 
                 self._status_update_lock.release(job_id)
-                await self.resolve_dag_status(job_id, work_item, now, now)
+                await self._resolve_dag_status_with_retry(
+                    job_id,
+                    work_item,
+                    now,
+                    now,
+                    source="job_event",
+                )
                 await self.notify_event()
             elif (
                 status == JobStatus.FAILED
@@ -543,7 +561,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
             # Check if DAG is complete (leaf node check)
             if job_levels.get(wi.id, -1) == min(job_levels.values()):
-                await self.resolve_dag_status(wi.id, wi)
+                await self._resolve_dag_status_with_retry(
+                    wi.id,
+                    wi,
+                    source="control_flow",
+                )
 
             self.logger.info(
                 f"[CONTROL_FLOW] Successfully processed {node_type} node {wi.id}"
@@ -1240,6 +1262,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             await self.repository.create_queue(work_queue)
             await self.repository.create_queue(f"${work_queue}_dlq")
 
+        # Start the NotificationService before hydrating or polling so DAG
+        # state transitions cannot race ahead of the LISTEN connection.
+        try:
+            await self.notification_service.start()
+            self.logger.info(
+                "Started NotificationService for DAG state change notifications"
+            )
+        except RuntimeFailToStart as e:
+            self.logger.error(f"Critical: NotificationService failed to start: {e}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Unexpected error starting NotificationService: {e}")
+            raise RuntimeFailToStart(f"NotificationService failed to start: {e}") from e
+
         # We need to display the status
         await self.hydrate_from_db()
 
@@ -1265,20 +1301,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             asyncio.create_task(self._process_submission_queue(worker_id))
             for worker_id in range(self.max_workers)
         ]
-
-        # Start the NotificationService for DAG state change notifications
-        # The service handles PostgreSQL LISTEN/NOTIFY in a non-blocking way
-        try:
-            await self.notification_service.start()
-            self.logger.info(
-                "Started NotificationService for DAG state change notifications"
-            )
-        except RuntimeFailToStart as e:
-            self.logger.error(f"Critical: NotificationService failed to start: {e}")
-            raise
-        except Exception as e:
-            self.logger.error(f"Unexpected error starting NotificationService: {e}")
-            raise RuntimeFailToStart(f"NotificationService failed to start: {e}") from e
 
         # Start the MaintenanceService for periodic cleanup tasks
         try:
@@ -2887,7 +2909,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"Synchronized job {job_id} is in terminal state {job_info.status}"
             )
             self._status_update_lock.release(job_id)
-            await self.resolve_dag_status(job_id, work_item, now, now)
+            await self._resolve_dag_status_with_retry(
+                job_id,
+                work_item,
+                now,
+                now,
+                source="storage_sync",
+            )
             await self.notify_event()
         elif (
             job_info.status == JobStatus.FAILED
@@ -2922,6 +2950,21 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 memory_dag_ids = list(self.active_dags.keys())
                 self.logger.debug(f"Validating {len(memory_dag_ids)} DAGs in memory")
 
+                resolved_terminal_dags: set[str] = set()
+                for dag_id in memory_dag_ids:
+                    try:
+                        future = asyncio.run_coroutine_threadsafe(
+                            self.repository.resolve_dag_state(dag_id), self._loop
+                        )
+                        dag_state = future.result(timeout=30)
+                        if dag_state in ("completed", "failed"):
+                            resolved_terminal_dags.add(dag_id)
+                    except Exception as resolve_error:
+                        self.logger.warning(
+                            f"[DAG_SYNC] Failed to resolve DAG state for {dag_id}: "
+                            f"{resolve_error}"
+                        )
+
                 # Delegate to repository to get active DAG IDs
                 # We need to run this async method from sync context
                 future = asyncio.run_coroutine_threadsafe(
@@ -2929,7 +2972,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 )
                 valid_db_dags = future.result(timeout=30)
 
-                invalid_dags = set(memory_dag_ids) - valid_db_dags
+                invalid_dags = (set(memory_dag_ids) - valid_db_dags).union(
+                    resolved_terminal_dags
+                )
 
                 if invalid_dags:
                     self.logger.info(
@@ -2957,12 +3002,26 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             time.sleep(interval)
         self.logger.debug(f"DAG sync polling stopped")
 
+    async def _evict_dag_from_memory(self, dag_id: str, reason: str) -> bool:
+        self._terminal_dag_states.pop(dag_id, None)
+        stats = await self.frontier.finalize_dag(dag_id)
+        removed = self.dag_service.remove_dag(dag_id, reason)
+        self.logger.info(
+            f"[DAG_SYNC] Evicted DAG {dag_id} from memory ({reason}), "
+            f"removed={removed}, finalize_stats={stats}"
+        )
+        return removed
+
     def _remove_dag_from_memory(self, dag_id: str, reason: str):
         """
         Centralized method to remove DAG from memory with logging.
-        Delegates to DAGManagementService.
+        Runs cleanup on the scheduler loop so frontier and active_dags stay
+        synchronized from the same thread.
         """
-        self.dag_service.remove_dag(dag_id, reason)
+        future = asyncio.run_coroutine_threadsafe(
+            self._evict_dag_from_memory(dag_id, reason), self._loop
+        )
+        return future.result(timeout=30)
 
     async def notify_event(self) -> bool:
         if self._debounced_notify:
@@ -3033,7 +3092,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             await self.frontier.on_job_retry(wi.id, wi)
         elif actual_work_state == WorkState.FAILED.value:
             await self.frontier.on_job_failed(wi.id)
-            await self.resolve_dag_status(wi.id, wi)
+            await self._resolve_dag_status_with_retry(
+                wi.id,
+                wi,
+                source="dispatch_failure",
+            )
         else:
             self.logger.error(
                 f"Dispatch failure cleanup could not transition job {wi.id}; "
@@ -3058,6 +3121,57 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             )
 
         await self.notify_event()
+
+    def _get_dag_resolution_retry_delay(self, retry_number: int) -> float:
+        delay = max(0.0, self._dag_resolution_retry_delay)
+        if not self._dag_resolution_retry_backoff or retry_number <= 1:
+            return delay
+
+        return min(
+            self._dag_resolution_retry_max_delay,
+            delay * (2 ** (retry_number - 1)),
+        )
+
+    async def _resolve_dag_status_with_retry(
+        self,
+        job_id: str,
+        work_info: WorkInfo,
+        started_on: Optional[datetime] = None,
+        completed_on: Optional[datetime] = None,
+        *,
+        source: str,
+    ) -> bool:
+        """
+        Retry DAG terminal resolution a small number of times for transient
+        database or cleanup errors without introducing a separate queue.
+        """
+        retry_number = 0
+        while True:
+            try:
+                return await self.resolve_dag_status(
+                    job_id, work_info, started_on, completed_on
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                retry_number += 1
+                if retry_number > self._dag_resolution_retry_limit:
+                    self.logger.error(
+                        f"[DAG_RESOLVE] Exhausted {self._dag_resolution_retry_limit} "
+                        f"retries for dag={work_info.dag_id}, job={job_id}, "
+                        f"source={source}: {error}"
+                    )
+                    return False
+
+                delay = self._get_dag_resolution_retry_delay(retry_number)
+                self.logger.warning(
+                    f"[DAG_RESOLVE] Retry {retry_number}/"
+                    f"{self._dag_resolution_retry_limit} for dag={work_info.dag_id}, "
+                    f"job={job_id}, source={source} after error: {error}. "
+                    f"Waiting {delay:.2f}s"
+                )
+                if delay > 0:
+                    await asyncio.sleep(delay)
 
     async def resolve_dag_status(
         self,

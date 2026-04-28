@@ -875,7 +875,7 @@ class JobRepository(PostgresqlMixin):
                 self.logger.error(f"Error resolving DAG state for {dag_id}: {error}")
                 if conn:
                     conn.rollback()
-                return None
+                raise
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)
@@ -916,7 +916,7 @@ class JobRepository(PostgresqlMixin):
                 self.logger.error(f"Error validating active DAGs: {error}")
                 if conn:
                     conn.rollback()
-                return set()
+                raise
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)
