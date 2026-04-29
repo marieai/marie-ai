@@ -299,6 +299,7 @@ class JobSupervisor:
         JobSupervisor does not reserve or release capacity anymore.
         """
         self.logger.debug("Pre-send callback invoked (no reservation).")
+        self._signal_confirmation_threadsafe()
 
         try:
             node_addr = ctx["address"]
@@ -331,12 +332,13 @@ class JobSupervisor:
         deployment_name = ctx["deployment"]
         epoch = self._current_job_epoch
 
+        self._signal_confirmation_threadsafe()
+
         if epoch is None:
             self.logger.warning("No desired epoch recorded; skipping ack wait")
             return
 
         try:
-            self._signal_confirmation_threadsafe()
             ack = await self._loop.run_in_executor(
                 None, self._await_worker_ack, node, deployment_name, epoch
             )
