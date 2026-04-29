@@ -262,6 +262,9 @@ class GatewayJobDistributor(JobDistributor):
 
         def _done(t: asyncio.Task):
             self._inflight.pop(submission_id, None)
+            if t.cancelled():
+                self.logger.warning("Job task cancelled for %s", submission_id)
+                return
             exc = t.exception()
             if exc:
                 self.logger.error("Job task crashed for %s: %s", submission_id, exc)

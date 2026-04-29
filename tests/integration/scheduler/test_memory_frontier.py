@@ -369,6 +369,35 @@ async def test_release_lease_does_not_requeue_terminal_job(frontier: MemoryFront
 
 
 @pytest.mark.asyncio
+async def test_active_job_not_requeued_after_lease_expires(frontier: MemoryFrontier):
+    job = wi_factory("active_reap_test", priority=1)
+    await add_ready_jobs(frontier, job)
+
+    taken = await frontier.take(["active_reap_test"], lease_ttl=0.05)
+    assert len(taken) == 1
+
+    await frontier.update_job_state("active_reap_test", "active")
+    await asyncio.sleep(0.1)
+    await frontier.reap_expired_soft_leases()
+
+    ready = await frontier.peek_ready(10)
+    assert "active_reap_test" not in [wi.id for wi in ready]
+
+
+@pytest.mark.asyncio
+async def test_release_lease_does_not_requeue_active_job(frontier: MemoryFrontier):
+    job = wi_factory("active_release_test", priority=1)
+    await add_ready_jobs(frontier, job)
+
+    await frontier.take(["active_release_test"], lease_ttl=60.0)
+    await frontier.update_job_state("active_release_test", "active")
+    await frontier.release_lease_local("active_release_test")
+
+    ready = await frontier.peek_ready(10)
+    assert "active_release_test" not in [wi.id for wi in ready]
+
+
+@pytest.mark.asyncio
 async def test_on_job_skipped_sets_state_and_removes_from_ready(frontier: MemoryFrontier):
     """on_job_skipped() should set state to SKIPPED and remove from ready queue."""
     job = wi_factory("skip_test", priority=1)

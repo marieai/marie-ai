@@ -1385,6 +1385,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if time.monotonic() >= self._next_priority_refresh_at:
                     await self._refresh_job_priorities()
 
+                reaped_soft_leases = await self.frontier.reap_expired_soft_leases()
+                if reaped_soft_leases:
+                    self.logger.warning(
+                        f"[WORK_DIST] Reaped {reaped_soft_leases} expired local frontier lease(s)"
+                    )
+
                 # Check if gateway is ready before attempting to dispatch work
                 if (
                     self._gateway_ready_event is not None
@@ -1499,7 +1505,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
                     for wi in control_flow_jobs:
                         # Take from frontier and lease in DB
-                        taken_wis = await self.frontier.take([wi.id])
+                        taken_wis = await self.frontier.take(
+                            [wi.id], lease_ttl=lease_ttl
+                        )
                         if not taken_wis:
                             self.logger.warning(
                                 f"[WORK_DIST] Failed to take control flow node {wi.id} from frontier"
@@ -1605,7 +1613,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                 # TAKE + SOFT-LEASE
                 selected_ids = [wi.id for _, wi in planned]
-                selected_wis: List[WorkInfo] = await self.frontier.take(selected_ids)
+                selected_wis: List[WorkInfo] = await self.frontier.take(
+                    selected_ids, lease_ttl=lease_ttl
+                )
 
                 taken = len(selected_wis)
                 requested = len(selected_ids)
@@ -1908,8 +1918,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def _activate_and_enqueue_job(self, wi: WorkInfo) -> bool:
         """Marks a job as active in the database and then enqueues it to a worker."""
-        await self.mark_as_active(wi)
-        return await self.enqueue(wi)
+        is_retry = wi.state == WorkState.RETRY or wi.state == WorkState.RETRY.value
+        marked_active = await self.mark_as_active(wi)
+        if not marked_active:
+            self.logger.error(f"Failed to mark job {wi.id} active before enqueue")
+            return False
+        await self.frontier.update_job_state(wi.id, WorkState.ACTIVE)
+        return await self.enqueue(wi, is_retry=is_retry)
 
     async def stop(self, timeout: float = 2.0) -> None:
         self.logger.info("Stopping job scheduling agent")
@@ -2083,7 +2098,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         return debug_data
 
-    async def enqueue(self, work_info: WorkInfo) -> bool:
+    async def enqueue(
+        self, work_info: WorkInfo, *, is_retry: Optional[bool] = None
+    ) -> bool:
         """
         Tries to dispatch a work item to an executor and waits for confirmation.
         This method does NOT change the job state in the database.
@@ -2113,21 +2130,27 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 )  # job ID serves as node task ID
 
             # Detect if this is a retry (job was previously run and failed)
-            is_retry = work_info.state == WorkState.RETRY
+            if is_retry is None:
+                is_retry = (
+                    work_info.state == WorkState.RETRY
+                    or work_info.state == WorkState.RETRY.value
+                )
 
-            await self.job_manager.submit_job(
-                entrypoint=entrypoint,
-                submission_id=submission_id,
-                metadata=job_metadata,
-                confirmation_event=confirmation_event,
-                is_retry=is_retry,
-            )
+            async def _submit_and_confirm() -> None:
+                await self.job_manager.submit_job(
+                    entrypoint=entrypoint,
+                    submission_id=submission_id,
+                    metadata=job_metadata,
+                    confirmation_event=confirmation_event,
+                    is_retry=is_retry,
+                )
 
-            # Wait for the supervisor to confirm it has received the job and is running.
-            # A short timeout is critical, it should be less than the lease TTL.
-            await asyncio.wait_for(
-                confirmation_event.wait(), timeout=self.lease_ttl_seconds - 1
-            )
+                # Wait for the supervisor to confirm it has received the job and is running.
+                # The timeout covers submit + confirmation and must stay inside the lease TTL.
+                await confirmation_event.wait()
+
+            dispatch_timeout = max(0.1, float(self.lease_ttl_seconds) - 1.0)
+            await asyncio.wait_for(_submit_and_confirm(), timeout=dispatch_timeout)
             self.logger.debug(f"Dispatch confirmed for job: {submission_id}")
             return True
 

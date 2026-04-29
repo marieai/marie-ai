@@ -115,11 +115,24 @@ class MemoryFrontier:
     def _remove_from_ready_set(self, job_id: str) -> None:
         self._ready_set.discard(job_id)
 
+    @staticmethod
+    def _is_schedulable_state(state: Any) -> bool:
+        if state is None:
+            return True
+        if isinstance(state, WorkState):
+            return state in (WorkState.CREATED, WorkState.RETRY)
+        if isinstance(state, str):
+            try:
+                return WorkState(state.lower()) in (WorkState.CREATED, WorkState.RETRY)
+            except ValueError:
+                return False
+        return False
+
     def _still_ready(self, job_id: str) -> bool:
         if job_id not in self.jobs_by_id:
             return False
         wi = self.jobs_by_id[job_id]
-        if is_terminal_state(wi.state):
+        if not self._is_schedulable_state(wi.state):
             return False
         if self.unmet_count.get(job_id, 1) != 0:
             return False
@@ -321,8 +334,7 @@ class MemoryFrontier:
             wi = self.jobs_by_id.get(job_id)
             if wi is None:
                 return
-            # Don't re-ready terminal jobs
-            if is_terminal_state(wi.state):
+            if not self._is_schedulable_state(wi.state):
                 return
             if self.unmet_count.get(job_id, 1) == 0:
                 # keep original added_at to preserve aging
@@ -434,10 +446,9 @@ class MemoryFrontier:
             for jid in reap:
                 self.leased_until.pop(jid, None)
                 wi = self.jobs_by_id.get(jid)
-                # Don't resurrect terminal jobs
                 if (
                     wi
-                    and not is_terminal_state(wi.state)
+                    and self._is_schedulable_state(wi.state)
                     and self.unmet_count.get(jid, 1) == 0
                 ):
                     self._push_ready(wi)
