@@ -570,6 +570,66 @@ async def test_sync_terminal_job_state_succeeded_unblocks_children_and_notifies(
 
 
 @pytest.mark.asyncio
+async def test_sync_active_jobs_once_syncs_fresh_terminal_status_immediately():
+    dag_id = "dag-sync-fresh"
+    job = build_work_item("job-sync-fresh", dag_id)
+    job.state = WorkState.ACTIVE
+
+    frontier = RecordingFrontier()
+    await frontier.add_dag(None, [job])
+
+    repository = RecordingRepository(dag_state="completed")
+    scheduler = build_scheduler(repository, frontier)
+    scheduler._status_update_lock = AsyncJobLock()
+
+    complete_calls: list[dict] = []
+
+    async def fake_complete(
+        job_id: str,
+        wi: WorkInfo,
+        output_metadata: dict | None = None,
+        force: bool = False,
+    ) -> None:
+        complete_calls.append(
+            {
+                "job_id": job_id,
+                "output_metadata": output_metadata or {},
+                "force": force,
+            }
+        )
+
+    async def fake_list_jobs(state=None):
+        return {job.id: job}
+
+    async def fake_get_dag_by_id(dag_id: str):
+        return None
+
+    class FakeJobInfoClient:
+        async def get_info(self, job_id: str):
+            return JobInfo(
+                status=JobStatus.SUCCEEDED,
+                entrypoint="test-entrypoint",
+                end_time=int(datetime.now(timezone.utc).timestamp() * 1000),
+            )
+
+    scheduler.complete = fake_complete
+    scheduler.list_jobs = fake_list_jobs
+    scheduler.get_dag_by_id = fake_get_dag_by_id
+
+    synced = await scheduler._sync_active_jobs_once(FakeJobInfoClient())
+
+    assert synced == 1
+    assert complete_calls == [
+        {
+            "job_id": job.id,
+            "output_metadata": {"synced": True},
+            "force": True,
+        }
+    ]
+    assert scheduler.notify_calls == [True]
+
+
+@pytest.mark.asyncio
 async def test_admit_dag_requires_db_activation_success():
     dag_id = "dag-admit"
     work_item = build_work_item("job-admit", dag_id)

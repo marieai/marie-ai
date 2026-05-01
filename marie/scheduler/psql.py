@@ -2816,39 +2816,51 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         wait_time = SYNC_POLL_PERIOD
         job_info_client = self.job_manager.job_info_client()
-        min_sync_interval_seconds = 300  # 5 minutes in seconds
 
         while self.running:
-            self.logger.info(f"Syncing job status every {wait_time} seconds")
-            await asyncio.sleep(wait_time)
             try:
-                active_jobs = await self.list_jobs(state=[WorkState.ACTIVE.value])
-                if not active_jobs:
-                    continue
-
-                for job_id, work_item in active_jobs.items():
-                    self.logger.info(f"Syncing job: {job_id}")
-                    job_info = await job_info_client.get_info(job_id)
-                    if job_info is None:
-                        self.logger.error(f"Job to synchronize not found: {job_id}")
-                        continue
-
-                    if not job_info.status:
-                        self.logger.warning(
-                            f"Missing status for job: {job_id}, skipping."
-                        )
-                        continue
-
-                    await self._sync_terminal_job_state(
-                        job_id,
-                        work_item,
-                        job_info,
-                        min_sync_interval_seconds=min_sync_interval_seconds,
-                    )
+                await self._sync_active_jobs_once(job_info_client)
 
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error syncing jobs: {error}")
                 self.logger.error(traceback.format_exc())
+
+            self.logger.info(f"Syncing job status every {wait_time} seconds")
+            await asyncio.sleep(wait_time)
+
+    async def _sync_active_jobs_once(self, job_info_client) -> int:
+        active_jobs = await self.list_jobs(state=[WorkState.ACTIVE.value])
+        if not active_jobs:
+            return 0
+
+        synced = 0
+        for job_id, work_item in active_jobs.items():
+            self.logger.info(f"Syncing job: {job_id}")
+            job_info = await job_info_client.get_info(job_id)
+            if job_info is None:
+                self.logger.error(f"Job to synchronize not found: {job_id}")
+                continue
+
+            if not job_info.status:
+                self.logger.warning(f"Missing status for job: {job_id}, skipping.")
+                continue
+
+            if not job_info.status.is_terminal():
+                self.logger.debug(
+                    f"Job {job_id} has non-terminal job-info status "
+                    f"{job_info.status}; leaving DB state active"
+                )
+                continue
+
+            if await self._sync_terminal_job_state(
+                job_id,
+                work_item,
+                job_info,
+                min_sync_interval_seconds=0,
+            ):
+                synced += 1
+
+        return synced
 
     async def _sync_terminal_job_state(
         self,
@@ -2871,7 +2883,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         remaining_time = None
         now = datetime.now(tz=timezone.utc)
 
-        if job_info.end_time is not None:
+        if min_sync_interval_seconds <= 0:
+            synchronize = True
+        elif job_info.end_time is not None:
             timestamp_ms = job_info.end_time
             end_time = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
             remaining_time = end_time - now
