@@ -769,6 +769,60 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                                         distributed_count += 1
                 continue
 
+            if source_path.startswith("section:"):
+                role_hint = source_path.split(":", 1)[1]
+                resolver_path = dist_cfg.get("resolver", "")
+                args = dist_cfg.get("args", [])
+                derived_fields = dist_cfg.get("derived_fields", None)
+
+                if document and resolver_path:
+                    sections = source_record.get(role_hint, [])
+                    if sections:
+                        resolver_fn = _import_resolver(resolver_path)
+                        lookup_map = resolver_fn(sections, dist_cfg, matched_field_rows)
+                        print("lookup_map: ", lookup_map)
+
+                        for row_idx, row in enumerate(matched_field_rows):
+                            row_key = _get_row_match_key(
+                                row, args, source_record, row_idx
+                            )
+                            if not row_key:
+                                continue
+
+                            key_parts = [k.strip() for k in row_key.split(",")]
+
+                            # For each derived field, collect its value from each key_part's lookup entry
+                            for derived_key, target_col in derived_fields.items():
+                                per_key_values = []
+                                for key_part in key_parts:
+                                    entry = lookup_map.get(key_part)
+                                    if entry is None:
+                                        continue
+                                    # Resolver returns {line_num: {DERIVED_KEY: value, ...}}
+                                    derived_val = (
+                                        entry.get(derived_key)
+                                        if isinstance(entry, dict)
+                                        else str(entry)
+                                    )
+                                    if derived_val:
+                                        per_key_values.append(str(derived_val))
+
+                                if not per_key_values:
+                                    continue
+
+                                joined_value = ", ".join(per_key_values)
+
+                                for col_name in map(str.strip, target_col.split(",")):
+                                    for field in row.fields:
+                                        if field.field_name != col_name:
+                                            continue
+                                        if strategy == "fill_empty" and field.value:
+                                            continue
+                                        field.value = joined_value
+                                        if not field.value_original:
+                                            field.value_original = joined_value
+                                        distributed_count += 1
+                    continue
             # JSONPath or dot-path resolution
             if source_path.startswith("$"):
                 source_value = _resolve_jsonpath(source_path, source_record)
