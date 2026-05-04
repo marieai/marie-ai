@@ -182,6 +182,14 @@ class LLMPipeline(BasePipeline):
         grouped_sub_classifiers = defaultdict(dict)
 
         for group, classifier_group in self.classifier_groups.items():
+            if runtime_conf.get("page_classifier") and not runtime_conf.get(
+                "page_classifier"
+            ).get("enabled", True):
+                self.logger.debug(
+                    f"Skipping disabled page classifier for group: {group}"
+                )
+                continue
+
             classifier_component, sub_classifiers = self.build_classifier_component(
                 classifier_group, group
             )
