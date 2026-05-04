@@ -44,10 +44,58 @@ if psycopg is None:  # pragma: no cover - environment-dependent import
 
 TOOL_VERSION = "0.1.0"
 SCHEMA_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$")
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 ACTIVE_JOB_STATES = {"active", "retry"}
 TERMINAL_JOB_STATES = {"completed", "skipped", "expired", "cancelled", "failed"}
 TERMINAL_DAG_STATES = TERMINAL_JOB_STATES
 STATUS_ENDPOINT_CANDIDATES = ("/status", "/health/status")
+FINDING_HINTS: dict[str, list[str]] = {
+    "admission_starvation": [
+        "Check whether the active DAGs are making progress or are stuck in terminal-zombie or stale-active states.",
+        "Inspect the oldest ready jobs and confirm the gateway still has free workers or executors available to admit them.",
+        "If slots are occupied by terminal or wedged DAGs, capture a report first and then clear or restart the affected scheduler process.",
+    ],
+    "terminal_zombie_dags": [
+        "Compare gateway in-memory active DAGs with database DAG state to confirm the admission slots are stale.",
+        "Check gateway logs for missing DAG cleanup or exceptions after job completion.",
+        "If the scheduler is wedged on stale DAG state, capture evidence and restart the gateway or clear the bad DAGs through the normal operator path.",
+    ],
+    "stuck_active_jobs": [
+        "Inspect the affected job IDs in executor and gateway logs to confirm whether the worker crashed or stopped heartbeating.",
+        "Check lease_owner and lease_expires_at fields to see whether another worker still owns the job.",
+        "If the executor is gone and the lease will not recover, use the normal operator workflow to reset or fail the job so the DAG can move again.",
+    ],
+    "ready_backlog_aging": [
+        "Check whether the frontier has ready work but no DAG slots or workers available to pick it up.",
+        "Review queue balance and worker capacity for the affected planner or queue before increasing thresholds.",
+        "If the backlog is expected for this workload, adjust the long-running or ready-age thresholds rather than treating it as an outage.",
+    ],
+    "scheduler_not_polling": [
+        "Check gateway logs for fetch-loop or scheduler exceptions around the current time window.",
+        "Confirm the scheduler thread/process is running and can still reach PostgreSQL and any required broker dependencies.",
+        "If the process is up but the fetch counter stays at zero, capture the report and restart the gateway scheduler component.",
+    ],
+    "unresolved_terminal_dags": [
+        "Inspect DAG finalization code paths to see why the DAG state was not updated after all jobs finished.",
+        "Check for database write failures or transaction rollbacks near the end of the DAG lifecycle.",
+        "Use the normal operator cleanup path to reconcile the DAG state once you confirm the jobs are truly terminal.",
+    ],
+    "hydrated_created_dags": [
+        "Confirm the DAG was admitted into gateway memory but never advanced into active execution.",
+        "Check gateway scheduling decisions and worker availability for the planner that owns the DAG.",
+        "Look for dependency or frontier issues that keep the DAG loaded but unable to start any jobs.",
+    ],
+    "gateway_db_divergence": [
+        "Compare gateway /api/debug state with direct database counts to confirm whether the divergence is persistent.",
+        "Check for recent gateway restarts, failed writes, or cleanup exceptions that could desynchronize memory from PostgreSQL.",
+        "If divergence persists, restart the gateway after capturing the report so in-memory state is rebuilt from the database.",
+    ],
+    "submission_workers_idle": [
+        "Check submission worker logs for startup failures or blocked queue consumption.",
+        "Confirm the pending request queue is draining and that workers still have connectivity to the scheduler database.",
+        "If workers are not recovering on their own, restart the submission worker process after collecting evidence.",
+    ],
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -88,7 +136,7 @@ def parse_args() -> argparse.Namespace:
         help="Long-running threshold in minutes",
     )
     parser.add_argument(
-        "--container-name", default="marie-gateway", help="Gateway container name"
+        "--container-name", default="marieai-gateway", help="Gateway container name"
     )
     parser.add_argument(
         "--log-file",
@@ -97,6 +145,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--log-tail", type=int, default=200, help="Number of log lines to tail"
+    )
+    parser.add_argument(
+        "--include-log-lines",
+        action="store_true",
+        help="Include raw tailed log lines in the JSON output",
     )
     parser.add_argument("--no-logs", action="store_true", help="Skip log collection")
     parser.add_argument(
@@ -168,6 +221,10 @@ def humanize_seconds(seconds: float | None) -> str | None:
     if seconds is None:
         return None
     return str(timedelta(seconds=int(seconds)))
+
+
+def strip_ansi(text: str) -> str:
+    return ANSI_ESCAPE_PATTERN.sub("", text)
 
 
 def coerce_json_response(payload: Any) -> Any:
@@ -536,7 +593,31 @@ def collect_database(
     return database
 
 
-def collect_container_logs(name: str, tail: int) -> dict[str, Any]:
+def format_log_payload(
+    *,
+    available: bool,
+    source: str | None,
+    exit_code: int | None,
+    error: dict[str, Any] | None,
+    lines: list[str],
+    include_lines: bool,
+    skipped: bool = False,
+) -> dict[str, Any]:
+    sanitized_lines = [strip_ansi(line) for line in lines]
+    payload = {
+        "available": available,
+        "source": source,
+        "exit_code": exit_code,
+        "error": error,
+        "skipped": skipped,
+        "line_count": len(sanitized_lines),
+        "lines_included": include_lines,
+        "lines": sanitized_lines if include_lines else [],
+    }
+    return payload
+
+
+def collect_container_logs(name: str, tail: int, include_lines: bool) -> dict[str, Any]:
     try:
         result = subprocess.run(
             ["docker", "logs", "--tail", str(tail), name],
@@ -545,21 +626,23 @@ def collect_container_logs(name: str, tail: int) -> dict[str, Any]:
             check=False,
         )
     except FileNotFoundError as exc:
-        return {
-            "available": False,
-            "source": "docker",
-            "exit_code": None,
-            "error": {"kind": "docker_unavailable", "message": str(exc)},
-            "lines": [],
-        }
+        return format_log_payload(
+            available=False,
+            source="docker",
+            exit_code=None,
+            error={"kind": "docker_unavailable", "message": str(exc)},
+            lines=[],
+            include_lines=include_lines,
+        )
     except PermissionError as exc:
-        return {
-            "available": False,
-            "source": "docker",
-            "exit_code": None,
-            "error": {"kind": "permission_denied", "message": str(exc)},
-            "lines": [],
-        }
+        return format_log_payload(
+            available=False,
+            source="docker",
+            exit_code=None,
+            error={"kind": "permission_denied", "message": str(exc)},
+            lines=[],
+            include_lines=include_lines,
+        )
 
     output = "\n".join(
         part for part in [result.stdout, result.stderr] if part
@@ -569,82 +652,91 @@ def collect_container_logs(name: str, tail: int) -> dict[str, Any]:
         stderr = (result.stderr or result.stdout or "").lower()
         if "permission denied" in stderr:
             kind = "permission_denied"
-        return {
-            "available": False,
-            "source": "docker",
-            "exit_code": result.returncode,
-            "error": {
+        return format_log_payload(
+            available=False,
+            source="docker",
+            exit_code=result.returncode,
+            error={
                 "kind": kind,
                 "message": (result.stderr or result.stdout).strip(),
             },
-            "lines": output[-tail:],
-        }
+            lines=output[-tail:],
+            include_lines=include_lines,
+        )
 
-    return {
-        "available": True,
-        "source": "docker",
-        "exit_code": result.returncode,
-        "error": None,
-        "lines": output[-tail:],
-    }
+    return format_log_payload(
+        available=True,
+        source="docker",
+        exit_code=result.returncode,
+        error=None,
+        lines=output[-tail:],
+        include_lines=include_lines,
+    )
 
 
-def collect_file_logs(path: str, tail: int) -> dict[str, Any]:
+def collect_file_logs(path: str, tail: int, include_lines: bool) -> dict[str, Any]:
     log_path = Path(path)
     if not log_path.exists():
-        return {
-            "available": False,
-            "source": "file",
-            "exit_code": None,
-            "error": {"kind": "file_missing", "message": f"Log file not found: {path}"},
-            "lines": [],
-        }
+        return format_log_payload(
+            available=False,
+            source="file",
+            exit_code=None,
+            error={"kind": "file_missing", "message": f"Log file not found: {path}"},
+            lines=[],
+            include_lines=include_lines,
+        )
     if not log_path.is_file():
-        return {
-            "available": False,
-            "source": "file",
-            "exit_code": None,
-            "error": {
+        return format_log_payload(
+            available=False,
+            source="file",
+            exit_code=None,
+            error={
                 "kind": "invalid_log_source",
                 "message": f"Not a regular file: {path}",
             },
-            "lines": [],
-        }
+            lines=[],
+            include_lines=include_lines,
+        )
 
     try:
         with log_path.open("r", encoding="utf-8", errors="replace") as handle:
             lines = list(deque((line.rstrip("\n") for line in handle), maxlen=tail))
     except OSError as exc:
-        return {
-            "available": False,
-            "source": "file",
-            "exit_code": None,
-            "error": {"kind": "file_unreadable", "message": str(exc)},
-            "lines": [],
-        }
+        return format_log_payload(
+            available=False,
+            source="file",
+            exit_code=None,
+            error={"kind": "file_unreadable", "message": str(exc)},
+            lines=[],
+            include_lines=include_lines,
+        )
 
-    return {
-        "available": True,
-        "source": "file",
-        "exit_code": 0,
-        "error": None,
-        "lines": lines,
-    }
+    return format_log_payload(
+        available=True,
+        source="file",
+        exit_code=0,
+        error=None,
+        lines=lines,
+        include_lines=include_lines,
+    )
 
 
 def collect_logs(args: argparse.Namespace) -> dict[str, Any]:
     if args.no_logs:
-        return {
-            "available": False,
-            "source": None,
-            "exit_code": None,
-            "error": None,
-            "skipped": True,
-            "lines": [],
-        }
+        return format_log_payload(
+            available=False,
+            source=None,
+            exit_code=None,
+            error=None,
+            lines=[],
+            include_lines=args.include_log_lines,
+            skipped=True,
+        )
     if args.log_file:
-        return collect_file_logs(args.log_file, args.log_tail)
-    return collect_container_logs(args.container_name, args.log_tail)
+        return collect_file_logs(args.log_file, args.log_tail, args.include_log_lines)
+    return collect_container_logs(
+        args.container_name, args.log_tail, args.include_log_lines
+    )
 
 
 def nested_get(payload: Any, path: Iterable[str], default: Any = None) -> Any:
@@ -665,6 +757,19 @@ def distribution_to_map(rows: list[dict[str, Any]]) -> dict[str, int]:
         count = int(row.get("total_count") or 0)
         output[state] = count
     return output
+
+
+def build_finding(
+    issue: str, severity: str, detail: str, **extra: Any
+) -> dict[str, Any]:
+    finding = {
+        "issue": issue,
+        "severity": severity,
+        "detail": detail,
+        "hints": FINDING_HINTS.get(issue, []),
+    }
+    finding.update(extra)
+    return finding
 
 
 def analyze(
@@ -730,11 +835,11 @@ def analyze(
         and ready_count > 0
     ):
         findings.append(
-            {
-                "issue": "admission_starvation",
-                "severity": "critical",
-                "detail": f"All {max_concurrent_dags} DAG slots full, {ready_count} ready jobs waiting",
-            }
+            build_finding(
+                "admission_starvation",
+                "critical",
+                f"All {max_concurrent_dags} DAG slots full, {ready_count} ready jobs waiting",
+            )
         )
 
     zombies = [
@@ -744,44 +849,44 @@ def analyze(
     ]
     if zombies:
         findings.append(
-            {
-                "issue": "terminal_zombie_dags",
-                "severity": "critical",
-                "count": len(zombies),
-                "dag_ids": [row["id"] for row in zombies[:25]],
-                "detail": "DAGs with terminal DB state still consuming admission slots",
-            }
+            build_finding(
+                "terminal_zombie_dags",
+                "critical",
+                "DAGs with terminal DB state still consuming admission slots",
+                count=len(zombies),
+                dag_ids=[row["id"] for row in zombies[:25]],
+            )
         )
 
     if stuck_active_jobs:
         findings.append(
-            {
-                "issue": "stuck_active_jobs",
-                "severity": "critical",
-                "count": len(stuck_active_jobs),
-                "oldest_run_time_seconds": stuck_active_jobs[0].get("run_time_seconds"),
-                "oldest_run_time_human": stuck_active_jobs[0].get("run_time_human"),
-                "detail": "Jobs in ACTIVE state past threshold, likely executor crash or wedge",
-            }
+            build_finding(
+                "stuck_active_jobs",
+                "critical",
+                "Jobs in ACTIVE state past threshold, likely executor crash or wedge",
+                count=len(stuck_active_jobs),
+                oldest_run_time_seconds=stuck_active_jobs[0].get("run_time_seconds"),
+                oldest_run_time_human=stuck_active_jobs[0].get("run_time_human"),
+            )
         )
 
     if ready_age_p90 is not None and ready_age_p90 > (threshold_minutes * 60):
         findings.append(
-            {
-                "issue": "ready_backlog_aging",
-                "severity": "warning",
-                "p90_age_seconds": ready_age_p90,
-                "detail": "Ready work has been waiting longer than the configured threshold",
-            }
+            build_finding(
+                "ready_backlog_aging",
+                "warning",
+                "Ready work has been waiting longer than the configured threshold",
+                p90_age_seconds=ready_age_p90,
+            )
         )
 
     if fetch_counter is not None and fetch_counter == 0:
         findings.append(
-            {
-                "issue": "scheduler_not_polling",
-                "severity": "critical",
-                "detail": "Scheduler fetch counter is zero",
-            }
+            build_finding(
+                "scheduler_not_polling",
+                "critical",
+                "Scheduler fetch counter is zero",
+            )
         )
 
     unresolved = [
@@ -791,13 +896,13 @@ def analyze(
     ]
     if unresolved:
         findings.append(
-            {
-                "issue": "unresolved_terminal_dags",
-                "severity": "warning",
-                "count": len(unresolved),
-                "dag_ids": [row["id"] for row in unresolved[:25]],
-                "detail": "All jobs are terminal but DAG state is not resolved",
-            }
+            build_finding(
+                "unresolved_terminal_dags",
+                "warning",
+                "All jobs are terminal but DAG state is not resolved",
+                count=len(unresolved),
+                dag_ids=[row["id"] for row in unresolved[:25]],
+            )
         )
 
     hydrated = [
@@ -807,23 +912,23 @@ def analyze(
     ]
     if hydrated:
         findings.append(
-            {
-                "issue": "hydrated_created_dags",
-                "severity": "warning",
-                "count": len(hydrated),
-                "dag_ids": [row["id"] for row in hydrated[:25]],
-                "detail": "Created DAGs are loaded in gateway memory but not actively executing",
-            }
+            build_finding(
+                "hydrated_created_dags",
+                "warning",
+                "Created DAGs are loaded in gateway memory but not actively executing",
+                count=len(hydrated),
+                dag_ids=[row["id"] for row in hydrated[:25]],
+            )
         )
 
     if gateway_data.get("reachable") and db_data.get("reachable"):
         if in_memory_dag_ids and not zombies and state_counts.get("active", 0) == 0:
             findings.append(
-                {
-                    "issue": "gateway_db_divergence",
-                    "severity": "warning",
-                    "detail": "Gateway reports in-memory DAGs while DB shows no active DAGs",
-                }
+                build_finding(
+                    "gateway_db_divergence",
+                    "warning",
+                    "Gateway reports in-memory DAGs while DB shows no active DAGs",
+                )
             )
 
     if (
@@ -833,11 +938,11 @@ def analyze(
         and pending_requests > 0
     ):
         findings.append(
-            {
-                "issue": "submission_workers_idle",
-                "severity": "warning",
-                "detail": f"No active submission workers but {pending_requests} pending requests are queued",
-            }
+            build_finding(
+                "submission_workers_idle",
+                "warning",
+                f"No active submission workers but {pending_requests} pending requests are queued",
+            )
         )
 
     severity_rank = {"critical": 0, "warning": 1, "info": 2}
@@ -919,6 +1024,9 @@ def main() -> int:
                 "source": None,
                 "exit_code": None,
                 "error": None,
+                "skipped": False,
+                "line_count": 0,
+                "lines_included": False,
                 "lines": [],
             },
             "analysis": {"findings": []},

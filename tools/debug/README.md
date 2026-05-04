@@ -10,6 +10,8 @@ It combines:
 
 The output is JSON so it can be used both by operators and by automation.
 
+By default, the JSON includes only log collection metadata, not raw log lines. This keeps the report small and avoids dumping noisy container output into every snapshot.
+
 ## What It Is For
 
 Use this when work is not flowing through the gateway and you need to answer:
@@ -28,6 +30,12 @@ Run from the `projects/marie-ai` root:
 
 ```bash
 python tools/debug/gateway_debug.py --pretty
+```
+
+If you want the actual tailed log lines included in the JSON:
+
+```bash
+python tools/debug/gateway_debug.py --include-log-lines --pretty
 ```
 
 ## Running Inside the Gateway Container
@@ -120,8 +128,9 @@ python tools/debug/gateway_debug.py \
 
 ```bash
 python tools/debug/gateway_debug.py \
-  --container-name marie-gateway \
+  --container-name marieai-gateway \
   --log-tail 300 \
+  --include-log-lines \
   --pretty
 ```
 
@@ -133,6 +142,7 @@ Use this when the gateway is not running in a local Docker container or logs are
 python tools/debug/gateway_debug.py \
   --log-file /var/log/marie/gateway.log \
   --log-tail 300 \
+  --include-log-lines \
   --pretty
 ```
 
@@ -141,7 +151,7 @@ python tools/debug/gateway_debug.py \
 If the repo is mounted inside the container:
 
 ```bash
-docker exec -it marie-gateway \
+docker exec -it marieai-gateway \
   python /workspace/tools/debug/gateway_debug.py \
   --gateway-url http://localhost:51000 \
   --db-host marie-postgres \
@@ -153,8 +163,8 @@ docker exec -it marie-gateway \
 If the script is not present in the container yet, copy it first:
 
 ```bash
-docker cp tools/debug/gateway_debug.py marie-gateway:/tmp/gateway_debug.py
-docker exec -it marie-gateway python /tmp/gateway_debug.py --gateway-url http://localhost:51000 --no-logs --pretty
+docker cp tools/debug/gateway_debug.py marieai-gateway:/tmp/gateway_debug.py
+docker exec -it marieai-gateway python /tmp/gateway_debug.py --gateway-url http://localhost:51000 --no-logs --pretty
 ```
 
 ### 6. Inspect one DAG or one job
@@ -181,9 +191,10 @@ python tools/debug/gateway_debug.py --job-id 069e81bd-6407-7d61-8000-4b764ff92f7
 | `--job-id` | none | Fetch one job detail row |
 | `--dag-id` | none | Fetch all jobs for one DAG |
 | `--long-running-threshold` | `15` | Long-running threshold in minutes |
-| `--container-name` | `marie-gateway` | Docker container to tail |
+| `--container-name` | `marieai-gateway` | Docker container to tail |
 | `--log-file` | none | File path to gateway logs |
 | `--log-tail` | `200` | Number of log lines to include |
+| `--include-log-lines` | `false` | Include the tailed raw log lines in JSON output |
 | `--no-logs` | `false` | Skip log collection |
 | `--pretty` | `false` | Pretty-print JSON |
 
@@ -217,6 +228,26 @@ Important parts to inspect first:
 - `database.stuck_active_jobs`
 - `analysis.findings`
 
+Each item in `analysis.findings` includes:
+
+- `issue`
+- `severity`
+- `detail`
+- `hints`
+
+The `hints` field is a short operator-oriented checklist for the specific failure mode.
+
+For `container_logs`, the normal fields to inspect are:
+
+- `available`
+- `source`
+- `exit_code`
+- `error`
+- `line_count`
+- `lines_included`
+
+Raw lines are only populated when `--include-log-lines` is set. ANSI color codes are stripped before they are written to JSON.
+
 ## Findings You May See
 
 Examples of finding keys:
@@ -231,6 +262,21 @@ Examples of finding keys:
 - `gateway_db_divergence`
 
 These are derived from the current gateway snapshot plus DB evidence.
+
+Example:
+
+```json
+{
+  "issue": "scheduler_not_polling",
+  "severity": "critical",
+  "detail": "Scheduler fetch counter is zero",
+  "hints": [
+    "Check gateway logs for fetch-loop or scheduler exceptions around the current time window.",
+    "Confirm the scheduler thread/process is running and can still reach PostgreSQL and any required broker dependencies.",
+    "If the process is up but the fetch counter stays at zero, capture the report and restart the gateway scheduler component."
+  ]
+}
+```
 
 ## Exit Codes
 
