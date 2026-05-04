@@ -821,6 +821,8 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             summary, histogram, histogram_metric_labels, tracing_context
         ):
             try:
+                _caller_loop = get_or_reuse_loop()
+
                 # wrap the func to allow for capturing a return value and calling our completion
                 # callback to indicate that the job has completed
                 def completion_function_wrapper(fn):
@@ -851,9 +853,12 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                             except Exception as exc:
                                 ex = exc
                             finally:
-                                loop = get_or_reuse_loop()
-                                task = loop.create_task(completion_callback(retval, ex))
-                                loop.run_until_complete(task)
+                                future = asyncio.run_coroutine_threadsafe(
+                                    completion_callback(retval, ex), _caller_loop
+                                )
+                                future.result(
+                                    timeout=30
+                                )  # block thread until callback complete
 
                         return arg_wrapper
 
