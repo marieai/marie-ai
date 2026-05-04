@@ -15,6 +15,7 @@ from marie.ocr.util import get_known_ocr_engines
 from marie.pipe.base_pipeline import BasePipeline
 from marie.pipe.components import (
     burst_frames,
+    is_component_enabled,
     load_pipeline,
     ocr_frames,
     restore_assets,
@@ -190,12 +191,20 @@ class LLMPipeline(BasePipeline):
         processing_group_pipeline = defaultdict(list)
         grouped_sub_classifiers = defaultdict(dict)
 
-        for group, classifier_group in self.classifier_groups.items():
-            classifier_component, sub_classifiers = self.build_classifier_component(
-                classifier_group, group
-            )
-            processing_group_pipeline[group].append(classifier_component)
-            grouped_sub_classifiers[group] = sub_classifiers
+        page_classifier_enabled = runtime_conf.get("page_classifier", {}).get(
+            "enabled",
+            is_component_enabled(
+                self.default_pipeline_config.get("page_classifier"), True
+            ),
+        )
+
+        if page_classifier_enabled:
+            for group, classifier_group in self.classifier_groups.items():
+                classifier_component, sub_classifiers = self.build_classifier_component(
+                    classifier_group, group
+                )
+                processing_group_pipeline[group].append(classifier_component)
+                grouped_sub_classifiers[group] = sub_classifiers
 
         llm_task_config = runtime_conf.get("llm_tasks", {})
         for group, indexer_group in self.indexer_groups.items():
