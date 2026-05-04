@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 usage() {
-    echo "Usage: $0 [protocol://host:port] [number_of_jobs] [metadata_file] [api_key]"
+    echo "Usage: $0 [protocol://host:port] [number_of_jobs] [api_key] [metadata_file]"
     echo
     echo "Arguments:"
     echo "  protocol://host:port  The address of the gateway in the format protocol://host:port"
@@ -13,7 +13,7 @@ usage() {
     echo "  -h, --help            Show this help message and exit"
     echo
     echo "Example:"
-    echo "  $0 http://127.0.0.1:5100 10 your_api_key metadata.json "
+    echo "  $0 http://127.0.0.1:5100 10 your_api_key metadata.json"
 }
 
 # Check if help is requested
@@ -203,8 +203,16 @@ submit_rag_with_chunking() {
 
 # Default job submission loop (extract jobs)
 for i in $(seq 1 "$2"); do
+    request_id="job-$i"
+    rendered_metadata="${metadata//\{\{job_index\}\}/$i}"
+    rendered_metadata="${rendered_metadata//\{\{request_id\}\}/$request_id}"
+    rendered_metadata="${rendered_metadata//\{\{timestamp\}\}/$(date +%s)}"
+    rendered_metadata="${rendered_metadata//\{\{random\}\}/$RANDOM}"
+
     echo "Submitting job $i"
-    python ./send_request_to_gateway.py job submit mock_simple --metadata-json "$metadata" --address "$host" --protocol "$protocol" --api_key "$api_key" &
+    python ./send_request_to_gateway.py job submit mock_simple \
+        --metadata-json "$rendered_metadata" \
+        --address "$host" --protocol "$protocol" --api_key "$api_key" &
     echo "Job $i submitted"
     sleep 1
 done

@@ -155,6 +155,11 @@ class OpenAIEngine(EngineLM):
             max_concurrency=max_concurrency,
             batch_timeout=batch_timeout,
             backend_address=backend_address,
+            queue_enabled=kwargs.get("queue_enabled"),
+            queue_client=kwargs.get("queue_client"),
+            queue_pool_id=kwargs.get("queue_pool_id"),
+            queue_producer_id=kwargs.get("queue_producer_id"),
+            queue_valkey_url=kwargs.get("queue_valkey_url"),
         )
 
     def validate(self) -> None:
@@ -163,9 +168,16 @@ class OpenAIEngine(EngineLM):
                 "Please set the OPENAI_API_KEY environment variable if you'd like to use OpenAI models."
             )
 
+    def build_queue_dispatcher(self):
+        return self.batch_processor.build_queue_dispatcher()
+
     def __del__(self):
         """Detach client to prevent cleanup errors during GC."""
         try:
+            if hasattr(self, "batch_processor") and self.batch_processor is not None:
+                close = getattr(self.batch_processor, "close", None)
+                if callable(close):
+                    close()
             if hasattr(self, 'client') and self.client is not None:
                 # Detach internal httpx client to prevent async cleanup issues
                 if hasattr(self.client, '_client'):

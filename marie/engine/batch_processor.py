@@ -43,7 +43,6 @@ import asyncio
 import os
 import time
 import uuid
-from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from PIL import Image
@@ -56,6 +55,9 @@ from tenacity import (
     wait_exponential,
 )
 
+from marie.engine.llm_queue.config import LlmQueueConfig
+from marie.engine.llm_queue.queue_io import ListQueueClient, ValkeyListQueueClient
+from marie.engine.llm_queue.result_types import BatchResult
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.serve.networking.balancer.circuit_breaker import (
@@ -71,13 +73,6 @@ API keys can be found or created at \
 https://platform.openai.com/account/api-keys
 """
 INVALID_API_KEY_ERROR_MESSAGE = """Invalid LLM API key."""
-
-
-@dataclass
-class BatchResult:
-    task_id: str
-    response: Optional[str]
-    error: Optional[Exception]
 
 
 def _is_pool_timeout(exc: BaseException) -> bool:
@@ -143,6 +138,11 @@ class BatchProcessor:
         max_concurrency: Optional[int] = None,
         batch_timeout: Optional[float] = None,
         backend_address: Optional[str] = None,
+        queue_enabled: Optional[bool] = None,
+        queue_client: Optional[ListQueueClient] = None,
+        queue_pool_id: Optional[str] = None,
+        queue_producer_id: Optional[str] = None,
+        queue_valkey_url: Optional[str] = None,
     ):
         self.client = client
         self.model_string = model_string
@@ -175,6 +175,66 @@ class BatchProcessor:
         # Async gate lock so HALF_OPEN slot reservation is serialized
         self._gate_lock: Optional[asyncio.Lock] = None
         self._gate_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._queue_client = queue_client
+        self._queued_executor = None
+        self._queue_config = LlmQueueConfig.from_env(
+            enabled=queue_enabled,
+            valkey_url=queue_valkey_url,
+            pool_id=queue_pool_id,
+            producer_id=queue_producer_id,
+        )
+
+    def _queue_enabled(self) -> bool:
+        config = getattr(self, "_queue_config", None)
+        return bool(config and config.enabled)
+
+    def _get_queue_client(self) -> ListQueueClient:
+        if self._queue_client is not None:
+            return self._queue_client
+        if not self._queue_config.valkey_url:
+            raise ValueError(
+                "LLM queue is enabled but LLM_QUEUE_VALKEY_URL (or queue_valkey_url) is not configured."
+            )
+        self._queue_client = ValkeyListQueueClient(self._queue_config.valkey_url)
+        return self._queue_client
+
+    def _get_queued_executor(self):
+        if self._queued_executor is None:
+            from marie.engine.llm_queue.submitter import QueuedBatchExecutor
+
+            self._queued_executor = QueuedBatchExecutor(
+                queue_client=self._get_queue_client(),
+                config=self._queue_config,
+                model_string=self.model_string,
+                logger=self.logger,
+            )
+        return self._queued_executor
+
+    def build_queue_dispatcher(self):
+        from marie.engine.llm_queue.adapters.litellm import LiteLlmExecutionAdapter
+        from marie.engine.llm_queue.dispatcher import QueuedBatchDispatcher
+
+        return QueuedBatchDispatcher(
+            queue_client=self._get_queue_client(),
+            execution_adapter=LiteLlmExecutionAdapter(self),
+            config=self._queue_config,
+            logger=self.logger,
+        )
+
+    def close(self) -> None:
+        queued_executor = getattr(self, "_queued_executor", None)
+        if queued_executor is not None:
+            close = getattr(queued_executor, "close", None)
+            if callable(close):
+                close()
+            self._queued_executor = None
+
+        queue_client = getattr(self, "_queue_client", None)
+        if queue_client is not None:
+            close = getattr(queue_client, "close", None)
+            if callable(close):
+                close()
+            self._queue_client = None
 
     def _get_request_semaphore(self) -> asyncio.Semaphore:
         loop = asyncio.get_running_loop()
@@ -474,6 +534,7 @@ class BatchProcessor:
         on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         completion_params: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, str]] = None,
+        metadata_list: Optional[List[Optional[Dict[str, str]]]] = None,
     ):
         """
         Processes the batch of requests, invoking on_result as each completes.
@@ -524,7 +585,11 @@ class BatchProcessor:
                             request_id=request_id,
                             guided_json=guided_json,
                             completion_params=completion_params,
-                            metadata=metadata,
+                            metadata=(
+                                metadata_list[i]
+                                if metadata_list is not None
+                                else metadata
+                            ),
                         )
                         return BatchResult(tid, resp, None)
                     except asyncio.CancelledError:
@@ -647,16 +712,26 @@ class BatchProcessor:
         ctx_token = otel_context.attach(otel_trace.set_span_in_context(batch_span))
 
         try:
-            batch_results: List[Optional[BatchResult]] = run_coroutine_in_current_loop(
-                self.load_batched_request(
-                    messages_list,
-                    request_id,
-                    guided_json,
+            if self._queue_enabled():
+                batch_results = self._get_queued_executor().execute(
+                    messages_list=messages_list,
+                    batch_request_id=request_id,
+                    batch_timeout=self.batch_timeout,
                     on_result=on_result,
                     completion_params=completion_params,
                     metadata=metadata,
                 )
-            )
+            else:
+                batch_results = run_coroutine_in_current_loop(
+                    self.load_batched_request(
+                        messages_list,
+                        request_id,
+                        guided_json,
+                        on_result=on_result,
+                        completion_params=completion_params,
+                        metadata=metadata,
+                    )
+                )
 
             successful_count = 0
             failed_count = 0

@@ -10,6 +10,10 @@ Use the reusable mock planner metadata template:
 ./create_jobs.sh grpc://127.0.0.1:52000 100 YOUR_API_KEY ./mock_parallel_subgraphs.metadata.json
 ```
 
+The default submission name in `create_jobs.sh` is currently `mock_simple`.
+If your metadata contains `"planner": "mock_parallel_subgraphs"`, the scheduler
+will use that planner instead of falling back to the submitted job name.
+
 The metadata template supports per-job placeholders:
 
 - `{{request_id}}` -> `job-1`, `job-2`, ...

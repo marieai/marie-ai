@@ -75,6 +75,7 @@ python-multipart:           standard,devel
 aiofiles:                   standard,devel
 aiohttp:                    standard,devel
 aiostream:                  standard,devel
+valkey:                     standard,core
 
 pytest<8.0.0:               test
 pytest-timeout:             test
