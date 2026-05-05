@@ -1,5 +1,5 @@
 import os
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import numpy as np
 from black.trans import defaultdict
@@ -159,6 +159,9 @@ class LLMPipeline(BasePipeline):
             queue_id=queue_id,
         )
         metadata["ocr"] = ocr_results
+        metadata = self.store_metadata(
+            ref_id, ref_type, root_asset_dir, metadata, save=False
+        )
 
         # Track pipline execution time for metrics
         with TimeContext(f"### {self.pipeline_name} LLMPipeline info") as tc:
@@ -222,8 +225,9 @@ class LLMPipeline(BasePipeline):
                 sub_classifiers,
                 frames,
                 ocr_results,
-                "indexing_pipeline",
+                f"{self.pipeline_name}_{group}",
                 include_ocr_lines=True,
+                metadata=metadata,
             )
             if "indexes" in results:
                 for task_name, index in results["indexes"].items():
@@ -247,9 +251,10 @@ class LLMPipeline(BasePipeline):
         ref_id: str,
         ref_type: str,
         root_asset_dir: str,
-        metadata: dict[str, any],
+        metadata: dict[str, Any],
         infix: str = "meta",
-    ) -> None:
+        save: bool = True,
+    ) -> dict[str, Any]:
         """
         Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
         :param ref_id: reference id of the document
@@ -261,10 +266,12 @@ class LLMPipeline(BasePipeline):
         """
         filename, _, _ = split_filename(ref_id)
         meta_filename = f"{filename}.{infix}.json"
-        # Save pipeline checkpoint
-        pipeline_meta_path = os.path.join(root_asset_dir, self.pipeline_name)
-        ensure_exists(pipeline_meta_path)
-        store_json_object(metadata, os.path.join(pipeline_meta_path, meta_filename))
+
+        if save:
+            # Save pipeline checkpoint
+            pipeline_meta_path = os.path.join(root_asset_dir, self.pipeline_name)
+            ensure_exists(pipeline_meta_path)
+            store_json_object(metadata, os.path.join(pipeline_meta_path, meta_filename))
 
         # Main save to meta file
         meta_path = os.path.join(root_asset_dir, meta_filename)
@@ -276,8 +283,11 @@ class LLMPipeline(BasePipeline):
         else:
             self.logger.warning(f"No previous meta found : {meta_path}")
 
-        self.logger.info(f"Storing metadata : {meta_path}")
-        store_json_object(metadata, meta_path)
+        if save:
+            self.logger.info(f"Storing metadata : {meta_path}")
+            store_json_object(metadata, meta_path)
+
+        return metadata
 
     def execute(
         self,

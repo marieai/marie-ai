@@ -123,28 +123,39 @@ class BoundaryDetectionInferenceDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         sample: dict = self.samples[idx]
-        image_paths = sample["images"]
+        images = sample["images"]
         words = sample["words"]
         boxes = sample["boxes"]
         pages: list = []
 
         if self.cache_dir:
-            for img_path in image_paths:
-                img_path = (base_dir / img_path).resolve()
-                page_cache_path = self._get_cache_path(img_path)
+            for image in images:
+                image = (base_dir / image).resolve()
+                page_cache_path = self._get_cache_path(image)
                 page = torch.load(page_cache_path, weights_only=False)
                 pages.append(page)
         else:
-            for i, img_path in enumerate(image_paths):
-                img_path = (base_dir / img_path).resolve()
+            for i, image in enumerate(images):
+                bboxes = boxes[i]
 
-                with Image.open(img_path) as image:
-                    image = image.convert("RGB")
+                width, height = image.shape[1], image.shape[0]
+                width_scale = 1000 / width
+                height_scale = 1000 / height
+                if not all(
+                    isinstance(box, (list, tuple)) and len(box) == 4 for box in bboxes
+                ):
+                    raise ValueError(
+                        "Invalid bbox format for classifier inference page. "
+                        "Expected a list of [x0, y0, x1, y1] boxes per page."
+                    )
+                boxes_normalized = [
+                    scale_bounding_box(box, width_scale, height_scale) for box in bboxes
+                ]
 
                 encoding = self.processor(
                     image,
                     words[i],
-                    boxes=boxes[i],
+                    boxes=boxes_normalized,
                     max_length=512,
                     padding="max_length",
                     truncation=True,

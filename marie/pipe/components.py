@@ -13,6 +13,9 @@ from marie.components.document_classifier import (
     TransformersDocumentLevelClassifier,
     TransformersPageLevelClassifier,
 )
+from marie.components.document_classifier.transformers import (
+    TransformersSplittingClassifier,
+)
 from marie.components.document_indexer import TransformersDocumentIndexer
 from marie.components.document_indexer.llm import MMLLMDocumentIndexer
 from marie.components.document_registration.unilm_dit import (
@@ -155,12 +158,6 @@ def setup_classifiers(
                 id2label=id2label,
                 max_pages=max_pages,
             )
-
-            document_classifiers[group][name] = {
-                "classifier": classifier,
-                "group": group,
-                "filter": model_filter,
-            }
         elif model_type == "transformers_document_level":
             classifier = TransformersDocumentLevelClassifier(
                 model_name_or_path=model_name_or_path,
@@ -170,15 +167,24 @@ def setup_classifiers(
                 id2label=id2label,
                 max_pages=max_pages,
             )
-
-            document_classifiers[group][name] = {
-                "classifier": classifier,
-                "group": group,
-                "filter": model_filter,
-            }
+        elif model_type == "splitter":
+            classifier = TransformersSplittingClassifier(
+                model_name_or_path=model_name_or_path,
+                batch_size=batch_size,
+                use_gpu=use_cuda,
+                task=task,
+                id2label=id2label,
+                max_pages=max_pages,
+            )
         else:
             raise ValueError(f"Invalid classifier type : {model_type}")
 
+        document_classifiers[group][name] = {
+            "classifier": classifier,
+            "group": group,
+            "filter": model_filter,
+            # "key": key
+        }
     return document_classifiers
 
 

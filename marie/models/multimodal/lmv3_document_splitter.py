@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 import transformers
+from torch import Tensor
 
 from marie.models.multimodal.util.attention_pooling import AttentionPooling
 
@@ -154,11 +155,11 @@ class LayoutLMv3DocumentSplitter(nn.Module):
 
     def forward(
         self,
-        input_ids: Any,
-        attention_mask: Any,
-        bbox: Any,
-        pixel_values: Any,
-        page_mask: Any,
+        input_ids: Tensor,
+        attention_mask: Tensor,
+        bbox: Tensor,
+        pixel_values: Tensor,
+        page_mask: Tensor,
         center_page_idx: Any,
     ) -> Any:
         """

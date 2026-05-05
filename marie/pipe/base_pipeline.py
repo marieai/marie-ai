@@ -153,9 +153,12 @@ class BasePipeline(ABC):
         ocr_results: dict,
         pipeline_id: str = "default_pipeline",
         include_ocr_lines: bool = False,
+        metadata=None,
     ) -> dict[str, any]:
         """Execute processing pipeline"""
 
+        if metadata is None:
+            metadata = {}
         words = []
         boxes = []
         lines = []
@@ -176,7 +179,7 @@ class BasePipeline(ABC):
             assert len(words) == len(lines)
 
         context = PipelineContext(pipeline_id=pipeline_id)
-        context["metadata"] = {}
+        context["metadata"] = metadata
 
         for pipe in processing_pipeline:
             try:
