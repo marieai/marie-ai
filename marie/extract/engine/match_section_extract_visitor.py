@@ -1007,11 +1007,12 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 continue
 
             # Derive page id from header row; fallback to first body row
-            page_id = (
-                header_row.source_page
-                if header_row
-                else (body_rows[0].source_page if body_rows else -1)
-            )
+            page_id = -1
+            if header_row and header_row.source_page is not None:
+                page_id = header_row.source_page
+            elif body_rows and  body_rows[0].source_page is not None:
+                page_id = body_rows[0].source_page
+
             self.logger.debug(f"Processing table block for page: {page_id}")
 
             # Prefer canonical headers from header_binding; otherwise, fallback to header row cell strings
@@ -2221,7 +2222,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         line: LineWithMeta,
     ) -> List[Field]:
 
-        page_id = line.metadata.page_id
+        page_id = line.metadata.page_id if line.metadata else 0 or 0
         field_name = field_def.get("name")
         derived_fields = (
             field_def.get("derived_fields", None)
