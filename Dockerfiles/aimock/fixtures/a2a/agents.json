@@ -1,0 +1,57 @@
+{
+  "agents": [
+    {
+      "id": "document-processor",
+      "name": "Document Processor Agent",
+      "description": "Processes documents through extraction, classification, and validation pipelines",
+      "capabilities": ["extract", "classify", "validate", "transform"],
+      "endpoint": "http://localhost:8080/agents/document-processor",
+      "mockResponses": {
+        "process": {
+          "status": "completed",
+          "result": {
+            "document_id": "doc_12345",
+            "operations": ["ocr", "extract", "classify"],
+            "extracted_data": {"invoice_number": "INV-2024-001"},
+            "classification": {"type": "invoice", "confidence": 0.97}
+          }
+        }
+      }
+    },
+    {
+      "id": "rag-assistant",
+      "name": "RAG Assistant Agent",
+      "description": "Retrieval-augmented generation agent for document Q&A",
+      "capabilities": ["query", "search", "summarize"],
+      "endpoint": "http://localhost:8080/agents/rag-assistant",
+      "mockResponses": {
+        "query": {
+          "status": "completed",
+          "result": {
+            "answer": "Based on the documents, the payment terms are Net 30.",
+            "sources": [
+              {"id": "doc_001", "title": "Vendor Agreement", "relevance": 0.95}
+            ],
+            "confidence": 0.92
+          }
+        }
+      }
+    },
+    {
+      "id": "workflow-orchestrator",
+      "name": "Workflow Orchestrator Agent",
+      "description": "Orchestrates multi-step document processing workflows",
+      "capabilities": ["orchestrate", "schedule", "monitor"],
+      "endpoint": "http://localhost:8080/agents/workflow-orchestrator",
+      "mockResponses": {
+        "execute": {
+          "status": "running",
+          "execution_id": "exec_78901",
+          "steps_completed": 2,
+          "steps_total": 5,
+          "estimated_completion": "2024-01-15T10:35:00Z"
+        }
+      }
+    }
+  ]
+}

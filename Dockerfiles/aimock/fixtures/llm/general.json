@@ -1,0 +1,66 @@
+[
+  {
+    "match": {
+      "userMessage": "hello"
+    },
+    "response": {
+      "content": "Hello! I'm Marie AI, your intelligent document processing assistant. I can help you with:\n\n- **Document Extraction**: Extract structured data from invoices, receipts, contracts, and more\n- **Classification**: Automatically categorize and tag documents\n- **Summarization**: Get quick summaries of lengthy documents\n- **Search & Query**: Find information across your document knowledge base\n- **Analysis**: Identify entities, relationships, and key insights\n\nHow can I assist you today?",
+      "model": "gpt-4o",
+      "finishReason": "stop"
+    }
+  },
+  {
+    "match": {
+      "userMessage": "help"
+    },
+    "response": {
+      "content": "# Marie AI Help\n\n## Available Commands\n\n### Document Processing\n- `extract` - Extract structured data from a document\n- `classify` - Classify document type and categories\n- `summarize` - Generate a summary of the document\n- `ocr` - Perform optical character recognition\n\n### Analysis\n- `analyze` - Perform entity and relationship extraction\n- `compare` - Compare multiple documents\n- `validate` - Validate extracted data against rules\n\n### Knowledge Base\n- `query` - Ask questions about your documents\n- `search` - Search across indexed documents\n- `find` - Find specific documents or data\n\n### Workflow\n- `process` - Run a complete processing pipeline\n- `status` - Check processing status\n- `export` - Export results in various formats\n\nType any command or describe what you need, and I'll help you get started!",
+      "model": "gpt-4o",
+      "finishReason": "stop"
+    }
+  },
+  {
+    "match": {
+      "userMessage": "test"
+    },
+    "response": {
+      "content": "✅ **Mock LLM Test Successful**\n\nThis response confirms that the AIMock server is working correctly.\n\n**Server Info:**\n- Status: Online\n- Provider: AIMock (CopilotKit)\n- Mode: Fixture-based responses\n- Streaming: Enabled\n\n**Request Details:**\n- Timestamp: 2024-01-15T10:30:00Z\n- Request ID: mock_req_001\n- Latency: <10ms\n\nYou can now use this mock server for testing your AI applications without incurring API costs.",
+      "model": "gpt-4o",
+      "finishReason": "stop"
+    }
+  },
+  {
+    "match": {
+      "userMessage": "json"
+    },
+    "response": {
+      "content": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"id\": \"resp_mock_001\",\n    \"type\": \"mock_response\",\n    \"timestamp\": \"2024-01-15T10:30:00Z\",\n    \"source\": \"aimock\",\n    \"metadata\": {\n      \"provider\": \"openai\",\n      \"model\": \"gpt-4o\",\n      \"fixture_matched\": true,\n      \"streaming\": false\n    }\n  }\n}",
+      "model": "gpt-4o",
+      "finishReason": "stop"
+    }
+  },
+  {
+    "match": {
+      "userMessage": "error"
+    },
+    "response": {
+      "content": "I apologize, but I encountered an error processing your request.\n\n**Error Details:**\n- Code: PROCESSING_ERROR\n- Message: Unable to complete the requested operation\n- Suggestion: Please verify your input and try again\n\nIf this issue persists, please contact support with the following reference:\n- Request ID: err_mock_001\n- Timestamp: 2024-01-15T10:30:00Z\n\nCommon solutions:\n1. Check that the document is in a supported format\n2. Ensure the file is not corrupted\n3. Verify your API credentials are valid",
+      "model": "gpt-4o",
+      "finishReason": "stop"
+    }
+  },
+  {
+    "match": {
+      "userMessage": "stream"
+    },
+    "response": {
+      "content": "This is a streaming response test. Each word in this message is delivered as a separate chunk to simulate real LLM streaming behavior. The AIMock server supports configurable streaming physics including time-to-first-token (TTFT), tokens-per-second (TPS), and jitter for realistic testing scenarios. You can adjust these parameters in the aimock.json configuration file.",
+      "model": "gpt-4o",
+      "finishReason": "stop"
+    },
+    "opts": {
+      "chunkSize": 5,
+      "latency": 50
+    }
+  }
+]

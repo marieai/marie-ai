@@ -1,0 +1,57 @@
+{
+  "prompts": [
+    {
+      "name": "extract_invoice",
+      "description": "Extract structured data from an invoice document",
+      "arguments": [
+        {"name": "document_content", "description": "The text content of the invoice", "required": true}
+      ],
+      "mockMessages": [
+        {
+          "role": "system",
+          "content": "You are an expert document extraction AI. Extract structured invoice data from the provided document content."
+        },
+        {
+          "role": "user",
+          "content": "Extract all relevant invoice fields from the following document:\n\n{{document_content}}"
+        }
+      ]
+    },
+    {
+      "name": "summarize_document",
+      "description": "Generate a concise summary of a document",
+      "arguments": [
+        {"name": "document_content", "description": "The document to summarize", "required": true},
+        {"name": "max_length", "description": "Maximum summary length in words", "required": false}
+      ],
+      "mockMessages": [
+        {
+          "role": "system",
+          "content": "You are a document summarization expert. Create clear, concise summaries that capture the key information."
+        },
+        {
+          "role": "user",
+          "content": "Summarize the following document{{#max_length}} in no more than {{max_length}} words{{/max_length}}:\n\n{{document_content}}"
+        }
+      ]
+    },
+    {
+      "name": "answer_query",
+      "description": "Answer a question based on retrieved document context",
+      "arguments": [
+        {"name": "query", "description": "The user's question", "required": true},
+        {"name": "context", "description": "Retrieved document chunks for context", "required": true}
+      ],
+      "mockMessages": [
+        {
+          "role": "system",
+          "content": "You are a helpful assistant that answers questions based on the provided document context. Only use information from the context to answer. If the answer cannot be found, say so."
+        },
+        {
+          "role": "user",
+          "content": "Context:\n{{context}}\n\nQuestion: {{query}}\n\nAnswer based on the context above:"
+        }
+      ]
+    }
+  ]
+}

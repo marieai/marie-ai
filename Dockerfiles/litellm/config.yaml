@@ -1,0 +1,131 @@
+# LiteLLM Proxy Configuration
+#
+# This configuration supports both real and mock LLM endpoints.
+# Use model aliases to route requests appropriately:
+#   - gpt-4o-mock     -> AIMock server (free, for testing)
+#   - gpt-4o          -> Real OpenAI (requires OPENAI_API_KEY)
+#   - claude-mock     -> AIMock server (free, for testing)
+#   - claude-3-opus   -> Real Anthropic (requires ANTHROPIC_API_KEY)
+#
+# Environment variables:
+#   - OPENAI_API_KEY      - OpenAI API key
+#   - ANTHROPIC_API_KEY   - Anthropic API key
+#   - AIMOCK_URL          - AIMock server URL (default: http://aimock:4010)
+#
+# Start AIMock: docker compose -f docker-compose.mock-llm.yml up -d
+
+model_list:
+  # ==========================================================================
+  # Mock Models - For testing and development (no API costs)
+  # Uses AIMock server: https://github.com/CopilotKit/aimock
+  # ==========================================================================
+
+  - model_name: gpt-4o-mock
+    litellm_params:
+      model: openai/gpt-4o
+      api_base: ${AIMOCK_URL:-http://aimock:4010}/v1
+      api_key: mock-key
+    model_info:
+      description: "Mock GPT-4o via AIMock - no API costs"
+
+  - model_name: gpt-4o-mini-mock
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_base: ${AIMOCK_URL:-http://aimock:4010}/v1
+      api_key: mock-key
+    model_info:
+      description: "Mock GPT-4o-mini via AIMock - no API costs"
+
+  - model_name: claude-mock
+    litellm_params:
+      model: anthropic/claude-3-opus-20240229
+      api_base: ${AIMOCK_URL:-http://aimock:4010}/anthropic
+      api_key: mock-key
+    model_info:
+      description: "Mock Claude via AIMock - no API costs"
+
+  - model_name: gemini-mock
+    litellm_params:
+      model: gemini/gemini-pro
+      api_base: ${AIMOCK_URL:-http://aimock:4010}/gemini
+      api_key: mock-key
+    model_info:
+      description: "Mock Gemini via AIMock - no API costs"
+
+  # ==========================================================================
+  # Real Models - Require API keys
+  # ==========================================================================
+
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      description: "OpenAI GPT-4o"
+
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      description: "OpenAI GPT-4o Mini"
+
+  - model_name: gpt-4-turbo
+    litellm_params:
+      model: openai/gpt-4-turbo
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      description: "OpenAI GPT-4 Turbo"
+
+  - model_name: claude-3-opus
+    litellm_params:
+      model: anthropic/claude-3-opus-20240229
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      description: "Anthropic Claude 3 Opus"
+
+  - model_name: claude-3-sonnet
+    litellm_params:
+      model: anthropic/claude-3-sonnet-20240229
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      description: "Anthropic Claude 3 Sonnet"
+
+  - model_name: claude-3-haiku
+    litellm_params:
+      model: anthropic/claude-3-haiku-20240307
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      description: "Anthropic Claude 3 Haiku"
+
+# General settings
+litellm_settings:
+  # Enable request/response logging
+  set_verbose: false
+
+  # Default timeout in seconds
+  request_timeout: 120
+
+  # Retry configuration
+  num_retries: 2
+
+  # Enable caching (optional)
+  cache: false
+
+# Router settings for load balancing and fallbacks
+router_settings:
+  # Routing strategy: simple-shuffle, least-busy, usage-based-routing, latency-based-routing
+  routing_strategy: simple-shuffle
+
+  # Enable fallbacks between models
+  enable_fallbacks: true
+
+  # Fallback configuration
+  fallbacks:
+    - gpt-4o: [gpt-4o-mini, gpt-4o-mock]
+    - claude-3-opus: [claude-3-sonnet, claude-mock]
+
+# Health check endpoint
+health_check_settings:
+  enable: true
+  endpoint: /health

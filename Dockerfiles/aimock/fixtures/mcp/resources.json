@@ -1,0 +1,44 @@
+{
+  "resources": [
+    {
+      "uri": "marie://documents/recent",
+      "name": "Recent Documents",
+      "description": "List of recently processed documents",
+      "mimeType": "application/json",
+      "mockContent": {
+        "documents": [
+          {"id": "doc_001", "name": "Invoice INV-2024-001.pdf", "processed_at": "2024-01-15T10:00:00Z"},
+          {"id": "doc_002", "name": "Contract Agreement.pdf", "processed_at": "2024-01-15T09:30:00Z"},
+          {"id": "doc_003", "name": "Receipt-Jan15.pdf", "processed_at": "2024-01-15T09:00:00Z"}
+        ],
+        "total": 3
+      }
+    },
+    {
+      "uri": "marie://workflows/active",
+      "name": "Active Workflows",
+      "description": "Currently running document processing workflows",
+      "mimeType": "application/json",
+      "mockContent": {
+        "workflows": [
+          {"id": "wf_001", "name": "Invoice Processing", "status": "running", "progress": 75},
+          {"id": "wf_002", "name": "Contract Analysis", "status": "queued", "progress": 0}
+        ]
+      }
+    },
+    {
+      "uri": "marie://schemas/available",
+      "name": "Available Extraction Schemas",
+      "description": "List of available document extraction schemas",
+      "mimeType": "application/json",
+      "mockContent": {
+        "schemas": [
+          {"id": "invoice", "name": "Invoice", "fields": 15, "accuracy": 0.96},
+          {"id": "receipt", "name": "Receipt", "fields": 8, "accuracy": 0.94},
+          {"id": "contract", "name": "Contract", "fields": 22, "accuracy": 0.91},
+          {"id": "form_w2", "name": "W-2 Tax Form", "fields": 18, "accuracy": 0.98}
+        ]
+      }
+    }
+  ]
+}

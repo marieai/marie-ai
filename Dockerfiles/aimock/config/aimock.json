@@ -1,0 +1,35 @@
+{
+  "$schema": "https://aimock.copilotkit.dev/schema.json",
+  "llm": {
+    "fixtures": "/fixtures/llm",
+    "providers": ["openai", "claude", "gemini", "ollama", "cohere"],
+    "streaming": {
+      "ttft": 50,
+      "tps": 50,
+      "jitter": 10
+    }
+  },
+  "mcp": {
+    "tools": "/fixtures/mcp/tools.json",
+    "resources": "/fixtures/mcp/resources.json",
+    "prompts": "/fixtures/mcp/prompts.json"
+  },
+  "a2a": {
+    "agents": "/fixtures/a2a/agents.json"
+  },
+  "vector": {
+    "provider": "pinecone",
+    "fixtures": "/fixtures/vector",
+    "dimensions": 1536
+  },
+  "chaos": {
+    "enabled": false,
+    "errorRate": 0.0,
+    "malformedRate": 0.0,
+    "disconnectRate": 0.0
+  },
+  "metrics": {
+    "enabled": true,
+    "path": "/metrics"
+  }
+}

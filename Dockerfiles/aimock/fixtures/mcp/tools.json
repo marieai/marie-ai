@@ -1,0 +1,128 @@
+{
+  "tools": [
+    {
+      "name": "extract_document",
+      "description": "Extract structured data from a document using AI-powered analysis",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "description": "Unique identifier of the document to process"
+          },
+          "schema": {
+            "type": "string",
+            "description": "Target extraction schema (e.g., 'invoice', 'receipt', 'contract')"
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "include_confidence": {"type": "boolean", "default": true},
+              "extract_tables": {"type": "boolean", "default": true},
+              "ocr_enabled": {"type": "boolean", "default": true}
+            }
+          }
+        },
+        "required": ["document_id", "schema"]
+      },
+      "mockResponse": {
+        "status": "success",
+        "document_id": "doc_12345",
+        "extracted_data": {
+          "invoice_number": "INV-2024-001",
+          "total": 9180.00
+        },
+        "confidence": 0.95
+      }
+    },
+    {
+      "name": "search_knowledge_base",
+      "description": "Search the document knowledge base using semantic search",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Natural language search query"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of results to return",
+            "default": 10
+          },
+          "filters": {
+            "type": "object",
+            "description": "Optional filters to narrow search results"
+          }
+        },
+        "required": ["query"]
+      },
+      "mockResponse": {
+        "results": [
+          {"id": "doc_001", "title": "Vendor Agreement", "score": 0.95},
+          {"id": "doc_002", "title": "Invoice INV-2024-001", "score": 0.88}
+        ],
+        "total": 2,
+        "query_time_ms": 45
+      }
+    },
+    {
+      "name": "classify_document",
+      "description": "Classify a document into predefined categories",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "description": "Document to classify"
+          },
+          "categories": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional list of categories to consider"
+          }
+        },
+        "required": ["document_id"]
+      },
+      "mockResponse": {
+        "document_id": "doc_12345",
+        "primary_category": "invoice",
+        "confidence": 0.97,
+        "all_categories": [
+          {"name": "invoice", "confidence": 0.97},
+          {"name": "financial", "confidence": 0.92}
+        ]
+      }
+    },
+    {
+      "name": "process_workflow",
+      "description": "Execute a document processing workflow",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workflow_id": {
+            "type": "string",
+            "description": "ID of the workflow to execute"
+          },
+          "document_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Documents to process"
+          },
+          "parameters": {
+            "type": "object",
+            "description": "Workflow-specific parameters"
+          }
+        },
+        "required": ["workflow_id", "document_ids"]
+      },
+      "mockResponse": {
+        "execution_id": "exec_78901",
+        "status": "running",
+        "workflow_id": "wf_invoice_processing",
+        "documents_queued": 3,
+        "estimated_completion": "2024-01-15T10:35:00Z"
+      }
+    }
+  ]
+}

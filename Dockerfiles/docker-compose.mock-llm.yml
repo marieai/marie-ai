@@ -1,0 +1,65 @@
+# AIMock Server - Comprehensive AI Stack Mocking
+#
+# Provides mock endpoints for the entire AI stack:
+#   - LLMs: OpenAI, Claude, Gemini, Bedrock, Azure, Vertex AI, Ollama, Cohere (13 providers)
+#   - MCP: Full JSON-RPC 2.0 protocol (tools, resources, prompts)
+#   - A2A: Agent-to-agent protocol with SSE streaming
+#   - Vector DBs: Pinecone, Qdrant, ChromaDB compatible endpoints
+#   - Services: Web search (Tavily), reranking (Cohere), moderation
+#
+# Features:
+#   - Record & Replay: Proxy real APIs and save responses as fixtures
+#   - Chaos Testing: Inject failures (500s, malformed JSON, disconnects)
+#   - Streaming Physics: Configurable TTFT, tokens-per-second, jitter
+#   - Prometheus Metrics: /metrics endpoint
+#
+# Usage:
+#   docker compose -f docker-compose.mock-llm.yml up -d
+#
+# Endpoints:
+#   - http://localhost:4010/v1          - OpenAI-compatible
+#   - http://localhost:4010/anthropic   - Anthropic/Claude
+#   - http://localhost:4010/gemini      - Google Gemini
+#   - http://localhost:4010/mcp         - MCP protocol
+#   - http://localhost:4010/vector      - Vector DB APIs
+#   - http://localhost:4010/metrics     - Prometheus metrics
+#
+# Documentation: https://aimock.copilotkit.dev
+
+services:
+  aimock:
+    image: ghcr.io/copilotkit/aimock:latest
+    container_name: marie-aimock
+    command: >
+      -h 0.0.0.0
+      -p 4010
+      -f /fixtures
+      --config /config/aimock.json
+    ports:
+      - "${AIMOCK_PORT:-4010}:4010"
+    volumes:
+      - ./aimock/fixtures:/fixtures:ro
+      - ./aimock/config:/config:ro
+    networks:
+      - marie_default
+    environment:
+      - NODE_ENV=development
+      # Record mode: proxy to real APIs and save responses
+      # - AIMOCK_RECORD=true
+      # - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4010/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "marie.service=aimock"
+      - "marie.description=AI mock server for testing and development"
+      - "marie.environment=development"
+    restart: unless-stopped
+
+networks:
+  marie_default:
+    external: true

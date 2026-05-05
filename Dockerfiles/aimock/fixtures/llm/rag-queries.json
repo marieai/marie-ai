@@ -1,0 +1,51 @@
+[
+  {
+    "match": {
+      "userMessage": "query"
+    },
+    "response": {
+      "content": "Based on the documents in your knowledge base, I found the following information:\n\n## Answer\n\nThe standard payment terms for vendor invoices are **Net 30 days** from the invoice date. Late payments are subject to a **1.5% monthly interest charge** as specified in the vendor agreement.\n\n### Supporting Sources\n\n1. **Vendor Agreement v2.3** (Section 4.2): \"Payment shall be due within thirty (30) days of invoice receipt...\"\n2. **Accounts Payable Policy** (Page 12): \"All vendor payments must be processed within the Net 30 window to avoid late fees...\"\n3. **Finance Handbook** (Chapter 8): \"Interest on overdue payments accrues at 1.5% per month...\"\n\n### Confidence\nHigh (3 corroborating sources found)",
+      "model": "gpt-4o",
+      "finishReason": "stop"
+    }
+  },
+  {
+    "match": {
+      "userMessage": "search"
+    },
+    "response": {
+      "toolCalls": [
+        {
+          "id": "call_search_001",
+          "type": "function",
+          "function": {
+            "name": "search_documents",
+            "arguments": "{\"query\": \"payment terms vendor invoice\", \"limit\": 10, \"filters\": {\"document_type\": [\"policy\", \"agreement\", \"invoice\"]}, \"include_metadata\": true}"
+          }
+        }
+      ],
+      "model": "gpt-4o",
+      "finishReason": "tool_calls"
+    }
+  },
+  {
+    "match": {
+      "userMessage": "find"
+    },
+    "response": {
+      "content": "I found **5 relevant documents** matching your query:\n\n| # | Document | Type | Relevance | Date |\n|---|----------|------|-----------|------|\n| 1 | Vendor Agreement v2.3 | Agreement | 98% | 2024-01-10 |\n| 2 | Accounts Payable Policy | Policy | 95% | 2023-11-15 |\n| 3 | Invoice INV-2024-001 | Invoice | 92% | 2024-01-15 |\n| 4 | Finance Handbook Ch.8 | Manual | 88% | 2023-06-01 |\n| 5 | Payment Processing Guide | Guide | 85% | 2023-09-20 |\n\nWould you like me to provide details from any of these documents?",
+      "model": "gpt-4o",
+      "finishReason": "stop"
+    }
+  },
+  {
+    "match": {
+      "userMessage": "compare"
+    },
+    "response": {
+      "content": "## Document Comparison Analysis\n\n### Documents Compared\n- **Document A:** Invoice INV-2024-001 (Acme Corp)\n- **Document B:** Invoice INV-2024-002 (Beta Services)\n\n### Key Differences\n\n| Field | Document A | Document B |\n|-------|------------|------------|\n| Vendor | Acme Corporation | Beta Services LLC |\n| Total Amount | $9,180.00 | $5,250.00 |\n| Payment Terms | Net 30 | Net 45 |\n| Tax Rate | 8% | 7.5% |\n| Line Items | 2 | 3 |\n\n### Similarities\n- Both are service invoices\n- Both include tax calculations\n- Both have standard invoice formatting\n- Currency: USD\n\n### Recommendations\n- Document A has shorter payment terms (higher priority)\n- Combined total: $14,430.00",
+      "model": "gpt-4o",
+      "finishReason": "stop"
+    }
+  }
+]

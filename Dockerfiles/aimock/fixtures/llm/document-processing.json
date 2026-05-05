@@ -1,0 +1,55 @@
+[
+  {
+    "match": {
+      "userMessage": "extract"
+    },
+    "response": {
+      "content": "{\n  \"invoice_number\": \"INV-2024-001\",\n  \"date\": \"2024-01-15\",\n  \"vendor\": {\n    \"name\": \"Acme Corporation\",\n    \"address\": \"123 Business Ave, Suite 100\",\n    \"tax_id\": \"12-3456789\"\n  },\n  \"bill_to\": {\n    \"name\": \"Client Company Inc\",\n    \"address\": \"456 Client Street\"\n  },\n  \"line_items\": [\n    {\"description\": \"Professional Services\", \"quantity\": 40, \"unit_price\": 150.00, \"total\": 6000.00},\n    {\"description\": \"Software License\", \"quantity\": 1, \"unit_price\": 2500.00, \"total\": 2500.00}\n  ],\n  \"subtotal\": 8500.00,\n  \"tax_rate\": 0.08,\n  \"tax_amount\": 680.00,\n  \"total\": 9180.00,\n  \"payment_terms\": \"Net 30\",\n  \"due_date\": \"2024-02-14\"\n}",
+      "model": "gpt-4o",
+      "finishReason": "stop"
+    },
+    "opts": {
+      "chunkSize": 20
+    }
+  },
+  {
+    "match": {
+      "userMessage": "classify"
+    },
+    "response": {
+      "content": "{\n  \"document_type\": \"invoice\",\n  \"confidence\": 0.97,\n  \"language\": \"en\",\n  \"categories\": [\"financial\", \"accounts_payable\"],\n  \"subcategories\": [\"vendor_invoice\", \"services\"],\n  \"metadata\": {\n    \"page_count\": 1,\n    \"has_signature\": false,\n    \"has_logo\": true,\n    \"is_scanned\": false\n  }\n}",
+      "model": "gpt-4o-mini",
+      "finishReason": "stop"
+    }
+  },
+  {
+    "match": {
+      "userMessage": "summarize"
+    },
+    "response": {
+      "content": "## Document Summary\n\n**Type:** Invoice from Acme Corporation\n**Date:** January 15, 2024\n**Amount Due:** $9,180.00\n\n### Key Details\n- Invoice covers professional services (40 hours at $150/hr) and a software license\n- Payment terms are Net 30, due by February 14, 2024\n- Tax rate applied: 8%\n\n### Action Required\nPayment should be processed within the standard accounts payable cycle to meet the due date.",
+      "model": "gpt-4o",
+      "finishReason": "stop"
+    }
+  },
+  {
+    "match": {
+      "userMessage": "analyze"
+    },
+    "response": {
+      "content": "{\n  \"entities\": [\n    {\"type\": \"organization\", \"value\": \"Acme Corporation\", \"confidence\": 0.98, \"span\": [0, 16]},\n    {\"type\": \"organization\", \"value\": \"Client Company Inc\", \"confidence\": 0.95, \"span\": [45, 63]},\n    {\"type\": \"date\", \"value\": \"2024-01-15\", \"confidence\": 0.99, \"normalized\": \"2024-01-15T00:00:00Z\"},\n    {\"type\": \"money\", \"value\": \"$9,180.00\", \"confidence\": 0.99, \"normalized\": {\"amount\": 9180.00, \"currency\": \"USD\"}},\n    {\"type\": \"tax_id\", \"value\": \"12-3456789\", \"confidence\": 0.92}\n  ],\n  \"relationships\": [\n    {\"type\": \"vendor_customer\", \"from\": \"Acme Corporation\", \"to\": \"Client Company Inc\"},\n    {\"type\": \"payment_due\", \"amount\": 9180.00, \"date\": \"2024-02-14\"}\n  ],\n  \"sentiment\": \"neutral\",\n  \"formality\": \"formal\",\n  \"key_phrases\": [\"professional services\", \"software license\", \"Net 30\", \"payment terms\"]\n}",
+      "model": "gpt-4o",
+      "finishReason": "stop"
+    }
+  },
+  {
+    "match": {
+      "userMessage": "ocr"
+    },
+    "response": {
+      "content": "{\n  \"text\": \"INVOICE\\n\\nAcme Corporation\\n123 Business Ave, Suite 100\\nNew York, NY 10001\\n\\nInvoice #: INV-2024-001\\nDate: January 15, 2024\\n\\nBill To:\\nClient Company Inc\\n456 Client Street\\nBoston, MA 02101\\n\\nDescription                  Qty    Rate      Amount\\n---------------------------------------------------------\\nProfessional Services         40    $150.00   $6,000.00\\nSoftware License               1  $2,500.00   $2,500.00\\n---------------------------------------------------------\\nSubtotal:                                     $8,500.00\\nTax (8%):                                       $680.00\\nTotal Due:                                    $9,180.00\\n\\nPayment Terms: Net 30\\nDue Date: February 14, 2024\",\n  \"confidence\": 0.96,\n  \"blocks\": 12,\n  \"words\": 89,\n  \"language\": \"en\"\n}",
+      "model": "gpt-4o",
+      "finishReason": "stop"
+    }
+  }
+]

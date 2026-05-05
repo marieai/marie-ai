@@ -1,0 +1,54 @@
+{
+  "collections": [
+    {
+      "name": "documents",
+      "dimension": 1536,
+      "metric": "cosine",
+      "mockVectors": [
+        {
+          "id": "doc_001",
+          "values": "random",
+          "metadata": {
+            "title": "Vendor Agreement v2.3",
+            "type": "agreement",
+            "date": "2024-01-10",
+            "chunk_index": 0
+          }
+        },
+        {
+          "id": "doc_002",
+          "values": "random",
+          "metadata": {
+            "title": "Invoice INV-2024-001",
+            "type": "invoice",
+            "date": "2024-01-15",
+            "chunk_index": 0
+          }
+        },
+        {
+          "id": "doc_003",
+          "values": "random",
+          "metadata": {
+            "title": "Accounts Payable Policy",
+            "type": "policy",
+            "date": "2023-11-15",
+            "chunk_index": 0
+          }
+        }
+      ],
+      "mockQueryResponse": {
+        "matches": [
+          {"id": "doc_001", "score": 0.95, "metadata": {"title": "Vendor Agreement v2.3"}},
+          {"id": "doc_003", "score": 0.88, "metadata": {"title": "Accounts Payable Policy"}},
+          {"id": "doc_002", "score": 0.82, "metadata": {"title": "Invoice INV-2024-001"}}
+        ]
+      }
+    },
+    {
+      "name": "embeddings_cache",
+      "dimension": 1536,
+      "metric": "cosine",
+      "mockVectors": []
+    }
+  ]
+}
