@@ -192,6 +192,7 @@ Each instance uses a unique port offset to avoid conflicts:
 | ClickHouse Native | 9000 | 9000 | 19000 |
 | RabbitMQ AMQP | 5672 | 5672 | 15672 |
 | RabbitMQ Management | 15672 | 15672 | 25672 |
+| Valkey | 6379 | 6379 | 16379 |
 | MinIO API | 9001 | 9001 | 19001 |
 | MinIO Console | 9002 | 9002 | 19002 |
 | etcd | 2379 | 2379 | 12379 |
@@ -208,6 +209,7 @@ Each instance uses a unique port offset to avoid conflicts:
 | PostgreSQL | 15432 | 16432 | 17432 |
 | ClickHouse | 18123 | 19123 | 20123 |
 | RabbitMQ Mgmt | 25672 | 26672 | 27672 |
+| Valkey | 16379 | 17379 | 18379 |
 | MinIO Console | 19002 | 20002 | 21002 |
 | Gitea | 13001 | 14001 | 15001 |
 | Gateway HTTP | 62000 | 63000 | 64000 |

@@ -39,6 +39,7 @@ from marie.helper import run_async
 from marie.logging_core.predefined import default_logger as logger
 from marie.prompt.template import PromptTemplate
 from marie.utils.docs import frames_from_file
+from marie.utils.types import to_bool
 from marie.utils.utils import batchify
 
 if TYPE_CHECKING:
@@ -97,7 +98,7 @@ def load_prompt(prompt_file: str) -> str:
 
 
 # Module-level engine cache to prevent orphaned AsyncClient instances
-_engine_cache: Dict[Tuple[str, bool], EngineLM] = {}
+_engine_cache: Dict[Tuple[str, bool, bool, Optional[str], str], EngineLM] = {}
 _engine_lock = Lock()
 
 
@@ -110,11 +111,27 @@ def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
     :param is_multimodal: Flag indicating if the model is multimodal.
     :return: An instance of the appropriate EngineLM class.
     """
-    cache_key = (model_name, is_multimodal)
+    queue_enabled = to_bool(os.environ.get("LLM_QUEUE_ENABLED"), False)
+    queue_valkey_url = os.environ.get("LLM_QUEUE_VALKEY_URL")
+    queue_pool_id = os.environ.get("LLM_QUEUE_POOL_ID", "default")
+    cache_key = (
+        model_name,
+        is_multimodal,
+        queue_enabled,
+        queue_valkey_url,
+        queue_pool_id,
+    )
 
     with _engine_lock:
         if cache_key in _engine_cache:
-            logger.info("Reusing engine %s", cache_key)
+            logger.info(
+                "Reusing engine model=%s multimodal=%s queue_enabled=%s queue_pool=%s valkey_configured=%s",
+                model_name,
+                is_multimodal,
+                queue_enabled,
+                queue_pool_id,
+                bool(queue_valkey_url),
+            )
             return _engine_cache[cache_key]
 
         api_key = os.environ.get('OPENAI_API_KEY')
@@ -129,10 +146,20 @@ def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
             model_name=model_name,
             is_multimodal=is_multimodal,
             cache=False,
+            queue_enabled=queue_enabled,
+            queue_valkey_url=queue_valkey_url,
+            queue_pool_id=queue_pool_id,
         )
 
         _engine_cache[cache_key] = engine
-        logger.info("Engine created: %s", cache_key)
+        logger.info(
+            "Engine created model=%s multimodal=%s queue_enabled=%s queue_pool=%s valkey_configured=%s",
+            model_name,
+            is_multimodal,
+            queue_enabled,
+            queue_pool_id,
+            bool(queue_valkey_url),
+        )
         return engine
 
 

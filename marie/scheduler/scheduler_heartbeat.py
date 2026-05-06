@@ -15,8 +15,6 @@ from marie.scheduler.printers import (
     print_slots_table,
 )
 from marie.scheduler.scheduler_repository import SchedulerRepository
-from marie.scheduler.util import available_slots_by_executor
-from marie.serve.runtimes.servers.cluster_state import ClusterState
 
 # ANSI colors
 GREEN = "\033[92m"
@@ -142,7 +140,7 @@ class SchedulerHeartbeat:
 
                 # Executor stats collection (configurable)
                 if self.config.enable_executor_stats:
-                    slot_info = available_slots_by_executor(ClusterState.deployments)
+                    slot_info = self.scheduler.get_available_slots()
                     _seen_executors.update(slot_info.keys())
 
                     for executor, count in slot_info.items():

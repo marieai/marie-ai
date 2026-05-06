@@ -197,6 +197,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             notify_callback=self.notify_event,
             max_active_dags=self.max_concurrent_dags,
             admission_lock=self._dag_admission_lock,
+            slot_snapshot_provider=self.get_available_slots,
         )
 
         # Register handler for DAG state changes (delegate to DAGManagementService)
@@ -3290,7 +3291,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         return await self.dag_service.get_dag(dag_id)
 
     def get_available_slots(self) -> dict[str, int]:
-        return available_slots_by_executor(ClusterState.deployments)
+        return available_slots_by_executor(self._semaphore_store)
 
     async def reset_active_dags(self):
         """

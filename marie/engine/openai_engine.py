@@ -26,12 +26,14 @@ from PIL import Image
 from pydantic import BaseModel
 
 from marie.engine.base import EngineLM
+from marie.engine.completion_contract import CompletionCallParams, build_completion_call
 from marie.engine.engine_utils import (
     convert_openai_to_transformers_format,
     extract_text_info,
     is_batched_request,
     open_ai_like_formatting,
 )
+from marie.engine.openai_compat import build_async_openai_client
 from marie.logging_core.logger import MarieLogger
 
 MISSING_API_KEY_ERROR_MESSAGE = """No API key found for LLM.
@@ -112,35 +114,7 @@ class OpenAIEngine(EngineLM):
         processor_kwargs = processor_kwargs or {}
         api_key = os.getenv("OPENAI_API_KEY")
 
-        import httpx
-
-        http_client = httpx.AsyncClient(
-            limits=httpx.Limits(
-                max_connections=40,
-                max_keepalive_connections=20,
-            ),
-            timeout=httpx.Timeout(
-                connect=10.0,  # connection establishment
-                read=300.0,  # reading response (vLLM inference can be slow)
-                write=10.0,  # sending request
-                pool=30.0,  # waiting for a connection from the pool
-            ),
-        )
-
-        # Disable OpenAI SDK internal retries — tenacity already handles
-        # retries with pool-timeout awareness.  The SDK's own retries are
-        # redundant and cause connection doubling under pressure.
-        if not base_url:
-            self.client = AsyncOpenAI(
-                api_key=api_key, http_client=http_client, max_retries=0
-            )
-        else:
-            self.client = AsyncOpenAI(
-                base_url=base_url,
-                api_key=api_key,
-                http_client=http_client,
-                max_retries=0,
-            )
+        self.client = build_async_openai_client(api_key=api_key, base_url=base_url)
 
         # Derive backend address for the circuit breaker key
         backend_address = base_url or "https://api.openai.com"
@@ -329,63 +303,22 @@ class OpenAIEngine(EngineLM):
 
         :return: A list of generated outputs corresponding to each input in batch_content.
         """
-        system_prompt = system_prompt or self.system_prompt
-        system_prompt = (
-            "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+        calls = self._build_completion_calls(
+            batch_content=batch_content,
+            system_prompt=system_prompt,
+            guided_json=guided_json,
+            **kwargs,
         )
 
-        if self.is_multimodal:
-            default_options = {
-                'min_pixels': 512 * 28 * 28,
-                'max_pixels': 2560 * 28 * 28,
-            }
-            mm_kwargs = kwargs.get('mm_processor_kwargs', default_options)
-            batch_content = [
-                open_ai_like_formatting(content, True, **mm_kwargs)
-                for content in batch_content
-            ]
-
-        reasoning_model = kwargs.get("reasoning_model", False)
-
-        # https://huggingface.co/deepseek-ai/DeepSeek-Coder-V2-Instruct-0724
-        # https://github.com/trustsight-io/deepseek-go/issues/2
-        def transform_prompt_for_reasoning(reasoning_model: bool, prompt: str):
-            if reasoning_model:
-                return f"""{prompt}
-
-                ## Response Format
-
-                Reply with JSON object ONLY."""
-            else:
-                return prompt
-
-        messages_list = [
-            [
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": transform_prompt_for_reasoning(reasoning_model, content),
-                },
-            ]
-            for content in batch_content
-        ]
-
-        return_stats = kwargs.get("return_stats", False)
-
-        self.logger.info(
-            f"Initiating batch inference with {len(batch_content)} requests."
-        )
+        self.logger.info(f"Initiating batch inference with {len(calls)} requests.")
         start_time = time.time()
         try:
             bp_kwargs = {}
-            if "completion_params" in kwargs:
-                bp_kwargs["completion_params"] = kwargs["completion_params"]
             if "metadata" in kwargs:
                 bp_kwargs["metadata"] = kwargs["metadata"]
 
-            ordered_outputs = self.batch_processor.batch_generate(
-                messages_list,
-                guided_json=guided_json,
+            ordered_outputs = self.batch_processor.batch_generate_calls(
+                calls=calls,
                 on_result=on_result,
                 **bp_kwargs,
             )
@@ -397,6 +330,68 @@ class OpenAIEngine(EngineLM):
         self.logger.info(f"Batch inference completed in {elapsed_time:.2f} sec")
 
         return ordered_outputs
+
+    def _build_completion_calls(
+        self,
+        *,
+        batch_content: Union[List[str], List[List[Union[Image.Image, bytes, str]]]],
+        system_prompt=None,
+        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
+        **kwargs,
+    ) -> List[CompletionCallParams]:
+        effective_system_prompt = system_prompt or self.system_prompt
+        effective_system_prompt = (
+            "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+        )
+
+        if self.is_multimodal:
+            default_options = {
+                "min_pixels": 512 * 28 * 28,
+                "max_pixels": 2560 * 28 * 28,
+            }
+            mm_kwargs = kwargs.get("mm_processor_kwargs", default_options)
+            batch_content = [
+                open_ai_like_formatting(content, True, **mm_kwargs)
+                for content in batch_content
+            ]
+
+        reasoning_model = kwargs.get("reasoning_model", False)
+        completion_params = kwargs.get("completion_params")
+
+        def transform_prompt_for_reasoning(reasoning_enabled: bool, prompt):
+            if not reasoning_enabled:
+                return prompt
+            return f"""{prompt}
+
+                ## Response Format
+
+                Reply with JSON object ONLY."""
+
+        messages_list = [
+            [
+                {"role": "system", "content": effective_system_prompt},
+                {
+                    "role": "user",
+                    "content": transform_prompt_for_reasoning(reasoning_model, content),
+                },
+            ]
+            for content in batch_content
+        ]
+
+        return [
+            build_completion_call(
+                model=self.model_string,
+                messages=messages,
+                default_completion_params=self.batch_processor.default_completion_params,
+                completion_params=completion_params,
+                guided_json=guided_json,
+                max_tokens=4096 * 4,
+                stop=[],
+                n=1,
+                stream=False,
+            )
+            for messages in messages_list
+        ]
 
     def openai_generate(
         self,

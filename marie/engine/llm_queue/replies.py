@@ -5,14 +5,14 @@ import time
 from dataclasses import dataclass
 from typing import Dict, Optional
 
-from marie.engine.llm_queue.models import QueueReply
+from marie.engine.completion_contract import CompletionReplyEnvelope
 from marie.engine.llm_queue.queue_io import ListQueueClient
 
 
 @dataclass
 class ReplyWaiter:
     request_id: str
-    reply: Optional[QueueReply] = None
+    reply: Optional[CompletionReplyEnvelope] = None
 
 
 class ProducerSession:
@@ -103,17 +103,15 @@ class ProducerSession:
 
     def _reply_loop(self) -> None:
         while not self._stop_event.is_set():
-            payload = self.queue_client.pop_reply(
-                self.producer_id,
-                timeout=self.reply_pop_timeout_seconds,
-            )
-            if payload is None:
-                continue
-
             try:
-                reply = QueueReply.from_json(payload)
+                reply = self.queue_client.pop_reply(
+                    self.producer_id,
+                    timeout=self.reply_pop_timeout_seconds,
+                )
             except Exception as exc:
                 self.logger.error("Dropping malformed queue reply: %r", exc)
+                continue
+            if reply is None:
                 continue
             with self._condition:
                 waiter = self._waiters.get(reply.request_id)

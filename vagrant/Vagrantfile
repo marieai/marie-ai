@@ -96,6 +96,7 @@ Vagrant.configure("2") do |config|
     node.vm.network "forwarded_port", guest: 9000,  host: host_port(9000),   id: "clickhouse-native"
     node.vm.network "forwarded_port", guest: 5672,  host: host_port(5673),   id: "rabbitmq-amqp"      # +10001 to avoid 15672 conflict
     node.vm.network "forwarded_port", guest: 15672, host: rabbitmq_mgmt_port, id: "rabbitmq-mgmt"
+    node.vm.network "forwarded_port", guest: 6379,  host: host_port(6379),   id: "valkey"
     node.vm.network "forwarded_port", guest: 9001,  host: host_port(9001),   id: "minio-api"
     node.vm.network "forwarded_port", guest: 9002,  host: host_port(9002),   id: "minio-console"
     node.vm.network "forwarded_port", guest: 2379,  host: host_port(2379),   id: "etcd"
@@ -242,6 +243,7 @@ EOF
       echo "  ClickHouse:     #{host_port(8123)} -> 8123"
       echo "  RabbitMQ AMQP:  #{host_port(5673)} -> 5672"
       echo "  RabbitMQ Mgmt:  #{rabbitmq_mgmt_port} -> 15672"
+      echo "  Valkey:         #{host_port(6379)} -> 6379"
       echo "  MinIO API:      #{host_port(9001)} -> 9001"
       echo "  MinIO Console:  #{host_port(9002)} -> 9002"
       echo "  etcd:           #{host_port(2379)} -> 2379"

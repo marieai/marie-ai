@@ -1382,7 +1382,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
         Args:
             dotted_path: Fully qualified path like
-                ``grapnel_g5.extract.core.resolvers.remark_line_resolver.resolve_remarks_by_line``
+                ``service.extract.core.resolvers.line_resolver``
 
         Returns:
             The callable resolver function.

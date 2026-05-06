@@ -320,6 +320,42 @@ npm install
 npm run dev  # Watch mode
 ```
 
+### Fault Profiles For Scheduler Stress
+
+The programmatic server supports explicit fault profiles for gateway and scheduler testing:
+
+- `normal` - deterministic successful responses
+- `timeout` - every request sleeps for `AIMOCK_TIMEOUT_MS`
+- `error` - every request throws an error
+- `chaos` - randomized monkey-style mix of slow, timeout, error, and normal responses
+
+You can set the startup profile with environment variables:
+
+```bash
+export AIMOCK_FAULT_PROFILE=chaos
+export AIMOCK_TIMEOUT_MS=180000
+docker compose -f docker-compose.mock-llm-programmatic.yml up -d
+```
+
+Or change it at runtime through the admin endpoint:
+
+```bash
+curl http://localhost:4011/fault-profile
+
+curl -X POST http://localhost:4011/fault-profile \
+  -H 'Content-Type: application/json' \
+  -d '{"profile":"timeout"}'
+```
+
+Supported admin fields:
+
+- `profile`
+- `timeoutMs`
+- `chaosErrorRate`
+- `chaosTimeoutRate`
+- `chaosSlowRate`
+- `chaosSlowMs`
+
 ## Advanced Features
 
 ### Record & Replay
@@ -369,7 +405,11 @@ For testing the batch queue system:
 from marie.engine.batch_processor import BatchProcessor
 
 # Configure to use AIMock
-processor = BatchProcessor(api_base="http://aimock:4010/v1", api_key="mock")
+# Host-network/local process example:
+#   api_base="http://127.0.0.1:4010/v1"
+# Docker bridge-network example:
+#   api_base="http://aimock-programmatic:4010/v1"
+processor = BatchProcessor(api_base="http://127.0.0.1:4010/v1", api_key="mock")
 
 # Deterministic responses for testing
 results = await processor.process_batch(
@@ -410,7 +450,10 @@ services:
 
 test:
   variables:
+    # If the CI service alias is "aimock", container-to-container traffic can use:
     OPENAI_BASE_URL: http://aimock:4010/v1
+    # For host-network/local runs use:
+    # OPENAI_BASE_URL: http://127.0.0.1:4010/v1
   script:
     - pytest tests/
 ```

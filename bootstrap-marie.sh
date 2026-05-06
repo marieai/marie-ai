@@ -12,6 +12,7 @@ COMPOSE_FILES=(
     "./Dockerfiles/docker-compose.storage.yml"
     "./Dockerfiles/docker-compose.s3.yml"
     "./Dockerfiles/docker-compose.rabbitmq.yml"
+    "./Dockerfiles/docker-compose.valkey.yml"
     "./Dockerfiles/docker-compose.etcd.yml"
     "./Dockerfiles/docker-compose.gateway.yml"
     "./Dockerfiles/docker-compose.extract.yml"
@@ -72,7 +73,7 @@ get_running_services() {
     case "$service_type" in
         "infrastructure")
             # Only check for infrastructure containers
-            docker ps --format "table {{.Names}}\t{{.Status}}" --filter "name=marie-s3-server" --filter "name=marie-psql-server" --filter "name=marie-rabbitmq" --filter "name=etcd-single" --filter "name=marie-litellm" --filter "name=marie-mc-setup" --filter "name=marie-clickhouse" --filter "name=marie-hyperdx" --filter "name=marie-log-collector" --filter "name=marie-gitea" 2>/dev/null | tail -n +2
+            docker ps --format "table {{.Names}}\t{{.Status}}" --filter "name=marie-s3-server" --filter "name=marie-psql-server" --filter "name=marie-rabbitmq" --filter "name=marie-valkey" --filter "name=etcd-single" --filter "name=marie-litellm" --filter "name=marie-mc-setup" --filter "name=marie-clickhouse" --filter "name=marie-hyperdx" --filter "name=marie-log-collector" --filter "name=marie-gitea" 2>/dev/null | tail -n +2
             ;;
         "application")
             # Only check for application containers (gateway, extract, etc.)
@@ -182,6 +183,7 @@ stop_infrastructure_services() {
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.storage.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.s3.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.valkey.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.litellm.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
@@ -194,7 +196,7 @@ stop_infrastructure_services() {
 
     # Stop any remaining infrastructure containers
     local containers
-    containers=$(docker ps -q --filter "name=marie-s3-server" --filter "name=marie-psql-server" --filter "name=marie-rabbitmq" --filter "name=etcd-single" --filter "name=marie-litellm" --filter "name=marie-mc-setup" --filter "name=marie-clickhouse" --filter "name=marie-hyperdx" --filter "name=marie-log-collector" --filter "name=marie-gitea" 2>/dev/null || true)
+    containers=$(docker ps -q --filter "name=marie-s3-server" --filter "name=marie-psql-server" --filter "name=marie-rabbitmq" --filter "name=marie-valkey" --filter "name=etcd-single" --filter "name=marie-litellm" --filter "name=marie-mc-setup" --filter "name=marie-clickhouse" --filter "name=marie-hyperdx" --filter "name=marie-log-collector" --filter "name=marie-gitea" 2>/dev/null || true)
     if [ -n "$containers" ]; then
         echo "Stopping remaining infrastructure containers..."
         docker stop $containers 2>/dev/null || true
@@ -242,6 +244,7 @@ stop_infrastructure_compose_services() {
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.storage.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.s3.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.valkey.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.litellm.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
@@ -291,6 +294,7 @@ stop_all_services() {
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.storage.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.s3.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+    stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.valkey.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.litellm.yml"
     stop_cmd="$stop_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
@@ -665,6 +669,7 @@ vagrant_status() {
         echo "  ClickHouse:     localhost:$((8123 + port_offset))"
         echo "  RabbitMQ AMQP:  localhost:$((5673 + port_offset))"
         echo "  RabbitMQ Mgmt:  localhost:$((15672 + port_offset))"
+        echo "  Valkey:         localhost:$((6379 + port_offset))"
         echo "  MinIO Console:  localhost:$((9002 + port_offset))"
         echo "  Gitea:          localhost:$((3001 + port_offset))"
         echo "  LiteLLM:        localhost:$((4000 + port_offset))"
@@ -1029,6 +1034,7 @@ vagrant_bootstrap() {
         echo "  PostgreSQL:     localhost:$((5432 + port_offset))"
         echo "  ClickHouse:     localhost:$((8123 + port_offset))"
         echo "  RabbitMQ Mgmt:  http://localhost:$((15672 + port_offset))"
+        echo "  Valkey:         redis://localhost:$((6379 + port_offset))/0"
         echo "  MinIO Console:  http://localhost:$((9002 + port_offset))"
         echo "  Gitea:          http://localhost:$((3001 + port_offset))"
         echo "  LiteLLM:        http://localhost:$((4000 + port_offset))"
@@ -1058,6 +1064,7 @@ show_deployment_config() {
     echo -e "  Infrastructure: ${DEPLOY_INFRASTRUCTURE}"
     echo -e "    ├── Storage (MinIO): ${DEPLOY_INFRASTRUCTURE}"
     echo -e "    ├── Message Queue (RabbitMQ): ${DEPLOY_INFRASTRUCTURE}"
+    echo -e "    ├── LLM Queue Store (Valkey): ${DEPLOY_INFRASTRUCTURE}"
     echo -e "    ├── Service Discovery (etcd): ${DEPLOY_INFRASTRUCTURE}"
     echo -e "    ├── LLM Proxy (LiteLLM): ${DEPLOY_LITELLM}"
     echo -e "    ├── Analytics DB (ClickHouse): ${DEPLOY_CLICKHOUSE}"
@@ -1430,6 +1437,7 @@ bootstrap_system() {
         infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.storage.yml"
         infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.s3.yml"
         infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+        infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.valkey.yml"
         infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
 
         # Note: LiteLLM is NOT included here - it will be started after database initialization
@@ -1452,7 +1460,7 @@ bootstrap_system() {
 
         # First wait for core services (PostgreSQL must be ready before we can create databases)
         # Note: LiteLLM and Gitea are NOT included - they need their databases created first
-        local core_services_to_wait=("s3server" "psql" "rabbitmq" "etcd-single")
+        local core_services_to_wait=("s3server" "psql" "rabbitmq" "valkey" "etcd-single")
 
         if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
             core_services_to_wait+=("clickhouse")
@@ -1464,6 +1472,7 @@ bootstrap_system() {
         wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.storage.yml"
         wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.s3.yml"
         wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+        wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.valkey.yml"
         wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
 
         if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
@@ -1487,6 +1496,7 @@ bootstrap_system() {
             litellm_cmd="$litellm_cmd -f ./Dockerfiles/docker-compose.storage.yml"
             litellm_cmd="$litellm_cmd -f ./Dockerfiles/docker-compose.s3.yml"
             litellm_cmd="$litellm_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+            litellm_cmd="$litellm_cmd -f ./Dockerfiles/docker-compose.valkey.yml"
             litellm_cmd="$litellm_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
             if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
                 litellm_cmd="$litellm_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
@@ -1510,6 +1520,7 @@ bootstrap_system() {
             gitea_cmd="$gitea_cmd -f ./Dockerfiles/docker-compose.storage.yml"
             gitea_cmd="$gitea_cmd -f ./Dockerfiles/docker-compose.s3.yml"
             gitea_cmd="$gitea_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+            gitea_cmd="$gitea_cmd -f ./Dockerfiles/docker-compose.valkey.yml"
             gitea_cmd="$gitea_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
             if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
                 gitea_cmd="$gitea_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
@@ -1561,6 +1572,7 @@ bootstrap_system() {
             clickstack_cmd="$clickstack_cmd -f ./Dockerfiles/docker-compose.storage.yml"
             clickstack_cmd="$clickstack_cmd -f ./Dockerfiles/docker-compose.s3.yml"
             clickstack_cmd="$clickstack_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+            clickstack_cmd="$clickstack_cmd -f ./Dockerfiles/docker-compose.valkey.yml"
             clickstack_cmd="$clickstack_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
             clickstack_cmd="$clickstack_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
             if [ "$DEPLOY_LITELLM" = "true" ]; then
@@ -1700,6 +1712,7 @@ show_all_services_status() {
         status_compose_cmd="$status_compose_cmd -f ./Dockerfiles/docker-compose.storage.yml"
         status_compose_cmd="$status_compose_cmd -f ./Dockerfiles/docker-compose.s3.yml"
         status_compose_cmd="$status_compose_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
+        status_compose_cmd="$status_compose_cmd -f ./Dockerfiles/docker-compose.valkey.yml"
         status_compose_cmd="$status_compose_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
 
         if [ "$DEPLOY_LITELLM" = "true" ]; then
@@ -1739,8 +1752,10 @@ show_service_endpoints() {
     echo -e "${BLUE}🔗 Service Endpoints:${NC}"
 
     if [ "$DEPLOY_INFRASTRUCTURE" = "true" ]; then
+        local valkey_url="${LLM_QUEUE_VALKEY_URL:-redis://localhost:6379/0}"
         echo -e "${GREEN}Infrastructure Services:${NC}"
         echo "  🐰 RabbitMQ Management: http://localhost:15672 (${RABBIT_MQ_USERNAME}/${RABBIT_MQ_PASSWORD})"
+        echo "  🧠 Valkey LLM Queue: ${valkey_url}"
         echo "  💾 MinIO S3 API: http://localhost:9000 (marieadmin/marietopsecret)"
         echo "  💾 MinIO Console: http://localhost:9001 (marieadmin/marietopsecret)"
         echo "  🗄️  etcd: http://localhost:2379"
@@ -1909,7 +1924,7 @@ show_help() {
     echo "  --stop-all            Stop and remove all Marie-AI services and containers"
     echo "  --no-gateway          Skip gateway deployment"
     echo "  --no-extract          Skip extract executor deployment"
-    echo "  --no-infrastructure   Skip infrastructure services (includes LiteLLM, ClickHouse, Gitea)"
+    echo "  --no-infrastructure   Skip infrastructure services (includes Valkey, LiteLLM, ClickHouse, Gitea)"
     echo "  --no-litellm          Skip LiteLLM proxy deployment"
     echo "  --no-clickhouse       Skip ClickHouse analytics database deployment"
     echo "  --no-clickstack       Skip ClickStack observability stack (HyperDX + log collector)"
@@ -1930,9 +1945,9 @@ show_help() {
     echo "  --instance=N          Specify instance number (1-9, default: 1)"
     echo ""
     echo "Service Categories:"
-    echo "  Infrastructure: Storage (MinIO), Message Queue (RabbitMQ), Service Discovery (etcd),"
-    echo "                  LLM Proxy (LiteLLM), Analytics DB (ClickHouse), Observability (ClickStack),"
-    echo "                  Git Service (Gitea)"
+    echo "  Infrastructure: Storage (MinIO), Message Queue (RabbitMQ), LLM Queue Store (Valkey),"
+    echo "                  Service Discovery (etcd), LLM Proxy (LiteLLM), Analytics DB (ClickHouse),"
+    echo "                  Observability (ClickStack), Git Service (Gitea)"
     echo "  AI Memory:      Mem0 (SDK-based, uses existing PostgreSQL)"
     echo "  Application:    Gateway, Extract Executors"
     echo ""
@@ -1959,9 +1974,9 @@ show_help() {
     echo "  $0 --vagrant-down --instance=2  # Destroy instance 2"
     echo ""
     echo "Multi-Instance Port Mapping:"
-    echo "  Instance 1: PostgreSQL=15432, ClickHouse=18123, RabbitMQ=25672"
-    echo "  Instance 2: PostgreSQL=16432, ClickHouse=19123, RabbitMQ=26672"
-    echo "  Instance 3: PostgreSQL=17432, ClickHouse=20123, RabbitMQ=27672"
+    echo "  Instance 1: PostgreSQL=15432, ClickHouse=18123, RabbitMQ=25672, Valkey=16379"
+    echo "  Instance 2: PostgreSQL=16432, ClickHouse=19123, RabbitMQ=26672, Valkey=17379"
+    echo "  Instance 3: PostgreSQL=17432, ClickHouse=20123, RabbitMQ=27672, Valkey=18379"
 }
 
 main() {

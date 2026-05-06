@@ -14,21 +14,204 @@
  */
 
 import { LLMock } from "@copilotkit/aimock";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 const PORT = parseInt(process.env.AIMOCK_PORT || "4010", 10);
+const ADMIN_PORT = parseInt(process.env.AIMOCK_ADMIN_PORT || "4011", 10);
+const VALID_FAULT_PROFILES = new Set(["normal", "timeout", "error", "chaos"]);
+
+type FaultProfile = "normal" | "timeout" | "error" | "chaos";
+type MockResponse = Record<string, unknown>;
+type MessageHandler = (message: string) => MockResponse | Promise<MockResponse>;
 
 // Document processing state for stateful mocks
 const processingState = new Map<string, { status: string; progress: number }>();
 
+const faultState: {
+  profile: FaultProfile;
+  timeoutMs: number;
+  chaosErrorRate: number;
+  chaosTimeoutRate: number;
+  chaosSlowRate: number;
+  chaosSlowMs: number;
+} = {
+  profile: (process.env.AIMOCK_FAULT_PROFILE as FaultProfile) || "normal",
+  timeoutMs: parseInt(process.env.AIMOCK_TIMEOUT_MS || "180000", 10),
+  chaosErrorRate: parseFloat(process.env.AIMOCK_CHAOS_ERROR_RATE || "0.15"),
+  chaosTimeoutRate: parseFloat(process.env.AIMOCK_CHAOS_TIMEOUT_RATE || "0.15"),
+  chaosSlowRate: parseFloat(process.env.AIMOCK_CHAOS_SLOW_RATE || "0.2"),
+  chaosSlowMs: parseInt(process.env.AIMOCK_CHAOS_SLOW_MS || "5000", 10),
+};
+
+if (!VALID_FAULT_PROFILES.has(faultState.profile)) {
+  faultState.profile = "normal";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function applyFaultProfile(): Promise<MockResponse | null> {
+  if (faultState.profile === "normal") {
+    return null;
+  }
+
+  if (faultState.profile === "error") {
+    throw new Error("Simulated AIMock error profile");
+  }
+
+  if (faultState.profile === "timeout") {
+    await sleep(faultState.timeoutMs);
+    return {
+      content: JSON.stringify({
+        status: "delayed",
+        profile: "timeout",
+        message: "This response was intentionally delayed",
+      }),
+    };
+  }
+
+  const roll = Math.random();
+  if (roll < faultState.chaosErrorRate) {
+    throw new Error("Simulated AIMock chaos error");
+  }
+  if (roll < faultState.chaosErrorRate + faultState.chaosTimeoutRate) {
+    await sleep(faultState.timeoutMs);
+    return {
+      content: JSON.stringify({
+        status: "delayed",
+        profile: "chaos",
+        branch: "timeout",
+        message: "Chaos timeout branch",
+      }),
+    };
+  }
+  if (roll < faultState.chaosErrorRate + faultState.chaosTimeoutRate + faultState.chaosSlowRate) {
+    await sleep(faultState.chaosSlowMs);
+  }
+
+  return null;
+}
+
+function withFaultProfile(handler: MessageHandler | MockResponse): MessageHandler {
+  return async (message: string) => {
+    const override = await applyFaultProfile();
+    if (override) {
+      return override;
+    }
+    return typeof handler === "function" ? await handler(message) : handler;
+  };
+}
+
+function sendJson(res: ServerResponse, statusCode: number, payload: unknown): void {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(payload, null, 2));
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  if (chunks.length === 0) {
+    return {};
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf-8")) as Record<string, unknown>;
+}
+
+function snapshotFaultState(): Record<string, unknown> {
+  return {
+    profile: faultState.profile,
+    timeoutMs: faultState.timeoutMs,
+    chaosErrorRate: faultState.chaosErrorRate,
+    chaosTimeoutRate: faultState.chaosTimeoutRate,
+    chaosSlowRate: faultState.chaosSlowRate,
+    chaosSlowMs: faultState.chaosSlowMs,
+  };
+}
+
+function startAdminServer(): Server {
+  const server = createServer(async (req, res) => {
+    const method = req.method || "GET";
+    const url = new URL(req.url || "/", `http://127.0.0.1:${ADMIN_PORT}`);
+
+    if (method === "GET" && url.pathname === "/health") {
+      sendJson(res, 200, { status: "ok", admin: true, ...snapshotFaultState() });
+      return;
+    }
+
+    if (url.pathname !== "/fault-profile") {
+      sendJson(res, 404, { error: "Not found" });
+      return;
+    }
+
+    if (method === "GET") {
+      sendJson(res, 200, snapshotFaultState());
+      return;
+    }
+
+    if (method !== "POST" && method !== "PUT") {
+      sendJson(res, 405, { error: "Method not allowed" });
+      return;
+    }
+
+    try {
+      const body = await readJsonBody(req);
+      const requestedProfile = body.profile;
+      if (typeof requestedProfile === "string") {
+        if (!VALID_FAULT_PROFILES.has(requestedProfile)) {
+          sendJson(res, 400, {
+            error: "Invalid profile",
+            valid_profiles: Array.from(VALID_FAULT_PROFILES),
+          });
+          return;
+        }
+        faultState.profile = requestedProfile as FaultProfile;
+      }
+
+      if (typeof body.timeoutMs === "number") {
+        faultState.timeoutMs = Math.max(1, Math.trunc(body.timeoutMs));
+      }
+      if (typeof body.chaosErrorRate === "number") {
+        faultState.chaosErrorRate = Math.max(0, Math.min(1, body.chaosErrorRate));
+      }
+      if (typeof body.chaosTimeoutRate === "number") {
+        faultState.chaosTimeoutRate = Math.max(0, Math.min(1, body.chaosTimeoutRate));
+      }
+      if (typeof body.chaosSlowRate === "number") {
+        faultState.chaosSlowRate = Math.max(0, Math.min(1, body.chaosSlowRate));
+      }
+      if (typeof body.chaosSlowMs === "number") {
+        faultState.chaosSlowMs = Math.max(1, Math.trunc(body.chaosSlowMs));
+      }
+
+      sendJson(res, 200, snapshotFaultState());
+    } catch (error) {
+      sendJson(res, 400, {
+        error: "Invalid JSON body",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  server.listen(ADMIN_PORT, () => {
+    console.log(`AIMock admin server listening on http://localhost:${ADMIN_PORT}`);
+  });
+
+  return server;
+}
+
 async function main() {
   const mock = new LLMock({ port: PORT });
+  const adminServer = startAdminServer();
 
   // ==========================================================================
   // Document Extraction Handlers
   // ==========================================================================
 
   // Invoice extraction with dynamic field detection
-  mock.onMessage(/extract.*invoice/i, async (message: string) => {
+  mock.onMessage(/extract.*invoice/i, withFaultProfile(async (message: string) => {
     const hasLineItems = message.toLowerCase().includes("line item");
     const hasTotal = message.toLowerCase().includes("total");
 
@@ -58,10 +241,10 @@ async function main() {
         2
       ),
     };
-  });
+  }));
 
   // General document extraction
-  mock.onMessage(/extract/i, {
+  mock.onMessage(/extract/i, withFaultProfile({
     content: JSON.stringify({
       document_type: "document",
       extracted_fields: {
@@ -71,13 +254,13 @@ async function main() {
       },
       confidence: 0.92,
     }),
-  });
+  }));
 
   // ==========================================================================
   // Document Classification Handlers
   // ==========================================================================
 
-  mock.onMessage(/classify/i, async (message: string) => {
+  mock.onMessage(/classify/i, withFaultProfile(async (message: string) => {
     // Detect document type hints in the message
     const typeHints: Record<string, { type: string; confidence: number }> = {
       invoice: { type: "invoice", confidence: 0.97 },
@@ -105,13 +288,13 @@ async function main() {
         ],
       }),
     };
-  });
+  }));
 
   // ==========================================================================
   // RAG Query Handlers
   // ==========================================================================
 
-  mock.onMessage(/\b(what|how|why|when|where|who|find|search|query)\b/i, {
+  mock.onMessage(/\b(what|how|why|when|where|who|find|search|query)\b/i, withFaultProfile({
     content:
       "Based on the documents in your knowledge base, here is what I found:\n\n" +
       "The payment terms are Net 30 as specified in the Vendor Agreement (Section 4.2). " +
@@ -119,13 +302,13 @@ async function main() {
       "**Sources:**\n" +
       "- Vendor Agreement v2.3 (relevance: 95%)\n" +
       "- Accounts Payable Policy (relevance: 88%)",
-  });
+  }));
 
   // ==========================================================================
   // Document Summarization Handlers
   // ==========================================================================
 
-  mock.onMessage(/summarize/i, async (message: string) => {
+  mock.onMessage(/summarize/i, withFaultProfile(async (message: string) => {
     const wordCount = message.split(/\s+/).length;
     const summaryLength = Math.min(Math.floor(wordCount * 0.3), 100);
 
@@ -143,13 +326,13 @@ async function main() {
         compression_ratio: 0.3,
       }),
     };
-  });
+  }));
 
   // ==========================================================================
   // OCR/Text Recognition Handlers
   // ==========================================================================
 
-  mock.onMessage(/ocr|recognize|read.*image|scan/i, {
+  mock.onMessage(/ocr|recognize|read.*image|scan/i, withFaultProfile({
     content: JSON.stringify({
       text: "INVOICE\n\nInvoice #: INV-2024-001\nDate: 2024-01-15\n\nBill To:\nAcme Corp\n123 Business St\n\nAmount Due: $1,234.56",
       confidence: 0.94,
@@ -159,14 +342,14 @@ async function main() {
         { type: "footer", bbox: [0, 180, 100, 200], confidence: 0.89 },
       ],
     }),
-  });
+  }));
 
   // ==========================================================================
   // Tool Call Handlers (for function calling)
   // ==========================================================================
 
   // Document processing tool call
-  mock.onMessage(/process.*document|document.*process/i, {
+  mock.onMessage(/process.*document|document.*process/i, withFaultProfile({
     content: null,
     tool_calls: [
       {
@@ -182,10 +365,10 @@ async function main() {
         },
       },
     ],
-  });
+  }));
 
   // Search tool call
-  mock.onMessage(/search.*knowledge|knowledge.*search/i, {
+  mock.onMessage(/search.*knowledge|knowledge.*search/i, withFaultProfile({
     content: null,
     tool_calls: [
       {
@@ -201,13 +384,13 @@ async function main() {
         },
       },
     ],
-  });
+  }));
 
   // ==========================================================================
   // Streaming Response Handler
   // ==========================================================================
 
-  mock.onMessage(/stream|long.*response/i, {
+  mock.onMessage(/stream|long.*response/i, withFaultProfile({
     content:
       "This is a streaming response that simulates how real LLM APIs " +
       "return tokens progressively. Each chunk arrives with realistic " +
@@ -219,27 +402,13 @@ async function main() {
       "3. Interactive Q&A sessions\n" +
       "4. Long-form content generation",
     // Streaming is automatic based on aimock.json streaming config
-  });
-
-  // ==========================================================================
-  // Error Simulation Handlers
-  // ==========================================================================
-
-  mock.onMessage(/error|fail|crash/i, () => {
-    throw new Error("Simulated error for testing error handling");
-  });
-
-  mock.onMessage(/timeout/i, async () => {
-    // Simulate a slow response
-    await new Promise((resolve) => setTimeout(resolve, 30000));
-    return { content: "This response was intentionally delayed" };
-  });
+  }));
 
   // ==========================================================================
   // Default Handler (fallback)
   // ==========================================================================
 
-  mock.onMessage(/.*/i, {
+  mock.onMessage(/.*/i, withFaultProfile({
     content:
       "I'm the Marie AI mock assistant. I can help with:\n" +
       "- Document extraction (try: 'extract invoice data')\n" +
@@ -247,7 +416,7 @@ async function main() {
       "- Knowledge queries (try: 'what are the payment terms?')\n" +
       "- Summarization (try: 'summarize this document')\n" +
       "- OCR (try: 'read text from image')",
-  });
+  }));
 
   // ==========================================================================
   // Start Server
@@ -265,6 +434,7 @@ async function main() {
 ║    OpenAI:    http://localhost:${PORT}/v1                           ║
 ║    Anthropic: http://localhost:${PORT}/anthropic                    ║
 ║    Metrics:   http://localhost:${PORT}/metrics                      ║
+║    Admin:     http://localhost:${ADMIN_PORT}/fault-profile              ║
 ║                                                                  ║
 ║  Custom Handlers:                                                ║
 ║    - Document extraction (invoice, general)                      ║
@@ -282,11 +452,13 @@ async function main() {
   // Handle graceful shutdown
   process.on("SIGINT", async () => {
     console.log("\nShutting down mock server...");
+    adminServer.close();
     await mock.stop();
     process.exit(0);
   });
 
   process.on("SIGTERM", async () => {
+    adminServer.close();
     await mock.stop();
     process.exit(0);
   });

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from typing import List, Protocol
+from typing import Any, Optional, Protocol
 
-from marie.engine.llm_queue.models import QueueRequest
-from marie.engine.llm_queue.result_types import BatchResult
+from marie.engine.completion_contract import CompletionCallParams
 
 
 class ExecutionAdapter(Protocol):
-    def execute_requests(self, requests: List[QueueRequest]) -> List[BatchResult]: ...
+    async def execute(
+        self,
+        call: CompletionCallParams,
+        *,
+        timeout_seconds: Optional[float] = None,
+    ) -> Any: ...

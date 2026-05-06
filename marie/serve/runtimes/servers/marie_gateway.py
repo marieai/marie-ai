@@ -30,6 +30,10 @@ from marie.constants import (
     __marie_home__,
     __model_path__,
 )
+from marie.engine.llm_queue.registry import (
+    dispatch_runtime_live_state,
+    dispatch_runtime_snapshot,
+)
 from marie.excepts import BadConfigSource, RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
 from marie.jaml import JAML
@@ -51,6 +55,9 @@ from marie.serve.discovery.resolver import EtcdServiceResolver
 from marie.serve.instrumentation import MetricsTimer
 from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.networking.utils import get_grpc_channel
+from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (
+    GatewayLlmDispatchRuntime,
+)
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.cluster_state import ClusterState
@@ -307,6 +314,9 @@ class MarieServerGateway(CompositeServer):
         )
         self.service_events_queue = asyncio.Queue(maxsize=512)
         self.state_events_queue = asyncio.Queue(maxsize=2048)  # tends to be chattier
+        self.llm_dispatch_runtime = GatewayLlmDispatchRuntime(logger=self.logger)
+        self._background_services_shutdown = False
+        self._background_services_lock = asyncio.Lock()
 
         job_manager = JobManager(
             storage=storage,
@@ -358,7 +368,7 @@ class MarieServerGateway(CompositeServer):
             @app.on_event("shutdown")
             async def _shutdown():
                 self.logger.info("Shutting down")
-                await self.job_scheduler.stop()
+                await self._shutdown_background_services()
 
             @app.api_route(
                 path="/job/submit",
@@ -406,12 +416,36 @@ class MarieServerGateway(CompositeServer):
                 )
                 try:
                     debug_data = self.job_scheduler.debug_info()
+                    debug_data["llm_dispatch"] = dispatch_runtime_snapshot()
                     return {"status": "OK", "result": debug_data}
                 except Exception as e:
                     self.logger.error(f"Error getting debug info: {str(e)}")
                     return {
                         "status": "error",
                         "result": f"Failed to get debug info: {str(e)}",
+                    }
+
+            @app.api_route(
+                path="/api/llm-dispatch/runtime",
+                methods=["GET"],
+                summary="Get live LLM dispatch runtime information /api/llm-dispatch/runtime",
+            )
+            async def get_llm_dispatch_runtime(
+                limit: int = Query(default=50, ge=1, le=250)
+            ):
+                self.logger.info(
+                    f"LLM dispatch runtime requested at {datetime.now(timezone.utc)}"
+                )
+                try:
+                    runtime_data = dispatch_runtime_live_state(limit_per_pool=limit)
+                    return {"status": "OK", "result": runtime_data}
+                except Exception as e:
+                    self.logger.error(
+                        f"Error getting LLM dispatch runtime info: {str(e)}"
+                    )
+                    return {
+                        "status": "error",
+                        "result": f"Failed to get LLM dispatch runtime info: {str(e)}",
                     }
 
             @app.api_route(
@@ -1618,8 +1652,39 @@ class MarieServerGateway(CompositeServer):
             service_name=self.args["discovery_service_name"],
         )
 
+    async def _start_gateway_background_runtimes(self) -> None:
+        await self.llm_dispatch_runtime.start()
+
+    async def _shutdown_background_services(self) -> None:
+        async with self._background_services_lock:
+            if self._background_services_shutdown:
+                return
+            self._background_services_shutdown = True
+
+            try:
+                await self.job_scheduler.stop()
+            except Exception as exc:
+                self.logger.error("Failed stopping job scheduler: %s", exc)
+
+            if self.grpc_broker:
+                try:
+                    await self.grpc_broker.stop()
+                except Exception as exc:
+                    self.logger.error("Failed stopping gRPC broker: %s", exc)
+
+            try:
+                await self.llm_dispatch_runtime.stop()
+            except Exception as exc:
+                self.logger.error("Failed stopping LLM dispatch runtime: %s", exc)
+
+    async def shutdown(self):
+        self.logger.debug("Shutting down Marie gateway")
+        await self._shutdown_background_services()
+        await super().shutdown()
+
     async def run_server(self):
         """Run servers inside CompositeServer forever"""
+        await self._start_gateway_background_runtimes()
         run_server_tasks = []
         for server in self.servers:
             run_server_tasks.append(asyncio.create_task(server.run_server()))

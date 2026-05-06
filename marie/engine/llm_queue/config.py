@@ -6,12 +6,9 @@ import uuid
 from dataclasses import dataclass
 from typing import Optional
 
+from marie.utils.types import to_bool
 
-def _env_bool(name: str, default: bool = False) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_MAX_INLINE_PAYLOAD_BYTES = 16 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -48,7 +45,9 @@ class LlmQueueConfig:
         )
         return cls(
             enabled=(
-                _env_bool("LLM_QUEUE_ENABLED", False) if enabled is None else enabled
+                to_bool(os.getenv("LLM_QUEUE_ENABLED"), False)
+                if enabled is None
+                else enabled
             ),
             valkey_url=valkey_url or os.getenv("LLM_QUEUE_VALKEY_URL"),
             pool_id=pool_id or os.getenv("LLM_QUEUE_POOL_ID", "default"),
@@ -72,7 +71,10 @@ class LlmQueueConfig:
                 os.getenv("LLM_QUEUE_MAX_BUFFERED_REQUESTS_PER_POOL", "32")
             ),
             max_inline_payload_bytes=int(
-                os.getenv("LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES", str(128 * 1024))
+                os.getenv(
+                    "LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES",
+                    str(DEFAULT_MAX_INLINE_PAYLOAD_BYTES),
+                )
             ),
         )
 

@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from opentelemetry import trace as otel_trace
 
+from marie.engine.completion_contract import (
+    CompletionCallParams,
+    CompletionReplyEnvelope,
+    QueuedCompletionEnvelope,
+    build_dispatch_profile_key,
+    completion_finish_reason,
+    extract_completion_text,
+)
 from marie.engine.llm_queue.config import LlmQueueConfig
-from marie.engine.llm_queue.models import QueueReply, QueueRequest
 from marie.engine.llm_queue.queue_io import ListQueueClient
 from marie.engine.llm_queue.replies import ProducerSession, ReplyWaiter
 from marie.engine.llm_queue.result_types import BatchResult
+from marie.excepts import MaxTokensExceededError
 
 
 class QueuedBatchExecutor:
@@ -21,12 +27,10 @@ class QueuedBatchExecutor:
         *,
         queue_client: ListQueueClient,
         config: LlmQueueConfig,
-        model_string: str,
         logger,
     ):
         self.queue_client = queue_client
         self.config = config
-        self.model_string = model_string
         self.logger = logger
         self._producer_session = ProducerSession(
             queue_client=queue_client,
@@ -41,40 +45,37 @@ class QueuedBatchExecutor:
     def execute(
         self,
         *,
-        messages_list: List[List[dict[str, Any]]],
+        calls: List[CompletionCallParams],
         batch_request_id: str,
         batch_timeout: float,
         on_result=None,
-        completion_params: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, str]] = None,
     ) -> List[BatchResult]:
-        route_key = _build_route_key(self.model_string, completion_params)
         traceparent, tracestate = _current_trace_headers()
         waiters: Dict[str, ReplyWaiter] = {}
         ordered_ids: List[str] = []
         positions: Dict[str, int] = {}
-        payloads: List[str] = []
+        requests: List[QueuedCompletionEnvelope] = []
 
         try:
-            for index, messages in enumerate(messages_list):
+            for index, call in enumerate(calls):
                 request_id = f"{batch_request_id}_task_{index}"
                 waiter = self._producer_session.register_waiter(request_id)
                 waiters[request_id] = waiter
                 ordered_ids.append(request_id)
                 positions[request_id] = index
 
-                request = QueueRequest(
+                request = QueuedCompletionEnvelope(
                     request_id=request_id,
                     producer_id=self.config.producer_id,
                     pool_id=self.config.pool_id,
-                    route_key=route_key,
                     submitted_at=time.time(),
-                    messages=messages,
-                    completion_params=completion_params,
+                    call=call,
                     metadata=metadata,
                     traceparent=traceparent,
                     tracestate=tracestate,
                     timeout_seconds=batch_timeout,
+                    dispatch_profile_key=build_dispatch_profile_key(call),
                 )
                 payload = request.to_json()
                 payload_size = len(payload.encode("utf-8"))
@@ -83,17 +84,17 @@ class QueuedBatchExecutor:
                         f"Queued request {request_id} is {payload_size} bytes; "
                         f"max inline payload is {self.config.max_inline_payload_bytes} bytes."
                     )
-                payloads.append(payload)
+                requests.append(request)
 
-            for payload in payloads:
-                self.queue_client.push_request(self.config.pool_id, payload)
+            for request in requests:
+                self.queue_client.push_request(request)
         except Exception:
             for request_id in ordered_ids:
                 self._producer_session.remove_waiter(request_id)
             raise
 
         deadline = time.monotonic() + batch_timeout
-        results: List[Optional[BatchResult]] = [None] * len(messages_list)
+        results: List[Optional[BatchResult]] = [None] * len(calls)
         pending = set(ordered_ids)
 
         try:
@@ -151,16 +152,6 @@ class QueuedBatchExecutor:
                 condition.wait(timeout=remaining)
 
 
-def _build_route_key(
-    model_string: str, completion_params: Optional[Dict[str, Any]]
-) -> str:
-    params_json = json.dumps(
-        completion_params or {}, sort_keys=True, separators=(",", ":")
-    )
-    params_hash = hashlib.sha256(params_json.encode("utf-8")).hexdigest()[:12]
-    return f"{model_string}:{params_hash}"
-
-
 def _current_trace_headers() -> Tuple[Optional[str], Optional[str]]:
     span = otel_trace.get_current_span()
     span_context = span.get_span_context()
@@ -175,16 +166,36 @@ def _current_trace_headers() -> Tuple[Optional[str], Optional[str]]:
     return traceparent, trace_state
 
 
-def _reply_to_batch_result(reply: QueueReply) -> BatchResult:
+def _reply_to_batch_result(reply: CompletionReplyEnvelope) -> BatchResult:
     if reply.status == "ok":
-        return BatchResult(
-            task_id=reply.request_id, response=reply.response, error=None
-        )
+        try:
+            if completion_finish_reason(reply.completion) == "length":
+                raise MaxTokensExceededError()
+            _, extracted_text = extract_completion_text(reply.completion)
+            return BatchResult(
+                task_id=reply.request_id,
+                response=extracted_text,
+                error=None,
+            )
+        except Exception as exc:
+            return BatchResult(
+                task_id=reply.request_id,
+                response=None,
+                error=exc,
+            )
 
     error_type = reply.error_type or "RemoteQueueTaskError"
     error_message = reply.error_message or "queued execution failed"
+    origin_parts = []
+    if reply.error_source:
+        origin_parts.append(reply.error_source)
+    if reply.dispatcher_id:
+        origin_parts.append(f"dispatcher={reply.dispatcher_id}")
+    if reply.execution_backend_address:
+        origin_parts.append(f"backend={reply.execution_backend_address}")
+    origin = f" from {' '.join(origin_parts)}" if origin_parts else ""
     return BatchResult(
         task_id=reply.request_id,
         response=None,
-        error=RuntimeError(f"{error_type}: {error_message}"),
+        error=RuntimeError(f"{error_type}{origin}: {error_message}"),
     )

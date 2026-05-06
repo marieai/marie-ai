@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from marie.engine.batch_processor import BatchProcessor, BatchResult
+from marie.engine.completion_contract import CompletionCallParams, build_completion_call
 from marie.excepts import BatchExecutionError, CircuitOpenError
 from marie.serve.networking.balancer.circuit_breaker import (
     CircuitBreaker,
@@ -23,6 +24,15 @@ class _Logger:
 
     def debug(self, *args, **kwargs):
         pass
+
+
+def _call(content: str, **completion_params) -> CompletionCallParams:
+    return build_completion_call(
+        model="test-model",
+        messages=[{"role": "user", "content": content}],
+        completion_params=completion_params or None,
+        stream=False,
+    )
 
 
 def _build_processor(
@@ -52,7 +62,7 @@ def _build_processor(
 # ---------------------------------------------------------------------------
 # Existing test: shared concurrency limit across overlapping calls
 # ---------------------------------------------------------------------------
-def test_load_batched_request_shares_concurrency_limit_across_overlapping_calls():
+def test_load_batched_completion_calls_shares_concurrency_limit_across_overlapping_calls():
     processor = _build_processor(max_concurrency=2)
     active = 0
     peak = 0
@@ -71,19 +81,17 @@ def test_load_batched_request_shares_concurrency_limit_across_overlapping_calls(
             async with lock:
                 active -= 1
 
-    processor.acompletion_with_retry = fake_completion
+    processor.acompletion_call_with_retry = fake_completion
 
     async def run():
         results = await asyncio.gather(
-            processor.load_batched_request(
-                messages_list=[["a"], ["b"], ["c"]],
+            processor.load_batched_completion_calls(
+                calls=[_call("a"), _call("b"), _call("c")],
                 request_id="req-1",
-                guided_json=None,
             ),
-            processor.load_batched_request(
-                messages_list=[["d"], ["e"], ["f"]],
+            processor.load_batched_completion_calls(
+                calls=[_call("d"), _call("e"), _call("f")],
                 request_id="req-2",
-                guided_json=None,
             ),
         )
 
@@ -97,28 +105,84 @@ def test_load_batched_request_shares_concurrency_limit_across_overlapping_calls(
 # Test: SDK retries disabled (max_retries=0)
 # ---------------------------------------------------------------------------
 def test_openai_sdk_retries_disabled():
-    """Verify that OpenAIEngine sets max_retries=0 on the AsyncOpenAI client."""
+    """Verify that OpenAIEngine builds its client through the shared helper."""
     import os
     import unittest.mock as mock
 
-    from openai import AsyncOpenAI
+    with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        with mock.patch(
+            "marie.engine.openai_engine.build_async_openai_client"
+        ) as mock_builder, mock.patch(
+            "marie.engine.batch_processor.AsyncOpenAI",
+            new=object,
+        ):
+            mock_client = mock.MagicMock()
+            mock_client.models.list.return_value = []
+            mock_builder.return_value = mock_client
+
+            from marie.engine.openai_engine import OpenAIEngine
+
+            OpenAIEngine(
+                model_name="test-model",
+                base_url="http://localhost:8000",
+                is_multimodal=False,
+            )
+
+            mock_builder.assert_called_once_with(
+                api_key="test-key",
+                base_url="http://localhost:8000",
+            )
+
+
+def test_openai_engine_normalizes_calls_before_strategy_split():
+    import os
+    import unittest.mock as mock
+
+    captured = {}
 
     with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
-        with mock.patch("marie.engine.openai_engine.AsyncOpenAI") as mock_cls:
-            mock_client = mock.MagicMock(spec=AsyncOpenAI)
+        with mock.patch(
+            "marie.engine.openai_engine.build_async_openai_client"
+        ) as mock_builder, mock.patch(
+            "marie.engine.batch_processor.AsyncOpenAI",
+            new=object,
+        ):
+            mock_client = mock.MagicMock()
             mock_client.models.list.return_value = []
-            mock_cls.return_value = mock_client
+            mock_builder.return_value = mock_client
 
             from marie.engine.openai_engine import OpenAIEngine
 
             engine = OpenAIEngine(
                 model_name="test-model",
                 base_url="http://localhost:8000",
+                is_multimodal=False,
             )
 
-            # Check that AsyncOpenAI was called with max_retries=0
-            call_kwargs = mock_cls.call_args[1]
-            assert call_kwargs["max_retries"] == 0
+            def fake_batch_generate_calls(*, calls, on_result=None, metadata=None, **kwargs):
+                captured["calls"] = calls
+                captured["metadata"] = metadata
+                return ["ok"]
+
+            engine.batch_processor.batch_generate_calls = fake_batch_generate_calls
+
+            responses = engine.batch_generate(
+                ["hello"],
+                guided_json={"type": "object"},
+                metadata={"source": "unit-test"},
+                completion_params={"temperature": 0.25},
+            )
+
+    assert responses == ["ok"]
+    assert len(captured["calls"]) == 1
+    call = captured["calls"][0]
+    assert isinstance(call, CompletionCallParams)
+    assert call.messages[0]["role"] == "system"
+    assert call.messages[1]["role"] == "user"
+    assert call.messages[1]["content"] == "hello"
+    assert call.temperature == 0.25
+    assert call.extra_body["guided_json"] == {"type": "object"}
+    assert captured["metadata"] == {"source": "unit-test"}
 
 
 # ---------------------------------------------------------------------------
@@ -139,13 +203,12 @@ def test_circuit_breaker_fast_fail_when_open():
         # Should never be called
         raise AssertionError("Should not reach completion when circuit is open")
 
-    processor.acompletion_with_retry = fake_completion
+    processor.acompletion_call_with_retry = fake_completion
 
     async def run():
-        results = await processor.load_batched_request(
-            messages_list=[["a"], ["b"], ["c"]],
+        results = await processor.load_batched_completion_calls(
+            calls=[_call("a"), _call("b"), _call("c")],
             request_id="req-cb-open",
-            guided_json=None,
         )
 
         # All tasks should have CircuitOpenError
@@ -186,13 +249,12 @@ def test_half_open_probe_slot_reservation():
         task_id = kwargs["task_id"]
         return task_id, f"response:{task_id}"
 
-    processor.acompletion_with_retry = fake_completion
+    processor.acompletion_call_with_retry = fake_completion
 
     async def run():
-        results = await processor.load_batched_request(
-            messages_list=[["a"], ["b"], ["c"]],
+        results = await processor.load_batched_completion_calls(
+            calls=[_call("a"), _call("b"), _call("c")],
             request_id="req-half-open",
-            guided_json=None,
         )
 
         # With half_open_max_calls=1, only 1 task should proceed to completion
@@ -215,21 +277,19 @@ def test_half_open_probe_slot_reservation():
 # ---------------------------------------------------------------------------
 # Test: BatchExecutionError raised instead of generic RuntimeError
 # ---------------------------------------------------------------------------
-def test_batch_execution_error_raised_on_failure():
-    """batch_generate should raise BatchExecutionError when tasks fail."""
+def test_batch_generate_calls_raises_batch_execution_error_on_failure():
+    """batch_generate_calls should raise BatchExecutionError when tasks fail."""
     processor = _build_processor(max_concurrency=10)
 
     async def failing_completion(**kwargs):
         task_id = kwargs["task_id"]
         raise RuntimeError(f"Simulated failure for {task_id}")
 
-    processor.acompletion_with_retry = failing_completion
+    processor.acompletion_call_with_retry = failing_completion
 
-    # batch_generate is sync; it internally runs the event loop
     with pytest.raises(BatchExecutionError) as exc_info:
-        processor.batch_generate(
-            messages_list=[["msg1"], ["msg2"]],
-            guided_json=None,
+        processor.batch_generate_calls(
+            calls=[_call("msg1"), _call("msg2")],
         )
 
     err = exc_info.value
@@ -244,7 +304,7 @@ def test_batch_execution_error_raised_on_failure():
 # ---------------------------------------------------------------------------
 # Test: unexpected completion exceptions propagate as task failures
 # ---------------------------------------------------------------------------
-def test_completion_non_streaming_reraises_unexpected_exception():
+def test_completion_non_streaming_call_reraises_unexpected_exception():
     """Unexpected task errors must propagate so the batch marks failure."""
     import os
     import unittest.mock as mock
@@ -270,11 +330,10 @@ def test_completion_non_streaming_reraises_unexpected_exception():
     async def run():
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
             with pytest.raises(ValueError, match="unexpected failure"):
-                await processor.completion_non_streaming(
-                    messages=[{"role": "user", "content": "hello"}],
+                await processor.completion_non_streaming_call(
+                    call=_call("hello"),
                     task_id="task-1",
                     request_id="req-1",
-                    guided_json=None,
                 )
 
     asyncio.run(run())
@@ -292,14 +351,13 @@ def test_batch_timeout_cancels_tasks():
         task_id = kwargs["task_id"]
         return task_id, "done"
 
-    processor.acompletion_with_retry = slow_completion
+    processor.acompletion_call_with_retry = slow_completion
 
     async def run():
         with pytest.raises(asyncio.TimeoutError):
-            await processor.load_batched_request(
-                messages_list=[["a"], ["b"]],
+            await processor.load_batched_completion_calls(
+                calls=[_call("a"), _call("b")],
                 request_id="req-timeout",
-                guided_json=None,
             )
 
     asyncio.run(run())
@@ -372,23 +430,22 @@ def test_process_batch_uses_async_sleep_on_retry():
 
 
 # ---------------------------------------------------------------------------
-# Test: load_batched_request returns BatchResult objects
+# Test: load_batched_completion_calls returns BatchResult objects
 # ---------------------------------------------------------------------------
-def test_load_batched_request_returns_batch_results():
-    """load_batched_request should return List[BatchResult] with full metadata."""
+def test_load_batched_completion_calls_returns_batch_results():
+    """load_batched_completion_calls should return List[BatchResult] with full metadata."""
     processor = _build_processor(max_concurrency=10)
 
     async def fake_completion(**kwargs):
         task_id = kwargs["task_id"]
         return task_id, f"response:{task_id}"
 
-    processor.acompletion_with_retry = fake_completion
+    processor.acompletion_call_with_retry = fake_completion
 
     async def run():
-        results = await processor.load_batched_request(
-            messages_list=[["a"], ["b"]],
+        results = await processor.load_batched_completion_calls(
+            calls=[_call("a"), _call("b")],
             request_id="req-br",
-            guided_json=None,
         )
 
         assert len(results) == 2
@@ -418,13 +475,12 @@ def test_circuit_open_error_not_counted_as_failure():
     async def fake_completion(**kwargs):
         raise AssertionError("Should not be called")
 
-    processor.acompletion_with_retry = fake_completion
+    processor.acompletion_call_with_retry = fake_completion
 
     async def run():
-        await processor.load_batched_request(
-            messages_list=[["a"]],
+        await processor.load_batched_completion_calls(
+            calls=[_call("a")],
             request_id="req-no-count",
-            guided_json=None,
         )
 
     asyncio.run(run())

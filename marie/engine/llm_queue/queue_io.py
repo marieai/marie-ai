@@ -6,6 +6,10 @@ import time
 from collections import defaultdict, deque
 from typing import Deque, Dict, Optional, Protocol
 
+from marie.engine.completion_contract import (
+    CompletionReplyEnvelope,
+    QueuedCompletionEnvelope,
+)
 from marie.engine.llm_queue.valkey_keys import (
     producer_alive_key,
     reply_queue_key,
@@ -14,19 +18,23 @@ from marie.engine.llm_queue.valkey_keys import (
 
 
 class ListQueueClient(Protocol):
-    def push_request(self, pool_id: str, payload: str) -> None: ...
+    def push_request(self, request: QueuedCompletionEnvelope) -> None: ...
 
-    def pop_request(self, pool_id: str, timeout: float) -> Optional[str]: ...
+    def pop_request(
+        self, pool_id: str, timeout: float
+    ) -> Optional[QueuedCompletionEnvelope]: ...
 
-    def try_pop_request(self, pool_id: str) -> Optional[str]: ...
+    def try_pop_request(self, pool_id: str) -> Optional[QueuedCompletionEnvelope]: ...
 
-    def push_request_front(self, pool_id: str, payload: str) -> None: ...
+    def push_request_front(self, request: QueuedCompletionEnvelope) -> None: ...
 
     def push_reply(
-        self, producer_id: str, payload: str, ttl_seconds: Optional[int] = None
+        self, reply: CompletionReplyEnvelope, ttl_seconds: Optional[int] = None
     ) -> None: ...
 
-    def pop_reply(self, producer_id: str, timeout: float) -> Optional[str]: ...
+    def pop_reply(
+        self, producer_id: str, timeout: float
+    ) -> Optional[CompletionReplyEnvelope]: ...
 
     def set_producer_alive(
         self, producer_id: str, value: str, ttl_seconds: int
@@ -36,6 +44,12 @@ class ListQueueClient(Protocol):
 
     def is_producer_alive(self, producer_id: str) -> bool: ...
 
+    def request_queue_depth(self, pool_id: str) -> int: ...
+
+    def sample_requests(
+        self, pool_id: str, limit: int
+    ) -> list[QueuedCompletionEnvelope]: ...
+
     def close(self) -> None: ...
 
 
@@ -43,42 +57,49 @@ class ValkeyListQueueClient:
     def __init__(self, url: str):
         self._client = _build_sync_client(url)
 
-    def push_request(self, pool_id: str, payload: str) -> None:
-        self._client.rpush(request_queue_key(pool_id), payload)
+    def push_request(self, request: QueuedCompletionEnvelope) -> None:
+        self._client.rpush(request_queue_key(request.pool_id), request.to_json())
 
-    def pop_request(self, pool_id: str, timeout: float) -> Optional[str]:
+    def pop_request(
+        self, pool_id: str, timeout: float
+    ) -> Optional[QueuedCompletionEnvelope]:
         result = self._client.blpop(
             request_queue_key(pool_id),
             timeout=max(1, math.ceil(timeout)),
         )
         if not result:
             return None
-        return result[1]
+        return QueuedCompletionEnvelope.from_json(result[1])
 
-    def try_pop_request(self, pool_id: str) -> Optional[str]:
-        return self._client.lpop(request_queue_key(pool_id))
+    def try_pop_request(self, pool_id: str) -> Optional[QueuedCompletionEnvelope]:
+        payload = self._client.lpop(request_queue_key(pool_id))
+        if payload is None:
+            return None
+        return QueuedCompletionEnvelope.from_json(payload)
 
-    def push_request_front(self, pool_id: str, payload: str) -> None:
-        self._client.lpush(request_queue_key(pool_id), payload)
+    def push_request_front(self, request: QueuedCompletionEnvelope) -> None:
+        self._client.lpush(request_queue_key(request.pool_id), request.to_json())
 
     def push_reply(
-        self, producer_id: str, payload: str, ttl_seconds: Optional[int] = None
+        self, reply: CompletionReplyEnvelope, ttl_seconds: Optional[int] = None
     ) -> None:
-        queue_key = reply_queue_key(producer_id)
+        queue_key = reply_queue_key(reply.producer_id)
         pipe = self._client.pipeline()
-        pipe.rpush(queue_key, payload)
+        pipe.rpush(queue_key, reply.to_json())
         if ttl_seconds:
             pipe.expire(queue_key, ttl_seconds)
         pipe.execute()
 
-    def pop_reply(self, producer_id: str, timeout: float) -> Optional[str]:
+    def pop_reply(
+        self, producer_id: str, timeout: float
+    ) -> Optional[CompletionReplyEnvelope]:
         result = self._client.blpop(
             reply_queue_key(producer_id),
             timeout=max(1, math.ceil(timeout)),
         )
         if not result:
             return None
-        return result[1]
+        return CompletionReplyEnvelope.from_json(result[1])
 
     def set_producer_alive(
         self, producer_id: str, value: str, ttl_seconds: int
@@ -90,6 +111,17 @@ class ValkeyListQueueClient:
 
     def is_producer_alive(self, producer_id: str) -> bool:
         return bool(self._client.exists(producer_alive_key(producer_id)))
+
+    def request_queue_depth(self, pool_id: str) -> int:
+        return int(self._client.llen(request_queue_key(pool_id)) or 0)
+
+    def sample_requests(
+        self, pool_id: str, limit: int
+    ) -> list[QueuedCompletionEnvelope]:
+        if limit <= 0:
+            return []
+        payloads = self._client.lrange(request_queue_key(pool_id), 0, limit - 1) or []
+        return [QueuedCompletionEnvelope.from_json(payload) for payload in payloads]
 
     def close(self) -> None:
         close = getattr(self._client, "close", None)
@@ -105,42 +137,54 @@ class InMemoryListQueueClient:
         self._condition = threading.Condition()
         self._closed = False
 
-    def push_request(self, pool_id: str, payload: str) -> None:
+    def push_request(self, request: QueuedCompletionEnvelope) -> None:
         with self._condition:
             self._cleanup_locked()
-            self._lists[request_queue_key(pool_id)].append(payload)
+            self._lists[request_queue_key(request.pool_id)].append(request.to_json())
             self._condition.notify_all()
 
-    def pop_request(self, pool_id: str, timeout: float) -> Optional[str]:
-        return self._blocking_pop(request_queue_key(pool_id), timeout)
+    def pop_request(
+        self, pool_id: str, timeout: float
+    ) -> Optional[QueuedCompletionEnvelope]:
+        payload = self._blocking_pop(request_queue_key(pool_id), timeout)
+        if payload is None:
+            return None
+        return QueuedCompletionEnvelope.from_json(payload)
 
-    def try_pop_request(self, pool_id: str) -> Optional[str]:
+    def try_pop_request(self, pool_id: str) -> Optional[QueuedCompletionEnvelope]:
         with self._condition:
             self._cleanup_locked()
             queue_key = request_queue_key(pool_id)
             if not self._lists[queue_key]:
                 return None
-            return self._lists[queue_key].popleft()
+            return QueuedCompletionEnvelope.from_json(self._lists[queue_key].popleft())
 
-    def push_request_front(self, pool_id: str, payload: str) -> None:
+    def push_request_front(self, request: QueuedCompletionEnvelope) -> None:
         with self._condition:
             self._cleanup_locked()
-            self._lists[request_queue_key(pool_id)].appendleft(payload)
+            self._lists[request_queue_key(request.pool_id)].appendleft(
+                request.to_json()
+            )
             self._condition.notify_all()
 
     def push_reply(
-        self, producer_id: str, payload: str, ttl_seconds: Optional[int] = None
+        self, reply: CompletionReplyEnvelope, ttl_seconds: Optional[int] = None
     ) -> None:
         with self._condition:
             self._cleanup_locked()
-            queue_key = reply_queue_key(producer_id)
-            self._lists[queue_key].append(payload)
+            queue_key = reply_queue_key(reply.producer_id)
+            self._lists[queue_key].append(reply.to_json())
             if ttl_seconds:
                 self._list_expiry[queue_key] = time.monotonic() + ttl_seconds
             self._condition.notify_all()
 
-    def pop_reply(self, producer_id: str, timeout: float) -> Optional[str]:
-        return self._blocking_pop(reply_queue_key(producer_id), timeout)
+    def pop_reply(
+        self, producer_id: str, timeout: float
+    ) -> Optional[CompletionReplyEnvelope]:
+        payload = self._blocking_pop(reply_queue_key(producer_id), timeout)
+        if payload is None:
+            return None
+        return CompletionReplyEnvelope.from_json(payload)
 
     def set_producer_alive(
         self, producer_id: str, value: str, ttl_seconds: int
@@ -161,6 +205,22 @@ class InMemoryListQueueClient:
         with self._condition:
             self._cleanup_locked()
             return producer_alive_key(producer_id) in self._alive
+
+    def request_queue_depth(self, pool_id: str) -> int:
+        with self._condition:
+            self._cleanup_locked()
+            return len(self._lists.get(request_queue_key(pool_id), ()))
+
+    def sample_requests(
+        self, pool_id: str, limit: int
+    ) -> list[QueuedCompletionEnvelope]:
+        if limit <= 0:
+            return []
+        with self._condition:
+            self._cleanup_locked()
+            queue_key = request_queue_key(pool_id)
+            payloads = list(self._lists.get(queue_key, ()))[:limit]
+        return [QueuedCompletionEnvelope.from_json(payload) for payload in payloads]
 
     def close(self) -> None:
         with self._condition:

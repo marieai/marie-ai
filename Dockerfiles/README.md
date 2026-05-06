@@ -32,6 +32,7 @@ docker network create --driver=bridge marie_default
 | PostgreSQL | marie-psql-server | `marie-psql-server` | 5432 |
 | ClickHouse | marie-clickhouse | `marie-clickhouse` | 8123, 9000, 9004 |
 | RabbitMQ | marie-rabbitmq | `marie-rabbitmq` | 5672, 15672 |
+| Valkey | marie-valkey | `marie-valkey` | 6379 |
 | MinIO (S3) | marie-s3-server | `marie-s3-server` | 8000, 8001 |
 | etcd | etcd-single | `etcd-single` | 2379, 2380 |
 | Gitea | marie-gitea | `marie-gitea` | 3001, 2222 |
@@ -48,6 +49,7 @@ Services communicate internally using container names (e.g., `marie-psql-server:
 | `docker-compose.storage.yml` | PostgreSQL | Primary database (DocumentDB compatible) |
 | `docker-compose.clickhouse.yml` | ClickHouse | Analytics/metrics database |
 | `docker-compose.rabbitmq.yml` | RabbitMQ | Message queue |
+| `docker-compose.valkey.yml` | Valkey | LLM queue request/reply store |
 | `docker-compose.s3.yml` | MinIO | S3-compatible object storage |
 | `docker-compose.etcd.yml` | etcd | Distributed key-value store |
 | `docker-compose.gitea.yml` | Gitea | Git hosting (used by marie-studio) |
@@ -70,6 +72,7 @@ docker network create --driver=bridge marie_default
 docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.storage.yml --project-directory . up -d
 docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.clickhouse.yml --project-directory . up -d
 docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.rabbitmq.yml --project-directory . up -d
+docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.valkey.yml --project-directory . up -d
 docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.s3.yml --project-directory . up -d
 docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.etcd.yml --project-directory . up -d
 docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.gitea.yml --project-directory . up -d
@@ -133,6 +136,59 @@ docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.rabbitmq
 # Management UI: http://localhost:15672 (guest/guest)
 ```
 
+### Valkey (docker-compose.valkey.yml)
+
+Shared request/reply transport for queued LLM execution.
+
+```bash
+# Start
+docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.valkey.yml --project-directory . up -d
+
+# Queue URL for host-network services
+# redis://localhost:6379/0
+```
+
+#### Enabling the LLM Dispatch Runtime
+
+`LLM_QUEUE_ENABLED` now has two distinct runtime effects:
+
+- on `marie-gateway`
+  - enables queued LLM submission paths
+  - auto-starts the `LLM Dispatch Runtime` consumer thread inside the gateway process
+- on extract / annotator services
+  - enables queued LLM submission paths
+  - these services remain queue producers; they do not need to run a dispatcher thread
+
+Required gateway environment:
+
+```bash
+LLM_QUEUE_ENABLED=true
+LLM_QUEUE_VALKEY_URL=redis://marie-valkey:6379/0
+LLM_QUEUE_POOL_ID=default
+LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=16777216
+OPENAI_API_KEY=EMPTY
+OPENAI_API_BASE=http://litellm:4000/v1
+```
+
+Required processor environment:
+
+```bash
+LLM_QUEUE_ENABLED=true
+LLM_QUEUE_VALKEY_URL=redis://marie-valkey:6379/0
+LLM_QUEUE_POOL_ID=default
+LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=16777216
+OPENAI_API_KEY=EMPTY
+OPENAI_API_BASE=http://litellm:4000/v1
+```
+
+Operational notes:
+
+- `OPENAI_API_BASE` can also be set as `OPENAI_BASE_URL`.
+- The default inline payload limit is `16777216` bytes (`16 MiB`) to support multimodal requests with serialized image content.
+- If the gateway has `LLM_QUEUE_ENABLED=true` but cannot reach Valkey or is missing `OPENAI_API_KEY`, it now fails fast during startup.
+- The gateway runtime exposes queue health through `/api/debug` and `/api/llm-dispatch/runtime`.
+- Use service names such as `marie-valkey` and `litellm` for container-to-container traffic; use `localhost` only for host-network processes.
+
 ### MinIO S3 (docker-compose.s3.yml)
 
 S3-compatible object storage.
@@ -189,6 +245,16 @@ POSTGRES_HOST=marie-psql-server      # Container hostname for internal access
 RABBIT_MQ_HOSTNAME=marie-rabbitmq    # Container hostname for internal access
 RABBIT_MQ_USERNAME=guest
 RABBIT_MQ_PASSWORD=guest
+
+# Valkey
+LLM_QUEUE_VALKEY_URL=redis://localhost:6379/0
+LLM_QUEUE_ENABLED=false
+LLM_QUEUE_POOL_ID=default
+LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=16777216
+
+# OpenAI-compatible LLM endpoint used by the gateway dispatch runtime
+OPENAI_API_KEY=
+OPENAI_API_BASE=
 
 # S3/MinIO
 S3_ENDPOINT_URL=http://marie-s3-server:8000  # Container hostname for internal access

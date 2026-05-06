@@ -8,7 +8,7 @@ The Marie-AI System Bootstrap script (`bootstrap-marie.sh`) is a comprehensive d
 
 ### Key Features
 
-- **Automated Infrastructure Deployment**: Deploys essential services including RabbitMQ, MinIO, ETCD, and PostgreSQL
+- **Automated Infrastructure Deployment**: Deploys essential services including RabbitMQ, Valkey, MinIO, ETCD, and PostgreSQL
 - **Application Service Management**: Manages Gateway and Extract Executor services
 - **Flexible Deployment Options**: Supports infrastructure-only, services-only, or complete deployments
 - **Health Monitoring**: Includes comprehensive health checks and status reporting
@@ -22,6 +22,7 @@ The Marie-AI System Bootstrap script (`bootstrap-marie.sh`) is a comprehensive d
 | **Marie Gateway** | API Gateway and request routing | 51000 (gRPC), 52000 (HTTP) |
 | **Extract Executor** | Document processing and OCR | 8080 |
 | **RabbitMQ** | Message queue and task distribution | 15672 (Management), 5672 (AMQP) |
+| **Valkey** | Shared request/reply store for queued LLM execution | 6379 |
 | **MinIO** | S3-compatible object storage | 9000 (API), 9001 (Console) |
 | **ETCD** | Service discovery and configuration | 2379 (Client), 2380 (Peer) |
 | **PostgreSQL** | Document database | 5432 |
@@ -151,9 +152,52 @@ The system uses for configuration: `/mnt/data/marie-ai/config/.env.dev`
   | docker-compose.monitoring.yml | Monitoring stack             |
   | docker-compose.s3.yml         | MinIO S3 storage             |
   | docker-compose.rabbitmq.yml   | RabbitMQ                     |
+  | docker-compose.valkey.yml     | Valkey for queued LLM work   |
   | docker-compose.etcd.yml       | ETCD cluster                 |
   | docker-compose.gateway.yml    | Gateway API (optional)       |
   | docker-compose.extract.yml    | Extract Executors (optional) |
+
+If you plan to enable queued `BatchProcessor` execution in the bootstrapped stack, add these environment variables to your deployment env file.
+
+Gateway and processors do not play the same role:
+
+- `marie-gateway`
+  - owns the `LLM Dispatch Runtime`
+  - auto-starts the Valkey-backed dispatcher when `LLM_QUEUE_ENABLED=true`
+  - consumes queued requests and executes them against the configured OpenAI-compatible endpoint
+- extract / annotator processors
+  - act as queue producers
+  - submit canonical completion calls into Valkey
+  - do not need to run the dispatcher thread themselves
+
+Minimum gateway configuration:
+
+```shell
+LLM_QUEUE_ENABLED=true
+LLM_QUEUE_VALKEY_URL=redis://localhost:6379/0
+LLM_QUEUE_POOL_ID=default
+LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=16777216
+OPENAI_API_KEY=EMPTY
+OPENAI_API_BASE=http://localhost:4000/v1
+```
+
+Minimum processor configuration:
+
+```shell
+LLM_QUEUE_ENABLED=true
+LLM_QUEUE_VALKEY_URL=redis://localhost:6379/0
+LLM_QUEUE_POOL_ID=default
+LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=16777216
+OPENAI_API_KEY=EMPTY
+OPENAI_API_BASE=http://localhost:4000/v1
+```
+
+Notes:
+
+- For container-to-container networking, replace `localhost` with the service name, for example `redis://marie-valkey:6379/0`.
+- `OPENAI_API_BASE` may also be provided as `OPENAI_BASE_URL`.
+- The default inline payload limit is `16777216` bytes (`16 MiB`) because multimodal requests include serialized image content.
+- If `LLM_QUEUE_ENABLED=true` on the gateway but `LLM_QUEUE_VALKEY_URL` or `OPENAI_API_KEY` is missing, the gateway now fails fast at startup instead of booting without a consumer runtime.
 
 ---
 
@@ -176,15 +220,15 @@ Options:
   --stop-all            Stop and remove all Marie-AI services and containers
   --no-gateway          Skip gateway deployment
   --no-extract          Skip extract executor deployment
-  --no-infrastructure   Skip infrastructure services (includes LiteLLM)
+  --no-infrastructure   Skip infrastructure services (includes LiteLLM and Valkey)
   --no-litellm          Skip LiteLLM proxy deployment
-  --infrastructure-only Deploy only infrastructure services (includes LiteLLM)
+  --infrastructure-only Deploy only infrastructure services (includes LiteLLM and Valkey)
   --services-only       Deploy only Marie application services (gateway + extract)
   --litellm-only        Deploy only LiteLLM proxy (with required infrastructure)
   -h, --help           Show this help message
 
 Service Categories:
-  Infrastructure: Storage, Message Queue, Service Discovery, LLM Proxy
+  Infrastructure: Storage, Message Queue, LLM Queue Store, Service Discovery, LLM Proxy
   Application:    Gateway, Extract Executors
 
 Examples:
@@ -223,6 +267,7 @@ Examples:
 | Service              | URL                                                              |
 | -------------------- | ---------------------------------------------------------------- |
 | RabbitMQ Management  | [http://localhost:15672](http://localhost:15672) (`guest/guest`) |
+| Valkey LLM Queue     | `redis://localhost:6379/0`                                       |
 | MinIO Console        | [http://localhost:8001](http://localhost:8001)                   |
 | Monitoring (Grafana) | [http://localhost:3000](http://localhost:3000)                   |
 | HTTP Gateway         | [http://localhost:52000](http://localhost:52000)                 |
@@ -244,6 +289,7 @@ Deployment Configuration:
   Infrastructure: true
     ├── Storage (MinIO): true
     ├── Message Queue (RabbitMQ): true
+    ├── LLM Queue Store (Valkey): true
     ├── Service Discovery (etcd): true
     └── LLM Proxy (LiteLLM): false
   Application Services:
@@ -257,13 +303,15 @@ Starting Marie-AI system bootstrap...
 ✅ Environment loaded from ./config/.env.dev
 🔧 Stage 1: Starting infrastructure services...
 Starting infrastructure services with host networking...
-[+] Running 14/14
+[+] Running 15/15
  ✔ Volume "marie-infrastructure_rabbitmq_data"                            Created                                                                                                                                                        0.0s 
  ✔ Volume "marie-infrastructure_rabbitmq_log"                             Created                                                                                                                                                        0.0s 
+ ✔ Volume "marie-infrastructure_valkey_data"                              Created                                                                                                                                                        0.0s 
  ✔ Volume "marie-infrastructure_etcd_data"                                Created                                                                                                                                                        0.0s 
  ✔ Volume "marie-infrastructure_psql_data"                                Created                                                                                                                                                        0.0s 
  ✔ Volume "marie-infrastructure_mc-config"                                Created                                                                                                                                                        0.0s 
  ✔ Container marie-rabbitmq                                               Started                                                                                                                                                        0.4s 
+ ✔ Container marie-valkey                                                 Started                                                                                                                                                        0.4s 
  ✔ Container marie-psql-server                                            Started                                                                                                                                                        0.4s 
  ✔ Container etcd-single                                                  Started                                                                                                                                                        0.4s 
  ✔ Container marie-s3-server                                              Healthy                                                                                                                                                       30.9s 
@@ -273,10 +321,11 @@ Starting infrastructure services with host networking...
  ! rabbitmq Published ports are discarded when using host network mode                                                                                                                                                                   0.0s 
  ! psql Published ports are discarded when using host network mode                                                                                                                                                                       0.0s 
 ⏳ Waiting for infrastructure services to be healthy (excluding setup containers)...
-[+] Running 4/4
+[+] Running 5/5
  ✔ Container etcd-single        Healthy                                                                                                                                                                                                  0.5s 
  ✔ Container marie-s3-server    Healthy                                                                                                                                                                                                  0.5s 
  ✔ Container marie-rabbitmq     Healthy                                                                                                                                                                                                  0.5s 
+ ✔ Container marie-valkey       Healthy                                                                                                                                                                                                  0.5s 
  ✔ Container marie-psql-server  Healthy                                                                                                                                                                                                  0.5s 
 Checking MinIO setup completion...
 ✅ MinIO setup completed successfully
@@ -293,10 +342,12 @@ etcd-single         quay.io/coreos/etcd:v3.6.1                        "/usr/loca
 marie-psql-server   ghcr.io/ferretdb/postgres-documentdb:17-0.103.0   "docker-entrypoint.s…"   psql          31 seconds ago   Up 31 seconds             
 marie-rabbitmq      rabbitmq:3-management-alpine                      "docker-entrypoint.s…"   rabbitmq      31 seconds ago   Up 31 seconds             
 marie-s3-server     minio/minio:latest                                "/usr/bin/docker-ent…"   s3server      31 seconds ago   Up 31 seconds (healthy)   
+marie-valkey        valkey/valkey:8-alpine                            "docker-entrypoint.s…"   valkey        31 seconds ago   Up 31 seconds (healthy)   
 
 🔗 Service Endpoints:
 Infrastructure Services:
   🐰 RabbitMQ Management: http://localhost:15672 (guest/guest)
+  🧠 Valkey LLM Queue: redis://localhost:6379/0
   💾 MinIO S3 API: http://localhost:9000 (marieadmin/marietopsecret)
   💾 MinIO Console: http://localhost:9001 (marieadmin/marietopsecret)
   📊 Monitoring: http://localhost:3000
@@ -319,6 +370,7 @@ Deployment Configuration:
   Infrastructure: false
     ├── Storage (MinIO): false
     ├── Message Queue (RabbitMQ): false
+    ├── LLM Queue Store (Valkey): false
     ├── Service Discovery (etcd): false
     └── LLM Proxy (LiteLLM): false
   Application Services:

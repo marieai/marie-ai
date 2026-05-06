@@ -10,7 +10,9 @@
 # Environment variables:
 #   - OPENAI_API_KEY      - OpenAI API key
 #   - ANTHROPIC_API_KEY   - Anthropic API key
-#   - AIMOCK_URL          - AIMock server URL (default: http://aimock:4010)
+#   - AIMOCK_URL          - AIMock server URL
+#                            Host-network default: http://127.0.0.1:4010
+#                            Bridge-network example: http://aimock-programmatic:4010
 #
 # Start AIMock: docker compose -f docker-compose.mock-llm.yml up -d
 
@@ -23,7 +25,7 @@ model_list:
   - model_name: gpt-4o-mock
     litellm_params:
       model: openai/gpt-4o
-      api_base: ${AIMOCK_URL:-http://aimock:4010}/v1
+      api_base: ${AIMOCK_URL:-http://127.0.0.1:4010}/v1
       api_key: mock-key
     model_info:
       description: "Mock GPT-4o via AIMock - no API costs"
@@ -31,7 +33,7 @@ model_list:
   - model_name: gpt-4o-mini-mock
     litellm_params:
       model: openai/gpt-4o-mini
-      api_base: ${AIMOCK_URL:-http://aimock:4010}/v1
+      api_base: ${AIMOCK_URL:-http://127.0.0.1:4010}/v1
       api_key: mock-key
     model_info:
       description: "Mock GPT-4o-mini via AIMock - no API costs"
@@ -39,7 +41,7 @@ model_list:
   - model_name: claude-mock
     litellm_params:
       model: anthropic/claude-3-opus-20240229
-      api_base: ${AIMOCK_URL:-http://aimock:4010}/anthropic
+      api_base: ${AIMOCK_URL:-http://127.0.0.1:4010}/anthropic
       api_key: mock-key
     model_info:
       description: "Mock Claude via AIMock - no API costs"
@@ -47,7 +49,7 @@ model_list:
   - model_name: gemini-mock
     litellm_params:
       model: gemini/gemini-pro
-      api_base: ${AIMOCK_URL:-http://aimock:4010}/gemini
+      api_base: ${AIMOCK_URL:-http://127.0.0.1:4010}/gemini
       api_key: mock-key
     model_info:
       description: "Mock Gemini via AIMock - no API costs"

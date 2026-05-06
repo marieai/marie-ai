@@ -1,0 +1,43 @@
+# ############### Valkey - LLM Queue Store ###############
+#
+# Used by: marie-ai LLM queue submitters and dispatchers
+#
+# Valkey provides the shared request/reply transport for the Phase 1
+# best-effort queued batch execution path.
+#
+# Prerequisites:
+#   - Network created: docker network create --driver=bridge marie_default
+#
+# Access:
+#   - Valkey: redis://localhost:6379/0
+
+services:
+  valkey:
+    image: valkey/valkey:9-alpine
+    init: true
+    restart: unless-stopped
+    container_name: "marie-valkey"
+    command: ["valkey-server", "--appendonly", "yes", "--save", "60", "1000"]
+    ports:
+      - 6379:6379
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-h", "127.0.0.1", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      - "marie.service=valkey"
+      - "marie.description=Valkey request/reply store for LLM queueing"
+    networks:
+      - marie_default
+
+volumes:
+  valkey_data:
+    driver: local
+
+networks:
+  marie_default:
+    external: true

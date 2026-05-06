@@ -4,7 +4,290 @@ This directory contains stress testing tools for testing the Marie gateway and n
 
 ## Tools
 
-### 1. `gateway_stresser.py`
+### 1. `gateway_e2e_stresser.py`
+
+End-to-end scheduler stress harness for real document jobs.
+
+This tool is for validating the full path:
+
+- local file discovery or pre-staged S3 selection
+- optional S3/MinIO upload
+- planner-aware `job submit` through the gateway
+- RabbitMQ scheduler event tracking
+- end-to-end latency and failure reporting
+
+Use it when the goal is to test:
+
+- gateway scheduling behavior under load
+- queueing and start latency
+- planner selection and submission correctness
+- downstream LLM / annotator failure handling
+- terminal completion vs failure rates
+
+#### Features
+
+- **Real asset staging**: uploads source files to the configured S3/MinIO bucket
+- **Existing S3 asset mode**: submits pre-staged `s3://` assets without uploading
+- **Planner-aware submit**: sets `planner`, `ref_id`, `ref_type`, and `uri` in metadata
+- **Scheduler event tracking**: listens for `*.scheduled`, `*.started`, `*.completed`, `*.failed`
+- **Companion metadata support**: uploads `<file>.meta.json` sidecars when present
+- **Finite load model**: submits a configurable number of jobs at a target rate
+- **Latency breakdowns**: submit, scheduling, queue wait, execution, and end-to-end timing
+- **AIMock fault profile integration**: can switch the mock backend into `normal`, `timeout`, `error`, or randomized `chaos`
+
+#### Usage
+
+```bash
+# Full end-to-end extract test using the existing grapnel config
+python tools/stress/gateway_e2e_stresser.py \
+    --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \
+    --input-dir /mnt/data/marie-ai/generators \
+    --job-count 25 \
+    --job-name gen5_extract \
+    --planner extract
+
+# Submit TIFFs at 4 jobs/sec and write a JSON report
+python tools/stress/gateway_e2e_stresser.py \
+    --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \
+    --s3-uri-manifest /tmp/stress-s3-uris.txt \
+    --job-count 50 \
+    --job-name gen5_extract \
+    --planner extract \
+    --submit-rate 4 \
+    --report-json /tmp/gateway-e2e-report.json
+
+# Run against AIMock/LiteLLM with randomized chaos mode
+python tools/stress/gateway_e2e_stresser.py \
+    --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \
+    --s3-uri 's3://marie/gen5_extract/sample-001.tif' \
+    --job-count 10 \
+    --job-name gen5_extract \
+    --planner extract \
+    --fault-profile chaos \
+    --aimock-admin-url http://localhost:4011
+```
+
+#### Quick Start
+
+The usual scheduler-stress path is:
+
+1. start the mock LLM backend
+2. start LiteLLM pointed at that mock backend
+3. make sure gateway + RabbitMQ + MinIO/S3 are already running
+4. run `gateway_e2e_stresser.py` against pre-staged `s3://` assets
+
+Create the shared Docker network once:
+
+```bash
+docker network create --driver=bridge marie_default 2>/dev/null || true
+```
+
+Start the programmatic AIMock backend with admin control enabled:
+
+```bash
+cd /home/gbugaj/dev/marieai/marie-ai/Dockerfiles
+docker compose -f docker-compose.mock-llm-programmatic.yml up -d
+
+# Verify the admin endpoint
+curl http://localhost:4011/fault-profile
+```
+
+Start LiteLLM and point it at the programmatic AIMock service on the Docker network:
+
+```bash
+cd /home/gbugaj/dev/marieai/marie-ai
+AIMOCK_URL=http://aimock-programmatic:4010 \
+docker compose --env-file ./config/.env.dev \
+  -f ./Dockerfiles/docker-compose.litellm.yml \
+  --project-directory . \
+  up -d
+
+# Verify LiteLLM
+curl http://localhost:4000/health
+```
+
+If LiteLLM is running with host networking, use:
+
+```bash
+cd /home/gbugaj/dev/marieai/marie-ai
+AIMOCK_URL=http://127.0.0.1:4010 \
+docker compose --env-file ./config/.env.dev \
+  -f ./Dockerfiles/docker-compose.litellm.yml \
+  --project-directory . \
+  up -d
+```
+
+Networking rule of thumb:
+
+- LiteLLM on Docker bridge network talking to `aimock-programmatic` container:
+  `AIMOCK_URL=http://aimock-programmatic:4010`
+- LiteLLM on host network talking to AIMock bound on the same host:
+  `AIMOCK_URL=http://127.0.0.1:4010`
+
+If you want to inspect or change the active AIMock profile manually:
+
+```bash
+# Read the active profile
+curl http://localhost:4011/fault-profile
+
+# Force timeout mode
+curl -X POST http://localhost:4011/fault-profile \
+  -H 'Content-Type: application/json' \
+  -d '{"profile":"timeout"}'
+
+# Return to normal mode
+curl -X POST http://localhost:4011/fault-profile \
+  -H 'Content-Type: application/json' \
+  -d '{"profile":"normal"}'
+```
+
+#### Input Modes
+
+`gateway_e2e_stresser.py` supports two input modes.
+
+Upload mode:
+
+- use `--input-dir`, `--input-glob`, or `--input-manifest`
+- the tool uploads local files to S3/MinIO before submission
+- use this when you want a true end-to-end ingest benchmark
+
+Pre-staged S3 mode:
+
+- use `--s3-uri` or `--s3-uri-manifest`
+- the tool skips upload and submits directly against existing `s3://` objects
+- use this when you want to isolate scheduler, queueing, LiteLLM, and failure behavior
+
+#### Sample `--s3-uri-manifest`
+
+Create a simple text file with one `s3://` URI per line:
+
+```text
+s3://marie/gen5_extract/sample-001.tif
+s3://marie/gen5_extract/sample-002.tif
+s3://marie/gen5_extract/sample-003.tif
+```
+
+Example:
+
+```bash
+cat >/tmp/stress-s3-uris.txt <<'EOF'
+s3://marie/gen5_extract/sample-001.tif
+s3://marie/gen5_extract/sample-002.tif
+s3://marie/gen5_extract/sample-003.tif
+EOF
+```
+
+#### Common Runs
+
+Scheduler and LLM stress against pre-staged S3 assets:
+
+```bash
+source ~/environments/marie-3.12/bin/activate
+
+python /home/gbugaj/dev/marieai/marie-ai/tools/stress/gateway_e2e_stresser.py \
+  --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \
+  --s3-uri-manifest /tmp/stress-s3-uris.txt \
+  --job-count 1000 \
+  --job-name gen5_extract \
+  --planner extract \
+  --submit-rate 4 \
+  --fault-profile normal \
+  --aimock-admin-url http://localhost:4011 \
+  --report-json /tmp/gateway-e2e-report.json
+```
+
+Timeout-profile run:
+
+```bash
+python /home/gbugaj/dev/marieai/marie-ai/tools/stress/gateway_e2e_stresser.py \
+  --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \
+  --s3-uri-manifest /tmp/stress-s3-uris.txt \
+  --job-count 250 \
+  --job-name gen5_extract \
+  --planner extract \
+  --submit-rate 2 \
+  --fault-profile timeout \
+  --aimock-admin-url http://localhost:4011 \
+  --report-json /tmp/gateway-timeout-report.json
+```
+
+Randomized monkey/chaos run:
+
+```bash
+python /home/gbugaj/dev/marieai/marie-ai/tools/stress/gateway_e2e_stresser.py \
+  --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \
+  --s3-uri-manifest /tmp/stress-s3-uris.txt \
+  --job-count 500 \
+  --job-name gen5_extract \
+  --planner extract \
+  --submit-rate 3 \
+  --fault-profile chaos \
+  --aimock-admin-url http://localhost:4011 \
+  --report-json /tmp/gateway-chaos-report.json
+```
+
+True full-pipeline run with local upload:
+
+```bash
+python /home/gbugaj/dev/marieai/marie-ai/tools/stress/gateway_e2e_stresser.py \
+  --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \
+  --input-dir /mnt/data/marie-ai/generators \
+  --job-count 100 \
+  --job-name gen5_extract \
+  --planner extract \
+  --submit-rate 2 \
+  --report-json /tmp/gateway-upload-report.json
+```
+
+#### Important options
+
+| Option | Description |
+|--------|-------------|
+| `--config` | Grapnel-style JSON config with `api_base_url`, `api_key`, `storage`, and `queue` |
+| `--input-dir` / `--input-glob` / `--input-manifest` | Local source file discovery for upload mode |
+| `--s3-uri` / `--s3-uri-manifest` | Pre-staged S3 objects for submit-only mode |
+| `--job-count` | Number of jobs to submit |
+| `--job-name` | Gateway submit name / scheduler queue name |
+| `--planner` | Planner to place in metadata |
+| `--fault-profile` | Run label and AIMock control target: `normal`, `timeout`, `error`, `chaos` |
+| `--aimock-admin-url` | AIMock admin endpoint used to switch the active fault profile before the run |
+| `--submit-concurrency` | Concurrent upload+submit workers |
+| `--submit-rate` | Job submit rate in jobs/sec |
+| `--terminal-timeout` | Max wait for terminal scheduler events |
+| `--request-template` | JSON file containing metadata or a full `invoke_action` template |
+| `--report-json` | Write structured report for later analysis |
+
+#### Output
+
+The report breaks timing into:
+
+- **submit latency**: gateway `job submit` request/response
+- **scheduling latency**: submit response to `*.scheduled`
+- **queue wait**: submit response to `*.started` (or `*.scheduled` when no start event exists)
+- **execution latency**: `*.started` to terminal event
+- **end-to-end latency**: submit start to terminal event
+
+This is the primary tool to use when intentionally restarting LiteLLM,
+annotators, or other downstream services to see how scheduler outcomes change.
+
+For scheduler and LLM fault testing, prefer:
+
+- `--s3-uri` or `--s3-uri-manifest` when the asset is already staged and you want to isolate queueing, scheduling, submit, and failure behavior
+- `--fault-profile chaos` when using the programmatic AIMock stack
+
+`chaos` is the randomized monkey-test mode in this setup.
+
+#### Stopping The Mock Stack
+
+```bash
+cd /home/gbugaj/dev/marieai/marie-ai
+docker compose -f ./Dockerfiles/docker-compose.mock-llm-programmatic.yml down
+docker compose -f ./Dockerfiles/docker-compose.litellm.yml down
+```
+
+---
+
+### 2. `gateway_stresser.py`
 
 A stress tester for the Marie gateway that supports both gRPC and HTTP protocols.
 
@@ -113,7 +396,7 @@ RESULT: EXCELLENT - Gateway performing well under load
 
 ---
 
-### 2. `networking_stresser.py`
+### 3. `networking_stresser.py`
 
 A comprehensive networking stress tester with chaos engineering capabilities.
 
@@ -172,7 +455,7 @@ python networking_stresser.py --no-chaos --duration 60
 
 ---
 
-### 3. `etcd_outage_simulator.py`
+### 4. `etcd_outage_simulator.py`
 
 Injects ETCD outages by calling `docker pause` / `docker unpause` against a
 running ETCD container such as `etcd-single`.

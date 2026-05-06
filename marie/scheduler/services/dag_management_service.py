@@ -1,10 +1,10 @@
 import asyncio
 import time
 import traceback
-from collections import defaultdict
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import psycopg2
 
@@ -14,6 +14,7 @@ from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.repository import JobRepository
 from marie.scheduler.state import WorkState
+from marie.scheduler.util import executor_name, is_control_flow_entrypoint
 
 
 class DAGManagementService:
@@ -33,6 +34,7 @@ class DAGManagementService:
         notify_callback: Optional[callable] = None,
         max_active_dags: int = 0,
         admission_lock: Optional[asyncio.Lock] = None,
+        slot_snapshot_provider: Optional[Callable[[], Dict[str, int]]] = None,
     ):
         """
         Initialize the DAG management service.
@@ -53,6 +55,7 @@ class DAGManagementService:
         self._notify_callback = notify_callback
         self.max_active_dags = max_active_dags
         self._admission_lock = admission_lock or asyncio.Lock()
+        self._slot_snapshot_provider = slot_snapshot_provider or (lambda: {})
 
         # Sync task
         self._sync_task: Optional[asyncio.Task] = None
@@ -60,12 +63,84 @@ class DAGManagementService:
 
     # ==================== DAG Hydration ====================
 
+    @staticmethod
+    def _is_schedulable_state(state: Any) -> bool:
+        if state is None:
+            return True
+        if isinstance(state, WorkState):
+            return state in (WorkState.CREATED, WorkState.RETRY)
+        if isinstance(state, str):
+            try:
+                return WorkState(state.lower()) in (WorkState.CREATED, WorkState.RETRY)
+            except ValueError:
+                return False
+        return False
+
+    @staticmethod
+    def _entrypoint(wi: WorkInfo) -> str:
+        metadata = wi.data.get("metadata", {}) if isinstance(wi.data, dict) else {}
+        return metadata.get("on", "") if isinstance(metadata, dict) else ""
+
+    def _admission_gate(self, nodes: List[WorkInfo]) -> tuple[bool, set[str]]:
+        jobs = {wi.id: wi for wi in nodes}
+        dependents: dict[str, list[str]] = defaultdict(list)
+        blocked_executors: set[str] = set()
+
+        for wi in nodes:
+            for dep in wi.dependencies or []:
+                dependents[dep].append(wi.id)
+
+        ready = deque(
+            wi.id
+            for wi in nodes
+            if self._is_schedulable_state(wi.state) and not (wi.dependencies or [])
+        )
+        if not ready:
+            return False, set()
+
+        slots = self._slot_snapshot_provider() or {}
+        traversed_control: set[str] = set()
+        seen: set[str] = set()
+
+        while ready:
+            job_id = ready.popleft()
+            if job_id in seen:
+                continue
+            seen.add(job_id)
+
+            wi = jobs.get(job_id)
+            if wi is None or not self._is_schedulable_state(wi.state):
+                continue
+
+            entrypoint = self._entrypoint(wi)
+            if is_control_flow_entrypoint(entrypoint):
+                traversed_control.add(job_id)
+                for child_id in dependents.get(job_id, []):
+                    child = jobs.get(child_id)
+                    if child is None or not self._is_schedulable_state(child.state):
+                        continue
+                    if all(
+                        dep in traversed_control for dep in child.dependencies or []
+                    ):
+                        ready.append(child_id)
+                continue
+
+            executor = executor_name(entrypoint)
+            if slots.get(executor, 0) > 0:
+                return True, set()
+            blocked_executors.add(executor)
+
+        if traversed_control and not blocked_executors:
+            return True, set()
+
+        return False, blocked_executors
+
     async def _admit_hydrated_dag(
         self, dag_id: str, dag: QueryPlan, nodes: List[WorkInfo], *, source: str
-    ) -> bool:
+    ) -> tuple[bool, str]:
         async with self._admission_lock:
             if dag_id in self.active_dags:
-                return True
+                return True, "already_active"
 
             if (
                 self.max_active_dags > 0
@@ -75,11 +150,20 @@ class DAGManagementService:
                     f"Skipping DAG {dag_id} from {source}; "
                     f"active_dags={len(self.active_dags)}/{self.max_active_dags}"
                 )
-                return False
+                return False, "active_limit"
+
+            admissible, blocked_executors = self._admission_gate(nodes)
+            if not admissible:
+                blocked_summary = ", ".join(sorted(blocked_executors)) or "none"
+                self.logger.debug(
+                    f"Skipping DAG {dag_id} from {source}; no runnable executor path "
+                    f"(blocked={blocked_summary})"
+                )
+                return False, "executor_capacity"
 
             await self.frontier.add_dag(dag, nodes)
             self.active_dags[dag_id] = dag
-            return True
+            return True, "admitted"
 
     async def hydrate_single_dag(self, dag_id: str) -> bool:
         """
@@ -89,7 +173,7 @@ class DAGManagementService:
         :return: True if DAG was hydrated, False if not found or failed
         """
         try:
-            self.logger.info(f"Hydrating single DAG from DB: {dag_id}")
+            self.logger.debug(f"Hydrating single DAG from DB: {dag_id}")
 
             # Load DAG and jobs from repository
             serialized_dag, job_rows = await self.repository.load_dag_and_jobs(dag_id)
@@ -143,7 +227,7 @@ class DAGManagementService:
                 self.logger.warning(f"No jobs found for DAG {dag_id}")
                 return False
 
-            admitted = await self._admit_hydrated_dag(
+            admitted, _ = await self._admit_hydrated_dag(
                 dag_id, dag, nodes, source="hydrate_single_dag"
             )
             if not admitted:
@@ -356,7 +440,8 @@ class DAGManagementService:
         self.logger.info(f"Hydrate: phase 3 (add to frontier) — {len(buckets)} DAG(s)")
         added = 0
         skipped = 0
-        deferred = 0
+        deferred_limit = 0
+        deferred_capacity = 0
         for dag_id in dag_ids_ordered:
             if dag_id not in buckets:
                 skipped += 1
@@ -366,13 +451,15 @@ class DAGManagementService:
                 skipped += 1
                 continue
             try:
-                admitted = await self._admit_hydrated_dag(
+                admitted, reason = await self._admit_hydrated_dag(
                     dag_id, dags[dag_id], nodes, source="hydrate_bulk"
                 )
                 if admitted:
                     added += 1
+                elif reason == "active_limit":
+                    deferred_limit += 1
                 else:
-                    deferred += 1
+                    deferred_capacity += 1
             except Exception as e:
                 self.logger.error(f"Hydrate: frontier.add_dag failed for {dag_id}: {e}")
                 skipped += 1
@@ -380,7 +467,8 @@ class DAGManagementService:
         total_elapsed = time.monotonic() - t0
         self.logger.info(
             f"Hydrate: complete — {added} DAG(s) added to frontier, "
-            f"{deferred} deferred by active DAG limit, {skipped} skipped, "
+            f"{deferred_limit} deferred by active DAG limit, "
+            f"{deferred_capacity} deferred by executor capacity, {skipped} skipped, "
             f"{processed_jobs} job(s) total. "
             f"Total time: {total_elapsed:.2f}s."
         )
