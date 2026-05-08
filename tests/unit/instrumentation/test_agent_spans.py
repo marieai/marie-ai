@@ -14,7 +14,7 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from openinference.semconv.trace import SpanAttributes
+from openinference.semconv.trace import MessageAttributes, SpanAttributes
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
@@ -26,6 +26,7 @@ from opentelemetry.trace import StatusCode
 
 from marie.agent.message import Message
 from marie.agent.tools.base import AgentTool, ToolMetadata, ToolOutput
+from marie.instrumentation import set_llm_io
 
 # ---------------------------------------------------------------------------
 # Lightweight in-memory exporter (OTel SDK 1.19 lacks InMemorySpanExporter)
@@ -108,6 +109,36 @@ def otel_setup_with_processor():
 @pytest.fixture
 def sample_messages():
     return [Message.user("Hello, world!")]
+
+
+def test_set_llm_io_expands_multimodal_message_content(otel_setup):
+    tracer = trace.get_tracer("test.llm_io")
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe the image"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,ZmFrZQ=="},
+                },
+            ],
+        },
+    ]
+
+    with tracer.start_as_current_span("llm-span") as span:
+        set_llm_io(span, input_messages=messages)
+
+    finished_span = otel_setup.get_finished_spans()[0]
+    attrs = finished_span.attributes
+    user_content_key = (
+        f"{SpanAttributes.LLM_INPUT_MESSAGES}.1."
+        f"{MessageAttributes.MESSAGE_CONTENT}"
+    )
+    assert attrs[user_content_key] == (
+        "describe the image\n[image_url: data:image/png;base64,ZmFrZQ==]"
+    )
 
 
 # ---------------------------------------------------------------------------

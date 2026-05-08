@@ -165,6 +165,8 @@ Required gateway environment:
 LLM_QUEUE_ENABLED=true
 LLM_QUEUE_VALKEY_URL=redis://marie-valkey:6379/0
 LLM_QUEUE_POOL_ID=default
+LLM_QUEUE_FABRIC_GROUP_ID=default
+LLM_QUEUE_GATEWAY_ID=gateway-localhost
 LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=16777216
 OPENAI_API_KEY=EMPTY
 OPENAI_API_BASE=http://litellm:4000/v1
@@ -185,6 +187,10 @@ Operational notes:
 
 - `OPENAI_API_BASE` can also be set as `OPENAI_BASE_URL`.
 - The default inline payload limit is `16777216` bytes (`16 MiB`) to support multimodal requests with serialized image content.
+- `LLM_QUEUE_FABRIC_GROUP_ID` should match the Runtime Fabric `groupId` in Marie Studio.
+- `LLM_QUEUE_GATEWAY_ID` should match the gateway id registered in Marie Studio.
+- Set the Runtime Fabric identity vars on the gateway dispatch runtime. Processor services are queue producers and do not need those identity vars unless they also run a dispatcher.
+- Recent execution history in Marie Studio is scoped by `LLM_QUEUE_FABRIC_GROUP_ID` or `LLM_QUEUE_GATEWAY_ID`. If neither is set on the gateway, spans are still emitted to ClickHouse, but they will not appear in the selected Runtime Fabric history view.
 - If the gateway has `LLM_QUEUE_ENABLED=true` but cannot reach Valkey or is missing `OPENAI_API_KEY`, it now fails fast during startup.
 - The gateway runtime exposes queue health through `/api/debug` and `/api/llm-dispatch/runtime`.
 - Use service names such as `marie-valkey` and `litellm` for container-to-container traffic; use `localhost` only for host-network processes.
@@ -250,6 +256,8 @@ RABBIT_MQ_PASSWORD=guest
 LLM_QUEUE_VALKEY_URL=redis://localhost:6379/0
 LLM_QUEUE_ENABLED=false
 LLM_QUEUE_POOL_ID=default
+LLM_QUEUE_FABRIC_GROUP_ID=
+LLM_QUEUE_GATEWAY_ID=
 LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=16777216
 
 # OpenAI-compatible LLM endpoint used by the gateway dispatch runtime

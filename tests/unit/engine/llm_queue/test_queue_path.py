@@ -15,6 +15,7 @@ from marie.engine.completion_contract import (
     build_completion_call,
     completion_payload_to_text,
 )
+from marie.engine.llm_queue import dispatcher as dispatcher_module
 from marie.engine.llm_queue import queue_io as queue_io_module
 from marie.engine.llm_queue.adapters.openai_compatible import (
     OpenAICompatibleExecutionAdapter,
@@ -585,6 +586,46 @@ def test_dispatcher_skips_malformed_request_and_processes_next_live_one():
     assert completion_payload_to_text(reply.completion) == "done:keep"
 
 
+def test_dispatcher_records_openinference_input_and_output(monkeypatch):
+    queue_client = InMemoryListQueueClient()
+    config = _queue_config(producer_id="producer-live")
+    adapter = _FakeAdapter()
+    dispatcher = QueuedBatchDispatcher(
+        queue_client=queue_client,
+        execution_adapter=adapter,
+        config=config,
+        logger=_Logger(),
+    )
+    messages = [{"role": "user", "content": "keep"}]
+    recorded_io = []
+
+    def record_llm_io(span, *, input_messages=None, output_messages=None):
+        recorded_io.append(
+            {
+                "input_messages": input_messages,
+                "output_messages": output_messages,
+            }
+        )
+
+    monkeypatch.setattr(dispatcher_module, "set_llm_io", record_llm_io)
+    queue_client.set_producer_alive("producer-live", "producer-live", 5)
+    queue_client.push_request(
+        QueuedCompletionEnvelope(
+            request_id="live-1",
+            producer_id="producer-live",
+            pool_id="default",
+            submitted_at=time.time(),
+            call=_call(messages),
+        )
+    )
+
+    assert dispatcher.run_once() == 1
+    assert recorded_io == [
+        {"input_messages": messages, "output_messages": None},
+        {"input_messages": None, "output_messages": "done:keep"},
+    ]
+
+
 def test_batch_processor_uses_queued_executor_when_enabled(monkeypatch):
     processor = object.__new__(BatchProcessor)
     processor.client = None
@@ -706,7 +747,10 @@ def test_dispatcher_lifecycle_health():
     dispatcher = QueuedBatchDispatcher(
         queue_client=queue_client,
         execution_adapter=_FakeAdapter(),
-        config=_queue_config(),
+        config=_queue_config(
+            fabric_group_id="runtime-fabric-default",
+            gateway_id="gateway-localhost",
+        ),
         logger=_Logger(),
     )
 
@@ -715,6 +759,8 @@ def test_dispatcher_lifecycle_health():
         health = dispatcher.health()
         assert health["running"] is True
         assert health["pool_id"] == "default"
+        assert health["fabric_group_id"] == "runtime-fabric-default"
+        assert health["gateway_id"] == "gateway-localhost"
         assert health["request_queue_depth"] == 0
         assert health["malformed_requests_dropped"] == 0
         assert health["offline_producer_requests_dropped"] == 0
@@ -806,6 +852,39 @@ def test_dispatch_runtime_live_state_merges_pending_and_inflight_requests():
     finally:
         release.set()
         dispatcher.stop()
+
+
+def test_inflight_snapshot_recomputes_age_on_each_read(monkeypatch):
+    queue_client = InMemoryListQueueClient()
+    dispatcher = QueuedBatchDispatcher(
+        queue_client=queue_client,
+        execution_adapter=_FakeAdapter(),
+        config=_queue_config(),
+        logger=_Logger(),
+    )
+    request = QueuedCompletionEnvelope(
+        request_id="req-inflight",
+        producer_id="producer-A",
+        pool_id="default",
+        submitted_at=95.0,
+        call=_call([{"role": "user", "content": "first prompt"}]),
+    )
+    current_time = {"value": 100.0}
+    monkeypatch.setattr(
+        dispatcher_module.time,
+        "time",
+        lambda: current_time["value"],
+    )
+
+    dispatcher._mark_request_popped(request, lifecycle_stage="executing")
+    first_snapshot = dispatcher.inflight_requests_snapshot()[0]
+    current_time["value"] = 107.0
+    second_snapshot = dispatcher.inflight_requests_snapshot()[0]
+
+    assert first_snapshot["queue_wait_age_seconds"] == 5.0
+    assert second_snapshot["queue_wait_age_seconds"] == 5.0
+    assert first_snapshot["inflight_age_seconds"] == 0.0
+    assert second_snapshot["inflight_age_seconds"] == 7.0
 
 
 def test_dispatch_runtime_live_state_reports_full_pending_depth_with_sample_cap():

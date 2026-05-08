@@ -26,6 +26,8 @@ class LlmQueueConfig:
     max_batch_wait_ms: int
     max_buffered_requests_per_pool: int
     max_inline_payload_bytes: int
+    fabric_group_id: Optional[str] = None
+    gateway_id: Optional[str] = None
 
     @classmethod
     def from_env(
@@ -76,6 +78,8 @@ class LlmQueueConfig:
                     str(DEFAULT_MAX_INLINE_PAYLOAD_BYTES),
                 )
             ),
+            fabric_group_id=os.getenv("LLM_QUEUE_FABRIC_GROUP_ID") or None,
+            gateway_id=os.getenv("LLM_QUEUE_GATEWAY_ID") or None,
         )
 
 

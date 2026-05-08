@@ -6,13 +6,16 @@ import time
 import uuid
 from typing import Any, List, Optional
 
-from opentelemetry import context as otel_context
+from openinference.semconv.trace import SpanAttributes
 from opentelemetry.propagate import extract
+from opentelemetry.trace import StatusCode
 
 from marie.engine.async_helper import run_coroutine_in_current_loop
 from marie.engine.completion_contract import (
+    COMPLETION_QUEUE_CONTRACT_VERSION,
     CompletionReplyEnvelope,
     QueuedCompletionEnvelope,
+    extract_completion_text,
     summarize_completion_call,
 )
 from marie.engine.llm_queue.config import LlmQueueConfig
@@ -20,8 +23,11 @@ from marie.engine.llm_queue.metrics import dispatch_metrics
 from marie.engine.llm_queue.queue_io import ListQueueClient
 from marie.engine.llm_queue.registry import register_dispatcher, unregister_dispatcher
 from marie.engine.llm_queue.result_types import BatchResult
+from marie.instrumentation import get_tracer, set_llm_io, start_as_current_span
+from marie.instrumentation.openinference import infer_llm_system
 
 _UNSET = object()
+_tracer = get_tracer("marie.engine.llm_queue.dispatcher")
 
 
 class QueuedBatchDispatcher:
@@ -125,6 +131,8 @@ class QueuedBatchDispatcher:
                 "dispatcher_id": self.dispatcher_id,
                 "enabled": self.config.enabled,
                 "pool_id": self.config.pool_id,
+                "fabric_group_id": self.config.fabric_group_id,
+                "gateway_id": self.config.gateway_id,
                 "valkey_configured": bool(self.config.valkey_url),
                 "running": bool(
                     thread and thread.is_alive() and not self._stop_event.is_set()
@@ -163,8 +171,13 @@ class QueuedBatchDispatcher:
         ]
 
     def inflight_requests_snapshot(self) -> List[dict[str, object]]:
+        now = time.time()
         with self._state_lock:
             snapshots = [dict(item) for item in self._inflight_requests.values()]
+        for snapshot in snapshots:
+            popped_at = snapshot.get("popped_at")
+            if popped_at is not None:
+                snapshot["inflight_age_seconds"] = max(0.0, now - float(popped_at))
         snapshots.sort(key=lambda item: float(item.get("submitted_at") or 0.0))
         return snapshots
 
@@ -259,17 +272,7 @@ class QueuedBatchDispatcher:
         self, requests: List[QueuedCompletionEnvelope]
     ) -> List[BatchResult]:
         try:
-            token = None
-            trace_context = _trace_context_from_request(requests[0])
-            if trace_context is not None:
-                token = otel_context.attach(trace_context)
-            try:
-                results = run_coroutine_in_current_loop(
-                    self._execute_batch_async(requests)
-                )
-            finally:
-                if token is not None:
-                    otel_context.detach(token)
+            results = run_coroutine_in_current_loop(self._execute_batch_async(requests))
             return _normalize_results(requests, results, self.logger)
         except Exception as exc:
             self.logger.error("Queued dispatch batch failed: %r", exc)
@@ -284,49 +287,81 @@ class QueuedBatchDispatcher:
         return await asyncio.gather(*tasks)
 
     async def _execute_one(self, request: QueuedCompletionEnvelope) -> BatchResult:
-        started_at = time.monotonic()
+        started_monotonic = time.monotonic()
+        started_wall = time.time()
         ok = False
         self._update_inflight_request(request, lifecycle_stage="executing")
-        try:
-            completion = await self.execution_adapter.execute(
-                request.call,
-                timeout_seconds=request.timeout_seconds,
-            )
-            response = (
-                completion.model_dump()
-                if hasattr(completion, "model_dump")
-                else completion
-            )
-            ok = True
-            return BatchResult(
-                task_id=request.request_id,
-                response=response,
-                error=None,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            self.logger.error(
-                "Queued execution failed for %s: %r",
-                request.request_id,
-                exc,
-            )
-            self._update_inflight_request(
-                request,
-                current_error_summary=str(exc),
-            )
-            return BatchResult(
-                task_id=request.request_id,
-                response=None,
-                error=exc,
-            )
-        finally:
-            dispatch_metrics.record_request_execution(
-                pool_id=self.config.pool_id,
+        parent_context = _trace_context_from_request(request)
+        backend_address = getattr(self.execution_adapter, "backend_address", None)
+        span_kwargs = {"context": parent_context} if parent_context is not None else {}
+
+        with start_as_current_span(
+            _tracer,
+            "LLMDispatch.completion",
+            span_kind="llm",
+            **span_kwargs,
+        ) as span:
+            _set_dispatch_span_base_attributes(
+                span,
+                request=request,
+                config=self.config,
                 dispatcher_id=self.dispatcher_id,
-                duration_seconds=max(0.0, time.monotonic() - started_at),
-                ok=ok,
+                backend_address=backend_address,
+                started_wall=started_wall,
             )
+
+            try:
+                completion = await self.execution_adapter.execute(
+                    request.call,
+                    timeout_seconds=request.timeout_seconds,
+                )
+                response = (
+                    completion.model_dump()
+                    if hasattr(completion, "model_dump")
+                    else completion
+                )
+                ok = True
+                _set_dispatch_span_success_attributes(
+                    span,
+                    completion=response,
+                    started_monotonic=started_monotonic,
+                    request=request,
+                )
+                return BatchResult(
+                    task_id=request.request_id,
+                    response=response,
+                    error=None,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.logger.error(
+                    "Queued execution failed for %s: %r",
+                    request.request_id,
+                    exc,
+                )
+                self._update_inflight_request(
+                    request,
+                    current_error_summary=str(exc),
+                )
+                _set_dispatch_span_error_attributes(
+                    span,
+                    exc=exc,
+                    started_monotonic=started_monotonic,
+                    request=request,
+                )
+                return BatchResult(
+                    task_id=request.request_id,
+                    response=None,
+                    error=exc,
+                )
+            finally:
+                dispatch_metrics.record_request_execution(
+                    pool_id=self.config.pool_id,
+                    dispatcher_id=self.dispatcher_id,
+                    duration_seconds=max(0.0, time.monotonic() - started_monotonic),
+                    ok=ok,
+                )
 
     def _publish_replies(
         self, requests: List[QueuedCompletionEnvelope], results: List[BatchResult]
@@ -454,6 +489,115 @@ def _trace_context_from_request(request: QueuedCompletionEnvelope):
     if not carrier:
         return None
     return extract(carrier)
+
+
+def _set_dispatch_span_base_attributes(
+    span,
+    *,
+    request: QueuedCompletionEnvelope,
+    config: LlmQueueConfig,
+    dispatcher_id: str,
+    backend_address: Optional[str],
+    started_wall: float,
+) -> None:
+    queue_wait_ms = max(0.0, (started_wall - request.submitted_at) * 1000.0)
+    span.set_attribute(SpanAttributes.LLM_MODEL_NAME, request.call.model)
+    span.set_attribute(SpanAttributes.LLM_SYSTEM, infer_llm_system(request.call.model))
+    span.set_attribute("marie.llm_dispatch.request_id", request.request_id)
+    span.set_attribute("marie.llm_dispatch.producer_id", request.producer_id)
+    span.set_attribute("marie.llm_dispatch.pool_id", request.pool_id)
+    span.set_attribute(
+        "marie.llm_dispatch.fabric_group_id", config.fabric_group_id or ""
+    )
+    span.set_attribute("marie.llm_dispatch.gateway_id", config.gateway_id or "")
+    span.set_attribute("marie.llm_dispatch.dispatcher_id", dispatcher_id)
+    span.set_attribute(
+        "marie.llm_dispatch.dispatch_profile_key",
+        request.dispatch_profile_key or request.call.model,
+    )
+    span.set_attribute("marie.llm_dispatch.backend_address", backend_address or "")
+    span.set_attribute("marie.llm_dispatch.model", request.call.model)
+    span.set_attribute("marie.llm_dispatch.queue_wait_ms", queue_wait_ms)
+    span.set_attribute("marie.llm_dispatch.message_count", len(request.call.messages))
+    span.set_attribute(
+        "marie.llm_dispatch.contract_version",
+        COMPLETION_QUEUE_CONTRACT_VERSION,
+    )
+    set_llm_io(span, input_messages=request.call.messages)
+
+
+def _set_dispatch_span_success_attributes(
+    span,
+    *,
+    completion: Any,
+    started_monotonic: float,
+    request: QueuedCompletionEnvelope,
+) -> None:
+    execution_ms = max(0.0, (time.monotonic() - started_monotonic) * 1000.0)
+    total_latency_ms = max(0.0, (time.time() - request.submitted_at) * 1000.0)
+    span.set_attribute("marie.llm_dispatch.status", "ok")
+    span.set_attribute("marie.llm_dispatch.execution_ms", execution_ms)
+    span.set_attribute("marie.llm_dispatch.total_latency_ms", total_latency_ms)
+    _set_completion_output_attributes(span, completion)
+    _set_usage_attributes(span, completion)
+    span.set_status(StatusCode.OK)
+
+
+def _set_dispatch_span_error_attributes(
+    span,
+    *,
+    exc: Exception,
+    started_monotonic: float,
+    request: QueuedCompletionEnvelope,
+) -> None:
+    execution_ms = max(0.0, (time.monotonic() - started_monotonic) * 1000.0)
+    total_latency_ms = max(0.0, (time.time() - request.submitted_at) * 1000.0)
+    span.set_attribute("marie.llm_dispatch.status", "error")
+    span.set_attribute("marie.llm_dispatch.error_type", type(exc).__name__)
+    span.set_attribute("marie.llm_dispatch.error_message", str(exc))
+    span.set_attribute("marie.llm_dispatch.execution_ms", execution_ms)
+    span.set_attribute("marie.llm_dispatch.total_latency_ms", total_latency_ms)
+    span.record_exception(exc)
+    span.set_status(StatusCode.ERROR, str(exc))
+
+
+def _set_completion_output_attributes(span, completion: Any) -> None:
+    try:
+        reasoning_content, extracted_text = extract_completion_text(completion)
+    except Exception:
+        return
+
+    if extracted_text is not None:
+        set_llm_io(span, output_messages=extracted_text)
+    span.set_attribute("marie.has_reasoning", reasoning_content is not None)
+
+
+def _set_usage_attributes(span, completion: Any) -> None:
+    usage = _read_completion_usage(completion)
+    if usage is None:
+        return
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    total_tokens = int(usage.get("total_tokens") or prompt_tokens + completion_tokens)
+    span.set_attribute(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt_tokens)
+    span.set_attribute(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, completion_tokens)
+    span.set_attribute(SpanAttributes.LLM_TOKEN_COUNT_TOTAL, total_tokens)
+
+
+def _read_completion_usage(completion: Any) -> Optional[dict[str, Any]]:
+    if isinstance(completion, dict):
+        usage = completion.get("usage")
+    else:
+        usage = getattr(completion, "usage", None)
+    if usage is None:
+        return None
+    if isinstance(usage, dict):
+        return usage
+    return {
+        "prompt_tokens": getattr(usage, "prompt_tokens", None),
+        "completion_tokens": getattr(usage, "completion_tokens", None),
+        "total_tokens": getattr(usage, "total_tokens", None),
+    }
 
 
 def _normalize_results(

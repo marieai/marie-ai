@@ -16,13 +16,17 @@
       <env name="MARIE_DEFAULT_MOUNT" value="/mnt/data/marie-ai" />
       <env name="OPENAI_API_KEY" value="EMPTY" />
       <env name="OPENAI_API_BASE" value="http://0.0.0.0:4000" />
+      <env name="LLM_QUEUE_ENABLED" value="true" />
+      <env name="LLM_QUEUE_VALKEY_URL" value="redis://localhost:6379/0" />
     </envs>
     <option name="SDK_HOME" value="" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/" />
     <option name="IS_MODULE_SDK" value="true" />
     <option name="ADD_CONTENT_ROOTS" value="false" />
     <option name="ADD_SOURCE_ROOTS" value="false" />
+    <option name="DEBUG_JUST_MY_CODE" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+    <option name="RUN_TOOL" value="" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/marie/__main__.py" />
     <option name="PARAMETERS" value="server --start --uses /mnt/data/marie-ai/config/service/g5/marie-g5-annotator_parser.yml" />
     <option name="SHOW_COMMAND_LINE" value="false" />

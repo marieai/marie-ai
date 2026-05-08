@@ -175,6 +175,22 @@ async def test_gateway_llm_dispatch_runtime_starts_and_stops_cleanly():
     assert runtime.health()["running"] is False
 
 
+def test_llm_queue_config_reads_runtime_fabric_identity_from_env():
+    with mock.patch.dict(
+        "os.environ",
+        {
+            "LLM_QUEUE_ENABLED": "true",
+            "LLM_QUEUE_VALKEY_URL": "redis://valkey:6379/0",
+            "LLM_QUEUE_FABRIC_GROUP_ID": "default",
+            "LLM_QUEUE_GATEWAY_ID": "gateway-localhost",
+        },
+    ):
+        config = LlmQueueConfig.from_env()
+
+    assert config.fabric_group_id == "default"
+    assert config.gateway_id == "gateway-localhost"
+
+
 @pytest.mark.asyncio
 async def test_gateway_llm_dispatch_runtime_requires_valkey_when_enabled():
     runtime = GatewayLlmDispatchRuntime(
