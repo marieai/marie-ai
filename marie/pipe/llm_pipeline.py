@@ -16,6 +16,7 @@ from marie.pipe.components import (
     burst_frames,
     load_pipeline,
     ocr_frames,
+    rotate_frames,
     update_existing_meta,
 )
 from marie.pipe.llm_indexer import LLMIndexerPipelineComponent
@@ -148,7 +149,18 @@ class LLMPipeline(BasePipeline):
         restore_assets(
             ref_id, ref_type, root_asset_dir, full_restore=True, overwrite=True
         )
-        burst_frames(ref_id, frames, root_asset_dir)
+
+        rotation_enabled = runtime_conf.get("rotation", {"enabled": False}).get(
+            "enabled", True
+        )
+
+        metadata["rotation"], any_rotated = (
+            rotate_frames(ref_id, frames, root_asset_dir, force=True)
+            if rotation_enabled
+            else (None, False)
+        )
+
+        burst_frames(ref_id, frames, root_asset_dir, force=any_rotated)
 
         # Load Available OCR data if possible
         ocr_results = ocr_frames(
@@ -157,6 +169,7 @@ class LLMPipeline(BasePipeline):
             frames,
             root_asset_dir,
             queue_id=queue_id,
+            force=any_rotated,
         )
         metadata["ocr"] = ocr_results
         metadata = self.store_metadata(

@@ -53,16 +53,7 @@ class DocumentClassificationInferenceDataset(Dataset):
             words = page.words
             bboxes = page.boxes
 
-            width, height = image.shape[1], image.shape[0]
-            width_scale = 1000 / width
-            height_scale = 1000 / height
-            if not all(
-                isinstance(box, (list, tuple)) and len(box) == 4 for box in bboxes
-            ):
-                raise ValueError(
-                    "Invalid bbox format for classifier inference page. "
-                    "Expected a list of [x0, y0, x1, y1] boxes per page."
-                )
+            width_scale, height_scale = 1000 / image.shape[1], 1000 / image.shape[0]
             boxes_normalized = [
                 scale_bounding_box(box, width_scale, height_scale) for box in bboxes
             ]
@@ -138,16 +129,7 @@ class BoundaryDetectionInferenceDataset(Dataset):
             for i, image in enumerate(images):
                 bboxes = boxes[i]
 
-                width, height = image.shape[1], image.shape[0]
-                width_scale = 1000 / width
-                height_scale = 1000 / height
-                if not all(
-                    isinstance(box, (list, tuple)) and len(box) == 4 for box in bboxes
-                ):
-                    raise ValueError(
-                        "Invalid bbox format for classifier inference page. "
-                        "Expected a list of [x0, y0, x1, y1] boxes per page."
-                    )
+                width_scale, height_scale = 1000 / image.shape[1], 1000 / image.shape[0]
                 boxes_normalized = [
                     scale_bounding_box(box, width_scale, height_scale) for box in bboxes
                 ]

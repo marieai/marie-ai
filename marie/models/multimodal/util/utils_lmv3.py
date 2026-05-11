@@ -1,10 +1,3 @@
-import json
-import os
-import pickle as pkl
-import re
-from PIL import Image
-import pytesseract
-from tqdm import tqdm
 from typing import Optional, Any, Tuple
 from sklearn.metrics import (
     confusion_matrix,
@@ -14,8 +7,6 @@ from sklearn.metrics import (
 )
 from matplotlib import pyplot as plt
 import seaborn as sns
-import pandas as pd
-from multiprocessing import Pool
 import torch
 from torch import Tensor
 import numpy as np
@@ -27,78 +18,6 @@ def convert_classes_to_list(classes: Dict[str, int]) -> List[str]:
     classes_rev = {v: k for k, v in classes.items()}
     classes_names = [classes_rev[i] for i in range(len(classes_rev))]
     return classes_names
-
-
-def check_doc_orientation(file_path: str, resize: bool = False) -> Tuple[str, int]:
-    """detect orientation for single document-image and return rotation"""
-    file_name = os.path.basename(file_path)
-    img = Image.open(file_path).convert("RGB")
-    if resize:
-        img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
-    try:
-        osd_output = pytesseract.image_to_osd(img)
-        if (match := re.search(r"Rotate: (\d+)", osd_output)) is not None:
-            rotation = int(match.group(1))
-        else:
-            rotation = 0
-    except pytesseract.TesseractError:
-        rotation = 0  # probably blank page
-    return file_name, rotation
-
-
-def check_orientation_prc_in_database(dir_path: str, chunk: int = 20) -> None:
-    """calculate percentage of pages with non-zero rotation for input database"""
-    db_files = [os.path.join(dir_path, f) for f in os.listdir(dir_path)]
-    db_rotations = []
-    with Pool() as pool:
-        for result in tqdm(
-            pool.imap(check_doc_orientation, db_files, chunksize=chunk),
-            total=len(db_files),
-        ):
-            db_rotations.append(result)
-    df = pd.DataFrame(db_rotations, columns=["filename", "rotation"])
-    df.to_csv("ImagesRotationProcessed.csv", index=False)
-
-    rotation_prc = (df["rotation"] != 0).mean() * 100
-    print(f"{rotation_prc:.2f}% of rotated pages. Total no. pages {len(db_files)}")
-
-
-def detect_page_rotation(page_path: str, compress_size: bool = False) -> int:
-    """detect single page (single image) orientation/rotation"""
-    with Image.open(page_path) as img:
-        img = img.convert("RGB")
-        if compress_size:
-            img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
-        try:
-            osd = pytesseract.image_to_osd(img)
-            if (match := re.search(r"Rotate: (\d+)", osd)) is not None:
-                rotation = int(match.group(1))
-            else:
-                rotation = 0
-        except pytesseract.TesseractError:
-            rotation = 0  # probably blank page
-    return rotation
-
-
-def save_data_to_pkl(data: Any, out_path: str, filename: Optional[str] = None) -> None:
-    if not filename:
-        filename = "input_db.pkl"
-    out_path = os.path.join(out_path, filename)
-    with open(out_path, "wb") as f:
-        pkl.dump(data, f)
-
-
-def load_data_from_pkl(data_path: str) -> Any:
-    with open(data_path, "rb") as f:
-        data = pkl.load(f)
-    return data
-
-
-def load_json(file_path: str) -> Any:
-    with open(file_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data
-
 
 def apply_classification_report(
     y_true: list,

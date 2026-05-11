@@ -1,6 +1,6 @@
 import hashlib
 import io
-import sys
+import os
 import time
 from math import ceil
 from typing import List, Tuple, Union
@@ -8,10 +8,12 @@ from typing import List, Tuple, Union
 import cv2
 import numpy as np
 import PIL.Image
+import pytesseract
 from PIL import Image
 from rich import print
 
-from marie.timer import Timer
+from marie.logging_core.predefined import default_logger as logger
+from marie.utils.docs import load_image
 
 
 def read_image(image):
@@ -319,3 +321,27 @@ def ensure_max_page_size(
             resized_frames.append(frame)
 
     return changed, resized_frames
+
+
+def detect_page_rotation(
+    img: str | Image.Image | np.ndarray, compress_size: bool = False
+) -> dict:
+    """detect single page (single image) orientation/rotation"""
+    if isinstance(img, (str, bytes, os.PathLike)):
+        img = load_image(img)
+    elif isinstance(img, Image.Image):
+        img = img.convert("RGB")
+
+    if compress_size:
+        img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
+    try:
+        osd = pytesseract.image_to_osd(img, output_type="dict")
+        return {
+            k: osd[k] for k in ("orientation", "rotate", "orientation_conf") if k in osd
+        }
+    except pytesseract.TesseractError as e:
+        logger.warning(
+            f"Failed to detect page rotation using Tesseract. Probably a blank page."
+        )
+        logger.debug(f"Tesseract Error: {e}")
+        return {"rotate": 0, "orientation": 0, "orientation_conf": 0, "error": e}

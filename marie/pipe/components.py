@@ -30,10 +30,10 @@ from marie.components.template_matching import (
 from marie.constants import __config_dir__, __model_path__
 from marie.excepts import BadConfigSource
 from marie.logging_core.predefined import default_logger as logger
-from marie.logging_core.profile import TimeContext
 from marie.ocr import CoordinateFormat, OcrEngine
 from marie.overlay.overlay import NoopOverlayProcessor, OverlayProcessor
 from marie.utils.asset_util import filename_supplier_page, split_filename
+from marie.utils.image_utils import detect_page_rotation, ensure_max_page_size
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.tiff_ops import burst_tiff_frames
 from marie.utils.types import strtobool
@@ -476,6 +476,41 @@ def burst_frames(
     file_count = get_file_count(output_dir)
     if file_count != len(frames):
         logger.warning(f"File count mismatch [burst] : {file_count} != {len(frames)}")
+
+
+def rotate_frames(
+    ref_id: str,
+    frames: List[np.ndarray],
+    root_asset_dir: str,
+    force: bool = False,
+) -> tuple[dict, bool]:
+    """Rotate frames in-place based on detected orientation"""
+    output_dir = ensure_exists(os.path.join(root_asset_dir, "rotation"))
+    _, prefix, _ = split_filename(ref_id)
+    json_path = os.path.join(output_dir, f"{prefix}_rotation.json")
+
+    any_rotated = False
+    if force or not os.path.exists(json_path):
+        page_rotation = dict()
+        for i, frame in enumerate(frames):
+            results = detect_page_rotation(frame)
+            if rotation := results.get("rotate", 0):
+                logger.info(f"Rotating frame {i} by {rotation} degrees")
+                frames[i] = np.rot90(frame, k=-rotation // 90)
+                changed, resized = ensure_max_page_size([frames[i]])
+                if changed:
+                    logger.info(f"Resized frame {i} after rotation")
+                    frames[i] = resized[0]
+                any_rotated = True
+            page_rotation[i] = results
+        results = {"any_rotated": any_rotated, "pages": page_rotation}
+        store_json_object(results, json_path)
+    else:
+        # TODO we only rotate the burst tiff not the multipage tiff, so we need to call with force
+        logger.info(f"Skipping Rotation : {json_path}")
+        results = load_json_file(json_path)
+
+    return results, any_rotated
 
 
 def update_existing_meta(existing_meta: dict, metadata: dict):
