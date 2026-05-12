@@ -734,7 +734,7 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                         resolver_fn = _import_resolver(resolver_path)
                         lookup_map = resolver_fn(regions, dist_cfg, matched_field_rows)
 
-                        distributed_count = distribute_resolved_values(
+                        distributed_count += distribute_resolved_values(
                             matched_field_rows,
                             lookup_map,
                             args,
@@ -742,7 +742,6 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                             derived_fields,
                             strategy,
                             field_name,
-                            distributed_count,
                             _get_row_match_key,
                         )
                 continue
@@ -759,7 +758,7 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                         resolver_fn = _import_resolver(resolver_path)
                         lookup_map = resolver_fn(sections, dist_cfg, matched_field_rows)
 
-                        distributed_count = distribute_resolved_values(
+                        distributed_count += distribute_resolved_values(
                             matched_field_rows,
                             lookup_map,
                             args,
@@ -767,7 +766,6 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                             derived_fields,
                             strategy,
                             field_name,
-                            distributed_count,
                             _get_row_match_key,
                         )
                     continue
@@ -812,15 +810,15 @@ def distribute_resolved_values(
         derived_fields,
         strategy,
         field_name,
-        distributed_count,
         _get_row_match_key,
 ):
     """
     Distributes resolved values to fields in matched_field_rows.
     - If derived_fields is provided and resolved_value is a dict, distributes per derived field.
     - Otherwise, distributes the resolved_value to the field matching field_name.
-    Returns the updated distributed_count.
+    Returns the count.
     """
+    count = 0
     for row_idx, row in enumerate(matched_field_rows):
         row_key = _get_row_match_key(row, args, source_record, row_idx)
         if not row_key or row_key not in lookup_map:
@@ -840,7 +838,7 @@ def distribute_resolved_values(
                     field.value = derived_val
                     if not field.value_original:
                         field.value_original = derived_val
-                    distributed_count += 1
+                    count += 1
         else:
             for field in row.fields:
                 if field.field_name != field_name:
@@ -850,8 +848,8 @@ def distribute_resolved_values(
                 field.value = resolved_value
                 if not field.value_original:
                     field.value_original = resolved_value
-                distributed_count += 1
-    return distributed_count
+                count += 1
+    return count
 
 def _find_region_entry(
     regions_cfg: List[Dict], section_title: str, expected_type: str
