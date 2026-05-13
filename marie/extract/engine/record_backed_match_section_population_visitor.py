@@ -698,6 +698,7 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
         - Simple dot-path from non-repeating fields
         - JSONPath from source record
         - Region-based cross-region resolvers
+        - Section-based within same region
         """
         non_repeating = match_section.matched_non_repeating_fields or []
 
@@ -733,42 +734,41 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                         resolver_fn = _import_resolver(resolver_path)
                         lookup_map = resolver_fn(regions, dist_cfg, matched_field_rows)
 
-                        for row_idx, row in enumerate(matched_field_rows):
-                            row_key = _get_row_match_key(
-                                row, args, source_record, row_idx
-                            )
-                            if row_key and row_key in lookup_map:
-                                resolved_value = lookup_map[row_key]
-
-                                if derived_fields and isinstance(resolved_value, dict):
-                                    for (
-                                        derived_key,
-                                        target_col,
-                                    ) in derived_fields.items():
-                                        derived_val = resolved_value.get(derived_key)
-                                        if derived_val is None:
-                                            continue
-                                        for field in row.fields:
-                                            if field.field_name != target_col:
-                                                continue
-                                            if strategy == "fill_empty" and field.value:
-                                                continue
-                                            field.value = derived_val
-                                            if not field.value_original:
-                                                field.value_original = derived_val
-                                            distributed_count += 1
-                                else:
-                                    for field in row.fields:
-                                        if field.field_name != field_name:
-                                            continue
-                                        if strategy == "fill_empty" and field.value:
-                                            continue
-                                        field.value = resolved_value
-                                        if not field.value_original:
-                                            field.value_original = resolved_value
-                                        distributed_count += 1
+                        distributed_count += distribute_resolved_values(
+                            matched_field_rows,
+                            lookup_map,
+                            args,
+                            source_record,
+                            derived_fields,
+                            strategy,
+                            field_name,
+                            _get_row_match_key,
+                        )
                 continue
 
+            if source_path.startswith("section:"):
+                role_hint = source_path.split(":", 1)[1]
+                resolver_path = dist_cfg.get("resolver", "")
+                args = dist_cfg.get("args", [])
+                derived_fields = dist_cfg.get("derived_fields", None)
+
+                if source_record and resolver_path:
+                    sections = source_record.get(role_hint, [])
+                    if sections:
+                        resolver_fn = _import_resolver(resolver_path)
+                        lookup_map = resolver_fn(sections, dist_cfg, matched_field_rows)
+
+                        distributed_count += distribute_resolved_values(
+                            matched_field_rows,
+                            lookup_map,
+                            args,
+                            source_record,
+                            derived_fields,
+                            strategy,
+                            field_name,
+                            _get_row_match_key,
+                        )
+                    continue
             # JSONPath or dot-path resolution
             if source_path.startswith("$"):
                 source_value = _resolve_jsonpath(source_path, source_record)
@@ -802,6 +802,54 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
 # Module-level helper functions (shared / duplicated from legacy visitor)
 # ======================================================================
 
+def distribute_resolved_values(
+        matched_field_rows,
+        lookup_map,
+        args,
+        source_record,
+        derived_fields,
+        strategy,
+        field_name,
+        _get_row_match_key,
+):
+    """
+    Distributes resolved values to fields in matched_field_rows.
+    - If derived_fields is provided and resolved_value is a dict, distributes per derived field.
+    - Otherwise, distributes the resolved_value to the field matching field_name.
+    Returns the count.
+    """
+    count = 0
+    for row_idx, row in enumerate(matched_field_rows):
+        row_key = _get_row_match_key(row, args, source_record, row_idx)
+        if not row_key or row_key not in lookup_map:
+            continue
+        resolved_value = lookup_map[row_key]
+
+        if derived_fields and isinstance(resolved_value, dict):
+            for derived_key, target_col in derived_fields.items():
+                derived_val = resolved_value.get(derived_key)
+                if derived_val is None:
+                    continue
+                for field in row.fields:
+                    if field.field_name != target_col:
+                        continue
+                    if strategy == "fill_empty" and field.value:
+                        continue
+                    field.value = derived_val
+                    if not field.value_original:
+                        field.value_original = derived_val
+                    count += 1
+        else:
+            for field in row.fields:
+                if field.field_name != field_name:
+                    continue
+                if strategy == "fill_empty" and field.value:
+                    continue
+                field.value = resolved_value
+                if not field.value_original:
+                    field.value_original = resolved_value
+                count += 1
+    return count
 
 def _find_region_entry(
     regions_cfg: List[Dict], section_title: str, expected_type: str
