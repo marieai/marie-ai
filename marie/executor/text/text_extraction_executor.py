@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 import warnings
@@ -571,14 +572,15 @@ class TextExtractionExecutorMock(MarieExecutor):
         #     doc.text += " First Exec"
         sec = 3600
         sec = random.randint(3, 6)
-        # sec = 0
+        sec = 1
 
         if False:
             # sys.exit()
             raise RuntimeError("Mock error for testing purposes")
 
         self.logger.info(f"Sleeping for {sec} seconds : {time.time()}")
-        time.sleep(sec)
+        # time.sleep(sec)
+        await asyncio.sleep(sec),
 
         self.logger.info(f"Sleeping for {sec} seconds - done : {time.time()}")
         return {

@@ -56,6 +56,19 @@ def test_compute_sla_priority_bucket_escalates_every_15_minutes():
     assert hard_31 == 1002
 
 
+def test_compute_sla_priority_bucket_can_use_second_scale_interval():
+    now = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+
+    bucket = compute_sla_priority_bucket(
+        now,
+        soft_sla=now + timedelta(seconds=12),
+        hard_sla=now + timedelta(minutes=1),
+        interval_seconds=1,
+    )
+
+    assert bucket == 488
+
+
 def test_sla_bucket_status_maps_ranges():
     assert sla_bucket_status(0) == "no_sla"
     assert sla_bucket_status(1) == "approaching_soft"

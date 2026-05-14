@@ -88,7 +88,7 @@ class JobRepository(PostgresqlMixin):
                     SELECT
                         id, name, priority, state, retry_limit, start_after,
                         expire_in, data, retry_delay, retry_backoff, keep_until,
-                        dag_id, job_level
+                        dag_id, job_level, soft_sla, hard_sla
                     FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
                     WHERE id = %s
                     """,
@@ -130,7 +130,7 @@ class JobRepository(PostgresqlMixin):
                     SELECT
                         id, name, priority, state, retry_limit, start_after,
                         expire_in, data, retry_delay, retry_backoff, keep_until,
-                        dag_id, job_level
+                        dag_id, job_level, soft_sla, hard_sla
                     FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
                     WHERE data->'metadata'->>'ref_type' = %s
                     AND data->'metadata'->>'ref_id' = %s
@@ -196,7 +196,7 @@ class JobRepository(PostgresqlMixin):
                     SELECT
                         id, name, priority, state, retry_limit, start_after,
                         expire_in, data, retry_delay, retry_backoff, keep_until,
-                        dag_id, job_level
+                        dag_id, job_level, soft_sla, hard_sla
                     FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
                     {where_sql}
                     ORDER BY created_on DESC
@@ -1203,6 +1203,8 @@ class JobRepository(PostgresqlMixin):
             keep_until,
             dag_id,
             job_level,
+            soft_sla,
+            hard_sla,
         ) = record
 
         wi = WorkInfo(
@@ -1219,6 +1221,8 @@ class JobRepository(PostgresqlMixin):
             keep_until=keep_until,
             dag_id=dag_id,
             job_level=job_level,
+            soft_sla=soft_sla,
+            hard_sla=hard_sla,
         )
         return wi
 

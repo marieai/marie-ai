@@ -50,8 +50,9 @@ async def add_ready_jobs(frontier: MemoryFrontier, *jobs):
 @pytest.mark.asyncio
 async def test_ordering_level_priority_age(frontier: MemoryFrontier):
     """
-    Ensures peek_ready returns true heap order by (-level, -priority, added_at, seq).
-    With same priority, higher job_level wins; with exact ties, older (smaller added_at) wins.
+    Ensures peek_ready returns the expected order within the same endpoint class.
+    With same priority/SLA/control-flow rank, higher job_level wins; with exact
+    ties, older (smaller added_at) wins.
     """
     a = wi_factory("A", job_level=0, priority=1)
     c = wi_factory("C", job_level=2, priority=1)  # insert C first → older than B
@@ -64,6 +65,29 @@ async def test_ordering_level_priority_age(frontier: MemoryFrontier):
     out = await frontier.peek_ready(4)
     ids = [wi.id for wi in out]
     assert ids == ["C", "B", "D", "A"]
+
+
+@pytest.mark.asyncio
+async def test_executor_work_outranks_control_flow_when_priority_and_sla_match(
+        frontier: MemoryFrontier,
+):
+    """
+    Ready executor work should outrank control-flow wrappers for equal
+    priority/SLA so newly submitted START/END nodes do not starve actual work.
+    """
+    root = wi_factory("ROOT", job_level=2, priority=5, executor="noop://noop")
+    leaf = wi_factory(
+        "LEAF",
+        job_level=1,
+        priority=5,
+        executor="extract_executor://document/extract",
+    )
+    tail = wi_factory("TAIL", job_level=0, priority=5, executor="noop://noop")
+
+    await add_ready_jobs(frontier, root, leaf, tail)
+
+    out = await frontier.peek_ready(3)
+    assert [wi.id for wi in out] == ["LEAF", "ROOT", "TAIL"]
 
 
 @pytest.mark.asyncio
@@ -626,7 +650,7 @@ async def test_refresh_ready_ordering_rebuilds_heap_for_time_based_sla_changes(
 ):
     buckets = {"deep": 0, "shallow": 0}
 
-    def fake_bucket(_now, _soft_sla, hard_sla):
+    def fake_bucket(_now, _soft_sla, hard_sla, **_kwargs):
         return buckets[hard_sla]
 
     monkeypatch.setattr(

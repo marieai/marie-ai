@@ -501,57 +501,9 @@ def _message_content_to_text(content) -> str | None:
         return None
     if isinstance(content, str):
         return content
-    if isinstance(content, (list, tuple)):
-        parts: list[str] = []
-        for item in content:
-            item_text = _content_part_to_text(item)
-            if item_text:
-                parts.append(item_text)
-        if parts:
-            return "\n".join(parts)
 
     text, _ = _serialise(content)
     return text
-
-
-def _content_part_to_text(item) -> str | None:
-    if item is None:
-        return None
-    if isinstance(item, str):
-        return item
-    if not isinstance(item, dict):
-        text, _ = _serialise(item)
-        return text
-
-    item_type = item.get("type")
-    if item_type in {"text", "input_text"}:
-        text = item.get("text") or item.get("content")
-        return str(text) if text is not None else None
-    if item_type in {"image", "image_url", "input_image"}:
-        return _image_content_part_to_text(item)
-
-    text = item.get("text") or item.get("content")
-    if text is not None:
-        return str(text)
-
-    serialized, _ = _serialise(item)
-    return serialized
-
-
-def _image_content_part_to_text(item: dict) -> str:
-    image = item.get("image_url") or item.get("image")
-    detail = None
-    url = None
-    if isinstance(image, dict):
-        detail = image.get("detail")
-        url = image.get("url") or image.get("image_url")
-    elif isinstance(image, str):
-        url = image
-
-    suffix = f" detail={detail}" if detail else ""
-    if url:
-        return f"[image_url: {url}{suffix}]"
-    return f"[image_url{suffix}]"
 
 
 __all__ = [

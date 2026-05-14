@@ -24,17 +24,29 @@ import json
 import logging
 import math
 import os
+import re
 import statistics
 import sys
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
+
+from tools.stress.gateway_e2e_reporting import (
+    REPORT_FORMAT_CHOICES,
+    build_latency_stats,
+    render_dry_run_report,
+    render_final_report,
+    render_live_report,
+    resolve_report_format,
+    write_text_atomically,
+)
 
 IMPORT_ERROR: Optional[ImportError] = None
 try:
@@ -64,6 +76,25 @@ DEFAULT_EXTENSIONS = (
     ".jpeg",
     ".pdf",
 )
+
+
+def _parse_duration_seconds(duration_str: str) -> float:
+    """Parse duration strings like '30s', '2m', or '1h' into seconds."""
+    raw = duration_str.strip().lower()
+    if not raw:
+        raise ValueError("Duration cannot be empty")
+
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([hms])?", raw)
+    if not match:
+        raise ValueError("Invalid duration. Use values like '30s', '2m', or '1h'")
+
+    value = float(match.group(1))
+    unit = match.group(2) or "s"
+    if unit == "h":
+        return value * 3600.0
+    if unit == "m":
+        return value * 60.0
+    return value
 
 
 @dataclass(frozen=True)
@@ -297,6 +328,52 @@ def _now() -> float:
     return time.time()
 
 
+def _normalize_epoch_seconds(raw: float) -> float:
+    value = float(raw)
+    abs_value = abs(value)
+    if abs_value >= 1e17:
+        return value / 1_000_000_000.0
+    if abs_value >= 1e14:
+        return value / 1_000_000.0
+    if abs_value >= 1e11:
+        return value / 1_000.0
+    return value
+
+
+def _parse_optional_epoch_seconds(raw: Any) -> Optional[float]:
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return _normalize_epoch_seconds(float(raw))
+    if isinstance(raw, str):
+        value = raw.strip()
+        if not value:
+            return None
+        try:
+            return _normalize_epoch_seconds(float(value))
+        except ValueError:
+            normalized = value.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(normalized)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+            return dt.timestamp()
+    raise ValueError(f"Unsupported timestamp value: {raw!r}")
+
+
+def _format_epoch_seconds(epoch_seconds: float) -> str:
+    return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
+
+
+def _extract_event_timestamp(message: Dict[str, Any]) -> float:
+    try:
+        event_timestamp = _parse_optional_epoch_seconds(message.get("timestamp"))
+    except ValueError:
+        event_timestamp = None
+    return event_timestamp if event_timestamp is not None else _now()
+
+
 @dataclass
 class SubmitResult:
     request_id: str
@@ -320,6 +397,11 @@ class JobRun:
     planner: str
     job_name: str
     fault_profile: str
+    soft_sla_at: Optional[float] = None
+    hard_sla_at: Optional[float] = None
+    sla_bucket_index: int = 0
+    soft_sla_offset_seconds: Optional[float] = None
+    hard_sla_offset_seconds: Optional[float] = None
     created_at: float = field(default_factory=_now)
     upload_started_at: Optional[float] = None
     upload_finished_at: Optional[float] = None
@@ -359,16 +441,16 @@ class JobRun:
         if self.submit_finished_at is None:
             return None
         if self.started_at is not None:
-            return (self.started_at - self.submit_finished_at) * 1000.0
+            return max(0.0, (self.started_at - self.submit_finished_at) * 1000.0)
         if self.scheduled_at is not None:
-            return (self.scheduled_at - self.submit_finished_at) * 1000.0
+            return max(0.0, (self.scheduled_at - self.submit_finished_at) * 1000.0)
         return None
 
     @property
     def scheduling_ms(self) -> Optional[float]:
         if self.submit_finished_at is None or self.scheduled_at is None:
             return None
-        return (self.scheduled_at - self.submit_finished_at) * 1000.0
+        return max(0.0, (self.scheduled_at - self.submit_finished_at) * 1000.0)
 
     @property
     def execution_ms(self) -> Optional[float]:
@@ -381,6 +463,58 @@ class JobRun:
         if self.submit_started_at is None or self.terminal_at is None:
             return None
         return (self.terminal_at - self.submit_started_at) * 1000.0
+
+    def _sla_status(self, deadline_at: Optional[float]) -> Optional[str]:
+        if deadline_at is None:
+            return None
+
+        status = self.terminal_status
+        if status is None:
+            return "pending"
+        if status == "submit_failed":
+            return "submit_failed"
+        if status != "completed":
+            if self.terminal_at is not None and self.terminal_at > deadline_at:
+                return "terminal_failed_after_deadline"
+            return "terminal_failed"
+        if self.terminal_at is not None and self.terminal_at <= deadline_at:
+            return "met"
+        return "deadline_missed"
+
+    def _sla_met(self, deadline_at: Optional[float]) -> Optional[bool]:
+        status = self._sla_status(deadline_at)
+        if status is None or status == "pending":
+            return None
+        return status == "met"
+
+    def _sla_lateness_ms(self, deadline_at: Optional[float]) -> Optional[float]:
+        if deadline_at is None or self.terminal_at is None:
+            return None
+        return max(0.0, (self.terminal_at - deadline_at) * 1000.0)
+
+    @property
+    def soft_sla_status(self) -> Optional[str]:
+        return self._sla_status(self.soft_sla_at)
+
+    @property
+    def hard_sla_status(self) -> Optional[str]:
+        return self._sla_status(self.hard_sla_at)
+
+    @property
+    def soft_sla_met(self) -> Optional[bool]:
+        return self._sla_met(self.soft_sla_at)
+
+    @property
+    def hard_sla_met(self) -> Optional[bool]:
+        return self._sla_met(self.hard_sla_at)
+
+    @property
+    def soft_sla_lateness_ms(self) -> Optional[float]:
+        return self._sla_lateness_ms(self.soft_sla_at)
+
+    @property
+    def hard_sla_lateness_ms(self) -> Optional[float]:
+        return self._sla_lateness_ms(self.hard_sla_at)
 
 
 @dataclass
@@ -399,6 +533,14 @@ class E2EMetrics:
     execution_latencies_ms: List[float] = field(default_factory=list)
     end_to_end_latencies_ms: List[float] = field(default_factory=list)
     failure_reasons: Dict[str, int] = field(default_factory=dict)
+    soft_sla_configured_jobs: int = 0
+    soft_sla_met_jobs: int = 0
+    soft_sla_missed_jobs: int = 0
+    hard_sla_configured_jobs: int = 0
+    hard_sla_met_jobs: int = 0
+    hard_sla_missed_jobs: int = 0
+    soft_sla_lateness_ms: List[float] = field(default_factory=list)
+    hard_sla_lateness_ms: List[float] = field(default_factory=list)
 
     @property
     def throughput(self) -> float:
@@ -408,6 +550,18 @@ class E2EMetrics:
         if duration <= 0:
             return 0.0
         return self.total_jobs / duration
+
+    @property
+    def soft_sla_compliance_pct(self) -> float:
+        if self.soft_sla_configured_jobs <= 0:
+            return 0.0
+        return (self.soft_sla_met_jobs / self.soft_sla_configured_jobs) * 100.0
+
+    @property
+    def hard_sla_compliance_pct(self) -> float:
+        if self.hard_sla_configured_jobs <= 0:
+            return 0.0
+        return (self.hard_sla_met_jobs / self.hard_sla_configured_jobs) * 100.0
 
 
 @dataclass
@@ -668,7 +822,8 @@ class GatewayE2EStresser:
         queue_name: str,
         planner: str,
         input_assets: List[InputAsset],
-        job_count: int,
+        job_count: Optional[int],
+        run_time_seconds: Optional[float],
         submit_concurrency: int,
         submit_rate: float,
         timeout: float,
@@ -679,12 +834,24 @@ class GatewayE2EStresser:
         template_job_name: Optional[str],
         fault_profile: str,
         aimock_admin_url: Optional[str] = None,
+        soft_sla_seconds: Optional[float] = None,
+        hard_sla_seconds: Optional[float] = None,
+        soft_sla_step_seconds: Optional[float] = None,
+        hard_sla_step_seconds: Optional[float] = None,
+        sla_step_every_jobs: int = 1,
+        sla_step_cycle: Optional[int] = None,
+        min_soft_sla_compliance_pct: Optional[float] = None,
+        min_hard_sla_compliance_pct: Optional[float] = None,
         ref_type: Optional[str] = None,
         policy: str = "allow_all",
         project_id: Optional[str] = None,
         upload_companion_meta: bool = True,
         batch_size: int = 1,
         debug_sample_interval: float = 0.0,
+        dry_run_preview_count: int = 3,
+        progress_interval: float = 5.0,
+        live_report_path: Optional[str] = None,
+        live_report_format: str = "auto",
     ) -> None:
         self.gateway_host = gateway_host
         self.gateway_port = gateway_port
@@ -699,7 +866,12 @@ class GatewayE2EStresser:
         self.queue_name = queue_name or template_job_name or planner
         self.planner = planner
         self.input_assets = input_assets
-        self.job_count = job_count
+        self.job_count = job_count if job_count and job_count > 0 else None
+        self.run_time_seconds = (
+            float(run_time_seconds)
+            if run_time_seconds is not None and run_time_seconds > 0
+            else None
+        )
         self.submit_concurrency = submit_concurrency
         self.submit_rate = submit_rate
         self.timeout = timeout
@@ -711,35 +883,507 @@ class GatewayE2EStresser:
         self.aimock_admin_url = (
             aimock_admin_url.rstrip("/") if aimock_admin_url else None
         )
+        self.soft_sla_seconds = soft_sla_seconds
+        self.hard_sla_seconds = hard_sla_seconds
+        self.soft_sla_step_seconds = soft_sla_step_seconds
+        self.hard_sla_step_seconds = hard_sla_step_seconds
+        self.sla_step_every_jobs = max(1, sla_step_every_jobs)
+        self.sla_step_cycle = sla_step_cycle
+        self.min_soft_sla_compliance_pct = min_soft_sla_compliance_pct
+        self.min_hard_sla_compliance_pct = min_hard_sla_compliance_pct
         self.ref_type = ref_type or self.queue_name
         self.policy = policy
         self.project_id = project_id or api_key
         self.upload_companion_meta = upload_companion_meta
         self.batch_size = batch_size
         self.debug_sample_interval = max(0.0, debug_sample_interval)
+        self.dry_run_preview_count = max(1, dry_run_preview_count)
+        self.progress_interval = progress_interval
+        self.live_report_path = live_report_path
+        self.live_report_format = live_report_format
         self.requires_upload = any(
             asset.local_path is not None for asset in input_assets
         )
+        if self.job_count is None and self.run_time_seconds is None:
+            raise ValueError("Either job_count or run_time_seconds must be provided")
+        if self.job_count is not None and self.run_time_seconds is not None:
+            raise ValueError("job_count and run_time_seconds are mutually exclusive")
+        if self.submit_rate <= 0:
+            raise ValueError("--submit-rate must be greater than zero")
+        if (
+            self.soft_sla_seconds is not None
+            and self.hard_sla_seconds is not None
+            and self.soft_sla_seconds > self.hard_sla_seconds
+        ):
+            raise ValueError(
+                "--soft-sla-seconds must be less than or equal to --hard-sla-seconds"
+            )
+        if self.soft_sla_step_seconds is not None and self.soft_sla_seconds is None:
+            raise ValueError("--soft-sla-step-seconds requires --soft-sla-seconds")
+        if self.hard_sla_step_seconds is not None and self.hard_sla_seconds is None:
+            raise ValueError("--hard-sla-step-seconds requires --hard-sla-seconds")
+        if self.sla_step_cycle is not None and self.sla_step_cycle <= 0:
+            raise ValueError("--sla-step-cycle must be greater than zero")
 
-        self.metrics = E2EMetrics(total_jobs=job_count)
+        self.metrics = E2EMetrics(total_jobs=self.job_count or 0)
         self._logger = logging.getLogger(self.__class__.__name__)
         self._runs_by_request_id: Dict[str, JobRun] = {}
         self._runs_by_job_id: Dict[str, JobRun] = {}
         self._runs_by_ref_id: Dict[str, JobRun] = {}
         self._debug_samples: List[DebugSnapshot] = []
+        self._verification_errors: List[str] = []
         self._state_lock = threading.Lock()
         self._http_session: Optional[aiohttp.ClientSession] = None
         self._event_consumer: Optional[SchedulerEventConsumer] = None
 
+    @property
+    def verification_errors(self) -> List[str]:
+        return list(self._verification_errors)
+
+    @property
+    def run_mode(self) -> str:
+        return "fixed-count" if self.job_count is not None else "duration"
+
+    @property
+    def estimated_job_count(self) -> Optional[int]:
+        if self.job_count is not None:
+            return self.job_count
+        if self.run_time_seconds is None:
+            return None
+        return max(1, int(math.ceil(self.run_time_seconds * self.submit_rate)))
+
+    def _dry_run_submission_count(self) -> int:
+        if self.job_count is not None:
+            return self.job_count
+        estimated = self.estimated_job_count or 0
+        return min(self.dry_run_preview_count, max(1, estimated))
+
+    def _build_sla_summary(
+        self,
+        runs: List[JobRun],
+        *,
+        now: float,
+        deadline_attr: str,
+        status_attr: str,
+        met_attr: str,
+        lateness_attr: str,
+        configured_seconds: Optional[float],
+        step_seconds: Optional[float],
+        min_compliance_pct: Optional[float],
+    ) -> Optional[Dict[str, Any]]:
+        configured_jobs = 0
+        terminal_evaluated_jobs = 0
+        met_jobs = 0
+        missed_jobs = 0
+        failed_jobs = 0
+        pending_jobs = 0
+        overdue_open_jobs = 0
+        lateness_values: List[float] = []
+
+        for run in runs:
+            deadline_at = getattr(run, deadline_attr)
+            if deadline_at is None:
+                continue
+            configured_jobs += 1
+            status_value = getattr(run, status_attr)
+            met_value = getattr(run, met_attr)
+
+            if status_value == "pending":
+                pending_jobs += 1
+                if now > deadline_at:
+                    overdue_open_jobs += 1
+                continue
+
+            terminal_evaluated_jobs += 1
+            if met_value is True:
+                met_jobs += 1
+            else:
+                if status_value == "terminal_failed":
+                    failed_jobs += 1
+                else:
+                    missed_jobs += 1
+                lateness_ms = getattr(run, lateness_attr)
+                if lateness_ms is not None and lateness_ms > 0:
+                    lateness_values.append(lateness_ms)
+
+        if configured_jobs == 0 and configured_seconds is None:
+            return None
+
+        terminal_compliance_pct = (
+            (met_jobs / terminal_evaluated_jobs) * 100.0
+            if terminal_evaluated_jobs > 0
+            else None
+        )
+
+        return {
+            "configured_seconds": configured_seconds,
+            "step_seconds": step_seconds,
+            "step_every_jobs": self.sla_step_every_jobs,
+            "step_cycle": self.sla_step_cycle,
+            "min_compliance_pct": min_compliance_pct,
+            "configured_jobs": configured_jobs,
+            "terminal_evaluated_jobs": terminal_evaluated_jobs,
+            "met_jobs": met_jobs,
+            "missed_jobs": missed_jobs,
+            "failed_jobs": failed_jobs,
+            "pending_jobs": pending_jobs,
+            "overdue_open_jobs": overdue_open_jobs,
+            "terminal_compliance_pct": terminal_compliance_pct,
+            "lateness_stats_ms": build_latency_stats(lateness_values, _percentile),
+        }
+
+    def _build_sla_payload(
+        self,
+        runs: List[JobRun],
+        *,
+        now: float,
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        return {
+            "soft": self._build_sla_summary(
+                runs,
+                now=now,
+                deadline_attr="soft_sla_at",
+                status_attr="soft_sla_status",
+                met_attr="soft_sla_met",
+                lateness_attr="soft_sla_lateness_ms",
+                configured_seconds=self.soft_sla_seconds,
+                step_seconds=self.soft_sla_step_seconds,
+                min_compliance_pct=self.min_soft_sla_compliance_pct,
+            ),
+            "hard": self._build_sla_summary(
+                runs,
+                now=now,
+                deadline_attr="hard_sla_at",
+                status_attr="hard_sla_status",
+                met_attr="hard_sla_met",
+                lateness_attr="hard_sla_lateness_ms",
+                configured_seconds=self.hard_sla_seconds,
+                step_seconds=self.hard_sla_step_seconds,
+                min_compliance_pct=self.min_hard_sla_compliance_pct,
+            ),
+        }
+
+    def _build_live_status_payload(self, status: str = "running") -> Dict[str, Any]:
+        now = _now()
+        with self._state_lock:
+            runs = list(self._runs_by_request_id.values())
+            latest_debug_sample = (
+                self._debug_samples[-1] if self._debug_samples else None
+            )
+
+        created = len(runs)
+        submitted = 0
+        completed = 0
+        failed = 0
+        submit_failed = 0
+        event_timeout = 0
+        pending_submit = 0
+
+        for run in runs:
+            if run.job_id:
+                submitted += 1
+            if run.terminal_status == "completed":
+                completed += 1
+            elif run.terminal_status == "failed":
+                if run.failure_reason == "terminal event timeout":
+                    event_timeout += 1
+                else:
+                    failed += 1
+            elif run.terminal_status == "submit_failed":
+                submit_failed += 1
+            elif run.job_id is None and run.submit_error_type is None:
+                pending_submit += 1
+
+        inflight_jobs = max(submitted - completed - failed - event_timeout, 0)
+        terminal_jobs = completed + failed + submit_failed + event_timeout
+        open_jobs = max(created - terminal_jobs, 0)
+        submit_acceptance_pct = (submitted / created) * 100.0 if created > 0 else None
+        terminal_success_pct = (
+            (completed / terminal_jobs) * 100.0 if terminal_jobs > 0 else None
+        )
+        completion_pct = ((completed / created) * 100.0) if created > 0 else None
+
+        submit_latency_ms = [
+            run.submit_latency_ms for run in runs if run.submit_latency_ms is not None
+        ]
+        scheduling_ms = [
+            run.scheduling_ms for run in runs if run.scheduling_ms is not None
+        ]
+        queue_wait_ms = [
+            run.queue_wait_ms for run in runs if run.queue_wait_ms is not None
+        ]
+        execution_ms = [
+            run.execution_ms for run in runs if run.execution_ms is not None
+        ]
+        end_to_end_ms = [
+            run.end_to_end_ms for run in runs if run.end_to_end_ms is not None
+        ]
+
+        elapsed_seconds = None
+        if self.metrics.start_time is not None:
+            finished_at = (
+                self.metrics.end_time if self.metrics.end_time is not None else now
+            )
+            elapsed_seconds = max(0.0, finished_at - self.metrics.start_time)
+
+        throughput_created = None
+        throughput_completed = None
+        if elapsed_seconds and elapsed_seconds > 0:
+            throughput_created = created / elapsed_seconds
+            throughput_completed = completed / elapsed_seconds
+
+        payload: Dict[str, Any] = {
+            "status": status,
+            "updated_at": _format_epoch_seconds(now),
+            "run_mode": self.run_mode,
+            "configured_job_count": self.job_count,
+            "configured_run_time_seconds": self.run_time_seconds,
+            "estimated_job_count": self.estimated_job_count,
+            "submit_rate": self.submit_rate,
+            "submit_concurrency": self.submit_concurrency,
+            "progress_interval_seconds": self.progress_interval,
+            "live_report_path": self.live_report_path,
+            "live_report_format": (
+                resolve_report_format(self.live_report_path, self.live_report_format)
+                if self.live_report_path
+                else None
+            ),
+            "elapsed_seconds": elapsed_seconds,
+            "throughput_jobs_per_second": {
+                "created": throughput_created,
+                "completed": throughput_completed,
+            },
+            "debug_sampling": {
+                "enabled": self.debug_sample_interval > 0,
+                "interval_seconds": self.debug_sample_interval,
+                "endpoint": (
+                    f"http://{self.gateway_host}:{self.http_port}/api/debug"
+                    if self.http_port is not None
+                    else None
+                ),
+            },
+            "run_health": {
+                "target_submit_rate": self.submit_rate,
+                "submit_acceptance_pct": submit_acceptance_pct,
+                "terminal_success_pct": terminal_success_pct,
+                "completion_pct": completion_pct,
+                "open_jobs": open_jobs,
+                "inflight_jobs": inflight_jobs,
+                "pending_submit_jobs": pending_submit,
+                "terminal_jobs": terminal_jobs,
+            },
+            "counts": {
+                "created_jobs": created,
+                "submitted_jobs": submitted,
+                "completed_jobs": completed,
+                "failed_jobs": failed,
+                "submit_failed_jobs": submit_failed,
+                "event_timeout_jobs": event_timeout,
+            },
+            "latency_stats_ms": {
+                "submit": build_latency_stats(submit_latency_ms, _percentile),
+                "scheduling": build_latency_stats(scheduling_ms, _percentile),
+                "queue_wait": build_latency_stats(queue_wait_ms, _percentile),
+                "execution": build_latency_stats(execution_ms, _percentile),
+                "end_to_end": build_latency_stats(end_to_end_ms, _percentile),
+            },
+            "sla": self._build_sla_payload(runs, now=now),
+            "latest_debug_sample": (
+                {
+                    "stage": latest_debug_sample.stage,
+                    "captured_at": latest_debug_sample.captured_at,
+                    "ok": latest_debug_sample.ok,
+                    "status_code": latest_debug_sample.status_code,
+                    "error": latest_debug_sample.error,
+                    "scheduler_running": latest_debug_sample.scheduler_running,
+                    "scheduler_paused": latest_debug_sample.scheduler_paused,
+                    "active_dags_count": latest_debug_sample.active_dags_count,
+                    "fetch_counter": latest_debug_sample.fetch_counter,
+                    "request_queue_size": latest_debug_sample.request_queue_size,
+                    "event_queue_size": latest_debug_sample.event_queue_size,
+                    "llm_dispatch_registered_dispatchers": latest_debug_sample.llm_dispatch_registered_dispatchers,
+                    "llm_dispatch_running_dispatchers": latest_debug_sample.llm_dispatch_running_dispatchers,
+                }
+                if latest_debug_sample is not None
+                else None
+            ),
+            "recent_jobs": [
+                {
+                    "job_index": run.job_index,
+                    "request_id": run.request_id,
+                    "job_id": run.job_id,
+                    "terminal_status": run.terminal_status,
+                    "source_path": run.source_path,
+                    "s3_uri": run.s3_uri,
+                    "failure_reason": run.failure_reason,
+                }
+                for run in sorted(runs, key=lambda item: item.job_index)[-10:]
+            ],
+            "verification_errors": list(self._verification_errors),
+        }
+        if self.job_count is not None and self.job_count > 0:
+            payload["progress_pct"] = {
+                "created": min(100.0, (created / self.job_count) * 100.0),
+                "submitted": min(100.0, (submitted / self.job_count) * 100.0),
+                "completed": min(100.0, (completed / self.job_count) * 100.0),
+            }
+        return payload
+
+    def _log_progress_payload(self, payload: Dict[str, Any]) -> None:
+        counts = payload["counts"]
+        if self.job_count is not None:
+            self._logger.info(
+                "Progress: submitted=%s/%s completed=%s failed=%s submit_failed=%s",
+                counts["submitted_jobs"],
+                self.job_count,
+                counts["completed_jobs"],
+                counts["failed_jobs"],
+                counts["submit_failed_jobs"],
+            )
+            return
+
+        self._logger.info(
+            "Progress: created=%s submitted=%s completed=%s failed=%s submit_failed=%s",
+            counts["created_jobs"],
+            counts["submitted_jobs"],
+            counts["completed_jobs"],
+            counts["failed_jobs"],
+            counts["submit_failed_jobs"],
+        )
+
+    def _write_live_report_payload(self, payload: Dict[str, Any]) -> None:
+        if not self.live_report_path:
+            return
+        try:
+            live_format = resolve_report_format(
+                self.live_report_path, self.live_report_format
+            )
+            rendered = render_live_report(payload, live_format, self.progress_interval)
+            write_text_atomically(self.live_report_path, rendered)
+        except Exception as exc:
+            self._logger.warning(
+                "Failed to write live report snapshot to %s: %s",
+                self.live_report_path,
+                exc,
+            )
+
+    def _write_live_json_payload(self, payload: Dict[str, Any]) -> None:
+        self._write_live_report_payload(payload)
+
+    def _prepare_storage_env(self) -> None:
+        bucket = self.s3_config.get("S3_STORAGE_BUCKET_NAME")
+        if bucket:
+            os.environ["MARIE_S3_BUCKET"] = str(bucket)
+
     def _setup_storage(self) -> None:
+        self._prepare_storage_env()
         if not self.requires_upload:
             return
-        bucket = self.s3_config.get("S3_STORAGE_BUCKET_NAME", "marie")
-        os.environ["MARIE_S3_BUCKET"] = str(bucket)
         handler = S3StorageHandler(config=self.s3_config)
         StorageManager.register_handler(handler=handler)
-        StorageManager.ensure_connection("s3://")
-        StorageManager.mkdir(f"s3://{bucket}")
+
+    def _build_submit_request(
+        self, run: JobRun, metadata: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return {
+            "data": [
+                {"id": f"{run.request_id}-{i}", "text": f"stress-{run.request_id}-{i}"}
+                for i in range(self.batch_size)
+            ],
+            "parameters": {
+                "invoke_action": {
+                    "action_type": "command",
+                    "command": "job",
+                    "action": "submit",
+                    "name": self.queue_name,
+                    "api_key": self.api_key,
+                    "metadata": metadata,
+                }
+            },
+            "header": {
+                "requestId": run.request_id,
+                "targetExecutor": "",
+            },
+        }
+
+    def build_dry_run_plan(self) -> Dict[str, Any]:
+        self._prepare_storage_env()
+        generated_at = _now()
+        submissions: List[Dict[str, Any]] = []
+        preview_job_count = self._dry_run_submission_count()
+        for job_index in range(preview_job_count):
+            asset = self.input_assets[job_index % len(self.input_assets)]
+            run = self._build_run(asset, job_index)
+            run.upload_started_at = generated_at
+            run.upload_finished_at = generated_at
+            run.submit_started_at = generated_at
+            metadata = self._build_metadata(run, sla_anchor_at=generated_at)
+            request_payload = self._build_submit_request(run, metadata)
+            transport: Dict[str, Any] = {
+                "protocol": self.protocol,
+                "endpoint": self.endpoint,
+            }
+            if self.protocol == "http":
+                transport["url"] = (
+                    f"http://{self.gateway_host}:{self.http_port}{self.endpoint}"
+                )
+                transport["headers"] = {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {self.api_key}",
+                }
+            else:
+                transport["gateway_host"] = self.gateway_host
+                transport["gateway_port"] = self.gateway_port
+                transport["request_size"] = self.batch_size
+
+            submissions.append(
+                {
+                    "job_index": run.job_index,
+                    "request_id": run.request_id,
+                    "source_path": run.source_path,
+                    "source_name": run.source_name,
+                    "input_mode": run.input_mode,
+                    "upload_planned": run.input_mode == "upload",
+                    "upload_companion_meta_planned": (
+                        run.input_mode == "upload"
+                        and self.upload_companion_meta
+                        and Path(run.source_path)
+                        .with_name(f"{Path(run.source_path).name}.meta.json")
+                        .exists()
+                    ),
+                    "s3_uri": run.s3_uri,
+                    "planner": run.planner,
+                    "job_name": run.job_name,
+                    "fault_profile": run.fault_profile,
+                    "sla_bucket_index": run.sla_bucket_index,
+                    "soft_sla_offset_seconds": run.soft_sla_offset_seconds,
+                    "hard_sla_offset_seconds": run.hard_sla_offset_seconds,
+                    "metadata": metadata,
+                    "request_payload": request_payload,
+                    "transport": transport,
+                }
+            )
+
+        return {
+            "dry_run": True,
+            "generated_at": _format_epoch_seconds(generated_at),
+            "run_mode": self.run_mode,
+            "job_count": self.job_count,
+            "run_time_seconds": self.run_time_seconds,
+            "estimated_job_count": self.estimated_job_count,
+            "preview_job_count": preview_job_count,
+            "input_assets_resolved": len(self.input_assets),
+            "protocol": self.protocol,
+            "endpoint": self.endpoint,
+            "planner": self.planner,
+            "job_name": self.queue_name,
+            "fault_profile": self.fault_profile,
+            "submit_rate": self.submit_rate,
+            "submit_concurrency": self.submit_concurrency,
+            "batch_size": self.batch_size,
+            "submissions": submissions,
+        }
 
     def _start_event_consumer(self) -> None:
         if not self.queue_config:
@@ -850,11 +1494,37 @@ class GatewayE2EStresser:
                 run.submit_error_type = result.error_type
                 run.submit_error_message = result.error_message
 
+    def _log_submit_summary(self, run: JobRun, result: SubmitResult) -> None:
+        if result.success:
+            self._logger.info(
+                "Submitted job_index=%s request_id=%s job_id=%s planner=%s input_mode=%s source=%s s3_uri=%s",
+                run.job_index,
+                run.request_id,
+                result.job_id,
+                run.planner,
+                run.input_mode,
+                run.source_path,
+                run.s3_uri,
+            )
+            return
+
+        self._logger.warning(
+            "Submit failed job_index=%s request_id=%s planner=%s input_mode=%s source=%s s3_uri=%s error_type=%s error=%s",
+            run.job_index,
+            run.request_id,
+            run.planner,
+            run.input_mode,
+            run.source_path,
+            run.s3_uri,
+            result.error_type,
+            result.error_message,
+        )
+
     def _handle_event_message(self, message: Dict[str, Any]) -> None:
         event_name = message.get("event")
         job_id = message.get("jobid")
         ref_id = _extract_ref_id_from_event(message)
-        timestamp = _now()
+        timestamp = _extract_event_timestamp(message)
 
         if not isinstance(event_name, str):
             return
@@ -903,12 +1573,37 @@ class GatewayE2EStresser:
             fault_profile=self.fault_profile,
         )
 
-    def _build_metadata(self, run: JobRun) -> Dict[str, Any]:
+    def _resolve_sla_offsets(
+        self, run: JobRun
+    ) -> Tuple[Optional[float], Optional[float]]:
+        bucket_index = run.job_index // self.sla_step_every_jobs
+        if self.sla_step_cycle is not None:
+            bucket_index %= self.sla_step_cycle
+        run.sla_bucket_index = bucket_index
+
+        soft_offset = self.soft_sla_seconds
+        hard_offset = self.hard_sla_seconds
+        if soft_offset is not None and self.soft_sla_step_seconds is not None:
+            soft_offset += bucket_index * self.soft_sla_step_seconds
+        if hard_offset is not None and self.hard_sla_step_seconds is not None:
+            hard_offset += bucket_index * self.hard_sla_step_seconds
+
+        run.soft_sla_offset_seconds = soft_offset
+        run.hard_sla_offset_seconds = hard_offset
+        if soft_offset is not None and hard_offset is not None:
+            if soft_offset > hard_offset:
+                raise ValueError(
+                    f"Resolved soft SLA offset {soft_offset} exceeds hard SLA offset "
+                    f"{hard_offset} for job_index={run.job_index}"
+                )
+        return soft_offset, hard_offset
+
+    def _build_metadata(self, run: JobRun, *, sla_anchor_at: float) -> Dict[str, Any]:
         template_vars = {
             "request_id": run.request_id,
             "job_index": str(run.job_index),
-            "timestamp": str(int(_now())),
-            "timestamp_ms": str(int(_now() * 1000)),
+            "timestamp": str(int(sla_anchor_at)),
+            "timestamp_ms": str(int(sla_anchor_at * 1000)),
             "uuid": uuid.uuid4().hex,
             "api_key": self.api_key,
             "job_name": self.queue_name,
@@ -931,18 +1626,27 @@ class GatewayE2EStresser:
         metadata["policy"] = metadata.get("policy", self.policy)
         metadata["stress_fault_profile"] = self.fault_profile
         metadata["uri"] = run.s3_uri
+        soft_offset, hard_offset = self._resolve_sla_offsets(run)
+        if soft_offset is not None:
+            metadata["soft_sla"] = _format_epoch_seconds(sla_anchor_at + soft_offset)
+        if hard_offset is not None:
+            metadata["hard_sla"] = _format_epoch_seconds(sla_anchor_at + hard_offset)
+
+        run.soft_sla_at = _parse_optional_epoch_seconds(metadata.get("soft_sla"))
+        run.hard_sla_at = _parse_optional_epoch_seconds(metadata.get("hard_sla"))
+        if run.soft_sla_at is not None and run.hard_sla_at is not None:
+            if run.soft_sla_at > run.hard_sla_at:
+                raise ValueError("soft_sla must be less than or equal to hard_sla")
         return metadata
 
-    def _upload_to_s3(self, run: JobRun) -> Dict[str, Any]:
+    def _upload_to_s3(self, run: JobRun) -> None:
         if run.input_mode != "upload":
             run.upload_started_at = _now()
-            metadata = self._build_metadata(run)
             run.upload_finished_at = run.upload_started_at
-            return metadata
+            return
 
         run.upload_started_at = _now()
         source_path = Path(run.source_path)
-        metadata = self._build_metadata(run)
         s3_root = s3_asset_path(ref_id=run.ref_id, ref_type=run.ref_type)
 
         status = StorageManager.write(str(source_path), run.s3_uri, overwrite=True)
@@ -978,30 +1682,10 @@ class GatewayE2EStresser:
                     )
 
         run.upload_finished_at = _now()
-        return metadata
 
     async def _submit_http(self, run: JobRun, metadata: Dict[str, Any]) -> SubmitResult:
         start_time = _now()
-        payload = {
-            "data": [
-                {"id": f"{run.request_id}-{i}", "text": f"stress-{run.request_id}-{i}"}
-                for i in range(self.batch_size)
-            ],
-            "parameters": {
-                "invoke_action": {
-                    "action_type": "command",
-                    "command": "job",
-                    "action": "submit",
-                    "name": self.queue_name,
-                    "api_key": self.api_key,
-                    "metadata": metadata,
-                }
-            },
-            "header": {
-                "requestId": run.request_id,
-                "targetExecutor": "",
-            },
-        }
+        payload = self._build_submit_request(run, metadata)
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -1108,26 +1792,15 @@ class GatewayE2EStresser:
                 request_size=-1,
                 asyncio=True,
             )
+            request_payload = self._build_submit_request(run, metadata)
             docs = DocumentArray(
-                [
-                    Document(text=f"stress-{run.request_id}-{i}")
-                    for i in range(self.batch_size)
-                ]
+                [Document(text=item["text"]) for item in request_payload["data"]]
             )
             response_docs = None
             async for response in client.post(
                 self.endpoint,
                 inputs=docs,
-                parameters={
-                    "invoke_action": {
-                        "action_type": "command",
-                        "command": "job",
-                        "action": "submit",
-                        "name": self.queue_name,
-                        "api_key": self.api_key,
-                        "metadata": metadata,
-                    }
-                },
+                parameters=request_payload["parameters"],
                 request_size=self.batch_size,
                 timeout=self.timeout,
             ):
@@ -1193,13 +1866,15 @@ class GatewayE2EStresser:
 
     async def _submit_run(self, run: JobRun, semaphore: asyncio.Semaphore) -> None:
         async with semaphore:
-            metadata = await asyncio.to_thread(self._upload_to_s3, run)
+            await asyncio.to_thread(self._upload_to_s3, run)
             run.submit_started_at = _now()
+            metadata = self._build_metadata(run, sla_anchor_at=run.submit_started_at)
             if self.protocol == "http":
                 result = await self._submit_http(run, metadata)
             else:
                 result = await self._submit_grpc(run, metadata)
             self._mark_submit_result(run, result)
+            self._log_submit_summary(run, result)
 
     async def _apply_aimock_fault_profile(self) -> None:
         if not self.aimock_admin_url:
@@ -1237,29 +1912,11 @@ class GatewayE2EStresser:
 
     async def _progress_reporter(self) -> None:
         while self.metrics.end_time is None:
-            await asyncio.sleep(5.0)
-            with self._state_lock:
-                completed = 0
-                failed = 0
-                submitted = 0
-                submit_failed = 0
-                for run in self._runs_by_request_id.values():
-                    if run.job_id:
-                        submitted += 1
-                    if run.terminal_status == "completed":
-                        completed += 1
-                    elif run.terminal_status == "failed":
-                        failed += 1
-                    elif run.terminal_status == "submit_failed":
-                        submit_failed += 1
-            self._logger.info(
-                "Progress: submitted=%s/%s completed=%s failed=%s submit_failed=%s",
-                submitted,
-                self.job_count,
-                completed,
-                failed,
-                submit_failed,
-            )
+            await asyncio.sleep(self.progress_interval)
+            payload = self._build_live_status_payload("running")
+            self._log_progress_payload(payload)
+            if self.live_report_path:
+                await asyncio.to_thread(self._write_live_report_payload, payload)
 
     async def _wait_for_terminal_states(self) -> None:
         deadline = _now() + self.terminal_timeout
@@ -1280,12 +1937,12 @@ class GatewayE2EStresser:
                         run.failure_reason = "terminal event timeout"
 
     def _finalize_metrics(self) -> None:
-        metrics = E2EMetrics(total_jobs=self.job_count)
-        metrics.start_time = self.metrics.start_time
-        metrics.end_time = self.metrics.end_time
-
         with self._state_lock:
             runs = list(self._runs_by_request_id.values())
+
+        metrics = E2EMetrics(total_jobs=len(runs))
+        metrics.start_time = self.metrics.start_time
+        metrics.end_time = self.metrics.end_time
 
         for run in runs:
             if run.job_id:
@@ -1320,7 +1977,58 @@ class GatewayE2EStresser:
                     metrics.failure_reasons.get(reason, 0) + 1
                 )
 
+            if run.job_id and run.soft_sla_at is not None:
+                metrics.soft_sla_configured_jobs += 1
+                if run.soft_sla_met is True:
+                    metrics.soft_sla_met_jobs += 1
+                else:
+                    metrics.soft_sla_missed_jobs += 1
+                lateness_ms = run.soft_sla_lateness_ms
+                if lateness_ms is not None and lateness_ms > 0:
+                    metrics.soft_sla_lateness_ms.append(lateness_ms)
+
+            if run.job_id and run.hard_sla_at is not None:
+                metrics.hard_sla_configured_jobs += 1
+                if run.hard_sla_met is True:
+                    metrics.hard_sla_met_jobs += 1
+                else:
+                    metrics.hard_sla_missed_jobs += 1
+                lateness_ms = run.hard_sla_lateness_ms
+                if lateness_ms is not None and lateness_ms > 0:
+                    metrics.hard_sla_lateness_ms.append(lateness_ms)
+
         self.metrics = metrics
+        self._verification_errors = self._evaluate_sla_verification_errors()
+
+    def _evaluate_sla_verification_errors(self) -> List[str]:
+        errors: List[str] = []
+        if self.min_soft_sla_compliance_pct is not None:
+            if self.metrics.soft_sla_configured_jobs <= 0:
+                errors.append(
+                    "Soft SLA verification requested but no submitted jobs carried a soft_sla"
+                )
+            elif (
+                self.metrics.soft_sla_compliance_pct < self.min_soft_sla_compliance_pct
+            ):
+                errors.append(
+                    "Soft SLA compliance "
+                    f"{self.metrics.soft_sla_compliance_pct:.2f}% is below the required "
+                    f"{self.min_soft_sla_compliance_pct:.2f}%"
+                )
+        if self.min_hard_sla_compliance_pct is not None:
+            if self.metrics.hard_sla_configured_jobs <= 0:
+                errors.append(
+                    "Hard SLA verification requested but no submitted jobs carried a hard_sla"
+                )
+            elif (
+                self.metrics.hard_sla_compliance_pct < self.min_hard_sla_compliance_pct
+            ):
+                errors.append(
+                    "Hard SLA compliance "
+                    f"{self.metrics.hard_sla_compliance_pct:.2f}% is below the required "
+                    f"{self.min_hard_sla_compliance_pct:.2f}%"
+                )
+        return errors
 
     async def run(self) -> E2EMetrics:
         self._setup_storage()
@@ -1340,6 +2048,11 @@ class GatewayE2EStresser:
         reporter = asyncio.create_task(self._progress_reporter())
         debug_sampler = None
         self.metrics.start_time = _now()
+        if self.live_report_path:
+            await asyncio.to_thread(
+                self._write_live_report_payload,
+                self._build_live_status_payload("running"),
+            )
 
         try:
             if self.debug_sample_interval > 0:
@@ -1347,14 +2060,29 @@ class GatewayE2EStresser:
                 debug_sampler = asyncio.create_task(self._debug_sampler())
 
             tasks = []
-            interval = 1.0 / self.submit_rate if self.submit_rate > 0 else 0.0
-            for job_index in range(self.job_count):
+            interval = 1.0 / self.submit_rate
+            next_submit_at = time.monotonic()
+            deadline = (
+                next_submit_at + self.run_time_seconds
+                if self.run_time_seconds is not None
+                else None
+            )
+            job_index = 0
+            while True:
+                if self.job_count is not None and job_index >= self.job_count:
+                    break
+                now_monotonic = time.monotonic()
+                if deadline is not None and now_monotonic >= deadline:
+                    break
                 asset = self.input_assets[job_index % len(self.input_assets)]
                 run = self._build_run(asset, job_index)
                 self._register_run(run)
                 tasks.append(asyncio.create_task(self._submit_run(run, semaphore)))
-                if interval > 0:
-                    await asyncio.sleep(interval)
+                job_index += 1
+                next_submit_at += interval
+                sleep_for = next_submit_at - time.monotonic()
+                if sleep_for > 0:
+                    await asyncio.sleep(sleep_for)
 
             await asyncio.gather(*tasks)
             await self._wait_for_terminal_states()
@@ -1373,6 +2101,11 @@ class GatewayE2EStresser:
             self._stop_event_consumer()
 
         self._finalize_metrics()
+        if self.live_report_path:
+            await asyncio.to_thread(
+                self._write_live_report_payload,
+                self._build_live_status_payload("completed"),
+            )
         return self.metrics
 
     def print_report(self) -> None:
@@ -1386,7 +2119,14 @@ class GatewayE2EStresser:
         print("GATEWAY END-TO-END STRESS REPORT")
         print("=" * 78)
         print(f"Duration: {duration:.2f}s")
-        print(f"Jobs requested: {m.total_jobs}")
+        print(f"Run mode: {self.run_mode}")
+        if self.job_count is not None:
+            print(f"Jobs requested: {self.job_count}")
+        else:
+            print(f"Run time target: {self.run_time_seconds:.2f}s")
+            if self.estimated_job_count is not None:
+                print(f"Estimated jobs at submit rate: {self.estimated_job_count}")
+            print(f"Jobs created: {m.total_jobs}")
         print(f"Fault profile: {self.fault_profile}")
         print(f"Jobs submitted: {m.submitted_jobs}")
         print(f"Completed: {m.completed_jobs}")
@@ -1394,6 +2134,22 @@ class GatewayE2EStresser:
         print(f"Submit failed: {m.submit_failed_jobs}")
         print(f"Timed out waiting for events: {m.event_timeout_jobs}")
         print(f"Throughput: {m.throughput:.2f} jobs/s")
+        if self.soft_sla_seconds is not None:
+            print(f"Soft SLA target: +{self.soft_sla_seconds:.2f}s from submit start")
+        if self.hard_sla_seconds is not None:
+            print(f"Hard SLA target: +{self.hard_sla_seconds:.2f}s from submit start")
+        if self.soft_sla_step_seconds is not None:
+            print(
+                "Soft SLA increment: "
+                f"{self.soft_sla_step_seconds:+.2f}s every {self.sla_step_every_jobs} jobs"
+            )
+        if self.hard_sla_step_seconds is not None:
+            print(
+                "Hard SLA increment: "
+                f"{self.hard_sla_step_seconds:+.2f}s every {self.sla_step_every_jobs} jobs"
+            )
+        if self.sla_step_cycle is not None:
+            print(f"SLA step cycle: {self.sla_step_cycle} buckets")
 
         def print_latency_block(title: str, values: List[float]) -> None:
             if not values:
@@ -1412,6 +2168,21 @@ class GatewayE2EStresser:
         print_latency_block("Queue Wait", m.queue_wait_ms)
         print_latency_block("Execution Latency", m.execution_latencies_ms)
         print_latency_block("End-to-End Latency", m.end_to_end_latencies_ms)
+        print_latency_block("Soft SLA Lateness", m.soft_sla_lateness_ms)
+        print_latency_block("Hard SLA Lateness", m.hard_sla_lateness_ms)
+
+        if m.soft_sla_configured_jobs or m.hard_sla_configured_jobs:
+            print("\n--- SLA Compliance ---")
+            if m.soft_sla_configured_jobs:
+                print(
+                    f"Soft SLA: {m.soft_sla_met_jobs}/{m.soft_sla_configured_jobs} "
+                    f"met ({m.soft_sla_compliance_pct:.2f}%)"
+                )
+            if m.hard_sla_configured_jobs:
+                print(
+                    f"Hard SLA: {m.hard_sla_met_jobs}/{m.hard_sla_configured_jobs} "
+                    f"met ({m.hard_sla_compliance_pct:.2f}%)"
+                )
 
         if m.failure_reasons:
             print("\n--- Failure Reasons ---")
@@ -1443,12 +2214,25 @@ class GatewayE2EStresser:
                     f"{last_ok.llm_dispatch_registered_dispatchers}"
                 )
 
+        if (
+            self.min_soft_sla_compliance_pct is not None
+            or self.min_hard_sla_compliance_pct is not None
+        ):
+            print("\n--- SLA Verification ---")
+            if self._verification_errors:
+                print("FAILED")
+                for error in self._verification_errors:
+                    print(f"- {error}")
+            else:
+                print("PASSED")
+
         print("=" * 78 + "\n")
 
-    def write_json_report(self, output_path: str) -> None:
+    def build_report_payload(self) -> Dict[str, Any]:
         with self._state_lock:
             runs = list(self._runs_by_request_id.values())
             debug_samples = list(self._debug_samples)
+        report_now = self.metrics.end_time or _now()
 
         debug_sample_payload = [
             {
@@ -1474,8 +2258,39 @@ class GatewayE2EStresser:
             for sample in debug_samples
         ]
 
-        payload = {
+        duration = (
+            (self.metrics.end_time - self.metrics.start_time)
+            if self.metrics.start_time is not None and self.metrics.end_time is not None
+            else None
+        )
+
+        return {
             "summary": {
+                "report_generated_at": _format_epoch_seconds(_now()),
+                "start_time": (
+                    _format_epoch_seconds(self.metrics.start_time)
+                    if self.metrics.start_time is not None
+                    else None
+                ),
+                "end_time": (
+                    _format_epoch_seconds(self.metrics.end_time)
+                    if self.metrics.end_time is not None
+                    else None
+                ),
+                "duration_seconds": duration,
+                "run_mode": self.run_mode,
+                "configured_job_count": self.job_count,
+                "configured_run_time_seconds": self.run_time_seconds,
+                "estimated_job_count": self.estimated_job_count,
+                "progress_interval_seconds": self.progress_interval,
+                "live_report_path": self.live_report_path,
+                "live_report_format": (
+                    resolve_report_format(
+                        self.live_report_path, self.live_report_format
+                    )
+                    if self.live_report_path
+                    else None
+                ),
                 "total_jobs": self.metrics.total_jobs,
                 "fault_profile": self.fault_profile,
                 "submitted_jobs": self.metrics.submitted_jobs,
@@ -1484,6 +2299,16 @@ class GatewayE2EStresser:
                 "submit_failed_jobs": self.metrics.submit_failed_jobs,
                 "event_timeout_jobs": self.metrics.event_timeout_jobs,
                 "throughput": self.metrics.throughput,
+                "soft_sla_configured_jobs": self.metrics.soft_sla_configured_jobs,
+                "soft_sla_met_jobs": self.metrics.soft_sla_met_jobs,
+                "soft_sla_missed_jobs": self.metrics.soft_sla_missed_jobs,
+                "soft_sla_compliance_pct": self.metrics.soft_sla_compliance_pct,
+                "hard_sla_configured_jobs": self.metrics.hard_sla_configured_jobs,
+                "hard_sla_met_jobs": self.metrics.hard_sla_met_jobs,
+                "hard_sla_missed_jobs": self.metrics.hard_sla_missed_jobs,
+                "hard_sla_compliance_pct": self.metrics.hard_sla_compliance_pct,
+                "sla_step_every_jobs": self.sla_step_every_jobs,
+                "sla_step_cycle": self.sla_step_cycle,
                 "debug_sample_count": len(debug_sample_payload),
             },
             "latencies_ms": {
@@ -1492,8 +2317,46 @@ class GatewayE2EStresser:
                 "queue_wait": self.metrics.queue_wait_ms,
                 "execution": self.metrics.execution_latencies_ms,
                 "end_to_end": self.metrics.end_to_end_latencies_ms,
+                "soft_sla_lateness": self.metrics.soft_sla_lateness_ms,
+                "hard_sla_lateness": self.metrics.hard_sla_lateness_ms,
+            },
+            "latency_stats_ms": {
+                "submit": build_latency_stats(
+                    self.metrics.submit_latencies_ms, _percentile
+                ),
+                "scheduling": build_latency_stats(
+                    self.metrics.scheduling_latencies_ms, _percentile
+                ),
+                "queue_wait": build_latency_stats(
+                    self.metrics.queue_wait_ms, _percentile
+                ),
+                "execution": build_latency_stats(
+                    self.metrics.execution_latencies_ms, _percentile
+                ),
+                "end_to_end": build_latency_stats(
+                    self.metrics.end_to_end_latencies_ms, _percentile
+                ),
+                "soft_sla_lateness": build_latency_stats(
+                    self.metrics.soft_sla_lateness_ms, _percentile
+                ),
+                "hard_sla_lateness": build_latency_stats(
+                    self.metrics.hard_sla_lateness_ms, _percentile
+                ),
             },
             "failure_reasons": self.metrics.failure_reasons,
+            "sla_verification": {
+                "soft_sla_seconds": self.soft_sla_seconds,
+                "hard_sla_seconds": self.hard_sla_seconds,
+                "soft_sla_step_seconds": self.soft_sla_step_seconds,
+                "hard_sla_step_seconds": self.hard_sla_step_seconds,
+                "sla_step_every_jobs": self.sla_step_every_jobs,
+                "sla_step_cycle": self.sla_step_cycle,
+                "min_soft_sla_compliance_pct": self.min_soft_sla_compliance_pct,
+                "min_hard_sla_compliance_pct": self.min_hard_sla_compliance_pct,
+                "passed": not self._verification_errors,
+                "errors": self.verification_errors,
+            },
+            "sla": self._build_sla_payload(runs, now=report_now),
             "debug_sampling": {
                 "enabled": self.debug_sample_interval > 0,
                 "sample_interval_seconds": self.debug_sample_interval,
@@ -1511,6 +2374,25 @@ class GatewayE2EStresser:
                     "job_name": run.job_name,
                     "fault_profile": run.fault_profile,
                     "terminal_status": run.terminal_status,
+                    "sla_bucket_index": run.sla_bucket_index,
+                    "soft_sla_offset_seconds": run.soft_sla_offset_seconds,
+                    "hard_sla_offset_seconds": run.hard_sla_offset_seconds,
+                    "soft_sla": (
+                        _format_epoch_seconds(run.soft_sla_at)
+                        if run.soft_sla_at is not None
+                        else None
+                    ),
+                    "hard_sla": (
+                        _format_epoch_seconds(run.hard_sla_at)
+                        if run.hard_sla_at is not None
+                        else None
+                    ),
+                    "soft_sla_status": run.soft_sla_status,
+                    "hard_sla_status": run.hard_sla_status,
+                    "soft_sla_met": run.soft_sla_met,
+                    "hard_sla_met": run.hard_sla_met,
+                    "soft_sla_lateness_ms": run.soft_sla_lateness_ms,
+                    "hard_sla_lateness_ms": run.hard_sla_lateness_ms,
                     "submit_latency_ms": run.submit_latency_ms,
                     "queue_wait_ms": run.queue_wait_ms,
                     "scheduling_ms": run.scheduling_ms,
@@ -1524,7 +2406,15 @@ class GatewayE2EStresser:
                 for run in runs
             ],
         }
-        Path(output_path).write_text(json.dumps(payload, indent=2))
+
+    def write_report(self, output_path: str, report_format: str = "auto") -> None:
+        payload = self.build_report_payload()
+        resolved_format = resolve_report_format(output_path, report_format)
+        rendered = render_final_report(payload, resolved_format)
+        write_text_atomically(output_path, rendered)
+
+    def write_json_report(self, output_path: str) -> None:
+        self.write_report(output_path, "json")
 
 
 def parse_args() -> argparse.Namespace:
@@ -1534,29 +2424,45 @@ def parse_args() -> argparse.Namespace:
         epilog="""
 Examples:
   python tools/stress/gateway_e2e_stresser.py \\
-      --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \\
-      --input-dir /mnt/data/marie-ai/generators \\
+      --config tools/stress/gateway-e2e.config.example.json \\
+      --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \\
       --job-count 50 \\
       --job-name gen5_extract \\
-      --planner extract
+      --planner extract \\
+      --soft-sla-seconds 30 \\
+      --hard-sla-seconds 90 \\
+      --soft-sla-step-seconds 10 \\
+      --hard-sla-step-seconds 20 \\
+      --sla-step-every-jobs 25 \\
+      --sla-step-cycle 4 \\
+      --min-hard-sla-compliance-pct 99 \\
+      --submit-rate 4 \\
+      --report /tmp/gateway-e2e-report.html
 
   python tools/stress/gateway_e2e_stresser.py \\
-      --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \\
-      --s3-uri-manifest /tmp/stress-s3-uris.txt \\
-      --job-count 20 \\
+      --config tools/stress/gateway-e2e.config.example.json \\
+      --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \\
+      --run-time 1h \\
       --job-name gen5_extract \\
       --planner extract \\
-      --submit-rate 2 \\
-      --report-json /tmp/gateway-e2e-report.json
+      --submit-rate 10 \\
+      --live-report /tmp/gateway-e2e-live.html
 
   python tools/stress/gateway_e2e_stresser.py \\
-      --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \\
+      --config tools/stress/gateway-e2e.config.example.json \\
       --s3-uri s3://marie/gen5_extract/sample-001.tif \\
       --job-count 10 \\
       --job-name gen5_extract \\
       --planner extract \\
       --fault-profile chaos \\
       --aimock-admin-url http://localhost:4011
+
+  python tools/stress/gateway_e2e_stresser.py \\
+      --config tools/stress/gateway-e2e.config.example.json \\
+      --input-dir /mnt/data/marie-ai/generators \\
+      --job-count 25 \\
+      --job-name gen5_extract \\
+      --planner extract
         """,
     )
 
@@ -1564,7 +2470,7 @@ Examples:
         "--config",
         type=str,
         default=None,
-        help="Path to grapnel-style config JSON containing api_base_url, api_key, storage, and queue",
+        help="Path to gateway E2E stress config JSON containing api_base_url, api_key, storage, and queue",
     )
     parser.add_argument("--gateway-host", default=None, help="Gateway host override")
     parser.add_argument(
@@ -1605,8 +2511,18 @@ Examples:
         help="Text file with one existing s3:// URI per line",
     )
 
-    parser.add_argument(
-        "--job-count", type=int, required=True, help="Total jobs to submit"
+    workload_group = parser.add_mutually_exclusive_group(required=True)
+    workload_group.add_argument(
+        "--job-count",
+        type=int,
+        help="Total jobs to submit",
+    )
+    workload_group.add_argument(
+        "--run-time",
+        "--duration",
+        dest="run_time",
+        type=str,
+        help="Run duration for rate-controlled submission, for example 30s, 2m, or 1h",
     )
     parser.add_argument(
         "--job-name",
@@ -1629,6 +2545,54 @@ Examples:
         type=str,
         default=None,
         help="Optional AIMock admin base URL used to set the active fault profile before the run, for example http://localhost:4011",
+    )
+    parser.add_argument(
+        "--soft-sla-seconds",
+        type=float,
+        default=None,
+        help="Optional soft SLA offset in seconds from submit start",
+    )
+    parser.add_argument(
+        "--hard-sla-seconds",
+        type=float,
+        default=None,
+        help="Optional hard SLA offset in seconds from submit start",
+    )
+    parser.add_argument(
+        "--soft-sla-step-seconds",
+        type=float,
+        default=None,
+        help="Optional soft SLA increment applied per SLA bucket; can be negative",
+    )
+    parser.add_argument(
+        "--hard-sla-step-seconds",
+        type=float,
+        default=None,
+        help="Optional hard SLA increment applied per SLA bucket; can be negative",
+    )
+    parser.add_argument(
+        "--sla-step-every-jobs",
+        type=int,
+        default=1,
+        help="How many jobs share the same SLA bucket before the step increment advances",
+    )
+    parser.add_argument(
+        "--sla-step-cycle",
+        type=int,
+        default=None,
+        help="Optional number of SLA buckets before the incremental deadline pattern wraps",
+    )
+    parser.add_argument(
+        "--min-soft-sla-compliance-pct",
+        type=float,
+        default=None,
+        help="Optional verification threshold for soft SLA compliance percentage",
+    )
+    parser.add_argument(
+        "--min-hard-sla-compliance-pct",
+        type=float,
+        default=None,
+        help="Optional verification threshold for hard SLA compliance percentage",
     )
     parser.add_argument(
         "--ref-type",
@@ -1671,6 +2635,37 @@ Examples:
         "--batch-size", type=int, default=1, help="Dummy documents per submit request"
     )
     parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=5.0,
+        help="Console progress and live report refresh interval in seconds",
+    )
+    parser.add_argument(
+        "--live-report",
+        type=str,
+        default=None,
+        help="Optional path to a live status report rewritten during the run",
+    )
+    parser.add_argument(
+        "--live-report-format",
+        choices=REPORT_FORMAT_CHOICES,
+        default="auto",
+        help="Live report format override; default auto infers from the file extension",
+    )
+    parser.add_argument(
+        "--live-json",
+        dest="live_json_compat",
+        type=str,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--dry-run-preview-count",
+        type=int,
+        default=3,
+        help="When using --dry-run with --run-time, preview this many would-be submissions",
+    )
+    parser.add_argument(
         "--debug-sample-interval",
         type=float,
         default=0.0,
@@ -1688,7 +2683,28 @@ Examples:
         help="Do not upload <file>.meta.json sidecars when present",
     )
     parser.add_argument(
-        "--report-json", type=str, default=None, help="Optional JSON report output path"
+        "--report",
+        type=str,
+        default=None,
+        help="Optional final report output path; use .json or .html or override with --report-format",
+    )
+    parser.add_argument(
+        "--report-format",
+        choices=REPORT_FORMAT_CHOICES,
+        default="auto",
+        help="Final report format override; default auto infers from the file extension",
+    )
+    parser.add_argument(
+        "--report-json",
+        dest="report_json_compat",
+        type=str,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the fully resolved submit plan and payload(s) as JSON without uploading or submitting",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable debug logging"
@@ -1706,8 +2722,59 @@ Examples:
         parser.error(
             "one of the arguments --input-dir --input-glob --input-manifest --s3-uri --s3-uri-manifest is required"
         )
+    if args.live_report and args.live_json_compat:
+        parser.error("Use only one of --live-report or --live-json")
+    if args.report and args.report_json_compat:
+        parser.error("Use only one of --report or --report-json")
     if args.debug_sample_interval < 0:
         parser.error("--debug-sample-interval must be greater than or equal to zero")
+    if args.job_count is not None and args.job_count <= 0:
+        parser.error("--job-count must be greater than zero")
+    if args.run_time is not None:
+        try:
+            parsed_run_time = _parse_duration_seconds(args.run_time)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if parsed_run_time <= 0:
+            parser.error("--run-time must be greater than zero")
+    if args.progress_interval <= 0:
+        parser.error("--progress-interval must be greater than zero")
+    if args.dry_run_preview_count <= 0:
+        parser.error("--dry-run-preview-count must be greater than zero")
+    if args.soft_sla_seconds is not None and args.soft_sla_seconds < 0:
+        parser.error("--soft-sla-seconds must be greater than or equal to zero")
+    if args.hard_sla_seconds is not None and args.hard_sla_seconds < 0:
+        parser.error("--hard-sla-seconds must be greater than or equal to zero")
+    if args.sla_step_every_jobs <= 0:
+        parser.error("--sla-step-every-jobs must be greater than zero")
+    if args.sla_step_cycle is not None and args.sla_step_cycle <= 0:
+        parser.error("--sla-step-cycle must be greater than zero")
+    if (
+        args.soft_sla_seconds is not None
+        and args.hard_sla_seconds is not None
+        and args.soft_sla_seconds > args.hard_sla_seconds
+    ):
+        parser.error(
+            "--soft-sla-seconds must be less than or equal to --hard-sla-seconds"
+        )
+    if args.soft_sla_step_seconds is not None and args.soft_sla_seconds is None:
+        parser.error("--soft-sla-step-seconds requires --soft-sla-seconds")
+    if args.hard_sla_step_seconds is not None and args.hard_sla_seconds is None:
+        parser.error("--hard-sla-step-seconds requires --hard-sla-seconds")
+    if args.min_soft_sla_compliance_pct is not None and not (
+        0.0 <= args.min_soft_sla_compliance_pct <= 100.0
+    ):
+        parser.error(
+            "--min-soft-sla-compliance-pct must be between 0 and 100 inclusive"
+        )
+    if args.min_hard_sla_compliance_pct is not None and not (
+        0.0 <= args.min_hard_sla_compliance_pct <= 100.0
+    ):
+        parser.error(
+            "--min-hard-sla-compliance-pct must be between 0 and 100 inclusive"
+        )
+    args.live_report = args.live_report or args.live_json_compat
+    args.report = args.report or args.report_json_compat
     return args
 
 
@@ -1782,6 +2849,9 @@ async def main() -> None:
     args = parse_args()
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+    run_time_seconds = (
+        _parse_duration_seconds(args.run_time) if args.run_time is not None else None
+    )
 
     (
         gateway_host,
@@ -1815,7 +2885,11 @@ async def main() -> None:
     )
     if not input_assets:
         raise ValueError("No inputs resolved for stress run")
-    if any(asset.local_path is not None for asset in input_assets) and not s3_config:
+    if (
+        any(asset.local_path is not None for asset in input_assets)
+        and not s3_config
+        and not args.dry_run
+    ):
         raise ValueError(
             "S3 storage config is required for local upload mode under config.storage"
         )
@@ -1836,6 +2910,7 @@ async def main() -> None:
         planner=args.planner,
         input_assets=input_assets,
         job_count=args.job_count,
+        run_time_seconds=run_time_seconds,
         submit_concurrency=args.submit_concurrency,
         submit_rate=args.submit_rate,
         timeout=args.timeout,
@@ -1846,19 +2921,45 @@ async def main() -> None:
         template_job_name=template_job_name,
         fault_profile=args.fault_profile,
         aimock_admin_url=args.aimock_admin_url,
+        soft_sla_seconds=args.soft_sla_seconds,
+        hard_sla_seconds=args.hard_sla_seconds,
+        soft_sla_step_seconds=args.soft_sla_step_seconds,
+        hard_sla_step_seconds=args.hard_sla_step_seconds,
+        sla_step_every_jobs=args.sla_step_every_jobs,
+        sla_step_cycle=args.sla_step_cycle,
+        min_soft_sla_compliance_pct=args.min_soft_sla_compliance_pct,
+        min_hard_sla_compliance_pct=args.min_hard_sla_compliance_pct,
         ref_type=args.ref_type,
         policy=args.policy,
         project_id=args.project_id,
         upload_companion_meta=not args.skip_companion_meta_upload,
         batch_size=args.batch_size,
+        progress_interval=args.progress_interval,
+        live_report_path=args.live_report,
+        live_report_format=args.live_report_format,
         debug_sample_interval=args.debug_sample_interval,
+        dry_run_preview_count=args.dry_run_preview_count,
     )
+
+    if args.dry_run:
+        dry_run_payload = stresser.build_dry_run_plan()
+        rendered = json.dumps(dry_run_payload, indent=2)
+        print(rendered)
+        if args.report:
+            resolved_format = resolve_report_format(args.report, args.report_format)
+            rendered_report = render_dry_run_report(dry_run_payload, resolved_format)
+            write_text_atomically(args.report, rendered_report)
+            logger.info("Wrote dry-run %s report to %s", resolved_format, args.report)
+        return
 
     await stresser.run()
     stresser.print_report()
-    if args.report_json:
-        stresser.write_json_report(args.report_json)
-        logger.info("Wrote JSON report to %s", args.report_json)
+    if args.report:
+        resolved_format = resolve_report_format(args.report, args.report_format)
+        stresser.write_report(args.report, args.report_format)
+        logger.info("Wrote %s report to %s", resolved_format, args.report)
+    if stresser.verification_errors:
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

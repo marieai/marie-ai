@@ -161,6 +161,13 @@ class DAGManagementService:
                 )
                 return False, "executor_capacity"
 
+            if not await self.repository.mark_dag_as_active(dag_id):
+                self.logger.warning(
+                    f"Failed to mark hydrated DAG {dag_id} active in database "
+                    f"from {source}; leaving it out of active_dags"
+                )
+                return False, "db_activation_failed"
+
             await self.frontier.add_dag(dag, nodes)
             self.active_dags[dag_id] = dag
             return True, "admitted"
@@ -213,6 +220,8 @@ class DAGManagementService:
                         keep_until=job_dict["keep_until"],
                         dag_id=dag_id,
                         job_level=job_dict["job_level"],
+                        soft_sla=job_dict.get("soft_sla"),
+                        hard_sla=job_dict.get("hard_sla"),
                     )
                     # Handle dependencies separately
                     deps = job_dict.get("dependencies") or []
@@ -406,6 +415,8 @@ class DAGManagementService:
                         keep_until=j["keep_until"],
                         dag_id=dag_id,
                         job_level=j["job_level"],
+                        soft_sla=j.get("soft_sla"),
+                        hard_sla=j.get("hard_sla"),
                     )
                     deps = j.get("dependencies") or []
                     wi.dependencies = [str(d) for d in deps]

@@ -81,6 +81,33 @@ def test_desired_bump_epoch(desired_store: DesiredStore):
     assert bumped.epoch == 2
 
 
+def test_desired_update_params_keeps_bumped_epoch(desired_store: DesiredStore):
+    ids = _mk_ids()
+    desired_store.set(
+        ids["node"], ids["depl"], params={"existing": "keep"}, phase="SCHEDULED"
+    )
+
+    bumped = desired_store.bump_epoch(ids["node"], ids["depl"])
+    assert bumped is not None
+
+    updated = desired_store.update_params(
+        ids["node"],
+        ids["depl"],
+        lambda params: {**params, "misses": int(params.get("misses", 0)) + 1},
+    )
+    assert updated is not None
+    assert updated.epoch == bumped.epoch
+    assert updated.phase == bumped.phase
+    assert updated.updated_at == bumped.updated_at
+    assert updated.params["existing"] == "keep"
+    assert updated.params["misses"] == 1
+
+    got = desired_store.get(ids["node"], ids["depl"])
+    assert got is not None
+    assert got.epoch == bumped.epoch
+    assert got.params["misses"] == 1
+
+
 def test_desired_iter_pairs(desired_store: DesiredStore):
     # create multiple desired docs
     ids1 = _mk_ids()

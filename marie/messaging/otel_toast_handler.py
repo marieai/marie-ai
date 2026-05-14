@@ -26,6 +26,14 @@ from marie.messaging.toast_handler import ToastHandler
 logger = logging.getLogger(__name__)
 
 
+def _event_timestamp_to_otel_ns(raw_timestamp: int) -> int:
+    value = int(raw_timestamp)
+    abs_value = abs(value)
+    if abs_value >= 1_000_000_000_000:
+        return value * 1_000_000
+    return value * 1_000_000_000
+
+
 class OTELToastHandler(ToastHandler):
     """
     Toast handler that publishes events to OpenTelemetry Collector as logs.
@@ -241,7 +249,7 @@ class OTELToastHandler(ToastHandler):
 
             # Emit log record using kwargs API (SDK 1.39+)
             self._otel_logger.emit(
-                timestamp=msg.timestamp * 1_000_000_000,  # seconds to ns
+                timestamp=_event_timestamp_to_otel_ns(msg.timestamp),
                 observed_timestamp=int(time.time_ns()),
                 severity_text=severity_text,
                 severity_number=severity_number,

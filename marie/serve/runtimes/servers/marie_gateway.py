@@ -79,6 +79,7 @@ from marie.state.state_store import (
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, Response
 from marie.types_core.request.status import StatusMessage
+from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.server_runtime import (
     setup_auth,
     setup_llm_tracking,
@@ -86,6 +87,7 @@ from marie.utils.server_runtime import (
     setup_toast_events,
 )
 from marie.utils.types import strtobool
+from marie.utils.utils import current_milli_time
 
 ROOT = "deployments/"
 
@@ -96,6 +98,9 @@ RESCHEDULE_BACKOFF_S = 5  # server backoff before bumping epoch again
 CLAIM_TIMEOUT_S = 30  # how long you wait for a claim per epoch
 MAX_MISSES = 3  # after 5 failed epochs -> GC
 MAX_AGE_S = 30 * 60  # hard age cap (30 min)
+STATUS_DEGRADED_SINCE = "status_degraded_since"
+STATUS_DEGRADED_REASON = "status_degraded_reason"
+STATUS_DEGRADED_LIVE_MISSING = "live_node_missing_status"
 
 
 class EventKind(str, Enum):
@@ -1483,7 +1488,28 @@ class MarieServerGateway(CompositeServer):
         )
 
         try:
+            scheduler_trace(
+                "gateway_submit_received",
+                job_id=work_info.id,
+                dag_id=work_info.id,
+                event_name=event_name,
+                ref_id=ref_id,
+                ref_type=ref_type,
+                project_id=project_id,
+                planner=metadata.get("planner"),
+                priority=priority,
+                soft_sla=soft_sla.isoformat() if soft_sla else None,
+                hard_sla=hard_sla.isoformat() if hard_sla else None,
+            )
             job_id = await self.job_scheduler.submit_job(work_info)
+            scheduler_trace(
+                "gateway_submit_accepted",
+                dag_id=job_id,
+                event_name=event_name,
+                ref_id=ref_id,
+                ref_type=ref_type,
+                planner=metadata.get("planner"),
+            )
 
             # Tag the active ASGI span with session.id = job_id (the dag_id)
             # so ClickHouse materializes oi_session_id for session grouping.
@@ -1506,12 +1532,26 @@ class MarieServerGateway(CompositeServer):
                 event_name=event_name,
                 job_tag=ref_type,
                 status="OK",
-                timestamp=int(time.time()),
+                timestamp=current_milli_time(),
                 payload=metadata,
+            )
+            scheduler_trace(
+                "gateway_submit_notified",
+                dag_id=job_id,
+                event_name=event_name,
+                ref_id=ref_id,
+                ref_type=ref_type,
             )
 
             return response
         except BaseException as ex:
+            scheduler_trace(
+                "gateway_submit_failed",
+                event_name=event_name,
+                ref_id=ref_id,
+                ref_type=ref_type,
+                error=repr(ex),
+            )
             response = self.error_response(
                 f"Failed to submit job. {ex}", ex, silence_exceptions
             )
@@ -1526,7 +1566,7 @@ class MarieServerGateway(CompositeServer):
                     event_name=work_info.name,
                     job_tag=ref_type,
                     status="FAILED",
-                    timestamp=int(time.time()),
+                    timestamp=current_milli_time(),
                     payload=exc_msg,
                 )
             except Exception as e:
@@ -2461,37 +2501,196 @@ class MarieServerGateway(CompositeServer):
                     return True
         return False
 
-    def _incr_miss_and_maybe_gc(self, node: str, depl: str, d: DesiredDoc) -> bool:
+    def _incr_miss_and_maybe_gc(
+        self,
+        node: str,
+        depl: str,
+        bump_context: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Returns True if GC happened (entry removed)."""
-        # bump 'misses' counter
-        params = dict(d.params or {})
-        misses = int(params.get("misses", 0)) + 1
-        params["misses"] = misses
-        d.params = params
-        d.updated_at = _now_iso()
-        self.desired_store._put_json(
-            self.desired_store._desired_key(node, depl), asdict(d)
+
+        def incr(params: Dict[str, Any]) -> Dict[str, Any]:
+            now = _now_iso()
+            params["misses"] = int(params.get("misses", 0)) + 1
+            params["missing_since"] = params.get("missing_since") or now
+            return params
+
+        updated = self.desired_store.update_params(node, depl, incr)
+        if updated is None:
+            return False
+
+        params = updated.params or {}
+        misses = int(params.get("misses", 0))
+        missing_since = str(params.get("missing_since") or updated.updated_at)
+        too_old = is_stale(missing_since, MAX_AGE_S)
+        node_live = self._address_is_live(node)
+        log_extra = {
+            **(bump_context or {}),
+            "event_type": (
+                "gateway_status_reconcile_bump"
+                if bump_context
+                else "gateway_status_reconcile_miss"
+            ),
+            "node": node,
+            "deployment": depl,
+            "current_desired_epoch": updated.epoch,
+            "misses": misses,
+            "missing_since": missing_since,
+            "node_live": node_live,
+            "too_old": too_old,
+            "degraded_live_node": bool(params.get(STATUS_DEGRADED_SINCE)),
+        }
+        self.logger.warning(
+            "Status reconcile recorded missing or stale status",
+            extra=log_extra,
         )
 
-        # hard age check
-        too_old = is_stale(d.updated_at, MAX_AGE_S)
-
         if misses >= MAX_MISSES or too_old:
+            if node_live:
+                if not params.get(STATUS_DEGRADED_SINCE):
+
+                    def mark_degraded(params: Dict[str, Any]) -> Dict[str, Any]:
+                        params[STATUS_DEGRADED_SINCE] = _now_iso()
+                        params[STATUS_DEGRADED_REASON] = STATUS_DEGRADED_LIVE_MISSING
+                        return params
+
+                    degraded_doc = self.desired_store.update_params(
+                        node, depl, mark_degraded
+                    )
+                    degraded_params = (
+                        degraded_doc.params if degraded_doc else {}
+                    ) or {}
+                    self.logger.warning(
+                        "Status degraded for live node; suppressing epoch bumps",
+                        extra={
+                            **log_extra,
+                            "event_type": "gateway_status_degraded_live_node",
+                            "degraded_live_node": True,
+                            "status_degraded_since": degraded_params.get(
+                                STATUS_DEGRADED_SINCE
+                            ),
+                            "status_degraded_reason": degraded_params.get(
+                                STATUS_DEGRADED_REASON
+                            ),
+                        },
+                    )
+                return False
             # only GC if the address is not currently live; this avoids killing an actually active worker that’s lagging
-            if not self._address_is_live(node):
-                self.logger.warning(
-                    f"GC misses={misses}, too_old={too_old}. Deleting desired+status subtree : {node}/{depl}"
-                )
-                # remove both desired and status for that node/depl
-                base = f"deployments/{node}/{depl}"
-                self.etcd_client.delete_prefix(base)
-                # bookkeeping maps
-                self.desired_map.pop((node, depl), None)
-                self.status_map.pop((node, depl), None)
-                ClusterState.desired = self.desired_map
-                ClusterState.status = self.status_map
-                return True
+            self.logger.warning(
+                f"GC misses={misses}, too_old={too_old}. Deleting desired+status subtree : {node}/{depl}",
+                extra={
+                    **log_extra,
+                    "event_type": "gateway_status_gc_missing_node",
+                },
+            )
+            # remove both desired and status for that node/depl
+            base = f"deployments/{node}/{depl}"
+            self.etcd_client.delete_prefix(base)
+            # bookkeeping maps
+            self.desired_map.pop((node, depl), None)
+            self.status_map.pop((node, depl), None)
+            ClusterState.desired = self.desired_map
+            ClusterState.status = self.status_map
+            return True
         return False
+
+    def _status_bump_suppressed(
+        self,
+        node: str,
+        depl: str,
+        d: DesiredDoc,
+        st: Optional[StatusDoc] = None,
+        reason: str = "status_missing",
+    ) -> bool:
+        suppressed = bool(
+            self._address_is_live(node) and (d.params or {}).get(STATUS_DEGRADED_SINCE)
+        )
+        if suppressed:
+            params = d.params or {}
+            self.logger.debug(
+                "Status reconcile bump suppressed for degraded live node",
+                extra={
+                    "event_type": "gateway_status_bump_suppressed",
+                    "node": node,
+                    "deployment": depl,
+                    "reason": reason,
+                    "desired_epoch": d.epoch,
+                    "status_epoch": st.epoch if st else None,
+                    "misses": int(params.get("misses", 0)),
+                    "node_live": True,
+                    "degraded_live_node": True,
+                    "status_degraded_since": params.get(STATUS_DEGRADED_SINCE),
+                    "status_degraded_reason": params.get(STATUS_DEGRADED_REASON),
+                },
+            )
+        return suppressed
+
+    def _bump_epoch_for_status_miss(
+        self,
+        node: str,
+        depl: str,
+        d: DesiredDoc,
+        st: Optional[StatusDoc],
+        reason: str,
+    ) -> bool:
+        params = d.params or {}
+        context = {
+            "reason": reason,
+            "old_desired_epoch": d.epoch,
+            "desired_epoch": d.epoch,
+            "status_epoch": st.epoch if st else None,
+            "misses": int(params.get("misses", 0)),
+            "node_live": self._address_is_live(node),
+            "degraded_live_node": bool(params.get(STATUS_DEGRADED_SINCE)),
+            "status_degraded_since": params.get(STATUS_DEGRADED_SINCE),
+            "status_degraded_reason": params.get(STATUS_DEGRADED_REASON),
+        }
+        bumped = self.desired_store.bump_epoch(node, depl)
+        if not bumped:
+            self.logger.warning(
+                "Status reconcile failed to bump desired epoch",
+                extra={
+                    **context,
+                    "event_type": "gateway_status_reconcile_bump_failed",
+                    "node": node,
+                    "deployment": depl,
+                    "new_desired_epoch": None,
+                },
+            )
+            return False
+
+        context["new_desired_epoch"] = bumped.epoch
+        return self._incr_miss_and_maybe_gc(node, depl, context)
+
+    def _reset_miss_metadata(self, node: str, depl: str) -> None:
+        before = self.desired_store.get(node, depl)
+        before_params = (before.params if before else {}) or {}
+
+        def reset(params: Dict[str, Any]) -> Dict[str, Any]:
+            params.pop("misses", None)
+            params.pop("missing_since", None)
+            params.pop(STATUS_DEGRADED_SINCE, None)
+            params.pop(STATUS_DEGRADED_REASON, None)
+            return params
+
+        updated = self.desired_store.update_params(node, depl, reset)
+        if updated:
+            self.logger.info(
+                "Status reconcile recovered; reset miss metadata",
+                extra={
+                    "event_type": "gateway_status_reconcile_recovered",
+                    "node": node,
+                    "deployment": depl,
+                    "desired_epoch": updated.epoch,
+                    "misses": int(before_params.get("misses", 0)),
+                    "node_live": self._address_is_live(node),
+                    "degraded_live_node": bool(
+                        before_params.get(STATUS_DEGRADED_SINCE)
+                    ),
+                    "status_degraded_since": before_params.get(STATUS_DEGRADED_SINCE),
+                    "status_degraded_reason": before_params.get(STATUS_DEGRADED_REASON),
+                },
+            )
 
     async def _reconcile_loop(self, interval_s: int = 10) -> None:
         self.logger.debug("Reconcile loop starting (interval=%ss)", interval_s)
@@ -2523,25 +2722,48 @@ class MarieServerGateway(CompositeServer):
 
                     st = self.status_store.read(node, depl)
                     if not st:
+                        if self._status_bump_suppressed(
+                            node, depl, d, reason="status_missing"
+                        ):
+                            continue
                         if is_stale(d.updated_at, CLAIM_TIMEOUT_S):
-                            self.logger.warning(
-                                f"No status for {node}/{depl} epoch {d.epoch}; bumping"
-                            )
-                            self.desired_store.bump_epoch(node, depl)
-                            if self._incr_miss_and_maybe_gc(node, depl, d):
+                            if self._bump_epoch_for_status_miss(
+                                node, depl, d, None, "status_missing"
+                            ):
                                 continue
                         continue
 
                     if st.epoch != d.epoch:
+                        if self._status_bump_suppressed(
+                            node, depl, d, st, "status_epoch_mismatch"
+                        ):
+                            continue
+                        if is_stale(d.updated_at, CLAIM_TIMEOUT_S):
+                            if self._bump_epoch_for_status_miss(
+                                node, depl, d, st, "status_epoch_mismatch"
+                            ):
+                                continue
                         continue
 
                     if is_stale(st.heartbeat_at, HEARTBEAT_TIMEOUT_S):
-                        self.logger.warning(
-                            f"Stale status {node}/{depl} epoch {st.epoch}; bumping"
-                        )
-                        self.desired_store.bump_epoch(node, depl)
-                        if self._incr_miss_and_maybe_gc(node, depl, d):
+                        if self._status_bump_suppressed(
+                            node, depl, d, st, "status_heartbeat_stale"
+                        ):
                             continue
+                        if self._bump_epoch_for_status_miss(
+                            node, depl, d, st, "status_heartbeat_stale"
+                        ):
+                            continue
+                        continue
+
+                    params = d.params or {}
+                    if (
+                        "misses" in params
+                        or "missing_since" in params
+                        or STATUS_DEGRADED_SINCE in params
+                        or STATUS_DEGRADED_REASON in params
+                    ):
+                        self._reset_miss_metadata(node, depl)
 
             except Exception as e:
                 if _is_known_connection_error(e):

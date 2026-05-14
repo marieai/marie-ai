@@ -8,6 +8,7 @@ Uses a lightweight in-memory exporter — no external OTel collector needed.
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional, Sequence
@@ -136,9 +137,11 @@ def test_set_llm_io_expands_multimodal_message_content(otel_setup):
         f"{SpanAttributes.LLM_INPUT_MESSAGES}.1."
         f"{MessageAttributes.MESSAGE_CONTENT}"
     )
-    assert attrs[user_content_key] == (
-        "describe the image\n[image_url: data:image/png;base64,ZmFrZQ==]"
-    )
+    content = json.loads(attrs[user_content_key])
+    assert content == [
+        {"type": "text", "text": "describe the image"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,ZmFrZQ=="}},
+    ]
 
 
 # ---------------------------------------------------------------------------

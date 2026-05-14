@@ -47,6 +47,7 @@ from marie.state.state_store import DesiredStore, StatusStore
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
 from marie.utils.network import get_ip_address
+from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.timing import exponential_backoff
 from marie.utils.types import strtobool
 
@@ -86,6 +87,16 @@ def next_heartbeat_delay(base: float, jitter_fraction=0.15):
     # jitter_fraction in [0.10, 0.20]
     j = random.uniform(-jitter_fraction, jitter_fraction)
     return max(1.0, base * (1.0 + j))
+
+
+def _status_lease_timings(etcd_config: EtcdConfig) -> Tuple[int, float]:
+    lease_time = max(2, int(etcd_config.lease_sec or 0))
+    heartbeat_time = float(etcd_config.heartbeat_sec or 0)
+    if heartbeat_time <= 0:
+        heartbeat_time = max(1.0, 0.25 * lease_time)
+    else:
+        heartbeat_time = max(1.0, heartbeat_time)
+    return lease_time, min(heartbeat_time, max(1.0, 0.5 * lease_time))
 
 
 # GB:MOD
@@ -186,11 +197,14 @@ class WorkerRequestHandler:
         etcd_args = convert_to_etcd_args(args_dict)
 
         etcd_config = EtcdConfig.from_dict(etcd_args)
-        self._lease_time = etcd_config.lease_sec
-        self._heartbeat_time = etcd_config.heartbeat_sec
-
-        self._lease_time = 15  # default lease time
-        self._heartbeat_time = 10  # default heartbeat time
+        self._lease_time, self._heartbeat_time = _status_lease_timings(etcd_config)
+        if (
+            self._lease_time != etcd_config.lease_sec
+            or self._heartbeat_time != etcd_config.heartbeat_sec
+        ):
+            self.logger.warning(
+                f"Adjusted worker status lease timing: configured lease={etcd_config.lease_sec}s heartbeat={etcd_config.heartbeat_sec}s -> lease={self._lease_time}s heartbeat={self._heartbeat_time}s"
+            )
 
         self._etcd_client = get_etcd_client(etcd_args)
         self._lease_reacquire_lock = threading.Lock()
@@ -208,12 +222,17 @@ class WorkerRequestHandler:
 
         # Short TTL for auto-GC of /status; heartbeat will keep it alive while the worker lives
         self._status_lease_cache = LeaseCache(
-            self._etcd_client, ttl=self._lease_time, margin=1.0
+            self._etcd_client,
+            ttl=self._lease_time,
+            margin=1.0,
+            logger=self.logger,
         )
         self._desired_store = DesiredStore(self._etcd_client)
         self._status_store = StatusStore(
             self._etcd_client,
             lease_getter=self._status_lease_getter,
+            lease_invalidator=self._status_lease_invalidator,
+            logger=self.logger,
         )
 
         self._sem_default_ttl = 30  # seconds
@@ -228,11 +247,10 @@ class WorkerRequestHandler:
         self._last_logged_status = None
         self._last_status_log_ts = 0.0
         self._status_log_interval = 60.0  # seconds
+        self._readiness_update_tasks: set[asyncio.Task] = set()
 
-        # Start a lightweight heartbeat for /status (separate from your etcd lease heartbeat)
-        self._base_heartbeat = max(
-            1.0, 0.25 * self._lease_time
-        )  # Base heartbeat as a fraction of TTL Here: 25%.
+        # Status writes refresh the etcd lease; keep the write interval below TTL.
+        self._base_heartbeat = self._heartbeat_time
         self._status_hb_thread = None
         self._status_hb_stop = threading.Event()
         self._hb_supervisor_stop = threading.Event()
@@ -734,6 +752,7 @@ class WorkerRequestHandler:
         job_id = None
         if params is not None:
             job_id = params.get("job_id", None)
+        dag_id = params.get("dag_id") if params is not None else None
 
         if job_id is None:
             raise RuntimeError(
@@ -742,6 +761,16 @@ class WorkerRequestHandler:
             )
 
         self.logger.info(f"requests TO MONITOR : {exec_endpoint} -- {job_id}")
+        scheduler_trace(
+            "executor_request_received",
+            job_id=job_id,
+            dag_id=dag_id,
+            endpoint=exec_endpoint,
+            deployment=self._deployment,
+            runtime_name=self.args.name,
+            executor=self._executor.__class__.__name__,
+            host=get_ip_address(flush_cache=False),
+        )
         await self._record_started_job(job_id, requests, params)
 
         len_docs = len(requests[0].docs)  # TODO we can optimize here and access the
@@ -784,6 +813,14 @@ class WorkerRequestHandler:
                 return_data: Any,
                 raised_exception: Exception,
             ):
+                scheduler_trace(
+                    "executor_callback_invoked",
+                    job_id=job_id,
+                    dag_id=dag_id,
+                    endpoint=exec_endpoint,
+                    deployment=self._deployment,
+                    has_exception=raised_exception is not None,
+                )
                 self.logger.info(
                     f"[callback] executor_completion_callback invoked for job_id={job_id}, "
                     f"has_exception={raised_exception is not None}"
@@ -793,6 +830,8 @@ class WorkerRequestHandler:
 
                 # TODO : add support for handling client disconnect rejects
                 additional_metadata = {"client_disconnected": client_disconnected}
+                if dag_id:
+                    additional_metadata["dag_id"] = dag_id
 
                 # Detect failure from raised exception OR from a returned error status
                 failed = raised_exception is not None or (
@@ -828,6 +867,14 @@ class WorkerRequestHandler:
 
                 self.logger.info(
                     f"[callback] executor_completion_callback completed for job_id={job_id}"
+                )
+                scheduler_trace(
+                    "executor_callback_completed",
+                    job_id=job_id,
+                    dag_id=dag_id,
+                    endpoint=exec_endpoint,
+                    deployment=self._deployment,
+                    failed=failed,
                 )
 
             try:
@@ -1531,25 +1578,29 @@ class WorkerRequestHandler:
                 f"Dry run mode - skipping job failure recording for {job_id}"
             )
             return
+        dag_id = metadata_attributes.get("dag_id") if metadata_attributes else None
 
         # TODO :
         #   We will need to set to the UNKNOWN state from the JobSupervisor after the node failed N attempts
         #   or the health check failed N times.
 
-        self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
-        try:
-            await asyncio.to_thread(
-                self._set_deployment_status,
-                self._worker_state,
-            )
-        except Exception as set_status_exc:
-            self.logger.error(
-                f"Failed to set UNKNOWN during _record_failed_job: {set_status_exc}"
-            )
-
         # Always untrack & release on terminal
         self.logger.info(f"[lifecycle] Calling _sem_untrack for failed job {job_id}")
+        scheduler_trace(
+            "executor_slot_release_start",
+            job_id=job_id,
+            dag_id=dag_id,
+            deployment=self._deployment,
+            terminal_status=JobStatus.FAILED.value,
+        )
         self._sem_untrack(job_id, release=True)
+        scheduler_trace(
+            "executor_slot_released",
+            job_id=job_id,
+            dag_id=dag_id,
+            deployment=self._deployment,
+            terminal_status=JobStatus.FAILED.value,
+        )
 
         if job_id is not None and self._job_info_client is not None:
             try:
@@ -1601,8 +1652,20 @@ class WorkerRequestHandler:
                         }
                     },
                 )
+                scheduler_trace(
+                    "executor_failed_recorded",
+                    job_id=job_id,
+                    dag_id=dag_id,
+                    deployment=self._deployment,
+                    error_type=exc["type"],
+                )
             except Exception as e:
                 self.logger.error(f"Error recording job status FAILED {job_id} : {e}")
+        self._schedule_deployment_ready_after_terminal(
+            job_id=job_id,
+            dag_id=dag_id,
+            terminal_status=JobStatus.FAILED.value,
+        )
 
     async def _record_started_job(
         self, job_id: str, requests: List["DataRequest"], params
@@ -1612,6 +1675,14 @@ class WorkerRequestHandler:
 
         self.logger.info(f"Record job started: {job_id}")
         self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.SERVING
+        dag_id = params.get("dag_id") if params is not None else None
+        scheduler_trace(
+            "executor_start_recording",
+            job_id=job_id,
+            dag_id=dag_id,
+            deployment=self._deployment,
+            runtime_name=self.args.name,
+        )
 
         try:
             # Busy: claim with SERVING semantics immediately
@@ -1623,6 +1694,14 @@ class WorkerRequestHandler:
                     self._deployment
                 )  # capacity bucket; can be executor type if you prefer
                 self._sem_track(job_id, slot_type, ttl=self._sem_default_ttl)
+                scheduler_trace(
+                    "executor_slot_tracked",
+                    job_id=job_id,
+                    dag_id=dag_id,
+                    deployment=self._deployment,
+                    slot_type=slot_type,
+                    ttl_seconds=self._sem_default_ttl,
+                )
             except Exception as e:
                 self.logger.error(f"[sem] failed to track ticket for {job_id}: {e}")
                 raise e
@@ -1647,6 +1726,12 @@ class WorkerRequestHandler:
                         }
                     },
                 )
+                scheduler_trace(
+                    "executor_running_recorded",
+                    job_id=job_id,
+                    dag_id=dag_id,
+                    deployment=self._deployment,
+                )
             except Exception as e:
                 self.logger.error(f"Error recording job status RUNNING {job_id} : {e}")
                 print(e)
@@ -1662,23 +1747,29 @@ class WorkerRequestHandler:
                 f"Dry run mode - skipping job success recording for {job_id}"
             )
             return
+        dag_id = metadata_attributes.get("dag_id") if metadata_attributes else None
 
         self.logger.info(f"[lifecycle] Recording job success for {job_id}")
-        self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
-
-        try:
-            # Idle/ready when finished
-            await asyncio.to_thread(self._set_deployment_status, self._worker_state)
-        except Exception as set_status_exc:
-            self.logger.error(
-                f"Failed to set NOT_SERVING during _record_successful_job: {set_status_exc}"
-            )
 
         # Always untrack & release on terminal
         self.logger.info(
             f"[lifecycle] Calling _sem_untrack for successful job {job_id}"
         )
+        scheduler_trace(
+            "executor_slot_release_start",
+            job_id=job_id,
+            dag_id=dag_id,
+            deployment=self._deployment,
+            terminal_status=JobStatus.SUCCEEDED.value,
+        )
         self._sem_untrack(job_id, release=True)
+        scheduler_trace(
+            "executor_slot_released",
+            job_id=job_id,
+            dag_id=dag_id,
+            deployment=self._deployment,
+            terminal_status=JobStatus.SUCCEEDED.value,
+        )
 
         if job_id is not None and self._job_info_client is not None:
             try:
@@ -1693,10 +1784,21 @@ class WorkerRequestHandler:
                         "runtime_env": {"attributes": request_attributes}
                     },
                 )
+                scheduler_trace(
+                    "executor_success_recorded",
+                    job_id=job_id,
+                    dag_id=dag_id,
+                    deployment=self._deployment,
+                )
             except Exception as e:
                 self.logger.error(
                     f"Error recording job status SUCCEEDED {job_id} : {e}"
                 )
+        self._schedule_deployment_ready_after_terminal(
+            job_id=job_id,
+            dag_id=dag_id,
+            terminal_status=JobStatus.SUCCEEDED.value,
+        )
 
     def _request_attributes(self, requests: List["DataRequest"]) -> Dict:
         exec_endpoint: str = requests[0].header.exec_endpoint
@@ -1710,6 +1812,86 @@ class WorkerRequestHandler:
             "runtime_name": self.args.name,
             "host": get_ip_address(flush_cache=False),
         }
+
+    def _schedule_deployment_ready_after_terminal(
+        self, job_id: str, dag_id: Optional[str], terminal_status: str
+    ) -> None:
+        task = asyncio.create_task(
+            self._mark_deployment_ready_after_terminal(
+                job_id=job_id,
+                dag_id=dag_id,
+                terminal_status=terminal_status,
+            )
+        )
+        self._readiness_update_tasks.add(task)
+        task.add_done_callback(self._readiness_update_tasks.discard)
+
+    async def _mark_deployment_ready_after_terminal(
+        self, job_id: str, dag_id: Optional[str], terminal_status: str
+    ) -> None:
+        scheduler_trace(
+            "executor_readiness_update_start",
+            job_id=job_id,
+            dag_id=dag_id,
+            deployment=self._deployment,
+            terminal_status=terminal_status,
+        )
+        try:
+            updated = await asyncio.to_thread(self._set_deployment_ready_if_idle)
+        except Exception as exc:
+            self.logger.error(
+                f"Failed to set NOT_SERVING after terminal job {job_id}: {exc}"
+            )
+            scheduler_trace(
+                "executor_readiness_update_failed",
+                job_id=job_id,
+                dag_id=dag_id,
+                deployment=self._deployment,
+                terminal_status=terminal_status,
+                error=repr(exc),
+            )
+            return
+
+        if not updated:
+            scheduler_trace(
+                "executor_readiness_update_skipped",
+                job_id=job_id,
+                dag_id=dag_id,
+                deployment=self._deployment,
+                terminal_status=terminal_status,
+                active_tickets=list(self._active_sem_tickets.keys()),
+            )
+            return
+
+        scheduler_trace(
+            "executor_readiness_updated",
+            job_id=job_id,
+            dag_id=dag_id,
+            deployment=self._deployment,
+            terminal_status=terminal_status,
+        )
+
+        if self._active_sem_tickets:
+            scheduler_trace(
+                "executor_readiness_update_race",
+                job_id=job_id,
+                dag_id=dag_id,
+                deployment=self._deployment,
+                terminal_status=terminal_status,
+                active_tickets=list(self._active_sem_tickets.keys()),
+            )
+            await asyncio.to_thread(
+                self._set_deployment_status,
+                health_pb2.HealthCheckResponse.ServingStatus.SERVING,
+            )
+
+    def _set_deployment_ready_if_idle(self) -> bool:
+        if self._active_sem_tickets:
+            return False
+        self._set_deployment_status(
+            health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
+        )
+        return True
 
     def _set_deployment_status(
         self, status: health_pb2.HealthCheckResponse.ServingStatus
@@ -1982,6 +2164,9 @@ class WorkerRequestHandler:
         return self._status_lease_cache.get_or_refresh(
             f"{self._node}/{self._deployment}"
         )
+
+    def _status_lease_invalidator(self):
+        self._status_lease_cache.invalidate(f"{self._node}/{self._deployment}")
 
     def _claim_and_mark(
         self,

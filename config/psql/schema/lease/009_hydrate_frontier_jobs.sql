@@ -21,6 +21,8 @@ SELECT
     'retry_backoff', j.retry_backoff,
     'keep_until',    j.keep_until,
     'job_level',     j.job_level,
+    'soft_sla',      j.soft_sla,
+    'hard_sla',      j.hard_sla,
     'dependencies',  COALESCE(dep.deps, '[]'::json)
   ) AS job
 FROM {schema}.job j

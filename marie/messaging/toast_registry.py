@@ -15,6 +15,7 @@ from marie.messaging.events import (
     MarieEventType,
 )
 from marie.messaging.toast_handler import ToastHandler
+from marie.utils.utils import current_milli_time
 
 
 class Toast:
@@ -193,7 +194,7 @@ class Toast:
                     )
                     if Toast._TRACK_TIMING:
                         Toast._LAST_DISPATCH_MS = dt_ms
-                        logger.info(
+                        logger.debug(
                             f"Toast dispatch took : {dt_ms:.2f} ms ({dt_ms/1000:.6f} s)"
                         )
 
@@ -332,8 +333,6 @@ class Toast:
         timestamp: Optional[int] = None,
         extra_payload: Optional[dict[str, Any]] = None,
     ) -> EventMessage:
-        import time as _time
-
         ns = Toast._namespace_for_event_type(ev.event_type)
         dotted = ev.event_type.as_event_name()  # e.g., "run.success", "engine.event"
         event_name = f"{ns}.{dotted}" if not dotted.startswith(f"{ns}.") else dotted
@@ -361,7 +360,7 @@ class Toast:
         if extra_payload:
             payload.update(extra_payload)
 
-        ts = int(timestamp if timestamp is not None else _time.time())
+        ts = int(timestamp if timestamp is not None else current_milli_time())
         job_tag = (
             (es.marker_start if es and es.marker_start else None)
             or (node if node else None)

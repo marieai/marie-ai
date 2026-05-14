@@ -25,6 +25,7 @@ from marie.query_planner.planner import (
 from marie.scheduler.fixtures import *
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import WorkInfo
+from marie.utils.types import to_bool
 
 _mapper_warnings_shown = set()
 
@@ -187,7 +188,7 @@ async def debug_candidates_and_plan(
 ) -> None:
     """
     Debugs and writes candidates and planned jobs to a file if the
-    environment variable `MARIE_DEBUG_QUERY_PLAN` is set.
+    environment variable `MARIE_DEBUG_QUERY_PLANNER` is set.
 
     :param candidates_wi: A list of work info objects that are candidates for planning.
     :param planned: A list of tuples containing entrypoint and work info for planned jobs.
@@ -195,10 +196,8 @@ async def debug_candidates_and_plan(
     :param active_dags: A dictionary of active DAGs with their IDs as keys.
     :param frontier: The memory frontier containing job states and information.
     """
-
-    if "MARIE_DEBUG_QUERY_PLAN" not in os.environ:
-        pass
-        # return
+    if not to_bool(os.getenv("MARIE_DEBUG_QUERY_PLANNER"), False):
+        return
 
     os.makedirs("/tmp/marie/plans", exist_ok=True)
     # timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")

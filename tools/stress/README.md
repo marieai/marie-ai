@@ -10,8 +10,8 @@ End-to-end scheduler stress harness for real document jobs.
 
 This tool is for validating the full path:
 
-- local file discovery or pre-staged S3 selection
-- optional S3/MinIO upload
+- pre-staged S3 selection or optional local upload
+- optional S3/MinIO upload when you want full-pipeline benchmarking
 - planner-aware `job submit` through the gateway
 - RabbitMQ scheduler event tracking
 - end-to-end latency and failure reporting
@@ -29,42 +29,113 @@ Use it when the goal is to test:
 - **Real asset staging**: uploads source files to the configured S3/MinIO bucket
 - **Existing S3 asset mode**: submits pre-staged `s3://` assets without uploading
 - **Planner-aware submit**: sets `planner`, `ref_id`, `ref_type`, and `uri` in metadata
+- **Per-submit visibility**: logs the selected source, planned `s3://` URI, request ID, and returned job ID for every real submission
 - **Scheduler event tracking**: listens for `*.scheduled`, `*.started`, `*.completed`, `*.failed`
 - **Companion metadata support**: uploads `<file>.meta.json` sidecars when present
-- **Finite load model**: submits a configurable number of jobs at a target rate
+- **Flexible load model**: submit either a fixed `--job-count` or run for a wall-clock `--run-time` at a target rate
+- **Live progress monitoring**: configurable console progress cadence and optional live JSON or HTML snapshots during the run
 - **Latency breakdowns**: submit, scheduling, queue wait, execution, and end-to-end timing
+- **SLA verification**: stamps `soft_sla` / `hard_sla` onto each request and reports compliance
 - **AIMock fault profile integration**: can switch the mock backend into `normal`, `timeout`, `error`, or randomized `chaos`
 
 #### Usage
 
+Enable the scheduler JSONL trace when investigating unexplained SLA gaps. Set
+these variables on the gateway and every executor process you want in the same
+timeline:
+
 ```bash
-# Full end-to-end extract test using the existing grapnel config
+export MARIE_SCHEDULER_TRACE_ENABLED=true
+export MARIE_SCHEDULER_TRACE_PATH=/home/gbugaj/tmp/marie-scheduler-trace.jsonl
+```
+
+The trace is disabled by default and is best-effort: write failures never block
+job scheduling. It emits phase events for gateway submit, scheduler submission
+queue enqueue/dequeue, DAG persistence, frontier insertion, planner selection,
+frontier and DB leasing, semaphore reservation, gateway dispatch confirmation,
+executor request receipt, RUNNING/SUCCEEDED/FAILED status writes, callbacks, and
+slot release. Use it alongside the HTML stress report to split end-to-end
+latency into submission queue wait, DAG persistence, frontier wait, dispatch
+wait, executor service time, and terminal status/slot-release delay.
+Frontier wait is further split into candidate visibility, planner selection,
+frontier take, DB lease, semaphore reservation, and activation. Planner and
+frontier phases are emitted as batch events with `job_ids`; the analyzer expands
+them per job without writing one trace line per selected job.
+
+After a run, summarize the slowest handoffs:
+
+```bash
+python tools/stress/analyze_scheduler_trace.py \
+    /home/gbugaj/tmp/marie-scheduler-trace.jsonl \
+    --sort frontier_to_dispatch \
+    --limit 25
+```
+
+Or print an aggregate report with event rates, executor utilization, planner
+pressure, control-flow balance, and latency percentiles:
+
+```bash
+python tools/stress/analyze_scheduler_trace.py \
+    /home/gbugaj/tmp/marie-scheduler-trace.jsonl \
+    --report
+```
+
+```bash
+# Full end-to-end extract test using the local stress config example
 python tools/stress/gateway_e2e_stresser.py \
-    --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \
+    --config tools/stress/gateway-e2e.config.example.json \
     --input-dir /mnt/data/marie-ai/generators \
     --job-count 25 \
     --job-name gen5_extract \
     --planner extract
 
-# Submit TIFFs at 4 jobs/sec and write a JSON report
+# Submit TIFFs at 4 jobs/sec and write an HTML report
 python tools/stress/gateway_e2e_stresser.py \
-    --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \
-    --s3-uri-manifest /tmp/stress-s3-uris.txt \
+    --config tools/stress/gateway-e2e.config.example.json \
+    --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \
     --job-count 50 \
     --job-name gen5_extract \
     --planner extract \
+    --soft-sla-seconds 30 \
+    --hard-sla-seconds 90 \
+    --soft-sla-step-seconds 10 \
+    --hard-sla-step-seconds 20 \
+    --sla-step-every-jobs 25 \
+    --sla-step-cycle 4 \
+    --min-hard-sla-compliance-pct 99 \
     --submit-rate 4 \
-    --report-json /tmp/gateway-e2e-report.json
+    --report /tmp/gateway-e2e-report.html
+
+# Run for one hour at 10 jobs/sec against pre-staged S3 assets
+python tools/stress/gateway_e2e_stresser.py \
+    --config tools/stress/gateway-e2e.config.example.json \
+    --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \
+    --run-time 1h \
+    --job-name gen5_extract \
+    --planner extract \
+    --submit-rate 10 \
+    --progress-interval 2 \
+    --live-report /tmp/gateway-e2e-live.html \
+    --report /tmp/gateway-e2e-hourly-report.html
 
 # Run against AIMock/LiteLLM with randomized chaos mode
 python tools/stress/gateway_e2e_stresser.py \
-    --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \
+    --config tools/stress/gateway-e2e.config.example.json \
     --s3-uri 's3://marie/gen5_extract/sample-001.tif' \
     --job-count 10 \
     --job-name gen5_extract \
     --planner extract \
     --fault-profile chaos \
     --aimock-admin-url http://localhost:4011
+
+# Preview exactly what would be submitted without uploading or calling the gateway
+python tools/stress/gateway_e2e_stresser.py \
+    --config tools/stress/gateway-e2e.config.example.json \
+    --input-dir ~/.marie/generators \
+    --job-count 1 \
+    --job-name gen5_extract \
+    --planner extract \
+    --dry-run
 ```
 
 #### Quick Start
@@ -76,6 +147,16 @@ The usual scheduler-stress path is:
 3. make sure gateway + RabbitMQ + MinIO/S3 are already running
 4. run `gateway_e2e_stresser.py` against pre-staged `s3://` assets
 
+The repo-local base files for this tool are:
+
+- `tools/stress/gateway-e2e.config.example.json`
+- `tools/stress/gateway-e2e.s3-uri-manifest.example.txt`
+
+These files are examples only. They are not required.
+
+- `gateway-e2e.config.example.json` is a local starter config for the tool
+- `gateway-e2e.s3-uri-manifest.example.txt` is a sample manifest showing the expected `s3://` URI format
+
 Create the shared Docker network once:
 
 ```bash
@@ -85,7 +166,7 @@ docker network create --driver=bridge marie_default 2>/dev/null || true
 Start the programmatic AIMock backend with admin control enabled:
 
 ```bash
-cd /home/gbugaj/dev/marieai/marie-ai/Dockerfiles
+cd Dockerfiles
 docker compose -f docker-compose.mock-llm-programmatic.yml up -d
 
 # Verify the admin endpoint
@@ -95,7 +176,6 @@ curl http://localhost:4011/fault-profile
 Start LiteLLM and point it at the programmatic AIMock service on the Docker network:
 
 ```bash
-cd /home/gbugaj/dev/marieai/marie-ai
 AIMOCK_URL=http://aimock-programmatic:4010 \
 docker compose --env-file ./config/.env.dev \
   -f ./Dockerfiles/docker-compose.litellm.yml \
@@ -109,7 +189,6 @@ curl http://localhost:4000/health
 If LiteLLM is running with host networking, use:
 
 ```bash
-cd /home/gbugaj/dev/marieai/marie-ai
 AIMOCK_URL=http://127.0.0.1:4010 \
 docker compose --env-file ./config/.env.dev \
   -f ./Dockerfiles/docker-compose.litellm.yml \
@@ -145,21 +224,177 @@ curl -X POST http://localhost:4011/fault-profile \
 
 `gateway_e2e_stresser.py` supports two input modes.
 
-Upload mode:
+It also supports two load-shaping modes:
 
-- use `--input-dir`, `--input-glob`, or `--input-manifest`
-- the tool uploads local files to S3/MinIO before submission
-- use this when you want a true end-to-end ingest benchmark
+- `--job-count N` for a fixed number of submissions
+- `--run-time 30s|2m|1h` for a duration-based run at `--submit-rate`
+
+For real-time monitoring during the run:
+
+- `--progress-interval` controls how often the tool logs progress to the terminal
+- `--live-report` rewrites a lightweight status snapshot on the same cadence
+- `--live-report-format` can force `json` or `html`; otherwise the tool infers the format from the file extension
 
 Pre-staged S3 mode:
 
 - use `--s3-uri` or `--s3-uri-manifest`
 - the tool skips upload and submits directly against existing `s3://` objects
-- use this when you want to isolate scheduler, queueing, LiteLLM, and failure behavior
+- this is the preferred mode for scheduler, queueing, timeout, and LLM failure testing
+- local files are not required in this mode
+
+Upload mode:
+
+- use `--input-dir`, `--input-glob`, or `--input-manifest`
+- the tool uploads local files to S3/MinIO before submission
+- use this only when you want a true end-to-end ingest benchmark
+
+#### Dry-Run Mode
+
+Use `--dry-run` when you want to inspect the fully resolved submit plan before
+the tool touches S3 or the gateway.
+
+What `--dry-run` does:
+
+- resolves the exact input file(s) or `s3://` URI(s) that would be used
+- computes the destination `s3_uri` for local upload mode
+- builds the final metadata, including SLA fields
+- builds the exact request payload body the tool would submit
+- prints the whole plan as JSON to stdout
+- in `--run-time` mode, previews only the first few would-be submissions instead of materializing the full duration run
+
+What `--dry-run` does not do:
+
+- does not upload local files
+- does not call the gateway
+- does not switch AIMock fault profiles
+- does not wait for scheduler events
+
+On a normal run without `--dry-run`, the tool also logs a one-line submit summary
+for each job so you can see exactly what was sent:
+
+```text
+Submitted job_index=0 request_id=job-0-... job_id=<gateway-job-id> planner=extract input_mode=upload source=/path/to/sample.tif s3_uri=s3://marie/extract/...
+```
+
+Example:
+
+```bash
+python tools/stress/gateway_e2e_stresser.py \
+  --config tools/stress/gateway-e2e.config.example.json \
+  --input-dir ~/.marie/generators \
+  --job-count 1 \
+  --job-name gen5_extract \
+  --planner extract \
+  --dry-run \
+  --report /tmp/gateway-e2e-dry-run.html
+```
+
+When `--run-time` is used with `--dry-run`, the tool reports:
+
+- `run_mode: duration`
+- `run_time_seconds`
+- `estimated_job_count`
+- `preview_job_count`
+
+Use `--dry-run-preview-count` to control how many preview submissions are emitted.
+
+#### Live Monitoring
+
+Use `--progress-interval` to control the console update cadence.
+
+Example:
+
+```bash
+python tools/stress/gateway_e2e_stresser.py \
+  --config tools/stress/gateway-e2e.config.example.json \
+  --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \
+  --run-time 30m \
+  --job-name gen5_extract \
+  --planner extract \
+  --submit-rate 10 \
+  --progress-interval 2 \
+  --live-report /tmp/gateway-e2e-live.html
+```
+
+The live report is rewritten on each interval and can be either:
+
+- JSON when the output path ends with `.json`
+- HTML when the output path ends with `.html`
+- an explicitly forced format via `--live-report-format json|html`
+
+The live report focuses on aggregate run health:
+
+- target submit rate vs observed created/completed throughput
+- open jobs, inflight jobs, and pending-submit backlog
+- terminal success rate and submit acceptance rate
+- observed latency summaries for submit, scheduling, queue wait, execution, and end-to-end
+- queue and dispatcher signals from the latest debug sample
+- recent failures only, instead of a general recent-job list
+
+The final HTML report now carries the same SLA context forward and adds:
+
+- `SLA Outcome` with configured jobs, met jobs, missed jobs, overdue-open counts, and compliance
+- `Worst SLA Misses` with the highest-lateness jobs across soft and hard deadlines
+- the existing per-job table for full drill-down
+
+Debug sampling is off by default. To enable it, pass a positive interval:
+
+```bash
+python tools/stress/gateway_e2e_stresser.py \
+  --config tools/stress/gateway-e2e.config.example.json \
+  --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \
+  --run-time 15m \
+  --job-name gen5_extract \
+  --planner extract \
+  --submit-rate 5 \
+  --debug-sample-interval 5 \
+  --live-report /tmp/gateway-e2e-live.html
+```
+
+The stresser polls:
+
+- `http://<gateway-host>:<http-port>/api/debug`
+
+Important:
+
+- debug sampling requires a reachable gateway HTTP port
+- if you are using `--protocol grpc`, you still need `--http-port` set correctly for `/api/debug`
+- `0` means disabled, which is why the report currently shows it as off unless you opt in
+
+Example inspection for JSON:
+
+```bash
+watch -n 2 'jq . /tmp/gateway-e2e-live.json'
+```
+
+Example HTML run:
+
+```bash
+python tools/stress/gateway_e2e_stresser.py \
+  --config tools/stress/gateway-e2e.config.example.json \
+  --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \
+  --run-time 30m \
+  --job-name gen5_extract \
+  --planner extract \
+  --submit-rate 10 \
+  --progress-interval 2 \
+  --live-report /tmp/gateway-e2e-live.html
+```
+
+Open `/tmp/gateway-e2e-live.html` in a browser and it will auto-refresh.
+
+The live report includes fields like:
+
+- `source_path`
+- `input_mode`
+- `s3_uri`
+- `metadata`
+- `request_payload`
+- `transport`
 
 #### Sample `--s3-uri-manifest`
 
-Create a simple text file with one `s3://` URI per line:
+The manifest is just a plain text file with one existing `s3://` URI per line:
 
 ```text
 s3://marie/gen5_extract/sample-001.tif
@@ -167,14 +402,23 @@ s3://marie/gen5_extract/sample-002.tif
 s3://marie/gen5_extract/sample-003.tif
 ```
 
-Example:
+The tool does not create these S3 objects. They must already exist in S3/MinIO.
+The point of the manifest is to let the stress run reuse a prepared asset set
+without re-uploading data on every run.
+
+How it is used:
+
+- if you pass `--s3-uri`, the run reuses that single object for every submitted job
+- if you pass `--s3-uri-manifest`, the tool reads the listed URIs and cycles through them round-robin as submissions increase
+- if the total number of submissions is larger than the number of manifest entries, the tool wraps and reuses the listed URIs
+
+Use `--s3-uri` when one object is enough. Use `--s3-uri-manifest` when you want
+to spread the run across a set of existing staged assets.
+
+Example sample file:
 
 ```bash
-cat >/tmp/stress-s3-uris.txt <<'EOF'
-s3://marie/gen5_extract/sample-001.tif
-s3://marie/gen5_extract/sample-002.tif
-s3://marie/gen5_extract/sample-003.tif
-EOF
+cat tools/stress/gateway-e2e.s3-uri-manifest.example.txt
 ```
 
 #### Common Runs
@@ -184,78 +428,285 @@ Scheduler and LLM stress against pre-staged S3 assets:
 ```bash
 source ~/environments/marie-3.12/bin/activate
 
-python /home/gbugaj/dev/marieai/marie-ai/tools/stress/gateway_e2e_stresser.py \
-  --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \
-  --s3-uri-manifest /tmp/stress-s3-uris.txt \
+python tools/stress/gateway_e2e_stresser.py \
+  --config tools/stress/gateway-e2e.config.example.json \
+  --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \
   --job-count 1000 \
   --job-name gen5_extract \
   --planner extract \
   --submit-rate 4 \
   --fault-profile normal \
   --aimock-admin-url http://localhost:4011 \
-  --report-json /tmp/gateway-e2e-report.json
+  --report /tmp/gateway-e2e-report.html
 ```
+
+#### Benchmark Matrix
+
+Use a rate sweep to find the first sustained submit rate where:
+
+- soft SLA drops below target
+- hard SLA drops below target
+- queue wait starts growing across the run
+- completed throughput stops tracking submit rate
+
+For the 1-second extract mock, start with fixed SLAs and sweep by executor count.
+
+Recommended sweep bands:
+
+| Executor Slots | Submit Rates to Sweep |
+| --- | --- |
+| `1` | `0.6 0.7 0.8 0.9 1.0` |
+| `2` | `1.0 1.2 1.4 1.6 1.8 2.0` |
+
+Run each point for at least `2m` with the same SLA contract:
+
+- `--soft-sla-seconds 15`
+- `--hard-sla-seconds 45`
+- `--min-soft-sla-compliance-pct 95`
+- `--min-hard-sla-compliance-pct 99`
+
+The repo includes a small runner for this sweep:
+
+```bash
+bash tools/stress/run_gateway_benchmark_matrix.sh \
+  --executor-count 1 \
+  --input-dir ~/.marie/generators \
+  --report-dir ~/tmp/gateway-matrix-1x
+```
+
+For two executor slots:
+
+```bash
+bash tools/stress/run_gateway_benchmark_matrix.sh \
+  --executor-count 2 \
+  --input-dir ~/.marie/generators \
+  --report-dir ~/tmp/gateway-matrix-2x
+```
+
+To override the default sweep:
+
+```bash
+bash tools/stress/run_gateway_benchmark_matrix.sh \
+  --executor-count 1 \
+  --input-dir ~/.marie/generators \
+  --rates "0.65 0.75 0.85 0.95" \
+  --report-dir ~/tmp/gateway-matrix-custom
+```
+
+Each run writes:
+
+- one HTML report per rate
+- one live HTML report per rate while that point is running
+- one raw console log per rate
+- a `summary.txt` file listing the rate, pass/fail status, and output paths
+- a stable `current-live.html` symlink pointing at the active rate's live report
+
+While the matrix is running, keep this open in a browser:
+
+```text
+~/tmp/gateway-matrix-1x/current-live.html
+```
+
+Or watch the current point from the shell:
+
+```bash
+ls -l ~/tmp/gateway-matrix-1x/current-live.html
+```
+
+How to read the matrix:
+
+- `PASS`: both SLA thresholds met and the stresser exited `0`
+- `FAIL`: at least one SLA threshold missed and the stresser exited `2`
+- first failing rate: practical SLA ceiling for that executor count
+- last passing rate: safe operating point for that executor count
+
+When the goal is pure scheduler capacity, prefer pre-staged `s3://` assets over local upload mode so S3 transfer variance does not contaminate the ceiling measurement.
+
+The SLA flags support both fixed and incremental deadlines:
+
+- `--soft-sla-seconds` / `--hard-sla-seconds`: base deadlines from submit start
+- `--soft-sla-step-seconds` / `--hard-sla-step-seconds`: increment applied per SLA bucket
+- `--sla-step-every-jobs`: how many jobs share the same bucket before the increment advances
+- `--sla-step-cycle`: optional wraparound after N buckets
+
+#### SLA Modes
+
+Fixed SLA mode:
+
+- every job gets the same `soft_sla` and `hard_sla`
+- use only `--soft-sla-seconds` and `--hard-sla-seconds`
+- best when you want one contractual target for the whole run
+
+Incremental SLA mode:
+
+- jobs are grouped into SLA buckets
+- each bucket shifts the deadline by the configured step size
+- best when you want one run to simulate mixed urgency classes
+
+Bucket formula:
+
+- `bucket_index = floor(job_index / sla_step_every_jobs)`
+- if `--sla-step-cycle` is set, `bucket_index = bucket_index % sla_step_cycle`
+- `soft_offset = soft_sla_seconds + bucket_index * soft_sla_step_seconds`
+- `hard_offset = hard_sla_seconds + bucket_index * hard_sla_step_seconds`
+
+Two useful patterns:
+
+- tighter deadlines over time: `--soft-sla-step-seconds -5 --hard-sla-step-seconds -15`
+- looser deadlines over time: `--soft-sla-step-seconds 5 --hard-sla-step-seconds 15`
 
 Timeout-profile run:
 
 ```bash
-python /home/gbugaj/dev/marieai/marie-ai/tools/stress/gateway_e2e_stresser.py \
-  --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \
-  --s3-uri-manifest /tmp/stress-s3-uris.txt \
+python tools/stress/gateway_e2e_stresser.py \
+  --config tools/stress/gateway-e2e.config.example.json \
+  --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \
   --job-count 250 \
   --job-name gen5_extract \
   --planner extract \
   --submit-rate 2 \
   --fault-profile timeout \
   --aimock-admin-url http://localhost:4011 \
-  --report-json /tmp/gateway-timeout-report.json
+  --report /tmp/gateway-timeout-report.html
 ```
+
+SLA verification run:
+
+```bash
+python tools/stress/gateway_e2e_stresser.py \
+  --config tools/stress/gateway-e2e.config.example.json \
+  --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \
+  --job-count 200 \
+  --job-name gen5_extract \
+  --planner extract \
+  --submit-rate 4 \
+  --soft-sla-seconds 20 \
+  --hard-sla-seconds 60 \
+  --min-soft-sla-compliance-pct 95 \
+  --min-hard-sla-compliance-pct 99 \
+  --report /tmp/gateway-sla-report.html
+```
+
+If a configured SLA verification threshold is missed, the tool exits with status code `2`.
+
+Incremental deadline run:
+
+```bash
+python tools/stress/gateway_e2e_stresser.py \
+  --config tools/stress/gateway-e2e.config.example.json \
+  --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \
+  --job-count 300 \
+  --job-name gen5_extract \
+  --planner extract \
+  --submit-rate 5 \
+  --soft-sla-seconds 15 \
+  --hard-sla-seconds 45 \
+  --soft-sla-step-seconds 5 \
+  --hard-sla-step-seconds 15 \
+  --sla-step-every-jobs 25 \
+  --sla-step-cycle 4 \
+  --report /tmp/gateway-sla-stepped-report.html
+```
+
+That example yields four repeating SLA classes:
+
+- jobs `0-24`: soft `15s`, hard `45s`
+- jobs `25-49`: soft `20s`, hard `60s`
+- jobs `50-74`: soft `25s`, hard `75s`
+- jobs `75-99`: soft `30s`, hard `90s`
+
+Then the pattern wraps and repeats for the rest of the run.
+
+Decrementing deadline run:
+
+```bash
+python tools/stress/gateway_e2e_stresser.py \
+  --config tools/stress/gateway-e2e.config.example.json \
+  --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \
+  --job-count 200 \
+  --job-name gen5_extract \
+  --planner extract \
+  --submit-rate 4 \
+  --soft-sla-seconds 40 \
+  --hard-sla-seconds 120 \
+  --soft-sla-step-seconds -5 \
+  --hard-sla-step-seconds -15 \
+  --sla-step-every-jobs 20 \
+  --sla-step-cycle 5 \
+  --report /tmp/gateway-sla-tightening-report.html
+```
+
+That pattern starts relaxed and gets tighter every 20 jobs:
+
+- jobs `0-19`: soft `40s`, hard `120s`
+- jobs `20-39`: soft `35s`, hard `105s`
+- jobs `40-59`: soft `30s`, hard `90s`
+- jobs `60-79`: soft `25s`, hard `75s`
+- jobs `80-99`: soft `20s`, hard `60s`
+
+Then it wraps and repeats.
 
 Randomized monkey/chaos run:
 
 ```bash
-python /home/gbugaj/dev/marieai/marie-ai/tools/stress/gateway_e2e_stresser.py \
-  --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \
-  --s3-uri-manifest /tmp/stress-s3-uris.txt \
+python tools/stress/gateway_e2e_stresser.py \
+  --config tools/stress/gateway-e2e.config.example.json \
+  --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \
   --job-count 500 \
   --job-name gen5_extract \
   --planner extract \
   --submit-rate 3 \
   --fault-profile chaos \
   --aimock-admin-url http://localhost:4011 \
-  --report-json /tmp/gateway-chaos-report.json
+  --report /tmp/gateway-chaos-report.html
 ```
 
 True full-pipeline run with local upload:
 
 ```bash
-python /home/gbugaj/dev/marieai/marie-ai/tools/stress/gateway_e2e_stresser.py \
-  --config /home/gbugaj/dev/workflow/grapnel-g5/config.dev.json \
+python tools/stress/gateway_e2e_stresser.py \
+  --config tools/stress/gateway-e2e.config.example.json \
   --input-dir /mnt/data/marie-ai/generators \
   --job-count 100 \
   --job-name gen5_extract \
   --planner extract \
   --submit-rate 2 \
-  --report-json /tmp/gateway-upload-report.json
+  --report /tmp/gateway-upload-report.html
 ```
 
 #### Important options
 
 | Option | Description |
 |--------|-------------|
-| `--config` | Grapnel-style JSON config with `api_base_url`, `api_key`, `storage`, and `queue` |
+| `--config` | Stress config JSON with `api_base_url`, `api_key`, `storage`, and `queue` |
 | `--input-dir` / `--input-glob` / `--input-manifest` | Local source file discovery for upload mode |
 | `--s3-uri` / `--s3-uri-manifest` | Pre-staged S3 objects for submit-only mode |
-| `--job-count` | Number of jobs to submit |
+| `--job-count` | Number of jobs to submit in fixed-count mode |
+| `--run-time` | Duration-based mode, for example `30s`, `2m`, or `1h` |
+| `--progress-interval` | Console progress and live report refresh cadence in seconds |
+| `--live-report` | Path to a live status report rewritten during the run |
+| `--live-report-format` | Override live report format; default `auto` infers from `.json` or `.html` |
 | `--job-name` | Gateway submit name / scheduler queue name |
 | `--planner` | Planner to place in metadata |
+| `--submit-rate` | Target submit rate in jobs per second |
+| `--dry-run-preview-count` | Number of sample submissions to show when `--dry-run` is combined with `--run-time` |
 | `--fault-profile` | Run label and AIMock control target: `normal`, `timeout`, `error`, `chaos` |
 | `--aimock-admin-url` | AIMock admin endpoint used to switch the active fault profile before the run |
+| `--soft-sla-seconds` | Relative soft SLA target from submit start |
+| `--hard-sla-seconds` | Relative hard SLA target from submit start |
+| `--soft-sla-step-seconds` | Soft SLA increment applied per SLA bucket |
+| `--hard-sla-step-seconds` | Hard SLA increment applied per SLA bucket |
+| `--sla-step-every-jobs` | Number of jobs per SLA bucket before incrementing |
+| `--sla-step-cycle` | Optional number of buckets before the incremental pattern wraps |
+| `--min-soft-sla-compliance-pct` | Optional soft SLA verification threshold |
+| `--min-hard-sla-compliance-pct` | Optional hard SLA verification threshold |
 | `--submit-concurrency` | Concurrent upload+submit workers |
 | `--submit-rate` | Job submit rate in jobs/sec |
 | `--terminal-timeout` | Max wait for terminal scheduler events |
 | `--request-template` | JSON file containing metadata or a full `invoke_action` template |
-| `--report-json` | Write structured report for later analysis |
+| `--report` | Write the final report as JSON or HTML |
+| `--report-format` | Override final report format; default `auto` infers from `.json` or `.html` |
+| `--dry-run` | Print the fully resolved submit plan and payload(s) as JSON without uploading or submitting |
 
 #### Output
 
@@ -266,6 +717,29 @@ The report breaks timing into:
 - **queue wait**: submit response to `*.started` (or `*.scheduled` when no start event exists)
 - **execution latency**: `*.started` to terminal event
 - **end-to-end latency**: submit start to terminal event
+
+When SLA options are enabled the report also includes:
+
+- **soft SLA compliance**: how many submitted jobs completed within `soft_sla`
+- **hard SLA compliance**: how many submitted jobs completed within `hard_sla`
+- **SLA lateness**: how late missed jobs were beyond the configured deadline
+- **verification result**: pass/fail against the configured minimum compliance thresholds
+- **SLA bucket index**: which incremental deadline bucket the job belonged to
+- **resolved SLA offsets**: the actual `soft_sla_offset_seconds` and `hard_sla_offset_seconds` used for that job
+
+The JSON report includes per-job SLA fields:
+
+- `sla_bucket_index`
+- `soft_sla_offset_seconds`
+- `hard_sla_offset_seconds`
+- `soft_sla`
+- `hard_sla`
+- `soft_sla_status`
+- `hard_sla_status`
+- `soft_sla_met`
+- `hard_sla_met`
+- `soft_sla_lateness_ms`
+- `hard_sla_lateness_ms`
 
 This is the primary tool to use when intentionally restarting LiteLLM,
 annotators, or other downstream services to see how scheduler outcomes change.
@@ -280,7 +754,6 @@ For scheduler and LLM fault testing, prefer:
 #### Stopping The Mock Stack
 
 ```bash
-cd /home/gbugaj/dev/marieai/marie-ai
 docker compose -f ./Dockerfiles/docker-compose.mock-llm-programmatic.yml down
 docker compose -f ./Dockerfiles/docker-compose.litellm.yml down
 ```

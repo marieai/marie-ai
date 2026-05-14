@@ -11,15 +11,37 @@ from marie.scheduler.state import WorkState
 
 
 class FakeRepository:
-    def __init__(self, priorities, hydratable_dags, hydratable_jobs=None):
+    def __init__(
+        self,
+        priorities,
+        hydratable_dags,
+        hydratable_jobs=None,
+        mark_dag_active_result=True,
+    ):
         self._priorities = priorities
         self._hydratable_dags = hydratable_dags
         self._hydratable_jobs = hydratable_jobs or {}
+        self._mark_dag_active_result = mark_dag_active_result
+        self.marked_active_dags = []
         self._closed = []
         self._rows = []
 
     async def get_job_priorities(self, job_ids):
         return {jid: self._priorities[jid] for jid in job_ids if jid in self._priorities}
+
+    async def mark_dag_as_active(self, dag_id):
+        self.marked_active_dags.append(dag_id)
+        return self._mark_dag_active_result
+
+    async def load_dag_and_jobs(self, dag_id):
+        for candidate_dag_id, serialized_dag in self._hydratable_dags:
+            if str(candidate_dag_id) == str(dag_id):
+                rows = [
+                    (dag_id, job)
+                    for job in self._hydratable_jobs.get(str(dag_id), [])
+                ]
+                return serialized_dag, rows
+        return None, []
 
     def _get_connection(self):
         return self
@@ -73,6 +95,8 @@ def make_wi(
     deps=None,
     state=WorkState.CREATED,
     level: int = 0,
+    soft_sla=None,
+    hard_sla=None,
 ):
     now = datetime.now(timezone.utc)
     wi = WorkInfo(
@@ -89,6 +113,8 @@ def make_wi(
         expire_in_seconds=3600,
         keep_until=now + timedelta(days=1),
         job_level=level,
+        soft_sla=soft_sla,
+        hard_sla=hard_sla,
     )
     wi.dependencies = list(deps or [])
     return wi
@@ -107,6 +133,8 @@ def serialize_wi(wi: WorkInfo) -> dict:
         "retry_backoff": wi.retry_backoff,
         "keep_until": wi.keep_until,
         "job_level": wi.job_level,
+        "soft_sla": wi.soft_sla,
+        "hard_sla": wi.hard_sla,
         "dependencies": list(wi.dependencies or []),
     }
 
@@ -123,6 +151,61 @@ def make_service(slots, *, max_active_dags=32, repo=None):
         slot_snapshot_provider=lambda: slots,
     )
     return service, frontier, active_dags
+
+
+@pytest.mark.asyncio
+async def test_hydrate_single_dag_preserves_sla_fields():
+    now = datetime.now(timezone.utc)
+    soft_sla = now + timedelta(seconds=15)
+    hard_sla = now + timedelta(seconds=45)
+    dag_id = "dag-sla-single"
+    job = make_wi(
+        "job-sla-single",
+        dag_id,
+        "annotator_llm://default",
+        soft_sla=soft_sla,
+        hard_sla=hard_sla,
+    )
+    repo = FakeRepository(
+        priorities={},
+        hydratable_dags=[(dag_id, {"nodes": []})],
+        hydratable_jobs={dag_id: [serialize_wi(job)]},
+    )
+    service, frontier, active_dags = make_service({"annotator_llm": 1}, repo=repo)
+
+    hydrated = await service.hydrate_single_dag(dag_id)
+
+    assert hydrated is True
+    assert dag_id in active_dags
+    assert frontier.jobs_by_id["job-sla-single"].soft_sla == soft_sla
+    assert frontier.jobs_by_id["job-sla-single"].hard_sla == hard_sla
+
+
+@pytest.mark.asyncio
+async def test_hydrate_bulk_preserves_sla_fields():
+    now = datetime.now(timezone.utc)
+    soft_sla = now + timedelta(seconds=15)
+    hard_sla = now + timedelta(seconds=45)
+    dag_id = "dag-sla-bulk"
+    job = make_wi(
+        "job-sla-bulk",
+        dag_id,
+        "annotator_llm://default",
+        soft_sla=soft_sla,
+        hard_sla=hard_sla,
+    )
+    repo = FakeRepository(
+        priorities={},
+        hydratable_dags=[(dag_id, {"nodes": []})],
+        hydratable_jobs={dag_id: [serialize_wi(job)]},
+    )
+    service, frontier, active_dags = make_service({"annotator_llm": 1}, repo=repo)
+
+    await service.hydrate_bulk(dag_batch_size=10, itersize=10, log_every_seconds=60.0)
+
+    assert dag_id in active_dags
+    assert frontier.jobs_by_id["job-sla-bulk"].soft_sla == soft_sla
+    assert frontier.jobs_by_id["job-sla-bulk"].hard_sla == hard_sla
 
 
 @pytest.mark.asyncio
@@ -235,8 +318,9 @@ async def test_handle_state_change_treats_active_as_live_state():
 
 @pytest.mark.asyncio
 async def test_hydrated_dag_with_only_unavailable_mock_ready_work_is_not_admitted():
+    repo = FakeRepository(priorities={}, hydratable_dags=[])
     service, frontier, active_dags = make_service(
-        {"annotator_llm": 1, "annotator_parser": 1}
+        {"annotator_llm": 1, "annotator_parser": 1}, repo=repo
     )
 
     dag_id = "dag-mock"
@@ -251,14 +335,16 @@ async def test_hydrated_dag_with_only_unavailable_mock_ready_work_is_not_admitte
 
     assert admitted is False
     assert reason == "executor_capacity"
+    assert repo.marked_active_dags == []
     assert dag_id not in active_dags
     assert dag_id not in frontier.dag_nodes
 
 
 @pytest.mark.asyncio
 async def test_hydrated_dag_with_ready_annotator_llm_work_is_admitted():
+    repo = FakeRepository(priorities={}, hydratable_dags=[])
     service, frontier, active_dags = make_service(
-        {"annotator_llm": 1, "annotator_parser": 1}
+        {"annotator_llm": 1, "annotator_parser": 1}, repo=repo
     )
 
     dag_id = "dag-llm"
@@ -273,13 +359,17 @@ async def test_hydrated_dag_with_ready_annotator_llm_work_is_admitted():
 
     assert admitted is True
     assert reason == "admitted"
+    assert repo.marked_active_dags == [dag_id]
     assert dag_id in active_dags
     assert dag_id in frontier.dag_nodes
 
 
 @pytest.mark.asyncio
 async def test_hydrated_dag_with_control_flow_path_to_runnable_work_is_admitted():
-    service, _, active_dags = make_service({"annotator_llm": 1, "annotator_parser": 0})
+    repo = FakeRepository(priorities={}, hydratable_dags=[])
+    service, _, active_dags = make_service(
+        {"annotator_llm": 1, "annotator_parser": 0}, repo=repo
+    )
 
     dag_id = "dag-control"
     nodes = [
@@ -293,12 +383,16 @@ async def test_hydrated_dag_with_control_flow_path_to_runnable_work_is_admitted(
 
     assert admitted is True
     assert reason == "admitted"
+    assert repo.marked_active_dags == [dag_id]
     assert dag_id in active_dags
 
 
 @pytest.mark.asyncio
 async def test_hydrated_dag_with_only_control_flow_work_is_admitted():
-    service, _, active_dags = make_service({"annotator_llm": 0, "annotator_parser": 0})
+    repo = FakeRepository(priorities={}, hydratable_dags=[])
+    service, _, active_dags = make_service(
+        {"annotator_llm": 0, "annotator_parser": 0}, repo=repo
+    )
 
     dag_id = "dag-noop"
     nodes = [
@@ -312,7 +406,33 @@ async def test_hydrated_dag_with_only_control_flow_work_is_admitted():
 
     assert admitted is True
     assert reason == "admitted"
+    assert repo.marked_active_dags == [dag_id]
     assert dag_id in active_dags
+
+
+@pytest.mark.asyncio
+async def test_hydrated_dag_is_not_admitted_when_database_activation_fails():
+    repo = FakeRepository(
+        priorities={},
+        hydratable_dags=[],
+        mark_dag_active_result=False,
+    )
+    service, frontier, active_dags = make_service(
+        {"annotator_llm": 1, "annotator_parser": 1}, repo=repo
+    )
+
+    dag_id = "dag-db-fail"
+    nodes = [make_wi("job-1", dag_id, "annotator_llm://default", deps=[])]
+
+    admitted, reason = await service._admit_hydrated_dag(
+        dag_id, QueryPlan(nodes=[]), nodes, source="hydrate_bulk"
+    )
+
+    assert admitted is False
+    assert reason == "db_activation_failed"
+    assert repo.marked_active_dags == [dag_id]
+    assert dag_id not in active_dags
+    assert dag_id not in frontier.dag_nodes
 
 
 @pytest.mark.asyncio

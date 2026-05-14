@@ -10,13 +10,25 @@ Single `docker-compose.allinone.yml` deployment bundling the entire Marie-AI inf
 - **etcd** -- Distributed coordination and configuration
 - **ClickHouse** -- Column-oriented analytics database
 - **Gitea** -- Self-hosted Git service (used by marie-studio)
-- **LiteLLM** -- LLM proxy server for AI model routing
+- **LiteLLM** -- OpenAI-compatible provider gateway for AI model routing, fallback, budgets, and rate limits
 - **HyperDX** -- Observability UI (logs, traces, metrics)
 - **Gateway** -- Marie-AI HTTP/gRPC gateway
 - **Extract executors** -- GPU-enabled document extraction servers
 - **Log Collector** -- OpenTelemetry-based Docker container log collection
 
 All services are orchestrated with declarative `depends_on` health checks, replacing the imperative `bootstrap-marie.sh` script.
+
+## LLM Dispatch Boundary
+
+Marie Gateway can run the LLM Dispatch Runtime for executor-originated LLM calls. Dispatch uses Valkey for live request/reply transport and calls one configured OpenAI-compatible backend URL.
+
+Use LiteLLM, OpenRouter, vLLM, or another OpenAI-compatible backend for provider-level policy:
+
+- provider fallback chains
+- model/provider routing by tenant, cost, latency, region, or capacity
+- provider budgets and rate limits
+
+Marie Dispatch owns executor ingress, producer liveness, in-flight state, dispatch retry/timeout behavior, circuit-breaker state, and backpressure visibility.
 
 ## Suitable For
 

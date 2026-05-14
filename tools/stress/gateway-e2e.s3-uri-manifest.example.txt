@@ -1,0 +1,3 @@
+s3://marie/gen5_extract/sample-001.tif
+s3://marie/gen5_extract/sample-002.tif
+s3://marie/gen5_extract/sample-003.tif

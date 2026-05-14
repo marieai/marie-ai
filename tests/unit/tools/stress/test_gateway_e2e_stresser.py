@@ -1,20 +1,24 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
 
+from tools.stress.gateway_e2e_reporting import resolve_report_format
 from tools.stress.gateway_e2e_stresser import (
     GatewayE2EStresser,
     InputAsset,
     JobRun,
+    SubmitResult,
     _build_debug_snapshot,
     _build_input_assets,
     _coerce_gateway_debug_payload,
     _extract_failure_error,
     _extract_ref_id_from_event,
     _extract_template,
+    _parse_duration_seconds,
     _resolve_inputs,
     _resolve_s3_inputs,
 )
@@ -128,7 +132,14 @@ def test_resolve_s3_inputs_supports_direct_uri_and_manifest(tmp_path: Path) -> N
     ) == [
         "s3://marie/gen5_extract/a.tif",
         "s3://marie/gen5_extract/b.tif",
-    ]
+    ]    
+
+
+def test_parse_duration_seconds_supports_suffixes() -> None:
+    assert _parse_duration_seconds("30s") == 30.0
+    assert _parse_duration_seconds("2m") == 120.0
+    assert _parse_duration_seconds("1h") == 3600.0
+    assert _parse_duration_seconds("1.5m") == 90.0
 
 
 def test_build_input_assets_supports_existing_s3_mode(tmp_path: Path) -> None:
@@ -160,6 +171,375 @@ def test_build_input_assets_supports_existing_s3_mode(tmp_path: Path) -> None:
     assert local_assets[0].existing_s3_uri is None
 
 
+def test_build_dry_run_plan_includes_resolved_payload_for_local_input(tmp_path: Path) -> None:
+    asset_path = tmp_path / "sample.tif"
+    asset_path.write_text("x")
+    companion_meta = tmp_path / "sample.tif.meta.json"
+    companion_meta.write_text(json.dumps({"doc_id": "sample"}))
+
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key="system:gateway",
+        queue_name="extract",
+        planner="extract",
+        input_assets=[
+            InputAsset(
+                source_name=asset_path.name,
+                source_path=str(asset_path),
+                local_path=asset_path.resolve(),
+            )
+        ],
+        job_count=1,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=1.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config={"S3_STORAGE_BUCKET_NAME": "stress-bucket"},
+        queue_config=None,
+        metadata_template=None,
+        template_job_name=None,
+        fault_profile="normal",
+        upload_companion_meta=True,
+    )
+
+    plan = stresser.build_dry_run_plan()
+
+    assert plan["dry_run"] is True
+    assert plan["job_count"] == 1
+    assert len(plan["submissions"]) == 1
+    submission = plan["submissions"][0]
+    assert submission["input_mode"] == "upload"
+    assert submission["upload_planned"] is True
+    assert submission["upload_companion_meta_planned"] is True
+    assert submission["s3_uri"].startswith("s3://stress-bucket/extract/")
+    assert submission["metadata"]["uri"] == submission["s3_uri"]
+    assert submission["request_payload"]["parameters"]["invoke_action"]["metadata"]["uri"] == submission["s3_uri"]
+    assert submission["transport"]["url"] == "http://localhost:51000/api/v1/invoke"
+
+
+def test_build_dry_run_plan_previews_duration_mode(tmp_path: Path) -> None:
+    asset_path = tmp_path / "sample.tif"
+    asset_path.write_text("x")
+
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key="system:gateway",
+        queue_name="extract",
+        planner="extract",
+        input_assets=[
+            InputAsset(
+                source_name=asset_path.name,
+                source_path=str(asset_path),
+                local_path=asset_path.resolve(),
+            )
+        ],
+        job_count=None,
+        run_time_seconds=60.0,
+        submit_concurrency=1,
+        submit_rate=10.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config={"S3_STORAGE_BUCKET_NAME": "stress-bucket"},
+        queue_config=None,
+        metadata_template=None,
+        template_job_name=None,
+        fault_profile="normal",
+        upload_companion_meta=False,
+        dry_run_preview_count=2,
+    )
+
+    plan = stresser.build_dry_run_plan()
+
+    assert plan["run_mode"] == "duration"
+    assert plan["job_count"] is None
+    assert plan["run_time_seconds"] == 60.0
+    assert plan["estimated_job_count"] == 600
+    assert plan["preview_job_count"] == 2
+    assert len(plan["submissions"]) == 2
+
+
+def test_live_status_payload_and_report_file(tmp_path: Path) -> None:
+    asset_path = tmp_path / "sample.tif"
+    asset_path.write_text("x")
+    live_report_path = tmp_path / "live-status.json"
+
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key="system:gateway",
+        queue_name="extract",
+        planner="extract",
+        input_assets=[
+            InputAsset(
+                source_name=asset_path.name,
+                source_path=str(asset_path),
+                local_path=asset_path.resolve(),
+            )
+        ],
+        job_count=5,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=2.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config={"S3_STORAGE_BUCKET_NAME": "stress-bucket"},
+        queue_config=None,
+        metadata_template=None,
+        template_job_name=None,
+        fault_profile="normal",
+        soft_sla_seconds=15.0,
+        hard_sla_seconds=45.0,
+        min_soft_sla_compliance_pct=95.0,
+        min_hard_sla_compliance_pct=99.0,
+        upload_companion_meta=False,
+        progress_interval=2.5,
+        live_report_path=str(live_report_path),
+        live_report_format="json",
+    )
+
+    stresser.metrics.start_time = 100.0
+    run = stresser._build_run(stresser.input_assets[0], 0)
+    run.soft_sla_at = 116.0
+    run.hard_sla_at = 146.0
+    run.soft_sla_offset_seconds = 15.0
+    run.hard_sla_offset_seconds = 45.0
+    run.job_id = "job-a"
+    run.submit_started_at = 101.0
+    run.submit_finished_at = 102.0
+    run.completed_at = 104.0
+    stresser._register_run(run)
+
+    payload = stresser._build_live_status_payload("running")
+    stresser._write_live_report_payload(payload)
+    written = json.loads(live_report_path.read_text())
+
+    assert payload["status"] == "running"
+    assert payload["counts"]["created_jobs"] == 1
+    assert payload["counts"]["submitted_jobs"] == 1
+    assert payload["counts"]["completed_jobs"] == 1
+    assert payload["progress_interval_seconds"] == 2.5
+    assert payload["live_report_format"] == "json"
+    assert payload["debug_sampling"]["enabled"] is False
+    assert payload["debug_sampling"]["interval_seconds"] == 0.0
+    assert payload["run_health"]["open_jobs"] == 0
+    assert payload["run_health"]["inflight_jobs"] == 0
+    assert payload["throughput_jobs_per_second"]["completed"] is not None
+    assert payload["latency_stats_ms"]["end_to_end"] is not None
+    assert payload["sla"]["soft"]["configured_seconds"] == 15.0
+    assert payload["sla"]["soft"]["configured_jobs"] == 1
+    assert payload["sla"]["soft"]["met_jobs"] == 1
+    assert payload["sla"]["soft"]["terminal_compliance_pct"] == 100.0
+    assert payload["sla"]["hard"]["configured_seconds"] == 45.0
+    assert payload["recent_jobs"][0]["job_id"] == "job-a"
+    assert written["counts"]["completed_jobs"] == 1
+    assert written["sla"]["soft"]["met_jobs"] == 1
+    assert written["recent_jobs"][0]["request_id"] == run.request_id
+
+
+def test_live_report_supports_html_output(tmp_path: Path) -> None:
+    asset_path = tmp_path / "sample.tif"
+    asset_path.write_text("x")
+    live_report_path = tmp_path / "live-status.html"
+
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key="system:gateway",
+        queue_name="extract",
+        planner="extract",
+        input_assets=[
+            InputAsset(
+                source_name=asset_path.name,
+                source_path=str(asset_path),
+                local_path=asset_path.resolve(),
+            )
+        ],
+        job_count=5,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=2.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config={"S3_STORAGE_BUCKET_NAME": "stress-bucket"},
+        queue_config=None,
+        metadata_template=None,
+        template_job_name=None,
+        fault_profile="normal",
+        soft_sla_seconds=15.0,
+        hard_sla_seconds=45.0,
+        upload_companion_meta=False,
+        progress_interval=2.5,
+        live_report_path=str(live_report_path),
+        live_report_format="html",
+    )
+
+    stresser.metrics.start_time = 100.0
+    run = stresser._build_run(stresser.input_assets[0], 0)
+    run.soft_sla_at = 116.0
+    run.hard_sla_at = 146.0
+    run.soft_sla_offset_seconds = 15.0
+    run.hard_sla_offset_seconds = 45.0
+    run.job_id = "job-a"
+    run.submit_started_at = 101.0
+    run.submit_finished_at = 102.0
+    run.completed_at = 104.0
+    stresser._register_run(run)
+
+    payload = stresser._build_live_status_payload("running")
+    stresser._write_live_report_payload(payload)
+    written = live_report_path.read_text()
+
+    assert "Gateway E2E Live Report" in written
+    assert "Auto-refreshing aggregate view of throughput, backlog, and latency." in written
+    assert 'http-equiv="refresh"' in written
+    assert "Run Health" in written
+    assert "Throughput and Flow" in written
+    assert "Live SLA Status" in written
+    assert "Observed Latency" in written
+    assert "Debug sampling disabled." in written
+    assert "No recent failures." in written
+
+
+def test_write_report_supports_html_output(tmp_path: Path) -> None:
+    asset_path = tmp_path / "sample.tif"
+    asset_path.write_text("x")
+    report_path = tmp_path / "final-report.html"
+
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key="system:gateway",
+        queue_name="extract",
+        planner="extract",
+        input_assets=[
+            InputAsset(
+                source_name=asset_path.name,
+                source_path=str(asset_path),
+                local_path=asset_path.resolve(),
+            )
+        ],
+        job_count=1,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=1.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config={"S3_STORAGE_BUCKET_NAME": "stress-bucket"},
+        queue_config=None,
+        metadata_template=None,
+        template_job_name=None,
+        fault_profile="normal",
+        soft_sla_seconds=15.0,
+        hard_sla_seconds=45.0,
+        upload_companion_meta=False,
+    )
+
+    stresser.metrics.start_time = 100.0
+    stresser.metrics.end_time = 104.0
+    run = stresser._build_run(stresser.input_assets[0], 0)
+    run.job_id = "job-a"
+    run.submit_started_at = 100.5
+    run.submit_finished_at = 101.0
+    run.scheduled_at = 101.2
+    run.started_at = 101.5
+    run.completed_at = 104.0
+    run.soft_sla_at = 115.0
+    run.hard_sla_at = 145.0
+    stresser._register_run(run)
+    stresser._finalize_metrics()
+    payload = stresser.build_report_payload()
+
+    stresser.write_report(str(report_path), "html")
+    written = report_path.read_text()
+
+    assert payload["sla"]["soft"]["met_jobs"] == 1
+    assert payload["sla"]["hard"]["met_jobs"] == 1
+    assert "Gateway E2E Stress Report" in written
+    assert "Latency Breakdown" in written
+    assert "SLA Outcome" in written
+    assert "Worst SLA Misses" in written
+    assert "job-a" in written
+    assert "Recent Jobs" in written
+
+
+def test_resolve_report_format_defaults_from_extension() -> None:
+    assert resolve_report_format("/tmp/report.html", "auto") == "html"
+    assert resolve_report_format("/tmp/report.json", "auto") == "json"
+    assert resolve_report_format("/tmp/report", "auto") == "json"
+
+
+def test_log_submit_summary_includes_source_and_s3_uri(caplog: pytest.LogCaptureFixture) -> None:
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key="system:gateway",
+        queue_name="extract",
+        planner="extract",
+        input_assets=[],
+        job_count=1,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=1.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config={"S3_STORAGE_BUCKET_NAME": "stress-bucket"},
+        queue_config=None,
+        metadata_template=None,
+        template_job_name=None,
+        fault_profile="normal",
+        upload_companion_meta=False,
+    )
+    run = JobRun(
+        request_id="job-1",
+        job_index=0,
+        source_path="/tmp/sample.tif",
+        source_name="sample.tif",
+        input_mode="upload",
+        ref_id="job-1-sample.tif",
+        ref_type="extract",
+        s3_uri="s3://stress-bucket/extract/job-1-sample/job-1-sample.tif",
+        planner="extract",
+        job_name="extract",
+        fault_profile="normal",
+    )
+
+    with caplog.at_level(logging.INFO, logger="GatewayE2EStresser"):
+        stresser._log_submit_summary(
+            run,
+            SubmitResult(
+                request_id=run.request_id,
+                success=True,
+                latency_ms=12.5,
+                job_id="gateway-job-1",
+            ),
+        )
+
+    assert "Submitted job_index=0 request_id=job-1 job_id=gateway-job-1" in caplog.text
+    assert "source=/tmp/sample.tif" in caplog.text
+    assert "s3_uri=s3://stress-bucket/extract/job-1-sample/job-1-sample.tif" in caplog.text
+
+
 def test_job_run_latency_properties() -> None:
     run = JobRun(
         request_id="job-1",
@@ -185,6 +565,160 @@ def test_job_run_latency_properties() -> None:
     assert run.execution_ms == 3500.0
     assert run.end_to_end_ms == 9000.0
     assert run.terminal_status == "completed"
+
+
+def test_job_run_clamps_negative_scheduling_and_queue_wait() -> None:
+    run = JobRun(
+        request_id="job-1",
+        job_index=0,
+        source_path="/tmp/sample.tif",
+        source_name="sample.tif",
+        input_mode="existing_s3",
+        ref_id="job-1-sample.tif",
+        ref_type="gen5_extract",
+        s3_uri="s3://marie/gen5_extract/job-1-sample/job-1-sample.tif",
+        planner="extract",
+        job_name="gen5_extract",
+        fault_profile="normal",
+    )
+    run.submit_finished_at = 12.750
+    run.scheduled_at = 12.000
+    run.started_at = 12.000
+
+    assert run.scheduling_ms == 0.0
+    assert run.queue_wait_ms == 0.0
+
+
+def test_job_run_sla_properties_mark_deadline_miss() -> None:
+    run = JobRun(
+        request_id="job-2",
+        job_index=1,
+        source_path="/tmp/sample.tif",
+        source_name="sample.tif",
+        input_mode="existing_s3",
+        ref_id="job-2-sample.tif",
+        ref_type="gen5_extract",
+        s3_uri="s3://marie/gen5_extract/job-2-sample/job-2-sample.tif",
+        planner="extract",
+        job_name="gen5_extract",
+        fault_profile="normal",
+        soft_sla_at=14.0,
+        hard_sla_at=20.0,
+    )
+    run.submit_started_at = 10.0
+    run.submit_finished_at = 12.0
+    run.completed_at = 19.0
+
+    assert run.soft_sla_status == "deadline_missed"
+    assert run.soft_sla_met is False
+    assert run.soft_sla_lateness_ms == 5000.0
+    assert run.hard_sla_status == "met"
+    assert run.hard_sla_met is True
+    assert run.hard_sla_lateness_ms == 0.0
+
+
+def test_build_metadata_applies_relative_sla_offsets() -> None:
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key="system:gateway",
+        queue_name="extract",
+        planner="extract",
+        input_assets=[
+            InputAsset(
+                source_name="sample.tif",
+                source_path="s3://marie/sample.tif",
+                existing_s3_uri="s3://marie/sample.tif",
+            )
+        ],
+        job_count=1,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=1.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config=None,
+        queue_config=None,
+        metadata_template={"policy": "strict"},
+        template_job_name=None,
+        fault_profile="normal",
+        soft_sla_seconds=30.0,
+        hard_sla_seconds=120.0,
+    )
+    run = stresser._build_run(stresser.input_assets[0], 0)
+
+    metadata = stresser._build_metadata(run, sla_anchor_at=1000.0)
+
+    assert metadata["soft_sla"] == "1970-01-01T00:17:10+00:00"
+    assert metadata["hard_sla"] == "1970-01-01T00:18:40+00:00"
+    assert run.soft_sla_at == 1030.0
+    assert run.hard_sla_at == 1120.0
+    assert metadata["policy"] == "strict"
+
+
+def test_build_metadata_applies_incremental_sla_offsets_with_cycle() -> None:
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key="system:gateway",
+        queue_name="extract",
+        planner="extract",
+        input_assets=[
+            InputAsset(
+                source_name="sample.tif",
+                source_path="s3://marie/sample.tif",
+                existing_s3_uri="s3://marie/sample.tif",
+            )
+        ],
+        job_count=1,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=1.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config=None,
+        queue_config=None,
+        metadata_template=None,
+        template_job_name=None,
+        fault_profile="normal",
+        soft_sla_seconds=20.0,
+        hard_sla_seconds=60.0,
+        soft_sla_step_seconds=5.0,
+        hard_sla_step_seconds=10.0,
+        sla_step_every_jobs=2,
+        sla_step_cycle=3,
+    )
+    run_bucket_0 = stresser._build_run(stresser.input_assets[0], 0)
+    run_bucket_2 = stresser._build_run(stresser.input_assets[0], 4)
+    run_wrapped = stresser._build_run(stresser.input_assets[0], 6)
+
+    metadata_0 = stresser._build_metadata(run_bucket_0, sla_anchor_at=1000.0)
+    metadata_2 = stresser._build_metadata(run_bucket_2, sla_anchor_at=1000.0)
+    metadata_wrapped = stresser._build_metadata(run_wrapped, sla_anchor_at=1000.0)
+
+    assert run_bucket_0.sla_bucket_index == 0
+    assert run_bucket_0.soft_sla_offset_seconds == 20.0
+    assert run_bucket_0.hard_sla_offset_seconds == 60.0
+    assert metadata_0["soft_sla"] == "1970-01-01T00:17:00+00:00"
+    assert metadata_0["hard_sla"] == "1970-01-01T00:17:40+00:00"
+
+    assert run_bucket_2.sla_bucket_index == 2
+    assert run_bucket_2.soft_sla_offset_seconds == 30.0
+    assert run_bucket_2.hard_sla_offset_seconds == 80.0
+    assert metadata_2["soft_sla"] == "1970-01-01T00:17:10+00:00"
+    assert metadata_2["hard_sla"] == "1970-01-01T00:18:00+00:00"
+
+    assert run_wrapped.sla_bucket_index == 0
+    assert run_wrapped.soft_sla_offset_seconds == 20.0
+    assert run_wrapped.hard_sla_offset_seconds == 60.0
+    assert metadata_wrapped["soft_sla"] == "1970-01-01T00:17:00+00:00"
+    assert metadata_wrapped["hard_sla"] == "1970-01-01T00:17:40+00:00"
 
 
 def test_build_debug_snapshot_extracts_scheduler_fields() -> None:
@@ -254,6 +788,7 @@ async def test_capture_debug_snapshot_records_gateway_debug_state() -> None:
             )
         ],
         job_count=1,
+        run_time_seconds=None,
         submit_concurrency=1,
         submit_rate=1.0,
         timeout=10.0,
@@ -322,6 +857,7 @@ def test_write_json_report_includes_debug_samples(tmp_path: Path) -> None:
             )
         ],
         job_count=1,
+        run_time_seconds=None,
         submit_concurrency=1,
         submit_rate=1.0,
         timeout=10.0,
@@ -365,6 +901,70 @@ def test_write_json_report_includes_debug_samples(tmp_path: Path) -> None:
     assert payload["debug_sampling"]["samples"][0]["active_dags_count"] == 4
     assert payload["debug_sampling"]["samples"][0]["fetch_counter"] == 12
     assert payload["debug_sampling"]["samples"][0]["llm_dispatch_running_dispatchers"] == 1
+
+
+def test_finalize_metrics_tracks_sla_compliance_and_verification() -> None:
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key="system:gateway",
+        queue_name="extract",
+        planner="extract",
+        input_assets=[
+            InputAsset(
+                source_name="sample.tif",
+                source_path="s3://marie/sample.tif",
+                existing_s3_uri="s3://marie/sample.tif",
+            )
+        ],
+        job_count=2,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=1.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config=None,
+        queue_config=None,
+        metadata_template=None,
+        template_job_name=None,
+        fault_profile="normal",
+        min_soft_sla_compliance_pct=100.0,
+        min_hard_sla_compliance_pct=100.0,
+    )
+    met_run = stresser._build_run(stresser.input_assets[0], 0)
+    met_run.job_id = "job-a"
+    met_run.submit_started_at = 10.0
+    met_run.submit_finished_at = 11.0
+    met_run.completed_at = 18.0
+    met_run.soft_sla_at = 20.0
+    met_run.hard_sla_at = 30.0
+
+    missed_run = stresser._build_run(stresser.input_assets[0], 1)
+    missed_run.job_id = "job-b"
+    missed_run.submit_started_at = 10.0
+    missed_run.submit_finished_at = 11.0
+    missed_run.completed_at = 28.0
+    missed_run.soft_sla_at = 20.0
+    missed_run.hard_sla_at = 25.0
+
+    stresser._register_run(met_run)
+    stresser._register_run(missed_run)
+    stresser._finalize_metrics()
+
+    assert stresser.metrics.soft_sla_configured_jobs == 2
+    assert stresser.metrics.soft_sla_met_jobs == 1
+    assert stresser.metrics.soft_sla_missed_jobs == 1
+    assert stresser.metrics.soft_sla_compliance_pct == 50.0
+    assert stresser.metrics.hard_sla_configured_jobs == 2
+    assert stresser.metrics.hard_sla_met_jobs == 1
+    assert stresser.metrics.hard_sla_missed_jobs == 1
+    assert stresser.metrics.hard_sla_compliance_pct == 50.0
+    assert len(stresser.verification_errors) == 2
+    assert "Soft SLA compliance 50.00%" in stresser.verification_errors[0]
+    assert "Hard SLA compliance 50.00%" in stresser.verification_errors[1]
 
 
 def test_coerce_gateway_debug_payload_unwraps_gateway_result() -> None:

@@ -11,6 +11,9 @@ services:
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-1234}
       - LITELLM_SALT_KEY=${LITELLM_SALT_KEY:-sk-1234}
       - AIMOCK_URL=${AIMOCK_URL:-http://127.0.0.1:4010}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       # Database-free mode by default. Set LITELLM_DATABASE_URL to enable DB storage.
       - DATABASE_URL=${LITELLM_DATABASE_URL:-}
       - STORE_MODEL_IN_DB=${LITELLM_STORE_MODEL_IN_DB:-false}

@@ -406,7 +406,7 @@ def mark_as_active_dags(schema: str, ids: list, include_metadata: bool = False):
         --FOR UPDATE SKIP LOCKED -- We don't need this because we are using a single worker
     )
     UPDATE {schema}.dag j SET
-        started_on = now(),
+        started_on = COALESCE(j.started_on, now()),
         state = '{WorkState.ACTIVE.value}'
     FROM next
     WHERE  j.id = next.id

@@ -5,17 +5,57 @@ import etcd3
 
 
 class LeaseCache:
-    def __init__(self, etcd_client, ttl=5, margin=1.0):
+    def __init__(self, etcd_client, ttl=5, margin=1.0, logger=None):
         self.etcd = etcd_client
         self.ttl: int = int(ttl)
         self.margin: float = float(margin)
+        self.logger = logger
         self._cache: Dict[str, Tuple[Any, float]] = (
             {}
         )  # cache_key -> (lease, expiry_ts)
 
+    def _log_renewal(
+        self,
+        level: str,
+        cache_key: str,
+        lease: Any,
+        lease_ttl: Optional[int],
+        result: str,
+        error: Optional[Exception] = None,
+    ) -> None:
+        if not self.logger:
+            return
+        extra = {
+            "event_type": "etcd_status_lease_renewal",
+            "cache_key": cache_key,
+            "lease_id": getattr(lease, "id", None),
+            "lease_ttl": lease_ttl,
+            "renewal_result": result,
+        }
+        if error:
+            extra["error_type"] = type(error).__name__
+            extra["error_message"] = str(error)
+        getattr(self.logger, level)(
+            "Status lease renewal state",
+            extra=extra,
+        )
+
+    def _ttl_from_refresh(self, result: Any) -> Optional[int]:
+        try:
+            result = result[0]
+        except (TypeError, IndexError):
+            pass
+        for attr in ("TTL", "ttl"):
+            try:
+                ttl = int(getattr(result, attr))
+                return ttl if ttl > 0 else None
+            except (AttributeError, TypeError, ValueError):
+                pass
+        return None
+
     def get_or_refresh(self, cache_key: str, ttl: Optional[int] = None) -> etcd3.Lease:
         """
-        Get a cached lease if still valid; otherwise acquire a new one.
+        Get a live lease, refreshing the cached lease before returning it.
         TTL can be overridden per call; falls back to the default from the constructor.
 
         :param cache_key: Cache bucket key (e.g., "<addr>/<deployment>")
@@ -29,19 +69,42 @@ class LeaseCache:
 
         effective_ttl = int(ttl) if ttl and ttl > 0 else self.ttl
 
-        # Reuse if still safely valid
         if lease is not None and now < (exp - self.margin):
             try:
-                # remaining_ttl is guaranteed present in our lease implementation
-                if lease.remaining_ttl > 0:
+                refreshed_ttl = self._ttl_from_refresh(lease.refresh())
+                if refreshed_ttl is None:
+                    refreshed_ttl = int(getattr(lease, "remaining_ttl", 0) or 0)
+                if refreshed_ttl > 0:
+                    self._cache[cache_key] = (lease, now + refreshed_ttl)
+                    self._log_renewal(
+                        "debug",
+                        cache_key,
+                        lease,
+                        refreshed_ttl,
+                        "refreshed",
+                    )
                     return lease
-            except Exception:
-                # stale/invalid -> refresh below
-                pass
+                self._log_renewal(
+                    "warning",
+                    cache_key,
+                    lease,
+                    refreshed_ttl,
+                    "expired",
+                )
+            except Exception as e:
+                self._log_renewal(
+                    "warning",
+                    cache_key,
+                    lease,
+                    getattr(lease, "remaining_ttl", None),
+                    "refresh_failed",
+                    e,
+                )
+                self.invalidate(cache_key)
 
-        # Refresh with effective TTL
         new_lease = self.etcd.lease(effective_ttl)
         self._cache[cache_key] = (new_lease, now + effective_ttl)
+        self._log_renewal("debug", cache_key, new_lease, effective_ttl, "created")
         return new_lease
 
     def invalidate(self, cache_key):

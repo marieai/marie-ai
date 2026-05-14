@@ -153,7 +153,7 @@ class NativeToastHandler(ToastHandler):
         # Use the standard logger synchronously (it’s thread-safe)
         # Call within worker to preserve ordering
         msg = self._serialize_event(notification)
-        self.event_logger.info(msg)
+        self.event_logger.debug(msg)
 
     async def _worker(self) -> None:
         """

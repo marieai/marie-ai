@@ -369,6 +369,31 @@ async def test_control_flow_node_requeues_when_active_dag_limit_is_full():
 
 
 @pytest.mark.asyncio
+async def test_control_flow_activation_marks_job_active_before_local_completion():
+    frontier = RecordingFrontier()
+    repository = RecordingRepository(dag_state="active")
+    scheduler = build_scheduler(repository, frontier)
+    scheduler.distributed_scheduler = False
+
+    work_item = build_work_item("job-control", "dag-control")
+    await frontier.add_dag(None, [work_item])
+
+    marked_active: list[str] = []
+
+    async def mark_as_active(wi: WorkInfo) -> bool:
+        marked_active.append(wi.id)
+        return True
+
+    scheduler.mark_as_active = mark_as_active
+
+    activated = await scheduler._activate_control_flow_job(work_item)
+
+    assert activated is True
+    assert marked_active == [work_item.id]
+    assert frontier.jobs_by_id[work_item.id].state == WorkState.ACTIVE
+
+
+@pytest.mark.asyncio
 async def test_dag_state_notification_terminal_marks_dag_as_terminal():
     dag_id = "dag-4"
     work_item = build_work_item("job-5", dag_id)
@@ -769,3 +794,147 @@ async def test_blocking_sync_dag_reaps_stale_memory_dags_and_notifies(monkeypatc
     assert "dag-stale" not in scheduler.active_dags
     assert "dag-stale" not in scheduler._terminal_dag_states
     assert scheduler.notify_calls == [True]
+
+
+def test_limit_planned_jobs_to_available_slots_keeps_order_and_caps_per_executor():
+    dag_id = "dag-limit"
+    now = datetime.now(timezone.utc)
+
+    def make_job(job_id: str, endpoint: str) -> tuple[str, WorkInfo]:
+        return (
+            endpoint,
+            WorkInfo(
+                id=job_id,
+                dag_id=dag_id,
+                name="extract",
+                priority=0,
+                data={"metadata": {"on": endpoint}},
+                state=WorkState.CREATED,
+                retry_limit=1,
+                retry_delay=0,
+                retry_backoff=False,
+                start_after=now,
+                expire_in_seconds=3600,
+                keep_until=now + timedelta(days=1),
+                dependencies=[],
+                job_level=1,
+            ),
+        )
+
+    planned = [
+        make_job("extract-1", "extract_executor://document/extract"),
+        make_job("extract-2", "extract_executor://document/extract"),
+        make_job("parser-1", "annotator_parser://document/parse"),
+        make_job("parser-2", "annotator_parser://document/parse"),
+        make_job("parser-3", "annotator_parser://document/parse"),
+    ]
+
+    limited = scheduler_psql.limit_planned_jobs_to_available_slots(
+        planned,
+        {"extract_executor": 1, "annotator_parser": 2},
+    )
+
+    assert [wi.id for _, wi in limited] == [
+        "extract-1",
+        "parser-1",
+        "parser-2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_process_control_flow_node_notifies_after_unblocking_children(monkeypatch):
+    scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.logger = FakeLogger()
+    scheduler.distributed_scheduler = False
+    scheduler.active_dags = {"dag-cf": object()}
+    scheduler._topology_cache = SimpleNamespace(
+        get_sorted_nodes_and_levels=lambda _dag, _dag_id: ([], {"noop-root": 2, "child": 1})
+    )
+    scheduler.frontier = SimpleNamespace(
+        leased_until={},
+        on_job_completed=None,
+    )
+
+    order: list[str] = []
+
+    async def complete(job_id: str, _wi: WorkInfo, *_args, **_kwargs):
+        order.append(f"complete:{job_id}")
+
+    async def on_job_completed(job_id: str):
+        order.append(f"frontier_completed:{job_id}")
+
+    async def notify_event() -> bool:
+        order.append("notify_event")
+        return True
+
+    async def resolve_dag_status_with_retry(*_args, **_kwargs):
+        order.append("resolve_dag_status")
+        return True
+
+    scheduler.complete = complete
+    scheduler.notify_event = notify_event
+    scheduler._resolve_dag_status_with_retry = resolve_dag_status_with_retry
+    scheduler.frontier.on_job_completed = on_job_completed
+    
+    async def activate_control_flow_job(_wi: WorkInfo) -> bool:
+        return True
+
+    scheduler._activate_control_flow_job = activate_control_flow_job
+
+    monkeypatch.setattr(scheduler_psql, "get_node_from_dag", lambda *_args, **_kwargs: object())
+
+    started_calls: list[dict] = []
+
+    async def mark_started_toast(**kwargs):
+        started_calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(scheduler_psql, "mark_as_started_toast", mark_started_toast)
+
+    work_item = WorkInfo(
+        id="noop-root",
+        dag_id="dag-cf",
+        name="extract",
+        priority=0,
+        data={
+            "name": "extract",
+            "api_key": "api-key",
+            "metadata": {"on": "noop://noop", "ref_type": "extract"},
+        },
+        state=WorkState.CREATED,
+        retry_limit=1,
+        retry_delay=0,
+        retry_backoff=False,
+        start_after=datetime.now(timezone.utc),
+        expire_in_seconds=3600,
+        keep_until=datetime.now(timezone.utc) + timedelta(days=1),
+        dependencies=[],
+        job_level=2,
+    )
+
+    await scheduler._process_control_flow_node(work_item)
+
+    assert order == [
+        "complete:noop-root",
+        "frontier_completed:noop-root",
+        "notify_event",
+    ]
+    assert len(started_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_wait_for_dispatch_wake_returns_early_on_notify():
+    scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler._event_queue = asyncio.Queue()
+    scheduler._debounced_notify = False
+
+    await scheduler.notify_event()
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    woke = await scheduler._wait_for_dispatch_wake(1.0)
+    elapsed = loop.time() - started
+
+    assert woke is True
+    assert elapsed < 0.2
+    assert scheduler._debounced_notify is False

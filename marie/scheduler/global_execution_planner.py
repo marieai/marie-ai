@@ -3,7 +3,10 @@ from math import inf
 from typing import Any, Dict, List, Sequence, Set, Tuple
 
 from marie.scheduler.execution_planner import FlatJob
-from marie.scheduler.sla import compute_sla_priority_bucket
+from marie.scheduler.sla import (
+    DEFAULT_INTERVAL_SECONDS,
+    compute_sla_priority_bucket,
+)
 
 _DEFAULT_REMAINING = 2**31
 
@@ -20,6 +23,11 @@ class GlobalPriorityExecutionPlanner:
       7) shorter estimated runtime
       8) FIFO (original input order)
     """
+
+    def __init__(
+        self, *, sla_priority_interval_seconds: int = DEFAULT_INTERVAL_SECONDS
+    ):
+        self.sla_priority_interval_seconds = max(1, int(sla_priority_interval_seconds))
 
     def plan(
         self,
@@ -68,6 +76,7 @@ class GlobalPriorityExecutionPlanner:
                 now_utc,
                 wi.soft_sla,
                 wi.hard_sla,
+                interval_seconds=self.sla_priority_interval_seconds,
             )
 
             meta = (

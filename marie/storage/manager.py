@@ -520,6 +520,7 @@ class StorageManager:
             return remote_path
 
         logger.error(f"Failed uploading {success}/{failed} files from {local_path}")
+        return None
 
     @classmethod
     def copy_remote(

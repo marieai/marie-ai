@@ -11,7 +11,6 @@ Handles:
 
 import asyncio
 import logging
-import time
 import uuid
 from typing import AsyncIterator, Dict, Optional
 
@@ -27,8 +26,21 @@ from marie.messaging.grpc_event_broker import (
 )
 from marie.proto import event_stream_pb2 as pb2
 from marie.proto import event_stream_pb2_grpc
+from marie.utils.utils import current_milli_time
 
 logger = logging.getLogger(__name__)
+
+
+def _set_proto_timestamp(ts: Timestamp, raw_timestamp: int) -> None:
+    value = int(raw_timestamp)
+    abs_value = abs(value)
+    if abs_value >= 1_000_000_000_000:
+        seconds, millis = divmod(value, 1000)
+        ts.seconds = seconds
+        ts.nanos = millis * 1_000_000
+        return
+    ts.seconds = value
+    ts.nanos = 0
 
 
 class EventStreamServicer(event_stream_pb2_grpc.EventStreamServiceServicer):
@@ -281,7 +293,7 @@ class EventStreamServicer(event_stream_pb2_grpc.EventStreamServiceServicer):
 
                 heartbeat = pb2.ServerMessage(
                     heartbeat=pb2.ServerHeartbeat(
-                        timestamp=int(time.time()),
+                        timestamp=current_milli_time(),
                         topic_heads=topic_heads,
                     )
                 )
@@ -340,7 +352,7 @@ class EventStreamServicer(event_stream_pb2_grpc.EventStreamServiceServicer):
 
         # Build timestamp
         ts = Timestamp()
-        ts.FromSeconds(envelope.event.timestamp)
+        _set_proto_timestamp(ts, envelope.event.timestamp)
 
         return pb2.ServerMessage(
             event=pb2.EventEnvelope(

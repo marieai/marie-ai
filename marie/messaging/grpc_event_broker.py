@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, Optional, Set
 
 from marie.messaging.events import EventMessage
+from marie.utils.utils import current_milli_time
 
 logger = logging.getLogger(__name__)
 
@@ -300,7 +301,7 @@ class GrpcEventBroker:
             event=event,
             jobtag=jobtag,
             status=status,
-            timestamp=int(time.time()),
+            timestamp=current_milli_time(),
             payload=payload,
         )
         return await self.publish_event_message(msg)
@@ -322,7 +323,7 @@ class GrpcEventBroker:
             # Debug: log subscription state before dispatch
             topic_subs = self._topic_subscribers.get(topic, set())
             wildcard_subs = self._topic_subscribers.get("*", set())
-            logger.info(
+            logger.debug(
                 f"Publishing event: topic={topic}, event={msg.event}, seq={seq}, "
                 f"topic_subs={len(topic_subs)}, wildcard_subs={len(wildcard_subs)}, "
                 f"total_connections={len(self._connections)}"

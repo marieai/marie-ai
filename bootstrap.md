@@ -164,11 +164,14 @@ Gateway and processors do not play the same role:
 - `marie-gateway`
   - owns the `LLM Dispatch Runtime`
   - auto-starts the Valkey-backed dispatcher when `LLM_QUEUE_ENABLED=true`
-  - consumes queued requests and executes them against the configured OpenAI-compatible endpoint
+  - consumes queued requests and executes them against the configured OpenAI-compatible backend URL
+  - owns dispatch-layer liveness, timeout, retry, circuit-breaker, and backpressure behavior
 - extract / annotator processors
   - act as queue producers
   - submit canonical completion calls into Valkey
   - do not need to run the dispatcher thread themselves
+
+The configured OpenAI-compatible backend may be LiteLLM, OpenRouter, vLLM, or a hosted provider endpoint. Provider fallback chains, model/provider routing, budgets, and provider rate limits should be configured in that backend gateway. Marie's LLM Dispatch Runtime is the executor ingress and dispatch lifecycle layer, not the provider-routing policy layer.
 
 Minimum gateway configuration:
 
@@ -195,9 +198,10 @@ OPENAI_API_BASE=http://localhost:4000/v1
 Notes:
 
 - For container-to-container networking, replace `localhost` with the service name, for example `redis://marie-valkey:6379/0`.
-- `OPENAI_API_BASE` may also be provided as `OPENAI_BASE_URL`.
+- `OPENAI_API_BASE` may also be provided as `OPENAI_BASE_URL`; point it at the provider gateway/backend that should execute the OpenAI-compatible request.
 - The default inline payload limit is `16777216` bytes (`16 MiB`) because multimodal requests include serialized image content.
 - If `LLM_QUEUE_ENABLED=true` on the gateway but `LLM_QUEUE_VALKEY_URL` or `OPENAI_API_KEY` is missing, the gateway now fails fast at startup instead of booting without a consumer runtime.
+- Runtime Fabric-scoped history requires the gateway dispatcher to set `LLM_QUEUE_FABRIC_GROUP_ID` and/or `LLM_QUEUE_GATEWAY_ID`; processors do not need these unless they also run a dispatcher.
 
 ---
 

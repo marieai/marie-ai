@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
 from grpc_health.v1.health_pb2 import HealthCheckResponse
 
@@ -198,6 +198,31 @@ class DesiredStore(BaseStore):
             time.sleep(0.01)
         return None
 
+    def update_params(
+        self,
+        node: str,
+        depl: str,
+        updater: Callable[[Dict[str, Any]], Dict[str, Any]],
+    ) -> Optional[DesiredDoc]:
+        """
+        CAS update for desired metadata. Keeps phase, epoch, and updated_at unchanged.
+        """
+        k = self._desired_key(node, depl)
+        for _ in range(8):
+            val, meta = self.etcd.get(k, metadata=True, serializable=False)
+            if val is None:
+                return None
+
+            cur = DesiredDoc.from_json(val)
+            cur.params = updater(dict(cur.params or {}))
+
+            if self.etcd.update_if_unchanged(
+                k, json.dumps(asdict(cur)), meta.mod_revision
+            ):
+                return cur
+            time.sleep(0.01)
+        return None
+
     def iter_desired_pairs(self):
         return _iter_node_depl_pairs(self.etcd, "desired")
 
@@ -327,12 +352,75 @@ class DesiredStore(BaseStore):
 class StatusStore(BaseStore):
     """Worker-only: observed serving status with heartbeats (HealthCheckResponse)."""
 
-    def __init__(self, etcd_client, lease_getter=None):  # Removed 'prefix' argument
+    def __init__(
+        self, etcd_client, lease_getter=None, lease_invalidator=None, logger=None
+    ):  # Removed 'prefix' argument
         super().__init__(etcd_client)
         self._lease_getter = lease_getter  # callable -> etcd lease (optional)
+        self._lease_invalidator = lease_invalidator  # callable -> None (optional)
+        self._logger = logger
 
     def _status_key(self, node: str, depl: str) -> str:
         return _skey(node, depl)
+
+    def _lease_id(self) -> Optional[int]:
+        return self._lease_getter().id if self._lease_getter else None
+
+    def _invalidate_lease(self) -> None:
+        if self._lease_invalidator:
+            self._lease_invalidator()
+
+    def _log_lease_retry(
+        self,
+        operation: str,
+        lease_id: Optional[int],
+        new_lease_id: Optional[int],
+        error: Exception,
+    ) -> None:
+        if not self._logger:
+            return
+        self._logger.warning(
+            "Status write lease was rejected; retrying with a fresh lease",
+            extra={
+                "event_type": "status_write_lease_retry",
+                "operation": operation,
+                "lease_id": lease_id,
+                "new_lease_id": new_lease_id,
+                "renewal_result": "lease_not_found_retry",
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+            },
+        )
+
+    def _put_if_absent_with_lease(
+        self, key: str, payload: str, lease_id: Optional[int]
+    ) -> bool:
+        try:
+            return self.etcd.put_if_absent(key, payload, lease=lease_id)
+        except Exception as e:
+            if not (_is_missing_lease_error(e) and self._lease_getter):
+                raise
+            self._invalidate_lease()
+            fresh_lease_id = self._lease_id()
+            self._log_lease_retry("put_if_absent", lease_id, fresh_lease_id, e)
+            return self.etcd.put_if_absent(key, payload, lease=fresh_lease_id)
+
+    def _update_if_unchanged_with_lease(
+        self, key: str, payload: str, mod_revision: int, lease_id: Optional[int]
+    ) -> bool:
+        try:
+            return self.etcd.update_if_unchanged(
+                key, payload, mod_revision, lease=lease_id
+            )
+        except Exception as e:
+            if not (_is_missing_lease_error(e) and self._lease_getter):
+                raise
+            self._invalidate_lease()
+            fresh_lease_id = self._lease_id()
+            self._log_lease_retry("update_if_unchanged", lease_id, fresh_lease_id, e)
+            return self.etcd.update_if_unchanged(
+                key, payload, mod_revision, lease=fresh_lease_id
+            )
 
     def _new_status_doc(
         self, worker_id: str, epoch: int, initial_status: int
@@ -368,8 +456,8 @@ class StatusStore(BaseStore):
         # A) attempt to create if absent
         doc = self._new_status_doc(worker_id, epoch, initial_status)
         payload = json.dumps(asdict(doc))
-        lease_id = self._lease_getter().id if self._lease_getter else None
-        if self.etcd.put_if_absent(k, payload, lease=lease_id):
+        lease_id = self._lease_id()
+        if self._put_if_absent_with_lease(k, payload, lease_id):
             return True
 
         # B) read+CAS path
@@ -377,8 +465,8 @@ class StatusStore(BaseStore):
             val, meta = self.etcd.get(k, metadata=True, serializable=False)
             if val is None:
                 # deleted between steps, retry create
-                lease_id = self._lease_getter().id if self._lease_getter else None
-                if self.etcd.put_if_absent(k, payload, lease=lease_id):
+                lease_id = self._lease_id()
+                if self._put_if_absent_with_lease(k, payload, lease_id):
                     return True
                 time.sleep(0.01)
                 continue
@@ -389,9 +477,9 @@ class StatusStore(BaseStore):
             if st.owner == worker_id and st.epoch == epoch:
                 st.updated_at = _now_iso()
                 st.heartbeat_at = st.heartbeat_at or st.updated_at
-                lease_id = self._lease_getter().id if self._lease_getter else None
-                if self.etcd.update_if_unchanged(
-                    k, json.dumps(asdict(st)), meta.mod_revision, lease=lease_id
+                lease_id = self._lease_id()
+                if self._update_if_unchanged_with_lease(
+                    k, json.dumps(asdict(st)), meta.mod_revision, lease_id
                 ):
                     return True
                 time.sleep(0.01)
@@ -400,9 +488,9 @@ class StatusStore(BaseStore):
             # Roll-forward (same owner, lower epoch)
             if st.owner == worker_id and st.epoch < epoch:
                 newdoc = self._new_status_doc(worker_id, epoch, initial_status)
-                lease_id = self._lease_getter().id if self._lease_getter else None
-                if self.etcd.update_if_unchanged(
-                    k, json.dumps(asdict(newdoc)), meta.mod_revision, lease=lease_id
+                lease_id = self._lease_id()
+                if self._update_if_unchanged_with_lease(
+                    k, json.dumps(asdict(newdoc)), meta.mod_revision, lease_id
                 ):
                     return True
                 time.sleep(0.01)
@@ -439,13 +527,10 @@ class StatusStore(BaseStore):
             if details:
                 st.details = {**(st.details or {}), **details}
 
-            try:
-                lease_id = self._lease_getter().id if self._lease_getter else None
-            except Exception:
-                lease_id = None
+            lease_id = self._lease_id()
 
-            if self.etcd.update_if_unchanged(
-                k, json.dumps(asdict(st)), meta.mod_revision, lease=lease_id
+            if self._update_if_unchanged_with_lease(
+                k, json.dumps(asdict(st)), meta.mod_revision, lease_id
             ):
                 return True
             time.sleep(0.01)
@@ -518,27 +603,11 @@ class StatusStore(BaseStore):
                 return False
             st.heartbeat_at = _now_iso()
 
-            lease_id = None
-            try:
-                lease_id = self._lease_getter().id if self._lease_getter else None
-            except Exception:
-                pass
-
-            try:
-                if self.etcd.update_if_unchanged(
-                    k, json.dumps(asdict(st)), meta.mod_revision, lease=lease_id
-                ):
-                    return True
-            except Exception as e:
-                # Handle missing/expired lease gracefully
-                if _is_missing_lease_error(e) and self._lease_getter:
-                    # refresh lease and retry once more in this iteration
-                    try:
-                        lease_id = self._lease_getter().id
-                    except Exception:
-                        return False
-                else:
-                    raise
+            lease_id = self._lease_id()
+            if self._update_if_unchanged_with_lease(
+                k, json.dumps(asdict(st)), meta.mod_revision, lease_id
+            ):
+                return True
             time.sleep(0.01)
         return False
 

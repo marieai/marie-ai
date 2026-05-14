@@ -8,15 +8,20 @@ from typing import Any, Callable, Iterable, NamedTuple, Optional
 from marie.logging_core.predefined import default_logger as logger
 from marie.query_planner.base import QueryPlan
 from marie.scheduler.models import WorkInfo
-from marie.scheduler.sla import compute_sla_priority_bucket, summarize_sla_work_items
+from marie.scheduler.sla import (
+    DEFAULT_INTERVAL_SECONDS,
+    compute_sla_priority_bucket,
+    summarize_sla_work_items,
+)
 from marie.scheduler.state import WorkState, is_terminal_state
+from marie.scheduler.util import is_control_flow_entrypoint
 
 DEFAULT_RETRY_DELAY_SECONDS = 2
 
 
 class ReadyEntry(NamedTuple):
     # Field order defines the frontier's static approximation of planner ordering.
-    key: tuple[int, int, int]  # (-priority, -sla_bucket, -job_level)
+    key: tuple[int, int, int, int]  # (-priority, -sla_bucket, control_rank, -job_level)
     added_at: float  # monotonic timestamp when first ready
     seq: int  # FIFO tie-breaker
     ver: int  # version to invalidate stale entries
@@ -32,7 +37,11 @@ class MemoryFrontier:
     """
 
     def __init__(
-        self, *, higher_priority_wins: bool = True, default_lease_ttl: float = 5.0
+        self,
+        *,
+        higher_priority_wins: bool = True,
+        default_lease_ttl: float = 5.0,
+        sla_priority_interval_seconds: int = DEFAULT_INTERVAL_SECONDS,
     ):
         # Job graph / indices
         self.jobs_by_id: dict[str, WorkInfo] = {}
@@ -54,21 +63,30 @@ class MemoryFrontier:
 
         self.higher_priority_wins = higher_priority_wins
         self.default_lease_ttl = float(default_lease_ttl)
+        self.sla_priority_interval_seconds = max(1, int(sla_priority_interval_seconds))
 
         self._lock = asyncio.Lock()
         self._now = time.monotonic
 
-    def _priority_key(self, wi: WorkInfo) -> tuple[int, int, int]:
-        """Approximate planner ordering with the static factors available in the frontier."""
+    def _priority_key(self, wi: WorkInfo) -> tuple[int, int, int, int]:
+        """Approximate planner ordering with static frontier-local factors.
+
+        Control-flow nodes are intentionally ranked after real executor work for
+        equal priority/SLA so new DAG wrappers do not starve already-ready leaf
+        work under sustained submission.
+        """
         priority = int(wi.priority)
         sla_bucket = compute_sla_priority_bucket(
             datetime.now(timezone.utc),
             wi.soft_sla,
             wi.hard_sla,
+            interval_seconds=self.sla_priority_interval_seconds,
         )
         level = int(wi.job_level)
         priority_key = -priority if self.higher_priority_wins else priority
-        return (priority_key, -sla_bucket, -level)
+        entrypoint = self._entrypoint(wi)
+        control_rank = 1 if is_control_flow_entrypoint(entrypoint) else 0
+        return (priority_key, -sla_bucket, control_rank, -level)
 
     def _push_ready(self, wi: WorkInfo) -> None:
         # Always bump version when (re)adding to ready
@@ -559,6 +577,7 @@ class MemoryFrontier:
                 self.jobs_by_id.values(),
                 now=datetime.now(timezone.utc),
                 top_n=top_n if detail else 0,
+                interval_seconds=self.sla_priority_interval_seconds,
             ),
         }
 
