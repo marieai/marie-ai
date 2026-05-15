@@ -1,5 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="marie server - extract" type="PythonConfigurationType" factoryName="Python" singleton="false">
+    <output_file path="$USER_HOME$/tmp/extract-executor.log" is_save="true" />
     <module name="marie-ai" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
@@ -14,13 +15,17 @@
       <env name="MARIE_DEBUG" value="0" />
       <env name="MARIE_DEBUG_PORT" value="5678" />
       <env name="MARIE_DEFAULT_MOUNT" value="/mnt/data/marie-ai" />
+      <env name="MARIE_SCHEDULER_TRACE_ENABLED" value="true" />
+      <env name="MARIE_SCHEDULER_TRACE_PATH" value="$USER_HOME$/tmp/marie-scheduler-trace.jsonl" />
     </envs>
     <option name="SDK_HOME" value="" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/" />
     <option name="IS_MODULE_SDK" value="true" />
     <option name="ADD_CONTENT_ROOTS" value="false" />
     <option name="ADD_SOURCE_ROOTS" value="false" />
+    <option name="DEBUG_JUST_MY_CODE" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+    <option name="RUN_TOOL" value="" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/marie/__main__.py" />
     <option name="PARAMETERS" value="server --start --uses /mnt/data/marie-ai/config/service/extract/marie-extract-4.0.0.yml" />
     <option name="SHOW_COMMAND_LINE" value="false" />

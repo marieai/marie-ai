@@ -6,19 +6,20 @@
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
     <envs>
-      <env name="PYTHONUNBUFFERED" value="1" />
       <env name="COLUMNS" value="180" />
       <env name="GRPC_TRACE" value="ALL" />
       <env name="GRPC_VERBOSITY" value="DEBUG" />
-      <env name="MARIE_DEBUG_QUERY_PLAN" value="1" />
-      <env name="MARIE_DEBUG_QUERY_PLANNER" value="TRUE" />
+      <env name="LLM_QUEUE_ENABLED" value="true" />
+      <env name="LLM_QUEUE_FABRIC_GROUP_ID" value="default" />
+      <env name="LLM_QUEUE_GATEWAY_ID" value="default" />
+      <env name="LLM_QUEUE_VALKEY_URL" value="redis://localhost:6379/0" />
+      <env name="MARIE_DEBUG_QUERY_PLANNER" value="FALSE" />
       <env name="MARIE_DEFAULT_MOUNT" value="/mnt/data/marie-ai" />
+      <env name="MARIE_SCHEDULER_TRACE_ENABLED" value="true" />
+      <env name="MARIE_SCHEDULER_TRACE_PATH" value="$USER_HOME$/tmp/marie-scheduler-trace.jsonl" />
       <env name="OPENAI_API_BASE" value="http://192.222.48.192" />
       <env name="OPENAI_API_KEY" value="EMPTY" />
-      <env name="LLM_QUEUE_ENABLED" value="true" />
-      <env name="LLM_QUEUE_VALKEY_URL" value="redis://localhost:6379/0" />
-      <env name="LLM_QUEUE_GATEWAY_ID" value="default" />
-      <env name="LLM_QUEUE_FABRIC_GROUP_ID" value="default" />
+      <env name="PYTHONUNBUFFERED" value="1" />
     </envs>
     <option name="SDK_HOME" value="" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/" />

@@ -80,6 +80,7 @@ from marie.utils.utils import current_milli_time
 
 INIT_POLL_PERIOD = 2.250  # initial idle wait before the first scheduler wake
 SHORT_POLL_INTERVAL = 0.250  # fallback wait when a wake is missed or no work is visible
+SLOT_POLL_INTERVAL = 0.025  # busy wait while executor work is blocked only by slots
 
 MIN_POLL_PERIOD = 0.250
 MAX_POLL_PERIOD = 8
@@ -1719,14 +1720,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             f"Idle streak: {idle_streak} | "
                             f"Wait time: {wait_time:.2f}s"
                         )
-                    await self._wait_for_dispatch_wake(SHORT_POLL_INTERVAL)
-                    idle_streak += 1
-                    wait_time = adjust_backoff(
-                        wait_time,
-                        idle_streak,
-                        scheduled=False,
-                        min_poll_period=MIN_POLL_PERIOD,
+                    poll_interval = (
+                        SLOT_POLL_INTERVAL if no_executor_slots else SHORT_POLL_INTERVAL
                     )
+                    woke = await self._wait_for_dispatch_wake(poll_interval)
+                    idle_streak = 0 if woke else idle_streak + 1
+                    wait_time = 0.0
                     continue
 
                 self.logger.debug(
@@ -1765,9 +1764,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 # no executor slots were available), skip the planner.
                 if not planner_candidates:
                     if scheduled_any:
-                        # We processed control flow nodes, reset idle streak
                         idle_streak = 0
-                        wait_time = MIN_POLL_PERIOD
+                        wait_time = 0.0
                     elif no_executor_slots:
                         idle_streak += 1
                         wait_time = adjust_backoff(
@@ -1829,14 +1827,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         f"Active DAGs: {active_dag_count}/{max_concurrent_dags} | "
                         f"Idle streak: {idle_streak}"
                     )
-                    await self._wait_for_dispatch_wake(SHORT_POLL_INTERVAL)
-                    idle_streak += 1
-                    wait_time = adjust_backoff(
-                        wait_time,
-                        idle_streak,
-                        scheduled=False,
-                        min_poll_period=MIN_POLL_PERIOD,
-                    )
+                    woke = await self._wait_for_dispatch_wake(SHORT_POLL_INTERVAL)
+                    idle_streak = 0 if woke else idle_streak + 1
+                    wait_time = 0.0
                     continue
 
                 self.logger.debug(
@@ -1913,14 +1906,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         f"Attempted {len(selected_wis)} jobs across {len(ids_by_job_name)} job names. "
                         f"Job names: {list(ids_by_job_name.keys())}"
                     )
-                    await self._wait_for_dispatch_wake(SHORT_POLL_INTERVAL)
-                    idle_streak += 1
-                    wait_time = adjust_backoff(
-                        wait_time,
-                        idle_streak,
-                        scheduled=False,
-                        min_poll_period=MIN_POLL_PERIOD,
-                    )
+                    woke = await self._wait_for_dispatch_wake(SHORT_POLL_INTERVAL)
+                    idle_streak = 0 if woke else idle_streak + 1
+                    wait_time = 0.0
                     continue
 
                 self.logger.info(
@@ -3475,7 +3463,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def _wait_for_dispatch_wake(self, timeout: float) -> bool:
         if timeout <= 0:
-            return False
+            try:
+                self._event_queue.get_nowait()
+                self._debounced_notify = False
+                return True
+            except asyncio.QueueEmpty:
+                return False
 
         try:
             await asyncio.wait_for(self._event_queue.get(), timeout=timeout)

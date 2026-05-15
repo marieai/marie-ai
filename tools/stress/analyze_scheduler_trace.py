@@ -22,6 +22,7 @@ EVENTS = (
     "dag_persisted",
     "dag_frontier_add_start",
     "dag_frontier_added",
+    "dag_admission_decision",
     "candidate_built",
     "planner_selected",
     "frontier_taken",
@@ -387,6 +388,92 @@ def _slot_counts(rows: list[dict[str, Any]]) -> dict[str, Counter[int]]:
     return counts
 
 
+def _executor_slot_idle_ms(rows: list[dict[str, Any]]) -> dict[str, list[float]]:
+    releases_by_executor: dict[str, list[float]] = defaultdict(list)
+    reserves_by_executor: dict[str, list[float]] = defaultdict(list)
+
+    for row in rows:
+        event = row.get("event")
+        ts = row.get("ts_unix")
+        if not isinstance(ts, (int, float)):
+            continue
+        if event == "executor_slot_released":
+            executor = row.get("deployment") or row.get("executor")
+            if isinstance(executor, str) and executor:
+                releases_by_executor[executor].append(float(ts))
+        elif event == "slot_reserved":
+            executor = row.get("executor") or row.get("deployment")
+            if isinstance(executor, str) and executor:
+                reserves_by_executor[executor].append(float(ts))
+
+    idle_by_executor: dict[str, list[float]] = {}
+    for executor, releases in releases_by_executor.items():
+        reserves = sorted(reserves_by_executor.get(executor, []))
+        if not reserves:
+            continue
+        idle: list[float] = []
+        index = 0
+        for released_at in sorted(releases):
+            while index < len(reserves) and reserves[index] <= released_at:
+                index += 1
+            if index >= len(reserves):
+                break
+            idle.append((reserves[index] - released_at) * 1000.0)
+        if idle:
+            idle_by_executor[executor] = idle
+    return idle_by_executor
+
+
+def _slot_hold_ms(rows: list[dict[str, Any]]) -> list[float]:
+    by_job: dict[str, dict[str, float]] = defaultdict(dict)
+    for row in rows:
+        job_id = row.get("job_id")
+        event = row.get("event")
+        ts = row.get("ts_unix")
+        if not isinstance(job_id, str) or not isinstance(ts, (int, float)):
+            continue
+        if event in {"slot_reserved", "executor_slot_released"}:
+            by_job[job_id][str(event)] = float(ts)
+
+    values: list[float] = []
+    for events in by_job.values():
+        reserved_at = events.get("slot_reserved")
+        released_at = events.get("executor_slot_released")
+        value = _milliseconds(reserved_at, released_at)
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _print_slot_idle_report(rows: list[dict[str, Any]]) -> None:
+    idle_by_executor = _executor_slot_idle_ms(rows)
+    slot_hold = _slot_hold_ms(rows)
+    if not idle_by_executor and not slot_hold:
+        return
+
+    print("\nExecutor Slot Idle")
+    if slot_hold:
+        print(
+            "slot hold: "
+            f"count={len(slot_hold)} "
+            f"avg={_fmt(_avg(slot_hold))} "
+            f"p50={_fmt(_percentile(slot_hold, 0.50))} "
+            f"p95={_fmt(_percentile(slot_hold, 0.95))} "
+            f"max={_fmt(max(slot_hold))}"
+        )
+
+    for executor in sorted(idle_by_executor):
+        values = idle_by_executor[executor]
+        print(
+            f"idle after release {executor}: "
+            f"count={len(values)} "
+            f"avg={_fmt(_avg(values))} "
+            f"p50={_fmt(_percentile(values, 0.50))} "
+            f"p95={_fmt(_percentile(values, 0.95))} "
+            f"max={_fmt(max(values))}"
+        )
+
+
 def _print_latency_report(summaries: list[dict[str, Any]]) -> None:
     print("\nLatency Percentiles")
     print("stage count avg p50 p90 p95 p99 max")
@@ -431,10 +518,60 @@ def _print_pressure_report(rows: list[dict[str, Any]]) -> None:
         print(f"  {executor}: " + ", ".join(pieces))
 
 
+def _print_admission_report(rows: list[dict[str, Any]]) -> None:
+    decisions = [row for row in rows if row.get("event") == "dag_admission_decision"]
+    if not decisions:
+        return
+
+    print("\nDAG Admission")
+    print(f"decisions: {len(decisions)}")
+    for field in ("mode", "source", "policy_reason", "legacy_reason"):
+        counts = Counter(str(row.get(field, "-")) for row in decisions)
+        pieces = [f"{key}={counts[key]}" for key in sorted(counts)]
+        print(f"{field}: " + ", ".join(pieces))
+
+    policy_denied = sum(1 for row in decisions if row.get("policy_decision") is False)
+    legacy_denied = sum(1 for row in decisions if row.get("legacy_decision") is False)
+    effective_denied = sum(
+        1 for row in decisions if row.get("effective_decision") is False
+    )
+    print(
+        "denials: "
+        f"policy={policy_denied} "
+        f"legacy={legacy_denied} "
+        f"effective={effective_denied}"
+    )
+
+    pressure_by_executor: dict[str, list[float]] = defaultdict(list)
+    for row in decisions:
+        pressure = row.get("executor_pressure")
+        if not isinstance(pressure, dict):
+            continue
+        for executor, payload in pressure.items():
+            if not isinstance(payload, dict):
+                continue
+            value = payload.get("pressure")
+            if isinstance(value, (int, float)):
+                pressure_by_executor[str(executor)].append(float(value))
+
+    if pressure_by_executor:
+        print("pressure:")
+        for executor in sorted(pressure_by_executor):
+            values = pressure_by_executor[executor]
+            print(
+                f"  {executor}: "
+                f"count={len(values)} "
+                f"avg={_avg(values):.2f} "
+                f"p95={_percentile(values, 0.95):.2f} "
+                f"max={max(values):.2f}"
+            )
+
+
 def _print_findings(
     rate_stats: dict[str, tuple[int, float | None, float | None]],
     summaries: list[dict[str, Any]],
     events: Counter[str],
+    rows: list[dict[str, Any]],
 ) -> None:
     findings: list[str] = []
 
@@ -475,6 +612,14 @@ def _print_findings(
             "Gateway-to-executor handoff is high "
             f"(dispatch->executor p95={_fmt(_percentile(dispatch_to_executor, 0.95))})."
         )
+    idle_by_executor = _executor_slot_idle_ms(rows)
+    for executor, values in sorted(idle_by_executor.items()):
+        p95 = _percentile(values, 0.95)
+        if p95 is not None and p95 > 50.0:
+            findings.append(
+                f"Executor slots are idle after release for {executor} "
+                f"(p95={_fmt(p95)})."
+            )
     if service:
         findings.append(
             f"Executor service p95 is {_fmt(_percentile(service, 0.95))}; "
@@ -551,8 +696,10 @@ def print_report(
     )
 
     _print_pressure_report(rows)
+    _print_slot_idle_report(rows)
+    _print_admission_report(rows)
     _print_latency_report(summaries)
-    _print_findings(rates, summaries, events)
+    _print_findings(rates, summaries, events, rows)
 
 
 def main() -> int:

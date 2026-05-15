@@ -519,8 +519,22 @@ class SemaphoreStore(BaseStore):
                     limit = 0
                 caps[parts[1]] = max(0, int(limit))
 
-        used = self.read_count_all()
-        all_slots = set(caps.keys()) | set(used.keys()) | self.list_slot_types()
+        used: Dict[str, int] = {}
+        sem_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("semaphores/"))
+        for val_bytes, meta in sem_iter:
+            key = self.etcd._demangle_key(meta.key)
+            parts = key.split("/")
+            if len(parts) == 3 and parts[0] == "semaphores" and parts[2] == "count":
+                try:
+                    used[parts[1]] = int(
+                        val_bytes.decode()
+                        if isinstance(val_bytes, (bytes, bytearray))
+                        else val_bytes
+                    )
+                except Exception:
+                    used[parts[1]] = 0
+
+        all_slots = set(caps.keys()) | set(used.keys())
         out: Dict[str, int] = {}
         for st in all_slots:
             cap = caps.get(st, 0)
