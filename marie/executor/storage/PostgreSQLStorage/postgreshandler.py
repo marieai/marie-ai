@@ -2,24 +2,14 @@ import json
 from typing import Optional
 
 import numpy as np
-import psycopg2
-import psycopg2.extras
-from psycopg2 import pool  # noqa: F401
-from psycopg2.extensions import AsIs, register_adapter
+import psycopg
 
 from marie import Document, DocumentArray
 from marie.logging_core.logger import MarieLogger
 from marie.numpyencoder import NumpyEncoder
 from marie.storage.database.postgres import PostgresqlMixin
-from marie.storage.pgvector.psycopg2 import register_vector
+from marie.storage.pgvector.utils import from_db, to_db
 from marie.utils.json import to_json
-
-
-def _adapt_np_array(np_array):
-    return AsIs(tuple(np_array))
-
-
-register_adapter(np.ndarray, _adapt_np_array)
 
 
 def doc_without_embedding(d: Document):
@@ -82,10 +72,6 @@ class PostgreSQLHandler(PostgresqlMixin):
         self.dump_dtype = dump_dtype
         self.virtual_shards = virtual_shards
         self.snapshot_table = f"snapshot_{table}"
-
-        # Track vector type registration state
-        self._vector_registered = False
-        self._vector_registration_attempted = False
 
         if not dry_run:
             config = {
@@ -158,18 +144,6 @@ class PostgreSQLHandler(PostgresqlMixin):
             INSERT INTO {MODEL_TABLE_NAME} (table_name) VALUES ('{self.qualified_table}');"""
         )
 
-        # Now that the extension is created, re-attempt vector type registration
-        if not self._vector_registered:
-            conn = super()._get_connection()
-            try:
-                self._vector_registered = register_vector(conn)
-                if self._vector_registered:
-                    self.logger.info(
-                        "pgvector type registered after extension creation"
-                    )
-            finally:
-                self._close_connection(conn)
-
     def _assert_table_schema_version(self):
         result = self._execute_sql_gracefully(
             f"SELECT schema_version FROM {META_TABLE_NAME} WHERE table_name=%s;",
@@ -204,7 +178,7 @@ class PostgreSQLHandler(PostgresqlMixin):
                     store_mode,
                     to_json(doc.tags) if doc.tags is not None else None,
                     (
-                        doc.embedding
+                        to_db(doc.embedding)
                         if store_mode == "embedding" and doc.embedding is not None
                         else None
                     ),
@@ -221,15 +195,14 @@ class PostgreSQLHandler(PostgresqlMixin):
             ]
 
             with conn.cursor() as cursor:
-                psycopg2.extras.execute_batch(
-                    cursor,
+                cursor.executemany(
                     f"INSERT INTO {self.qualified_table} (doc_id, ref_id, ref_type, store_mode,tags, embedding, blob, "
-                    " content, doc, shard, created_at, updated_at) VALUES (%s, %s, %s, %s, %s,"
-                    " %s, %s, %s, %s,%s, current_timestamp, current_timestamp)",
+                    " content, doc, shard, created_at, updated_at) VALUES (%s, %s, %s, %s, %s::jsonb,"
+                    " %s::vector, %s, %s::jsonb, %s,%s, current_timestamp, current_timestamp)",
                     query_obj,
                 )
             conn.commit()
-        except psycopg2.errors.UniqueViolation as e:
+        except psycopg.errors.UniqueViolation as e:
             self.logger.warning(f"Document already exists. Skipping. Error: {e}")
             self._safe_rollback(conn)
         except Exception as e:
@@ -245,13 +218,12 @@ class PostgreSQLHandler(PostgresqlMixin):
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
-                psycopg2.extras.execute_batch(
-                    cursor,
-                    f"UPDATE {self.qualified_table} SET embedding = %s, doc = %s,"
+                cursor.executemany(
+                    f"UPDATE {self.qualified_table} SET embedding = %s::vector, doc = %s,"
                     " is_deleted = false, updated_at = current_timestamp WHERE doc_id = %s",
                     [
                         (
-                            doc.embedding.astype(self.dump_dtype).tobytes(),
+                            to_db(doc.embedding),
                             doc_without_embedding(doc),
                             doc.id,
                         )
@@ -279,14 +251,12 @@ class PostgreSQLHandler(PostgresqlMixin):
             conn = self._get_connection()
             with conn.cursor() as cursor:
                 if soft_delete:
-                    psycopg2.extras.execute_batch(
-                        cursor,
+                    cursor.executemany(
                         f"UPDATE {self.qualified_table} SET is_deleted = true, updated_at = current_timestamp WHERE doc_id = %s;",
                         [(doc.id,) for doc in docs],
                     )
                 else:
-                    psycopg2.extras.execute_batch(
-                        cursor,
+                    cursor.executemany(
                         f"DELETE FROM {self.qualified_table} WHERE doc_id = %s;",
                         [(doc.id,) for doc in docs],
                     )
@@ -297,7 +267,7 @@ class PostgreSQLHandler(PostgresqlMixin):
     def close(self):
         """Close all connections in the pool."""
         if hasattr(self, "postgreSQL_pool") and self.postgreSQL_pool:
-            self.postgreSQL_pool.closeall()
+            self.postgreSQL_pool.close()
 
     def search(self, docs: DocumentArray, return_embeddings: bool = True, **kwargs):
         """Use the Postgres db as a key-value engine to retrieve document metadata."""
@@ -319,9 +289,14 @@ class PostgreSQLHandler(PostgresqlMixin):
                     data = bytes(result[0])
                     retrieved_doc = Document(data)
                     if return_embeddings and result[1] is not None:
-                        retrieved_doc.embedding = np.frombuffer(
-                            result[1], dtype=self.dump_dtype
-                        )
+                        if isinstance(result[1], np.ndarray):
+                            retrieved_doc.embedding = result[1]
+                        elif isinstance(result[1], (bytes, bytearray, memoryview)):
+                            retrieved_doc.embedding = np.frombuffer(
+                                result[1], dtype=self.dump_dtype
+                            )
+                        else:
+                            retrieved_doc.embedding = from_db(result[1])
                     doc.MergeFrom(retrieved_doc)
         finally:
             self._close_connection(conn)
@@ -338,21 +313,4 @@ class PostgreSQLHandler(PostgresqlMixin):
         return hash(doc_id) % self.virtual_shards
 
     def _get_connection(self):
-        """
-        Get a connection from the pool and register the vector type.
-        This extends the behavior of the mixin's _get_connection.
-        """
-        # Get a standard connection from the mixin
-        conn = super()._get_connection()
-
-        # Only attempt vector registration once per handler instance
-        # This avoids repeated failures if pgvector isn't installed
-        if not self._vector_registration_attempted:
-            self._vector_registration_attempted = True
-            self._vector_registered = register_vector(conn)
-            if not self._vector_registered:
-                self.logger.warning(
-                    "pgvector extension not available; vector operations will not work"
-                )
-
-        return conn
+        return super()._get_connection()

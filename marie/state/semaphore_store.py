@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import asdict, dataclass
 from typing import Dict, Optional, Set
 
@@ -256,6 +257,119 @@ class SemaphoreStore(BaseStore):
 
         ok, _resp = t.commit()
         return bool(ok)
+
+    def reserve_many(
+        self,
+        slot_type: str,
+        ticket_ids: list[str],
+        *,
+        node: str,
+        ttl: Optional[int] = None,
+        owner_by_ticket: Optional[Dict[str, str]] = None,
+        max_retries: int = 3,
+        max_batch_size: int = 32,
+    ) -> Set[str]:
+        if not ticket_ids:
+            return set()
+
+        unique_ticket_ids = list(
+            dict.fromkeys(str(ticket_id) for ticket_id in ticket_ids)
+        )
+        batch_size = max(1, int(max_batch_size))
+        retries = max(1, int(max_retries))
+
+        ttl_seconds = int(ttl or self.default_lease_ttl)
+        reserved: Set[str] = set()
+        for start in range(0, len(unique_ticket_ids), batch_size):
+            batch = unique_ticket_ids[start : start + batch_size]
+            reserved.update(
+                self._reserve_many_batch(
+                    slot_type,
+                    batch,
+                    node=node,
+                    ttl_seconds=ttl_seconds,
+                    owner_by_ticket=owner_by_ticket,
+                    max_retries=retries,
+                )
+            )
+        return reserved
+
+    def _reserve_many_batch(
+        self,
+        slot_type: str,
+        ticket_ids: list[str],
+        *,
+        node: str,
+        ttl_seconds: int,
+        owner_by_ticket: Optional[Dict[str, str]],
+        max_retries: int,
+    ) -> Set[str]:
+        cap_k = _cap_key(slot_type)
+        cnt_k = _count_key(slot_type)
+
+        for attempt in range(max_retries):
+            cap_raw = self._get_raw(cap_k)
+            if not cap_raw:
+                return set()
+            try:
+                limit = CapacityDoc.from_json(cap_raw).limit
+            except Exception:
+                return set()
+            if limit <= 0:
+                return set()
+
+            cnt_raw = self._get_raw(cnt_k)
+            old_count = int(cnt_raw.decode()) if cnt_raw else 0
+            available = max(0, int(limit) - max(0, old_count))
+            if available <= 0:
+                return set()
+
+            selected = ticket_ids[:available]
+            lease = self.etcd.lease(ttl_seconds)
+            tx = self.etcd.txn()
+            tx.if_value(cap_k, "==", cap_raw)
+            if cnt_raw is None:
+                tx.if_missing(cnt_k)
+            else:
+                tx.if_value(cnt_k, "==", cnt_raw)
+
+            for ticket_id in selected:
+                tx.if_missing(_holder_key(slot_type, ticket_id))
+
+            tx.put(cnt_k, str(old_count + len(selected)))
+            for ticket_id in selected:
+                holder_doc = SemaphoreHolder(
+                    ticket_id=ticket_id,
+                    node=node,
+                    ttl=ttl_seconds,
+                    created_at=_now_iso(),
+                    owner=(owner_by_ticket or {}).get(ticket_id)
+                    or f"{node}:{ticket_id}",
+                    renewed_at=None,
+                )
+                tx.put(
+                    _holder_key(slot_type, ticket_id),
+                    json.dumps(asdict(holder_doc)),
+                    lease=lease.id,
+                )
+
+            ok, _resp = tx.commit()
+            if ok:
+                return set(selected)
+            if attempt < max_retries - 1:
+                time.sleep(0.001 * (2**attempt))
+
+        reserved: Set[str] = set()
+        for ticket_id in ticket_ids:
+            if self.reserve(
+                slot_type,
+                ticket_id,
+                node=node,
+                ttl=ttl_seconds,
+                owner=(owner_by_ticket or {}).get(ticket_id),
+            ):
+                reserved.add(ticket_id)
+        return reserved
 
     def renew(
         self,

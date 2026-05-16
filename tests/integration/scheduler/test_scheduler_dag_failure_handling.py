@@ -1,4 +1,6 @@
 import asyncio
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -10,6 +12,7 @@ from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.psql import PostgreSQLJobScheduler
+from marie.scheduler.repository.job_repository import JobRepository
 from marie.scheduler.state import WorkState
 
 
@@ -720,12 +723,10 @@ async def test_evict_dag_from_memory_finalizes_frontier_and_clears_terminal_stat
 
 
 @pytest.mark.asyncio
-async def test_blocking_sync_dag_reaps_stale_memory_dags_and_notifies(monkeypatch):
+async def test_sync_dag_once_reaps_stale_memory_dags_and_notifies():
     repository = RecordingRepository(dag_state="active")
     frontier = RecordingFrontier()
     scheduler = build_scheduler(repository, frontier)
-    scheduler.running = True
-    scheduler._loop = object()
     scheduler.active_dags = {
         "dag-valid": object(),
         "dag-stale": object(),
@@ -746,46 +747,17 @@ async def test_blocking_sync_dag_reaps_stale_memory_dags_and_notifies(monkeypatc
         return {"dag-valid"}
 
     scheduler.repository.get_active_dag_ids = get_active_dag_ids
+    original_resolve_dag_state = scheduler.repository.resolve_dag_state
 
-    class FakeFuture:
-        def __init__(self, value):
-            self._value = value
+    async def resolve_dag_state(dag_id: str) -> str:
+        resolved.append(dag_id)
+        if dag_id == "dag-stale":
+            return "completed"
+        return await original_resolve_dag_state(dag_id)
 
-        def result(self, timeout=None):
-            return self._value
+    scheduler.repository.resolve_dag_state = resolve_dag_state
 
-    def fake_run_coroutine_threadsafe(coro, _loop):
-        try:
-            coro_name = coro.cr_code.co_name
-            if coro_name == "resolve_dag_state":
-                dag_id = coro.cr_frame.f_locals["dag_id"]
-                resolved.append(dag_id)
-                if dag_id == "dag-stale":
-                    return FakeFuture("completed")
-                return FakeFuture("active")
-            if coro_name == "get_active_dag_ids":
-                return FakeFuture({"dag-valid"})
-            if coro_name == "_evict_dag_from_memory":
-                dag_id = coro.cr_frame.f_locals["dag_id"]
-                reason = coro.cr_frame.f_locals["reason"]
-                scheduler._terminal_dag_states.pop(dag_id, None)
-                removed.append((dag_id, reason))
-                scheduler.active_dags.pop(dag_id, None)
-                return FakeFuture(True)
-            if coro_name == "notify_event":
-                scheduler.notify_calls.append(True)
-                return FakeFuture(True)
-            raise AssertionError(f"Unexpected coroutine submitted: {coro_name}")
-        finally:
-            coro.close()
-
-    def fake_sleep(_interval: float) -> None:
-        scheduler.running = False
-
-    monkeypatch.setattr(scheduler_psql.asyncio, "run_coroutine_threadsafe", fake_run_coroutine_threadsafe)
-    monkeypatch.setattr(scheduler_psql.time, "sleep", fake_sleep)
-
-    scheduler._blocking_sync_dag(interval=0)
+    await scheduler._sync_dag_once()
 
     assert removed == [
         ("dag-stale", "no longer active or deleted in database")
@@ -793,6 +765,57 @@ async def test_blocking_sync_dag_reaps_stale_memory_dags_and_notifies(monkeypatc
     assert resolved == ["dag-valid", "dag-stale"]
     assert "dag-stale" not in scheduler.active_dags
     assert "dag-stale" not in scheduler._terminal_dag_states
+    assert scheduler.notify_calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_submission_priority_refresh_request_does_not_refresh_inline():
+    repository = RecordingRepository(dag_state="active")
+    frontier = RecordingFrontier()
+    scheduler = build_scheduler(repository, frontier)
+    scheduler.priority_refresh_interval = 10
+    scheduler._submission_count = 10
+    scheduler._request_queue = asyncio.Queue()
+    scheduler._pending_requests = {}
+    scheduler._next_priority_refresh_at = time.monotonic() + 60.0
+
+    refresh_calls: list[str] = []
+
+    async def refresh_job_priorities(source: str = "unknown") -> int:
+        refresh_calls.append(source)
+        return 1
+
+    scheduler._refresh_job_priorities = refresh_job_priorities
+
+    await scheduler._handle_priority_refresh()
+
+    assert refresh_calls == []
+    assert scheduler._next_priority_refresh_at > time.monotonic()
+    assert scheduler.notify_calls == []
+
+
+@pytest.mark.asyncio
+async def test_submission_priority_refresh_request_wakes_when_due():
+    repository = RecordingRepository(dag_state="active")
+    frontier = RecordingFrontier()
+    scheduler = build_scheduler(repository, frontier)
+    scheduler.priority_refresh_interval = 10
+    scheduler._submission_count = 10
+    scheduler._request_queue = asyncio.Queue()
+    scheduler._pending_requests = {}
+    scheduler._next_priority_refresh_at = time.monotonic() - 1.0
+
+    refresh_calls: list[str] = []
+
+    async def refresh_job_priorities(source: str = "unknown") -> int:
+        refresh_calls.append(source)
+        return 1
+
+    scheduler._refresh_job_priorities = refresh_job_priorities
+
+    await scheduler._handle_priority_refresh()
+
+    assert refresh_calls == []
     assert scheduler.notify_calls == [True]
 
 
@@ -839,6 +862,36 @@ def test_limit_planned_jobs_to_available_slots_keeps_order_and_caps_per_executor
         "parser-1",
         "parser-2",
     ]
+
+
+def test_repository_record_to_work_info_normalizes_uuid_fields():
+    repository = object.__new__(JobRepository)
+    now = datetime.now(timezone.utc)
+    job_id = uuid.uuid4()
+    dag_id = uuid.uuid4()
+
+    work_info = repository._record_to_work_info(
+        (
+            job_id,
+            "extract",
+            0,
+            WorkState.CREATED.value,
+            1,
+            now,
+            timedelta(seconds=60),
+            {},
+            0,
+            False,
+            now + timedelta(days=1),
+            dag_id,
+            0,
+            None,
+            None,
+        )
+    )
+
+    assert work_info.id == str(job_id)
+    assert work_info.dag_id == str(dag_id)
 
 
 @pytest.mark.asyncio

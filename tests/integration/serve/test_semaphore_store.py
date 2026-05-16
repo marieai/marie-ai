@@ -76,6 +76,58 @@ def test_reserve_success_and_release(sema: SemaphoreStore):
     assert sema.available_slot_count(slot) == 1
 
 
+def test_reserve_many_reserves_available_tickets(sema: SemaphoreStore):
+    slot = _slot()
+    sema.set_capacity(slot, 3)
+
+    tickets = [_ticket() for _ in range(3)]
+    reserved = sema.reserve_many(
+        slot,
+        tickets,
+        node="scheduler",
+        owner_by_ticket={ticket: ticket for ticket in tickets},
+    )
+
+    assert reserved == set(tickets)
+    assert sema.read_count(slot) == 3
+
+    holders = sema.list_holders(slot)
+    assert set(holders) == set(tickets)
+    for ticket in tickets:
+        assert holders[ticket].owner == ticket
+
+
+def test_reserve_many_caps_at_available_capacity(sema: SemaphoreStore):
+    slot = _slot()
+    sema.set_capacity(slot, 2)
+
+    tickets = [_ticket() for _ in range(4)]
+    reserved = sema.reserve_many(slot, tickets, node="scheduler")
+
+    assert reserved == set(tickets[:2])
+    assert sema.read_count(slot) == 2
+    assert sema.available_slot_count(slot) == 0
+
+
+def test_reserve_many_falls_back_when_one_ticket_exists(sema: SemaphoreStore):
+    slot = _slot()
+    sema.set_capacity(slot, 3)
+
+    existing = _ticket()
+    first_new = _ticket()
+    second_new = _ticket()
+    assert sema.reserve(slot, existing, node="scheduler") is True
+
+    reserved = sema.reserve_many(
+        slot,
+        [existing, first_new, second_new],
+        node="scheduler",
+    )
+
+    assert reserved == {first_new, second_new}
+    assert sema.read_count(slot) == 3
+
+
 def test_release_requires_existing_holder_and_count(sema: SemaphoreStore):
     slot = _slot()
     sema.set_capacity(slot, 1)

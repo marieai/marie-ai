@@ -2,7 +2,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional
 
-import psycopg2
+import psycopg
 
 from marie.logging_core.logger import MarieLogger
 from marie.scheduler.repository import JobRepository
@@ -77,7 +77,7 @@ class MaintenanceService:
                     count = result[0][0]
                     if count:
                         released_count = count
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Failed to expire jobs: {error}", exc_info=True)
             finally:
                 self.repository._close_connection(conn)

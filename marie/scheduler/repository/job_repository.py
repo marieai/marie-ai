@@ -7,9 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import psycopg2
-import psycopg2.extras
-from psycopg2.extras import Json
+import psycopg
+from psycopg.types.json import Jsonb
 
 from marie.constants import __default_psql_dir__, __default_schema_dir__
 from marie.excepts import RuntimeFailToStart
@@ -99,7 +98,7 @@ class JobRepository(PostgresqlMixin):
                 if record:
                     return self._record_to_work_info(record)
                 return None
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error getting job '{job_id}': {error}")
                 if conn:
                     conn.rollback()
@@ -142,7 +141,7 @@ class JobRepository(PostgresqlMixin):
                 if record:
                     return self._record_to_work_info(record)
                 return None
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error getting job by policy: {error}")
                 if conn:
                     conn.rollback()
@@ -208,7 +207,7 @@ class JobRepository(PostgresqlMixin):
                 conn.commit()
 
                 return [self._record_to_work_info(r) for r in records]
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error listing jobs: {error}")
                 if conn:
                     conn.rollback()
@@ -264,7 +263,7 @@ class JobRepository(PostgresqlMixin):
                 deleted = cursor.rowcount > 0
                 conn.commit()
                 return deleted
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error deleting job '{job_id}': {error}")
                 if conn:
                     conn.rollback()
@@ -309,7 +308,7 @@ class JobRepository(PostgresqlMixin):
 
                 if output:
                     update_fields.append("output = %s")
-                    params.append(Json(output))
+                    params.append(Jsonb(output))
 
                 if started_on:
                     update_fields.append("started_on = %s")
@@ -333,7 +332,7 @@ class JobRepository(PostgresqlMixin):
                 updated = cursor.rowcount > 0
                 conn.commit()
                 return updated
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error updating job state: {error}")
                 if conn:
                     conn.rollback()
@@ -372,7 +371,7 @@ class JobRepository(PostgresqlMixin):
 
                 for field_name, field_value in metadata_updates.items():
                     update_fields.append(f"{field_name} = %s")
-                    params.append(Json(field_value))
+                    params.append(Jsonb(field_value))
 
                 params.extend([queue_name, job_id])  # WHERE clause parameters
 
@@ -388,7 +387,7 @@ class JobRepository(PostgresqlMixin):
                 updated = cursor.rowcount > 0
                 conn.commit()
                 return updated
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error updating job metadata: {error}")
                 if conn:
                     conn.rollback()
@@ -443,7 +442,7 @@ class JobRepository(PostgresqlMixin):
             try:
                 conn = self._get_connection()
                 if output:
-                    query = complete_jobs_by_id(DEFAULT_SCHEMA, job_ids, Json(output))
+                    query = complete_jobs_by_id(DEFAULT_SCHEMA, job_ids, Jsonb(output))
                 else:
                     query = complete_jobs_by_id(DEFAULT_SCHEMA, job_ids, None)
 
@@ -473,7 +472,7 @@ class JobRepository(PostgresqlMixin):
             conn = None
             try:
                 conn = self._get_connection()
-                output = Json({"error": error_message})
+                output = {"error": error_message}
                 query = fail_jobs_by_id(DEFAULT_SCHEMA, job_ids, output)
                 result = self._execute_sql_gracefully(query, connection=conn)
                 # Extract count from SELECT COUNT(*) result: [(count,)]
@@ -732,6 +731,7 @@ class JobRepository(PostgresqlMixin):
                     ),
                     connection=connection,
                     return_cursor=True,
+                    commit=False,
                 )
                 # Check if DAG was inserted (ON CONFLICT DO NOTHING returns no rows if exists)
                 result = cursor.fetchone() if cursor else None
@@ -746,6 +746,7 @@ class JobRepository(PostgresqlMixin):
                         insert_job(DEFAULT_SCHEMA, dag_work_info),
                         connection=connection,
                         return_cursor=True,
+                        commit=False,
                     )
                     self._close_cursor(cursor)
 
@@ -754,12 +755,13 @@ class JobRepository(PostgresqlMixin):
                         insert_job_search_document(DEFAULT_SCHEMA, search_document),
                         connection=connection,
                         return_cursor=True,
+                        commit=False,
                     )
                     self._close_cursor(cursor)
 
                 connection.commit()
                 return new_key_added, new_dag_key
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 if connection:
                     connection.rollback()
                 raise ValueError(f"Job creation failed for {dag_id}: {error}")
@@ -871,7 +873,7 @@ class JobRepository(PostgresqlMixin):
                 result = cursor.fetchone()
                 conn.commit()
                 return result[0] if result else None
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error resolving DAG state for {dag_id}: {error}")
                 if conn:
                     conn.rollback()
@@ -912,7 +914,7 @@ class JobRepository(PostgresqlMixin):
 
                 # Return set of valid DAG IDs
                 return {str(record[0]) for record in valid_dag_records}
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error validating active DAGs: {error}")
                 if conn:
                     conn.rollback()
@@ -1136,7 +1138,7 @@ class JobRepository(PostgresqlMixin):
                 result = cursor.fetchone()
                 conn.commit()
                 return result[0] if result else None
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error updating monitor time: {error}")
                 if conn:
                     conn.rollback()
@@ -1219,7 +1221,7 @@ class JobRepository(PostgresqlMixin):
             retry_delay=retry_delay,
             retry_backoff=retry_backoff,
             keep_until=keep_until,
-            dag_id=dag_id,
+            dag_id=str(dag_id) if dag_id is not None else None,
             job_level=job_level,
             soft_sla=soft_sla,
             hard_sla=hard_sla,
@@ -1309,8 +1311,8 @@ class JobRepository(PostgresqlMixin):
             conn = self._get_connection()
             self._execute_sql_gracefully(locked_query, connection=conn)
             self.logger.info(f"Successfully created tables in schema '{schema}'")
-        except (Exception, psycopg2.Error) as error:
-            if isinstance(error, psycopg2.errors.DuplicateTable):
+        except (Exception, psycopg.Error) as error:
+            if isinstance(error, psycopg.errors.DuplicateTable):
                 self.logger.warning("Tables already exist, skipping creation.")
             else:
                 self.logger.error(f"Error creating tables: {error}")
@@ -1336,7 +1338,7 @@ class JobRepository(PostgresqlMixin):
             try:
                 conn = self._get_connection()
                 self._execute_sql_gracefully(query, connection=conn)
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error wiping tables: {error}")
                 raise RuntimeFailToStart(
                     f"Failed to wipe tables in schema '{schema}': {error}"
@@ -1369,7 +1371,7 @@ class JobRepository(PostgresqlMixin):
                     if result and result[0] is not None:
                         return True
                 return False
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error checking tables: {error}")
                 raise RuntimeFailToStart(
                     f"Unable to check installation in schema '{schema}': {error}"
@@ -1398,7 +1400,7 @@ class JobRepository(PostgresqlMixin):
                 rows = cursor.fetchall()
                 conn.commit()
                 return {row[0] for row in rows}
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error getting defined queues: {error}")
                 return set()
             finally:
@@ -1429,7 +1431,7 @@ class JobRepository(PostgresqlMixin):
                     cancel_jobs(schema, queue_name, [job_id]),
                     connection=conn,
                 )
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error cancelling job: {error}")
             finally:
                 self._close_connection(conn)
@@ -1467,7 +1469,7 @@ class JobRepository(PostgresqlMixin):
                     connection=conn,
                 )
                 return cursor.fetchone()[0]
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(
                     f"Error cancelling pending jobs for DAG {dag_id}: {error}"
                 )
@@ -1497,7 +1499,7 @@ class JobRepository(PostgresqlMixin):
                 self._execute_sql_gracefully(
                     resume_jobs(schema, queue_name, [job_id]), connection=conn
                 )
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error resuming job: {error}")
             finally:
                 self._close_connection(conn)
@@ -1562,7 +1564,7 @@ class JobRepository(PostgresqlMixin):
                         "Job will be re-executed from fresh state."
                     )
                 return counts
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error completing job: {error}")
                 return 0
             finally:
@@ -1621,7 +1623,7 @@ class JobRepository(PostgresqlMixin):
                     self.logger.error(f"Failed to update job state: {job_id}")
 
                 return (count, final_state)
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error processing job failure: {error}")
                 return (0, None)
             finally:
@@ -1669,7 +1671,7 @@ class JobRepository(PostgresqlMixin):
                       AND state NOT IN ('completed', 'failed', 'cancelled', 'skipped')
                     """,
                     (
-                        Json({"on_skip": "skipped", **(output_metadata or {})}),
+                        Jsonb({"on_skip": "skipped", **(output_metadata or {})}),
                         job_ids,
                     ),
                 )
@@ -1686,7 +1688,7 @@ class JobRepository(PostgresqlMixin):
 
                 return count
 
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error marking jobs as skipped: {error}")
                 if conn:
                     conn.rollback()
@@ -1704,4 +1706,4 @@ class JobRepository(PostgresqlMixin):
         if hasattr(self, '_db_executor'):
             self._db_executor.shutdown(wait=True)
         if hasattr(self, 'postgreSQL_pool'):
-            self.postgreSQL_pool.closeall()
+            self.postgreSQL_pool.close()

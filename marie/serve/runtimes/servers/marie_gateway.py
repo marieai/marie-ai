@@ -1318,7 +1318,6 @@ class MarieServerGateway(CompositeServer):
             return response
 
         command = invoke_action.get("command")  # job
-        print('invoke_action : ', invoke_action)
 
         if command == "job":
             return self.handle_job_command(invoke_action)

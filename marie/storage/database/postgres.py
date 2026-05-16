@@ -1,12 +1,13 @@
+import time
 import traceback
-from typing import Dict, Any, Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
-import psycopg2
-import psycopg2.extras
-from psycopg2 import pool  # noqa: F401
+import psycopg
+from psycopg import pq
+from psycopg_pool import ConnectionPool, PoolTimeout
 
 from marie.excepts import BadConfigSource
-import traceback
+from marie.utils.scheduler_trace import scheduler_trace
 
 
 class PostgresqlMixin:
@@ -36,22 +37,32 @@ class PostgresqlMixin:
             username = config["username"]
             password = config["password"]
             database = config["database"]
-            max_connections = int(config.get("max_connections", 10))
-            min_connections = int(config.get("min_connections", 1))
+            max_connections = int(config.get("max_connections", config.get("max_pool_size", 10)))
+            min_connections = int(config.get("min_connections", config.get("min_pool_size", 1)))
             application_name = config.get("application_name", "marie_scheduler")
+            self._pg_pool_acquire_timeout_seconds = float(
+                config.get("pool_acquire_timeout_seconds", 30.0)
+            )
+            self._pg_pool_acquire_warn_after_seconds = float(
+                config.get("pool_acquire_warn_after_seconds", 1.0)
+            )
+            self._pg_pool_acquire_trace_after_seconds = float(
+                config.get("pool_acquire_trace_after_seconds", 0.001)
+            )
 
-            # ThreadedConnectionPool
-            self.postgreSQL_pool = psycopg2.pool.ThreadedConnectionPool(
-                min_connections,
-                max_connections,
-                user=username,
-                password=password,
-                database=database,
-                host=hostname,
-                port=port,
-                # Add connection validation
-                # HINT:  Available values: serializable, repeatable read, read committed, read uncommitted.
-                **{
+            self.postgreSQL_pool = ConnectionPool(
+                "",
+                min_size=min_connections,
+                max_size=max_connections,
+                timeout=self._pg_pool_acquire_timeout_seconds,
+                open=True,
+                name=application_name,
+                kwargs={
+                    'user': username,
+                    'password': password,
+                    'dbname': database,
+                    'host': hostname,
+                    'port': port,
                     'options': '-c timezone=UTC -c statement_timeout=120000',
                     'application_name': application_name,
                     'connect_timeout': 10,
@@ -59,8 +70,9 @@ class PostgresqlMixin:
                     'keepalives_idle': 30,
                     'keepalives_interval': 10,
                     'keepalives_count': 3,
-                }
+                },
             )
+            self.postgreSQL_pool.wait(timeout=float(config.get("pool_open_timeout_seconds", 10.0)))
 
             if connection_only:
                 self.logger.info(f"Connected to postgresql database: {config}")
@@ -84,48 +96,47 @@ class PostgresqlMixin:
                 f"Cannot connect to postgresql database: {config}, {e}"
             )
 
+    def _pool_counts(self) -> tuple[int | None, int | None]:
+        pool = getattr(self, "postgreSQL_pool", None)
+        if pool is None:
+            return None, None
+        stats = pool.get_stats()
+        available = stats.get("pool_available")
+        size = stats.get("pool_size")
+        used = None
+        if isinstance(available, int) and isinstance(size, int):
+            used = max(0, size - available)
+        return available, used
+
     def _close_connection(self, conn):
         """Close a connection"""
-        if not conn or conn.closed:
+        if not conn:
             self.logger.debug(
                 f"Connection is None or already closed, nothing to do, conn: {conn}"
             )
             return
-
         try:
-            from psycopg2.extensions import STATUS_IN_TRANSACTION
-            from psycopg2.extensions import STATUS_READY
-
-            if conn.status != STATUS_IN_TRANSACTION:
-                if conn.status == STATUS_READY:
-                    self.logger.debug(
-                        "Returning connection to pool in idle state (STATUS_READY)"
-                    )
-                else:
+            if not conn.closed:
+                tx_status = conn.pgconn.transaction_status
+                if tx_status != pq.TransactionStatus.IDLE:
+                    stack_trace = "".join(traceback.format_stack())
                     self.logger.warning(
-                        f"Returning connection to pool in non-idle state (status: {conn.status})."
+                        f"Returning connection to pool in non-idle state (status: {tx_status}). "
+                        "Forcing rollback."
                     )
-            else:
-                # this is a problem, we have a transaction that is not committed
-                # we should not be in this state, but if we are, we should roll back
-                stack_trace = "".join(traceback.format_stack())
-                self.logger.warning(
-                    f"Returning connection to pool in non-idle state (status: {conn.status}). Forcing rollback."
-                )
-                self.logger.warning(
-                    f"Call stack leading to uncommitted transaction:\n {stack_trace}"
-                )
-                conn.rollback()
+                    self.logger.warning(
+                        f"Call stack leading to uncommitted transaction:\n {stack_trace}"
+                    )
+                    conn.rollback()
             self.postgreSQL_pool.putconn(conn)
-        except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+        except (psycopg.OperationalError, psycopg.InterfaceError) as e:
             self.logger.warning(
                 f"Handling connection error: {e}. Discarding invalid connection."
             )
-            if self.postgreSQL_pool:
-                self.postgreSQL_pool.putconn(conn, close=True)
-        except psycopg2.pool.PoolError as e:
-            self.logger.warning(f"Error returning connection to pool: {e}")
-            self.diagnose_pool()
+            try:
+                conn.close()
+            finally:
+                self.postgreSQL_pool.putconn(conn)
         except Exception as e:
             self.logger.error(f"Unexpected error closing connection: {e}")
 
@@ -142,58 +153,81 @@ class PostgresqlMixin:
         Get a connection from the pool with proper transaction state management.
         Ensures connection is in a clean state for new operations.
         """
+        start = time.perf_counter()
+        timeout = float(getattr(self, "_pg_pool_acquire_timeout_seconds", 30.0))
         connection = None
-        max_retries = 3
 
-        for attempt in range(max_retries):
-            try:
-                connection = self.postgreSQL_pool.getconn()
-                if connection.closed:
-                    self.postgreSQL_pool.putconn(connection, close=True)
-                    continue
-                tx_status = connection.get_transaction_status()
+        try:
+            connection = self.postgreSQL_pool.getconn(timeout=timeout)
+        except PoolTimeout as error:
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            available, used = self._pool_counts()
+            scheduler_trace(
+                "postgres_pool_acquire_timeout",
+                max_connections=getattr(self.postgreSQL_pool, "max_size", None),
+                available_connections=available,
+                used_connections=used,
+                elapsed_ms=elapsed_ms,
+            )
+            self.logger.error(
+                "Timed out waiting for PostgreSQL connection pool capacity "
+                f"after {elapsed_ms:.1f}ms "
+                f"(available={available}, used={used}, "
+                f"max={getattr(self.postgreSQL_pool, 'max_size', None)})"
+            )
+            raise PoolTimeout(
+                "Timed out waiting for PostgreSQL connection pool capacity "
+                f"after {elapsed_ms:.1f}ms"
+            ) from error
 
-                if tx_status == psycopg2.extensions.TRANSACTION_STATUS_IDLE:
-                    # Connection is clean, safe to set autocommit
-                    connection.autocommit = False
-                    return connection
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        available, used = self._pool_counts()
+        if elapsed_ms >= (
+            float(getattr(self, "_pg_pool_acquire_trace_after_seconds", 0.001)) * 1000.0
+        ):
+            scheduler_trace(
+                "postgres_pool_acquire_wait_done",
+                max_connections=getattr(self.postgreSQL_pool, "max_size", None),
+                available_connections=available,
+                used_connections=used,
+                elapsed_ms=elapsed_ms,
+            )
 
-                elif tx_status in (
-                        psycopg2.extensions.TRANSACTION_STATUS_INTRANS,
-                        psycopg2.extensions.TRANSACTION_STATUS_INERROR
-                ):
-                    # Log warning - this shouldn't happen with proper pool management
-                    self.logger.warning(
-                        f"Connection from pool has active transaction (status: {tx_status}). "
-                        f"Rolling back and cleaning up. Attempt {attempt + 1}/{max_retries}"
-                    )
+        warn_after_ms = (
+            float(getattr(self, "_pg_pool_acquire_warn_after_seconds", 1.0)) * 1000.0
+        )
+        if elapsed_ms >= warn_after_ms:
+            self.logger.warning(
+                "Waited %.1fms for PostgreSQL connection pool capacity "
+                "(available=%s, used=%s, max=%s)",
+                elapsed_ms,
+                available,
+                used,
+                getattr(self.postgreSQL_pool, "max_size", None),
+            )
 
-                    # Rollback and reset
-                    connection.rollback()
-                    connection.autocommit = False
-                    return connection
+        try:
+            if connection.closed:
+                raise psycopg.OperationalError("PostgreSQL pool returned a closed connection")
 
-                else:
-                    # Unknown state, return connection to pool and get a new one
-                    self.logger.error(f"Connection in unknown state: {tx_status}")
-                    self.postgreSQL_pool.putconn(connection, close=True)
-                    continue
+            tx_status = connection.pgconn.transaction_status
+            if tx_status != pq.TransactionStatus.IDLE:
+                stack_trace = "".join(traceback.format_stack())
+                self.logger.warning(
+                    f"Connection from pool has active transaction (status: {tx_status}). "
+                    "Rolling back and cleaning up."
+                )
+                self.logger.warning(
+                    f"Call stack leading to uncommitted transaction:\n {stack_trace}"
+                )
+                connection.rollback()
 
-            except psycopg2.OperationalError as e:
-                self.logger.error(f"Connection error on attempt {attempt + 1}: {e}")
-                if connection:
-                    self.postgreSQL_pool.putconn(connection, close=True)
-                if attempt == max_retries - 1:
-                    raise
-                continue
-
-            except Exception as e:
-                self.logger.error(f"Unexpected error getting connection: {e}")
-                if connection:
-                    self.postgreSQL_pool.putconn(connection, close=True)
-                raise
-
-        raise psycopg2.OperationalError("Failed to get clean connection after maximum retries")
+            connection.autocommit = False
+            return connection
+        except Exception:
+            if connection is not None:
+                self.postgreSQL_pool.putconn(connection)
+            raise
 
     @property
     def qualified_table(self) -> str:
@@ -240,79 +274,23 @@ class PostgresqlMixin:
 
     def diagnose_pool(self):
         """Debug connection pool status with transaction state details."""
-        # Transaction status mapping from psycopg2
-        TRANSACTION_STATUS_NAMES = {
-            0: "IDLE",
-            1: "ACTIVE",
-            2: "INTRANS",
-            3: "INERROR",
-            4: "UNKNOWN"
-        }
-
         if hasattr(self, 'postgreSQL_pool'):
             pool = self.postgreSQL_pool
-            print(f"Pool - Min: {pool.minconn}, Max: {pool.maxconn}")
-            print(f"Available: {len(pool._pool)}, Used: {len(pool._used)}")
-
-            # Check available connections
-            print("\nAvailable connections:")
-            for i, conn in enumerate(list(pool._pool)):
-                status_code = getattr(conn, 'status', 4)
-                status_name = TRANSACTION_STATUS_NAMES.get(status_code, f"UNKNOWN({status_code})")
-                print(f"  Connection {i}: {status_name} (code: {status_code})")
-
-            # Check used connections
-            print("\nUsed connections:")
-            for key, conn in list(pool._used.items()):
-                status_code = getattr(conn, 'status', 4)
-                status_name = TRANSACTION_STATUS_NAMES.get(status_code, f"UNKNOWN({status_code})")
-                print(f"  Connection {key}: {status_name} (code: {status_code})")
-
-                # Check for open cursors (if accessible)
-                if hasattr(conn, '_cursor_count'):
-                    print(f"    Open cursors: {conn._cursor_count}")
-
+            print(f"Pool - Min: {pool.min_size}, Max: {pool.max_size}")
+            for key, value in sorted(pool.get_stats().items()):
+                print(f"{key}: {value}")
         else:
             print("No PostgreSQL pool found")
 
     def get_pool_status(self):
         """Get current pool status for programmatic use."""
-        TRANSACTION_STATUS_NAMES = {
-            0: "IDLE",
-            1: "ACTIVE",
-            2: "INTRANS",
-            3: "INERROR",
-            4: "UNKNOWN"
-        }
-
         if hasattr(self, 'postgreSQL_pool'):
             pool = self.postgreSQL_pool
-
-            available_connections = []
-            for conn in pool._pool:
-                status_code = getattr(conn, 'status', 4)
-                available_connections.append({
-                    'status_code': status_code,
-                    'status_name': TRANSACTION_STATUS_NAMES.get(status_code, f"UNKNOWN({status_code})")
-                })
-
-            used_connections = []
-            for key, conn in pool._used.items():
-                status_code = getattr(conn, 'status', 4)
-                used_connections.append({
-                    'key': key,
-                    'status_code': status_code,
-                    'status_name': TRANSACTION_STATUS_NAMES.get(status_code, f"UNKNOWN({status_code})")
-                })
-
             return {
-                'minconn': pool.minconn,
-                'maxconn': pool.maxconn,
-                'closed': getattr(pool, 'closed', 'unknown'),
-                'available_count': len(pool._pool),
-                'used_count': len(pool._used),
-                'available_connections': available_connections,
-                'used_connections': used_connections
+                'minconn': pool.min_size,
+                'maxconn': pool.max_size,
+                'closed': pool.closed,
+                **pool.get_stats(),
             }
         return None
 
@@ -348,10 +326,11 @@ class PostgresqlMixin:
             *,
             named_cursor_name: Optional[str] = None,
             itersize: Optional[int] = 10000,
-            connection: Optional[psycopg2.extensions.connection] = None,
+            connection: Optional[psycopg.Connection] = None,
             max_retries: int = 3,
             return_cursor: bool = False,
-    ) -> psycopg2.extras.DictCursor | list | int | None:
+            commit: bool = True,
+    ) -> Any:
         # A cursor cannot be returned if this function is responsible for the connection,
         # as the connection would be closed in the 'finally' block, rendering the cursor useless.
         if return_cursor and connection is None:
@@ -373,7 +352,8 @@ class PostgresqlMixin:
                         cursor.execute(statement, data)
                     else:
                         cursor.execute(statement)
-                    conn.commit()
+                    if commit:
+                        conn.commit()
 
                     if return_cursor:
                         return cursor
@@ -388,7 +368,7 @@ class PostgresqlMixin:
                         finally:
                             cursor.close()
 
-                except psycopg2.InterfaceError as error:
+                except psycopg.InterfaceError as error:
                     self._close_cursor(cursor)
 
                     if "connection already closed" not in str(error):
@@ -419,5 +399,5 @@ class PostgresqlMixin:
         """Rollback without raising on closed connections."""
         try:
             conn.rollback()
-        except psycopg2.InterfaceError:
+        except psycopg.InterfaceError:
             pass  # Connection already closed

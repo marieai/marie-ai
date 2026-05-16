@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from psycopg2.extensions import adapt
-from psycopg2.extras import Json
+from psycopg import sql
+from psycopg.types.json import Jsonb
 
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.search_documents import JobSearchDocument
@@ -51,15 +51,17 @@ def try_set_timestamp(schema: str, column: str, interval: int) -> str:
 
 
 def _literal(value: Any) -> str:
+    return sql.Literal(value).as_string()
+
+
+def _jsonb_literal(value: Any) -> str:
     if value is None:
         return "NULL"
-    return adapt(value).getquoted().decode("utf-8")
+    return sql.Literal(Jsonb(value)).as_string()
 
 
 def insert_job(schema: str, work_info: WorkInfo) -> str:
-    dependencies_json = (
-        Json(work_info.dependencies) if work_info.dependencies else "'[]'::jsonb"
-    )
+    dependencies_json = _jsonb_literal(work_info.dependencies or [])
 
     return f"""
         INSERT INTO {schema}.job (
@@ -129,7 +131,7 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
                 END as start_after,
 
                 CAST('{work_info.expire_in_seconds}' as interval) as expire_in,
-                {Json(work_info.data)}::jsonb as data,
+                {_jsonb_literal(work_info.data)} as data,
                 {work_info.retry_delay}::int as retry_delay,
                 {work_info.retry_backoff}::bool as retry_backoff,
                 '{to_timestamp_with_tz(work_info.keep_until)}'::text as keep_until,
@@ -180,7 +182,7 @@ def insert_dag(
             '{dag_id}'::uuid,
             '{dag_name}'::text,
             '{WorkState.CREATED.value}',
-            {Json(serialized_dag)}::jsonb,
+            {_jsonb_literal(serialized_dag)},
             {soft_sla_str},
             {hard_sla_str},
             {planner_str}
@@ -317,7 +319,7 @@ def cancel_pending_jobs_for_dag(schema: str, dag_id: str, output: dict):
       UPDATE {schema}.job
       SET completed_on = now(),
           state = '{WorkState.CANCELLED.value}',
-          output = COALESCE(output, '{{}}'::jsonb) || {Json(output)}::jsonb,
+          output = COALESCE(output, '{{}}'::jsonb) || {_jsonb_literal(output)},
           lease_owner = NULL,
           lease_expires_at = NULL,
           run_owner = NULL,
@@ -423,7 +425,7 @@ def _complete_jobs_query(
       UPDATE {schema}.job
       SET completed_on = now(),
           state = '{WorkState.COMPLETED.value}',
-          output = {Json(output)}::jsonb,
+          output = {_jsonb_literal(output)},
           -- clear leases / run ownership 
           lease_owner          = NULL,
           lease_expires_at     = NULL,
@@ -446,28 +448,6 @@ def complete_jobs(schema: str, name: str, ids: list, output: dict):
 def complete_jobs_by_id(schema: str, name: str, ids: list, output: dict):
     state_condition = "TRUE"  # No state condition for complete_jobs_by_id
     return _complete_jobs_query(schema, name, ids, output, state_condition)
-
-
-def complete_jobs_by_id(schema: str, name: str, ids: list, output: dict):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
-    query = f"""
-    WITH results AS (
-      UPDATE {schema}.job
-      SET completed_on = now(),
-          state = '{WorkState.COMPLETED.value}',
-          output = {Json(output)}::jsonb,
-          -- clear leases / run ownership 
-          lease_owner          = NULL,
-          lease_expires_at     = NULL,
-          run_owner            = NULL,
-          run_lease_expires_at = NULL          
-      WHERE name = '{name}'
-        AND id IN (SELECT UNNEST({ids_string}::uuid[]))
-      RETURNING *
-    )
-    SELECT COUNT(*) FROM results
-    """
-    return query
 
 
 def fail_jobs_by_id(schema: str, name: str, ids: list, output: dict):
@@ -500,7 +480,7 @@ def fail_jobs(schema: str, where: str, output: dict):
           WHEN NOT retry_backoff THEN now() + retry_delay * interval '1'
           ELSE {schema}.exponential_backoff(retry_delay, retry_count)
           END,
-        output = {Json(output)}::jsonb,
+        output = {_jsonb_literal(output)},
         -- clear leases / run ownership
         lease_owner          = NULL,
         lease_expires_at     = NULL,

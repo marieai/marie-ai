@@ -261,6 +261,79 @@ async def test_refresh_frontier_priorities_updates_memory_and_hydrates_missing(m
 
 
 @pytest.mark.asyncio
+async def test_refresh_frontier_priorities_skips_dags_already_in_frontier(monkeypatch):
+    frontier = MemoryFrontier(higher_priority_wins=True, default_lease_ttl=0.25)
+    await frontier.add_dag(
+        None,
+        [make_wi("job-frontier", "dag-frontier", "exe://default")],
+    )
+    repo = FakeRepository(
+        priorities={},
+        hydratable_dags=[
+            ("dag-frontier", {"nodes": []}),
+            ("dag-missing", {"nodes": []}),
+        ],
+    )
+    service = DAGManagementService(
+        repository=repo,
+        frontier=frontier,
+        active_dags={},
+    )
+
+    hydrated = []
+
+    async def fake_hydrate_single_dag(dag_id: str) -> bool:
+        hydrated.append(dag_id)
+        return True
+
+    monkeypatch.setattr(service, "hydrate_single_dag", fake_hydrate_single_dag)
+
+    stats = await service.refresh_frontier_priorities(hydrate_missing_limit=10)
+
+    assert stats["hydrated_missing"] == 1
+    assert hydrated == ["dag-missing"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_frontier_priorities_updates_frontier_tracked_job_priority(
+    monkeypatch,
+):
+    frontier = MemoryFrontier(higher_priority_wins=True, default_lease_ttl=0.25)
+    await frontier.add_dag(
+        None,
+        [make_wi("job-frontier", "dag-frontier", "exe://default")],
+    )
+    repo = FakeRepository(
+        priorities={"job-frontier": 42},
+        hydratable_dags=[("dag-frontier", {"nodes": []})],
+    )
+    service = DAGManagementService(
+        repository=repo,
+        frontier=frontier,
+        active_dags={},
+    )
+
+    hydrated = []
+
+    async def fake_hydrate_single_dag(dag_id: str) -> bool:
+        hydrated.append(dag_id)
+        return True
+
+    monkeypatch.setattr(service, "hydrate_single_dag", fake_hydrate_single_dag)
+
+    stats = await service.refresh_frontier_priorities(hydrate_missing_limit=10)
+
+    assert stats == {
+        "tracked": 1,
+        "fetched": 1,
+        "changed": 1,
+        "hydrated_missing": 0,
+    }
+    assert frontier.jobs_by_id["job-frontier"].priority == 42
+    assert hydrated == []
+
+
+@pytest.mark.asyncio
 async def test_refresh_frontier_priorities_skips_hydration_when_active_dag_limit_is_full(
     monkeypatch,
 ):

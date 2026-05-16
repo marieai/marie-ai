@@ -3,10 +3,7 @@ import time
 import traceback
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
-
-import psycopg2
 
 from marie.logging_core.logger import MarieLogger
 from marie.query_planner.base import QueryPlan
@@ -15,6 +12,7 @@ from marie.scheduler.models import WorkInfo
 from marie.scheduler.repository import JobRepository
 from marie.scheduler.state import WorkState
 from marie.scheduler.util import executor_name, is_control_flow_entrypoint
+from marie.utils.scheduler_trace import scheduler_trace
 
 
 class DAGManagementService:
@@ -191,7 +189,7 @@ class DAGManagementService:
                 )
                 return False
 
-            # DAG is stored as JSON, psycopg2 returns it as dict
+            # DAG is stored as JSON and the PostgreSQL driver returns it as a dict.
             # Convert to QueryPlan object using Pydantic
             try:
                 dag = QueryPlan.model_validate(serialized_dag)
@@ -788,7 +786,10 @@ class DAGManagementService:
             self.logger.debug("All DAGs in memory are still valid")
 
     async def refresh_frontier_priorities(
-        self, hydrate_missing_limit: int = 100
+        self,
+        hydrate_missing_limit: int = 100,
+        refresh_id: Optional[int] = None,
+        source: str = "unknown",
     ) -> Dict[str, int]:
         """
         Refresh manual priorities from DB and hydrate missing DAGs that are
@@ -797,15 +798,61 @@ class DAGManagementService:
         tracked_job_ids = list(self.frontier.jobs_by_id.keys())
         changed = 0
         if tracked_job_ids:
+            phase_started = time.perf_counter()
+            scheduler_trace(
+                "scheduler_priority_refresh_frontier_priority_load_start",
+                source=source,
+                refresh_id=refresh_id,
+                tracked=len(tracked_job_ids),
+            )
             priorities = await self.repository.get_job_priorities(tracked_job_ids)
+            scheduler_trace(
+                "scheduler_priority_refresh_frontier_priority_load_done",
+                source=source,
+                refresh_id=refresh_id,
+                tracked=len(tracked_job_ids),
+                fetched=len(priorities),
+                elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
+            )
+            phase_started = time.perf_counter()
+            scheduler_trace(
+                "scheduler_priority_refresh_frontier_priority_apply_start",
+                source=source,
+                refresh_id=refresh_id,
+                tracked=len(tracked_job_ids),
+                fetched=len(priorities),
+            )
             changed = await self.frontier.refresh_priorities(priorities)
+            scheduler_trace(
+                "scheduler_priority_refresh_frontier_priority_apply_done",
+                source=source,
+                refresh_id=refresh_id,
+                tracked=len(tracked_job_ids),
+                fetched=len(priorities),
+                changed=changed,
+                elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
+            )
         else:
             priorities = {}
 
         def _discover_hydratable_dags() -> List[Tuple[str, Dict]]:
-            conn = self.repository._get_connection()
+            conn = None
             cur = None
             try:
+                phase_started = time.perf_counter()
+                scheduler_trace(
+                    "scheduler_priority_refresh_frontier_discover_connection_start",
+                    source=source,
+                    refresh_id=refresh_id,
+                )
+                conn = self.repository._get_connection()
+                scheduler_trace(
+                    "scheduler_priority_refresh_frontier_discover_connection_done",
+                    source=source,
+                    refresh_id=refresh_id,
+                    elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
+                )
+
                 cur = conn.cursor()
                 query = (
                     "SELECT dag_id, serialized_dag "
@@ -813,41 +860,160 @@ class DAGManagementService:
                 )
                 if hydrate_missing_limit > 0:
                     query += f" LIMIT {int(hydrate_missing_limit)}"
+                phase_started = time.perf_counter()
+                scheduler_trace(
+                    "scheduler_priority_refresh_frontier_discover_query_start",
+                    source=source,
+                    refresh_id=refresh_id,
+                    hydrate_missing_limit=hydrate_missing_limit,
+                )
                 cur.execute(query)
+                scheduler_trace(
+                    "scheduler_priority_refresh_frontier_discover_query_done",
+                    source=source,
+                    refresh_id=refresh_id,
+                    elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
+                )
+                phase_started = time.perf_counter()
+                scheduler_trace(
+                    "scheduler_priority_refresh_frontier_discover_fetch_start",
+                    source=source,
+                    refresh_id=refresh_id,
+                )
                 rows = cur.fetchall()
+                scheduler_trace(
+                    "scheduler_priority_refresh_frontier_discover_fetch_done",
+                    source=source,
+                    refresh_id=refresh_id,
+                    row_count=len(rows),
+                    elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
+                )
+                phase_started = time.perf_counter()
+                scheduler_trace(
+                    "scheduler_priority_refresh_frontier_discover_commit_start",
+                    source=source,
+                    refresh_id=refresh_id,
+                )
                 conn.commit()
+                scheduler_trace(
+                    "scheduler_priority_refresh_frontier_discover_commit_done",
+                    source=source,
+                    refresh_id=refresh_id,
+                    elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
+                )
                 return [
                     (str(dag_id), serialized_dag) for dag_id, serialized_dag in rows
                 ]
-            except Exception:
+            except Exception as exc:
+                scheduler_trace(
+                    "scheduler_priority_refresh_frontier_discover_failed",
+                    source=source,
+                    refresh_id=refresh_id,
+                    error=repr(exc),
+                )
                 try:
-                    conn.rollback()
+                    if conn is not None:
+                        conn.rollback()
                 except Exception:
                     pass
                 raise
             finally:
                 if cur and not cur.closed:
                     self.repository._close_cursor(cur)
-                self.repository._close_connection(conn)
+                if conn is not None:
+                    self.repository._close_connection(conn)
 
+        phase_started = time.perf_counter()
+        scheduler_trace(
+            "scheduler_priority_refresh_frontier_discover_start",
+            source=source,
+            refresh_id=refresh_id,
+            hydrate_missing_limit=hydrate_missing_limit,
+            active_dags=len(self.active_dags),
+            max_active_dags=self.max_active_dags,
+        )
         hydratable_dags = await self._loop.run_in_executor(
             self._executor, _discover_hydratable_dags
         )
+        scheduler_trace(
+            "scheduler_priority_refresh_frontier_discover_done",
+            source=source,
+            refresh_id=refresh_id,
+            hydrate_missing_limit=hydrate_missing_limit,
+            hydratable_dags=len(hydratable_dags),
+            active_dags=len(self.active_dags),
+            max_active_dags=self.max_active_dags,
+            elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
+        )
 
         hydrated = 0
-        for dag_id, _serialized_dag in hydratable_dags:
+        for index, (dag_id, _serialized_dag) in enumerate(hydratable_dags):
             if dag_id in self.active_dags:
+                scheduler_trace(
+                    "scheduler_priority_refresh_frontier_hydrate_skip",
+                    source=source,
+                    refresh_id=refresh_id,
+                    dag_id=dag_id,
+                    index=index,
+                    reason="already_active",
+                    active_dags=len(self.active_dags),
+                    max_active_dags=self.max_active_dags,
+                )
+                continue
+            if dag_id in self.frontier.dag_nodes:
+                scheduler_trace(
+                    "scheduler_priority_refresh_frontier_hydrate_skip",
+                    source=source,
+                    refresh_id=refresh_id,
+                    dag_id=dag_id,
+                    index=index,
+                    reason="frontier_tracked",
+                    active_dags=len(self.active_dags),
+                    max_active_dags=self.max_active_dags,
+                )
                 continue
             if (
                 self.max_active_dags > 0
                 and len(self.active_dags) >= self.max_active_dags
             ):
+                scheduler_trace(
+                    "scheduler_priority_refresh_frontier_hydrate_stop",
+                    source=source,
+                    refresh_id=refresh_id,
+                    dag_id=dag_id,
+                    index=index,
+                    reason="active_limit",
+                    active_dags=len(self.active_dags),
+                    max_active_dags=self.max_active_dags,
+                )
                 self.logger.debug(
                     f"Skipping DAG hydration refresh at capacity "
                     f"{len(self.active_dags)}/{self.max_active_dags}"
                 )
                 break
-            if await self.hydrate_single_dag(dag_id):
+            phase_started = time.perf_counter()
+            scheduler_trace(
+                "scheduler_priority_refresh_frontier_hydrate_start",
+                source=source,
+                refresh_id=refresh_id,
+                dag_id=dag_id,
+                index=index,
+                active_dags=len(self.active_dags),
+                max_active_dags=self.max_active_dags,
+            )
+            hydrated_dag = await self.hydrate_single_dag(dag_id)
+            scheduler_trace(
+                "scheduler_priority_refresh_frontier_hydrate_done",
+                source=source,
+                refresh_id=refresh_id,
+                dag_id=dag_id,
+                index=index,
+                admitted=hydrated_dag,
+                active_dags=len(self.active_dags),
+                max_active_dags=self.max_active_dags,
+                elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
+            )
+            if hydrated_dag:
                 hydrated += 1
 
         if changed > 0 or hydrated > 0:

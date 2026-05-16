@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from math import inf
 from typing import Any, Dict, List, Optional
 
-import psycopg2
+import psycopg
 
 from marie.connectors.builtin import register_all_known_connectors
 from marie.connectors.model import ConnectorsConf
@@ -327,6 +327,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.priority_refresh_hydrate_limit = int(
             config.get("priority_refresh_hydrate_limit", 100)
         )
+        self._priority_refresh_seq = 0
         self._next_priority_refresh_at = (
             time.monotonic() + self.priority_refresh_interval_seconds
         )
@@ -1520,15 +1521,40 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             t_active_start = None
 
             try:
-                self.logger.debug(
-                    f"Polling : {wait_time:.2f}s — Queue size: {self._event_queue.qsize()} — Idle streak: {idle_streak}"
+                priority_due_in = max(
+                    0.0, self._next_priority_refresh_at - time.monotonic()
                 )
-                woke = await self._wait_for_dispatch_wake(wait_time)
+                effective_wait_time = min(wait_time, priority_due_in)
+                self.logger.debug(
+                    f"Polling : {effective_wait_time:.2f}s — Queue size: {self._event_queue.qsize()} — Idle streak: {idle_streak}"
+                )
+                woke = await self._wait_for_dispatch_wake(effective_wait_time)
                 if woke:
                     wait_time = MIN_POLL_PERIOD
 
                 if time.monotonic() >= self._next_priority_refresh_at:
-                    await self._refresh_job_priorities()
+                    refresh_started = time.perf_counter()
+                    scheduler_trace(
+                        "scheduler_priority_refresh_due",
+                        source="scheduler_loop",
+                        submission_count=self._submission_count,
+                        refresh_interval_seconds=self.priority_refresh_interval_seconds,
+                        request_queue_size=self._request_queue.qsize(),
+                        pending_requests=len(self._pending_requests),
+                    )
+                    refresh_id = await self._refresh_job_priorities(
+                        source="scheduler_loop"
+                    )
+                    scheduler_trace(
+                        "scheduler_priority_refresh_returned",
+                        source="scheduler_loop",
+                        refresh_id=refresh_id,
+                        submission_count=self._submission_count,
+                        refresh_interval_seconds=self.priority_refresh_interval_seconds,
+                        request_queue_size=self._request_queue.qsize(),
+                        pending_requests=len(self._pending_requests),
+                        elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
+                    )
 
                 reaped_soft_leases = await self.frontier.reap_expired_soft_leases()
                 if reaped_soft_leases:
@@ -1930,6 +1956,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 scheduled_any = False
                 jobs_scheduled_this_cycle = defaultdict(int)
                 enqueue_tasks = []
+                reservable_jobs_by_executor: dict[str, list[WorkInfo]] = defaultdict(
+                    list
+                )
+                slots_before_by_job: dict[str, int] = {}
 
                 self.logger.debug(
                     f"[WORK_DIST] Processing {len(leased_jobs)} leased jobs..."
@@ -1983,78 +2013,49 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         await self.frontier.release_lease_local(wi.id)
                         continue
 
-                    # Reserve capacity via semaphore before dispatch to avoid async races
-                    slot_type = exe
-                    # owner = f"{self._sem_owner_prefix}:{wi.id}"
-                    owner = f"{wi.id}"
-                    reserved = False
-                    try:
-                        self.logger.debug(
-                            f"[WORK_DIST] Attempting semaphore reservation for job={wi.id}, executor={slot_type}"
-                        )
-                        reserved = await asyncio.to_thread(
-                            self._semaphore_store.reserve,
-                            slot_type,
-                            wi.id,  # ticket_id
-                            node='',  # at this time we don't know the placement where the job wil be executed yet
-                            ttl=self._sem_default_ttl,
-                            owner=wi.id,
-                        )
-                        if reserved:
-                            self.logger.info(
-                                f"[WORK_DIST] Semaphore reserved successfully for job={wi.id}, executor={slot_type}"
-                            )
+                    slots_before_by_job[wi.id] = slots_before
+                    slots_by_executor[exe] = max(0, slots_by_executor.get(exe, 0) - 1)
+                    reservable_jobs_by_executor[exe].append(wi)
+
+                for slot_type, jobs in reservable_jobs_by_executor.items():
+                    reserved_ids = await self._reserve_semaphore_slots(slot_type, jobs)
+                    for wi in jobs:
+                        owner = wi.id
+                        if wi.id not in reserved_ids:
                             scheduler_trace(
-                                "slot_reserved",
+                                "slot_unavailable",
                                 job_id=wi.id,
                                 dag_id=wi.dag_id,
                                 executor=slot_type,
-                                owner=owner,
-                                slots_before=slots_before,
-                                ttl_seconds=self._sem_default_ttl,
+                                slots_by_executor=dict(slots_by_executor),
                             )
-                    except Exception as e:
-                        self.logger.error(
-                            f"[WORK_DIST] Semaphore reserve ERROR for job={wi.id}, executor={slot_type}: {e}",
-                            exc_info=True,
-                        )
+                            self.logger.warning(
+                                f"[WORK_DIST] NO semaphore capacity for executor={slot_type}; releasing lease for job={wi.id}. "
+                                f"slots_by_executor={slots_by_executor}"
+                            )
+                            await self._release_lease_db([wi.id])
+                            await self.frontier.release_lease_local(wi.id)
+                            continue
+
                         scheduler_trace(
-                            "slot_reserve_failed",
+                            "slot_reserved",
                             job_id=wi.id,
                             dag_id=wi.dag_id,
                             executor=slot_type,
                             owner=owner,
-                            error=repr(e),
+                            slots_before=slots_before_by_job.get(wi.id),
+                            ttl_seconds=self._sem_default_ttl,
                         )
-                        reserved = False
-
-                    if not reserved:
-                        scheduler_trace(
-                            "slot_unavailable",
-                            job_id=wi.id,
-                            dag_id=wi.dag_id,
-                            executor=slot_type,
-                            slots_by_executor=dict(slots_by_executor),
+                        enqueue_tasks.append(
+                            {
+                                "task": asyncio.create_task(
+                                    self._activate_and_enqueue_job(wi)
+                                ),
+                                "wi": wi,
+                                "exe": slot_type,
+                                "owner": owner,
+                            }
                         )
-                        self.logger.warning(
-                            f"[WORK_DIST] NO semaphore capacity for executor={slot_type}; releasing lease for job={wi.id}. "
-                            f"slots_by_executor={slots_by_executor}"
-                        )
-                        await self._release_lease_db([wi.id])
-                        await self.frontier.release_lease_local(wi.id)
-                        continue
-
-                    slots_by_executor[exe] = max(0, slots_by_executor.get(exe, 0) - 1)
-                    enqueue_tasks.append(
-                        {
-                            "task": asyncio.create_task(
-                                self._activate_and_enqueue_job(wi)
-                            ),
-                            "wi": wi,
-                            "exe": exe,
-                            "owner": owner,
-                        }
-                    )
 
                 if enqueue_tasks:
                     scheduler_trace(
@@ -2588,7 +2589,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             for record in cursor:
                 work_items[record[0]] = self.record_to_work_info(record)
             conn.commit()
-        except (Exception, psycopg2.Error) as error:
+        except (Exception, psycopg.Error) as error:
             self.logger.error(f"Error listing jobs: {error}")
             conn.rollback()
         finally:
@@ -2615,12 +2616,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         result_future = asyncio.Future()
         request_id = str(uuid.uuid4())
+        # sync_mode = work_info.data.get("metadata", {}).get("sync_mode", False)
+        sync_mode = False
 
         submission_request = JobSubmissionRequest(
             work_info=work_info,
             overwrite=overwrite,
             request_id=request_id,
             result_future=result_future,
+            wait_for_result=sync_mode,
         )
 
         self._pending_requests[request_id] = submission_request
@@ -2640,8 +2644,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.debug(
                 f"Job {work_info.id} queued successfully (request: {request_id})"
             )
-            # sync_mode = work_info.data.get("metadata", {}).get("sync_mode", False)
-            sync_mode = False
             if sync_mode:
                 # Wait for the result
                 result = await result_future
@@ -2650,7 +2652,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             return work_info.id
         except Exception as e:
             self._pending_requests.pop(request_id, None)
-            result_future.set_exception(e)
+            if sync_mode and not result_future.done():
+                result_future.set_exception(e)
             raise
 
     async def _handle_priority_refresh(self):
@@ -2658,10 +2661,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         refresh_interval = self.priority_refresh_interval
 
         if self._submission_count % refresh_interval == 0:
-            await self._refresh_job_priorities()
+            now = time.monotonic()
+            due_in = self._next_priority_refresh_at - now
+            should_wake = due_in <= 0
+            scheduler_trace(
+                "scheduler_priority_refresh_requested",
+                source="submission_worker",
+                submission_count=self._submission_count,
+                refresh_interval=refresh_interval,
+                request_queue_size=self._request_queue.qsize(),
+                pending_requests=len(self._pending_requests),
+                due_in_ms=max(0.0, due_in * 1000.0),
+                wake_scheduler=should_wake,
+            )
+            if should_wake:
+                await self.notify_event()
             self.logger.info(
-                f"Refreshed job priorities after {self._submission_count} submissions "
-                f"(interval: {refresh_interval})"
+                f"Requested job priority refresh after {self._submission_count} submissions "
+                f"(interval: {refresh_interval}, due_in={max(0.0, due_in):.3f}s)"
             )
 
     async def _send_submission_failure_toast(self, work_info, error: Exception) -> None:
@@ -2717,7 +2734,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self._submission_count += 1
                     await self._handle_priority_refresh()
 
-                    if not request.result_future.done():
+                    if request.wait_for_result and not request.result_future.done():
                         request.result_future.set_result(result)
 
                     queue_size = self._request_queue.qsize()
@@ -2729,10 +2746,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.error(
                         f"Job submission failed for {request.work_info.id}: {e}"
                     )
-                    if not request.result_future.done():
+                    if request.wait_for_result and not request.result_future.done():
                         request.result_future.set_exception(e)
                 except Exception as e:
-                    if not request.result_future.done():
+                    if request.wait_for_result and not request.result_future.done():
                         request.result_future.set_exception(e)
                     self.logger.error(
                         f"Failed to process job {request.work_info.id}: {e}"
@@ -2855,20 +2872,91 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         await self.notify_event()
         return submission_id
 
-    async def _refresh_job_priorities(self):
+    async def _refresh_job_priorities(self, source: str = "unknown") -> int:
         """Sync DB priority edits into memory and log current SLA pressure."""
+        self._priority_refresh_seq += 1
+        refresh_id = self._priority_refresh_seq
+        refresh_started = time.perf_counter()
+        scheduler_trace(
+            "scheduler_priority_refresh_start",
+            source=source,
+            refresh_id=refresh_id,
+            submission_count=self._submission_count,
+            hydrate_missing_limit=self.priority_refresh_hydrate_limit,
+            request_queue_size=self._request_queue.qsize(),
+            pending_requests=len(self._pending_requests),
+        )
         try:
+            phase_started = time.perf_counter()
+            scheduler_trace(
+                "scheduler_priority_refresh_frontier_start",
+                source=source,
+                refresh_id=refresh_id,
+                submission_count=self._submission_count,
+                hydrate_missing_limit=self.priority_refresh_hydrate_limit,
+            )
             refresh_stats = await self.dag_service.refresh_frontier_priorities(
-                hydrate_missing_limit=self.priority_refresh_hydrate_limit
+                hydrate_missing_limit=self.priority_refresh_hydrate_limit,
+                refresh_id=refresh_id,
+                source=source,
+            )
+            scheduler_trace(
+                "scheduler_priority_refresh_frontier_done",
+                source=source,
+                refresh_id=refresh_id,
+                submission_count=self._submission_count,
+                elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
+                tracked=refresh_stats.get("tracked", 0),
+                fetched=refresh_stats.get("fetched", 0),
+                changed=refresh_stats.get("changed", 0),
+                hydrated_missing=refresh_stats.get("hydrated_missing", 0),
+            )
+
+            phase_started = time.perf_counter()
+            scheduler_trace(
+                "scheduler_priority_refresh_ready_ordering_start",
+                source=source,
+                refresh_id=refresh_id,
+                submission_count=self._submission_count,
             )
             await self.frontier.refresh_ready_ordering()
+            scheduler_trace(
+                "scheduler_priority_refresh_ready_ordering_done",
+                source=source,
+                refresh_id=refresh_id,
+                submission_count=self._submission_count,
+                elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
+            )
             self._next_priority_refresh_at = (
                 time.monotonic() + self.priority_refresh_interval_seconds
+            )
+
+            phase_started = time.perf_counter()
+            scheduler_trace(
+                "scheduler_priority_refresh_summary_start",
+                source=source,
+                refresh_id=refresh_id,
+                submission_count=self._submission_count,
+                top_n=self.sla_warning_top_n,
             )
             frontier_summary = self.frontier.summary(
                 detail=True, top_n=self.sla_warning_top_n
             )
             sla_summary = frontier_summary.get("sla", {})
+            scheduler_trace(
+                "scheduler_priority_refresh_summary_done",
+                source=source,
+                refresh_id=refresh_id,
+                submission_count=self._submission_count,
+                elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
+                frontier_jobs=frontier_summary.get("totals", {}).get("jobs", 0),
+                frontier_dags=frontier_summary.get("totals", {}).get("dags", 0),
+                ready=frontier_summary.get("totals", {}).get("ready", 0),
+                blocked=frontier_summary.get("totals", {}).get("blocked", 0),
+                soft_missed=sla_summary.get("soft_missed", 0),
+                hard_missed=sla_summary.get("hard_missed", 0),
+                highest_bucket=sla_summary.get("highest_bucket", 0),
+            )
             if not sla_summary:
                 self.logger.info(
                     "[SLA] Refresh checkpoint: "
@@ -2878,7 +2966,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     f"hydrated_missing={refresh_stats.get('hydrated_missing', 0)}, "
                     "no frontier-tracked jobs"
                 )
-                return
+                scheduler_trace(
+                    "scheduler_priority_refresh_done",
+                    source=source,
+                    refresh_id=refresh_id,
+                    submission_count=self._submission_count,
+                    elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
+                    tracked=refresh_stats.get("tracked", 0),
+                    fetched=refresh_stats.get("fetched", 0),
+                    changed=refresh_stats.get("changed", 0),
+                    hydrated_missing=refresh_stats.get("hydrated_missing", 0),
+                    has_sla_summary=False,
+                )
+                return refresh_id
 
             self.logger.info(
                 "[SLA] Refresh checkpoint: "
@@ -2896,9 +2996,51 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             if top_urgent:
                 self.logger.warning(f"[SLA] Top urgent jobs: {top_urgent}")
 
+            phase_started = time.perf_counter()
+            scheduler_trace(
+                "scheduler_priority_refresh_hard_sla_policy_start",
+                source=source,
+                refresh_id=refresh_id,
+                submission_count=self._submission_count,
+                hard_missed=sla_summary.get("hard_missed", 0),
+                policy=self.hard_sla_policy,
+            )
             await self._handle_hard_sla_policy(sla_summary)
+            scheduler_trace(
+                "scheduler_priority_refresh_hard_sla_policy_done",
+                source=source,
+                refresh_id=refresh_id,
+                submission_count=self._submission_count,
+                elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
+                hard_missed=sla_summary.get("hard_missed", 0),
+                policy=self.hard_sla_policy,
+            )
+            scheduler_trace(
+                "scheduler_priority_refresh_done",
+                source=source,
+                refresh_id=refresh_id,
+                submission_count=self._submission_count,
+                elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
+                tracked=refresh_stats.get("tracked", 0),
+                fetched=refresh_stats.get("fetched", 0),
+                changed=refresh_stats.get("changed", 0),
+                hydrated_missing=refresh_stats.get("hydrated_missing", 0),
+                has_sla_summary=True,
+                soft_missed=sla_summary.get("soft_missed", 0),
+                hard_missed=sla_summary.get("hard_missed", 0),
+                highest_bucket=sla_summary.get("highest_bucket", 0),
+            )
         except Exception as e:
+            scheduler_trace(
+                "scheduler_priority_refresh_failed",
+                source=source,
+                refresh_id=refresh_id,
+                submission_count=self._submission_count,
+                elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
+                error=repr(e),
+            )
             self.logger.error(f"Failed to refresh job priorities: {e}")
+        return refresh_id
 
     async def _handle_hard_sla_policy(self, sla_summary: Dict[str, Any]) -> None:
         """Current hard-SLA behavior hook for the in-memory scheduler."""
@@ -3132,7 +3274,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return:
         """
         return WorkInfo(
-            id=record[0],
+            id=str(record[0]),
             name=record[1],
             priority=record[2],
             state=WorkState(record[3]) if record[3] else None,
@@ -3143,7 +3285,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             retry_delay=record[8],
             retry_backoff=record[9],
             keep_until=record[10],
-            dag_id=record[11],
+            dag_id=str(record[11]) if record[11] is not None else None,
             job_level=record[12],
         )
 
@@ -3257,7 +3399,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         min_sync_interval_seconds=min_sync_interval_seconds,
                     )
 
-            except (Exception, psycopg2.Error) as error:
+            except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error syncing jobs: {error}")
                 self.logger.error(traceback.format_exc())
 
@@ -3359,76 +3501,76 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def _sync_dag(self):
         self.logger.info("Starting DAG synchronization")
         # https://github.com/marieai/marie-ai/issues/134
-        await self._loop.run_in_executor(self._db_executor, self._blocking_sync_dag)
+        await self._sync_dag_loop()
 
-    def _blocking_sync_dag(self, interval: int = 30) -> None:
+    async def _sync_dag_loop(self, interval: int = 30) -> None:
         """
-        Validate that DAGs in memory still exist and are active in database.
-        This runs in a background thread and delegates DB access to repository.
+        Validate in-memory DAGs without monopolizing the scheduler DB executor.
         """
         self.logger.info(f"Starting DAG sync polling (interval: {interval}s)")
+        scheduler_trace("scheduler_dag_sync_loop_start", interval=interval)
 
         while self.running:
             try:
-                if not self.active_dags:
-                    self.logger.debug("No active DAGs in memory to validate")
-                    time.sleep(interval)
-                    continue
-
-                memory_dag_ids = list(self.active_dags.keys())
-                self.logger.debug(f"Validating {len(memory_dag_ids)} DAGs in memory")
-
-                resolved_terminal_dags: set[str] = set()
-                for dag_id in memory_dag_ids:
-                    try:
-                        future = asyncio.run_coroutine_threadsafe(
-                            self.repository.resolve_dag_state(dag_id), self._loop
-                        )
-                        dag_state = future.result(timeout=30)
-                        if dag_state in ("completed", "failed"):
-                            resolved_terminal_dags.add(dag_id)
-                    except Exception as resolve_error:
-                        self.logger.warning(
-                            f"[DAG_SYNC] Failed to resolve DAG state for {dag_id}: "
-                            f"{resolve_error}"
-                        )
-
-                # Delegate to repository to get active DAG IDs
-                # We need to run this async method from sync context
-                future = asyncio.run_coroutine_threadsafe(
-                    self.repository.get_active_dag_ids(memory_dag_ids), self._loop
-                )
-                valid_db_dags = future.result(timeout=30)
-
-                invalid_dags = (set(memory_dag_ids) - valid_db_dags).union(
-                    resolved_terminal_dags
-                )
-
-                if invalid_dags:
-                    self.logger.info(
-                        f"Found {len(invalid_dags)} invalid DAGs in memory"
-                    )
-                    for dag_id in invalid_dags:
-                        self._remove_dag_from_memory(
-                            dag_id, "no longer active or deleted in database"
-                        )
-                    try:
-                        asyncio.run_coroutine_threadsafe(
-                            self.notify_event(), self._loop
-                        ).result(timeout=5)
-                    except Exception as notify_error:
-                        self.logger.debug(
-                            f"[DAG_SYNC] Failed to notify scheduler after DAG cleanup: "
-                            f"{notify_error}"
-                        )
-                else:
-                    self.logger.debug("All DAGs in memory are still valid")
-
+                await self._sync_dag_once()
+            except asyncio.CancelledError:
+                raise
             except Exception as error:
+                scheduler_trace("scheduler_dag_sync_cycle_failed", error=repr(error))
                 self.logger.error(f"Error validating DAGs: {error}")
 
-            time.sleep(interval)
-        self.logger.debug(f"DAG sync polling stopped")
+            await asyncio.sleep(interval)
+
+        scheduler_trace("scheduler_dag_sync_loop_stopped")
+        self.logger.debug("DAG sync polling stopped")
+
+    async def _sync_dag_once(self) -> None:
+        if not self.active_dags:
+            scheduler_trace("scheduler_dag_sync_cycle_skipped", reason="no_active_dags")
+            self.logger.debug("No active DAGs in memory to validate")
+            return
+
+        memory_dag_ids = list(self.active_dags.keys())
+        scheduler_trace(
+            "scheduler_dag_sync_cycle_start",
+            active_dags=len(memory_dag_ids),
+        )
+        self.logger.debug(f"Validating {len(memory_dag_ids)} DAGs in memory")
+
+        resolved_terminal_dags: set[str] = set()
+        for dag_id in memory_dag_ids:
+            try:
+                dag_state = await self.repository.resolve_dag_state(dag_id)
+                if dag_state in ("completed", "failed"):
+                    resolved_terminal_dags.add(dag_id)
+            except Exception as resolve_error:
+                self.logger.warning(
+                    f"[DAG_SYNC] Failed to resolve DAG state for {dag_id}: "
+                    f"{resolve_error}"
+                )
+
+        valid_db_dags = await self.repository.get_active_dag_ids(memory_dag_ids)
+        invalid_dags = (set(memory_dag_ids) - valid_db_dags).union(
+            resolved_terminal_dags
+        )
+
+        if invalid_dags:
+            self.logger.info(f"Found {len(invalid_dags)} invalid DAGs in memory")
+            for dag_id in invalid_dags:
+                await self._evict_dag_from_memory(
+                    dag_id, "no longer active or deleted in database"
+                )
+            await self.notify_event()
+        else:
+            self.logger.debug("All DAGs in memory are still valid")
+
+        scheduler_trace(
+            "scheduler_dag_sync_cycle_done",
+            active_dags=len(memory_dag_ids),
+            valid_dags=len(valid_db_dags),
+            terminal_dags=len(resolved_terminal_dags),
+            invalid_dags=len(invalid_dags),
+        )
 
     async def _evict_dag_from_memory(self, dag_id: str, reason: str) -> bool:
         self._terminal_dag_states.pop(dag_id, None)
@@ -3439,17 +3581,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             f"removed={removed}, finalize_stats={stats}"
         )
         return removed
-
-    def _remove_dag_from_memory(self, dag_id: str, reason: str):
-        """
-        Centralized method to remove DAG from memory with logging.
-        Runs cleanup on the scheduler loop so frontier and active_dags stay
-        synchronized from the same thread.
-        """
-        future = asyncio.run_coroutine_threadsafe(
-            self._evict_dag_from_memory(dag_id, reason), self._loop
-        )
-        return future.result(timeout=30)
 
     async def notify_event(self) -> bool:
         if self._debounced_notify:
@@ -3694,11 +3825,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                     await self._emit_dag_terminal_event(dag_state, work_info)
                     return True
-                except (Exception, psycopg2.Error):
+                except (Exception, psycopg.Error):
                     if claimed_terminal_state:
                         self._terminal_dag_states.pop(dag_id, None)
                     raise
-        except (Exception, psycopg2.Error) as error:
+        except (Exception, psycopg.Error) as error:
             self.logger.error(f"Error resolving DAG status: {error}")
             raise error
 
@@ -3770,6 +3901,84 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             return set(ids)
 
         return await self.repository.release_lease(job_ids=ids)
+
+    async def _reserve_semaphore_slots_serial(
+        self, executor: str, jobs: list[WorkInfo]
+    ) -> set[str]:
+        reserved: set[str] = set()
+        for wi in jobs:
+            try:
+                ok = await asyncio.to_thread(
+                    self._semaphore_store.reserve,
+                    executor,
+                    wi.id,
+                    node='',
+                    ttl=self._sem_default_ttl,
+                    owner=wi.id,
+                )
+            except Exception as error:
+                scheduler_trace(
+                    "slot_reserve_failed",
+                    job_id=wi.id,
+                    dag_id=wi.dag_id,
+                    executor=executor,
+                    owner=wi.id,
+                    error=repr(error),
+                )
+                self.logger.error(
+                    f"[WORK_DIST] Semaphore reserve ERROR for job={wi.id}, executor={executor}: {error}",
+                    exc_info=True,
+                )
+                continue
+            if ok:
+                reserved.add(wi.id)
+        return reserved
+
+    async def _reserve_semaphore_slots(
+        self, executor: str, jobs: list[WorkInfo]
+    ) -> set[str]:
+        if not jobs:
+            return set()
+
+        job_ids = [wi.id for wi in jobs]
+        started = time.perf_counter()
+        fallback_used = False
+        error: str | None = None
+        scheduler_trace(
+            "semaphore_reserve_batch_start",
+            executor=executor,
+            requested=len(job_ids),
+            job_ids=job_ids,
+        )
+        try:
+            reserved = await asyncio.to_thread(
+                self._semaphore_store.reserve_many,
+                executor,
+                job_ids,
+                node='',
+                ttl=self._sem_default_ttl,
+                owner_by_ticket={wi.id: wi.id for wi in jobs},
+            )
+        except Exception as exc:
+            fallback_used = True
+            error = repr(exc)
+            self.logger.error(
+                f"[WORK_DIST] Batch semaphore reserve failed for executor={executor}; falling back to serial reserve: {exc}",
+                exc_info=True,
+            )
+            reserved = await self._reserve_semaphore_slots_serial(executor, jobs)
+
+        scheduler_trace(
+            "semaphore_reserve_batch_done",
+            executor=executor,
+            requested=len(job_ids),
+            reserved=len(reserved),
+            fallback_used=fallback_used,
+            error=error,
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            job_ids=list(reserved),
+        )
+        return set(reserved)
 
     async def hydrate_single_dag_from_db(self, dag_id: str) -> bool:
         """

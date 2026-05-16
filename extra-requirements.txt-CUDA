@@ -131,6 +131,7 @@ jsons:                        standard,core
 shapely:                      standard,core
 gradio:                       devel
 psycopg2-binary==2.9.10:      standard,core
+psycopg[binary,pool]>=3.1.0:  standard,core
 asyncpg>=0.29.0:              standard,core
 pytest:                       standard,core
 nlpaug:                       standard,core

@@ -27,6 +27,10 @@ EVENTS = (
     "planner_selected",
     "frontier_taken",
     "db_leased",
+    "semaphore_reserve_batch_start",
+    "semaphore_reserve_batch_done",
+    "slot_unavailable",
+    "slot_reserve_failed",
     "slot_reserved",
     "job_activate_start",
     "job_active_marked",
@@ -39,6 +43,48 @@ EVENTS = (
     "executor_slot_released",
     "executor_success_recorded",
     "executor_failed_recorded",
+    "scheduler_priority_refresh_requested",
+    "scheduler_priority_refresh_due",
+    "scheduler_priority_refresh_start",
+    "scheduler_priority_refresh_frontier_start",
+    "scheduler_priority_refresh_frontier_priority_load_start",
+    "scheduler_priority_refresh_frontier_priority_load_done",
+    "scheduler_priority_refresh_frontier_priority_apply_start",
+    "scheduler_priority_refresh_frontier_priority_apply_done",
+    "scheduler_priority_refresh_frontier_discover_start",
+    "scheduler_priority_refresh_frontier_discover_connection_start",
+    "scheduler_priority_refresh_frontier_discover_connection_done",
+    "scheduler_priority_refresh_frontier_discover_query_start",
+    "scheduler_priority_refresh_frontier_discover_query_done",
+    "scheduler_priority_refresh_frontier_discover_fetch_start",
+    "scheduler_priority_refresh_frontier_discover_fetch_done",
+    "scheduler_priority_refresh_frontier_discover_commit_start",
+    "scheduler_priority_refresh_frontier_discover_commit_done",
+    "scheduler_priority_refresh_frontier_discover_failed",
+    "scheduler_priority_refresh_frontier_discover_done",
+    "scheduler_priority_refresh_frontier_hydrate_start",
+    "scheduler_priority_refresh_frontier_hydrate_done",
+    "scheduler_priority_refresh_frontier_hydrate_skip",
+    "scheduler_priority_refresh_frontier_hydrate_stop",
+    "scheduler_priority_refresh_frontier_done",
+    "scheduler_priority_refresh_ready_ordering_start",
+    "scheduler_priority_refresh_ready_ordering_done",
+    "scheduler_priority_refresh_summary_start",
+    "scheduler_priority_refresh_summary_done",
+    "scheduler_priority_refresh_hard_sla_policy_start",
+    "scheduler_priority_refresh_hard_sla_policy_done",
+    "scheduler_priority_refresh_done",
+    "scheduler_priority_refresh_failed",
+    "scheduler_priority_refresh_returned",
+    "scheduler_dag_sync_loop_start",
+    "scheduler_dag_sync_cycle_skipped",
+    "scheduler_dag_sync_cycle_start",
+    "scheduler_dag_sync_cycle_done",
+    "scheduler_dag_sync_cycle_failed",
+    "scheduler_dag_sync_loop_stopped",
+    "postgres_pool_acquire_wait_start",
+    "postgres_pool_acquire_wait_done",
+    "postgres_pool_acquire_timeout",
 )
 
 SORT_ALIASES = {
@@ -72,12 +118,125 @@ REPORT_LATENCIES = (
     ("callback->terminal", "callback_to_terminal_status"),
 )
 
+SCHEDULER_DISPATCH_PATH = (
+    "candidate_to_planned",
+    "planned_to_taken",
+    "taken_to_db_lease",
+    "db_lease_to_slot",
+    "slot_to_active",
+    "activate_to_dispatch",
+)
+
+EXECUTOR_HANDOFF_PATH = (
+    "dispatch_to_executor",
+    "executor_start_record",
+)
+
+DISPATCH_BOTTLENECK_STAGES = (
+    ("candidate->planned", "candidate_to_planned"),
+    ("planned->taken", "planned_to_taken"),
+    ("taken->db-lease", "taken_to_db_lease"),
+    ("db-lease->slot", "db_lease_to_slot"),
+    ("slot->active", "slot_to_active"),
+    ("active->dispatch", "activate_to_dispatch"),
+    ("dispatch->confirm", "dispatch_to_confirm"),
+    ("dispatch->executor", "dispatch_to_executor"),
+    ("receive->running", "executor_start_record"),
+    ("callback->release", "callback_to_slot_release"),
+    ("callback->terminal", "callback_to_terminal_status"),
+)
+
 DAG_LATENCIES = {
     "submit_queue_wait",
     "submit_worker_to_persist_start",
     "dag_persist",
     "persisted_to_frontier",
 }
+
+PRIORITY_REFRESH_EVENTS = (
+    "scheduler_priority_refresh_due",
+    "scheduler_priority_refresh_start",
+    "scheduler_priority_refresh_frontier_start",
+    "scheduler_priority_refresh_frontier_priority_load_start",
+    "scheduler_priority_refresh_frontier_priority_load_done",
+    "scheduler_priority_refresh_frontier_priority_apply_start",
+    "scheduler_priority_refresh_frontier_priority_apply_done",
+    "scheduler_priority_refresh_frontier_discover_start",
+    "scheduler_priority_refresh_frontier_discover_connection_start",
+    "scheduler_priority_refresh_frontier_discover_connection_done",
+    "scheduler_priority_refresh_frontier_discover_query_start",
+    "scheduler_priority_refresh_frontier_discover_query_done",
+    "scheduler_priority_refresh_frontier_discover_fetch_start",
+    "scheduler_priority_refresh_frontier_discover_fetch_done",
+    "scheduler_priority_refresh_frontier_discover_commit_start",
+    "scheduler_priority_refresh_frontier_discover_commit_done",
+    "scheduler_priority_refresh_frontier_discover_failed",
+    "scheduler_priority_refresh_frontier_discover_done",
+    "scheduler_priority_refresh_frontier_hydrate_start",
+    "scheduler_priority_refresh_frontier_hydrate_done",
+    "scheduler_priority_refresh_frontier_hydrate_skip",
+    "scheduler_priority_refresh_frontier_hydrate_stop",
+    "scheduler_priority_refresh_frontier_done",
+    "scheduler_priority_refresh_ready_ordering_start",
+    "scheduler_priority_refresh_ready_ordering_done",
+    "scheduler_priority_refresh_summary_start",
+    "scheduler_priority_refresh_summary_done",
+    "scheduler_priority_refresh_hard_sla_policy_start",
+    "scheduler_priority_refresh_hard_sla_policy_done",
+    "scheduler_priority_refresh_done",
+    "scheduler_priority_refresh_failed",
+    "scheduler_priority_refresh_returned",
+)
+
+PRIORITY_REFRESH_PHASES = (
+    ("due->returned", "scheduler_priority_refresh_returned"),
+    ("total", "scheduler_priority_refresh_done"),
+    ("frontier", "scheduler_priority_refresh_frontier_done"),
+    (
+        "frontier-priority-load",
+        "scheduler_priority_refresh_frontier_priority_load_done",
+    ),
+    (
+        "frontier-priority-apply",
+        "scheduler_priority_refresh_frontier_priority_apply_done",
+    ),
+    ("frontier-discover", "scheduler_priority_refresh_frontier_discover_done"),
+    (
+        "frontier-discover-connect",
+        "scheduler_priority_refresh_frontier_discover_connection_done",
+    ),
+    (
+        "frontier-discover-query",
+        "scheduler_priority_refresh_frontier_discover_query_done",
+    ),
+    (
+        "frontier-discover-fetch",
+        "scheduler_priority_refresh_frontier_discover_fetch_done",
+    ),
+    (
+        "frontier-discover-commit",
+        "scheduler_priority_refresh_frontier_discover_commit_done",
+    ),
+    ("frontier-hydrate", "scheduler_priority_refresh_frontier_hydrate_done"),
+    ("ready-ordering", "scheduler_priority_refresh_ready_ordering_done"),
+    ("summary", "scheduler_priority_refresh_summary_done"),
+    ("hard-sla-policy", "scheduler_priority_refresh_hard_sla_policy_done"),
+)
+
+DAG_SYNC_EVENTS = (
+    "scheduler_dag_sync_loop_start",
+    "scheduler_dag_sync_cycle_skipped",
+    "scheduler_dag_sync_cycle_start",
+    "scheduler_dag_sync_cycle_done",
+    "scheduler_dag_sync_cycle_failed",
+    "scheduler_dag_sync_loop_stopped",
+)
+
+POSTGRES_POOL_EVENTS = (
+    "postgres_pool_acquire_wait_start",
+    "postgres_pool_acquire_wait_done",
+    "postgres_pool_acquire_timeout",
+)
 
 
 def _event_times(rows: list[dict[str, Any]]) -> dict[str, float]:
@@ -347,20 +506,139 @@ def _numeric_values(
     return values
 
 
+def _summed_latency_values(
+    summaries: list[dict[str, Any]],
+    keys: tuple[str, ...],
+) -> list[float]:
+    values: list[float] = []
+    for item in summaries:
+        total = 0.0
+        for key in keys:
+            value = item.get(key)
+            if not isinstance(value, (int, float)):
+                break
+            total += float(value)
+        else:
+            values.append(total)
+    return values
+
+
+def _print_distribution(label: str, values: list[float]) -> None:
+    if not values:
+        return
+    print(
+        f"{label}: "
+        f"count={len(values)} "
+        f"avg={_fmt(_avg(values))} "
+        f"p50={_fmt(_percentile(values, 0.50))} "
+        f"p95={_fmt(_percentile(values, 0.95))} "
+        f"max={_fmt(max(values))}"
+    )
+
+
+def _print_count_distribution(label: str, values: list[float]) -> None:
+    if not values:
+        return
+    print(
+        f"{label}: "
+        f"count={len(values)} "
+        f"avg={_avg(values):.1f} "
+        f"p50={_percentile(values, 0.50):.0f} "
+        f"p95={_percentile(values, 0.95):.0f} "
+        f"max={max(values):.0f}"
+    )
+
+
+def _capacity_per_second(duration_ms: float | None) -> float | None:
+    if duration_ms is None or duration_ms <= 0:
+        return None
+    return 1000.0 / duration_ms
+
+
+def _event_intervals_ms(rows: list[dict[str, Any]], event_name: str) -> list[float]:
+    times = sorted(
+        float(row["ts_unix"])
+        for row in rows
+        if row.get("event") == event_name
+        and isinstance(row.get("ts_unix"), (int, float))
+    )
+    return [(end - start) * 1000.0 for start, end in zip(times, times[1:])]
+
+
+def _max_observed_free_slots(rows: list[dict[str, Any]]) -> int | None:
+    max_slots: int | None = None
+    for row in rows:
+        event = row.get("event")
+        if event == "candidate_built":
+            slots = row.get("slots_by_executor")
+            if not isinstance(slots, dict):
+                continue
+            total = sum(value for value in slots.values() if isinstance(value, int))
+        elif event == "slot_reserved":
+            slots_before = row.get("slots_before")
+            if not isinstance(slots_before, int):
+                continue
+            total = slots_before
+        else:
+            continue
+        max_slots = total if max_slots is None else max(max_slots, total)
+    return max_slots
+
+
+def _candidate_selection_attempts(
+    rows: list[dict[str, Any]],
+) -> tuple[list[float], list[float]]:
+    candidate_times: dict[str, list[float]] = defaultdict(list)
+    selected_times: dict[str, float] = {}
+    for row in sorted(rows, key=lambda item: item.get("ts_unix", 0.0)):
+        ts = row.get("ts_unix")
+        if not isinstance(ts, (int, float)):
+            continue
+        job_ids = row.get("job_ids")
+        if not isinstance(job_ids, list):
+            continue
+        event = row.get("event")
+        if event == "candidate_built":
+            for job_id in job_ids:
+                if isinstance(job_id, str):
+                    candidate_times[job_id].append(float(ts))
+        elif event == "planner_selected":
+            for job_id in job_ids:
+                if isinstance(job_id, str):
+                    selected_times.setdefault(job_id, float(ts))
+
+    appearances: list[float] = []
+    first_candidate_wait: list[float] = []
+    for job_id, selected_at in selected_times.items():
+        before_selection = [
+            candidate_at
+            for candidate_at in candidate_times.get(job_id, [])
+            if candidate_at <= selected_at
+        ]
+        if not before_selection:
+            continue
+        appearances.append(float(len(before_selection)))
+        first_candidate_wait.append((selected_at - before_selection[0]) * 1000.0)
+    return appearances, first_candidate_wait
+
+
 def _event_counts(rows: list[dict[str, Any]]) -> Counter[str]:
     return Counter(row["event"] for row in rows if isinstance(row.get("event"), str))
 
 
 def _executor_counts(rows: list[dict[str, Any]]) -> Counter[str]:
-    counts: Counter[str] = Counter()
+    request_counts: Counter[str] = Counter()
+    terminal_counts: Counter[str] = Counter()
     for row in rows:
-        if row.get("event") != "executor_request_received":
-            continue
+        event = row.get("event")
         pid = row.get("pid")
         if pid is None:
             continue
-        counts[str(pid)] += 1
-    return counts
+        if event == "executor_request_received":
+            request_counts[str(pid)] += 1
+        elif event in {"executor_success_recorded", "executor_failed_recorded"}:
+            terminal_counts[str(pid)] += 1
+    return request_counts or terminal_counts
 
 
 def _candidate_counts(rows: list[dict[str, Any]]) -> list[float]:
@@ -445,6 +723,50 @@ def _slot_hold_ms(rows: list[dict[str, Any]]) -> list[float]:
     return values
 
 
+def _slot_cycle_ms(rows: list[dict[str, Any]]) -> dict[str, list[float]]:
+    by_job: dict[str, dict[str, Any]] = defaultdict(dict)
+    for row in rows:
+        job_id = row.get("job_id")
+        event = row.get("event")
+        ts = row.get("ts_unix")
+        if not isinstance(job_id, str) or not isinstance(ts, (int, float)):
+            continue
+        if event == "slot_reserved":
+            executor = row.get("executor") or row.get("deployment")
+            if isinstance(executor, str) and executor:
+                by_job[job_id]["executor"] = executor
+            by_job[job_id]["reserved_at"] = float(ts)
+        elif event == "executor_slot_released":
+            executor = row.get("deployment") or row.get("executor")
+            if isinstance(executor, str) and executor:
+                by_job[job_id]["executor"] = executor
+            by_job[job_id]["released_at"] = float(ts)
+
+    intervals_by_executor: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for events in by_job.values():
+        executor = events.get("executor")
+        reserved_at = events.get("reserved_at")
+        released_at = events.get("released_at")
+        if (
+            isinstance(executor, str)
+            and isinstance(reserved_at, float)
+            and isinstance(released_at, float)
+        ):
+            intervals_by_executor[executor].append((reserved_at, released_at))
+
+    cycles_by_executor: dict[str, list[float]] = {}
+    for executor, intervals in intervals_by_executor.items():
+        ordered = sorted(intervals)
+        cycles: list[float] = []
+        for index, (reserved_at, released_at) in enumerate(ordered[:-1]):
+            next_reserved_at = ordered[index + 1][0]
+            if next_reserved_at >= released_at:
+                cycles.append((next_reserved_at - reserved_at) * 1000.0)
+        if cycles:
+            cycles_by_executor[executor] = cycles
+    return cycles_by_executor
+
+
 def _print_slot_idle_report(rows: list[dict[str, Any]]) -> None:
     idle_by_executor = _executor_slot_idle_ms(rows)
     slot_hold = _slot_hold_ms(rows)
@@ -472,6 +794,157 @@ def _print_slot_idle_report(rows: list[dict[str, Any]]) -> None:
             f"p95={_fmt(_percentile(values, 0.95))} "
             f"max={_fmt(max(values))}"
         )
+
+
+def _print_dispatch_efficiency_report(
+    rows: list[dict[str, Any]],
+    summaries: list[dict[str, Any]],
+    rate_stats: dict[str, tuple[int, float | None, float | None]],
+) -> None:
+    dispatch_count = rate_stats["gateway_dispatch_start"][0]
+    success_count = rate_stats["executor_success_recorded"][0]
+    if not dispatch_count and not success_count:
+        return
+
+    submit_rate = rate_stats["gateway_submit_received"][1]
+    dispatch_rate = rate_stats["gateway_dispatch_start"][1]
+    success_rate = rate_stats["executor_success_recorded"][1]
+    scheduler_path = _summed_latency_values(summaries, SCHEDULER_DISPATCH_PATH)
+    handoff_path = _summed_latency_values(summaries, EXECUTOR_HANDOFF_PATH)
+    dispatch_confirm = _numeric_values(summaries, "dispatch_to_confirm")
+    callback_release = _numeric_values(summaries, "callback_to_slot_release")
+    callback_terminal = _numeric_values(summaries, "callback_to_terminal_status")
+    service = _numeric_values(summaries, "executor_service")
+    slot_hold = _slot_hold_ms(rows)
+    idle_by_executor = _executor_slot_idle_ms(rows)
+    slot_cycles_by_executor = _slot_cycle_ms(rows)
+    candidate_appearances, first_candidate_wait = _candidate_selection_attempts(rows)
+    max_observed_slots = _max_observed_free_slots(rows)
+
+    print("\nDispatch Efficiency")
+    print(
+        "rates: "
+        f"submit={_fmt_rate(submit_rate)} "
+        f"dispatch={_fmt_rate(dispatch_rate)} "
+        f"complete={_fmt_rate(success_rate)}"
+    )
+    if submit_rate is not None and dispatch_rate is not None:
+        drift = submit_rate - dispatch_rate
+        print("submit-dispatch drift: " f"{drift:.3f}/s ({drift * 3600.0:.0f}/hour)")
+
+    _print_distribution(
+        "frontier backlog wait",
+        _numeric_values(summaries, "frontier_to_candidate"),
+    )
+    _print_distribution("scheduler dispatch path", scheduler_path)
+    _print_distribution("executor handoff path", handoff_path)
+    _print_distribution("dispatch confirmation", dispatch_confirm)
+    _print_distribution("callback to slot release", callback_release)
+    _print_distribution("callback to terminal", callback_terminal)
+    _print_distribution("first candidate to selected", first_candidate_wait)
+    _print_count_distribution(
+        "planner limited batch size",
+        _numeric_event_field(rows, "planner_selected", "limited"),
+    )
+    _print_count_distribution(
+        "dispatch batch size",
+        _numeric_event_field(rows, "dispatch_batch_start", "count"),
+    )
+    _print_count_distribution(
+        "semaphore reserve requested",
+        _numeric_event_field(rows, "semaphore_reserve_batch_done", "requested"),
+    )
+    _print_count_distribution(
+        "semaphore reserve granted",
+        _numeric_event_field(rows, "semaphore_reserve_batch_done", "reserved"),
+    )
+    _print_distribution(
+        "semaphore reserve batch latency",
+        _numeric_event_field(rows, "semaphore_reserve_batch_done", "elapsed_ms"),
+    )
+    _print_distribution(
+        "dispatch batch interval",
+        _event_intervals_ms(rows, "dispatch_batch_start"),
+    )
+    if candidate_appearances:
+        print(
+            "candidate snapshots before selection: "
+            f"count={len(candidate_appearances)} "
+            f"avg={_avg(candidate_appearances):.1f} "
+            f"p50={_percentile(candidate_appearances, 0.50):.0f} "
+            f"p95={_percentile(candidate_appearances, 0.95):.0f} "
+            f"max={max(candidate_appearances):.0f}"
+        )
+
+    slot_hold_p50 = _percentile(slot_hold, 0.50)
+    slot_hold_capacity = _capacity_per_second(slot_hold_p50)
+    if slot_hold_capacity is not None:
+        print(
+            "slot-hold capacity estimate: "
+            f"p50={_fmt(slot_hold_p50)} => {_fmt_rate(slot_hold_capacity)} "
+            "per occupied slot"
+        )
+        if dispatch_rate is not None and max_observed_slots and max_observed_slots <= 1:
+            print(
+                "actual dispatch vs slot-hold estimate: "
+                f"{(dispatch_rate / slot_hold_capacity) * 100.0:.1f}%"
+            )
+        elif max_observed_slots and max_observed_slots > 1:
+            aggregate_capacity = slot_hold_capacity * max_observed_slots
+            print(
+                "aggregate slot-hold capacity estimate: "
+                f"max_observed_slots={max_observed_slots} "
+                f"=> {_fmt_rate(aggregate_capacity)}"
+            )
+            if dispatch_rate is not None:
+                print(
+                    "actual dispatch vs aggregate slot-hold estimate: "
+                    f"{(dispatch_rate / aggregate_capacity) * 100.0:.1f}%"
+                )
+
+    service_p50 = _percentile(service, 0.50)
+    service_capacity = _capacity_per_second(service_p50)
+    if service_capacity is not None:
+        print(
+            "service-only capacity estimate: "
+            f"p50={_fmt(service_p50)} => {_fmt_rate(service_capacity)} "
+            "per executor"
+        )
+
+    for executor in sorted(idle_by_executor):
+        values = idle_by_executor[executor]
+        print(
+            f"slot refill idle {executor}: "
+            f"p50={_fmt(_percentile(values, 0.50))} "
+            f"p95={_fmt(_percentile(values, 0.95))}"
+        )
+    if max_observed_slots is None or max_observed_slots <= 1:
+        for executor in sorted(slot_cycles_by_executor):
+            values = slot_cycles_by_executor[executor]
+            p50 = _percentile(values, 0.50)
+            capacity = _capacity_per_second(p50)
+            print(
+                f"slot cycle {executor}: "
+                f"p50={_fmt(p50)} "
+                f"p95={_fmt(_percentile(values, 0.95))} "
+                f"rate@p50={_fmt_rate(capacity)}"
+            )
+    elif slot_cycles_by_executor:
+        print(
+            "slot cycle estimate: skipped for multi-slot executor "
+            f"(max_observed_slots={max_observed_slots})"
+        )
+
+    stage_rows: list[tuple[float, str, float | None]] = []
+    for label, key in DISPATCH_BOTTLENECK_STAGES:
+        values = _numeric_values(summaries, key)
+        p50 = _percentile(values, 0.50)
+        if p50 is not None:
+            stage_rows.append((p50, label, _percentile(values, 0.95)))
+    if stage_rows:
+        print("largest non-backlog p50 stages:")
+        for p50, label, p95 in sorted(stage_rows, reverse=True)[:5]:
+            print(f"  {label}: p50={_fmt(p50)} p95={_fmt(p95)}")
 
 
 def _print_latency_report(summaries: list[dict[str, Any]]) -> None:
@@ -567,6 +1040,222 @@ def _print_admission_report(rows: list[dict[str, Any]]) -> None:
             )
 
 
+def _numeric_event_field(
+    rows: list[dict[str, Any]], event_name: str, field: str
+) -> list[float]:
+    values: list[float] = []
+    for row in rows:
+        if row.get("event") != event_name:
+            continue
+        value = row.get(field)
+        if isinstance(value, (int, float)):
+            values.append(float(value))
+    return values
+
+
+def _latest_priority_refresh_row(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    latest: dict[str, Any] | None = None
+    for row in rows:
+        if row.get("event") not in PRIORITY_REFRESH_EVENTS:
+            continue
+        if not isinstance(row.get("ts_unix"), (int, float)):
+            continue
+        if latest is None or float(row["ts_unix"]) > float(latest["ts_unix"]):
+            latest = row
+    return latest
+
+
+def _priority_refresh_attempts(
+    rows: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    attempts: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row.get("event") not in PRIORITY_REFRESH_EVENTS:
+            continue
+        refresh_id = row.get("refresh_id")
+        if refresh_id is None:
+            continue
+        attempts[str(refresh_id)].append(row)
+    return attempts
+
+
+def _sort_refresh_id(refresh_id: str) -> tuple[int, str]:
+    try:
+        return int(refresh_id), refresh_id
+    except ValueError:
+        return 0, refresh_id
+
+
+def _refresh_attempt_status(rows: list[dict[str, Any]]) -> str:
+    events = Counter(row.get("event") for row in rows)
+    if events.get("scheduler_priority_refresh_returned", 0):
+        return "returned"
+    if events.get("scheduler_priority_refresh_failed", 0):
+        return "failed_no_return"
+    if events.get("scheduler_priority_refresh_done", 0):
+        return "done_no_return"
+    if events.get("scheduler_priority_refresh_start", 0):
+        return "in_progress"
+    return "due_only"
+
+
+def _print_priority_refresh_report(rows: list[dict[str, Any]]) -> None:
+    events = _event_counts(rows)
+    refresh_requested = events.get("scheduler_priority_refresh_requested", 0)
+    if not refresh_requested and not any(
+        events.get(event, 0) for event in PRIORITY_REFRESH_EVENTS
+    ):
+        return
+
+    print("\nScheduler Priority Refresh")
+    if refresh_requested:
+        requested_rows = [
+            row
+            for row in rows
+            if row.get("event") == "scheduler_priority_refresh_requested"
+        ]
+        wake_requests = sum(1 for row in requested_rows if row.get("wake_scheduler"))
+        deferred_requests = len(requested_rows) - wake_requests
+        print(
+            f"requests: scheduler_priority_refresh_requested {refresh_requested} "
+            f"wake={wake_requests} deferred={deferred_requests}"
+        )
+    print("event count")
+    for event in PRIORITY_REFRESH_EVENTS:
+        count = events.get(event, 0)
+        if count:
+            print(f"{event} {count}")
+
+    due = events.get("scheduler_priority_refresh_due", 0)
+    returned = events.get("scheduler_priority_refresh_returned", 0)
+    started = events.get("scheduler_priority_refresh_start", 0)
+    completed = events.get("scheduler_priority_refresh_done", 0)
+    failed = events.get("scheduler_priority_refresh_failed", 0)
+    if due != returned or started != completed + failed:
+        print(
+            "incomplete: "
+            f"due_without_return={max(0, due - returned)} "
+            f"started_without_terminal={max(0, started - completed - failed)}"
+        )
+
+    print("phase count avg p50 p95 max")
+    for label, event_name in PRIORITY_REFRESH_PHASES:
+        values = _numeric_event_field(rows, event_name, "elapsed_ms")
+        if not values:
+            continue
+        print(
+            f"{label} "
+            f"{len(values)} "
+            f"{_fmt(_avg(values))} "
+            f"{_fmt(_percentile(values, 0.50))} "
+            f"{_fmt(_percentile(values, 0.95))} "
+            f"{_fmt(max(values))}"
+        )
+
+    latest = _latest_priority_refresh_row(rows)
+    if latest is None:
+        return
+    details = [
+        f"event={latest.get('event')}",
+        f"ts={latest.get('ts', '-')}",
+    ]
+    for field in (
+        "source",
+        "refresh_id",
+        "submission_count",
+        "request_queue_size",
+        "pending_requests",
+        "elapsed_ms",
+        "error",
+    ):
+        value = latest.get(field)
+        if value is not None:
+            details.append(f"{field}={_fmt(value) if field == 'elapsed_ms' else value}")
+    print("latest: " + " ".join(details))
+
+    attempts = _priority_refresh_attempts(rows)
+    if not attempts:
+        return
+
+    incomplete_attempts = [
+        (refresh_id, attempt_rows)
+        for refresh_id, attempt_rows in attempts.items()
+        if _refresh_attempt_status(attempt_rows) != "returned"
+    ]
+    if not incomplete_attempts:
+        return
+
+    print("incomplete attempts:")
+    print("refresh_id source status latest")
+    for refresh_id, attempt_rows in sorted(
+        incomplete_attempts, key=lambda item: _sort_refresh_id(item[0])
+    )[:10]:
+        latest_attempt = _latest_priority_refresh_row(attempt_rows) or {}
+        source = next(
+            (
+                row.get("source")
+                for row in attempt_rows
+                if row.get("source") is not None
+            ),
+            "-",
+        )
+        print(
+            f"{refresh_id} "
+            f"{source} "
+            f"{_refresh_attempt_status(attempt_rows)} "
+            f"{latest_attempt.get('event', '-')}"
+        )
+
+
+def _print_dag_sync_report(rows: list[dict[str, Any]]) -> None:
+    events = _event_counts(rows)
+    if not any(events.get(event, 0) for event in DAG_SYNC_EVENTS):
+        return
+
+    print("\nDAG Sync")
+    print("event count")
+    for event in DAG_SYNC_EVENTS:
+        count = events.get(event, 0)
+        if count:
+            print(f"{event} {count}")
+
+    completed = [
+        row for row in rows if row.get("event") == "scheduler_dag_sync_cycle_done"
+    ]
+    if completed:
+        invalid = sum(int(row.get("invalid_dags") or 0) for row in completed)
+        terminal = sum(int(row.get("terminal_dags") or 0) for row in completed)
+        print(
+            f"summary cycles={len(completed)} "
+            f"invalid_dags={invalid} "
+            f"terminal_dags={terminal}"
+        )
+
+
+def _print_postgres_pool_report(rows: list[dict[str, Any]]) -> None:
+    events = _event_counts(rows)
+    if not any(events.get(event, 0) for event in POSTGRES_POOL_EVENTS):
+        return
+
+    print("\nPostgres Pool")
+    print("event count")
+    for event in POSTGRES_POOL_EVENTS:
+        count = events.get(event, 0)
+        if count:
+            print(f"{event} {count}")
+
+    waits = _numeric_event_field(rows, "postgres_pool_acquire_wait_done", "elapsed_ms")
+    if waits:
+        print(
+            "acquire-wait "
+            f"{len(waits)} "
+            f"{_fmt(_avg(waits))} "
+            f"{_fmt(_percentile(waits, 0.50))} "
+            f"{_fmt(_percentile(waits, 0.95))} "
+            f"{_fmt(max(waits))}"
+        )
+
+
 def _print_findings(
     rate_stats: dict[str, tuple[int, float | None, float | None]],
     summaries: list[dict[str, Any]],
@@ -602,16 +1291,55 @@ def _print_findings(
     candidate_to_planned = _numeric_values(summaries, "candidate_to_planned")
     dispatch_to_executor = _numeric_values(summaries, "dispatch_to_executor")
     service = _numeric_values(summaries, "executor_service")
+    candidate_appearances, _ = _candidate_selection_attempts(rows)
     if candidate_to_planned and (_percentile(candidate_to_planned, 0.95) or 0) > 1000:
         findings.append(
             "Selection wait is the dominant scheduler-side tail "
             f"(candidate->planned p95={_fmt(_percentile(candidate_to_planned, 0.95))})."
+        )
+    if candidate_appearances and (_percentile(candidate_appearances, 0.50) or 0) > 1:
+        findings.append(
+            "candidate->planned includes repeated candidate snapshots before selection "
+            f"(candidate appearances p50={_percentile(candidate_appearances, 0.50):.0f})."
         )
     if dispatch_to_executor and (_percentile(dispatch_to_executor, 0.95) or 0) > 500:
         findings.append(
             "Gateway-to-executor handoff is high "
             f"(dispatch->executor p95={_fmt(_percentile(dispatch_to_executor, 0.95))})."
         )
+    dispatch_rate = rate_stats["gateway_dispatch_start"][1]
+    slot_hold = _slot_hold_ms(rows)
+    slot_hold_capacity = _capacity_per_second(_percentile(slot_hold, 0.50))
+    max_observed_slots = _max_observed_free_slots(rows)
+    aggregate_slot_hold_capacity = (
+        slot_hold_capacity * max_observed_slots
+        if slot_hold_capacity is not None and max_observed_slots
+        else slot_hold_capacity
+    )
+    if (
+        dispatch_rate is not None
+        and aggregate_slot_hold_capacity is not None
+        and dispatch_rate < aggregate_slot_hold_capacity * 0.75
+    ):
+        findings.append(
+            "Dispatch rate is below the slot-hold capacity estimate "
+            f"({_fmt_rate(dispatch_rate)} actual vs "
+            f"{_fmt_rate(aggregate_slot_hold_capacity)} estimated aggregate)."
+        )
+    if service and (_percentile(service, 0.95) or 0.0) < 5.0:
+        stage_rows: list[tuple[float, str, float | None]] = []
+        for label, key in DISPATCH_BOTTLENECK_STAGES:
+            values = _numeric_values(summaries, key)
+            p50 = _percentile(values, 0.50)
+            if p50 is not None:
+                stage_rows.append((p50, label, _percentile(values, 0.95)))
+        if stage_rows:
+            p50, label, p95 = max(stage_rows)
+            findings.append(
+                "With near-zero executor service time, the largest non-backlog "
+                f"dispatch interval is {label} "
+                f"(p50={_fmt(p50)}, p95={_fmt(p95)})."
+            )
     idle_by_executor = _executor_slot_idle_ms(rows)
     for executor, values in sorted(idle_by_executor.items()):
         p95 = _percentile(values, 0.95)
@@ -624,6 +1352,64 @@ def _print_findings(
         findings.append(
             f"Executor service p95 is {_fmt(_percentile(service, 0.95))}; "
             "compare this with SLA budget before blaming dispatch overhead."
+        )
+
+    refresh_sources = sorted(
+        {
+            str(row.get("source"))
+            for row in rows
+            if row.get("event") in PRIORITY_REFRESH_EVENTS
+            and row.get("source") is not None
+        }
+    )
+    if refresh_sources:
+        for source in refresh_sources:
+            source_events = Counter(
+                row.get("event")
+                for row in rows
+                if row.get("source") == source
+                and row.get("event") in PRIORITY_REFRESH_EVENTS
+            )
+            source_due = source_events.get("scheduler_priority_refresh_due", 0)
+            source_returned = source_events.get(
+                "scheduler_priority_refresh_returned", 0
+            )
+            source_started = source_events.get("scheduler_priority_refresh_start", 0)
+            source_terminal = source_events.get(
+                "scheduler_priority_refresh_done", 0
+            ) + source_events.get("scheduler_priority_refresh_failed", 0)
+            if source_due > source_returned:
+                findings.append(
+                    f"Priority refresh source={source} did not return "
+                    f"(due={source_due}, returned={source_returned})."
+                )
+            elif source_started > source_terminal:
+                findings.append(
+                    f"Priority refresh source={source} started without a terminal "
+                    f"trace event (started={source_started}, terminal={source_terminal})."
+                )
+    else:
+        refresh_due = events.get("scheduler_priority_refresh_due", 0)
+        refresh_returned = events.get("scheduler_priority_refresh_returned", 0)
+        refresh_started = events.get("scheduler_priority_refresh_start", 0)
+        refresh_terminal = events.get(
+            "scheduler_priority_refresh_done", 0
+        ) + events.get("scheduler_priority_refresh_failed", 0)
+        if refresh_due > refresh_returned:
+            findings.append(
+                "Priority refresh appears to block the submission worker "
+                f"(due={refresh_due}, returned={refresh_returned})."
+            )
+        elif refresh_started > refresh_terminal:
+            findings.append(
+                "Priority refresh started without a terminal trace event "
+                f"(started={refresh_started}, terminal={refresh_terminal})."
+            )
+
+    pool_timeouts = events.get("postgres_pool_acquire_timeout", 0)
+    if pool_timeouts:
+        findings.append(
+            f"Postgres connection pool acquisition timed out {pool_timeouts} time(s)."
         )
 
     if not findings:
@@ -695,9 +1481,13 @@ def print_report(
         f"completed={events.get('control_flow_completed', 0)}"
     )
 
+    _print_dispatch_efficiency_report(rows, summaries, rates)
     _print_pressure_report(rows)
     _print_slot_idle_report(rows)
     _print_admission_report(rows)
+    _print_priority_refresh_report(rows)
+    _print_dag_sync_report(rows)
+    _print_postgres_pool_report(rows)
     _print_latency_report(summaries)
     _print_findings(rates, summaries, events, rows)
 

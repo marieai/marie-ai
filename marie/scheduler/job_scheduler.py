@@ -11,6 +11,7 @@ class JobSubmissionRequest(NamedTuple):
     overwrite: bool
     request_id: str
     result_future: asyncio.Future
+    wait_for_result: bool = False
 
 
 class JobScheduler(abc.ABC):

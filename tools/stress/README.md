@@ -47,20 +47,24 @@ timeline:
 ```bash
 export MARIE_SCHEDULER_TRACE_ENABLED=true
 export MARIE_SCHEDULER_TRACE_PATH=/home/gbugaj/tmp/marie-scheduler-trace.jsonl
+export MARIE_SCHEDULER_TRACE_PROFILE=full
 ```
 
 The trace is disabled by default and is best-effort: write failures never block
-job scheduling. It emits phase events for gateway submit, scheduler submission
-queue enqueue/dequeue, DAG persistence, frontier insertion, planner selection,
+job scheduling. The default profile is `compact`, which is meant for long
+endurance runs and keeps submit, dispatch, terminal, batch, priority-refresh,
+DAG-sync, and pool-pressure signals. Use `MARIE_SCHEDULER_TRACE_PROFILE=full`
+for short bottleneck investigations that need scheduler submission queue
+enqueue/dequeue, DAG persistence, frontier insertion, planner selection,
 frontier and DB leasing, semaphore reservation, gateway dispatch confirmation,
 executor request receipt, RUNNING/SUCCEEDED/FAILED status writes, callbacks, and
-slot release. Use it alongside the HTML stress report to split end-to-end
-latency into submission queue wait, DAG persistence, frontier wait, dispatch
-wait, executor service time, and terminal status/slot-release delay.
-Frontier wait is further split into candidate visibility, planner selection,
-frontier take, DB lease, semaphore reservation, and activation. Planner and
-frontier phases are emitted as batch events with `job_ids`; the analyzer expands
-them per job without writing one trace line per selected job.
+slot release. The full profile splits end-to-end latency into submission queue
+wait, DAG persistence, frontier wait, dispatch wait, executor service time, and
+terminal status/slot-release delay. Frontier wait is further split into
+candidate visibility, planner selection, frontier take, DB lease, semaphore
+reservation, and activation. Planner and frontier phases are emitted as batch
+events with `job_ids`; the analyzer expands them per job without writing one
+trace line per selected job.
 
 After a run, summarize the slowest handoffs:
 
@@ -86,7 +90,7 @@ python tools/stress/gateway_e2e_stresser.py \
     --config tools/stress/gateway-e2e.config.example.json \
     --input-dir /mnt/data/marie-ai/generators \
     --job-count 25 \
-    --job-name gen5_extract \
+    --job-name extract \
     --planner extract
 
 # Submit TIFFs at 4 jobs/sec and write an HTML report
@@ -426,7 +430,7 @@ cat tools/stress/gateway-e2e.s3-uri-manifest.example.txt
 Scheduler and LLM stress against pre-staged S3 assets:
 
 ```bash
-source ~/environments/marie-3.12/bin/activate
+source ~/environment/marie-3.12/bin/activate
 
 python tools/stress/gateway_e2e_stresser.py \
   --config tools/stress/gateway-e2e.config.example.json \
@@ -439,6 +443,65 @@ python tools/stress/gateway_e2e_stresser.py \
   --aimock-admin-url http://localhost:4011 \
   --report /tmp/gateway-e2e-report.html
 ```
+
+Eight-hour scheduler endurance run for 10 extract executors with a 1-second
+mock workload:
+
+```bash
+source ~/environment/marie-3.12/bin/activate
+mkdir -p ~/tmp
+
+export MARIE_SCHEDULER_TRACE_ENABLED=true
+export MARIE_SCHEDULER_TRACE_PATH=~/tmp/marie-scheduler-trace-8h.jsonl
+export MARIE_SCHEDULER_TRACE_PROFILE=compact
+
+python tools/stress/gateway_e2e_stresser.py \
+  --config tools/stress/gateway-e2e.config.example.json \
+  --input-dir /mnt/data/marie-ai/generators \
+  --run-time 8h \
+  --job-name extract \
+  --planner extract \
+  --submit-concurrency 100 \
+  --submit-rate 8 \
+  --soft-sla-seconds 30 \
+  --hard-sla-seconds 120 \
+  --min-soft-sla-compliance-pct 95 \
+  --min-hard-sla-compliance-pct 99 \
+  --progress-interval 30 \
+  --terminal-timeout 1800 \
+  --fault-profile normal \
+  --live-report ~/tmp/gateway-e2e-8h-live.html \
+  --report ~/tmp/gateway-e2e-8h-final.json
+```
+
+Preconditions:
+
+- run exactly 10 `extract_executor` slots
+- configure the mock extract workload to sleep for 1 second
+- keep the AIMock / executor profile in `normal` mode
+- prefer pre-staged S3 inputs for pure scheduler tests; the command above uses
+  upload mode because it matches the local generator input path
+
+The `--submit-rate 8` target leaves headroom under the theoretical 10 jobs/sec
+capacity of 10 one-second executor slots. Use `--submit-rate 10` for a
+saturation run. Avoid `--submit-rate 250` for this 8-hour SLA run unless the
+goal is intentionally to create a large backlog and measure overload behavior.
+
+After the run, summarize the scheduler trace:
+
+```bash
+python tools/stress/analyze_scheduler_trace.py \
+  ~/tmp/marie-scheduler-trace-8h.jsonl \
+  --sort frontier_to_dispatch \
+  --limit 25 \
+  --report
+```
+
+The compact trace profile is intended for long endurance runs. It keeps submit,
+dispatch, terminal, batch, priority-refresh, DAG-sync, and pool-pressure signals
+while dropping per-stage debug events that can turn an 8-hour trace into a very
+large JSONL file. Use `MARIE_SCHEDULER_TRACE_PROFILE=full` only for shorter
+bottleneck investigations where detailed stage timings are required.
 
 #### Benchmark Matrix
 

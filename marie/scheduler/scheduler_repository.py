@@ -1,6 +1,6 @@
 from typing import Any, Dict
 
-import psycopg2
+import psycopg
 
 from marie.logging_core.logger import MarieLogger
 from marie.scheduler.repository.plans import (
@@ -38,7 +38,7 @@ class SchedulerRepository(PostgresqlMixin):
                 query_func(schema), return_cursor=True, connection=conn
             )
             counts = cursor.fetchall()
-        except (Exception, psycopg2.Error) as error:
+        except (Exception, psycopg.Error) as error:
             self.logger.error(f"Error handling state count: {error}")
         finally:
             self._close_cursor(cursor)
