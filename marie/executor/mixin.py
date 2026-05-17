@@ -62,7 +62,7 @@ class StorageMixin:
                     storage_handler=self.storage_handler,
                     storage_conf=storage_conf,
                 )
-                self.logger.info("Asset tracking enabled")
+                # self.logger.info("Asset tracking enabled")
             except Exception as e:
                 if silence_exceptions:
                     self.logger.warning(
@@ -78,6 +78,9 @@ class StorageMixin:
                 "Asset tracking requires storage_enabled=True. Disabling asset tracking."
             )
             self.asset_tracking_enabled = False
+
+        self.logger.info(f"storage_enabled  = {self.storage_enabled}")
+        self.logger.info(f"asset_tracking_enabled  = {self.asset_tracking_enabled}")
 
     # @Timer(text="stored in {:.4f} seconds")
     def store(

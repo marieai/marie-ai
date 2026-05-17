@@ -106,11 +106,6 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
             "use_cuda": True if self.device.type.startswith("cuda") else False,
         }
 
-        self.storage_enabled = False
-        if storage is not None and "psql" in storage:
-            sconf = storage["psql"]
-            self.setup_storage(sconf.get("enabled", False), sconf)
-
         connected = StorageManager.ensure_connection("s3://", silence_exceptions=False)
         logger.warning(f"S3 connection status : {connected}")
 
