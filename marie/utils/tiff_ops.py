@@ -13,6 +13,7 @@ import numpy as np
 
 # http://148.216.108.129/vython38/lib/python3.8/site-packages/willow/plugins/wand.py
 from tifffile import TiffWriter
+from tqdm import tqdm
 
 from marie.utils.docs import frames_from_file, get_document_type
 
@@ -123,7 +124,12 @@ def burst_tiff_frames(
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         if sequential:
-            for i, frame in enumerate(frames):
+            for i, frame in tqdm(
+                enumerate(frames),
+                total=len(frames),
+                desc="bursting frames",
+                unit="frame",
+            ):
                 index = i + 1
                 generated_name = filename_generator(pagenumber=index)
                 __process_burst(
