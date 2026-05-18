@@ -401,6 +401,9 @@ class JobSupervisor:
 
                     if response.status.code == jina_pb2.StatusProto.SUCCESS:
                         if current_status.is_terminal():
+                            current_info = await self._job_info_client.get_info(
+                                self._job_id
+                            )
                             await self._event_publisher.publish(
                                 current_status,
                                 {
@@ -408,6 +411,14 @@ class JobSupervisor:
                                     "status": current_status,
                                     "message": f"Job {self._job_id} already completed with status {current_status}.",
                                     "jobinfo_replace_kwargs": False,
+                                    "run_owner": (
+                                        current_info.run_owner if current_info else None
+                                    ),
+                                    "run_attempt_id": (
+                                        current_info.run_attempt_id
+                                        if current_info
+                                        else None
+                                    ),
                                 },
                             )
                         else:

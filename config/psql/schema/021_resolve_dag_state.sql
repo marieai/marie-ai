@@ -14,7 +14,7 @@ BEGIN
         SELECT 1
         FROM {schema}.job
         WHERE dag_id = p_dag_id
-          AND state = 'failed'
+              AND state::text IN ('failed', 'expired', 'cancelled')
     )
     INTO v_any_failed;
 
@@ -22,12 +22,12 @@ BEGIN
         v_new_state := 'failed';
 
     ELSE
-        -- 2) If all jobs are "completed," mark the DAG as "completed."
+        -- 2) If all jobs are terminal-success, mark the DAG as "completed."
         SELECT NOT EXISTS (
             SELECT 1
             FROM {schema}.job
             WHERE dag_id = p_dag_id
-              AND state <> 'completed'
+              AND state::text NOT IN ('completed', 'skipped')
         )
         INTO v_all_completed;
 

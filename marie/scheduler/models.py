@@ -30,6 +30,8 @@ class WorkInfo(BaseModel):
     job_level: int = 0
     soft_sla: Optional[datetime] = None
     hard_sla: Optional[datetime] = None
+    run_owner: Optional[str] = None
+    run_attempt_id: Optional[str] = None
 
 
 class JobSubmissionModel(BaseModel):

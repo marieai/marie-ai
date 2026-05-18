@@ -259,7 +259,7 @@ class JobManager:
 
                 jitter = random.uniform(0.9, 1.3)
                 wait_time = self.JOB_MONITOR_LOOP_PERIOD_S * jitter
-                await asyncio.sleep(self.JOB_MONITOR_LOOP_PERIOD_S)
+                await asyncio.sleep(wait_time)
             except Exception as e:
                 is_alive = False
                 job_status = await self._job_info_client.get_status(job_id)
@@ -339,6 +339,8 @@ class JobManager:
         _start_signal_actor: Optional[ActorHandle] = None,
         confirmation_event: Optional[asyncio.Event] = None,
         is_retry: bool = False,
+        run_owner: Optional[str] = None,
+        run_attempt_id: Optional[str] = None,
     ) -> str:
         """
         Job execution happens asynchronously.
@@ -365,6 +367,8 @@ class JobManager:
             entrypoint_num_cpus=entrypoint_num_cpus,
             entrypoint_num_gpus=entrypoint_num_gpus,
             entrypoint_resources=entrypoint_resources,
+            run_owner=run_owner,
+            run_attempt_id=run_attempt_id,
         )
         new_key_added = await self._job_info_client.put_info(
             submission_id, job_info, overwrite=is_retry
@@ -386,9 +390,7 @@ class JobManager:
                     entrypoint_resources not in [None, {}],
                 ]
             )
-            scheduling_strategy = await self._get_scheduling_strategy(
-                resources_specified
-            )
+            await self._get_scheduling_strategy(resources_specified)
             if self.event_logger:
                 self.event_logger.info(
                     f"Started a job {submission_id}.", submission_id=submission_id

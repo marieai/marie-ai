@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS {schema}.job_history (
     sla_miss_logged BOOLEAN NOT NULL DEFAULT FALSE,
     dag_id UUID NOT NULL,
     job_level INTEGER NOT NULL DEFAULT 0,
+    run_attempt_id UUID,
     dependencies JSONB DEFAULT '[]'::JSONB,
     branch_metadata JSONB,
     history_created_on TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()

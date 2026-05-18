@@ -3,9 +3,9 @@ WITH candidate_jobs AS (
     SELECT j.*
     FROM {schema}.job j
     INNER JOIN {schema}.dag d ON d.id = j.dag_id
-    WHERE j.state < 'active'
+    WHERE j.state::text IN ('created', 'retry')
       AND j.start_after < now()
-      AND d.state != 'completed'
+      AND d.state::text != 'completed'
 ),
 unblocked_jobs AS (
     SELECT j.*
@@ -18,7 +18,7 @@ unblocked_jobs AS (
          AND d2.id = dep.depends_on_id
         WHERE dep.job_name = j.name
           AND dep.job_id = j.id
-          AND d2.state <> 'completed'
+          AND d2.state::text NOT IN ('completed', 'skipped')
     )
 )
 SELECT *

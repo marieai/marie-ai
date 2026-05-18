@@ -3,7 +3,7 @@ import json
 import time
 from dataclasses import asdict, dataclass, replace
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Union
 
 from marie.constants import KV_NAMESPACE_JOB
 from marie.storage.kv.storage_client import StorageArea
@@ -81,6 +81,10 @@ class JobInfo:
     #: The node id that driver running on. It will be None only when the job status
     # is PENDING, and this field will not be deleted or modified even if the driver dies
     driver_node_id: Optional[str] = None
+    #: Scheduler owner that created the durable run attempt.
+    run_owner: Optional[str] = None
+    #: Durable execution attempt identifier. Terminal callbacks must carry this value.
+    run_attempt_id: Optional[str] = None
 
     def __post_init__(self):
         if isinstance(self.status, str):

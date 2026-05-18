@@ -132,6 +132,7 @@ def build_scheduler(
     scheduler._dag_resolution_retry_delay = 0.0
     scheduler._dag_resolution_retry_backoff = False
     scheduler._dag_resolution_retry_max_delay = 0.0
+    scheduler.lease_owner = "test-scheduler"
 
     async def notify_event() -> bool:
         scheduler.notify_calls.append(True)
@@ -376,23 +377,24 @@ async def test_control_flow_activation_marks_job_active_before_local_completion(
     frontier = RecordingFrontier()
     repository = RecordingRepository(dag_state="active")
     scheduler = build_scheduler(repository, frontier)
-    scheduler.distributed_scheduler = False
 
     work_item = build_work_item("job-control", "dag-control")
     await frontier.add_dag(None, [work_item])
 
-    marked_active: list[str] = []
+    activated_ids: list[list[str]] = []
 
-    async def mark_as_active(wi: WorkInfo) -> bool:
-        marked_active.append(wi.id)
-        return True
+    async def activate_from_lease(ids: list[str]) -> dict[str, str]:
+        activated_ids.append(ids)
+        return {work_item.id: "06a0ac88-5326-7f90-8000-0274669de089"}
 
-    scheduler.mark_as_active = mark_as_active
+    scheduler._activate_from_lease_db = activate_from_lease
 
     activated = await scheduler._activate_control_flow_job(work_item)
 
     assert activated is True
-    assert marked_active == [work_item.id]
+    assert activated_ids == [[work_item.id]]
+    assert work_item.run_owner == "test-scheduler"
+    assert work_item.run_attempt_id == "06a0ac88-5326-7f90-8000-0274669de089"
     assert frontier.jobs_by_id[work_item.id].state == WorkState.ACTIVE
 
 
@@ -430,7 +432,12 @@ async def test_handle_dispatch_failure_marks_job_for_retry_and_releases_semaphor
     scheduler = build_scheduler(repository, frontier)
     fail_calls: list[dict] = []
 
-    async def fake_fail(job_id: str, wi: WorkInfo, output_metadata: dict | None = None):
+    async def fake_fail(
+        job_id: str,
+        wi: WorkInfo,
+        output_metadata: dict | None = None,
+        **_kwargs,
+    ):
         fail_calls.append(
             {
                 "job_id": job_id,
@@ -482,7 +489,12 @@ async def test_handle_dispatch_failure_marks_job_failed_and_resolves_dag():
     fail_calls: list[dict] = []
     resolve_calls: list[tuple[str, str]] = []
 
-    async def fake_fail(job_id: str, wi: WorkInfo, output_metadata: dict | None = None):
+    async def fake_fail(
+        job_id: str,
+        wi: WorkInfo,
+        output_metadata: dict | None = None,
+        **_kwargs,
+    ):
         fail_calls.append(
             {
                 "job_id": job_id,
@@ -546,7 +558,8 @@ async def test_sync_terminal_job_state_succeeded_unblocks_children_and_notifies(
         wi: WorkInfo,
         output_metadata: dict | None = None,
         force: bool = False,
-    ) -> None:
+        **_kwargs,
+    ) -> int:
         complete_calls.append(
             {
                 "job_id": job_id,
@@ -554,6 +567,7 @@ async def test_sync_terminal_job_state_succeeded_unblocks_children_and_notifies(
                 "force": force,
             }
         )
+        return 1
 
     async def fake_resolve_dag_status(job_id: str, wi: WorkInfo, *args, **kwargs):
         resolve_calls.append((job_id, wi.dag_id))
@@ -573,6 +587,8 @@ async def test_sync_terminal_job_state_succeeded_unblocks_children_and_notifies(
         status=JobStatus.SUCCEEDED,
         entrypoint="test-entrypoint",
         end_time=old_end,
+        run_owner="test-scheduler",
+        run_attempt_id="06a0ac88-5326-7f90-8000-0274669de089",
     )
 
     synced = await scheduler._sync_terminal_job_state(
@@ -587,7 +603,7 @@ async def test_sync_terminal_job_state_succeeded_unblocks_children_and_notifies(
         {
             "job_id": parent.id,
             "output_metadata": {"synced": True},
-            "force": True,
+            "force": False,
         }
     ]
     assert resolve_calls == [(parent.id, dag_id)]
@@ -633,6 +649,9 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
 
         def create_tables(self, _schema):
             order.append("create_tables")
+
+        async def validate_durable_scheduler_schema(self, _schema):
+            order.append("validate_durable_scheduler_schema")
 
         async def create_queue(self, _queue):
             order.append("create_queue")
@@ -887,6 +906,8 @@ def test_repository_record_to_work_info_normalizes_uuid_fields():
             0,
             None,
             None,
+            "test-scheduler",
+            uuid.uuid4(),
         )
     )
 
@@ -912,6 +933,7 @@ async def test_process_control_flow_node_notifies_after_unblocking_children(monk
 
     async def complete(job_id: str, _wi: WorkInfo, *_args, **_kwargs):
         order.append(f"complete:{job_id}")
+        return 1
 
     async def on_job_completed(job_id: str):
         order.append(f"frontier_completed:{job_id}")
@@ -930,6 +952,8 @@ async def test_process_control_flow_node_notifies_after_unblocking_children(monk
     scheduler.frontier.on_job_completed = on_job_completed
     
     async def activate_control_flow_job(_wi: WorkInfo) -> bool:
+        _wi.run_owner = "test-scheduler"
+        _wi.run_attempt_id = "06a0ac88-5326-7f90-8000-0274669de089"
         return True
 
     scheduler._activate_control_flow_job = activate_control_flow_job

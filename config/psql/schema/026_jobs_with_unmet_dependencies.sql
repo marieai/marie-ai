@@ -25,7 +25,7 @@ AS $$
         JOIN
             {schema}.job AS d ON jd.depends_on_id = d.id
         WHERE
-            jd.job_id = j.id AND d.state != 'completed'
+            jd.job_id = j.id AND d.state::text NOT IN ('completed', 'skipped')
     );
 
 $$;

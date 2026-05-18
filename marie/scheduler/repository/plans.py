@@ -298,15 +298,27 @@ def count_dag_states(schema: str):
 
 def cancel_jobs(schema: str, name: str, ids: list):
     ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    nonterminal = "', '".join(
+        [
+            WorkState.CREATED.value,
+            WorkState.RETRY.value,
+            WorkState.ACTIVE.value,
+        ]
+    )
 
     return f"""
     WITH results AS (
       UPDATE {schema}.job
       SET completed_on = now(),
-          state = '{WorkState.CANCELLED.value}'
-      WHERE name = {name}
+          state = '{WorkState.CANCELLED.value}',
+          lease_owner = NULL,
+          lease_expires_at = NULL,
+          run_owner = NULL,
+          run_attempt_id = NULL,
+          run_lease_expires_at = NULL
+      WHERE name = '{name}'
         AND id IN (SELECT UNNEST({ids_string}::uuid[]))
-        AND state < '{WorkState.COMPLETED.value}'
+        AND state::text IN ('{nonterminal}')
       RETURNING 1
     )
     SELECT COUNT(*) FROM results
@@ -323,6 +335,7 @@ def cancel_pending_jobs_for_dag(schema: str, dag_id: str, output: dict):
           lease_owner = NULL,
           lease_expires_at = NULL,
           run_owner = NULL,
+          run_attempt_id = NULL,
           run_lease_expires_at = NULL
       WHERE dag_id = '{dag_id}'::uuid
         AND state IN ('{WorkState.CREATED.value}', '{WorkState.RETRY.value}')
@@ -340,7 +353,7 @@ def resume_jobs(schema: str, name: str, ids: list):
       UPDATE {schema}.job
       SET completed_on = NULL,
           state = '{WorkState.CREATED.value}'
-      WHERE name = {name}
+      WHERE name = '{name}'
         AND id IN (SELECT UNNEST({ids_string}::uuid[]))
         AND state = '{WorkState.CANCELLED.value}'
       RETURNING 1
@@ -445,6 +458,22 @@ def complete_jobs(schema: str, name: str, ids: list, output: dict):
     return _complete_jobs_query(schema, name, ids, output, state_condition)
 
 
+def complete_jobs_by_attempt(
+    schema: str,
+    name: str,
+    ids: list,
+    output: dict,
+    run_owner: str,
+    run_attempt_id: str,
+):
+    state_condition = (
+        f"state = '{WorkState.ACTIVE.value}' "
+        f"AND run_owner = {_literal(run_owner)} "
+        f"AND run_attempt_id = {_literal(run_attempt_id)}::uuid"
+    )
+    return _complete_jobs_query(schema, name, ids, output, state_condition)
+
+
 def complete_jobs_by_id(schema: str, name: str, ids: list, output: dict):
     state_condition = "TRUE"  # No state condition for complete_jobs_by_id
     return _complete_jobs_query(schema, name, ids, output, state_condition)
@@ -452,7 +481,30 @@ def complete_jobs_by_id(schema: str, name: str, ids: list, output: dict):
 
 def fail_jobs_by_id(schema: str, name: str, ids: list, output: dict):
     ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
-    where = f"name = '{name}' AND id IN (SELECT UNNEST({ids_string}::uuid[])) AND state < '{WorkState.COMPLETED.value}'"
+    where = (
+        f"name = '{name}' "
+        f"AND id IN (SELECT UNNEST({ids_string}::uuid[])) "
+        "AND state::text IN ('created', 'retry', 'active')"
+    )
+    return fail_jobs(schema, where, output)
+
+
+def fail_jobs_by_attempt(
+    schema: str,
+    name: str,
+    ids: list,
+    output: dict,
+    run_owner: str,
+    run_attempt_id: str,
+):
+    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    where = (
+        f"name = '{name}' "
+        f"AND id IN (SELECT UNNEST({ids_string}::uuid[])) "
+        f"AND state = '{WorkState.ACTIVE.value}' "
+        f"AND run_owner = {_literal(run_owner)} "
+        f"AND run_attempt_id = {_literal(run_attempt_id)}::uuid"
+    )
     return fail_jobs(schema, where, output)
 
 
@@ -485,6 +537,10 @@ def fail_jobs(schema: str, where: str, output: dict):
         lease_owner          = NULL,
         lease_expires_at     = NULL,
         run_owner            = NULL,
+        run_attempt_id       = CASE
+          WHEN retry_count < retry_limit THEN NULL
+          ELSE run_attempt_id
+          END,
         run_lease_expires_at = NULL
       WHERE {where}
       RETURNING *

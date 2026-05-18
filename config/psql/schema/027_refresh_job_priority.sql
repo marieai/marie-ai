@@ -6,7 +6,7 @@ BEGIN
     WITH ordered AS (
         SELECT id
         FROM {schema}.job
-        WHERE state <> 'completed'
+        WHERE state::text NOT IN ('completed', 'skipped')
         ORDER BY id
         FOR UPDATE
     )

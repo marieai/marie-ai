@@ -9,6 +9,7 @@ AS $$
       lease_expires_at      = NULL,
       lease_epoch           = lease_epoch + 1,  -- bump CAS
       run_owner             = NULL,
+      run_attempt_id        = NULL,
       run_lease_expires_at  = NULL
     WHERE lease_owner IS NOT NULL
        OR lease_expires_at IS NOT NULL

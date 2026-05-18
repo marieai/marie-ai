@@ -177,8 +177,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.scheduler_mode = config.get(
             "scheduler_mode", "parallel"
         )  # "serial" or "parallel"
-        self.scheduler_mode = "serial"
-        self.distributed_scheduler = config.get("distributed_scheduler", False)
+        self.distributed_scheduler = config.get("distributed_scheduler", True)
+        if self.distributed_scheduler is False:
+            raise BadConfigSource(
+                "distributed_scheduler=false is no longer supported; "
+                "durable DB leasing is required."
+            )
 
         self._event_queue = Queue()
         self._status_update_lock = AsyncJobLock()
@@ -351,7 +355,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         )
         self._sem_default_ttl = 30
         self._sem_owner_prefix = f"{socket.gethostname()}"
-        self._sem_owner_prefix = f""
+        self._sem_owner_prefix = ""
 
         self.capacity_manager = SlotCapacityManager(
             semaphore_store=self._semaphore_store,
@@ -393,11 +397,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
             now = datetime.now(timezone.utc)
             work_state = convert_job_status_to_work_state(status)
-            work_item.state = work_state
-
-            # update storage cache and memory cache
-            self._job_cache[job_id] = work_item
-            await self.frontier.update_job_state(job_id, work_state)
+            run_owner = message.get("run_owner")
+            run_attempt_id = message.get("run_attempt_id")
 
             # Track actual work state for failures (may be 'retry' or 'failed')
             actual_work_state: Optional[str] = None
@@ -405,23 +406,116 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             if status == JobStatus.PENDING:
                 self.logger.debug(f"Job pending : {job_id}")
             elif status == JobStatus.SUCCEEDED:
-                await self.complete(job_id, work_item)
+                if not run_owner or not run_attempt_id:
+                    scheduler_trace(
+                        "job_terminal_attempt_rejected",
+                        job_id=job_id,
+                        dag_id=work_item.dag_id,
+                        status=status.value,
+                        reason="missing_attempt",
+                    )
+                    self.logger.warning(
+                        f"Ignoring terminal job event without run attempt: job_id={job_id}, status={status}"
+                    )
+                    return
+
+                completed = await self.complete(
+                    job_id,
+                    work_item,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                )
+                if completed <= 0:
+                    scheduler_trace(
+                        "job_terminal_attempt_rejected",
+                        job_id=job_id,
+                        dag_id=work_item.dag_id,
+                        status=status.value,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                        reason="db_update_zero_rows",
+                    )
+                    return
+                work_item.state = WorkState.COMPLETED
+                self._job_cache[job_id] = work_item
+                scheduler_trace(
+                    "job_terminal_attempt_accepted",
+                    job_id=job_id,
+                    dag_id=work_item.dag_id,
+                    status=status.value,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                )
                 await self._handle_successful_job_completion(job_id, work_item)
             elif status == JobStatus.FAILED:
-                actual_work_state = await self.fail(job_id, work_item)
+                if not run_owner or not run_attempt_id:
+                    scheduler_trace(
+                        "job_terminal_attempt_rejected",
+                        job_id=job_id,
+                        dag_id=work_item.dag_id,
+                        status=status.value,
+                        reason="missing_attempt",
+                    )
+                    self.logger.warning(
+                        f"Ignoring failed job event without run attempt: job_id={job_id}"
+                    )
+                    return
+
+                actual_work_state = await self.fail(
+                    job_id,
+                    work_item,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                )
+                if actual_work_state is None:
+                    scheduler_trace(
+                        "job_terminal_attempt_rejected",
+                        job_id=job_id,
+                        dag_id=work_item.dag_id,
+                        status=status.value,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                        reason="db_update_zero_rows",
+                    )
+                    return
+                work_item.state = WorkState(actual_work_state)
+                self._job_cache[job_id] = work_item
+                scheduler_trace(
+                    "job_terminal_attempt_accepted",
+                    job_id=job_id,
+                    dag_id=work_item.dag_id,
+                    status=status.value,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    final_state=actual_work_state,
+                )
                 if actual_work_state == WorkState.RETRY.value:
                     await self.frontier.on_job_retry(job_id, work_item)
                 else:
                     await self.frontier.on_job_failed(job_id)
             elif status == JobStatus.STOPPED:
                 await self.cancel_job(job_id, work_item)
+                work_item.state = work_state
+                self._job_cache[job_id] = work_item
                 await self.frontier.on_job_cancelled(job_id)
             elif status == JobStatus.RUNNING:
+                work_item.state = work_state
+                self._job_cache[job_id] = work_item
+                await self.frontier.update_job_state(job_id, work_state)
                 self.logger.debug(f"Job running : {job_id}")
                 await self.put_status(job_id, work_state, now, None)
             else:
                 self.logger.error(f"Unhandled job status: {status}. Marking as FAILED.")
-                actual_work_state = await self.fail(job_id, work_item)  # Fail-safe
+                actual_work_state = await self.fail(
+                    job_id,
+                    work_item,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                )  # Fail-safe
+                if actual_work_state is None:
+                    return
+                work_item.state = WorkState(actual_work_state)
+                self._job_cache[job_id] = work_item
                 if actual_work_state == WorkState.RETRY.value:
                     await self.frontier.on_job_retry(job_id, work_item)
                 else:
@@ -501,11 +595,22 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             await self._evaluate_and_mark_guardrail_paths(job_id, work_item, dag_plan)
 
     async def _activate_control_flow_job(self, wi: WorkInfo) -> bool:
-        if self.distributed_scheduler:
-            activated = await self._activate_from_lease_db([wi.id])
-            marked_active = wi.id in activated
-        else:
-            marked_active = await self.mark_as_active(wi)
+        if (
+            wi.state == WorkState.ACTIVE
+            and wi.run_owner == self.lease_owner
+            and wi.run_attempt_id
+        ):
+            self._job_cache[wi.id] = wi
+            await self.frontier.update_job_state(wi.id, WorkState.ACTIVE)
+            return True
+
+        activated = await self._activate_from_lease_db([wi.id])
+        marked_active = wi.id in activated
+        if marked_active:
+            wi.run_owner = self.lease_owner
+            wi.run_attempt_id = activated[wi.id]
+            wi.state = WorkState.ACTIVE
+            self._job_cache[wi.id] = wi
 
         if not marked_active:
             self.logger.error(
@@ -515,6 +620,79 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         await self.frontier.update_job_state(wi.id, WorkState.ACTIVE)
         return True
+
+    async def _complete_control_flow_attempt(self, wi: WorkInfo) -> bool:
+        if not wi.run_owner or not wi.run_attempt_id:
+            self.logger.error(
+                f"[CONTROL_FLOW] Missing run attempt for control flow node {wi.id}"
+            )
+            scheduler_trace(
+                "control_flow_terminal_rejected",
+                job_id=wi.id,
+                dag_id=wi.dag_id,
+                reason="missing_attempt",
+            )
+            return False
+
+        completed = await self.complete(
+            wi.id,
+            wi,
+            {},
+            run_owner=wi.run_owner,
+            run_attempt_id=wi.run_attempt_id,
+        )
+        if completed:
+            return True
+
+        self.logger.warning(
+            f"[CONTROL_FLOW] Terminal update rejected for control flow node {wi.id} "
+            f"(run_owner={wi.run_owner}, run_attempt_id={wi.run_attempt_id})"
+        )
+        scheduler_trace(
+            "control_flow_terminal_rejected",
+            job_id=wi.id,
+            dag_id=wi.dag_id,
+            reason="attempt_mismatch",
+            run_owner=wi.run_owner,
+            run_attempt_id=wi.run_attempt_id,
+        )
+        return False
+
+    async def _reconcile_control_flow_lease_miss(
+        self, wi: WorkInfo, db_wi: WorkInfo | None
+    ) -> bool:
+        if db_wi is None:
+            await self.frontier.release_lease_local(wi.id)
+            return False
+
+        self._job_cache[wi.id] = db_wi
+        state = db_wi.state
+        scheduler_trace(
+            "control_flow_db_lease_miss_reconciled",
+            job_id=wi.id,
+            dag_id=wi.dag_id,
+            db_state=state.value if isinstance(state, WorkState) else str(state),
+        )
+
+        if state == WorkState.COMPLETED:
+            await self.frontier.on_job_completed(wi.id)
+            return True
+        if state == WorkState.SKIPPED:
+            await self.frontier.on_job_skipped(wi.id)
+            return True
+        if state in (WorkState.FAILED, WorkState.EXPIRED):
+            await self.frontier.on_job_failed(wi.id)
+            return True
+        if state == WorkState.CANCELLED:
+            await self.frontier.on_job_cancelled(wi.id)
+            return True
+        if state == WorkState.ACTIVE:
+            await self.frontier.update_job_state(wi.id, WorkState.ACTIVE)
+            await self.frontier.release_lease_local(wi.id)
+            return True
+
+        await self.frontier.release_lease_local(wi.id)
+        return False
 
     async def _process_control_flow_node(self, wi: WorkInfo) -> None:
         """
@@ -564,9 +742,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 await self.frontier.release_lease_local(wi.id)
                 return
 
-            # Get the node from the DAG
-            node = get_node_from_dag(wi.id, self.active_dags[dag_id])
-
             # Get job levels for root/leaf detection
             sorted_nodes, job_levels = self._topology_cache.get_sorted_nodes_and_levels(
                 self.active_dags[dag_id], dag_id
@@ -598,7 +773,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 )
 
                 # Complete the branch node first
-                await self.complete(wi.id, wi, {}, force=True)
+                if not await self._complete_control_flow_attempt(wi):
+                    return
 
                 # Evaluate and mark paths
                 await self._evaluate_and_mark_branch_paths(
@@ -612,7 +788,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 )
 
                 # Complete the guardrail node first
-                await self.complete(wi.id, wi, {}, force=True)
+                if not await self._complete_control_flow_attempt(wi):
+                    return
 
                 # Evaluate and mark paths based on pass/fail
                 await self._evaluate_and_mark_guardrail_paths(
@@ -622,7 +799,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             elif node_type == "noop":
                 # NOOP nodes just complete
                 self.logger.debug(f"[CONTROL_FLOW] Completing NOOP node {wi.id}")
-                await self.complete(wi.id, wi, {}, force=True)
+                if not await self._complete_control_flow_attempt(wi):
+                    return
 
             elif node_type == "merger":
                 # MERGER nodes wait for branches to complete via dependencies
@@ -633,13 +811,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     f"[CONTROL_FLOW] Completing MERGER node {wi.id} "
                     "(merge logic handled by dependencies)"
                 )
-                await self.complete(wi.id, wi, {}, force=True)
+                if not await self._complete_control_flow_attempt(wi):
+                    return
 
             else:
                 self.logger.warning(
                     f"[CONTROL_FLOW] Unknown control flow type: {node_type} for {wi.id}"
                 )
-                await self.complete(wi.id, wi, {}, force=True)
+                if not await self._complete_control_flow_attempt(wi):
+                    return
 
             # Clean up
             self.frontier.leased_until.pop(wi.id, None)
@@ -694,6 +874,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             return 0
 
         tasks: list[asyncio.Task[None]] = []
+        reconciled_count = 0
 
         for wi in control_flow_jobs:
             taken_wis = await self.frontier.take([wi.id], lease_ttl=lease_ttl)
@@ -713,16 +894,32 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 continue
 
             if not leased_ids:
+                db_wi = await self.repository.get_job_by_id(wi.id)
+                db_state = db_wi.state if db_wi else None
                 self.logger.warning(
-                    f"[WORK_DIST] Failed to lease control flow node {wi.id} in DB"
+                    f"[WORK_DIST] Failed to lease control flow node {wi.id} in DB "
+                    f"(frontier_state={wi.state}, db_state={db_state})"
                 )
-                await self.frontier.release_lease_local(wi.id)
+                if (
+                    db_wi
+                    and db_wi.state == WorkState.ACTIVE
+                    and db_wi.run_owner == self.lease_owner
+                    and db_wi.run_attempt_id
+                ):
+                    await self.frontier.update_job_state(wi.id, WorkState.ACTIVE)
+                    tasks.append(
+                        asyncio.create_task(self._process_control_flow_node(db_wi))
+                    )
+                    continue
+
+                reconciled = await self._reconcile_control_flow_lease_miss(wi, db_wi)
+                reconciled_count += int(reconciled)
                 continue
 
             tasks.append(asyncio.create_task(self._process_control_flow_node(wi)))
 
         if not tasks:
-            return 0
+            return reconciled_count
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for result in results:
@@ -732,7 +929,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     exc_info=(type(result), result, result.__traceback__),
                 )
 
-        return len(tasks)
+        return len(tasks) + reconciled_count
 
     async def _evaluate_and_mark_branch_paths(
         self, branch_node_id: str, work_item: WorkInfo, dag_plan: QueryPlan
@@ -1323,12 +1520,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             f"Removed finished DAG {dag_id} from active_dags"
                         )
 
-                elif new_state in ["running", "pending"]:
-                    # DAG should be active - if not in memory, it might need hydration
+                elif new_state in ["active", "running", "pending"]:
                     if dag_id not in self.active_dags:
-                        self.logger.warning(
-                            f"DAG {dag_id} is in '{new_state}' state but not in active_dags. "
-                            "It will be hydrated on next scheduler cycle."
+                        self.logger.debug(
+                            f"DAG {dag_id} is '{new_state}' in DB but is not local "
+                            "to this scheduler yet; it may be admitted by the current "
+                            "cycle, owned by another scheduler, or hydrated later."
                         )
 
                 else:
@@ -1403,6 +1600,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         logger.info(f"Tables installed: {installed}")
         if not installed:
             self.repository.create_tables(DEFAULT_SCHEMA)
+
+        await self.repository.validate_durable_scheduler_schema(DEFAULT_SCHEMA)
 
         # Get defined queues from repository
         defined_queues = await self.repository.get_defined_queues(DEFAULT_SCHEMA)
@@ -2019,6 +2218,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                 for slot_type, jobs in reservable_jobs_by_executor.items():
                     reserved_ids = await self._reserve_semaphore_slots(slot_type, jobs)
+                    reserved_jobs: list[WorkInfo] = []
                     for wi in jobs:
                         owner = wi.id
                         if wi.id not in reserved_ids:
@@ -2046,14 +2246,70 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             slots_before=slots_before_by_job.get(wi.id),
                             ttl_seconds=self._sem_default_ttl,
                         )
+                        reserved_jobs.append(wi)
+
+                    if not reserved_jobs:
+                        continue
+
+                    try:
+                        attempts = await self._activate_from_lease_db(
+                            [wi.id for wi in reserved_jobs]
+                        )
+                    except Exception as error:
+                        attempts = {}
+                        self.logger.error(
+                            f"[WORK_DIST] DB activation failed for executor={slot_type}: {error}",
+                            exc_info=True,
+                        )
+
+                    for wi in reserved_jobs:
+                        owner = wi.id
+                        run_attempt_id = attempts.get(wi.id)
+                        if not run_attempt_id:
+                            scheduler_trace(
+                                "job_db_activate_failed",
+                                job_id=wi.id,
+                                dag_id=wi.dag_id,
+                                executor=slot_type,
+                                run_owner=self.lease_owner,
+                            )
+                            await self._release_lease_db([wi.id])
+                            await self.frontier.release_lease_local(wi.id)
+                            try:
+                                await asyncio.to_thread(
+                                    self._semaphore_store.release_owned,
+                                    slot_type,
+                                    wi.id,
+                                    owner=owner,
+                                )
+                            except Exception as release_error:
+                                self.logger.warning(
+                                    f"[sem] release error after activation-fail {wi.id}@{slot_type}: {release_error}"
+                                )
+                            continue
+
+                        scheduler_trace(
+                            "job_run_attempt_started",
+                            job_id=wi.id,
+                            dag_id=wi.dag_id,
+                            executor=slot_type,
+                            run_owner=self.lease_owner,
+                            run_attempt_id=run_attempt_id,
+                        )
                         enqueue_tasks.append(
                             {
                                 "task": asyncio.create_task(
-                                    self._activate_and_enqueue_job(wi)
+                                    self._activate_and_enqueue_job(
+                                        wi,
+                                        run_owner=self.lease_owner,
+                                        run_attempt_id=run_attempt_id,
+                                    )
                                 ),
                                 "wi": wi,
                                 "exe": slot_type,
                                 "owner": owner,
+                                "run_owner": self.lease_owner,
+                                "run_attempt_id": run_attempt_id,
                             }
                         )
 
@@ -2085,6 +2341,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         wi = enqueue_tasks[i]["wi"]
                         exe = enqueue_tasks[i]["exe"]
                         owner = enqueue_tasks[i]["owner"]
+                        run_owner = enqueue_tasks[i]["run_owner"]
+                        run_attempt_id = enqueue_tasks[i]["run_attempt_id"]
 
                         if isinstance(result, Exception) or not result:
                             # dispatch failed → release lease & requeue
@@ -2094,32 +2352,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                                     True if isinstance(result, Exception) else False
                                 ),
                             )
-                            await self._handle_dispatch_failure(wi, exe, owner, result)
+                            await self._handle_dispatch_failure(
+                                wi,
+                                exe,
+                                owner,
+                                result,
+                                run_owner=run_owner,
+                                run_attempt_id=run_attempt_id,
+                            )
                             continue
 
-                        # runner accepted → activate from lease
-                        activated = await self._activate_from_lease_db([wi.id])
-                        if wi.id in activated:
-                            scheduler_trace(
-                                "job_db_activated",
-                                job_id=wi.id,
-                                dag_id=wi.dag_id,
-                                executor=exe,
-                            )
-                            jobs_scheduled_this_cycle[exe] += 1
-                            scheduled_any = True
-                        else:
-                            scheduler_trace(
-                                "job_db_activate_failed",
-                                job_id=wi.id,
-                                dag_id=wi.dag_id,
-                                executor=exe,
-                            )
-                            self.logger.error(
-                                f"Failed to activate job {wi.id}; releasing lease."
-                            )
-                            await self._release_lease_db([wi.id])
-                            await self.frontier.release_lease_local(wi.id)
+                        jobs_scheduled_this_cycle[exe] += 1
+                        scheduled_any = True
 
                 if jobs_scheduled_this_cycle:
                     self.logger.info("Scheduling summary for this cycle:")
@@ -2147,7 +2391,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             except Exception as e:
                 if _is_known_connection_error(e):
                     self.logger.warning(
-                        f"Poll loop: ETCD connection unavailable, waiting for reconnect"
+                        "Poll loop: ETCD connection unavailable, waiting for reconnect"
                     )
                     await asyncio.sleep(3)
                     continue
@@ -2202,34 +2446,38 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         "max_active": 0.0,
                     }
 
-    async def _activate_and_enqueue_job(self, wi: WorkInfo) -> bool:
-        """Marks a job as active in the database and then enqueues it to a worker."""
+    async def _activate_and_enqueue_job(
+        self, wi: WorkInfo, *, run_owner: str, run_attempt_id: str
+    ) -> bool:
         is_retry = wi.state == WorkState.RETRY or wi.state == WorkState.RETRY.value
         scheduler_trace(
-            "job_activate_start",
+            "job_enqueue_start",
             job_id=wi.id,
             dag_id=wi.dag_id,
             job_name=wi.name,
             is_retry=is_retry,
+            run_owner=run_owner,
+            run_attempt_id=run_attempt_id,
         )
-        marked_active = await self.mark_as_active(wi)
-        if not marked_active:
-            scheduler_trace(
-                "job_activate_failed",
-                job_id=wi.id,
-                dag_id=wi.dag_id,
-                job_name=wi.name,
-            )
-            self.logger.error(f"Failed to mark job {wi.id} active before enqueue")
-            return False
+        wi.run_owner = run_owner
+        wi.run_attempt_id = run_attempt_id
+        wi.state = WorkState.ACTIVE
+        self._job_cache[wi.id] = wi
         await self.frontier.update_job_state(wi.id, WorkState.ACTIVE)
         scheduler_trace(
             "job_active_marked",
             job_id=wi.id,
             dag_id=wi.dag_id,
             job_name=wi.name,
+            run_owner=run_owner,
+            run_attempt_id=run_attempt_id,
         )
-        enqueued = await self.enqueue(wi, is_retry=is_retry)
+        enqueued = await self.enqueue(
+            wi,
+            is_retry=is_retry,
+            run_owner=run_owner,
+            run_attempt_id=run_attempt_id,
+        )
         scheduler_trace(
             "job_enqueue_result",
             job_id=wi.id,
@@ -2412,7 +2660,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         return debug_data
 
     async def enqueue(
-        self, work_info: WorkInfo, *, is_retry: Optional[bool] = None
+        self,
+        work_info: WorkInfo,
+        *,
+        is_retry: Optional[bool] = None,
+        run_owner: str | None = None,
+        run_attempt_id: str | None = None,
     ) -> bool:
         """
         Tries to dispatch a work item to an executor and waits for confirmation.
@@ -2455,6 +2708,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 job_metadata['node_task_id'] = (
                     work_info.id
                 )  # job ID serves as node task ID
+            if run_owner:
+                job_metadata["run_owner"] = run_owner
+            if run_attempt_id:
+                job_metadata["run_attempt_id"] = run_attempt_id
 
             # Detect if this is a retry (job was previously run and failed)
             if is_retry is None:
@@ -2470,6 +2727,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     metadata=job_metadata,
                     confirmation_event=confirmation_event,
                     is_retry=is_retry,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
                 )
                 scheduler_trace(
                     "gateway_dispatch_submitted",
@@ -3319,7 +3578,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         work_item: WorkInfo,
         output_metadata: dict = None,
         force=False,
-    ):
+        run_owner: str | None = None,
+        run_attempt_id: str | None = None,
+    ) -> int:
         """
         Mark a job as completed.
         Delegates to JobRepository.
@@ -3330,17 +3591,25 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param force: If True, complete job regardless of current state
         """
         async with self._status_update_lock[job_id]:
-            await self.repository.complete_job(
+            count = await self.repository.complete_job(
                 job_id=job_id,
                 queue_name=work_item.name,
                 output_metadata=output_metadata,
                 force=force,
                 schema=DEFAULT_SCHEMA,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
             )
             # self._job_cache.pop(job_id, None) # invalidate cache
+            return count
 
     async def fail(
-        self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
+        self,
+        job_id: str,
+        work_item: WorkInfo,
+        output_metadata: dict = None,
+        run_owner: str | None = None,
+        run_attempt_id: str | None = None,
     ) -> Optional[str]:
         """
         Mark a job as failed or for retry.
@@ -3357,6 +3626,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 queue_name=work_item.name,
                 output_metadata=output_metadata,
                 schema=DEFAULT_SCHEMA,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
             )
             # self._job_cache.pop(job_id, None) # invalidate cache
             return final_state
@@ -3442,12 +3713,66 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         meta = {"synced": True}
         actual_work_state: Optional[str] = None
+        run_owner = job_info.run_owner
+        run_attempt_id = job_info.run_attempt_id
 
         if job_info.status == JobStatus.SUCCEEDED:
-            await self.complete(job_id, work_item, meta, force=True)
+            if not run_owner or not run_attempt_id:
+                scheduler_trace(
+                    "job_terminal_attempt_rejected",
+                    job_id=job_id,
+                    dag_id=work_item.dag_id,
+                    status=job_info.status.value,
+                    reason="sync_missing_attempt",
+                )
+                return False
+            completed = await self.complete(
+                job_id,
+                work_item,
+                meta,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+            )
+            if completed <= 0:
+                scheduler_trace(
+                    "job_terminal_attempt_rejected",
+                    job_id=job_id,
+                    dag_id=work_item.dag_id,
+                    status=job_info.status.value,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    reason="sync_db_update_zero_rows",
+                )
+                return False
             await self._handle_successful_job_completion(job_id, work_item)
         elif job_info.status == JobStatus.FAILED:
-            actual_work_state = await self.fail(job_id, work_item, meta)
+            if not run_owner or not run_attempt_id:
+                scheduler_trace(
+                    "job_terminal_attempt_rejected",
+                    job_id=job_id,
+                    dag_id=work_item.dag_id,
+                    status=job_info.status.value,
+                    reason="sync_missing_attempt",
+                )
+                return False
+            actual_work_state = await self.fail(
+                job_id,
+                work_item,
+                meta,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+            )
+            if actual_work_state is None:
+                scheduler_trace(
+                    "job_terminal_attempt_rejected",
+                    job_id=job_id,
+                    dag_id=work_item.dag_id,
+                    status=job_info.status.value,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    reason="sync_db_update_zero_rows",
+                )
+                return False
             if actual_work_state == WorkState.RETRY.value:
                 await self.frontier.on_job_retry(job_id, work_item)
             else:
@@ -3649,7 +3974,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             )
 
     async def _handle_dispatch_failure(
-        self, wi: WorkInfo, executor: str, owner: str, error: Any
+        self,
+        wi: WorkInfo,
+        executor: str,
+        owner: str,
+        error: Any,
+        *,
+        run_owner: str | None = None,
+        run_attempt_id: str | None = None,
     ) -> None:
         error_message = str(error) if error is not None else "dispatch failed"
 
@@ -3661,6 +3993,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 "dispatch_error": error_message,
                 "failure_stage": "enqueue",
             },
+            run_owner=run_owner,
+            run_attempt_id=run_attempt_id,
         )
 
         if actual_work_state == WorkState.RETRY.value:
@@ -3863,10 +4197,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not ids:
             return set()
 
-        # Skip leasing if not in distributed mode
-        if not self.distributed_scheduler:
-            return set(ids)
-
         return await self.repository.lease_jobs(
             job_ids=ids,
             owner=self.lease_owner,
@@ -3874,16 +4204,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             job_name=job_name,
         )
 
-    async def _activate_from_lease_db(self, ids: list[str]) -> set[str]:
+    async def _activate_from_lease_db(self, ids: list[str]) -> dict[str, str]:
         """
         Promote leased jobs to active in DB once dispatch is acknowledged.
         """
         if not ids:
-            return set()
-
-        # Skip activation if not in distributed mode
-        if not self.distributed_scheduler:
-            return set(ids)
+            return {}
 
         return await self.repository.activate_from_lease(
             job_ids=ids, owner=self.lease_owner, run_ttl_seconds=self.run_ttl_seconds
@@ -3895,10 +4221,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         if not ids:
             return set()
-
-        # Skip release if not in distributed mode
-        if not self.distributed_scheduler:
-            return set(ids)
 
         return await self.repository.release_lease(job_ids=ids)
 

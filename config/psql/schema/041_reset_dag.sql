@@ -66,6 +66,7 @@ BEGIN
         lease_expires_at = NULL,
         lease_epoch = 0,
         run_owner = NULL,
+        run_attempt_id = NULL,
         run_lease_expires_at = NULL
     WHERE dag_id = p_dag_id;
     GET DIAGNOSTICS job_count = ROW_COUNT;

@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS {schema}.job (
     lease_expires_at TIMESTAMP WITH TIME ZONE,
     lease_epoch BIGINT DEFAULT 0,
     run_owner TEXT,
+    run_attempt_id UUID,
     run_lease_expires_at TIMESTAMP WITH TIME ZONE
 ) PARTITION BY LIST (name);
 

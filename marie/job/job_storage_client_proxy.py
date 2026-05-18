@@ -36,6 +36,7 @@ class JobInfoStorageClientProxy(JobInfoStorageClient):
         force: bool = False,
     ):
         await super().put_status(job_id, status, message, jobinfo_replace_kwargs, force)
+        job_info = await self.get_info(job_id)
         await self._event_publisher.publish(
             status,
             {
@@ -43,5 +44,7 @@ class JobInfoStorageClientProxy(JobInfoStorageClient):
                 "status": status,
                 "message": message,
                 "jobinfo_replace_kwargs": jobinfo_replace_kwargs,
+                "run_owner": job_info.run_owner if job_info else None,
+                "run_attempt_id": job_info.run_attempt_id if job_info else None,
             },
         )

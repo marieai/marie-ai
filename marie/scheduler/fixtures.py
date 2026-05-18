@@ -27,6 +27,7 @@ def create_job_state_enum(schema: str):
       '{WorkState.RETRY.value}',
       '{WorkState.ACTIVE.value}',
       '{WorkState.COMPLETED.value}',
+      '{WorkState.SKIPPED.value}',
       '{WorkState.EXPIRED.value}',
       '{WorkState.CANCELLED.value}',
       '{WorkState.FAILED.value}'
@@ -72,6 +73,7 @@ def create_job_table(schema: str):
       lease_expires_at timestamptz,
       lease_epoch bigint DEFAULT 0,     -- monotonic per-lease CAS
       run_owner text,                     -- executor id once ACTIVE
+      run_attempt_id uuid,
       run_lease_expires_at timestamptz   -- optional executor heartbeat lease
      -- CONSTRAINT job_pkey PRIMARY KEY (name, id) -- adde via partition
     )
@@ -112,6 +114,7 @@ def create_job_history_table(schema: str):
       sla_miss_logged boolean not null default false,
       dag_id uuid not null,
       job_level integer not null default 0,
+      run_attempt_id uuid,
       dependencies jsonb default '[]'::jsonb,
       branch_metadata jsonb,              -- Branch execution metadata for tracking
       history_created_on timestamptz not null default now()
@@ -129,7 +132,8 @@ def create_job_update_trigger_function(schema: str):
             retry_backoff, start_after, expire_in, created_on, started_on,
             completed_on, keep_until, output, dead_letter, policy, duration,
             sla_interval, soft_sla, hard_sla, sla_miss_logged,
-            dag_id, job_level, dependencies, branch_metadata, history_created_on
+            dag_id, job_level, run_attempt_id, dependencies, branch_metadata,
+            history_created_on
         )
         VALUES (
             NEW.id, NEW.name, NEW.priority, NEW.data, NEW.state, NEW.retry_limit,
@@ -137,7 +141,8 @@ def create_job_update_trigger_function(schema: str):
             NEW.expire_in, NEW.created_on, NEW.started_on, NEW.completed_on,
             NEW.keep_until, NEW.output, NEW.dead_letter, NEW.policy, NEW.duration,
             NEW.sla_interval, NEW.soft_sla, NEW.hard_sla, NEW.sla_miss_logged,
-            NEW.dag_id, NEW.job_level, NEW.dependencies, NEW.branch_metadata, now()
+            NEW.dag_id, NEW.job_level, NEW.run_attempt_id, NEW.dependencies,
+            NEW.branch_metadata, now()
         );
         RETURN NEW;
     END;
@@ -609,7 +614,7 @@ def create_dag_resolve_state_function(schema: str):
                 SELECT 1
                 FROM marie_scheduler.job
                 WHERE dag_id = p_dag_id
-                  AND state = 'failed'
+                  AND state::text IN ('failed', 'expired', 'cancelled')
             )
             INTO v_any_failed;
         
@@ -617,12 +622,12 @@ def create_dag_resolve_state_function(schema: str):
                 v_new_state := 'failed';
         
             ELSE
-                -- 2) If all jobs are "completed," mark the DAG as "completed."
+                -- 2) If all jobs are terminal-success, mark the DAG as "completed."
                 SELECT NOT EXISTS (
                     SELECT 1
                     FROM marie_scheduler.job
                     WHERE dag_id = p_dag_id
-                      AND state <> 'completed'
+                      AND state::text NOT IN ('completed', 'skipped')
                 )
                 INTO v_all_completed;
         

@@ -19,7 +19,13 @@ BEGIN
     SET
         state = 'created',
         started_on = NULL,
-        completed_on = NULL
+        completed_on = NULL,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        lease_epoch = 0,
+        run_owner = NULL,
+        run_attempt_id = NULL,
+        run_lease_expires_at = NULL
     WHERE
        dag_id IN (
           SELECT id FROM {schema}.dag WHERE state = 'created'

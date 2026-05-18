@@ -444,6 +444,11 @@ python tools/stress/gateway_e2e_stresser.py \
   --report /tmp/gateway-e2e-report.html
 ```
 
+
+python tools/stress/gateway_e2e_stresser.py   --config tools/stress/gateway-e2e.config.example.json   --input-dir /mnt/data/marie-ai/generators   --run-time 5m   --job-name extract   --planner extract   --submit-concurrency 1   --submit-rate 1   --soft-sla-seconds 30   --hard-sla-seconds 120   --min-soft-sla-compliance-pct 95   --min-hard-sla-compliance-pct 99   --progress-interval 5   --terminal-timeout 1800   --fault-profile normal   --live-report ~/tmp/gateway-e2e-8h-live.html   --report ~/tmp/gateway-e2e-8h-final.json
+
+
+
 Eight-hour scheduler endurance run for 10 extract executors with a 1-second
 mock workload:
 

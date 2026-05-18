@@ -9,6 +9,7 @@ DO $$ BEGIN
         'retry',
         'active',
         'completed',
+        'skipped',
         'expired',
         'cancelled',
         'failed'

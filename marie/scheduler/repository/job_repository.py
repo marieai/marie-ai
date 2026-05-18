@@ -20,10 +20,12 @@ from marie.scheduler.repository.plans import (
     cancel_jobs,
     cancel_pending_jobs_for_dag,
     complete_jobs,
+    complete_jobs_by_attempt,
     complete_jobs_by_id,
     count_dag_states,
     count_job_states,
     create_queue,
+    fail_jobs_by_attempt,
     fail_jobs_by_id,
     insert_dag,
     insert_job,
@@ -87,7 +89,8 @@ class JobRepository(PostgresqlMixin):
                     SELECT
                         id, name, priority, state, retry_limit, start_after,
                         expire_in, data, retry_delay, retry_backoff, keep_until,
-                        dag_id, job_level, soft_sla, hard_sla
+                        dag_id, job_level, soft_sla, hard_sla,
+                        run_owner, run_attempt_id
                     FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
                     WHERE id = %s
                     """,
@@ -129,7 +132,8 @@ class JobRepository(PostgresqlMixin):
                     SELECT
                         id, name, priority, state, retry_limit, start_after,
                         expire_in, data, retry_delay, retry_backoff, keep_until,
-                        dag_id, job_level, soft_sla, hard_sla
+                        dag_id, job_level, soft_sla, hard_sla,
+                        run_owner, run_attempt_id
                     FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
                     WHERE data->'metadata'->>'ref_type' = %s
                     AND data->'metadata'->>'ref_id' = %s
@@ -195,7 +199,8 @@ class JobRepository(PostgresqlMixin):
                     SELECT
                         id, name, priority, state, retry_limit, start_after,
                         expire_in, data, retry_delay, retry_backoff, keep_until,
-                        dag_id, job_level, soft_sla, hard_sla
+                        dag_id, job_level, soft_sla, hard_sla,
+                        run_owner, run_attempt_id
                     FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
                     {where_sql}
                     ORDER BY created_on DESC
@@ -590,42 +595,182 @@ class JobRepository(PostgresqlMixin):
 
     async def activate_from_lease(
         self, job_ids: List[str], owner: str, run_ttl_seconds: int
-    ) -> set[str]:
+    ) -> dict[str, str]:
         """
         Promote leased jobs to active once dispatch is acknowledged.
 
         :param job_ids: List of job IDs to activate
         :param owner: Lease owner identifier
         :param run_ttl_seconds: Run TTL in seconds
-        :return: Set of successfully activated job IDs
+        :return: Mapping of successfully activated job IDs to run attempt IDs
         """
         if not job_ids:
-            return set()
+            return {}
 
-        def _activate_sync() -> set[str]:
+        def _activate_sync() -> dict[str, str]:
             conn = None
             cursor = None
             try:
                 conn = self._get_connection()
-                sql = (
-                    f"SELECT unnest({DEFAULT_SCHEMA}.activate_from_lease("
-                    f"%s::uuid[], %s, %s::interval)) AS id"
-                )
+                cursor = conn.cursor()
                 params = (
                     job_ids,
                     owner,
                     f"{run_ttl_seconds} seconds",
                 )
-                cursor = self._execute_sql_gracefully(
-                    sql, data=params, return_cursor=True, connection=conn
+                cursor.execute(
+                    f"""
+                    SELECT unnest({DEFAULT_SCHEMA}.activate_from_lease(
+                        %s::uuid[], %s, %s::interval
+                    )) AS id
+                    """,
+                    params,
                 )
-                rows = cursor.fetchall() if cursor else []
-                return {row[0] for row in rows}
+                activated_ids = [
+                    str(row[0]) for row in cursor.fetchall() if row[0] is not None
+                ]
+                if not activated_ids:
+                    conn.commit()
+                    return {}
+
+                cursor.execute(
+                    f"""
+                    SELECT id, run_attempt_id
+                    FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                    WHERE id = ANY(%s::uuid[])
+                    """,
+                    (activated_ids,),
+                )
+                rows = cursor.fetchall()
+                missing_attempt = [
+                    str(row[0]) for row in rows if row[0] is not None and row[1] is None
+                ]
+                if missing_attempt:
+                    raise RuntimeError(
+                        "activate_from_lease returned active jobs without "
+                        f"run_attempt_id: {missing_attempt}. Apply "
+                        "config/psql/schema/064_durable_attempts.sql."
+                    )
+                attempts = {
+                    str(row[0]): str(row[1])
+                    for row in rows
+                    if row[0] is not None and row[1] is not None
+                }
+                missing_rows = set(activated_ids) - set(attempts)
+                if missing_rows:
+                    raise RuntimeError(
+                        "activate_from_lease returned ids that could not be "
+                        f"read back from job table: {sorted(missing_rows)}"
+                    )
+                conn.commit()
+                return attempts
+            except Exception:
+                if conn:
+                    conn.rollback()
+                raise
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)
 
         return await self._loop.run_in_executor(self._db_executor, _activate_sync)
+
+    async def validate_durable_scheduler_schema(
+        self, schema: str = DEFAULT_SCHEMA
+    ) -> None:
+        def _validate_sync() -> None:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+
+                cursor.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = %s
+                          AND table_name = 'job'
+                          AND column_name = 'run_attempt_id'
+                    )
+                    """,
+                    (schema,),
+                )
+                has_run_attempt_id = bool(cursor.fetchone()[0])
+                if not has_run_attempt_id:
+                    raise RuntimeFailToStart(
+                        f"{schema}.job.run_attempt_id is missing. Apply "
+                        "config/psql/schema/064_durable_attempts.sql before starting."
+                    )
+
+                cursor.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_enum e
+                        JOIN pg_type t ON t.oid = e.enumtypid
+                        JOIN pg_namespace n ON n.oid = t.typnamespace
+                        WHERE n.nspname = %s
+                          AND t.typname = 'job_state'
+                          AND e.enumlabel = 'skipped'
+                    )
+                    """,
+                    (schema,),
+                )
+                has_skipped_state = bool(cursor.fetchone()[0])
+                if not has_skipped_state:
+                    raise RuntimeFailToStart(
+                        f"{schema}.job_state is missing value 'skipped'. Apply "
+                        "config/psql/schema/064_durable_attempts.sql before starting."
+                    )
+
+                cursor.execute(
+                    """
+                    SELECT pg_get_functiondef(p.oid)
+                    FROM pg_proc p
+                    JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname = %s
+                      AND p.proname = 'activate_from_lease'
+                    ORDER BY p.oid DESC
+                    LIMIT 1
+                    """,
+                    (schema,),
+                )
+                row = cursor.fetchone()
+                function_def = row[0] if row else ""
+                if (
+                    "run_attempt_id" not in function_def
+                    or "lease_owner = _run_owner" not in function_def
+                ):
+                    raise RuntimeFailToStart(
+                        f"{schema}.activate_from_lease is not the durable "
+                        "attempt-aware version. Apply "
+                        "config/psql/schema/064_durable_attempts.sql before starting."
+                    )
+
+                cursor.execute(
+                    f"""
+                    SELECT id
+                    FROM {schema}.{DEFAULT_JOB_TABLE}
+                    WHERE state::text = 'active'
+                      AND run_attempt_id IS NULL
+                    LIMIT 10
+                    """
+                )
+                bad_rows = [str(row[0]) for row in cursor.fetchall()]
+                if bad_rows:
+                    raise RuntimeFailToStart(
+                        "Active jobs without run_attempt_id found: "
+                        f"{bad_rows}. Reset/retry these rows before starting; "
+                        "do not repair them in the scheduler hot path."
+                    )
+            finally:
+                self._close_cursor(cursor)
+                if conn and not conn.closed:
+                    conn.rollback()
+                self._close_connection(conn)
+
+        await self._loop.run_in_executor(self._db_executor, _validate_sync)
 
     async def release_lease(self, job_ids: List[str]) -> set[str]:
         """
@@ -1207,6 +1352,8 @@ class JobRepository(PostgresqlMixin):
             job_level,
             soft_sla,
             hard_sla,
+            run_owner,
+            run_attempt_id,
         ) = record
 
         wi = WorkInfo(
@@ -1225,6 +1372,8 @@ class JobRepository(PostgresqlMixin):
             job_level=job_level,
             soft_sla=soft_sla,
             hard_sla=hard_sla,
+            run_owner=run_owner,
+            run_attempt_id=str(run_attempt_id) if run_attempt_id else None,
         )
         return wi
 
@@ -1513,6 +1662,8 @@ class JobRepository(PostgresqlMixin):
         output_metadata: dict = None,
         force: bool = False,
         schema: str = DEFAULT_SCHEMA,
+        run_owner: str | None = None,
+        run_attempt_id: str | None = None,
     ) -> int:
         """
         Mark a job as completed.
@@ -1532,13 +1683,21 @@ class JobRepository(PostgresqlMixin):
             try:
                 conn = self._get_connection()
 
-                # Choose appropriate completion function based on force flag
                 if force:
                     query = complete_jobs_by_id(
                         schema,
                         queue_name,
                         [job_id],
                         {"on_complete": "done", **(output_metadata or {})},
+                    )
+                elif run_owner and run_attempt_id:
+                    query = complete_jobs_by_attempt(
+                        schema,
+                        queue_name,
+                        [job_id],
+                        {"on_complete": "done", **(output_metadata or {})},
+                        run_owner,
+                        run_attempt_id,
                     )
                 else:
                     query = complete_jobs(
@@ -1579,6 +1738,8 @@ class JobRepository(PostgresqlMixin):
         queue_name: str,
         output_metadata: dict = None,
         schema: str = DEFAULT_SCHEMA,
+        run_owner: str | None = None,
+        run_attempt_id: str | None = None,
     ) -> Tuple[int, Optional[str]]:
         """
         Mark a job as failed or for retry.
@@ -1596,13 +1757,25 @@ class JobRepository(PostgresqlMixin):
             conn = None
             try:
                 conn = self._get_connection()
-                cursor = self._execute_sql_gracefully(
-                    fail_jobs_by_id(
+                if run_owner and run_attempt_id:
+                    query = fail_jobs_by_attempt(
                         schema,
                         queue_name,
                         [job_id],
                         {"on_complete": "failed", **(output_metadata or {})},
-                    ),
+                        run_owner,
+                        run_attempt_id,
+                    )
+                else:
+                    query = fail_jobs_by_id(
+                        schema,
+                        queue_name,
+                        [job_id],
+                        {"on_complete": "failed", **(output_metadata or {})},
+                    )
+
+                cursor = self._execute_sql_gracefully(
+                    query,
                     return_cursor=True,
                     connection=conn,
                 )
@@ -1683,7 +1856,7 @@ class JobRepository(PostgresqlMixin):
                     self.logger.info(f"Marked {count} jobs as SKIPPED")
                 else:
                     self.logger.warning(
-                        f"No jobs were marked as SKIPPED (may already be in terminal state)"
+                        "No jobs were marked as SKIPPED (may already be in terminal state)"
                     )
 
                 return count

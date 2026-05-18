@@ -669,11 +669,11 @@ class DAGManagementService:
                         )
 
                 elif new_state in ["active", "running", "pending"]:
-                    # DAG should be active - if not in memory, it might need hydration
                     if dag_id not in self.active_dags:
-                        self.logger.warning(
-                            f"DAG {dag_id} is in '{new_state}' state but not in active_dags. "
-                            "It will be hydrated on next scheduler cycle."
+                        self.logger.debug(
+                            f"DAG {dag_id} is '{new_state}' in DB but is not local "
+                            "to this scheduler yet; it may be admitted by the current "
+                            "cycle, owned by another scheduler, or hydrated later."
                         )
 
                 else:

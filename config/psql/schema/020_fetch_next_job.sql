@@ -35,7 +35,7 @@ candidate AS MATERIALIZED (
     WHERE dep.job_id = e.id
       AND (
         p.id IS NULL
-        OR p.state <> 'completed'
+        OR p.state::text NOT IN ('completed', 'skipped')
       )
   )
 ),
