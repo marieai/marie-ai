@@ -13,7 +13,6 @@ from PIL import Image
 from rich import print
 
 from marie.logging_core.predefined import default_logger as logger
-from marie.utils.docs import load_image
 
 
 def read_image(image):
@@ -328,6 +327,8 @@ def detect_page_rotation(
 ) -> dict:
     """detect single page (single image) orientation/rotation"""
     if isinstance(img, (str, bytes, os.PathLike)):
+        from marie.utils.docs import load_image
+
         img = load_image(img)
     elif isinstance(img, Image.Image):
         img = img.convert("RGB")

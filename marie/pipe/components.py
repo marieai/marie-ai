@@ -6,6 +6,7 @@ from typing import List, Optional, Union
 import numpy as np
 import torch
 from PIL import Image
+from tqdm import tqdm
 
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
@@ -183,7 +184,7 @@ def setup_classifiers(
             "classifier": classifier,
             "group": group,
             "filter": model_filter,
-            # "key": key
+            "key": key,
         }
     return document_classifiers
 
@@ -355,6 +356,7 @@ def ocr_frames(
     regions: [] = None,
     runtime_conf: Optional[dict[str, any]] = None,
     engine_name: str = "default",
+    save: bool = True,
 ) -> dict:
     """
     Perform OCR on the frames and return the results
@@ -369,6 +371,7 @@ def ocr_frames(
     :param regions: regions to perform OCR on (default: None)
     :param runtime_conf: runtime configuration for the pipeline (e.g. which steps to execute) default is None.
     :param engine_name: OCR engine to use (default: default)
+    :param save: save results to disk (default: True)
     :return: OCR results
 
     Example runtime_conf payload:
@@ -433,7 +436,8 @@ def ocr_frames(
             regions,
             queue_id=queue_id,
         )
-        store_json_object(results, json_path)
+        if save:
+            store_json_object(results, json_path)
     else:
         logger.debug(f"Skipping OCR : {json_path}")
         results = load_json_file(json_path)
@@ -492,7 +496,10 @@ def rotate_frames(
     any_rotated = False
     if force or not os.path.exists(json_path):
         page_rotation = dict()
-        for i, frame in enumerate(frames):
+        enumerated_frames = tqdm(
+            enumerate(frames), total=len(frames), desc="page rotation", unit="frame"
+        )
+        for i, frame in enumerated_frames:
             results = detect_page_rotation(frame)
             if rotation := results.get("rotate", 0):
                 logger.info(f"Rotating frame {i} by {rotation} degrees")
