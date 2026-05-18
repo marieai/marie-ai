@@ -91,3 +91,22 @@ def test_scheduler_trace_compact_drops_batch_job_ids(monkeypatch, tmp_path):
     assert row["event"] == "dispatch_batch_start"
     assert row["count"] == 2
     assert "job_ids" not in row
+
+
+def test_scheduler_trace_compact_writes_scheduler_counters(monkeypatch, tmp_path):
+    trace_path = tmp_path / "scheduler-trace.jsonl"
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_ENABLED", "true")
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PATH", str(trace_path))
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PROFILE", "compact")
+
+    scheduler_trace(
+        "terminal_event_stale_attempt_total",
+        count=1,
+        job_id="job-1",
+        run_attempt_id="attempt-1",
+    )
+
+    row = json.loads(trace_path.read_text().strip())
+    assert row["event"] == "terminal_event_stale_attempt_total"
+    assert row["count"] == 1
+    assert row["job_id"] == "job-1"

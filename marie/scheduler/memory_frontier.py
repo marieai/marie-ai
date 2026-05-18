@@ -303,7 +303,9 @@ class MemoryFrontier:
                     f"Job with id {job_id} not found in memory frontier for skip."
                 )
 
-    async def on_job_retry(self, job_id: str, work_item: WorkInfo) -> None:
+    async def on_job_retry(
+        self, job_id: str, work_item: WorkInfo, start_after: datetime | None = None
+    ) -> None:
         """
         Handles job marked for retry. Updates state to RETRY, calculates
         start_after from retry_delay, and re-adds to ready queue.
@@ -318,20 +320,27 @@ class MemoryFrontier:
 
             wi = self.jobs_by_id[job_id]
             wi.state = WorkState.RETRY
+            wi.run_owner = None
+            wi.run_attempt_id = None
 
             # Clear the old lease so retry_delay is honored exactly
             # (otherwise effective retry = max(start_after, old_lease_expiry))
             self.leased_until.pop(job_id, None)
 
-            retry_delay_seconds = work_item.retry_delay or DEFAULT_RETRY_DELAY_SECONDS
-            wi.start_after = datetime.now(timezone.utc) + timedelta(
-                seconds=retry_delay_seconds
-            )
+            if start_after is not None:
+                wi.start_after = start_after
+            else:
+                retry_delay_seconds = (
+                    work_item.retry_delay or DEFAULT_RETRY_DELAY_SECONDS
+                )
+                wi.start_after = datetime.now(timezone.utc) + timedelta(
+                    seconds=retry_delay_seconds
+                )
 
             self._push_ready(wi)
             logger.info(
                 f"Job {job_id} re-added to ready queue for retry "
-                f"(retry_delay={retry_delay_seconds}s, start_after={wi.start_after})"
+                f"(start_after={wi.start_after})"
             )
 
     async def mark_leased(self, job_id: str, ttl_s: Optional[float] = None) -> None:

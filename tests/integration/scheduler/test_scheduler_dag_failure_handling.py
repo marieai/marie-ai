@@ -1,6 +1,7 @@
 import asyncio
 import time
 import uuid
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -10,7 +11,7 @@ import marie.scheduler.psql as scheduler_psql
 from marie.job.common import JobInfo, JobStatus
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.memory_frontier import MemoryFrontier
-from marie.scheduler.models import WorkInfo
+from marie.scheduler.models import RecoveredRunLease, WorkInfo
 from marie.scheduler.psql import PostgreSQLJobScheduler
 from marie.scheduler.repository.job_repository import JobRepository
 from marie.scheduler.state import WorkState
@@ -125,6 +126,7 @@ def build_scheduler(
     scheduler._dag_resolution_lock = AsyncJobLock()
     scheduler._terminal_dag_states = {}
     scheduler._job_cache = {}
+    scheduler._scheduler_counters = defaultdict(int)
     scheduler.notify_calls: list[bool] = []
     scheduler.hydrated_dag_ids: list[str] = []
     scheduler._semaphore_store = RecordingSemaphoreStore()
@@ -614,6 +616,256 @@ async def test_sync_terminal_job_state_succeeded_unblocks_children_and_notifies(
 
 
 @pytest.mark.asyncio
+async def test_recovered_failure_updates_frontier_and_dag_failure_path(monkeypatch):
+    dag_id = "dag-recovered-failed"
+    failed_job = build_work_item("job-recovered-failed", dag_id)
+    sibling_job = build_work_item("job-recovered-sibling", dag_id)
+
+    frontier = RecordingFrontier()
+    await frontier.add_dag(None, [failed_job, sibling_job])
+
+    repository = RecordingRepository(dag_state="failed")
+    scheduler = build_scheduler(repository, frontier)
+    scheduler.active_dags[dag_id] = object()
+    scheduler._job_cache = {failed_job.id: failed_job, sibling_job.id: sibling_job}
+
+    db_failed_job = failed_job.model_copy(update={"state": WorkState.FAILED})
+
+    async def get_job_by_id(job_id: str):
+        if job_id == failed_job.id:
+            return db_failed_job
+        return None
+
+    repository.get_job_by_id = get_job_by_id
+
+    failed_toasts: list[dict] = []
+
+    async def record_failed_toast(**kwargs):
+        failed_toasts.append(kwargs)
+        return True
+
+    monkeypatch.setattr(scheduler_psql, "mark_as_failed_toast", record_failed_toast)
+    monkeypatch.setattr(
+        scheduler_psql,
+        "mark_as_complete_toast",
+        lambda **kwargs: pytest.fail("unexpected completion toast"),
+    )
+
+    await scheduler._reconcile_recovered_run_leases(
+        [
+            RecoveredRunLease(
+                id=failed_job.id,
+                name=failed_job.name,
+                previous_state=WorkState.ACTIVE.value,
+                recovered_state="failed",
+                dag_id=dag_id,
+                retry_count=1,
+                retry_limit=1,
+                start_after=None,
+                previous_run_owner="dead-scheduler",
+                previous_run_attempt_id="06a0ac88-5326-7f90-8000-0274669de089",
+            )
+        ]
+    )
+
+    assert repository.resolve_calls == [dag_id]
+    assert len(repository.cancel_calls) == 1
+    assert frontier.finalize_calls == [dag_id]
+    assert dag_id not in scheduler.active_dags
+    assert failed_job.id not in scheduler._job_cache
+    assert sibling_job.id not in scheduler._job_cache
+    assert await frontier.get_jobs_by_dag_id(dag_id) == []
+    assert len(failed_toasts) == 1
+    assert scheduler._scheduler_counters[
+        scheduler_psql.RUN_LEASE_RECOVERED_FAILED_TOTAL
+    ] == 1
+
+
+@pytest.mark.asyncio
+async def test_late_success_for_old_run_attempt_updates_zero_rows(monkeypatch):
+    work_item = build_work_item("job-late-success", "dag-late-success")
+    work_item.state = WorkState.ACTIVE
+    work_item.run_owner = "current-owner"
+    work_item.run_attempt_id = "06a0ac88-5326-7f90-8000-0274669de089"
+
+    frontier = RecordingFrontier()
+    repository = RecordingRepository(dag_state="active")
+    scheduler = build_scheduler(repository, frontier)
+    scheduler._job_cache = {work_item.id: work_item}
+
+    complete_calls: list[dict] = []
+    completed_calls: list[str] = []
+    trace_events: list[tuple[str, dict]] = []
+
+    async def complete(job_id: str, wi: WorkInfo, *_args, **kwargs) -> int:
+        complete_calls.append(
+            {
+                "job_id": job_id,
+                "work_item": wi.id,
+                "run_owner": kwargs.get("run_owner"),
+                "run_attempt_id": kwargs.get("run_attempt_id"),
+            }
+        )
+        return 0
+
+    async def on_job_completed(job_id: str):
+        completed_calls.append(job_id)
+
+    scheduler.complete = complete
+    scheduler.frontier.on_job_completed = on_job_completed
+    monkeypatch.setattr(
+        scheduler_psql,
+        "scheduler_trace",
+        lambda event, **fields: trace_events.append((event, fields)),
+    )
+
+    await scheduler.handle_job_event(
+        JobStatus.SUCCEEDED.value,
+        {
+            "job_id": work_item.id,
+            "run_owner": "old-owner",
+            "run_attempt_id": "06a0ac88-5326-7f90-8000-111111111111",
+        },
+    )
+
+    assert complete_calls == [
+        {
+            "job_id": work_item.id,
+            "work_item": work_item.id,
+            "run_owner": "old-owner",
+            "run_attempt_id": "06a0ac88-5326-7f90-8000-111111111111",
+        }
+    ]
+    assert completed_calls == []
+    assert scheduler.notify_calls == []
+    assert scheduler._scheduler_counters[
+        scheduler_psql.TERMINAL_EVENT_STALE_ATTEMPT_TOTAL
+    ] == 1
+    assert [event for event, _fields in trace_events].count(
+        scheduler_psql.TERMINAL_EVENT_STALE_ATTEMPT_TOTAL
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_late_failure_for_old_run_attempt_updates_zero_rows(monkeypatch):
+    work_item = build_work_item("job-late-failure", "dag-late-failure")
+    work_item.state = WorkState.ACTIVE
+    work_item.run_owner = "current-owner"
+    work_item.run_attempt_id = "06a0ac88-5326-7f90-8000-0274669de089"
+
+    frontier = RecordingFrontier()
+    repository = RecordingRepository(dag_state="active")
+    scheduler = build_scheduler(repository, frontier)
+    scheduler._job_cache = {work_item.id: work_item}
+
+    fail_calls: list[dict] = []
+    failed_calls: list[str] = []
+    trace_events: list[tuple[str, dict]] = []
+
+    async def fail(job_id: str, wi: WorkInfo, *_args, **kwargs) -> str | None:
+        fail_calls.append(
+            {
+                "job_id": job_id,
+                "work_item": wi.id,
+                "run_owner": kwargs.get("run_owner"),
+                "run_attempt_id": kwargs.get("run_attempt_id"),
+            }
+        )
+        return None
+
+    async def on_job_failed(job_id: str):
+        failed_calls.append(job_id)
+
+    scheduler.fail = fail
+    scheduler.frontier.on_job_failed = on_job_failed
+    monkeypatch.setattr(
+        scheduler_psql,
+        "scheduler_trace",
+        lambda event, **fields: trace_events.append((event, fields)),
+    )
+
+    await scheduler.handle_job_event(
+        JobStatus.FAILED.value,
+        {
+            "job_id": work_item.id,
+            "run_owner": "old-owner",
+            "run_attempt_id": "06a0ac88-5326-7f90-8000-222222222222",
+        },
+    )
+
+    assert fail_calls == [
+        {
+            "job_id": work_item.id,
+            "work_item": work_item.id,
+            "run_owner": "old-owner",
+            "run_attempt_id": "06a0ac88-5326-7f90-8000-222222222222",
+        }
+    ]
+    assert failed_calls == []
+    assert scheduler.notify_calls == []
+    assert scheduler._scheduler_counters[
+        scheduler_psql.TERMINAL_EVENT_STALE_ATTEMPT_TOTAL
+    ] == 1
+    assert [event for event, _fields in trace_events].count(
+        scheduler_psql.TERMINAL_EVENT_STALE_ATTEMPT_TOTAL
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_stale_running_heartbeat_exposes_run_lease_counter(monkeypatch):
+    work_item = build_work_item("job-stale-heartbeat", "dag-stale-heartbeat")
+    work_item.state = WorkState.ACTIVE
+
+    frontier = RecordingFrontier()
+    repository = RecordingRepository(dag_state="active")
+    scheduler = build_scheduler(repository, frontier)
+    scheduler._job_cache = {work_item.id: work_item}
+
+    extend_calls: list[dict] = []
+    trace_events: list[tuple[str, dict]] = []
+
+    async def extend_run_lease(ids: list[str], *, run_owner: str, run_attempt_id: str):
+        extend_calls.append(
+            {
+                "ids": ids,
+                "run_owner": run_owner,
+                "run_attempt_id": run_attempt_id,
+            }
+        )
+        return set()
+
+    scheduler._extend_run_lease_db = extend_run_lease
+    monkeypatch.setattr(
+        scheduler_psql,
+        "scheduler_trace",
+        lambda event, **fields: trace_events.append((event, fields)),
+    )
+
+    await scheduler.handle_job_event(
+        JobStatus.RUNNING.value,
+        {
+            "job_id": work_item.id,
+            "run_owner": "old-owner",
+            "run_attempt_id": "06a0ac88-5326-7f90-8000-333333333333",
+        },
+    )
+
+    assert extend_calls == [
+        {
+            "ids": [work_item.id],
+            "run_owner": "old-owner",
+            "run_attempt_id": "06a0ac88-5326-7f90-8000-333333333333",
+        }
+    ]
+    assert scheduler._scheduler_counters[
+        scheduler_psql.RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL
+    ] == 1
+    assert [event for event, _fields in trace_events].count(
+        scheduler_psql.RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL
+    ) == 1
+
+
+@pytest.mark.asyncio
 async def test_admit_dag_requires_db_activation_success():
     dag_id = "dag-admit"
     work_item = build_work_item("job-admit", dag_id)
@@ -881,6 +1133,62 @@ def test_limit_planned_jobs_to_available_slots_keeps_order_and_caps_per_executor
         "parser-1",
         "parser-2",
     ]
+
+
+def test_regular_candidates_cover_available_slots_requires_enough_per_executor():
+    dag_id = "dag-coverage"
+    now = datetime.now(timezone.utc)
+
+    def make_job(job_id: str, endpoint: str) -> WorkInfo:
+        return WorkInfo(
+            id=job_id,
+            dag_id=dag_id,
+            name="extract",
+            priority=0,
+            data={"metadata": {"on": endpoint}},
+            state=WorkState.CREATED,
+            retry_limit=1,
+            retry_delay=0,
+            retry_backoff=False,
+            start_after=now,
+            expire_in_seconds=3600,
+            keep_until=now + timedelta(days=1),
+            dependencies=[],
+            job_level=1,
+        )
+
+    assert (
+        scheduler_psql.regular_candidates_cover_available_slots(
+            [
+                make_job("extract-1", "extract_executor://document/extract"),
+                make_job("extract-2", "extract_executor://document/extract"),
+            ],
+            {"extract_executor": 3},
+        )
+        is False
+    )
+    assert (
+        scheduler_psql.regular_candidates_cover_available_slots(
+            [
+                make_job("extract-1", "extract_executor://document/extract"),
+                make_job("extract-2", "extract_executor://document/extract"),
+                make_job("extract-3", "extract_executor://document/extract"),
+            ],
+            {"extract_executor": 3},
+        )
+        is True
+    )
+    assert (
+        scheduler_psql.regular_candidates_cover_available_slots(
+            [
+                make_job("extract-1", "extract_executor://document/extract"),
+                make_job("extract-2", "extract_executor://document/extract"),
+                make_job("parser-1", "annotator_parser://document/parse"),
+            ],
+            {"extract_executor": 2, "annotator_parser": 2},
+        )
+        is False
+    )
 
 
 def test_repository_record_to_work_info_normalizes_uuid_fields():

@@ -1,10 +1,11 @@
 import asyncio
 import glob
 import os
+import random
 import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import psycopg
@@ -15,7 +16,7 @@ from marie.excepts import RuntimeFailToStart
 from marie.logging_core.logger import MarieLogger
 from marie.query_planner.base import QueryPlan
 from marie.scheduler.fixtures import create_sql_from_file
-from marie.scheduler.models import WorkInfo
+from marie.scheduler.models import RecoveredRunLease, WorkInfo
 from marie.scheduler.repository.plans import (
     cancel_jobs,
     cancel_pending_jobs_for_dag,
@@ -559,7 +560,7 @@ class JobRepository(PostgresqlMixin):
         if not job_ids:
             return set()
 
-        norm_ids = list({str(i) for i in job_ids})
+        norm_ids = list(dict.fromkeys(str(i) for i in job_ids))
 
         def _lease_sync() -> set[str]:
             conn = None
@@ -592,6 +593,63 @@ class JobRepository(PostgresqlMixin):
                 self._close_connection(conn)
 
         return await self._loop.run_in_executor(self._db_executor, _lease_sync)
+
+    async def extend_run_lease(
+        self,
+        job_ids: List[str],
+        owner: str,
+        run_attempt_id: str,
+        extend_seconds: int,
+    ) -> set[str]:
+        """
+        Extend the active run lease for the current durable attempt.
+
+        :param job_ids: List of job IDs to extend
+        :param owner: Run owner identifier
+        :param run_attempt_id: Durable run attempt identifier
+        :param extend_seconds: Extension duration in seconds
+        :return: Set of successfully extended job IDs
+        """
+        if not job_ids:
+            return set()
+
+        norm_ids = list(dict.fromkeys(str(i) for i in job_ids))
+
+        def _extend_sync() -> set[str]:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                sql = f"""
+                    SELECT unnest({DEFAULT_SCHEMA}.extend_run_lease(
+                        %s::uuid[],          -- _ids
+                        %s,                  -- _run_owner
+                        %s::uuid,            -- _run_attempt_id
+                        %s::interval         -- _extend_by
+                    ))
+                """
+                params = (
+                    norm_ids,
+                    owner,
+                    run_attempt_id,
+                    f"{int(extend_seconds)} seconds",
+                )
+                cursor = self._execute_sql_gracefully(
+                    sql, data=params, return_cursor=True, connection=conn
+                )
+                if not cursor:
+                    return set()
+
+                extended: set[str] = set()
+                for row in cursor.fetchall():
+                    if len(row) >= 1 and row[0] is not None:
+                        extended.add(str(row[0]))
+                return extended
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, _extend_sync)
 
     async def activate_from_lease(
         self, job_ids: List[str], owner: str, run_ttl_seconds: int
@@ -649,7 +707,7 @@ class JobRepository(PostgresqlMixin):
                     raise RuntimeError(
                         "activate_from_lease returned active jobs without "
                         f"run_attempt_id: {missing_attempt}. Apply "
-                        "config/psql/schema/064_durable_attempts.sql."
+                        "config/psql/schema/lease/000_durable_attempts.sql."
                     )
                 attempts = {
                     str(row[0]): str(row[1])
@@ -700,7 +758,7 @@ class JobRepository(PostgresqlMixin):
                 if not has_run_attempt_id:
                     raise RuntimeFailToStart(
                         f"{schema}.job.run_attempt_id is missing. Apply "
-                        "config/psql/schema/064_durable_attempts.sql before starting."
+                        "config/psql/schema/lease/000_durable_attempts.sql before starting."
                     )
 
                 cursor.execute(
@@ -721,7 +779,7 @@ class JobRepository(PostgresqlMixin):
                 if not has_skipped_state:
                     raise RuntimeFailToStart(
                         f"{schema}.job_state is missing value 'skipped'. Apply "
-                        "config/psql/schema/064_durable_attempts.sql before starting."
+                        "config/psql/schema/lease/000_durable_attempts.sql before starting."
                     )
 
                 cursor.execute(
@@ -745,7 +803,27 @@ class JobRepository(PostgresqlMixin):
                     raise RuntimeFailToStart(
                         f"{schema}.activate_from_lease is not the durable "
                         "attempt-aware version. Apply "
-                        "config/psql/schema/064_durable_attempts.sql before starting."
+                        "config/psql/schema/lease/002_activate_from_lease.sql before starting."
+                    )
+
+                cursor.execute(
+                    """
+                    SELECT pg_get_functiondef(p.oid)
+                    FROM pg_proc p
+                    JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname = %s
+                      AND p.proname = 'extend_run_lease'
+                    ORDER BY p.oid DESC
+                    LIMIT 1
+                    """,
+                    (schema,),
+                )
+                row = cursor.fetchone()
+                function_def = row[0] if row else ""
+                if "_run_attempt_id" not in function_def:
+                    raise RuntimeFailToStart(
+                        f"{schema}.extend_run_lease is not attempt-aware. Apply "
+                        "config/psql/schema/lease/003_extend_run_lease.sql before starting."
                     )
 
                 cursor.execute(
@@ -799,6 +877,176 @@ class JobRepository(PostgresqlMixin):
                 self._close_connection(conn)
 
         return await self._loop.run_in_executor(self._db_executor, _release_sync)
+
+    @staticmethod
+    def _recovery_start_after(
+        *, retry_delay: int, retry_backoff: bool, retry_count: int
+    ) -> datetime:
+        now = datetime.now(timezone.utc)
+        if not retry_backoff:
+            return now + timedelta(seconds=int(retry_delay or 0))
+
+        backoff_factor = 2 ** min(16, int(retry_count) + 1) / 2
+        base_delay = int(retry_delay or 0) * backoff_factor
+        return now + timedelta(seconds=base_delay + base_delay * random.random())
+
+    async def recover_expired_run_leases(
+        self, limit: int = 1000
+    ) -> list[RecoveredRunLease]:
+        """
+        Recover active run leases whose heartbeats have expired.
+
+        Claiming and applying recovery decisions happen in one transaction so
+        row locks acquired by claim_expired_run_leases remain held until apply.
+        """
+
+        def _recover_sync() -> list[RecoveredRunLease]:
+            conn = None
+            cursor = None
+            recovered: list[RecoveredRunLease] = []
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    SELECT
+                        id,
+                        name,
+                        dag_id,
+                        previous_state,
+                        retry_count,
+                        retry_limit,
+                        retry_delay,
+                        retry_backoff,
+                        start_after,
+                        run_owner,
+                        run_attempt_id,
+                        run_lease_expires_at
+                    FROM {DEFAULT_SCHEMA}.claim_expired_run_leases(%s)
+                    """,
+                    (int(limit),),
+                )
+                rows = cursor.fetchall()
+                for row in rows:
+                    job_id = str(row[0])
+                    name = row[1]
+                    dag_id = str(row[2]) if row[2] is not None else None
+                    previous_state = row[3]
+                    retry_count = int(row[4])
+                    retry_limit = int(row[5])
+                    retry_delay = int(row[6] or 0)
+                    retry_backoff = bool(row[7])
+                    previous_run_owner = row[9]
+                    previous_run_attempt_id = str(row[10])
+                    reason = {
+                        "recovery": {
+                            "reason_code": "RUN_LEASE_EXPIRED",
+                            "previous_run_owner": previous_run_owner,
+                            "previous_run_attempt_id": previous_run_attempt_id,
+                        }
+                    }
+
+                    if retry_count < retry_limit:
+                        start_after = self._recovery_start_after(
+                            retry_delay=retry_delay,
+                            retry_backoff=retry_backoff,
+                            retry_count=retry_count,
+                        )
+                        cursor.execute(
+                            f"""
+                            UPDATE {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                            SET state                = 'retry',
+                                start_after          = %s,
+                                completed_on         = NULL,
+                                output               = %s,
+                                lease_owner          = NULL,
+                                lease_expires_at     = NULL,
+                                run_owner            = NULL,
+                                run_attempt_id       = NULL,
+                                run_lease_expires_at = NULL
+                            WHERE id = %s
+                              AND state = 'active'
+                              AND run_owner = %s
+                              AND run_attempt_id = %s::uuid
+                              AND run_lease_expires_at <= now()
+                            RETURNING id
+                            """,
+                            (
+                                start_after,
+                                Jsonb(reason),
+                                job_id,
+                                previous_run_owner,
+                                previous_run_attempt_id,
+                            ),
+                        )
+                        if cursor.fetchone() is None:
+                            continue
+                        recovered.append(
+                            RecoveredRunLease(
+                                id=job_id,
+                                name=name,
+                                previous_state=previous_state,
+                                recovered_state="retry",
+                                dag_id=dag_id,
+                                retry_count=retry_count,
+                                retry_limit=retry_limit,
+                                start_after=start_after,
+                                previous_run_owner=previous_run_owner,
+                                previous_run_attempt_id=previous_run_attempt_id,
+                            )
+                        )
+                    else:
+                        cursor.execute(
+                            f"""
+                            UPDATE {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                            SET state                = 'failed',
+                                completed_on         = now(),
+                                output               = %s,
+                                lease_owner          = NULL,
+                                lease_expires_at     = NULL,
+                                run_lease_expires_at = NULL
+                            WHERE id = %s
+                              AND state = 'active'
+                              AND run_owner = %s
+                              AND run_attempt_id = %s::uuid
+                              AND run_lease_expires_at <= now()
+                            RETURNING id
+                            """,
+                            (
+                                Jsonb(reason),
+                                job_id,
+                                previous_run_owner,
+                                previous_run_attempt_id,
+                            ),
+                        )
+                        if cursor.fetchone() is None:
+                            continue
+                        recovered.append(
+                            RecoveredRunLease(
+                                id=job_id,
+                                name=name,
+                                previous_state=previous_state,
+                                recovered_state="failed",
+                                dag_id=dag_id,
+                                retry_count=retry_count,
+                                retry_limit=retry_limit,
+                                start_after=None,
+                                previous_run_owner=previous_run_owner,
+                                previous_run_attempt_id=previous_run_attempt_id,
+                            )
+                        )
+
+                conn.commit()
+                return recovered
+            except Exception:
+                if conn:
+                    conn.rollback()
+                raise
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, _recover_sync)
 
     # ==================== DAG Operations ====================
 

@@ -588,6 +588,26 @@ async def test_on_job_retry_without_clearing_lease_would_delay():
 
 
 @pytest.mark.asyncio
+async def test_on_job_retry_can_use_database_start_after():
+    frontier = MemoryFrontier(higher_priority_wins=True, default_lease_ttl=0.5)
+    job = wi_factory("retry_db_start_after", priority=1)
+    await add_ready_jobs(frontier, job)
+    await frontier.take(["retry_db_start_after"], lease_ttl=0.5)
+
+    start_after = datetime.now(timezone.utc) + timedelta(seconds=0.2)
+    await frontier.on_job_retry(
+        "retry_db_start_after", NS(retry_delay=10), start_after=start_after
+    )
+
+    ready = await frontier.peek_ready(10)
+    assert "retry_db_start_after" not in [wi.id for wi in ready]
+
+    await asyncio.sleep(0.25)
+    ready = await frontier.peek_ready(10)
+    assert "retry_db_start_after" in [wi.id for wi in ready]
+
+
+@pytest.mark.asyncio
 async def test_heap_ordering_matches_planner_priority_before_level(frontier: MemoryFrontier):
     """Heap must order by priority before level to match GlobalPriorityExecutionPlanner."""
     deep_low_pri = wi_factory("deep", job_level=10, priority=0)

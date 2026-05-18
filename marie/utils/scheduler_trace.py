@@ -38,6 +38,10 @@ _COMPACT_EVENTS = {
     "scheduler_priority_refresh_done",
     "scheduler_priority_refresh_failed",
     "scheduler_priority_refresh_returned",
+    "run_lease_extend_stale_attempt_total",
+    "terminal_event_stale_attempt_total",
+    "run_lease_recovered_retry_total",
+    "run_lease_recovered_failed_total",
 }
 
 _COMPACT_DROP_FIELDS = {

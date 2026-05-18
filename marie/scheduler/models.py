@@ -1,7 +1,7 @@
 from dataclasses import dataclass, fields
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, Field
 from uuid_extensions import uuid7str
@@ -40,6 +40,21 @@ class JobSubmissionModel(BaseModel):
     action: str
     name: str
     metadata: Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RecoveredRunLease:
+    id: str
+    name: str
+    previous_state: str
+    recovered_state: Literal["retry", "failed"]
+    dag_id: str | None
+    retry_count: int
+    retry_limit: int
+    start_after: datetime | None
+    previous_run_owner: str
+    previous_run_attempt_id: str
+    reason_code: str = "RUN_LEASE_EXPIRED"
 
 
 class ExistingWorkPolicy(Enum):

@@ -1,10 +1,11 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 import psycopg
 
 from marie.logging_core.logger import MarieLogger
+from marie.scheduler.models import RecoveredRunLease
 from marie.scheduler.repository import JobRepository
 
 
@@ -20,6 +21,9 @@ class MaintenanceService:
         loop: Optional[asyncio.AbstractEventLoop] = None,
         executor: Optional[ThreadPoolExecutor] = None,
         notify_callback: Optional[callable] = None,
+        recovery_callback: Optional[
+            Callable[[list[RecoveredRunLease]], Awaitable[None]]
+        ] = None,
         maintenance_interval: int = 60,  # seconds
     ):
         """
@@ -36,6 +40,7 @@ class MaintenanceService:
         self._loop = loop or asyncio.get_event_loop()
         self._executor = executor
         self._notify_callback = notify_callback
+        self._recovery_callback = recovery_callback
         self.maintenance_interval = maintenance_interval
 
         # Maintenance task
@@ -84,8 +89,29 @@ class MaintenanceService:
             return released_count
 
         released_count = await self._loop.run_in_executor(self._executor, db_call)
+        recovered = await self.repository.recover_expired_run_leases()
+        recovered_retry_count = sum(
+            1 for row in recovered if row.recovered_state == "retry"
+        )
+        recovered_failed_count = sum(
+            1 for row in recovered if row.recovered_state == "failed"
+        )
+
         if released_count > 0:
             self.logger.info(f"Released expired job leases: {released_count}")
+        if recovered_retry_count > 0:
+            self.logger.warning(
+                f"Recovered expired active run leases to retry: {recovered_retry_count}"
+            )
+        if recovered_failed_count > 0:
+            self.logger.warning(
+                f"Recovered expired active run leases to failed: {recovered_failed_count}"
+            )
+
+        if recovered and self._recovery_callback:
+            await self._recovery_callback(recovered)
+
+        if released_count > 0 or recovered:
             if self._notify_callback:
                 await self._notify_callback()
 

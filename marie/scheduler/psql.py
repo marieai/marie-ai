@@ -46,7 +46,12 @@ from marie.scheduler.guardrail_evaluator import (
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.job_scheduler import JobScheduler, JobSubmissionRequest
 from marie.scheduler.memory_frontier import MemoryFrontier
-from marie.scheduler.models import ExistingWorkPolicy, HeartbeatConfig, WorkInfo
+from marie.scheduler.models import (
+    ExistingWorkPolicy,
+    HeartbeatConfig,
+    RecoveredRunLease,
+    WorkInfo,
+)
 from marie.scheduler.planner_util import (
     debug_candidates_and_plan,
     get_node_from_dag,
@@ -78,9 +83,9 @@ from marie.storage.database.postgres import PostgresqlMixin
 from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.utils import current_milli_time
 
-INIT_POLL_PERIOD = 2.250  # initial idle wait before the first scheduler wake
+INIT_POLL_PERIOD = 0.5  # initial idle wait before the first scheduler wake
 SHORT_POLL_INTERVAL = 0.250  # fallback wait when a wake is missed or no work is visible
-SLOT_POLL_INTERVAL = 0.025  # busy wait while executor work is blocked only by slots
+SLOT_POLL_INTERVAL = 0.100  # busy wait while executor work is blocked only by slots
 
 MIN_POLL_PERIOD = 0.250
 MAX_POLL_PERIOD = 8
@@ -91,6 +96,10 @@ SYNC_POLL_PERIOD = 60.0  # 60s — safety net, not primary dispatch path
 
 DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
+RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL = "run_lease_extend_stale_attempt_total"
+TERMINAL_EVENT_STALE_ATTEMPT_TOTAL = "terminal_event_stale_attempt_total"
+RUN_LEASE_RECOVERED_RETRY_TOTAL = "run_lease_recovered_retry_total"
+RUN_LEASE_RECOVERED_FAILED_TOTAL = "run_lease_recovered_failed_total"
 
 
 def limit_planned_jobs_to_available_slots(
@@ -126,6 +135,27 @@ def limit_planned_jobs_to_available_slots(
         selected.append((entrypoint, wi))
 
     return selected
+
+
+def regular_candidates_cover_available_slots(
+    candidates: List[WorkInfo], slots_by_executor: Dict[str, int]
+) -> bool:
+    remaining = {
+        executor: max(0, int(count))
+        for executor, count in slots_by_executor.items()
+        if int(count) > 0
+    }
+    if not remaining:
+        return bool(candidates)
+
+    for wi in candidates:
+        metadata = wi.data.get("metadata", {}) if isinstance(wi.data, dict) else {}
+        entrypoint = metadata.get("on", "") if isinstance(metadata, dict) else ""
+        executor = entrypoint.split("://", 1)[0]
+        if remaining.get(executor, 0) > 0:
+            remaining[executor] -= 1
+
+    return all(count <= 0 for count in remaining.values())
 
 
 # FIXME : Today we are tracking at the executor level, however that might not be the best
@@ -173,6 +203,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._submission_count = 0
         self._pending_requests = {}  # Track pending requests by ID
         self._request_queue = Queue()  # Buffer up to 1000 requests
+        self._scheduler_counters = defaultdict(int)
 
         self.scheduler_mode = config.get(
             "scheduler_mode", "parallel"
@@ -265,6 +296,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             loop=self._loop,
             executor=self._db_executor,
             notify_callback=self.notify_event,
+            recovery_callback=self._reconcile_recovered_run_leases,
             maintenance_interval=maintenance_interval,
         )
 
@@ -372,6 +404,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             if key not in config:
                 raise BadConfigSource(f"Missing required config: {key}")
 
+    def _scheduler_counter(self, name: str, **fields: Any) -> None:
+        counters = getattr(self, "_scheduler_counters", None)
+        if counters is None:
+            counters = defaultdict(int)
+            self._scheduler_counters = counters
+
+        counters[name] += 1
+        scheduler_trace(name, count=counters[name], **fields)
+
     async def handle_job_event(self, event_type: str, message: Any):
         """
         Handles a job event.
@@ -435,6 +476,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         run_attempt_id=run_attempt_id,
                         reason="db_update_zero_rows",
                     )
+                    self._scheduler_counter(
+                        TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
+                        job_id=job_id,
+                        dag_id=work_item.dag_id,
+                        status=status.value,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                        source="job_event",
+                    )
                     return
                 work_item.state = WorkState.COMPLETED
                 self._job_cache[job_id] = work_item
@@ -477,6 +527,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         run_attempt_id=run_attempt_id,
                         reason="db_update_zero_rows",
                     )
+                    self._scheduler_counter(
+                        TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
+                        job_id=job_id,
+                        dag_id=work_item.dag_id,
+                        status=status.value,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                        source="job_event",
+                    )
                     return
                 work_item.state = WorkState(actual_work_state)
                 self._job_cache[job_id] = work_item
@@ -499,11 +558,49 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self._job_cache[job_id] = work_item
                 await self.frontier.on_job_cancelled(job_id)
             elif status == JobStatus.RUNNING:
+                if not run_owner or not run_attempt_id:
+                    scheduler_trace(
+                        "run_lease_extend_rejected",
+                        job_id=job_id,
+                        dag_id=work_item.dag_id,
+                        status=status.value,
+                        reason="missing_attempt",
+                    )
+                    self.logger.warning(
+                        f"Ignoring running job event without run attempt: job_id={job_id}"
+                    )
+                    return
+
+                extended = await self._extend_run_lease_db(
+                    [job_id], run_owner=run_owner, run_attempt_id=run_attempt_id
+                )
+                if job_id not in extended:
+                    scheduler_trace(
+                        "run_lease_extend_rejected",
+                        job_id=job_id,
+                        dag_id=work_item.dag_id,
+                        status=status.value,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                        reason="db_update_zero_rows",
+                    )
+                    self._scheduler_counter(
+                        RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL,
+                        job_id=job_id,
+                        dag_id=work_item.dag_id,
+                        status=status.value,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                        source="job_event",
+                    )
+                    return
+
                 work_item.state = work_state
+                work_item.run_owner = run_owner
+                work_item.run_attempt_id = run_attempt_id
                 self._job_cache[job_id] = work_item
                 await self.frontier.update_job_state(job_id, work_state)
                 self.logger.debug(f"Job running : {job_id}")
-                await self.put_status(job_id, work_state, now, None)
             else:
                 self.logger.error(f"Unhandled job status: {status}. Marking as FAILED.")
                 actual_work_state = await self.fail(
@@ -1846,7 +1943,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     candidates_wi = regular_candidates
 
                 for drain_pass in range(CONTROL_FLOW_DRAIN_MAX_PASSES):
-                    if regular_candidates:
+                    if regular_candidates_cover_available_slots(
+                        regular_candidates, slots_by_executor
+                    ):
                         break
 
                     control_flow_drain_passes = drain_pass + 1
@@ -1918,9 +2017,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         )
                         if regular_candidates:
                             candidates_wi = regular_candidates
-                            break
+                            if regular_candidates_cover_available_slots(
+                                regular_candidates, slots_by_executor
+                            ):
+                                break
 
-                    if regular_candidates or not control_flow_jobs:
+                    if not control_flow_jobs:
                         break
 
                 if (
@@ -3484,6 +3586,57 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             )
             # self._job_cache.pop(job_id, None)
 
+    async def _reconcile_recovered_run_leases(
+        self, recovered: list[RecoveredRunLease]
+    ) -> None:
+        for recovery in recovered:
+            work_item = await self.repository.get_job_by_id(recovery.id)
+            if work_item is None:
+                self.logger.warning(
+                    f"Recovered run lease for missing job: {recovery.id}"
+                )
+                continue
+
+            self._job_cache[recovery.id] = work_item
+            scheduler_trace(
+                "run_lease_recovered",
+                job_id=recovery.id,
+                dag_id=recovery.dag_id,
+                recovered_state=recovery.recovered_state,
+                previous_run_owner=recovery.previous_run_owner,
+                previous_run_attempt_id=recovery.previous_run_attempt_id,
+                reason_code=recovery.reason_code,
+            )
+
+            if recovery.recovered_state == "retry":
+                self._scheduler_counter(
+                    RUN_LEASE_RECOVERED_RETRY_TOTAL,
+                    job_id=recovery.id,
+                    dag_id=recovery.dag_id,
+                    previous_run_owner=recovery.previous_run_owner,
+                    previous_run_attempt_id=recovery.previous_run_attempt_id,
+                    reason_code=recovery.reason_code,
+                )
+                await self.frontier.on_job_retry(
+                    recovery.id, work_item, start_after=recovery.start_after
+                )
+                continue
+
+            self._scheduler_counter(
+                RUN_LEASE_RECOVERED_FAILED_TOTAL,
+                job_id=recovery.id,
+                dag_id=recovery.dag_id,
+                previous_run_owner=recovery.previous_run_owner,
+                previous_run_attempt_id=recovery.previous_run_attempt_id,
+                reason_code=recovery.reason_code,
+            )
+            await self.frontier.on_job_failed(recovery.id)
+            await self._resolve_dag_status_with_retry(
+                recovery.id,
+                work_item,
+                source="run_lease_recovery",
+            )
+
     async def maintenance(self):
         """
         Performs the maintenance process, including expiring, archiving, and purging.
@@ -3663,6 +3816,45 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         )
                         continue
 
+                    if job_info.status == JobStatus.RUNNING:
+                        run_owner = job_info.run_owner
+                        run_attempt_id = job_info.run_attempt_id
+                        if not run_owner or not run_attempt_id:
+                            scheduler_trace(
+                                "run_lease_extend_rejected",
+                                job_id=job_id,
+                                dag_id=work_item.dag_id,
+                                status=job_info.status.value,
+                                reason="sync_missing_attempt",
+                            )
+                            continue
+
+                        extended = await self._extend_run_lease_db(
+                            [job_id],
+                            run_owner=run_owner,
+                            run_attempt_id=run_attempt_id,
+                        )
+                        if job_id not in extended:
+                            scheduler_trace(
+                                "run_lease_extend_rejected",
+                                job_id=job_id,
+                                dag_id=work_item.dag_id,
+                                status=job_info.status.value,
+                                run_owner=run_owner,
+                                run_attempt_id=run_attempt_id,
+                                reason="sync_db_update_zero_rows",
+                            )
+                            self._scheduler_counter(
+                                RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL,
+                                job_id=job_id,
+                                dag_id=work_item.dag_id,
+                                status=job_info.status.value,
+                                run_owner=run_owner,
+                                run_attempt_id=run_attempt_id,
+                                source="storage_sync",
+                            )
+                        continue
+
                     await self._sync_terminal_job_state(
                         job_id,
                         work_item,
@@ -3743,6 +3935,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     run_attempt_id=run_attempt_id,
                     reason="sync_db_update_zero_rows",
                 )
+                self._scheduler_counter(
+                    TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
+                    job_id=job_id,
+                    dag_id=work_item.dag_id,
+                    status=job_info.status.value,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    source="storage_sync",
+                )
                 return False
             await self._handle_successful_job_completion(job_id, work_item)
         elif job_info.status == JobStatus.FAILED:
@@ -3771,6 +3972,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     run_owner=run_owner,
                     run_attempt_id=run_attempt_id,
                     reason="sync_db_update_zero_rows",
+                )
+                self._scheduler_counter(
+                    TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
+                    job_id=job_id,
+                    dag_id=work_item.dag_id,
+                    status=job_info.status.value,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    source="storage_sync",
                 )
                 return False
             if actual_work_state == WorkState.RETRY.value:
@@ -4213,6 +4423,22 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         return await self.repository.activate_from_lease(
             job_ids=ids, owner=self.lease_owner, run_ttl_seconds=self.run_ttl_seconds
+        )
+
+    async def _extend_run_lease_db(
+        self, ids: list[str], *, run_owner: str, run_attempt_id: str
+    ) -> set[str]:
+        """
+        Extend active run leases for the current durable attempt.
+        """
+        if not ids:
+            return set()
+
+        return await self.repository.extend_run_lease(
+            job_ids=ids,
+            owner=run_owner,
+            run_attempt_id=run_attempt_id,
+            extend_seconds=self.run_ttl_seconds,
         )
 
     async def _release_lease_db(self, ids: list[str]) -> set[str]:
