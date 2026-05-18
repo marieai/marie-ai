@@ -8,6 +8,7 @@ from marie.agent.middleware.content_filter import (
     ContentFilterError,
     ContentFilterMiddleware,
 )
+from marie.agent.middleware.debug_capture import DebugCaptureMiddleware
 from marie.agent.middleware.protocol import (
     BaseMiddleware,
     MiddlewareList,
@@ -28,6 +29,7 @@ __all__ = [
     "AuditMiddleware",
     "ContentFilterError",
     "ContentFilterMiddleware",
+    "DebugCaptureMiddleware",
     "SecretsDetectionError",
     "SecretsDetectionMiddleware",
     "TrajectoryMiddleware",

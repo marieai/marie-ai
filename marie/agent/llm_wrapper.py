@@ -1185,10 +1185,6 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         Returns:
             String for text-only, or list of content blocks for multimodal
         """
-        print(
-            f"[DEBUG _content_to_openai] input type: {type(content)}, value: {content}"
-        )
-
         # Simple string content
         if isinstance(content, str):
             return content

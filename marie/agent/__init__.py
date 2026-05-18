@@ -145,6 +145,13 @@ from marie.agent.message import (
     ToolCall,
     format_messages,
 )
+from marie.agent.middleware import (
+    AuditMiddleware,
+    ContentFilterMiddleware,
+    DebugCaptureMiddleware,
+    SecretsDetectionMiddleware,
+    TrajectoryMiddleware,
+)
 from marie.agent.state import (
     AgentMemoryBridge,
     ConversationState,
@@ -230,6 +237,12 @@ __all__ = [
     "FunctionCall",
     "ToolCall",
     "format_messages",
+    # Middleware
+    "AuditMiddleware",
+    "ContentFilterMiddleware",
+    "DebugCaptureMiddleware",
+    "SecretsDetectionMiddleware",
+    "TrajectoryMiddleware",
     # Message constants
     "ROLE",
     "CONTENT",

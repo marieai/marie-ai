@@ -70,6 +70,49 @@ SLASH_COMMAND_PATTERN = re.compile(
 )
 
 
+def _message_debug_payload(message: Any) -> Dict[str, Any]:
+    if hasattr(message, "model_dump"):
+        return message.model_dump(mode="json")
+    if isinstance(message, dict):
+        return dict(message)
+    return {
+        "role": getattr(message, "role", None),
+        "content": getattr(message, "content", None),
+        "name": getattr(message, "name", None),
+        "function_call": getattr(message, "function_call", None),
+        "tool_calls": getattr(message, "tool_calls", None),
+        "tool_call_id": getattr(message, "tool_call_id", None),
+        "metadata": getattr(message, "metadata", None),
+    }
+
+
+def _tool_debug_payload(function_map: Dict[str, AgentTool]) -> List[Dict[str, Any]]:
+    tools: List[Dict[str, Any]] = []
+    for name, tool in sorted(function_map.items()):
+        metadata = getattr(tool, "metadata", None)
+        tools.append(
+            {
+                "name": name,
+                "class": type(tool).__name__,
+                "description": getattr(metadata, "description", None),
+                "parameters": metadata.get_parameters_dict() if metadata else None,
+                "return_direct": getattr(metadata, "return_direct", None),
+            }
+        )
+    return tools
+
+
+def _llm_debug_name(llm: Any) -> Optional[str]:
+    if llm is None:
+        return None
+    return (
+        getattr(llm, "model", None)
+        or getattr(llm, "engine_name", None)
+        or getattr(llm, "name", None)
+        or type(llm).__name__
+    )
+
+
 class BaseAgent(ABC):
     """Abstract base class for Marie agents.
 
@@ -362,7 +405,21 @@ class BaseAgent(ABC):
         if not skill.metadata.allowed_tools:
             return {}
 
-        resolved = resolve_tools(skill.metadata.allowed_tools)
+        resolved: Dict[str, AgentTool] = {}
+        unresolved: List[Union[str, Dict[str, Any], AgentTool, Callable]] = []
+        for spec in skill.metadata.allowed_tools:
+            if isinstance(spec, str) and spec in self.function_map:
+                resolved[spec] = self.function_map[spec]
+                continue
+            if isinstance(spec, dict):
+                name = spec.get("name")
+                if isinstance(name, str) and name in self.function_map:
+                    resolved[name] = self.function_map[name]
+                    continue
+            unresolved.append(spec)
+
+        if unresolved:
+            resolved.update(resolve_tools(unresolved))
         return resolved
 
     def _init_memory(self, memory_config: "Mem0Config") -> None:
@@ -689,10 +746,23 @@ class BaseAgent(ABC):
         # Emit start event
         emit_sync(
             run_emitter,
-            "start",
+            "agent.start",
             {
                 "agent_name": self.name,
                 "message_count": len(new_messages),
+            },
+            source=self.name,
+        )
+        emit_sync(
+            run_emitter,
+            "agent.input",
+            {
+                "agent_name": self.name,
+                "model_name": _llm_debug_name(self.llm),
+                "messages": [
+                    _message_debug_payload(message) for message in new_messages
+                ],
+                "tools": _tool_debug_payload(self.function_map),
             },
             source=self.name,
         )
@@ -730,6 +800,7 @@ class BaseAgent(ABC):
         )
 
         last_responses: List[Message] = []
+        response_iteration = 0
         success = False
         error_exc: Optional[Exception] = None
 
@@ -742,6 +813,19 @@ class BaseAgent(ABC):
                         resp.name = self.name
 
                 last_responses = responses
+                response_iteration += 1
+                emit_sync(
+                    run_emitter,
+                    "agent.response",
+                    {
+                        "agent_name": self.name,
+                        "iteration": response_iteration,
+                        "messages": [
+                            _message_debug_payload(response) for response in responses
+                        ],
+                    },
+                    source=self.name,
+                )
 
                 # Convert output format based on input format
                 if _return_message_type == "message":
@@ -775,7 +859,7 @@ class BaseAgent(ABC):
             duration_ms = (time.perf_counter() - start_time) * 1000
             emit_sync(
                 run_emitter,
-                "success",
+                "agent.success",
                 {
                     "agent_name": self.name,
                     "result_count": len(last_responses),
@@ -786,6 +870,7 @@ class BaseAgent(ABC):
 
         except GeneratorExit:
             # Consumer stopped iterating — clean exit, not an error
+            success = True
             _otel_span.set_status(StatusCode.OK)
 
         except Exception as e:
@@ -795,7 +880,7 @@ class BaseAgent(ABC):
             # Emit error event
             emit_sync(
                 run_emitter,
-                "error",
+                "agent.error",
                 {
                     "agent_name": self.name,
                     "error_type": type(e).__name__,
@@ -813,7 +898,7 @@ class BaseAgent(ABC):
             duration_ms = (time.perf_counter() - start_time) * 1000
             emit_sync(
                 run_emitter,
-                "finish",
+                "agent.finish",
                 {
                     "agent_name": self.name,
                     "success": success,
@@ -934,8 +1019,28 @@ class BaseAgent(ABC):
         if extra_generate_cfg:
             merged_cfg.update(extra_generate_cfg)
 
+        import time
+
+        from marie.agent.emitter import emit_sync
+
+        run_emitter = self.emitter if self.middlewares else None
+        model_name = _llm_debug_name(self.llm)
+        start_time = time.perf_counter()
+        emit_sync(
+            run_emitter,
+            "llm.start",
+            {
+                "model_name": model_name,
+                "message_count": len(messages),
+                "tool_count": len(functions or []),
+                "stream": stream,
+                "extra_generate_cfg": merged_cfg,
+            },
+            source="llm",
+        )
+
         try:
-            return self.llm.chat(
+            response_iter = self.llm.chat(
                 messages=messages,
                 functions=functions,
                 stream=stream,
@@ -943,6 +1048,28 @@ class BaseAgent(ABC):
             )
         except Exception as e:
             logger.error(f"LLM call failed: {type(e).__name__}: {e}")
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            emit_sync(
+                run_emitter,
+                "llm.error",
+                {
+                    "model_name": model_name,
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "duration_ms": duration_ms,
+                },
+                source="llm",
+            )
+            emit_sync(
+                run_emitter,
+                "llm.finish",
+                {
+                    "model_name": model_name,
+                    "success": False,
+                    "duration_ms": duration_ms,
+                },
+                source="llm",
+            )
             # Yield an error message so the agent can handle it gracefully
             error_msg = Message.assistant(
                 f"I encountered an error while processing: {type(e).__name__}. "
@@ -954,6 +1081,65 @@ class BaseAgent(ABC):
                 yield [error_msg]
 
             return error_generator()
+
+        def instrumented_generator() -> Iterator[List[Message]]:
+            response_count = 0
+            has_tool_calls = False
+            success = False
+            try:
+                for responses in response_iter:
+                    response_count += len(responses)
+                    has_tool_calls = has_tool_calls or any(
+                        bool(getattr(response, "tool_calls", None))
+                        for response in responses
+                    )
+                    yield responses
+                success = True
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                emit_sync(
+                    run_emitter,
+                    "llm.success",
+                    {
+                        "model_name": model_name,
+                        "response_count": response_count,
+                        "has_tool_calls": has_tool_calls,
+                        "duration_ms": duration_ms,
+                    },
+                    source="llm",
+                )
+            except Exception as e:
+                logger.error(f"LLM call failed: {type(e).__name__}: {e}")
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                emit_sync(
+                    run_emitter,
+                    "llm.error",
+                    {
+                        "model_name": model_name,
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "duration_ms": duration_ms,
+                    },
+                    source="llm",
+                )
+                error_msg = Message.assistant(
+                    f"I encountered an error while processing: {type(e).__name__}. "
+                    "Please try again or rephrase your request."
+                )
+                yield [error_msg]
+            finally:
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                emit_sync(
+                    run_emitter,
+                    "llm.finish",
+                    {
+                        "model_name": model_name,
+                        "success": success,
+                        "duration_ms": duration_ms,
+                    },
+                    source="llm",
+                )
+
+        return instrumented_generator()
 
     async def _call_llm_stream(
         self,
@@ -1012,14 +1198,73 @@ class BaseAgent(ABC):
         Returns:
             Tool output (string or list of ContentItems for multimodal)
         """
+        import time
+
+        from marie.agent.emitter import emit_sync
+
+        run_emitter = self.emitter if self.middlewares else None
+        start_time = time.perf_counter()
+        emit_sync(
+            run_emitter,
+            "tool.start",
+            {"tool_name": tool_name, "arguments": tool_args},
+            source=tool_name,
+        )
         if tool_name not in self.function_map:
-            return f"Tool '{tool_name}' does not exist."
+            message = f"Tool '{tool_name}' does not exist."
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            emit_sync(
+                run_emitter,
+                "tool.error",
+                {"tool_name": tool_name, "error": message, "duration_ms": duration_ms},
+                source=tool_name,
+            )
+            emit_sync(
+                run_emitter,
+                "tool.finish",
+                {"tool_name": tool_name, "success": False, "duration_ms": duration_ms},
+                source=tool_name,
+            )
+            return message
 
         tool = self.function_map[tool_name]
         result = tool.safe_call(tool_args, **kwargs)
+        duration_ms = (time.perf_counter() - start_time) * 1000
 
         if result.is_error:
             logger.warning(f"Tool '{tool_name}' failed: {result.content}")
+            emit_sync(
+                run_emitter,
+                "tool.error",
+                {
+                    "tool_name": tool_name,
+                    "error": result.content,
+                    "duration_ms": duration_ms,
+                },
+                source=tool_name,
+            )
+        else:
+            emit_sync(
+                run_emitter,
+                "tool.success",
+                {
+                    "tool_name": tool_name,
+                    "result_length": len(str(result.content)),
+                    "result": result.content,
+                    "duration_ms": duration_ms,
+                },
+                source=tool_name,
+            )
+        emit_sync(
+            run_emitter,
+            "tool.finish",
+            {
+                "tool_name": tool_name,
+                "success": not result.is_error,
+                "duration_ms": duration_ms,
+            },
+            source=tool_name,
+        )
 
         return result.content
 
@@ -1039,14 +1284,77 @@ class BaseAgent(ABC):
         Returns:
             Tool output
         """
+        import time
+
+        run_emitter = self.emitter if self.middlewares else None
+        start_time = time.perf_counter()
+        if run_emitter is not None:
+            await run_emitter.emit(
+                "tool.start",
+                {"tool_name": tool_name, "arguments": tool_args},
+                source=tool_name,
+            )
         if tool_name not in self.function_map:
-            return f"Tool '{tool_name}' does not exist."
+            message = f"Tool '{tool_name}' does not exist."
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            if run_emitter is not None:
+                await run_emitter.emit(
+                    "tool.error",
+                    {
+                        "tool_name": tool_name,
+                        "error": message,
+                        "duration_ms": duration_ms,
+                    },
+                    source=tool_name,
+                )
+                await run_emitter.emit(
+                    "tool.finish",
+                    {
+                        "tool_name": tool_name,
+                        "success": False,
+                        "duration_ms": duration_ms,
+                    },
+                    source=tool_name,
+                )
+            return message
 
         tool = self.function_map[tool_name]
         result = await tool.safe_acall(tool_args, **kwargs)
+        duration_ms = (time.perf_counter() - start_time) * 1000
 
         if result.is_error:
             logger.warning(f"Tool '{tool_name}' failed: {result.content}")
+            if run_emitter is not None:
+                await run_emitter.emit(
+                    "tool.error",
+                    {
+                        "tool_name": tool_name,
+                        "error": result.content,
+                        "duration_ms": duration_ms,
+                    },
+                    source=tool_name,
+                )
+        elif run_emitter is not None:
+            await run_emitter.emit(
+                "tool.success",
+                {
+                    "tool_name": tool_name,
+                    "result_length": len(str(result.content)),
+                    "result": result.content,
+                    "duration_ms": duration_ms,
+                },
+                source=tool_name,
+            )
+        if run_emitter is not None:
+            await run_emitter.emit(
+                "tool.finish",
+                {
+                    "tool_name": tool_name,
+                    "success": not result.is_error,
+                    "duration_ms": duration_ms,
+                },
+                source=tool_name,
+            )
 
         return result.content
 
