@@ -652,7 +652,11 @@ class JobRepository(PostgresqlMixin):
         return await self._loop.run_in_executor(self._db_executor, _extend_sync)
 
     async def activate_from_lease(
-        self, job_ids: List[str], owner: str, run_ttl_seconds: int
+        self,
+        job_ids: List[str],
+        owner: str,
+        run_ttl_seconds: int,
+        gateway_instance_id: str | None = None,
     ) -> dict[str, str]:
         """
         Promote leased jobs to active once dispatch is acknowledged.
@@ -693,7 +697,7 @@ class JobRepository(PostgresqlMixin):
 
                 cursor.execute(
                     f"""
-                    SELECT id, run_attempt_id
+                    SELECT id, name, dag_id, run_attempt_id
                     FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
                     WHERE id = ANY(%s::uuid[])
                     """,
@@ -701,7 +705,7 @@ class JobRepository(PostgresqlMixin):
                 )
                 rows = cursor.fetchall()
                 missing_attempt = [
-                    str(row[0]) for row in rows if row[0] is not None and row[1] is None
+                    str(row[0]) for row in rows if row[0] is not None and row[3] is None
                 ]
                 if missing_attempt:
                     raise RuntimeError(
@@ -710,9 +714,9 @@ class JobRepository(PostgresqlMixin):
                         "config/psql/schema/lease/000_durable_attempts.sql."
                     )
                 attempts = {
-                    str(row[0]): str(row[1])
+                    str(row[0]): str(row[3])
                     for row in rows
-                    if row[0] is not None and row[1] is not None
+                    if row[0] is not None and row[3] is not None
                 }
                 missing_rows = set(activated_ids) - set(attempts)
                 if missing_rows:
@@ -720,6 +724,45 @@ class JobRepository(PostgresqlMixin):
                         "activate_from_lease returned ids that could not be "
                         f"read back from job table: {sorted(missing_rows)}"
                     )
+                cursor.executemany(
+                    f"""
+                    INSERT INTO {DEFAULT_SCHEMA}.job_attempt (
+                        run_attempt_id,
+                        job_id,
+                        job_name,
+                        dag_id,
+                        run_owner,
+                        scheduler_lease_owner,
+                        gateway_instance_id,
+                        attempt_state,
+                        activated_at,
+                        updated_on
+                    )
+                    VALUES (%s::uuid, %s::uuid, %s, %s::uuid, %s, %s, %s, 'activated', NOW(), NOW())
+                    ON CONFLICT (run_attempt_id) DO UPDATE
+                    SET job_id = EXCLUDED.job_id,
+                        job_name = EXCLUDED.job_name,
+                        dag_id = EXCLUDED.dag_id,
+                        run_owner = EXCLUDED.run_owner,
+                        scheduler_lease_owner = EXCLUDED.scheduler_lease_owner,
+                        gateway_instance_id = COALESCE(EXCLUDED.gateway_instance_id, job_attempt.gateway_instance_id),
+                        attempt_state = 'activated',
+                        updated_on = NOW()
+                    """,
+                    [
+                        (
+                            str(row[3]),
+                            str(row[0]),
+                            row[1],
+                            str(row[2]),
+                            owner,
+                            owner,
+                            gateway_instance_id,
+                        )
+                        for row in rows
+                        if row[0] is not None and row[3] is not None
+                    ],
+                )
                 conn.commit()
                 return attempts
             except Exception:
@@ -731,6 +774,266 @@ class JobRepository(PostgresqlMixin):
                 self._close_connection(conn)
 
         return await self._loop.run_in_executor(self._db_executor, _activate_sync)
+
+    async def record_job_attempt_dispatch_started(
+        self,
+        *,
+        job_id: str,
+        job_name: str,
+        dag_id: str,
+        run_owner: str,
+        run_attempt_id: str,
+        scheduler_lease_owner: str,
+        gateway_instance_id: str | None,
+        executor: str | None,
+    ) -> None:
+        def _record_sync() -> None:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    INSERT INTO {DEFAULT_SCHEMA}.job_attempt (
+                        run_attempt_id,
+                        job_id,
+                        job_name,
+                        dag_id,
+                        run_owner,
+                        scheduler_lease_owner,
+                        gateway_instance_id,
+                        executor,
+                        attempt_state,
+                        dispatch_started_at,
+                        updated_on
+                    )
+                    VALUES (%s::uuid, %s::uuid, %s, %s::uuid, %s, %s, %s, %s, 'dispatching', NOW(), NOW())
+                    ON CONFLICT (run_attempt_id) DO UPDATE
+                    SET executor = COALESCE(EXCLUDED.executor, job_attempt.executor),
+                        gateway_instance_id = COALESCE(EXCLUDED.gateway_instance_id, job_attempt.gateway_instance_id),
+                        scheduler_lease_owner = EXCLUDED.scheduler_lease_owner,
+                        attempt_state = 'dispatching',
+                        dispatch_started_at = COALESCE(job_attempt.dispatch_started_at, NOW()),
+                        updated_on = NOW()
+                    """,
+                    (
+                        run_attempt_id,
+                        job_id,
+                        job_name,
+                        dag_id,
+                        run_owner,
+                        scheduler_lease_owner,
+                        gateway_instance_id,
+                        executor,
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                if conn:
+                    conn.rollback()
+                raise
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        await self._loop.run_in_executor(self._db_executor, _record_sync)
+
+    async def record_job_attempt_dispatch_result(
+        self,
+        *,
+        run_attempt_id: str,
+        confirmed: bool,
+        error: str | None = None,
+    ) -> None:
+        def _record_sync() -> None:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    UPDATE {DEFAULT_SCHEMA}.job_attempt
+                    SET attempt_state = %s,
+                        dispatch_confirmed_at = CASE WHEN %s THEN COALESCE(dispatch_confirmed_at, NOW()) ELSE dispatch_confirmed_at END,
+                        dispatch_error = %s,
+                        updated_on = NOW()
+                    WHERE run_attempt_id = %s::uuid
+                    """,
+                    (
+                        "dispatched" if confirmed else "dispatch_failed",
+                        confirmed,
+                        error,
+                        run_attempt_id,
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                if conn:
+                    conn.rollback()
+                raise
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        await self._loop.run_in_executor(self._db_executor, _record_sync)
+
+    async def record_job_attempt_terminal(
+        self,
+        *,
+        job_id: str,
+        job_name: str,
+        dag_id: str,
+        run_owner: str,
+        run_attempt_id: str,
+        scheduler_lease_owner: str,
+        gateway_instance_id: str | None,
+        terminal_status: str,
+        terminal_work_state: str | None,
+        source: str,
+        accepted: bool,
+        reject_reason: str | None = None,
+    ) -> None:
+        attempt_state = (
+            terminal_work_state
+            if terminal_work_state is not None
+            else ("terminal_rejected" if not accepted else terminal_status.lower())
+        )
+
+        def _record_sync() -> None:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    UPDATE {DEFAULT_SCHEMA}.job_attempt
+                    SET attempt_state = CASE
+                            WHEN (terminal_accepted IS TRUE OR recovery_at IS NOT NULL)
+                                 AND %s IS FALSE
+                            THEN attempt_state
+                            ELSE %s
+                        END,
+                        terminal_at = COALESCE(terminal_at, NOW()),
+                        terminal_status = CASE
+                            WHEN terminal_accepted IS TRUE AND %s IS FALSE
+                            THEN terminal_status
+                            ELSE %s
+                        END,
+                        terminal_work_state = CASE
+                            WHEN terminal_accepted IS TRUE AND %s IS FALSE
+                            THEN terminal_work_state
+                            ELSE %s
+                        END,
+                        terminal_source = CASE
+                            WHEN terminal_accepted IS TRUE AND %s IS FALSE
+                            THEN terminal_source
+                            ELSE %s
+                        END,
+                        terminal_gateway_instance_id = CASE
+                            WHEN terminal_accepted IS TRUE AND %s IS FALSE
+                            THEN terminal_gateway_instance_id
+                            ELSE %s
+                        END,
+                        terminal_scheduler_lease_owner = CASE
+                            WHEN terminal_accepted IS TRUE AND %s IS FALSE
+                            THEN terminal_scheduler_lease_owner
+                            ELSE %s
+                        END,
+                        terminal_accepted = CASE
+                            WHEN terminal_accepted IS TRUE AND %s IS FALSE
+                            THEN TRUE
+                            ELSE %s
+                        END,
+                        terminal_reject_reason = CASE
+                            WHEN terminal_accepted IS TRUE AND %s IS FALSE
+                            THEN terminal_reject_reason
+                            ELSE %s
+                        END,
+                        updated_on = NOW()
+                    WHERE run_attempt_id = %s::uuid
+                    """,
+                    (
+                        accepted,
+                        attempt_state,
+                        accepted,
+                        terminal_status,
+                        accepted,
+                        terminal_work_state,
+                        accepted,
+                        source,
+                        accepted,
+                        gateway_instance_id,
+                        accepted,
+                        scheduler_lease_owner,
+                        accepted,
+                        accepted,
+                        accepted,
+                        reject_reason,
+                        run_attempt_id,
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    cursor.execute(
+                        f"""
+                        INSERT INTO {DEFAULT_SCHEMA}.job_attempt (
+                            run_attempt_id,
+                            job_id,
+                            job_name,
+                            dag_id,
+                            run_owner,
+                            scheduler_lease_owner,
+                            gateway_instance_id,
+                            attempt_state,
+                            terminal_at,
+                            terminal_status,
+                            terminal_work_state,
+                            terminal_source,
+                            terminal_gateway_instance_id,
+                            terminal_scheduler_lease_owner,
+                            terminal_accepted,
+                            terminal_reject_reason,
+                            metadata,
+                            updated_on
+                        )
+                        VALUES (
+                            %s::uuid, %s::uuid, %s, %s::uuid, %s, %s, %s, %s, NOW(),
+                            %s, %s, %s, %s, %s, %s, %s,
+                            jsonb_build_object('missing_activation_audit', TRUE),
+                            NOW()
+                        )
+                        ON CONFLICT (run_attempt_id) DO NOTHING
+                        """,
+                        (
+                            run_attempt_id,
+                            job_id,
+                            job_name,
+                            dag_id,
+                            run_owner,
+                            scheduler_lease_owner,
+                            gateway_instance_id,
+                            attempt_state,
+                            terminal_status,
+                            terminal_work_state,
+                            source,
+                            gateway_instance_id,
+                            scheduler_lease_owner,
+                            accepted,
+                            reject_reason,
+                        ),
+                    )
+                conn.commit()
+            except Exception:
+                if conn:
+                    conn.rollback()
+                raise
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        await self._loop.run_in_executor(self._db_executor, _record_sync)
 
     async def validate_durable_scheduler_schema(
         self, schema: str = DEFAULT_SCHEMA
@@ -780,6 +1083,24 @@ class JobRepository(PostgresqlMixin):
                     raise RuntimeFailToStart(
                         f"{schema}.job_state is missing value 'skipped'. Apply "
                         "config/psql/schema/lease/000_durable_attempts.sql before starting."
+                    )
+
+                cursor.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM information_schema.tables
+                        WHERE table_schema = %s
+                          AND table_name = 'job_attempt'
+                    )
+                    """,
+                    (schema,),
+                )
+                has_job_attempt = bool(cursor.fetchone()[0])
+                if not has_job_attempt:
+                    raise RuntimeFailToStart(
+                        f"{schema}.job_attempt is missing. Apply "
+                        "config/psql/schema/065_job_attempt.sql before starting."
                     )
 
                 cursor.execute(
@@ -981,6 +1302,18 @@ class JobRepository(PostgresqlMixin):
                         )
                         if cursor.fetchone() is None:
                             continue
+                        cursor.execute(
+                            f"""
+                            UPDATE {DEFAULT_SCHEMA}.job_attempt
+                            SET attempt_state = 'recovered_retry',
+                                recovery_at = NOW(),
+                                recovery_state = 'retry',
+                                recovery_reason = 'RUN_LEASE_EXPIRED',
+                                updated_on = NOW()
+                            WHERE run_attempt_id = %s::uuid
+                            """,
+                            (previous_run_attempt_id,),
+                        )
                         recovered.append(
                             RecoveredRunLease(
                                 id=job_id,
@@ -1021,6 +1354,18 @@ class JobRepository(PostgresqlMixin):
                         )
                         if cursor.fetchone() is None:
                             continue
+                        cursor.execute(
+                            f"""
+                            UPDATE {DEFAULT_SCHEMA}.job_attempt
+                            SET attempt_state = 'recovered_failed',
+                                recovery_at = NOW(),
+                                recovery_state = 'failed',
+                                recovery_reason = 'RUN_LEASE_EXPIRED',
+                                updated_on = NOW()
+                            WHERE run_attempt_id = %s::uuid
+                            """,
+                            (previous_run_attempt_id,),
+                        )
                         recovered.append(
                             RecoveredRunLease(
                                 id=job_id,

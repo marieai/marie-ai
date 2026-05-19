@@ -572,7 +572,7 @@ class TextExtractionExecutorMock(MarieExecutor):
         #     doc.text += " First Exec"
         sec = 3600
         sec = random.randint(3, 6)
-        sec = 1
+        sec = 60
 
         if False:
             # sys.exit()

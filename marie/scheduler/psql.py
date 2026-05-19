@@ -373,9 +373,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.run_ttl_seconds: int = int(config.get("run_ttl_seconds", 60))
         # unique, stable lease owner for this scheduler instance
         self.lease_owner: str = f"{socket.gethostname()}:{_uuid.uuid4()}"
+        self.gateway_instance_id: str = str(
+            config.get("gateway_instance_id") or self.lease_owner
+        )
         self.logger.info(
             f"Lease config: lease_ttl_seconds={self.lease_ttl_seconds}, "
-            f"run_ttl_seconds={self.run_ttl_seconds}, owner='{self.lease_owner}'"
+            f"run_ttl_seconds={self.run_ttl_seconds}, owner='{self.lease_owner}', "
+            f"gateway_instance_id='{self.gateway_instance_id}'"
         )
 
         self._job_cache = {}
@@ -397,6 +401,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         )
         self.cycle_log_every = 10
 
+    def _ha_trace_fields(self) -> dict[str, str]:
+        return {
+            "gateway_instance_id": self.gateway_instance_id,
+            "scheduler_lease_owner": self.lease_owner,
+        }
+
     def validate_config(self, config: Dict[str, Any]):
         # TODO :Implement full validation of required fields
         required_keys = ["queue_names"]
@@ -412,6 +422,50 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         counters[name] += 1
         scheduler_trace(name, count=counters[name], **fields)
+
+    async def _record_terminal_attempt_audit(
+        self,
+        *,
+        job_id: str,
+        work_item: WorkInfo,
+        status: JobStatus,
+        run_owner: str,
+        run_attempt_id: str,
+        terminal_work_state: str | None,
+        source: str,
+        accepted: bool,
+        reject_reason: str | None = None,
+    ) -> None:
+        try:
+            await self.repository.record_job_attempt_terminal(
+                job_id=job_id,
+                job_name=work_item.name,
+                dag_id=str(work_item.dag_id),
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                scheduler_lease_owner=self.lease_owner,
+                gateway_instance_id=self.gateway_instance_id,
+                terminal_status=status.value,
+                terminal_work_state=terminal_work_state,
+                source=source,
+                accepted=accepted,
+                reject_reason=reject_reason,
+            )
+        except Exception as audit_error:
+            scheduler_trace(
+                "job_attempt_audit_failed",
+                job_id=job_id,
+                dag_id=work_item.dag_id,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                source=source,
+                accepted=accepted,
+                error=repr(audit_error),
+                **self._ha_trace_fields(),
+            )
+            self.logger.warning(
+                f"Failed to record terminal audit for attempt {run_attempt_id}: {audit_error}"
+            )
 
     async def handle_job_event(self, event_type: str, message: Any):
         """
@@ -454,6 +508,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         dag_id=work_item.dag_id,
                         status=status.value,
                         reason="missing_attempt",
+                        **self._ha_trace_fields(),
                     )
                     self.logger.warning(
                         f"Ignoring terminal job event without run attempt: job_id={job_id}, status={status}"
@@ -475,6 +530,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         run_owner=run_owner,
                         run_attempt_id=run_attempt_id,
                         reason="db_update_zero_rows",
+                        **self._ha_trace_fields(),
+                    )
+                    await self._record_terminal_attempt_audit(
+                        job_id=job_id,
+                        work_item=work_item,
+                        status=status,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                        terminal_work_state=None,
+                        source="job_event",
+                        accepted=False,
+                        reject_reason="db_update_zero_rows",
                     )
                     self._scheduler_counter(
                         TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
@@ -488,6 +555,16 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     return
                 work_item.state = WorkState.COMPLETED
                 self._job_cache[job_id] = work_item
+                await self._record_terminal_attempt_audit(
+                    job_id=job_id,
+                    work_item=work_item,
+                    status=status,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    terminal_work_state=WorkState.COMPLETED.value,
+                    source="job_event",
+                    accepted=True,
+                )
                 scheduler_trace(
                     "job_terminal_attempt_accepted",
                     job_id=job_id,
@@ -495,6 +572,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     status=status.value,
                     run_owner=run_owner,
                     run_attempt_id=run_attempt_id,
+                    **self._ha_trace_fields(),
                 )
                 await self._handle_successful_job_completion(job_id, work_item)
             elif status == JobStatus.FAILED:
@@ -505,6 +583,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         dag_id=work_item.dag_id,
                         status=status.value,
                         reason="missing_attempt",
+                        **self._ha_trace_fields(),
                     )
                     self.logger.warning(
                         f"Ignoring failed job event without run attempt: job_id={job_id}"
@@ -526,6 +605,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         run_owner=run_owner,
                         run_attempt_id=run_attempt_id,
                         reason="db_update_zero_rows",
+                        **self._ha_trace_fields(),
+                    )
+                    await self._record_terminal_attempt_audit(
+                        job_id=job_id,
+                        work_item=work_item,
+                        status=status,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                        terminal_work_state=None,
+                        source="job_event",
+                        accepted=False,
+                        reject_reason="db_update_zero_rows",
                     )
                     self._scheduler_counter(
                         TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
@@ -539,6 +630,16 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     return
                 work_item.state = WorkState(actual_work_state)
                 self._job_cache[job_id] = work_item
+                await self._record_terminal_attempt_audit(
+                    job_id=job_id,
+                    work_item=work_item,
+                    status=status,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    terminal_work_state=actual_work_state,
+                    source="job_event",
+                    accepted=True,
+                )
                 scheduler_trace(
                     "job_terminal_attempt_accepted",
                     job_id=job_id,
@@ -547,6 +648,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     run_owner=run_owner,
                     run_attempt_id=run_attempt_id,
                     final_state=actual_work_state,
+                    **self._ha_trace_fields(),
                 )
                 if actual_work_state == WorkState.RETRY.value:
                     await self.frontier.on_job_retry(job_id, work_item)
@@ -565,6 +667,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         dag_id=work_item.dag_id,
                         status=status.value,
                         reason="missing_attempt",
+                        **self._ha_trace_fields(),
                     )
                     self.logger.warning(
                         f"Ignoring running job event without run attempt: job_id={job_id}"
@@ -583,6 +686,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         run_owner=run_owner,
                         run_attempt_id=run_attempt_id,
                         reason="db_update_zero_rows",
+                        **self._ha_trace_fields(),
                     )
                     self._scheduler_counter(
                         RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL,
@@ -2397,6 +2501,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             executor=slot_type,
                             run_owner=self.lease_owner,
                             run_attempt_id=run_attempt_id,
+                            **self._ha_trace_fields(),
                         )
                         enqueue_tasks.append(
                             {
@@ -2560,6 +2665,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             is_retry=is_retry,
             run_owner=run_owner,
             run_attempt_id=run_attempt_id,
+            **self._ha_trace_fields(),
         )
         wi.run_owner = run_owner
         wi.run_attempt_id = run_attempt_id
@@ -2573,6 +2679,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             job_name=wi.name,
             run_owner=run_owner,
             run_attempt_id=run_attempt_id,
+            **self._ha_trace_fields(),
         )
         enqueued = await self.enqueue(
             wi,
@@ -2586,6 +2693,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             dag_id=wi.dag_id,
             job_name=wi.name,
             success=enqueued,
+            run_owner=run_owner,
+            run_attempt_id=run_attempt_id,
+            **self._ha_trace_fields(),
         )
         return enqueued
 
@@ -2665,6 +2775,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 "running": self.running,
                 "paused": self._paused,
                 "scheduler_mode": self.scheduler_mode,
+                "gateway_instance_id": self.gateway_instance_id,
+                "scheduler_lease_owner": self.lease_owner,
                 "max_concurrent_dags": self.max_concurrent_dags,
                 "known_queues": list(self.known_queues) if self.known_queues else [],
                 "active_dags_count": len(self.active_dags) if self.active_dags else 0,
@@ -2787,6 +2899,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 job_id=submission_id,
                 dag_id=work_info.dag_id,
                 reason="missing_entrypoint",
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                **self._ha_trace_fields(),
             )
             self.logger.error(
                 f"The entrypoint 'on' is not defined in metadata for job {submission_id}"
@@ -2795,12 +2910,32 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         try:
             dispatch_started = time.perf_counter()
+            executor = entrypoint.split("://", 1)[0]
+            if run_owner and run_attempt_id:
+                try:
+                    await self.repository.record_job_attempt_dispatch_started(
+                        job_id=submission_id,
+                        job_name=work_info.name,
+                        dag_id=str(work_info.dag_id),
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                        scheduler_lease_owner=self.lease_owner,
+                        gateway_instance_id=self.gateway_instance_id,
+                        executor=executor,
+                    )
+                except Exception as audit_error:
+                    self.logger.warning(
+                        f"Failed to record dispatch start for attempt {run_attempt_id}: {audit_error}"
+                    )
             scheduler_trace(
                 "gateway_dispatch_start",
                 job_id=submission_id,
                 dag_id=work_info.dag_id,
                 entrypoint=entrypoint,
                 is_retry=is_retry,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                **self._ha_trace_fields(),
             )
             # Inject DAG tracking parameters into metadata for asset tracking
             # These are needed by executors to record asset materializations
@@ -2837,6 +2972,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     job_id=submission_id,
                     dag_id=work_info.dag_id,
                     entrypoint=entrypoint,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    **self._ha_trace_fields(),
                 )
 
                 # Wait for the supervisor to confirm it has received the job and is running.
@@ -2848,7 +2986,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     dag_id=work_info.dag_id,
                     entrypoint=entrypoint,
                     elapsed_ms=(time.perf_counter() - dispatch_started) * 1000.0,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    **self._ha_trace_fields(),
                 )
+                if run_attempt_id:
+                    try:
+                        await self.repository.record_job_attempt_dispatch_result(
+                            run_attempt_id=run_attempt_id,
+                            confirmed=True,
+                        )
+                    except Exception as audit_error:
+                        self.logger.warning(
+                            f"Failed to record dispatch confirmation for attempt {run_attempt_id}: {audit_error}"
+                        )
 
             dispatch_timeout = max(0.1, float(self.lease_ttl_seconds) - 1.0)
             await asyncio.wait_for(_submit_and_confirm(), timeout=dispatch_timeout)
@@ -2862,7 +3013,21 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 dag_id=work_info.dag_id,
                 entrypoint=entrypoint,
                 timeout_seconds=max(0.1, float(self.lease_ttl_seconds) - 1.0),
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                **self._ha_trace_fields(),
             )
+            if run_attempt_id:
+                try:
+                    await self.repository.record_job_attempt_dispatch_result(
+                        run_attempt_id=run_attempt_id,
+                        confirmed=False,
+                        error="dispatch_timeout",
+                    )
+                except Exception as audit_error:
+                    self.logger.warning(
+                        f"Failed to record dispatch timeout for attempt {run_attempt_id}: {audit_error}"
+                    )
             self.logger.error(
                 f"Timeout waiting for dispatch confirmation for job {submission_id}"
             )
@@ -2874,7 +3039,21 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 dag_id=work_info.dag_id,
                 entrypoint=entrypoint,
                 error=repr(e),
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                **self._ha_trace_fields(),
             )
+            if run_attempt_id:
+                try:
+                    await self.repository.record_job_attempt_dispatch_result(
+                        run_attempt_id=run_attempt_id,
+                        confirmed=False,
+                        error=repr(e),
+                    )
+                except Exception as audit_error:
+                    self.logger.warning(
+                        f"Failed to record dispatch failure for attempt {run_attempt_id}: {audit_error}"
+                    )
             self.logger.error(
                 f"Failed to dispatch job {submission_id}: {e}", exc_info=True
             )
@@ -3606,6 +3785,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 previous_run_owner=recovery.previous_run_owner,
                 previous_run_attempt_id=recovery.previous_run_attempt_id,
                 reason_code=recovery.reason_code,
+                **self._ha_trace_fields(),
             )
 
             if recovery.recovered_state == "retry":
@@ -3916,6 +4096,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     dag_id=work_item.dag_id,
                     status=job_info.status.value,
                     reason="sync_missing_attempt",
+                    **self._ha_trace_fields(),
                 )
                 return False
             completed = await self.complete(
@@ -3934,6 +4115,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     run_owner=run_owner,
                     run_attempt_id=run_attempt_id,
                     reason="sync_db_update_zero_rows",
+                    **self._ha_trace_fields(),
+                )
+                await self._record_terminal_attempt_audit(
+                    job_id=job_id,
+                    work_item=work_item,
+                    status=job_info.status,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    terminal_work_state=None,
+                    source="storage_sync",
+                    accepted=False,
+                    reject_reason="sync_db_update_zero_rows",
                 )
                 self._scheduler_counter(
                     TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
@@ -3945,6 +4138,26 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     source="storage_sync",
                 )
                 return False
+            await self._record_terminal_attempt_audit(
+                job_id=job_id,
+                work_item=work_item,
+                status=job_info.status,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                terminal_work_state=WorkState.COMPLETED.value,
+                source="storage_sync",
+                accepted=True,
+            )
+            scheduler_trace(
+                "job_terminal_attempt_accepted",
+                job_id=job_id,
+                dag_id=work_item.dag_id,
+                status=job_info.status.value,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                source="storage_sync",
+                **self._ha_trace_fields(),
+            )
             await self._handle_successful_job_completion(job_id, work_item)
         elif job_info.status == JobStatus.FAILED:
             if not run_owner or not run_attempt_id:
@@ -3954,6 +4167,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     dag_id=work_item.dag_id,
                     status=job_info.status.value,
                     reason="sync_missing_attempt",
+                    **self._ha_trace_fields(),
                 )
                 return False
             actual_work_state = await self.fail(
@@ -3972,6 +4186,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     run_owner=run_owner,
                     run_attempt_id=run_attempt_id,
                     reason="sync_db_update_zero_rows",
+                    **self._ha_trace_fields(),
+                )
+                await self._record_terminal_attempt_audit(
+                    job_id=job_id,
+                    work_item=work_item,
+                    status=job_info.status,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    terminal_work_state=None,
+                    source="storage_sync",
+                    accepted=False,
+                    reject_reason="sync_db_update_zero_rows",
                 )
                 self._scheduler_counter(
                     TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
@@ -3983,6 +4209,27 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     source="storage_sync",
                 )
                 return False
+            await self._record_terminal_attempt_audit(
+                job_id=job_id,
+                work_item=work_item,
+                status=job_info.status,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                terminal_work_state=actual_work_state,
+                source="storage_sync",
+                accepted=True,
+            )
+            scheduler_trace(
+                "job_terminal_attempt_accepted",
+                job_id=job_id,
+                dag_id=work_item.dag_id,
+                status=job_info.status.value,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                final_state=actual_work_state,
+                source="storage_sync",
+                **self._ha_trace_fields(),
+            )
             if actual_work_state == WorkState.RETRY.value:
                 await self.frontier.on_job_retry(job_id, work_item)
             else:
@@ -4206,6 +4453,29 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             run_owner=run_owner,
             run_attempt_id=run_attempt_id,
         )
+        if actual_work_state is not None and run_owner and run_attempt_id:
+            await self._record_terminal_attempt_audit(
+                job_id=wi.id,
+                work_item=wi,
+                status=JobStatus.FAILED,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                terminal_work_state=actual_work_state,
+                source="dispatch_failure",
+                accepted=True,
+            )
+        elif run_owner and run_attempt_id:
+            await self._record_terminal_attempt_audit(
+                job_id=wi.id,
+                work_item=wi,
+                status=JobStatus.FAILED,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                terminal_work_state=None,
+                source="dispatch_failure",
+                accepted=False,
+                reject_reason="db_update_zero_rows",
+            )
 
         if actual_work_state == WorkState.RETRY.value:
             await self.frontier.on_job_retry(wi.id, wi)
@@ -4422,7 +4692,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             return {}
 
         return await self.repository.activate_from_lease(
-            job_ids=ids, owner=self.lease_owner, run_ttl_seconds=self.run_ttl_seconds
+            job_ids=ids,
+            owner=self.lease_owner,
+            run_ttl_seconds=self.run_ttl_seconds,
+            gateway_instance_id=self.gateway_instance_id,
         )
 
     async def _extend_run_lease_db(

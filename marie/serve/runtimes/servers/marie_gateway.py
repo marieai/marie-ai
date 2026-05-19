@@ -2,9 +2,11 @@ import asyncio
 import importlib
 import json
 import os
+import socket
 import sys
 import time
 import traceback
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -193,6 +195,14 @@ class MarieServerGateway(CompositeServer):
         self._deployments_lock = asyncio.Lock()
         self.event_queue = asyncio.Queue(maxsize=512)
         self.ready_event = asyncio.Event()
+        configured_gateway_instance_id = kwargs.get("gateway_instance_id")
+        if configured_gateway_instance_id is None:
+            configured_gateway_instance_id = getattr(self, "args", {}).get(
+                "gateway_instance_id"
+            )
+        self.gateway_instance_id = str(
+            configured_gateway_instance_id or f"{socket.gethostname()}:{uuid.uuid4()}"
+        )
 
         # OTel metrics for gateway request tracking
         self._gateway_request_seconds = None
@@ -290,11 +300,13 @@ class MarieServerGateway(CompositeServer):
         if "job_scheduler_kwargs" not in self.args:
             raise BadConfigSource("Missing job_scheduler_kwargs in config")
 
-        job_scheduler_kwargs = self.args["job_scheduler_kwargs"]
+        job_scheduler_kwargs = dict(self.args["job_scheduler_kwargs"])
         if not all(key in job_scheduler_kwargs for key in expected_keys):
             raise ValueError(
                 f"job_scheduler_kwargs must contain the following keys: {expected_keys}"
             )
+        job_scheduler_kwargs["gateway_instance_id"] = self.gateway_instance_id
+        self.args["job_scheduler_kwargs"] = job_scheduler_kwargs
 
         self.distributor = GatewayJobDistributor(
             gateway_streamer=None,
@@ -1499,6 +1511,7 @@ class MarieServerGateway(CompositeServer):
                 priority=priority,
                 soft_sla=soft_sla.isoformat() if soft_sla else None,
                 hard_sla=hard_sla.isoformat() if hard_sla else None,
+                gateway_instance_id=self.gateway_instance_id,
             )
             job_id = await self.job_scheduler.submit_job(work_info)
             scheduler_trace(
@@ -1508,6 +1521,7 @@ class MarieServerGateway(CompositeServer):
                 ref_id=ref_id,
                 ref_type=ref_type,
                 planner=metadata.get("planner"),
+                gateway_instance_id=self.gateway_instance_id,
             )
 
             # Tag the active ASGI span with session.id = job_id (the dag_id)
@@ -1540,6 +1554,7 @@ class MarieServerGateway(CompositeServer):
                 event_name=event_name,
                 ref_id=ref_id,
                 ref_type=ref_type,
+                gateway_instance_id=self.gateway_instance_id,
             )
 
             return response
@@ -1550,6 +1565,7 @@ class MarieServerGateway(CompositeServer):
                 ref_id=ref_id,
                 ref_type=ref_type,
                 error=repr(ex),
+                gateway_instance_id=self.gateway_instance_id,
             )
             response = self.error_response(
                 f"Failed to submit job. {ex}", ex, silence_exceptions
