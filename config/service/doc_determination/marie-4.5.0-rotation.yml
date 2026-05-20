@@ -124,6 +124,12 @@ with:
       tags:
         - document
         - rotate
+    /document/collate:
+      methods: [ "POST" ]
+      summary: Collate document results
+      tags:
+        - document
+        - collate
     /merge/metadata:
       methods: [ "POST" ]
       summary: Merge metadata from multiple documents
@@ -180,27 +186,27 @@ executors:
     replicas: 1
     env:
        CUDA_VISIBLE_DEVICES: RR
-#  - name: ocr_executor
-#    uses:
-#      jtype: DocDeterminationPipelineExecutor
-#      metas:
-#        py_modules:
-#          - marie.executor.pipeline
-#      with:
-#        device: cuda
-#        storage:
-#          # postgresql configuration. Will be used only if value of backend is "psql"
-#          psql:
-#            <<: *psql_conf_shared
-#            default_table: extract_metadata
-#            enabled: True
-#          s3:
-#            <<: *s3_conf_shared
-#            enabled: True
-#    timeout_ready: 3000000
-#    replicas: 1
-#    env:
-#      CUDA_VISIBLE_DEVICES: RR
+  - name: collation_executor
+    uses:
+      jtype: DocDeterminationPipelineExecutor
+      metas:
+        py_modules:
+          - marie.executor.pipeline
+      with:
+        device: cpu
+        storage:
+          # postgresql configuration. Will be used only if value of backend is "psql"
+          psql:
+            <<: *psql_conf_shared
+            default_table: extract_metadata
+            enabled: True
+          s3:
+            <<: *s3_conf_shared
+            enabled: True
+    timeout_ready: 3000000
+    replicas: 1
+    env:
+       CUDA_VISIBLE_DEVICES: RR
 
 auth:
   keys:

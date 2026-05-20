@@ -1,5 +1,6 @@
 import os
-from typing import Any, List, Optional
+import tempfile
+from typing import Any, Dict, List, Optional
 
 from docarray import DocList
 
@@ -22,12 +23,14 @@ from marie.pipe.components import (
 from marie.pipe.llm_pipeline import LLMPipeline
 from marie.utils.asset_util import (
     create_working_dir,
+    download_asset,
     restore_assets,
     split_filename,
     store_assets,
 )
 from marie.utils.json import load_json_file, store_json_object
-from marie.utils.tiff_ops import merge_tiff, merge_tiff_frames
+from marie.utils.tiff_ops import merge_tiff
+from marie.utils.utils import ensure_exists
 
 
 class DocDeterminationPipelineExecutor(PipelineExecutor):
@@ -44,12 +47,11 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
         **kwargs,
     ):
         super().__init__(name, device, num_worker_preprocess, storage, **kwargs)
-        logger.info(f"Starting Pipeline Setup")
-        logger.info(f"Pipelines config: {pipelines}")
-        has_cuda = True if self.device.type.startswith("cuda") else False
+        logger.info("Starting Doc Determination Executor Setup")
         self.ocr_engines = get_known_ocr_engines(self.device.type, "default")
         if pipelines:
-            self.pipeline = LLMPipeline(pipelines_config=pipelines, cuda=has_cuda)
+            logger.info(f"Pipelines config: {pipelines}")
+            self.pipeline = LLMPipeline(pipelines_config=pipelines, device=self.device)
 
     @requests(on="/document/rotate")
     def rotate_frames(
@@ -87,7 +89,7 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
             }
 
             metadata["rotation"], any_rotated = rotate_frames(
-                ref_id, frames, root_asset_dir, force=True  # Todo reuse
+                ref_id, frames, root_asset_dir
             )
 
             if any_rotated:
@@ -96,8 +98,7 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
 
                 self.logger.info(f"Merging TIFF pages for {ref_id}")
                 _, prefix, _ = split_filename(ref_id)
-                # todo which approach is better? merge_tiff_frames has 96 DPI issue
-                # merge_tiff_frames(frames, os.path.join(root_asset_dir, f"{prefix}.tif"))
+                # merge_tiff_frames(frames, os.path.join(root_asset_dir, f"{prefix}.tif")) # produces wrong DPI
                 merge_tiff(
                     os.path.join(root_asset_dir, "burst"),
                     os.path.join(root_asset_dir, f"{prefix}.tif"),
@@ -109,7 +110,6 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
 
                 # Todo does incominng image need to be updated?
 
-            # TODO make configurable?
             metadata["ocr"] = ocr_frames(
                 self.ocr_engines,
                 ref_id,
@@ -268,27 +268,11 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
                 f"Coordinate format `{coordinate_format}` is not implemented yet"
             )
 
-        pipeline_name, runtime_conf = self.resolve_runtime_config(
+        pipeline_conf, runtime_conf = self.resolve_runtime_and_pipeline_configs(
             payload.get("features", [])
         )
 
-        pages = runtime_conf.get("pages", None) or self.pipeline.pipeline_configs_dict[
-            pipeline_name
-        ].get("pages", None)
-
-        if isinstance(pages, str):
-            pages = {0: sorted({int(n) for n in pages.split(",")})}
-        elif isinstance(pages, list[str | int]):
-            pages = {0: sorted({int(n) for n in pages})}
-        elif isinstance(pages, list[dict]):
-            pages = filter_pages_by_classifier_results(pages, None)  # todo
-        elif isinstance(pages, dict[int, list[int]]):
-            pass
-        elif pages is not None:
-            self.logger.warning(f"Unexpected pages attr {pages}, ignoring")
-            pages = None
-
-        pages = pages or {0: None}
+        pages = get_pipeline_pages(ref_id, ref_type, runtime_conf, pipeline_conf)
 
         for index, page_set in pages.items():
             frames = get_frames_from_docs(docs, page_set)
@@ -329,8 +313,10 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
         MDC.remove("request_id")
         return converted
 
-    def resolve_runtime_config(self, features) -> tuple[Any, dict[Any, Any]]:
-        self.logger.info("Extracting Runtime Config from features list")
+    def resolve_runtime_and_pipeline_configs(
+        self, features
+    ) -> tuple[dict[str, Any], dict[Any, Any]]:
+        self.logger.debug("Extracting Runtime Config from features list")
         runtime_conf = {}
         pipeline_name = None
         for feature in features:
@@ -346,16 +332,56 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
                 if pipeline_name == self.pipeline.default_pipeline_config["name"]:
                     break
 
-        self.logger.debug(f"Resolved Runtime Config: {runtime_conf}")
-        return pipeline_name, runtime_conf
+        pipeline_conf = self.pipeline.pipeline_configs_dict.get(
+            pipeline_name, self.pipeline.default_pipeline_config
+        )
+        self.logger.info(f"Resolved Runtime Config: {runtime_conf}")
+        return pipeline_conf, runtime_conf
+
+
+def get_pipeline_pages(
+    ref_id,
+    ref_type,
+    runtime_conf: dict[Any, Any],
+    pipeline_conf: dict[str, Any],
+) -> dict[int, Optional[list[int]]]:
+    config_pages = runtime_conf.get("pages", pipeline_conf.get("pages", None))
+
+    pages = {0: None}
+    if isinstance(config_pages, str):
+        pages = {0: sorted({int(n) for n in config_pages.split(",")})}
+    elif isinstance(config_pages, list):
+        if all(isinstance(x, int) for x in config_pages):
+            pages = {0: sorted({int(n) for n in config_pages})}
+        else:
+            # todo there is probably a better way to do this
+            ensure_exists("/tmp/marie")
+            with tempfile.TemporaryDirectory(dir="/tmp/marie") as temp_asset_dir:
+                temp_meta_path = download_asset(
+                    ref_id,
+                    ref_type,
+                    temp_asset_dir,
+                    s3_file_path=f"{ref_id}.meta.json",
+                )
+                if os.path.exists(temp_meta_path):
+                    existing_meta = load_json_file(temp_meta_path, True)
+
+            if existing_meta:
+                pages = filter_pages_by_classifier_results(config_pages, existing_meta)
+            else:
+                logger.warning(f"No meta file found for {ref_id}, using all pages")
+    elif isinstance(config_pages, dict):
+        pages = config_pages
+    elif config_pages is not None:
+        logger.warning(f"Unexpected pages attr {config_pages}, ignoring")
+    return pages
 
 
 def filter_pages_by_classifier_results(
     pages_config: list[dict], metadata: dict
 ) -> dict[int, list[int]]:
-
     # todo pre-populate with page count
-    result_pages = dict(int, list[int])
+    result_pages: dict[int, list[int]] = {}
     i = 0
     for rule in pages_config:
         if rule.get("type") != "classification":
@@ -391,20 +417,23 @@ def filter_pages_by_classifier_results(
             )
             continue
 
-        pages = target_results.get("classification", {}).get("pages", {})
+        classification_pages: Dict = target_results.get("classification", {}).get(
+            "pages", {}
+        )
 
+        matched_pages = []
         if method == "exclude":
             # fixme
             matched_pages = [
                 page_results["best"]["page"]
-                for page_results in pages.values()
+                for page_results in classification_pages.values()
                 if page_results.get("best", {}).get("classification")
                 not in filtered_classifications
             ]
         elif method in ("include", "split"):
             matched_pages = [
                 page_results["best"]["page"]
-                for page_results in pages.values()
+                for page_results in classification_pages.values()
                 if page_results.get("best", {}).get("classification")
                 in filtered_classifications
             ]
@@ -418,23 +447,27 @@ def filter_pages_by_classifier_results(
                     for k, v in result_pages.items():
                         result_pages[k] = [page for page in v if page in matched_pages]
             elif method == "split":
-                if result_pages:
-                    split_after = set(matched_pages)
-                    out = {}
-                    chunk: List[int] = []
-                    j = 0
-                    for _, group in sorted(result_pages.items()):
-                        for x in group:
-                            chunk.append(x)
-                            if x in split_after:
-                                out[j] = chunk
-                                j += 1
-                                chunk = []
-                        if chunk:
+                if not result_pages:
+                    result_pages = {i: list(classification_pages.keys())}
+
+                # if result_pages:
+                split_after = set(matched_pages)
+                out = {}
+                chunk: List[int] = []
+                j = 0
+                for _, group in sorted(result_pages.items()):
+                    for x in group:
+                        chunk.append(x)
+                        if x in split_after:
                             out[j] = chunk
                             j += 1
                             chunk = []
+                    if chunk:
+                        out[j] = chunk
+                        j += 1
+                        chunk = []
 
-                    result_pages = out, i = j
+                result_pages = out
+                i = j
 
     return result_pages

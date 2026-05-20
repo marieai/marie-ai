@@ -148,7 +148,7 @@ prefetch: 4
 executors:
   - name: med_page_classify_executor
     uses:
-      jtype: DocumentLLMPipelineExecutor
+      jtype: DocDeterminationPipelineExecutor
       metas:
         py_modules:
           - marie.executor.pipeline

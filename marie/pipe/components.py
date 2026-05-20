@@ -34,11 +34,21 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.ocr import CoordinateFormat, OcrEngine
 from marie.overlay.overlay import NoopOverlayProcessor, OverlayProcessor
 from marie.utils.asset_util import filename_supplier_page, split_filename
-from marie.utils.image_utils import detect_page_rotation, ensure_max_page_size
+from marie.utils.image_utils import (
+    detect_page_rotation,
+    ensure_max_page_size,
+    hash_frames_fast,
+)
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.tiff_ops import burst_tiff_frames
 from marie.utils.types import strtobool
 from marie.utils.utils import ensure_exists
+
+CLASSIFIER_REGISTRY = {
+    "transformers": TransformersPageLevelClassifier,
+    "transformers_document_level": TransformersDocumentLevelClassifier,
+    "splitter": TransformersSplittingClassifier,
+}
 
 
 def setup_overlay(
@@ -90,7 +100,7 @@ def setup_classifiers(
     key: str = "page_classifier",
     device: str = "cuda",
     ocr_engine: Optional[OcrEngine] = None,
-) -> dict[str, any]:
+) -> dict[str, Any]:
     """
     Setup the document classifiers (Document Classification) for the pipeline
     :param pipeline_config: pipeline configuration
@@ -150,35 +160,20 @@ def setup_classifiers(
                 f"Duplicate classifier name : {name} in group : {group}"
             )
 
-        if model_type == "transformers":
-            classifier = TransformersPageLevelClassifier(
-                model_name_or_path=model_name_or_path,
-                batch_size=batch_size,
-                use_gpu=use_cuda,
-                task=task,
-                id2label=id2label,
-                max_pages=max_pages,
+        classifier_class = CLASSIFIER_REGISTRY.get(model_type)
+        if classifier_class is None:
+            raise BadConfigSource(
+                f"Invalid classifier type : {model_type}. "
+                f"Supported types: {list(CLASSIFIER_REGISTRY.keys())}"
             )
-        elif model_type == "transformers_document_level":
-            classifier = TransformersDocumentLevelClassifier(
-                model_name_or_path=model_name_or_path,
-                batch_size=batch_size,
-                use_gpu=use_cuda,
-                task=task,
-                id2label=id2label,
-                max_pages=max_pages,
-            )
-        elif model_type == "splitter":
-            classifier = TransformersSplittingClassifier(
-                model_name_or_path=model_name_or_path,
-                batch_size=batch_size,
-                use_gpu=use_cuda,
-                task=task,
-                id2label=id2label,
-                max_pages=max_pages,
-            )
-        else:
-            raise ValueError(f"Invalid classifier type : {model_type}")
+        classifier = classifier_class(
+            model_name_or_path=model_name_or_path,
+            batch_size=batch_size,
+            use_gpu=use_cuda,
+            task=task,
+            id2label=id2label,
+            max_pages=max_pages,
+        )
 
         document_classifiers[group][name] = {
             "classifier": classifier,
@@ -194,7 +189,7 @@ def setup_indexers(
     key: str = "page_indexer",
     device: str = "cuda",
     ocr_engine: Optional[OcrEngine] = None,
-) -> dict[str, any]:
+) -> dict[str, Any]:
     """
     Setup the document indexers(Named Entity Recognition) for the pipeline
     :param pipeline_config: pipeline configuration
@@ -345,7 +340,7 @@ def setup_template_matching(
 
 
 def ocr_frames(
-    ocr_engines: dict[str, any],
+    ocr_engines: dict[str, Any],
     ref_id: str,
     frames: Union[List[np.ndarray], List[Image.Image]],
     root_asset_dir: str,
@@ -354,7 +349,7 @@ def ocr_frames(
     ps_mode: PSMode = PSMode.SPARSE,
     coord_format: CoordinateFormat = CoordinateFormat.XYWH,
     regions: [] = None,
-    runtime_conf: Optional[dict[str, any]] = None,
+    runtime_conf: Optional[dict[str, Any]] = None,
     engine_name: str = "default",
     save: bool = True,
 ) -> dict:
@@ -493,29 +488,36 @@ def rotate_frames(
     _, prefix, _ = split_filename(ref_id)
     json_path = os.path.join(output_dir, f"{prefix}_rotation.json")
 
+    if not force and os.path.exists(json_path):
+        existing_rotation_meta = load_json_file(json_path)
+        prev_hash = existing_rotation_meta.get("hash", None)
+        curr_hash = hash_frames_fast(frames)
+        if (
+            prev_hash == curr_hash
+        ):  # A double check that the source image has been rotated
+            logger.info(f"Skipping rotation for {ref_id} as frames have not changed")
+            return existing_rotation_meta, False
+
     any_rotated = False
-    if force or not os.path.exists(json_path):
-        page_rotation = dict()
-        enumerated_frames = tqdm(
-            enumerate(frames), total=len(frames), desc="page rotation", unit="frame"
-        )
-        for i, frame in enumerated_frames:
-            results = detect_page_rotation(frame)
-            if rotation := results.get("rotate", 0):
-                logger.info(f"Rotating frame {i} by {rotation} degrees")
-                frames[i] = np.rot90(frame, k=-rotation // 90)
-                changed, resized = ensure_max_page_size([frames[i]])
-                if changed:
-                    logger.info(f"Resized frame {i} after rotation")
-                    frames[i] = resized[0]
-                any_rotated = True
-            page_rotation[i] = results
-        results = {"any_rotated": any_rotated, "pages": page_rotation}
-        store_json_object(results, json_path)
-    else:
-        # TODO we only rotate the burst tiff not the multipage tiff, so we need to call with force
-        logger.info(f"Skipping Rotation : {json_path}")
-        results = load_json_file(json_path)
+    page_rotation = dict()
+
+    enumerated_frames = tqdm(
+        enumerate(frames), total=len(frames), desc="page rotation", unit="frame"
+    )
+    for i, frame in enumerated_frames:
+        results = detect_page_rotation(frame)
+        if rotation := results.get("rotate", 0):
+            logger.info(f"Rotating frame {i} by {rotation} degrees")
+            frames[i] = np.rot90(frame, k=-rotation // 90)
+            changed, resized = ensure_max_page_size([frames[i]])
+            if changed:
+                logger.info(f"Resized frame {i} after rotation")
+                frames[i] = resized[0]
+            any_rotated = True
+        page_rotation[i] = results
+    result_hash = hash_frames_fast(frames)
+    results = {"any_rotated": any_rotated, "hash": result_hash, "pages": page_rotation}
+    store_json_object(results, json_path)
 
     return results, any_rotated
 
@@ -593,8 +595,8 @@ def setup_llm_tasks(pipeline_config, document_indexers):
 
 
 def load_pipeline(
-    pipeline_config: dict[str, any], ocr_engine: Optional[OcrEngine] = None
-) -> tuple[str, dict[str, any], dict[str, any]]:
+    pipeline_config: dict[str, Any], ocr_engine: Optional[OcrEngine] = None
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
     # TODO : Need to refactor this (use the caller to get the device and then fallback to the pipeline config)
     # sometimes we have CUDA/GPU support but want to only use CPU
     use_cuda = torch.cuda.is_available()

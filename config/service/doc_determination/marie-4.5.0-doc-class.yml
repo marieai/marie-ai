@@ -134,7 +134,7 @@ prefetch: 4
 executors:
   - name: doc_determination_executor
     uses:
-      jtype: DocumentLLMPipelineExecutor #todo switch to new type
+      jtype: DocDeterminationPipelineExecutor
       metas:
         py_modules:
           - marie.executor.pipeline
@@ -158,19 +158,18 @@ executors:
               rotation:
                 enabled: False
               pages:
-                - method: exclude
-                  type: classification
-                  group: medical-page-classifier
-                  classifications: ["OTHER", "SUBSTITUTION-DOC", "BLANK", "ENVELOPE-BACK", "CHECK-BACK", "PATPAY-BACK"]
+#                - method: exclude
+#                  type: classification
+#                  group: medical-page-classifier
+#                  classifications: ["OTHER", "SUBSTITUTION-DOC", "BLANK", "ENVELOPE-BACK", "CHECK-BACK", "PATPAY-BACK"]
                 - method: split
                   type: classification
                   group: split-boundary-group
-                  classifications: [1]
+                  classifications: ["1"]
               page_classifier:
                 - model_name_or_path: 'rms/doc-determination-layoutlmv3'
                   name: 'doc_determination_layoutlmv3'
                   type: 'transformers_document_level'
-                  #          task: 'doc-determination-classification'
                   device: 'cuda'
                   enabled: True
                   batch_size: 1 # Quantup's batch_size is # of docs.

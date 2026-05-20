@@ -637,7 +637,9 @@ class TransformersDocumentLevelClassifier(BaseDocumentClassifier):
         """Predict single multi-pages document class"""
         results = []
         with torch.no_grad():
-            for batch in tqdm(data_loader, desc="Running Inference"):
+            for batch in tqdm(
+                data_loader, desc="Running Inference", total=len(data_loader)
+            ):
                 for k in batch:
                     batch[k] = batch[k].to(self.device)
                 outputs = self.model(**batch)
@@ -879,7 +881,9 @@ class TransformersSplittingClassifier(BaseDocumentClassifier):
         """Predict boundaries between pages for single LbxID"""
         results = []
         with torch.no_grad():
-            for batch in tqdm(data_loader, desc="Running Inference"):
+            for batch in tqdm(
+                data_loader, desc="Running Inference", total=len(data_loader)
+            ):
                 exclude_keys = {"seq_id", "general_page_idx"}
                 for k in batch:
                     if k not in exclude_keys:

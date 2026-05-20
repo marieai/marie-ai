@@ -59,7 +59,7 @@ class LLMPipeline(BasePipeline):
 
     def __init__(
         self,
-        pipelines_config: List[dict[str, any]] = None,
+        pipelines_config: List[dict[str, Any]] = None,
         device: Optional[str] = "cuda",
         silence_exceptions: bool = False,
         **kwargs,
@@ -67,9 +67,11 @@ class LLMPipeline(BasePipeline):
         super().__init__(silence_exceptions, **kwargs)
         self.pipelines_config = pipelines_config
         self.default_pipeline_config = None
+        self.pipeline_configs_dict = dict()
 
         for conf in pipelines_config:
             conf = conf["pipeline"]
+            self.pipeline_configs_dict[conf["name"]] = conf
             if conf.get("default", False):
                 if self.default_pipeline_config is not None:
                     raise BadConfigSource(
@@ -82,7 +84,7 @@ class LLMPipeline(BasePipeline):
 
         # sometimes we have CUDA/GPU support but want to only use CPU
         resolved_devices, _ = initialize_device_settings(
-            devices=[device], use_cuda=True, multi_gpu=False
+            devices=[device], multi_gpu=False
         )
         if len(resolved_devices) > 1:
             self.logger.warning(
@@ -91,10 +93,8 @@ class LLMPipeline(BasePipeline):
                 resolved_devices[0],
             )
         self.device = resolved_devices[0]
-        # self.has_cuda = True if self.device.type.startswith("cuda") else False
 
         self.ocr_engines = get_known_ocr_engines(self.device.type, "default")
-        # self.ocr_engines = {"default": None}
 
         (
             self.pipeline_name,
@@ -109,9 +109,10 @@ class LLMPipeline(BasePipeline):
         frames: List[np.ndarray],
         root_asset_dir: str,
         job_id: str,
-        runtime_conf: Optional[dict[str, any]] = None,
+        runtime_conf: Optional[dict[str, Any]] = None,
         queue_id: str = None,
-    ) -> dict[str, any]:
+        pages: Optional[List[int]] = None,
+    ) -> dict[str, Any]:
         if ref_type is None or ref_id is None:
             raise ValueError("Invalid reference type or id")
 
@@ -150,15 +151,17 @@ class LLMPipeline(BasePipeline):
             ref_id, ref_type, root_asset_dir, full_restore=True, overwrite=True
         )
 
+        # Rotate pages
         rotation_enabled = runtime_conf.get("rotation", {"enabled": False}).get(
             "enabled", True
         )
 
-        metadata["rotation"], any_rotated = (
-            rotate_frames(ref_id, frames, root_asset_dir, force=True)
-            if rotation_enabled
-            else (None, False)
-        )
+        if rotation_enabled:
+            metadata["rotation"], any_rotated = rotate_frames(
+                ref_id, frames, root_asset_dir, force=True
+            )
+        else:
+            any_rotated = False
 
         burst_frames(ref_id, frames, root_asset_dir, force=any_rotated)
 
@@ -170,15 +173,23 @@ class LLMPipeline(BasePipeline):
             root_asset_dir,
             queue_id=queue_id,
             force=any_rotated,
+            # save=pages is None,  # We only want to save OCR when run for all pages
         )
+        # if pages is not None and not any_rotated:
+        #     # If we did not do new OCR and are filtering by pages, we need to filter results
+        #     ocr_results[:] = [
+        #         result for i, result in enumerate(ocr_results, start=1) if i in pages
+        #     ]
         metadata["ocr"] = ocr_results
-        metadata = self.store_metadata(
-            ref_id, ref_type, root_asset_dir, metadata, save=False
-        )
 
         # Track pipline execution time for metrics
         with TimeContext(f"### {self.pipeline_name} LLMPipeline info") as tc:
-            self.execute_llm_pipeline(frames, metadata, ocr_results, runtime_conf)
+            self.execute_llm_pipeline(
+                frames,
+                metadata,
+                ocr_results,
+                runtime_conf,  # , pages
+            )
             metadata[f"delta_time_{self.pipeline_name}"] = tc.now()
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
@@ -186,7 +197,9 @@ class LLMPipeline(BasePipeline):
 
         return metadata
 
-    def execute_llm_pipeline(self, frames, metadata, ocr_results, runtime_conf: dict):
+    def execute_llm_pipeline(
+        self, frames, metadata, ocr_results, runtime_conf: dict, pages: List[int] = None
+    ):
         if self.classifier_groups:
             if "classifications" not in metadata:
                 metadata["classifications"] = []
@@ -252,6 +265,13 @@ class LLMPipeline(BasePipeline):
                         }
                     )
             if "classifiers" in results:
+                # if pages:
+                #     assert len(results["classifiers"]["pages"]) == len(pages)
+                #     for page, classification in zip(pages, results["classifiers"]["pages"].values()):
+                #         classification["best"]["page"] = page
+                #         for detail in classification["details"]:
+                #             detail["page"] = page
+
                 metadata["classifications"].append(
                     {
                         "group": group,
@@ -277,8 +297,7 @@ class LLMPipeline(BasePipeline):
         :param infix: infix to use for the metadata file, default is "meta" e.g. {ref_id}.meta.json
         :return: None
         """
-        filename, _, _ = split_filename(ref_id)
-        meta_filename = f"{filename}.{infix}.json"
+        meta_filename = f"{ref_id}.{infix}.json"
 
         if save:
             # Save pipeline checkpoint
@@ -312,8 +331,8 @@ class LLMPipeline(BasePipeline):
         regions: List = None,
         queue_id: str = None,
         job_id: str = None,
-        runtime_conf: Optional[dict[str, any]] = None,
-    ) -> dict[str, any]:
+        runtime_conf: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """
         Execute the pipeline for the document with the given frames.If regions are specified,
         then only the specified regions will be extracted from the document with the rest of the steps being skipped.
