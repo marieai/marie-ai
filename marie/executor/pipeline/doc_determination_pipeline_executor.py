@@ -86,6 +86,7 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
                 "ref_type": ref_type,
                 "job_id": job_id,
                 "pages": f"{len(frames)}",
+                "total_page_count": f"{len(frames)}",  # Here because downstream nodes may process onlt a subset of pages
             }
 
             metadata["rotation"], any_rotated = rotate_frames(
@@ -140,107 +141,7 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
             torch_gc()
             MDC.remove("request_id")
 
-    @requests(on=["/document/split"])
-    def split_boundary(
-        self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
-    ):
-        if not self.pipeline:
-            raise ValueError("pipeline not initialized.")
-
-        job_id, ref_id, ref_type, queue_id, payload = parse_parameters(parameters)
-
-        # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
-        pms_mode = PSMode.from_value(
-            value_from_payload_or_args(payload, "mode", default=str(PSMode.SPARSE))
-        )
-        coordinate_format = CoordinateFormat.from_value(
-            value_from_payload_or_args(
-                payload, "format", default=str(CoordinateFormat.XYWH)
-            )
-        )
-
-        if payload.get("regions", []):
-            raise NotImplementedError("Regions is not implemented yet")
-        if pms_mode is not PSMode.SPARSE:
-            raise NotImplementedError(f"PMS mode `{pms_mode}` is not implemented yet")
-        if coordinate_format is not CoordinateFormat.XYWH:
-            raise NotImplementedError(
-                f"Coordinate format `{coordinate_format}` is not implemented yet"
-            )
-
-        self.logger.info("Extracting Runtime Config from features list")
-        runtime_conf = {}
-        pipeline_names = [
-            conf["pipeline"]["name"] for conf in self.pipeline.pipelines_config
-        ]
-        for feature in payload.get("features", []):
-            if feature.get("type") != "pipeline":
-                continue
-            name = feature.get("name")
-            if name and any(name == p_name for p_name in pipeline_names):
-                runtime_conf = feature
-        self.logger.debug(f"Resolved Runtime Config: {runtime_conf}")
-
-        pages = runtime_conf.get("pages", None)
-        if isinstance(pages, str):
-            pages = sorted({int(n) for n in pages.split(",")})
-        elif isinstance(pages, list):
-            pages = sorted({int(n) for n in pages})
-        elif pages is not None:
-            self.logger.warning(f"Unexpected pages attr {pages}, ignoring")
-            pages = None
-
-        # TODO pages_to_exclude: ["OTHER", "SUBSTITUTION-DOC", "BLANK", "ENVELOPE-BACK", "CHECK-BACK", "PATPAY-BACK"]  # list of MPC to exclude from documents before classification. can be [].
-
-        frames = get_frames_from_docs(
-            docs, pages
-        )  # frames = get_frames_from_docs(docs)
-        root_asset_dir = create_working_dir(
-            frames,
-            ref_id=ref_id,
-            ref_type=ref_type,
-            queue_id=queue_id,
-            job_id=job_id,
-        )
-        try:
-            metadata = self.pipeline.execute_frames_pipeline(
-                ref_id=ref_id,
-                ref_type=ref_type,
-                frames=frames,
-                root_asset_dir=root_asset_dir,
-                job_id=job_id,
-                queue_id=queue_id,
-                runtime_conf=runtime_conf,
-            )
-            if metadata is None:
-                self.logger.error(f"Metadata is None, this should not happen")
-                raise ValueError("Pipeline Execution Error: Metadata is None")
-
-            include_ocr = value_from_payload_or_args(
-                payload, "return_ocr", default=False
-            )
-            # strip out ocr results from metadata
-            if not include_ocr and "ocr" in metadata:
-                del metadata["ocr"]
-
-            response = {
-                "status": "success",
-                "runtime_info": self.runtime_info,
-                # "metadata": metadata,
-            }
-            converted = safely_encoded(lambda x: x)(response)
-            return converted
-
-        except BaseException as error:
-            self.logger.error(f"Pipeline error : {error}", exc_info=True)
-            raise error
-
-        finally:
-            del frames
-            torch_gc()
-            MDC.remove("request_id")
-
-    @requests(on=["/document/index", "/document/classify"])
+    @requests(on=["/document/classify"])
     def handle(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
         if not self.pipeline:
             raise ValueError("pipeline not initialized.")
@@ -275,8 +176,9 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
         pages = get_pipeline_pages(ref_id, ref_type, runtime_conf, pipeline_conf)
 
         for index, page_set in pages.items():
+            self.logger.info(f"Processing page set {index} with {len(page_set)} pages")
             frames = get_frames_from_docs(docs, page_set)
-            root_asset_dir = create_working_dir(  # todo will it be an issue if different nodes have different hashes?
+            root_asset_dir = create_working_dir(
                 frames,
                 ref_id=ref_id,
                 ref_type=ref_type,
@@ -284,7 +186,6 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
                 job_id=job_id,
             )
             try:
-                # todo reconcile page numbers back
                 metadata = self.pipeline.execute_frames_pipeline(
                     ref_id=ref_id,
                     ref_type=ref_type,
@@ -293,6 +194,7 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
                     job_id=job_id,
                     queue_id=queue_id,
                     runtime_conf=runtime_conf,
+                    pages=page_set,
                 )
                 if metadata is None:
                     self.logger.error(f"Metadata is None, this should not happen")
@@ -374,100 +276,117 @@ def get_pipeline_pages(
         pages = config_pages
     elif config_pages is not None:
         logger.warning(f"Unexpected pages attr {config_pages}, ignoring")
+
+    logger.info(f"Resolved pipeline pages: {pages}")
     return pages
 
 
 def filter_pages_by_classifier_results(
     pages_config: list[dict], metadata: dict
-) -> dict[int, list[int]]:
-    # todo pre-populate with page count
-    result_pages: dict[int, list[int]] = {}
-    i = 0
-    for rule in pages_config:
-        if rule.get("type") != "classification":
-            logger.warning(
-                f"Page filtering is only implemented by classifications, ignoring rule: {rule}"
+) -> dict[int, Optional[list[int]]]:
+    try:
+        result_pages: dict[int, list[int]] = {}
+        i = 0
+        for rule in pages_config:
+            if rule.get("type") != "classification":
+                logger.warning(
+                    f"Page filtering is only implemented by classifications, ignoring rule: {rule}"
+                )
+                continue
+
+            group = rule.get("group")
+            method = rule.get("method")
+
+            if method not in ("include", "exclude", "split"):
+                logger.warning(
+                    f"Unknown page filtering method '{method}', skipping rule: {rule}"
+                )
+                continue
+
+            filtered_classifications = set(
+                str(r) for r in rule.get("classifications", [])
             )
-            continue
+            if not filtered_classifications:
+                logger.warning(
+                    f"No classifications specified for page filtering, skipping rule: {rule}"
+                )
+                continue
 
-        group = rule.get("group")
-        method = rule.get("method")
-
-        if method not in ("include", "exclude", "split"):
-            logger.warning(
-                f"Unknown page filtering method '{method}', skipping rule: {rule}"
+            # Find existing metadata results to filter on
+            target_results = next(
+                (
+                    c
+                    for c in metadata.get("classifications", [])
+                    if c.get("group") == group
+                ),
+                None,
             )
-            continue
+            if not target_results:
+                logger.warning(
+                    f"Classification '{group}' not found in metadata, skipping page filtering."
+                )
+                continue
 
-        filtered_classifications = set(rule.get("classifications", []))
-        if not filtered_classifications:
-            logger.warning(
-                f"No classifications specified for page filtering, skipping rule: {rule}"
+            classification_pages: Dict = target_results.get("classification", {}).get(
+                "pages", {}
             )
-            continue
 
-        # Find existing metadata results to filter on
-        target_results = next(
-            (c for c in metadata.get("classifications", []) if c.get("group") == group),
-            None,
-        )
-        if not target_results:
-            logger.warning(
-                f"Classification '{group}' not found in metadata, skipping page filtering."
-            )
-            continue
+            matched_pages = []
+            if method == "exclude":
+                # fixme
+                matched_pages = [
+                    page_results["best"]["page"]
+                    for page_results in classification_pages.values()
+                    if page_results.get("best", {}).get("classification")
+                    not in filtered_classifications
+                ]
+            elif method in ("include", "split"):
+                matched_pages = [
+                    page_results["best"]["page"]
+                    for page_results in classification_pages.values()
+                    if page_results.get("best", {}).get("classification")
+                    in filtered_classifications
+                ]
 
-        classification_pages: Dict = target_results.get("classification", {}).get(
-            "pages", {}
-        )
+            if matched_pages:
+                if method in ("include", "exclude"):
+                    if not result_pages:
+                        result_pages[i] = sorted(matched_pages)
+                        i = i + 1
+                    else:
+                        for k, v in result_pages.items():
+                            result_pages[k] = [
+                                page for page in v if page in matched_pages
+                            ]
+                elif method == "split":
+                    if not result_pages:
+                        result_pages = {
+                            i: list(int(k) for k in classification_pages.keys())
+                        }
 
-        matched_pages = []
-        if method == "exclude":
-            # fixme
-            matched_pages = [
-                page_results["best"]["page"]
-                for page_results in classification_pages.values()
-                if page_results.get("best", {}).get("classification")
-                not in filtered_classifications
-            ]
-        elif method in ("include", "split"):
-            matched_pages = [
-                page_results["best"]["page"]
-                for page_results in classification_pages.values()
-                if page_results.get("best", {}).get("classification")
-                in filtered_classifications
-            ]
-
-        if matched_pages:
-            if method in ("include", "exclude"):
-                if not result_pages:
-                    result_pages[i] = sorted(matched_pages)
-                    i = i + 1
-                else:
-                    for k, v in result_pages.items():
-                        result_pages[k] = [page for page in v if page in matched_pages]
-            elif method == "split":
-                if not result_pages:
-                    result_pages = {i: list(classification_pages.keys())}
-
-                # if result_pages:
-                split_after = set(matched_pages)
-                out = {}
-                chunk: List[int] = []
-                j = 0
-                for _, group in sorted(result_pages.items()):
-                    for x in group:
-                        chunk.append(x)
-                        if x in split_after:
+                    # if result_pages:
+                    split_after = set(matched_pages)
+                    out = {}
+                    chunk: List[int] = []
+                    j = 0
+                    for _, group in sorted(result_pages.items()):
+                        for x in group:
+                            chunk.append(x)
+                            if x in split_after:
+                                out[j] = chunk
+                                j += 1
+                                chunk = []
+                        if chunk:
                             out[j] = chunk
                             j += 1
                             chunk = []
-                    if chunk:
-                        out[j] = chunk
-                        j += 1
-                        chunk = []
 
-                result_pages = out
-                i = j
-
-    return result_pages
+                    result_pages = out
+                    i = j
+        return result_pages
+    except Exception as e:
+        logger.error(
+            f"Error while filtering pages with config: {pages_config} Error: {e}"
+        )
+        logger.warning("Continuing with processing all pages")
+        return {0: None}

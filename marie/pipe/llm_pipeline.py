@@ -139,13 +139,19 @@ class LLMPipeline(BasePipeline):
 
         # TODO: use runtime config to modify pipline features at runtime
 
-        metadata = {
+        metadata: dict[str, Any] = {
             "ref_id": ref_id,
             "ref_type": ref_type,
             "job_id": job_id,
             "pipeline": self.pipeline_name,
+            f"{self.pipeline_name}": {"pages": f"{len(frames)}", "page_numbers": pages},
             "pages": f"{len(frames)}",
         }
+
+        # metadata.setdefault("pipelines", {})[self.pipeline_name] = {
+        #     "pages": f"{len(frames)}",
+        #     "page_numbers": pages,
+        # }
 
         restore_assets(
             ref_id, ref_type, root_asset_dir, full_restore=True, overwrite=True
@@ -155,7 +161,6 @@ class LLMPipeline(BasePipeline):
         rotation_enabled = runtime_conf.get("rotation", {"enabled": False}).get(
             "enabled", True
         )
-
         if rotation_enabled:
             metadata["rotation"], any_rotated = rotate_frames(
                 ref_id, frames, root_asset_dir, force=True
@@ -173,24 +178,21 @@ class LLMPipeline(BasePipeline):
             root_asset_dir,
             queue_id=queue_id,
             force=any_rotated,
-            # save=pages is None,  # We only want to save OCR when run for all pages
         )
-        # if pages is not None and not any_rotated:
-        #     # If we did not do new OCR and are filtering by pages, we need to filter results
-        #     ocr_results[:] = [
-        #         result for i, result in enumerate(ocr_results, start=1) if i in pages
-        #     ]
+        if pages is not None and not any_rotated:
+            # If we did not do new OCR and are filtering by pages, we need to filter results
+            ocr_results[:] = [
+                result for i, result in enumerate(ocr_results) if i in pages
+            ]
         metadata["ocr"] = ocr_results
 
         # Track pipline execution time for metrics
         with TimeContext(f"### {self.pipeline_name} LLMPipeline info") as tc:
             self.execute_llm_pipeline(
-                frames,
-                metadata,
-                ocr_results,
-                runtime_conf,  # , pages
+                frames, metadata, ocr_results, runtime_conf, pages
             )
-            metadata[f"delta_time_{self.pipeline_name}"] = tc.now()
+
+            metadata[self.pipeline_name]["delta_time"] = tc.now()
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
         del metadata["ocr"]
@@ -198,7 +200,12 @@ class LLMPipeline(BasePipeline):
         return metadata
 
     def execute_llm_pipeline(
-        self, frames, metadata, ocr_results, runtime_conf: dict, pages: List[int] = None
+        self,
+        frames,
+        metadata,
+        ocr_results,
+        runtime_conf: dict,
+        pages: Optional[List[int]] = None,
     ):
         if self.classifier_groups:
             if "classifications" not in metadata:
@@ -262,20 +269,38 @@ class LLMPipeline(BasePipeline):
                             "group": group,
                             "task": task_name,
                             "index": index,
+                            "pipeline": self.pipeline_name,
                         }
                     )
             if "classifiers" in results:
-                # if pages:
-                #     assert len(results["classifiers"]["pages"]) == len(pages)
-                #     for page, classification in zip(pages, results["classifiers"]["pages"].values()):
-                #         classification["best"]["page"] = page
-                #         for detail in classification["details"]:
-                #             detail["page"] = page
+                # Re-assign original page numbers
+                if pages:
+                    zero_index_pages = results["classifiers"]["pages"]
+                    assert len(zero_index_pages) == len(pages)
+                    results["classifiers"]["page_numbers"] = pages
+                    reconciled_pages = {}
+                    for page, classification in zip(pages, zero_index_pages.values()):
+                        best = classification["best"]
+                        if hasattr(best, "page"):
+                            best.page = page
+                        else:
+                            best["page"] = page
+                        for detail in classification["details"]:
+                            detail["page"] = page
+                            for subclassifier in detail.get("sub_classifier", []):
+                                subclassifier["page"] = page
+                                for subclassifier_detail in subclassifier.get(
+                                    "details", []
+                                ):
+                                    subclassifier_detail["page"] = page
+                        reconciled_pages[page] = classification
+                    results["classifiers"]["pages"] = reconciled_pages
 
                 metadata["classifications"].append(
                     {
                         "group": group,
                         "classification": results["classifiers"],
+                        "pipeline": self.pipeline_name,
                     }
                 )
 

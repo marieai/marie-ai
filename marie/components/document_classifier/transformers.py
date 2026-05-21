@@ -695,12 +695,6 @@ class TransformersDocumentLevelClassifier(BaseDocumentClassifier):
             batchable_doc_pages = batchable_doc_pages[: self.max_pages]
 
         predictions = []
-        pb = tqdm(
-            total=len(batchable_doc_pages),
-            disable=not self.progress_bar,
-            desc="Classifying documents",
-        )
-
         dataset = DocumentClassificationInferenceDataset(
             batchable_doc_pages, self.processor
         )
@@ -716,8 +710,6 @@ class TransformersDocumentLevelClassifier(BaseDocumentClassifier):
         )
 
         predictions.extend(self.predict_document_class(data_loader))
-        pb.update(len(batchable_doc_pages))
-        pb.close()
 
         self.logger.info(f"Classification: {predictions[0]}")
         formatted_prediction = {
@@ -950,12 +942,6 @@ class TransformersSplittingClassifier(BaseDocumentClassifier):
             )
             batchable_doc_pages = batchable_doc_pages[: self.max_pages]
 
-        pb = tqdm(
-            total=len(batchable_doc_pages),
-            disable=not self.progress_bar,
-            desc="Classifying documents",
-        )
-
         dataset = BoundaryDetectionInferenceDataset(
             {
                 1: {
@@ -979,8 +965,6 @@ class TransformersSplittingClassifier(BaseDocumentClassifier):
         )
 
         predictions = self.predict_document_boundaries(data_loader)
-        pb.update(len(batchable_doc_pages))
-        pb.close()
 
         # TODO fixme
         predictions.append(

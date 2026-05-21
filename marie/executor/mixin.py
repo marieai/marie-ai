@@ -62,7 +62,7 @@ class StorageMixin:
                     storage_handler=self.storage_handler,
                     storage_conf=storage_conf,
                 )
-                # self.logger.info("Asset tracking enabled")
+                self.logger.info("Asset tracking enabled")
             except Exception as e:
                 if silence_exceptions:
                     self.logger.warning(

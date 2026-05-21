@@ -1,7 +1,8 @@
 import os
 from collections import defaultdict
 from functools import partial
-from typing import List, Optional, Union
+from pathlib import Path
+from typing import Any, List, Optional, Union
 
 import numpy as np
 import torch
@@ -467,6 +468,10 @@ def burst_frames(
     )
     if force or file_count != len(frames):
         logger.info(f"Bursting frames for {ref_id}")
+        # Clear existing burst dir
+        for t in Path(output_dir).iterdir():
+            if t.is_file():
+                t.unlink()
         burst_tiff_frames(frames, output_dir, filename_generator=filename_generator)
     else:
         logger.info(f"Skipping bursting for {ref_id}")
@@ -528,6 +533,13 @@ def update_existing_meta(existing_meta: dict, metadata: dict):
     if not metadata:
         return existing_meta
 
+    def _merge_key(
+        unit: dict[str, Any], identifier_key: str
+    ) -> tuple[Any | None, tuple[int, ...]]:
+        pages: List[int] = unit.get("classification", {}).get("page_numbers", [])
+        identification = unit.get(identifier_key)
+        return identification, tuple(sorted(pages))
+
     # List elements are overridden on dict.update, so they need to be merged independently
     # New metadata lists take priority when handling duplicate elements with the same identifier value
     meta_lists = [("classifications", "group"), ("indexers", "group")]
@@ -537,12 +549,16 @@ def update_existing_meta(existing_meta: dict, metadata: dict):
         new_list = metadata.get(category, [])
 
         # Determine if existing keys are stale
-        existing_keys = {unit[identifier]: False for unit in existing_list}
+        existing_keys = {_merge_key(unit, identifier): False for unit in existing_list}
         for unit in new_list:
-            existing_keys[unit[identifier]] = unit[identifier] in existing_keys
+            key = _merge_key(unit, identifier)
+            existing_keys[key] = key in existing_keys
+
         # Filter out stale categories
         merged_list = [
-            unit for unit in existing_list if not existing_keys[unit[identifier]]
+            unit
+            for unit in existing_list
+            if not existing_keys[_merge_key(unit, identifier)]
         ]
         merged_list.extend(new_list)
 

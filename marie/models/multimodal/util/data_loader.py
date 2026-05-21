@@ -76,7 +76,7 @@ class DocumentClassificationInferenceDataset(Dataset):
                     "pixel_values": encoding["pixel_values"].squeeze(0),
                     "page_label": torch.tensor(
                         0
-                    ),  # dummy label for inference #todo MPC classifications should go here
+                    ),  # dummy label for inference # MPC classifications should go here
                 }
             )
 
