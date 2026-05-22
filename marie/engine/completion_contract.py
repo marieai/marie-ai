@@ -135,8 +135,9 @@ class QueuedCompletionEnvelope:
     timeout_seconds: Optional[float] = None
     traceparent: Optional[str] = None
     tracestate: Optional[str] = None
-    metadata: Optional[dict[str, str]] = None
+    metadata: Optional[dict[str, Any]] = None
     dispatch_profile_key: Optional[str] = None
+    estimated_cost_units: Optional[int] = None
 
     @property
     def model(self) -> str:

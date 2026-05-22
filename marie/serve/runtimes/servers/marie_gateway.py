@@ -331,7 +331,11 @@ class MarieServerGateway(CompositeServer):
         )
         self.service_events_queue = asyncio.Queue(maxsize=512)
         self.state_events_queue = asyncio.Queue(maxsize=2048)  # tends to be chattier
-        self.llm_dispatch_runtime = GatewayLlmDispatchRuntime(logger=self.logger)
+        llm_queue_config = self.args.get("llm_queue", {}) or {}
+        self.llm_dispatch_runtime = GatewayLlmDispatchRuntime(
+            logger=self.logger,
+            config=llm_queue_config,
+        )
         self._background_services_shutdown = False
         self._background_services_lock = asyncio.Lock()
 

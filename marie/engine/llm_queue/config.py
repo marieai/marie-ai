@@ -9,6 +9,7 @@ from typing import Optional
 from marie.utils.types import to_bool
 
 DEFAULT_MAX_INLINE_PAYLOAD_BYTES = 16 * 1024 * 1024
+DEFAULT_LLM_QUEUE_POOL_ID = "default"
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,12 @@ class LlmQueueConfig:
                 str(max(1, alive_ttl // 3)),
             )
         )
+        pool_id_value = pool_id or os.getenv(
+            "LLM_QUEUE_POOL_ID",
+            DEFAULT_LLM_QUEUE_POOL_ID,
+        )
+        max_batch_items = int(os.getenv("LLM_QUEUE_MAX_BATCH_ITEMS", "8"))
+
         return cls(
             enabled=(
                 to_bool(os.getenv("LLM_QUEUE_ENABLED"), False)
@@ -52,7 +59,7 @@ class LlmQueueConfig:
                 else enabled
             ),
             valkey_url=valkey_url or os.getenv("LLM_QUEUE_VALKEY_URL"),
-            pool_id=pool_id or os.getenv("LLM_QUEUE_POOL_ID", "default"),
+            pool_id=pool_id_value,
             producer_id=producer_id
             or os.getenv("LLM_QUEUE_PRODUCER_ID")
             or _default_producer_id(),
@@ -67,7 +74,7 @@ class LlmQueueConfig:
             dispatch_pop_timeout_seconds=float(
                 os.getenv("LLM_QUEUE_DISPATCH_POP_TIMEOUT_SECONDS", "1.0")
             ),
-            max_batch_items=int(os.getenv("LLM_QUEUE_MAX_BATCH_ITEMS", "8")),
+            max_batch_items=max_batch_items,
             max_batch_wait_ms=int(os.getenv("LLM_QUEUE_MAX_BATCH_WAIT_MS", "100")),
             max_buffered_requests_per_pool=int(
                 os.getenv("LLM_QUEUE_MAX_BUFFERED_REQUESTS_PER_POOL", "32")

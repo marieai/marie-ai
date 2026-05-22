@@ -70,6 +70,36 @@ class DispatchMetrics:
                 description="Current queued request depth per LLM dispatch runtime",
                 unit="{requests}",
             )
+            self._meter.create_observable_gauge(
+                name="marie_llm_dispatch_lane_depth",
+                callbacks=[self._observe_lane_depth],
+                description="Current queued request depth per DRR lane",
+                unit="{requests}",
+            )
+            self._meter.create_observable_gauge(
+                name="marie_llm_dispatch_lane_inflight",
+                callbacks=[self._observe_lane_inflight],
+                description="Current in-flight request count per DRR lane",
+                unit="{requests}",
+            )
+            self._meter.create_observable_gauge(
+                name="marie_llm_dispatch_lane_deficit",
+                callbacks=[self._observe_lane_deficit],
+                description="Current DRR deficit counter per lane",
+                unit="{cost_units}",
+            )
+            self._meter.create_observable_gauge(
+                name="marie_llm_dispatch_lane_quantum",
+                callbacks=[self._observe_lane_quantum],
+                description="Configured DRR quantum per lane",
+                unit="{cost_units}",
+            )
+            self._meter.create_observable_gauge(
+                name="marie_llm_dispatch_lane_oldest_pending_seconds",
+                callbacks=[self._observe_lane_oldest_pending_seconds],
+                description="Age of the oldest pending request per DRR lane",
+                unit="s",
+            )
 
     def record_batch(
         self,
@@ -174,6 +204,49 @@ class DispatchMetrics:
                     },
                 )
             )
+        return observations
+
+    def _observe_lane_depth(self, _options: Any):
+        return self._observe_lane_metric("request_queue_depth")
+
+    def _observe_lane_inflight(self, _options: Any):
+        return self._observe_lane_metric("inflight")
+
+    def _observe_lane_deficit(self, _options: Any):
+        return self._observe_lane_metric("deficit")
+
+    def _observe_lane_quantum(self, _options: Any):
+        return self._observe_lane_metric("quantum")
+
+    def _observe_lane_oldest_pending_seconds(self, _options: Any):
+        return self._observe_lane_metric("oldest_pending_age_seconds")
+
+    def _observe_lane_metric(self, value_key: str):
+        snapshot = dispatch_runtime_snapshot()
+        observations = []
+        contract_version = str(snapshot.get("contract_version", "unknown"))
+        for dispatcher in snapshot.get("dispatchers", []):
+            dispatcher_id = str(dispatcher.get("dispatcher_id", ""))
+            fabric_group_id = str(dispatcher.get("fabric_group_id", ""))
+            gateway_id = str(dispatcher.get("gateway_id", ""))
+            scheduler_policy = str(dispatcher.get("scheduler_policy", "fifo"))
+            for lane in dispatcher.get("lanes") or []:
+                value = lane.get(value_key)
+                if value is None:
+                    continue
+                observations.append(
+                    Observation(
+                        value,
+                        {
+                            "contract_version": contract_version,
+                            "dispatcher_id": dispatcher_id,
+                            "fabric_group_id": fabric_group_id,
+                            "gateway_id": gateway_id,
+                            "scheduler_policy": scheduler_policy,
+                            "pool_id": str(lane.get("pool_id", "")),
+                        },
+                    )
+                )
         return observations
 
 

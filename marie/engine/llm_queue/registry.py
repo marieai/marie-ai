@@ -70,7 +70,7 @@ def dispatch_runtime_live_state(limit_per_pool: int = 50) -> dict[str, Any]:
 
     pending_requests: list[dict[str, Any]] = []
     inflight_requests: list[dict[str, Any]] = []
-    sampled_pools: set[str] = set()
+    sampled_dispatch_keys: set[str] = set()
     pending_sample_counts_by_pool: dict[str, int] = {}
 
     for dispatcher in dispatchers:
@@ -79,9 +79,16 @@ def dispatch_runtime_live_state(limit_per_pool: int = 50) -> dict[str, Any]:
         except Exception:  # pragma: no cover - defensive
             continue
 
+        dispatcher_id = str(health.get("dispatcher_id") or "")
         pool_id = str(health.get("pool_id") or "")
-        if pool_id and pool_id not in sampled_pools:
-            sampled_pools.add(pool_id)
+        scheduler_policy = str(health.get("scheduler_policy") or "fifo")
+        sample_key = (
+            f"dispatcher:{dispatcher_id}"
+            if scheduler_policy == "drr"
+            else f"pool:{pool_id}"
+        )
+        if pool_id and sample_key not in sampled_dispatch_keys:
+            sampled_dispatch_keys.add(sample_key)
             try:
                 pool_requests = dispatcher.sample_pending_requests(limit_per_pool)
                 pending_requests.extend(pool_requests)
@@ -143,6 +150,72 @@ def dispatch_runtime_live_state(limit_per_pool: int = 50) -> dict[str, Any]:
                 for item in dispatcher_rows
             ),
         },
+        "pool_config": _pool_config_rows(dispatcher_rows),
         "live_requests": live_requests,
         "dispatchers": dispatcher_rows,
     }
+
+
+def _pool_config_rows(dispatchers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for dispatcher in dispatchers:
+        scheduler_policy = str(dispatcher.get("scheduler_policy") or "fifo")
+        if scheduler_policy == "drr":
+            for lane in dispatcher.get("lanes") or []:
+                rows.append(
+                    {
+                        "fabric_group_id": dispatcher.get("fabric_group_id"),
+                        "gateway_id": dispatcher.get("gateway_id"),
+                        "dispatcher_id": dispatcher.get("dispatcher_id"),
+                        "scheduler_policy": scheduler_policy,
+                        "pool_id": lane.get("pool_id"),
+                        "display_name": lane.get("display_name"),
+                        "enabled": True,
+                        "quantum": lane.get("quantum"),
+                        "deficit": lane.get("deficit"),
+                        "inflight": lane.get("inflight"),
+                        "request_queue_depth": lane.get("request_queue_depth"),
+                        "oldest_pending_age_seconds": lane.get(
+                            "oldest_pending_age_seconds"
+                        ),
+                        "head_cost_units": lane.get("head_cost_units"),
+                        "min_concurrent": lane.get("min_concurrent"),
+                        "max_concurrent": lane.get("max_concurrent"),
+                        "max_burst_per_visit": lane.get("max_burst_per_visit"),
+                        "endpoint_url": lane.get("endpoint_url"),
+                    }
+                )
+            continue
+
+        pool_id = dispatcher.get("pool_id")
+        if not pool_id:
+            continue
+        rows.append(
+            {
+                "fabric_group_id": dispatcher.get("fabric_group_id"),
+                "gateway_id": dispatcher.get("gateway_id"),
+                "dispatcher_id": dispatcher.get("dispatcher_id"),
+                "scheduler_policy": scheduler_policy,
+                "pool_id": pool_id,
+                "display_name": None,
+                "enabled": bool(dispatcher.get("enabled", True)),
+                "quantum": None,
+                "deficit": None,
+                "inflight": dispatcher.get("inflight_request_count"),
+                "request_queue_depth": dispatcher.get("request_queue_depth"),
+                "oldest_pending_age_seconds": None,
+                "head_cost_units": None,
+                "min_concurrent": None,
+                "max_concurrent": None,
+                "max_burst_per_visit": None,
+                "endpoint_url": dispatcher.get("endpoint_url"),
+            }
+        )
+
+    rows.sort(
+        key=lambda item: (
+            str(item.get("fabric_group_id") or ""),
+            str(item.get("pool_id") or ""),
+        )
+    )
+    return rows

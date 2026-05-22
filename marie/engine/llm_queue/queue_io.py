@@ -24,6 +24,8 @@ class ListQueueClient(Protocol):
         self, pool_id: str, timeout: float
     ) -> Optional[QueuedCompletionEnvelope]: ...
 
+    def peek_request(self, pool_id: str) -> Optional[QueuedCompletionEnvelope]: ...
+
     def try_pop_request(self, pool_id: str) -> Optional[QueuedCompletionEnvelope]: ...
 
     def push_request_front(self, request: QueuedCompletionEnvelope) -> None: ...
@@ -73,6 +75,12 @@ class ValkeyListQueueClient:
 
     def try_pop_request(self, pool_id: str) -> Optional[QueuedCompletionEnvelope]:
         payload = self._client.lpop(request_queue_key(pool_id))
+        if payload is None:
+            return None
+        return QueuedCompletionEnvelope.from_json(payload)
+
+    def peek_request(self, pool_id: str) -> Optional[QueuedCompletionEnvelope]:
+        payload = self._client.lindex(request_queue_key(pool_id), 0)
         if payload is None:
             return None
         return QueuedCompletionEnvelope.from_json(payload)
@@ -158,6 +166,14 @@ class InMemoryListQueueClient:
             if not self._lists[queue_key]:
                 return None
             return QueuedCompletionEnvelope.from_json(self._lists[queue_key].popleft())
+
+    def peek_request(self, pool_id: str) -> Optional[QueuedCompletionEnvelope]:
+        with self._condition:
+            self._cleanup_locked()
+            queue_key = request_queue_key(pool_id)
+            if not self._lists[queue_key]:
+                return None
+            return QueuedCompletionEnvelope.from_json(self._lists[queue_key][0])
 
     def push_request_front(self, request: QueuedCompletionEnvelope) -> None:
         with self._condition:

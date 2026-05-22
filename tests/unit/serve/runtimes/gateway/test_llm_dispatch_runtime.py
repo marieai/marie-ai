@@ -4,12 +4,24 @@ from unittest import mock
 import pytest
 
 from marie.engine.llm_queue.config import (
+    DEFAULT_LLM_QUEUE_POOL_ID,
     DEFAULT_MAX_INLINE_PAYLOAD_BYTES,
     LlmQueueConfig,
+)
+from marie.engine.llm_queue.dispatcher import DrrQueuedBatchDispatcher
+from marie.engine.llm_queue.scheduler import DrrLaneConfig
+from marie.engine.llm_queue.scheduler_config import (
+    DatabaseSchedulerConfigSource,
+    LlmQueueSchedulerConfig,
+    StaticSchedulerConfigSource,
+    scheduler_config_from_mapping,
 )
 from marie.excepts import RuntimeFailToStart
 from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (
     GatewayLlmDispatchRuntime,
+    _build_dispatcher,
+    _scheduler_fabric_group_id,
+    _scheduler_repository_config,
 )
 from marie.serve.runtimes.servers.marie_gateway import MarieServerGateway
 
@@ -63,11 +75,14 @@ class _FakeQueueClient:
 
 
 class _FakeDispatcher:
-    def __init__(self, *, queue_client, client, client_factory, config, logger):
+    def __init__(
+        self, *, queue_client, client, client_factory, config, scheduler_config, logger
+    ):
         self.queue_client = queue_client
         self.client = client
         self.client_factory = client_factory
         self.config = config
+        self.scheduler_config = scheduler_config
         self.logger = logger
         self.start_calls = 0
         self.stop_calls = 0
@@ -88,6 +103,16 @@ class _FakeDispatcher:
             "running": self.running,
             "request_queue_depth": 0,
         }
+
+
+class _FakeSchedulerConfigRepository:
+    def __init__(self, payload):
+        self.payload = payload
+        self.fabric_group_ids = []
+
+    def load_scheduler_config(self, fabric_group_id: str):
+        self.fabric_group_ids.append(fabric_group_id)
+        return self.payload
 
 
 class _FakeOpenAIClient:
@@ -133,16 +158,26 @@ async def test_gateway_llm_dispatch_runtime_starts_and_stops_cleanly():
         return client
 
     def dispatcher_factory(
-        *, queue_client, client, client_factory, config, logger, backend_address
+        *,
+        queue_client,
+        client,
+        client_factory,
+        client_factory_for_base_url,
+        config,
+        scheduler_config,
+        logger,
+        backend_address,
     ):
         assert backend_address == "http://queue-backend:4000/v1"
         assert client is None
         assert callable(client_factory)
+        assert callable(client_factory_for_base_url)
         dispatcher = _FakeDispatcher(
             queue_client=queue_client,
             client=client,
             client_factory=client_factory,
             config=config,
+            scheduler_config=scheduler_config,
             logger=logger,
         )
         dispatchers.append(dispatcher)
@@ -189,6 +224,200 @@ def test_llm_queue_config_reads_runtime_fabric_identity_from_env():
 
     assert config.fabric_group_id == "default"
     assert config.gateway_id == "gateway-localhost"
+
+
+def test_database_scheduler_config_source_reads_repository_mapping():
+    repository = _FakeSchedulerConfigRepository(
+        {
+            "policy": "drr",
+            "total_concurrent_dispatch": 60,
+            "lanes": [
+                {
+                    "pool_id": "interactive",
+                    "quantum": 8,
+                    "min_concurrent": 10,
+                },
+                {
+                    "pool_id": "backfill",
+                    "quantum": 1,
+                    "max_burst_per_visit": 1,
+                },
+            ],
+        }
+    )
+
+    config = DatabaseSchedulerConfigSource(
+        repository=repository,
+        fabric_group_id="fabric-a",
+    ).load()
+
+    assert config.is_drr is True
+    assert config.total_concurrent_dispatch == 60
+    assert repository.fabric_group_ids == ["fabric-a"]
+    assert [lane.pool_id for lane in config.lanes] == [
+        "interactive",
+        "backfill",
+        DEFAULT_LLM_QUEUE_POOL_ID,
+    ]
+    assert config.lanes[0].min_concurrent == 10
+    assert config.lanes[1].max_burst_per_visit == 1
+
+
+def test_scheduler_config_rejects_unknown_policy():
+    with pytest.raises(ValueError, match="Unsupported LLM queue scheduler policy"):
+        scheduler_config_from_mapping({"policy": "weighted"})
+
+
+def test_runtime_scheduler_repository_config_uses_llm_queue_block():
+    config = {
+        "fabric_group_id": "default",
+        "scheduler": {
+            "storage": {
+                "psql": {
+                    "provider": "postgresql",
+                    "hostname": "postgres",
+                    "port": 5432,
+                    "username": "marie",
+                    "password": "test",
+                    "database": "marie",
+                    "schema": "marie_scheduler",
+                }
+            }
+        },
+    }
+
+    repository_config = _scheduler_repository_config(config)
+
+    assert repository_config is not None
+    assert repository_config["hostname"] == "postgres"
+    assert repository_config["schema"] == "marie_scheduler"
+    assert _scheduler_fabric_group_id(_queue_config(), config) == "default"
+
+
+def test_build_dispatcher_uses_drr_dispatcher_for_drr_policy():
+    scheduler_config = LlmQueueSchedulerConfig(
+        policy="drr",
+        total_concurrent_dispatch=3,
+        lanes=(
+            DrrLaneConfig(pool_id="interactive", quantum=2),
+            DrrLaneConfig(pool_id="backfill", quantum=1),
+        ),
+    )
+
+    dispatcher = _build_dispatcher(
+        queue_client=_FakeQueueClient("redis://valkey:6379/0"),
+        client=object(),
+        config=_queue_config(),
+        scheduler_config=scheduler_config,
+        logger=_Logger(),
+        backend_address="http://queue-backend:4000/v1",
+    )
+
+    assert isinstance(dispatcher, DrrQueuedBatchDispatcher)
+    assert dispatcher.scheduler.total_concurrent_dispatch == 3
+
+
+def test_build_dispatcher_builds_lane_endpoint_adapters():
+    scheduler_config = LlmQueueSchedulerConfig(
+        policy="drr",
+        total_concurrent_dispatch=1,
+        lanes=(
+            DrrLaneConfig(
+                pool_id="interactive",
+                endpoint_url="http://user:secret@interactive:4000/v1",
+            ),
+        ),
+    )
+
+    def client_factory_for_base_url(base_url):
+        assert base_url == "http://user:secret@interactive:4000/v1"
+        return lambda: object()
+
+    dispatcher = _build_dispatcher(
+        queue_client=_FakeQueueClient("redis://valkey:6379/0"),
+        client=None,
+        client_factory=lambda: object(),
+        client_factory_for_base_url=client_factory_for_base_url,
+        config=_queue_config(),
+        scheduler_config=scheduler_config,
+        logger=_Logger(),
+        backend_address="http://queue-backend:4000/v1",
+    )
+
+    lane = next(
+        lane
+        for lane in dispatcher.health()["lanes"]
+        if lane["pool_id"] == "interactive"
+    )
+    assert lane["pool_id"] == "interactive"
+    assert lane["endpoint_url"] == "http://interactive:4000/v1"
+
+
+@pytest.mark.asyncio
+async def test_gateway_runtime_uses_injected_scheduler_config_source():
+    queue_clients = []
+    dispatchers = []
+    scheduler_config = LlmQueueSchedulerConfig(
+        policy="drr",
+        total_concurrent_dispatch=2,
+        lanes=(DrrLaneConfig(pool_id="interactive"), DrrLaneConfig(pool_id="backfill")),
+    )
+
+    def queue_client_factory(url: str):
+        client = _FakeQueueClient(url)
+        queue_clients.append(client)
+        return client
+
+    def dispatcher_factory(
+        *,
+        queue_client,
+        client,
+        client_factory,
+        client_factory_for_base_url,
+        config,
+        scheduler_config,
+        logger,
+        backend_address,
+    ):
+        dispatcher = _FakeDispatcher(
+            queue_client=queue_client,
+            client=client,
+            client_factory=client_factory,
+            config=config,
+            scheduler_config=scheduler_config,
+            logger=logger,
+        )
+        dispatchers.append(dispatcher)
+        return dispatcher
+
+    runtime = GatewayLlmDispatchRuntime(
+        logger=_Logger(),
+        queue_config=_queue_config(),
+        queue_client_factory=queue_client_factory,
+        dispatcher_factory=dispatcher_factory,
+        scheduler_config_source=StaticSchedulerConfigSource(scheduler_config),
+    )
+
+    with mock.patch.dict(
+        "os.environ",
+        {
+            "OPENAI_API_KEY": "test-key",
+            "OPENAI_API_BASE": "http://queue-backend:4000/v1",
+        },
+    ):
+        await runtime.start()
+        await runtime.stop()
+
+    assert queue_clients[0].depth_calls == [
+        "interactive",
+        "backfill",
+        DEFAULT_LLM_QUEUE_POOL_ID,
+    ]
+    assert [lane.pool_id for lane in dispatchers[0].scheduler_config.lanes] == [
+        "interactive",
+        "backfill",
+        DEFAULT_LLM_QUEUE_POOL_ID,
+    ]
 
 
 @pytest.mark.asyncio

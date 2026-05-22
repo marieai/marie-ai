@@ -160,6 +160,13 @@ class _FakeSyncQueueBackend:
                 return None
             return values.pop(0)
 
+    def lindex(self, key, index):
+        with self._lock:
+            values = self.lists.get(key, [])
+            if not values:
+                return None
+            return values[index]
+
     def blpop(self, key, timeout):
         with self._lock:
             self.blpop_calls.append((key, timeout))
@@ -357,6 +364,11 @@ def test_valkey_list_queue_client_round_trip_and_pipeline_ttl(monkeypatch):
     )
 
     queue_client.push_request(request)
+    peeked_request = queue_client.peek_request("default")
+    assert peeked_request is not None
+    assert peeked_request.request_id == "req-1"
+    assert queue_client.request_queue_depth("default") == 1
+
     sampled_requests = queue_client.sample_requests("default", limit=10)
     assert [item.request_id for item in sampled_requests] == ["req-1"]
     restored_request = queue_client.pop_request("default", timeout=0.1)
@@ -833,16 +845,21 @@ def test_dispatch_runtime_live_state_merges_pending_and_inflight_requests():
         runtime_state = dispatch_runtime_live_state(limit_per_pool=10)
         summary = runtime_state["runtime_summary"]
         live_requests = runtime_state["live_requests"]
+        pool_config = runtime_state["pool_config"]
 
         assert summary["pending_request_count"] == 1
         assert summary["pending_request_sample_count"] == 1
         assert summary["inflight_request_count"] == 1
         assert summary["live_request_sample_limit_per_pool"] == 10
+        assert pool_config[0]["scheduler_policy"] == "fifo"
+        assert pool_config[0]["pool_id"] == "default"
+        assert pool_config[0]["request_queue_depth"] == 1
 
         by_id = {item["request_id"]: item for item in live_requests}
         assert by_id["req-pending"]["state_source"] == "valkey"
         assert by_id["req-pending"]["lifecycle_stage"] == "pending"
         assert by_id["req-pending"]["dispatcher_id"] is None
+        assert by_id["req-pending"]["estimated_cost_units"] == 1
         assert by_id["req-pending"]["request_summary"] == "user: second prompt"
 
         assert by_id["req-inflight"]["state_source"] == "dispatcher"

@@ -4,6 +4,7 @@ import asyncio
 import threading
 import time
 import uuid
+from collections import Counter
 from typing import Any, List, Optional
 
 from openinference.semconv.trace import SpanAttributes
@@ -23,6 +24,11 @@ from marie.engine.llm_queue.metrics import dispatch_metrics
 from marie.engine.llm_queue.queue_io import ListQueueClient
 from marie.engine.llm_queue.registry import register_dispatcher, unregister_dispatcher
 from marie.engine.llm_queue.result_types import BatchResult
+from marie.engine.llm_queue.scheduler import (
+    DrrLaneConfig,
+    DrrLaneScheduler,
+    request_cost_units,
+)
 from marie.instrumentation import get_tracer, set_llm_io, start_as_current_span
 from marie.instrumentation.openinference import infer_llm_system
 
@@ -58,20 +64,30 @@ class QueuedBatchDispatcher:
         self._offline_producer_replies_dropped = 0
         self._inflight_requests: dict[str, dict[str, object]] = {}
 
+    def _execution_adapter_for(self, request: QueuedCompletionEnvelope):
+        return self.execution_adapter
+
     def run_once(self) -> int:
         first_request = self._pop_first_live_request()
         if first_request is None:
             return 0
 
+        return self._run_popped_batch([first_request], fill_compatible=True)
+
+    def _run_popped_batch(
+        self,
+        first_requests: List[QueuedCompletionEnvelope],
+        *,
+        fill_compatible: bool,
+    ) -> int:
         started_at = time.monotonic()
-        batch = [first_request]
-        batch.extend(self._fill_batch(first_request))
+        batch = list(first_requests)
+        if fill_compatible and len(batch) == 1:
+            batch.extend(self._fill_batch(batch[0]))
         results = self._execute_batch(batch)
         self._publish_replies(batch, results)
-        dispatch_metrics.record_batch(
-            pool_id=self.config.pool_id,
-            dispatcher_id=self.dispatcher_id,
-            batch_size=len(batch),
+        self._record_batches(
+            batch,
             duration_seconds=max(0.0, time.monotonic() - started_at),
         )
         with self._state_lock:
@@ -138,6 +154,12 @@ class QueuedBatchDispatcher:
                     thread and thread.is_alive() and not self._stop_event.is_set()
                 ),
                 "last_error": self._last_error,
+                "scheduler_policy": "fifo",
+                "endpoint_url": getattr(
+                    self.execution_adapter,
+                    "backend_address",
+                    None,
+                ),
                 "processed_batches": self._processed_batches,
                 "processed_items": self._processed_items,
                 "last_processed_at": self._last_processed_at,
@@ -209,7 +231,7 @@ class QueuedBatchDispatcher:
                 with self._state_lock:
                     self._offline_producer_requests_dropped += 1
                 dispatch_metrics.record_request_drop(
-                    pool_id=self.config.pool_id,
+                    pool_id=request.pool_id,
                     dispatcher_id=self.dispatcher_id,
                     reason="offline_producer_before_dispatch",
                 )
@@ -228,13 +250,13 @@ class QueuedBatchDispatcher:
                 break
 
             try:
-                candidate = self.queue_client.try_pop_request(self.config.pool_id)
+                candidate = self.queue_client.try_pop_request(first_request.pool_id)
             except Exception as exc:
                 self.logger.error("Dropping malformed queue request: %r", exc)
                 with self._state_lock:
                     self._malformed_requests_dropped += 1
                 dispatch_metrics.record_request_drop(
-                    pool_id=self.config.pool_id,
+                    pool_id=first_request.pool_id,
                     dispatcher_id=self.dispatcher_id,
                     reason="malformed_request",
                 )
@@ -253,7 +275,7 @@ class QueuedBatchDispatcher:
                 with self._state_lock:
                     self._offline_producer_requests_dropped += 1
                 dispatch_metrics.record_request_drop(
-                    pool_id=self.config.pool_id,
+                    pool_id=candidate.pool_id,
                     dispatcher_id=self.dispatcher_id,
                     reason="offline_producer_before_batching",
                 )
@@ -292,7 +314,8 @@ class QueuedBatchDispatcher:
         ok = False
         self._update_inflight_request(request, lifecycle_stage="executing")
         parent_context = _trace_context_from_request(request)
-        backend_address = getattr(self.execution_adapter, "backend_address", None)
+        execution_adapter = self._execution_adapter_for(request)
+        backend_address = getattr(execution_adapter, "backend_address", None)
         span_kwargs = {"context": parent_context} if parent_context is not None else {}
 
         with start_as_current_span(
@@ -311,7 +334,7 @@ class QueuedBatchDispatcher:
             )
 
             try:
-                completion = await self.execution_adapter.execute(
+                completion = await execution_adapter.execute(
                     request.call,
                     timeout_seconds=request.timeout_seconds,
                 )
@@ -357,7 +380,7 @@ class QueuedBatchDispatcher:
                 )
             finally:
                 dispatch_metrics.record_request_execution(
-                    pool_id=self.config.pool_id,
+                    pool_id=request.pool_id,
                     dispatcher_id=self.dispatcher_id,
                     duration_seconds=max(0.0, time.monotonic() - started_monotonic),
                     ok=ok,
@@ -383,7 +406,7 @@ class QueuedBatchDispatcher:
                 with self._state_lock:
                     self._offline_producer_replies_dropped += 1
                 dispatch_metrics.record_reply_drop(
-                    pool_id=self.config.pool_id,
+                    pool_id=request.pool_id,
                     dispatcher_id=self.dispatcher_id,
                     reason="offline_producer_before_reply",
                 )
@@ -395,7 +418,7 @@ class QueuedBatchDispatcher:
                 result,
                 dispatcher_id=self.dispatcher_id,
                 execution_backend_address=getattr(
-                    self.execution_adapter,
+                    self._execution_adapter_for(request),
                     "backend_address",
                     None,
                 ),
@@ -445,6 +468,173 @@ class QueuedBatchDispatcher:
     def _clear_inflight_request(self, request_id: str) -> None:
         with self._state_lock:
             self._inflight_requests.pop(request_id, None)
+
+    def _record_batches(
+        self, batch: List[QueuedCompletionEnvelope], *, duration_seconds: float
+    ) -> None:
+        for pool_id, batch_size in Counter(
+            request.pool_id for request in batch
+        ).items():
+            dispatch_metrics.record_batch(
+                pool_id=pool_id,
+                dispatcher_id=self.dispatcher_id,
+                batch_size=batch_size,
+                duration_seconds=duration_seconds,
+            )
+
+
+class DrrQueuedBatchDispatcher(QueuedBatchDispatcher):
+    def __init__(
+        self,
+        *,
+        queue_client: ListQueueClient,
+        execution_adapter,
+        config: LlmQueueConfig,
+        logger,
+        lanes: list[DrrLaneConfig],
+        total_concurrent_dispatch: int,
+        execution_adapters_by_pool: Optional[dict[str, object]] = None,
+    ):
+        super().__init__(
+            queue_client=queue_client,
+            execution_adapter=execution_adapter,
+            config=config,
+            logger=logger,
+        )
+        self.scheduler = DrrLaneScheduler(
+            queue_client=queue_client,
+            lanes=lanes,
+            total_concurrent_dispatch=total_concurrent_dispatch,
+        )
+        self.dispatcher_id = f"{self.config.pool_id}:drr:{uuid.uuid4().hex[:12]}"
+        self._lane_pool_ids = [lane.pool_id for lane in lanes if lane.enabled]
+        self._execution_adapters_by_pool = execution_adapters_by_pool or {}
+
+    def _execution_adapter_for(self, request: QueuedCompletionEnvelope):
+        return self._execution_adapters_by_pool.get(
+            request.pool_id,
+            self.execution_adapter,
+        )
+
+    def run_once(self) -> int:
+        batch: list[QueuedCompletionEnvelope] = []
+        selected_pool_ids: list[str] = []
+
+        while self.scheduler.inflight_count < self.scheduler.total_concurrent_dispatch:
+            dispatch = self.scheduler.select_next()
+            if dispatch is None:
+                break
+
+            request = dispatch.request
+            if not self.queue_client.is_producer_alive(request.producer_id):
+                self.logger.info(
+                    "Dropping request %s because producer %s is offline before dispatch",
+                    request.request_id,
+                    request.producer_id,
+                )
+                with self._state_lock:
+                    self._offline_producer_requests_dropped += 1
+                dispatch_metrics.record_request_drop(
+                    pool_id=request.pool_id,
+                    dispatcher_id=self.dispatcher_id,
+                    reason="offline_producer_before_dispatch",
+                )
+                self.scheduler.release(dispatch.pool_id)
+                continue
+
+            self._mark_request_popped(request, lifecycle_stage="dispatching")
+            batch.append(request)
+            selected_pool_ids.append(dispatch.pool_id)
+
+        if not batch:
+            return 0
+
+        try:
+            return self._run_popped_batch(batch, fill_compatible=False)
+        finally:
+            for pool_id in selected_pool_ids:
+                self.scheduler.release(pool_id)
+
+    def run_forever(self, stop_event=None) -> None:
+        idle_sleep_seconds = min(
+            0.05,
+            max(0.001, self.config.dispatch_pop_timeout_seconds),
+        )
+        while stop_event is None or not stop_event.is_set():
+            try:
+                processed = self.run_once()
+                with self._state_lock:
+                    self._last_error = None
+                if processed == 0:
+                    time.sleep(idle_sleep_seconds)
+            except Exception as exc:
+                self.logger.error("Queued DRR dispatcher loop failed: %r", exc)
+                with self._state_lock:
+                    self._last_error = str(exc)
+                time.sleep(0.1)
+
+    def health(self) -> dict[str, object]:
+        health = super().health()
+        lane_snapshots = [
+            {
+                "pool_id": lane.pool_id,
+                "display_name": lane.display_name,
+                "quantum": lane.quantum,
+                "deficit": lane.deficit,
+                "inflight": lane.inflight,
+                "request_queue_depth": lane.queue_depth,
+                "oldest_pending_age_seconds": lane.oldest_pending_age_seconds,
+                "head_cost_units": lane.head_cost_units,
+                "min_concurrent": lane.min_concurrent,
+                "max_concurrent": lane.max_concurrent,
+                "max_burst_per_visit": lane.max_burst_per_visit,
+                "endpoint_url": getattr(
+                    self._execution_adapters_by_pool.get(
+                        lane.pool_id,
+                        self.execution_adapter,
+                    ),
+                    "backend_address",
+                    None,
+                ),
+                "skip_counts": lane.skip_counts,
+                "malformed_requests_dropped": lane.malformed_requests_dropped,
+            }
+            for lane in self.scheduler.lane_snapshots()
+        ]
+        total_depth = sum(
+            int(lane["request_queue_depth"] or 0)
+            for lane in lane_snapshots
+            if lane["request_queue_depth"] is not None
+        )
+        health.update(
+            {
+                "scheduler_policy": "drr",
+                "request_queue_depth": total_depth,
+                "total_concurrent_dispatch": self.scheduler.total_concurrent_dispatch,
+                "lanes": lane_snapshots,
+            }
+        )
+        return health
+
+    def sample_pending_requests(self, limit: int) -> List[dict[str, object]]:
+        if limit <= 0:
+            return []
+
+        now = time.time()
+        snapshots: list[dict[str, object]] = []
+        for pool_id in self._lane_pool_ids:
+            requests = self.queue_client.sample_requests(pool_id, limit)
+            snapshots.extend(
+                _build_live_request_snapshot(
+                    request,
+                    lifecycle_stage="pending",
+                    state_source="valkey",
+                    dispatcher_id=None,
+                    now=now,
+                )
+                for request in requests
+            )
+        return snapshots
 
 
 def _build_reply(
@@ -653,6 +843,7 @@ def _build_live_request_snapshot(
         "inflight_age_seconds": inflight_age_seconds,
         "dispatcher_id": dispatcher_id,
         "dispatch_profile_key": request.dispatch_profile_key,
+        "estimated_cost_units": request_cost_units(request),
         "timeout_seconds": request.timeout_seconds,
         "message_count": len(request.call.messages),
         "request_summary": summarize_completion_call(request.call),

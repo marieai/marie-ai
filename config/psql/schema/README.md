@@ -47,6 +47,8 @@ These tables are defined here and also used by Marie-Studio:
 | `schedule` | 009_schedule.sql | Cron-based scheduling |
 | `subscription` | 010_subscription.sql | Event subscriptions |
 | `archive` | 011_archive.sql | Archived jobs |
+| `llm_queue_fabric_config` | 066_llm_queue_scheduler.sql | Runtime Fabric scoped LLM dispatch scheduler policy |
+| `llm_queue_pool` | 066_llm_queue_scheduler.sql | Configured LLM dispatch pools used as DRR lanes |
 | `version` | 003_version.sql | Schema version tracking |
 
 ## When Making Changes
