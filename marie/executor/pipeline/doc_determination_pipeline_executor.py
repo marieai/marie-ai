@@ -86,7 +86,6 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
                 "ref_type": ref_type,
                 "job_id": job_id,
                 "pages": f"{len(frames)}",
-                "total_page_count": f"{len(frames)}",  # Here because downstream nodes may process onlt a subset of pages
             }
 
             metadata["rotation"], any_rotated = rotate_frames(
@@ -139,6 +138,52 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
         finally:
             del frames
             torch_gc()
+            (MDC.remove("request_id"))
+
+    @requests(on="/document/collate")
+    def collate(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
+        """
+        :param docs: DocList containing a single AssetKeyDoc.
+        :param parameters: Dictionary of request parameters including payload.
+        :returns: Dictionary with merge status, runtime_info, and stored assets.
+        :raises ConnectionError: If unable to fetch existing assets.
+        """
+        job_id, ref_id, ref_type, queue_id, payload = parse_parameters(parameters)
+
+        try:
+            frames = get_frames_from_docs(docs)
+            root_asset_dir = create_working_dir(
+                frames, ref_id=ref_id, ref_type=ref_type, job_id=job_id
+            )
+
+            s3_root_path = restore_assets(
+                ref_id, ref_type, root_asset_dir, overwrite=True
+            )
+            if s3_root_path is None:
+                raise ConnectionError("Unable to collect meta data from")
+
+            meta_path = os.path.join(root_asset_dir, f"{ref_id}.meta.json")
+            self.logger.info(f"Retrieving metadata : {meta_path}")
+            if not os.path.exists(meta_path):
+                raise FileNotFoundError(f"Metadata file not found: {meta_path}")
+
+            metadata: Dict[str, Any] = load_json_file(meta_path, True)
+            metadata["pages"] = f"{len(frames)}"
+
+            doc_determination_collation(metadata)
+
+            store_json_object(metadata, meta_path)
+            stored_assets = store_assets(
+                ref_id, ref_type, root_asset_dir, match_wildcard=meta_path
+            )
+
+            return {
+                "status": "success",
+                "runtime_info": self.runtime_info,
+                "assets": stored_assets,
+            }
+        finally:
+            del frames
             MDC.remove("request_id")
 
     @requests(on=["/document/classify"])
@@ -390,3 +435,96 @@ def filter_pages_by_classifier_results(
         )
         logger.warning("Continuing with processing all pages")
         return {0: None}
+
+
+def doc_determination_collation(meta: Dict[str, Any]) -> Dict[str, Any]:
+    documents: List[Dict[str, Any]] = []
+    try:
+        rotation_pages = meta.get("rotation", {}).get("pages", {})
+
+        # page_number -> medical page classification string (e.g., "EOB")
+        medical_by_page: Dict[int, Optional[str]] = {}
+        for item in meta.get("classifications", []):
+            if item.get("group") != "medical-page-classifier":
+                continue
+            pages = (item.get("classification") or {}).get("pages") or {}
+            for p, pnode in pages.items():
+                try:
+                    pnum = int(p)
+                except (TypeError, ValueError):
+                    continue
+                best = (pnode or {}).get("best") or {}
+                medical_by_page[pnum] = best.get("classification")
+
+        for item in meta.get("classifications", []):
+            if item.get("group") != "doc-determination-classifier":
+                continue
+
+            cls = item.get("classification", {})
+            pages_map = cls.get("pages", {}) or {}
+
+            raw_page_numbers = cls.get("page_numbers")
+            if raw_page_numbers is None:
+                raw_page_numbers = pages_map.keys()
+
+            page_numbers = sorted({int(p) for p in raw_page_numbers})
+            if not page_numbers:
+                continue
+
+            # All pages in group should share one doc-determination value.
+            labels = set()
+            for p in page_numbers:
+                node = pages_map.get(str(p), pages_map.get(p, {})) or {}
+                best = node.get("best", {}) or {}
+                label = best.get("classification")
+                if label is None:
+                    details = node.get("details", []) or []
+                    if details:
+                        label = details[0].get("classification")
+                if label is not None:
+                    labels.add(label)
+
+            if len(labels) > 1:
+                raise ValueError(
+                    f"Inconsistent classifications in doc-determination-classifier group: {labels}"
+                )
+            doc_label = next(iter(labels), None)
+
+            # Fill missing pages in range (e.g., [2,3,5] -> [2,3,4,5])
+            start_page, end_page = page_numbers[0], page_numbers[-1]
+            collated_pages = []
+            new_page = 1
+            for page_num in range(start_page, end_page + 1):
+                rot = (
+                    rotation_pages.get(str(page_num), rotation_pages.get(page_num, {}))
+                    or {}
+                )
+                collated_pages.append(
+                    {
+                        "page": page_num,
+                        "new_page": new_page,
+                        "rotation": rot.get("rotate"),
+                        "medical-page-classification": medical_by_page.get(page_num),
+                    }
+                )
+                new_page += 1
+
+            documents.append(
+                {
+                    "doc-classification": doc_label,
+                    "page-count": len(collated_pages),
+                    "pages": collated_pages,
+                }
+            )
+
+        logger.info(f"Final document count: {len(documents)}")
+    except Exception as e:
+        logger.error(f"Error during document collation: {e}")
+        meta.setdefault("doc_determination_collation", {})["Error"] = e
+
+    meta["doc_determination_collation"] = {
+        "doc_count": len(documents),
+        "docs": documents,
+    }
+
+    return meta
