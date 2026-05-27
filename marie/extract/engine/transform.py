@@ -99,6 +99,12 @@ def convert_name_format(value: str, field_def: Dict[str, Any]) -> dict[str, None
             if t1_is_first and not t0_is_first and not t1_is_last:
                 # "CASHE JOHN" → LAST FIRST — reorder as "CASHE,JOHN"
                 full_name = f"{tokens[0]},{tokens[1]}"
+        elif len(tokens) == 3:
+            t0_is_first = _is_known_first_name(tokens[0])
+            t1_is_first = _is_known_first_name(tokens[1])
+            if t1_is_first and not t0_is_first:
+                # "SCHULLER KRISTEN N" → LAST FIRST MIDDLE — reorder as "SCHULLER,KRISTEN N"
+                full_name = f"{tokens[0]},{tokens[1]} {tokens[2]}"
 
     from nameparser import HumanName
 
