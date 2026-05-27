@@ -66,6 +66,7 @@ class RecordBackedMatchSectionBuilderVisitor(BaseProcessingVisitor):
             )
 
         envelope_key = match_section_source.get("envelope_key")
+        records_required = match_section_source.get("records_required", True)
 
         records = load_extracted_records(
             output_dir=str(context.output_dir),
@@ -73,7 +74,7 @@ class RecordBackedMatchSectionBuilderVisitor(BaseProcessingVisitor):
             envelope_key=envelope_key,
         )
 
-        if not records:
+        if not records and records_required:
             raise ValueError(
                 f"Layer '{layer.layer_name}': strategy 'record_backed' "
                 f"but no records found in data_source '{data_source}'. "
