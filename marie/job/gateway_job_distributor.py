@@ -16,6 +16,14 @@ from marie.logging_core.logger import MarieLogger
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.types_core.request.data import DataRequest, Request
 
+MOCK_EXECUTOR_PARAMETER_KEYS = (
+    "failure_rate",
+    "failure_mode",
+    "force_fail",
+    "process_time",
+    "randomize_time",
+)
+
 
 class GatewayJobDistributor(JobDistributor):
     def __init__(
@@ -87,6 +95,9 @@ class GatewayJobDistributor(JobDistributor):
         parameters, asset_doc = await parse_payload_to_docs(metadata)
         parameters["job_id"] = submission_id
         parameters["payload"] = metadata
+        for key in MOCK_EXECUTOR_PARAMETER_KEYS:
+            if key in metadata:
+                parameters[key] = metadata[key]
 
         # Pass through DAG tracking parameters for asset materialization
         # These are set by the scheduler when dispatching DAG jobs

@@ -36,7 +36,11 @@ from marie.engine.llm_queue.registry import (
     unregister_dispatcher,
 )
 from marie.engine.llm_queue.result_types import BatchResult
-from marie.engine.llm_queue.submitter import QueuedBatchExecutor, _reply_to_batch_result
+from marie.engine.llm_queue.submitter import (
+    QueuedBatchExecutor,
+    _reply_to_batch_result,
+    _resolve_queue_pool_id,
+)
 from marie.engine.llm_queue.valkey_keys import (
     producer_alive_key,
     queue_namespace,
@@ -215,7 +219,9 @@ class _FakeSyncQueueBackend:
             self.closed = True
 
 
-def _build_processor(*, client, queue_enabled: bool, queue_client=None) -> BatchProcessor:
+def _build_processor(
+    *, client, queue_enabled: bool, queue_client=None
+) -> BatchProcessor:
     processor = object.__new__(BatchProcessor)
     processor.client = client
     processor.model_string = "test-model"
@@ -285,6 +291,53 @@ def test_queued_batch_executor_demultiplexes_replies_from_same_producer():
     ]
 
 
+def test_queued_batch_executor_routes_request_to_metadata_pool():
+    queue_client = InMemoryListQueueClient()
+    executor = QueuedBatchExecutor(
+        queue_client=queue_client,
+        config=_queue_config(),
+        logger=_Logger(),
+    )
+
+    def worker():
+        request = queue_client.pop_request("document-small", timeout=1.0)
+        assert request is not None
+        assert request.pool_id == "document-small"
+        assert request.metadata == {"pool_id": "document-small"}
+        queue_client.push_reply(
+            CompletionReplyEnvelope(
+                request_id=request.request_id,
+                producer_id=request.producer_id,
+                pool_id=request.pool_id,
+                status="ok",
+                completion=_completion_payload("resp:document-small"),
+                completed_at=time.time(),
+            ),
+            ttl_seconds=60,
+        )
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    results = executor.execute(
+        calls=[_call([{"role": "user", "content": "small document"}])],
+        batch_request_id="batch-document-small",
+        batch_timeout=2.0,
+        metadata={"pool_id": "document-small"},
+    )
+
+    assert [result.response for result in results] == ["resp:document-small"]
+    assert queue_client.try_pop_request("default") is None
+
+
+def test_resolve_queue_pool_id_accepts_metadata_pool_id():
+    assert (
+        _resolve_queue_pool_id("default", {"pool_id": "document-medium"})
+        == "document-medium"
+    )
+    assert _resolve_queue_pool_id("default", {"pool_id": " "}) == "default"
+
+
 def test_queued_batch_executor_skips_malformed_reply_and_keeps_waiting():
     queue_client = InMemoryListQueueClient()
     executor = QueuedBatchExecutor(
@@ -305,7 +358,9 @@ def test_queued_batch_executor_skips_malformed_reply_and_keeps_waiting():
                 status="ok",
                 completion=_completion_payload("bad"),
                 completed_at=time.time(),
-            ).to_json().replace(
+            )
+            .to_json()
+            .replace(
                 f"\"contract_version\":\"{COMPLETION_QUEUE_CONTRACT_VERSION}\"",
                 "\"contract_version\":\"v1\"",
             )
@@ -469,29 +524,37 @@ def test_valkey_queue_runtime_end_to_end_with_dispatcher_thread(monkeypatch):
 
 
 def test_envelopes_reject_mismatched_contract_version():
-    request_payload = QueuedCompletionEnvelope(
-        request_id="req-1",
-        producer_id="producer-A",
-        pool_id="default",
-        submitted_at=time.time(),
-        call=_call([{"role": "user", "content": "hello"}]),
-    ).to_json().replace(
-        f"\"contract_version\":\"{COMPLETION_QUEUE_CONTRACT_VERSION}\"",
-        "\"contract_version\":\"v1\"",
+    request_payload = (
+        QueuedCompletionEnvelope(
+            request_id="req-1",
+            producer_id="producer-A",
+            pool_id="default",
+            submitted_at=time.time(),
+            call=_call([{"role": "user", "content": "hello"}]),
+        )
+        .to_json()
+        .replace(
+            f"\"contract_version\":\"{COMPLETION_QUEUE_CONTRACT_VERSION}\"",
+            "\"contract_version\":\"v1\"",
+        )
     )
     with pytest.raises(ValueError, match="Unsupported request contract version"):
         QueuedCompletionEnvelope.from_json(request_payload)
 
-    reply_payload = CompletionReplyEnvelope(
-        request_id="req-1",
-        producer_id="producer-A",
-        pool_id="default",
-        status="ok",
-        completion=_completion_payload("hello"),
-        completed_at=time.time(),
-    ).to_json().replace(
-        f"\"contract_version\":\"{COMPLETION_QUEUE_CONTRACT_VERSION}\"",
-        "\"contract_version\":\"v1\"",
+    reply_payload = (
+        CompletionReplyEnvelope(
+            request_id="req-1",
+            producer_id="producer-A",
+            pool_id="default",
+            status="ok",
+            completion=_completion_payload("hello"),
+            completed_at=time.time(),
+        )
+        .to_json()
+        .replace(
+            f"\"contract_version\":\"{COMPLETION_QUEUE_CONTRACT_VERSION}\"",
+            "\"contract_version\":\"v1\"",
+        )
     )
     with pytest.raises(ValueError, match="Unsupported reply contract version"):
         CompletionReplyEnvelope.from_json(reply_payload)
@@ -566,15 +629,19 @@ def test_dispatcher_skips_malformed_request_and_processes_next_live_one():
 
     queue_client.set_producer_alive("producer-live", "producer-live", 5)
 
-    malformed_payload = QueuedCompletionEnvelope(
-        request_id="bad-1",
-        producer_id="producer-live",
-        pool_id="default",
-        submitted_at=time.time(),
-        call=_call([{"role": "user", "content": "stale"}]),
-    ).to_json().replace(
-        f"\"contract_version\":\"{COMPLETION_QUEUE_CONTRACT_VERSION}\"",
-        "\"contract_version\":\"v1\"",
+    malformed_payload = (
+        QueuedCompletionEnvelope(
+            request_id="bad-1",
+            producer_id="producer-live",
+            pool_id="default",
+            submitted_at=time.time(),
+            call=_call([{"role": "user", "content": "stale"}]),
+        )
+        .to_json()
+        .replace(
+            f"\"contract_version\":\"{COMPLETION_QUEUE_CONTRACT_VERSION}\"",
+            "\"contract_version\":\"v1\"",
+        )
     )
     queue_client._lists[request_queue_key("default")].append(malformed_payload)
 
@@ -728,7 +795,11 @@ def test_dispatcher_drops_reply_if_producer_goes_offline_after_execute():
             return type(
                 "Completion",
                 (),
-                {"model_dump": lambda self: _completion_payload(f"done:{request_text}")},
+                {
+                    "model_dump": lambda self: _completion_payload(
+                        f"done:{request_text}"
+                    )
+                },
             )()
 
     dispatcher = QueuedBatchDispatcher(

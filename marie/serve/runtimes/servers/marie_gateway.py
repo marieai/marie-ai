@@ -43,7 +43,12 @@ from marie.job.gateway_job_distributor import GatewayJobDistributor
 from marie.job.job_manager import JobManager
 from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import Toast, mark_as_failed, mark_as_scheduled
-from marie.messaging.events import EngineEventData, MarieEvent, MarieEventType
+from marie.messaging.events import (
+    EngineEventData,
+    EventMessage,
+    MarieEvent,
+    MarieEventType,
+)
 from marie.messaging.grpc_event_broker import GrpcEventBroker
 from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.scheduler import PostgreSQLJobScheduler
@@ -166,6 +171,105 @@ def _netloc(addr: str) -> str:
         p = urlparse(addr)
         return p.netloc or addr
     return addr
+
+
+def _llm_queue_runtime_config(args: dict[str, Any]) -> dict[str, Any]:
+    config = dict(args.get("llm_queue") or {})
+    scheduler_config = config.get("scheduler")
+    if _has_llm_scheduler_repository_config(scheduler_config):
+        return config
+
+    job_scheduler_kwargs = args.get("job_scheduler_kwargs")
+    if not isinstance(job_scheduler_kwargs, dict):
+        return config
+
+    scheduler = dict(scheduler_config) if isinstance(scheduler_config, dict) else {}
+    scheduler["psql"] = dict(job_scheduler_kwargs)
+    config["scheduler"] = scheduler
+    return config
+
+
+def _has_llm_scheduler_repository_config(scheduler_config: Any) -> bool:
+    if not isinstance(scheduler_config, dict):
+        return False
+
+    storage_config = scheduler_config.get("storage")
+    if isinstance(storage_config, dict) and isinstance(
+        storage_config.get("psql"), dict
+    ):
+        return True
+
+    return isinstance(scheduler_config.get("psql"), dict)
+
+
+LLM_DISPATCH_RUNTIME_EVENT = "llm.dispatch.runtime.snapshot"
+LLM_DISPATCH_RUNTIME_MARKER = "LLM_DISPATCH_RUNTIME_SNAPSHOT"
+LLM_DISPATCH_RUNTIME_SOURCE = "gateway://control-plane"
+LLM_DISPATCH_RUNTIME_JOB_ID = "gateway"
+LLM_DISPATCH_RUNTIME_COMPONENT = "llm_dispatch_runtime"
+LLM_DISPATCH_RUNTIME_IDLE_SNAPSHOT_INTERVAL_S = 5.0
+
+
+def _llm_dispatch_runtime_event_fingerprint(snapshot: dict[str, Any]) -> str:
+    return json.dumps(snapshot, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _llm_dispatch_runtime_event_result(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(json.dumps(snapshot, sort_keys=True, default=str))
+
+
+def _should_publish_llm_dispatch_runtime_event(
+    *,
+    fingerprint: str,
+    last_fingerprint: Optional[str],
+    last_published_at: float,
+    now: float,
+    unchanged_interval_s: float,
+) -> bool:
+    if fingerprint != last_fingerprint:
+        return True
+
+    if last_published_at <= 0:
+        return True
+
+    return now - last_published_at >= unchanged_interval_s
+
+
+def _llm_dispatch_runtime_event_message(
+    *,
+    snapshot: dict[str, Any],
+    queue_config: Any,
+) -> EventMessage:
+    fabric_group_id = str(getattr(queue_config, "fabric_group_id", "") or "")
+    gateway_id = str(getattr(queue_config, "gateway_id", "") or "")
+    pool_id = str(getattr(queue_config, "pool_id", "") or "")
+
+    result = _llm_dispatch_runtime_event_result(snapshot)
+    event = MarieEvent.engine_event(
+        LLM_DISPATCH_RUNTIME_SOURCE,
+        "LLM dispatch runtime snapshot updated",
+        EngineEventData(
+            metadata={
+                "llm_dispatch_runtime": JsonMetadataValue(result),
+            },
+            marker_start=LLM_DISPATCH_RUNTIME_MARKER,
+        ),
+    )
+
+    return Toast.marie_event_to_message(
+        event,
+        api_key="system:gateway",
+        node="gateway",
+        jobid=LLM_DISPATCH_RUNTIME_JOB_ID,
+        extra_payload={
+            "component": LLM_DISPATCH_RUNTIME_COMPONENT,
+            "event_type": LLM_DISPATCH_RUNTIME_EVENT,
+            "fabric_group_id": fabric_group_id,
+            "gateway_id": gateway_id,
+            "pool_id": pool_id,
+            "result": result,
+        },
+    )
 
 
 class MarieServerGateway(CompositeServer):
@@ -331,11 +435,13 @@ class MarieServerGateway(CompositeServer):
         )
         self.service_events_queue = asyncio.Queue(maxsize=512)
         self.state_events_queue = asyncio.Queue(maxsize=2048)  # tends to be chattier
-        llm_queue_config = self.args.get("llm_queue", {}) or {}
+        llm_queue_config = _llm_queue_runtime_config(self.args)
         self.llm_dispatch_runtime = GatewayLlmDispatchRuntime(
             logger=self.logger,
             config=llm_queue_config,
         )
+        self._last_llm_dispatch_event_fingerprint: Optional[str] = None
+        self._last_llm_dispatch_event_monotonic: float = 0.0
         self._background_services_shutdown = False
         self._background_services_lock = asyncio.Lock()
 
@@ -437,7 +543,9 @@ class MarieServerGateway(CompositeServer):
                 )
                 try:
                     debug_data = self.job_scheduler.debug_info()
-                    debug_data["llm_dispatch"] = dispatch_runtime_snapshot()
+                    debug_data["llm_dispatch"] = dispatch_runtime_live_state(
+                        limit_per_pool=50
+                    )
                     return {"status": "OK", "result": debug_data}
                 except Exception as e:
                     self.logger.error(f"Error getting debug info: {str(e)}")
@@ -1764,6 +1872,10 @@ class MarieServerGateway(CompositeServer):
         run_server_tasks.append(
             asyncio.create_task(self._capacity_broadcast_loop(interval_s=5))
         )
+        if self.grpc_broker:
+            run_server_tasks.append(
+                asyncio.create_task(self._llm_dispatch_broadcast_loop(interval_s=1.0))
+            )
 
         await asyncio.gather(*run_server_tasks)
 
@@ -1831,6 +1943,49 @@ class MarieServerGateway(CompositeServer):
                     self.logger.debug(f"Capacity broadcast skipped (etcd unavailable)")
                 else:
                     self.logger.error(f"Capacity broadcast error: {ex}", exc_info=True)
+            await asyncio.sleep(interval_s)
+
+    async def _publish_llm_dispatch_runtime_event(
+        self,
+        *,
+        unchanged_interval_s: float = LLM_DISPATCH_RUNTIME_IDLE_SNAPSHOT_INTERVAL_S,
+    ) -> None:
+        snapshot = dispatch_runtime_live_state(limit_per_pool=50)
+        fingerprint = _llm_dispatch_runtime_event_fingerprint(snapshot)
+        now = time.monotonic()
+        if not _should_publish_llm_dispatch_runtime_event(
+            fingerprint=fingerprint,
+            last_fingerprint=self._last_llm_dispatch_event_fingerprint,
+            last_published_at=self._last_llm_dispatch_event_monotonic,
+            now=now,
+            unchanged_interval_s=unchanged_interval_s,
+        ):
+            return
+
+        event = _llm_dispatch_runtime_event_message(
+            snapshot=snapshot,
+            queue_config=self.llm_dispatch_runtime.config,
+        )
+        await Toast.notify(event.event, event)
+        self._last_llm_dispatch_event_fingerprint = fingerprint
+        self._last_llm_dispatch_event_monotonic = now
+
+    async def _llm_dispatch_broadcast_loop(self, interval_s: float = 1.0) -> None:
+        self.logger.info(
+            "Starting LLM dispatch broadcast loop "
+            f"(poll={interval_s}s, idle_snapshot={LLM_DISPATCH_RUNTIME_IDLE_SNAPSHOT_INTERVAL_S}s)"
+        )
+        await asyncio.sleep(interval_s)
+
+        while True:
+            try:
+                await self._publish_llm_dispatch_runtime_event()
+            except Exception as exc:
+                self.logger.error(
+                    "LLM dispatch broadcast error: %s",
+                    exc,
+                    exc_info=True,
+                )
             await asyncio.sleep(interval_s)
 
     async def wait_and_start_scheduler(self, timeout: int = 5):

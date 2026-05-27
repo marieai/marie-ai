@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from opentelemetry import trace as otel_trace
 
@@ -49,13 +49,14 @@ class QueuedBatchExecutor:
         batch_request_id: str,
         batch_timeout: float,
         on_result=None,
-        metadata: Optional[Dict[str, str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> List[BatchResult]:
         traceparent, tracestate = _current_trace_headers()
         waiters: Dict[str, ReplyWaiter] = {}
         ordered_ids: List[str] = []
         positions: Dict[str, int] = {}
         requests: List[QueuedCompletionEnvelope] = []
+        pool_id = _resolve_queue_pool_id(self.config.pool_id, metadata)
 
         try:
             for index, call in enumerate(calls):
@@ -68,7 +69,7 @@ class QueuedBatchExecutor:
                 request = QueuedCompletionEnvelope(
                     request_id=request_id,
                     producer_id=self.config.producer_id,
-                    pool_id=self.config.pool_id,
+                    pool_id=pool_id,
                     submitted_at=time.time(),
                     call=call,
                     metadata=metadata,
@@ -164,6 +165,23 @@ def _current_trace_headers() -> Tuple[Optional[str], Optional[str]]:
     if span_context.trace_state:
         trace_state = str(span_context.trace_state)
     return traceparent, trace_state
+
+
+def _resolve_queue_pool_id(
+    fallback_pool_id: str,
+    metadata: Optional[Dict[str, Any]],
+) -> str:
+    if not isinstance(metadata, dict):
+        return fallback_pool_id
+
+    return _non_empty_str(metadata.get("pool_id")) or fallback_pool_id
+
+
+def _non_empty_str(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
 
 
 def _reply_to_batch_result(reply: CompletionReplyEnvelope) -> BatchResult:

@@ -77,6 +77,8 @@ DEFAULT_EXTENSIONS = (
     ".pdf",
 )
 
+MOCK_FAILURE_MODES = ("exception", "timeout", "random")
+
 
 def _parse_duration_seconds(duration_str: str) -> float:
     """Parse duration strings like '30s', '2m', or '1h' into seconds."""
@@ -95,6 +97,13 @@ def _parse_duration_seconds(duration_str: str) -> float:
     if unit == "m":
         return value * 60.0
     return value
+
+
+def _parse_csv_values(raw: Optional[str]) -> List[str]:
+    if raw is None:
+        return []
+    values = [item.strip() for item in raw.split(",")]
+    return [item for item in values if item]
 
 
 @dataclass(frozen=True)
@@ -397,6 +406,10 @@ class JobRun:
     planner: str
     job_name: str
     fault_profile: str
+    llm_pool_id: Optional[str] = None
+    mock_failure_rate: Optional[float] = None
+    mock_failure_mode: Optional[str] = None
+    force_fail: bool = False
     soft_sla_at: Optional[float] = None
     hard_sla_at: Optional[float] = None
     sla_bucket_index: int = 0
@@ -845,6 +858,11 @@ class GatewayE2EStresser:
         ref_type: Optional[str] = None,
         policy: str = "allow_all",
         project_id: Optional[str] = None,
+        llm_pool_id: Optional[str] = None,
+        llm_pool_cycle: Optional[List[str]] = None,
+        mock_failure_rate: Optional[float] = None,
+        mock_failure_mode: str = "exception",
+        force_failure_every: Optional[int] = None,
         upload_companion_meta: bool = True,
         batch_size: int = 1,
         debug_sample_interval: float = 0.0,
@@ -894,6 +912,13 @@ class GatewayE2EStresser:
         self.ref_type = ref_type or self.queue_name
         self.policy = policy
         self.project_id = project_id or api_key
+        self.llm_pool_id = llm_pool_id.strip() if llm_pool_id else None
+        self.llm_pool_cycle = [
+            item.strip() for item in llm_pool_cycle or [] if item.strip()
+        ]
+        self.mock_failure_rate = mock_failure_rate
+        self.mock_failure_mode = mock_failure_mode
+        self.force_failure_every = force_failure_every
         self.upload_companion_meta = upload_companion_meta
         self.batch_size = batch_size
         self.debug_sample_interval = max(0.0, debug_sample_interval)
@@ -924,6 +949,22 @@ class GatewayE2EStresser:
             raise ValueError("--hard-sla-step-seconds requires --hard-sla-seconds")
         if self.sla_step_cycle is not None and self.sla_step_cycle <= 0:
             raise ValueError("--sla-step-cycle must be greater than zero")
+        if self.mock_failure_rate is not None and not (
+            0.0 <= self.mock_failure_rate <= 1.0
+        ):
+            raise ValueError("--mock-failure-rate must be between 0 and 1 inclusive")
+        if self.mock_failure_mode not in MOCK_FAILURE_MODES:
+            raise ValueError(
+                f"--mock-failure-mode must be one of {', '.join(MOCK_FAILURE_MODES)}"
+            )
+        if self.force_failure_every is not None and self.force_failure_every <= 0:
+            raise ValueError("--force-failure-every must be greater than zero")
+        if self.llm_pool_id and self.llm_pool_cycle:
+            raise ValueError(
+                "--llm-pool-id and --llm-pool-cycle are mutually exclusive"
+            )
+        if llm_pool_cycle is not None and not self.llm_pool_cycle:
+            raise ValueError("--llm-pool-cycle must contain at least one pool ID")
 
         self.metrics = E2EMetrics(total_jobs=self.job_count or 0)
         self._logger = logging.getLogger(self.__class__.__name__)
@@ -1141,6 +1182,11 @@ class GatewayE2EStresser:
             "estimated_job_count": self.estimated_job_count,
             "submit_rate": self.submit_rate,
             "submit_concurrency": self.submit_concurrency,
+            "failure_simulation": {
+                "mock_failure_rate": self.mock_failure_rate,
+                "mock_failure_mode": self.mock_failure_mode,
+                "force_failure_every": self.force_failure_every,
+            },
             "progress_interval_seconds": self.progress_interval,
             "live_report_path": self.live_report_path,
             "live_report_format": (
@@ -1216,6 +1262,7 @@ class GatewayE2EStresser:
                     "source_path": run.source_path,
                     "s3_uri": run.s3_uri,
                     "failure_reason": run.failure_reason,
+                    "force_fail": run.force_fail,
                 }
                 for run in sorted(runs, key=lambda item: item.job_index)[-10:]
             ],
@@ -1356,6 +1403,10 @@ class GatewayE2EStresser:
                     "planner": run.planner,
                     "job_name": run.job_name,
                     "fault_profile": run.fault_profile,
+                    "llm_pool_id": run.llm_pool_id,
+                    "mock_failure_rate": run.mock_failure_rate,
+                    "mock_failure_mode": run.mock_failure_mode,
+                    "force_fail": run.force_fail,
                     "sla_bucket_index": run.sla_bucket_index,
                     "soft_sla_offset_seconds": run.soft_sla_offset_seconds,
                     "hard_sla_offset_seconds": run.hard_sla_offset_seconds,
@@ -1379,6 +1430,11 @@ class GatewayE2EStresser:
             "planner": self.planner,
             "job_name": self.queue_name,
             "fault_profile": self.fault_profile,
+            "llm_pool_id": self.llm_pool_id,
+            "llm_pool_cycle": list(self.llm_pool_cycle),
+            "mock_failure_rate": self.mock_failure_rate,
+            "mock_failure_mode": self.mock_failure_mode,
+            "force_failure_every": self.force_failure_every,
             "submit_rate": self.submit_rate,
             "submit_concurrency": self.submit_concurrency,
             "batch_size": self.batch_size,
@@ -1571,7 +1627,13 @@ class GatewayE2EStresser:
             planner=self.planner,
             job_name=self.queue_name,
             fault_profile=self.fault_profile,
+            llm_pool_id=self._resolve_llm_pool_id(job_index),
         )
+
+    def _resolve_llm_pool_id(self, job_index: int) -> Optional[str]:
+        if self.llm_pool_cycle:
+            return self.llm_pool_cycle[job_index % len(self.llm_pool_cycle)]
+        return self.llm_pool_id
 
     def _resolve_sla_offsets(
         self, run: JobRun
@@ -1598,6 +1660,37 @@ class GatewayE2EStresser:
                 )
         return soft_offset, hard_offset
 
+    def _build_failure_metadata(self, run: JobRun) -> Dict[str, Any]:
+        force_fail = (
+            self.force_failure_every is not None
+            and (run.job_index + 1) % self.force_failure_every == 0
+        )
+        if self.mock_failure_rate is None and not force_fail:
+            run.mock_failure_rate = None
+            run.mock_failure_mode = None
+            run.force_fail = False
+            return {}
+
+        run.mock_failure_rate = self.mock_failure_rate
+        run.mock_failure_mode = self.mock_failure_mode
+        run.force_fail = force_fail
+
+        failure_metadata: Dict[str, Any] = {
+            "failure_mode": self.mock_failure_mode,
+            "stress_failure_simulation": {
+                "source": "gateway_e2e_stresser",
+                "mock_failure_rate": self.mock_failure_rate,
+                "mock_failure_mode": self.mock_failure_mode,
+                "force_failure_every": self.force_failure_every,
+                "force_fail": force_fail,
+            },
+        }
+        if self.mock_failure_rate is not None:
+            failure_metadata["failure_rate"] = self.mock_failure_rate
+        if force_fail:
+            failure_metadata["force_fail"] = True
+        return failure_metadata
+
     def _build_metadata(self, run: JobRun, *, sla_anchor_at: float) -> Dict[str, Any]:
         template_vars = {
             "request_id": run.request_id,
@@ -1619,6 +1712,9 @@ class GatewayE2EStresser:
         if not isinstance(metadata, dict):
             raise ValueError("Rendered metadata template must be a JSON object")
 
+        if run.llm_pool_id:
+            metadata["pool_id"] = run.llm_pool_id
+
         metadata["planner"] = self.planner
         metadata["project_id"] = self.project_id
         metadata["ref_id"] = run.ref_id
@@ -1626,6 +1722,7 @@ class GatewayE2EStresser:
         metadata["policy"] = metadata.get("policy", self.policy)
         metadata["stress_fault_profile"] = self.fault_profile
         metadata["uri"] = run.s3_uri
+        metadata.update(self._build_failure_metadata(run))
         soft_offset, hard_offset = self._resolve_sla_offsets(run)
         if soft_offset is not None:
             metadata["soft_sla"] = _format_epoch_seconds(sla_anchor_at + soft_offset)
@@ -2128,6 +2225,17 @@ class GatewayE2EStresser:
                 print(f"Estimated jobs at submit rate: {self.estimated_job_count}")
             print(f"Jobs created: {m.total_jobs}")
         print(f"Fault profile: {self.fault_profile}")
+        if self.mock_failure_rate is not None or self.force_failure_every is not None:
+            print(
+                "Mock failure simulation: "
+                f"rate={self.mock_failure_rate if self.mock_failure_rate is not None else 'default'} "
+                f"mode={self.mock_failure_mode} "
+                f"force_every={self.force_failure_every if self.force_failure_every is not None else 'none'}"
+            )
+        if self.llm_pool_id:
+            print(f"LLM dispatch pool: {self.llm_pool_id}")
+        if self.llm_pool_cycle:
+            print(f"LLM dispatch pool cycle: {', '.join(self.llm_pool_cycle)}")
         print(f"Jobs submitted: {m.submitted_jobs}")
         print(f"Completed: {m.completed_jobs}")
         print(f"Failed: {m.failed_jobs}")
@@ -2293,6 +2401,9 @@ class GatewayE2EStresser:
                 ),
                 "total_jobs": self.metrics.total_jobs,
                 "fault_profile": self.fault_profile,
+                "mock_failure_rate": self.mock_failure_rate,
+                "mock_failure_mode": self.mock_failure_mode,
+                "force_failure_every": self.force_failure_every,
                 "submitted_jobs": self.metrics.submitted_jobs,
                 "completed_jobs": self.metrics.completed_jobs,
                 "failed_jobs": self.metrics.failed_jobs,
@@ -2373,6 +2484,9 @@ class GatewayE2EStresser:
                     "planner": run.planner,
                     "job_name": run.job_name,
                     "fault_profile": run.fault_profile,
+                    "mock_failure_rate": run.mock_failure_rate,
+                    "mock_failure_mode": run.mock_failure_mode,
+                    "force_fail": run.force_fail,
                     "terminal_status": run.terminal_status,
                     "sla_bucket_index": run.sla_bucket_index,
                     "soft_sla_offset_seconds": run.soft_sla_offset_seconds,
@@ -2459,6 +2573,16 @@ Examples:
 
   python tools/stress/gateway_e2e_stresser.py \\
       --config tools/stress/gateway-e2e.config.example.json \\
+      --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \\
+      --job-count 50 \\
+      --job-name mock_parallel_subgraphs \\
+      --planner mock_parallel_subgraphs \\
+      --mock-failure-rate 0.10 \\
+      --mock-failure-mode exception \\
+      --force-failure-every 5
+
+  python tools/stress/gateway_e2e_stresser.py \\
+      --config tools/stress/gateway-e2e.config.example.json \\
       --input-dir /mnt/data/marie-ai/generators \\
       --job-count 25 \\
       --job-name gen5_extract \\
@@ -2541,6 +2665,24 @@ Examples:
         help="Logical fault profile label for this run; combine with AIMock config/admin control when using mock backends",
     )
     parser.add_argument(
+        "--mock-failure-rate",
+        type=float,
+        default=None,
+        help="Per-request mock executor failure_rate override to place in job metadata (0.0 to 1.0)",
+    )
+    parser.add_argument(
+        "--mock-failure-mode",
+        choices=MOCK_FAILURE_MODES,
+        default="exception",
+        help="Per-request mock executor failure_mode override used with --mock-failure-rate or --force-failure-every",
+    )
+    parser.add_argument(
+        "--force-failure-every",
+        type=int,
+        default=None,
+        help="Force every Nth generated job to fail by setting force_fail=true in job metadata",
+    )
+    parser.add_argument(
         "--aimock-admin-url",
         type=str,
         default=None,
@@ -2611,6 +2753,19 @@ Examples:
         type=str,
         default=None,
         help="project_id metadata override (default: api_key)",
+    )
+    llm_pool_group = parser.add_mutually_exclusive_group(required=False)
+    llm_pool_group.add_argument(
+        "--llm-pool-id",
+        type=str,
+        default=None,
+        help="Fixed LLM dispatch pool ID to place in metadata.pool_id, for example document-small",
+    )
+    llm_pool_group.add_argument(
+        "--llm-pool-cycle",
+        type=str,
+        default=None,
+        help="Comma-separated LLM dispatch pool IDs to cycle through metadata.pool_id by generated job index",
     )
 
     parser.add_argument(
@@ -2741,6 +2896,12 @@ Examples:
         parser.error("--progress-interval must be greater than zero")
     if args.dry_run_preview_count <= 0:
         parser.error("--dry-run-preview-count must be greater than zero")
+    if args.mock_failure_rate is not None and not (
+        0.0 <= args.mock_failure_rate <= 1.0
+    ):
+        parser.error("--mock-failure-rate must be between 0 and 1 inclusive")
+    if args.force_failure_every is not None and args.force_failure_every <= 0:
+        parser.error("--force-failure-every must be greater than zero")
     if args.soft_sla_seconds is not None and args.soft_sla_seconds < 0:
         parser.error("--soft-sla-seconds must be greater than or equal to zero")
     if args.hard_sla_seconds is not None and args.hard_sla_seconds < 0:
@@ -2761,6 +2922,11 @@ Examples:
         parser.error("--soft-sla-step-seconds requires --soft-sla-seconds")
     if args.hard_sla_step_seconds is not None and args.hard_sla_seconds is None:
         parser.error("--hard-sla-step-seconds requires --hard-sla-seconds")
+    llm_pool_cycle = _parse_csv_values(args.llm_pool_cycle)
+    if args.llm_pool_cycle is not None and not llm_pool_cycle:
+        parser.error("--llm-pool-cycle must contain at least one pool ID")
+    if args.llm_pool_id is not None and not args.llm_pool_id.strip():
+        parser.error("--llm-pool-id cannot be empty")
     if args.min_soft_sla_compliance_pct is not None and not (
         0.0 <= args.min_soft_sla_compliance_pct <= 100.0
     ):
@@ -2775,6 +2941,9 @@ Examples:
         )
     args.live_report = args.live_report or args.live_json_compat
     args.report = args.report or args.report_json_compat
+    args.llm_pool_cycle_values = (
+        llm_pool_cycle if args.llm_pool_cycle is not None else None
+    )
     return args
 
 
@@ -2932,6 +3101,11 @@ async def main() -> None:
         ref_type=args.ref_type,
         policy=args.policy,
         project_id=args.project_id,
+        llm_pool_id=args.llm_pool_id,
+        llm_pool_cycle=args.llm_pool_cycle_values,
+        mock_failure_rate=args.mock_failure_rate,
+        mock_failure_mode=args.mock_failure_mode,
+        force_failure_every=args.force_failure_every,
         upload_companion_meta=not args.skip_companion_meta_upload,
         batch_size=args.batch_size,
         progress_interval=args.progress_interval,

@@ -132,7 +132,7 @@ def test_resolve_s3_inputs_supports_direct_uri_and_manifest(tmp_path: Path) -> N
     ) == [
         "s3://marie/gen5_extract/a.tif",
         "s3://marie/gen5_extract/b.tif",
-    ]    
+    ]
 
 
 def test_parse_duration_seconds_supports_suffixes() -> None:
@@ -171,7 +171,9 @@ def test_build_input_assets_supports_existing_s3_mode(tmp_path: Path) -> None:
     assert local_assets[0].existing_s3_uri is None
 
 
-def test_build_dry_run_plan_includes_resolved_payload_for_local_input(tmp_path: Path) -> None:
+def test_build_dry_run_plan_includes_resolved_payload_for_local_input(
+    tmp_path: Path,
+) -> None:
     asset_path = tmp_path / "sample.tif"
     asset_path.write_text("x")
     companion_meta = tmp_path / "sample.tif.meta.json"
@@ -218,7 +220,10 @@ def test_build_dry_run_plan_includes_resolved_payload_for_local_input(tmp_path: 
     assert submission["upload_companion_meta_planned"] is True
     assert submission["s3_uri"].startswith("s3://stress-bucket/extract/")
     assert submission["metadata"]["uri"] == submission["s3_uri"]
-    assert submission["request_payload"]["parameters"]["invoke_action"]["metadata"]["uri"] == submission["s3_uri"]
+    assert (
+        submission["request_payload"]["parameters"]["invoke_action"]["metadata"]["uri"]
+        == submission["s3_uri"]
+    )
     assert submission["transport"]["url"] == "http://localhost:51000/api/v1/invoke"
 
 
@@ -405,7 +410,9 @@ def test_live_report_supports_html_output(tmp_path: Path) -> None:
     written = live_report_path.read_text()
 
     assert "Gateway E2E Live Report" in written
-    assert "Auto-refreshing aggregate view of throughput, backlog, and latency." in written
+    assert (
+        "Auto-refreshing aggregate view of throughput, backlog, and latency." in written
+    )
     assert 'http-equiv="refresh"' in written
     assert "Run Health" in written
     assert "Throughput and Flow" in written
@@ -486,7 +493,9 @@ def test_resolve_report_format_defaults_from_extension() -> None:
     assert resolve_report_format("/tmp/report", "auto") == "json"
 
 
-def test_log_submit_summary_includes_source_and_s3_uri(caplog: pytest.LogCaptureFixture) -> None:
+def test_log_submit_summary_includes_source_and_s3_uri(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     stresser = GatewayE2EStresser(
         gateway_host="localhost",
         gateway_port=51000,
@@ -537,7 +546,9 @@ def test_log_submit_summary_includes_source_and_s3_uri(caplog: pytest.LogCapture
 
     assert "Submitted job_index=0 request_id=job-1 job_id=gateway-job-1" in caplog.text
     assert "source=/tmp/sample.tif" in caplog.text
-    assert "s3_uri=s3://stress-bucket/extract/job-1-sample/job-1-sample.tif" in caplog.text
+    assert (
+        "s3_uri=s3://stress-bucket/extract/job-1-sample/job-1-sample.tif" in caplog.text
+    )
 
 
 def test_job_run_latency_properties() -> None:
@@ -657,6 +668,201 @@ def test_build_metadata_applies_relative_sla_offsets() -> None:
     assert run.soft_sla_at == 1030.0
     assert run.hard_sla_at == 1120.0
     assert metadata["policy"] == "strict"
+
+
+def test_build_metadata_injects_mock_failure_controls() -> None:
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key="system:gateway",
+        queue_name="extract",
+        planner="extract",
+        input_assets=[
+            InputAsset(
+                source_name="sample.tif",
+                source_path="s3://marie/sample.tif",
+                existing_s3_uri="s3://marie/sample.tif",
+            )
+        ],
+        job_count=2,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=1.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config=None,
+        queue_config=None,
+        metadata_template=None,
+        template_job_name=None,
+        fault_profile="normal",
+        mock_failure_rate=0.25,
+        mock_failure_mode="timeout",
+        force_failure_every=2,
+    )
+    first_run = stresser._build_run(stresser.input_assets[0], 0)
+    second_run = stresser._build_run(stresser.input_assets[0], 1)
+
+    first_metadata = stresser._build_metadata(first_run, sla_anchor_at=1000.0)
+    second_metadata = stresser._build_metadata(second_run, sla_anchor_at=1000.0)
+
+    assert first_metadata["failure_rate"] == 0.25
+    assert first_metadata["failure_mode"] == "timeout"
+    assert "force_fail" not in first_metadata
+    assert first_metadata["stress_failure_simulation"]["force_fail"] is False
+    assert first_run.mock_failure_rate == 0.25
+    assert first_run.mock_failure_mode == "timeout"
+    assert first_run.force_fail is False
+
+    assert second_metadata["failure_rate"] == 0.25
+    assert second_metadata["failure_mode"] == "timeout"
+    assert second_metadata["force_fail"] is True
+    assert second_metadata["stress_failure_simulation"] == {
+        "source": "gateway_e2e_stresser",
+        "mock_failure_rate": 0.25,
+        "mock_failure_mode": "timeout",
+        "force_failure_every": 2,
+        "force_fail": True,
+    }
+    assert second_run.force_fail is True
+
+
+def test_build_metadata_injects_fixed_llm_pool_controls() -> None:
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key="system:gateway",
+        queue_name="extract",
+        planner="extract",
+        input_assets=[
+            InputAsset(
+                source_name="sample.tif",
+                source_path="s3://marie/sample.tif",
+                existing_s3_uri="s3://marie/sample.tif",
+            )
+        ],
+        job_count=1,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=1.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config=None,
+        queue_config=None,
+        metadata_template={"source": "unit-test"},
+        template_job_name=None,
+        fault_profile="normal",
+        llm_pool_id="document-small",
+    )
+    run = stresser._build_run(stresser.input_assets[0], 0)
+
+    metadata = stresser._build_metadata(run, sla_anchor_at=1000.0)
+
+    assert run.llm_pool_id == "document-small"
+    assert metadata["pool_id"] == "document-small"
+
+
+def test_build_metadata_cycles_llm_pool_controls() -> None:
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key="system:gateway",
+        queue_name="extract",
+        planner="extract",
+        input_assets=[
+            InputAsset(
+                source_name="sample.tif",
+                source_path="s3://marie/sample.tif",
+                existing_s3_uri="s3://marie/sample.tif",
+            )
+        ],
+        job_count=3,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=1.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config=None,
+        queue_config=None,
+        metadata_template=None,
+        template_job_name=None,
+        fault_profile="normal",
+        llm_pool_cycle=["document-small", "document-medium"],
+    )
+    runs = [stresser._build_run(stresser.input_assets[0], index) for index in range(3)]
+
+    metadata = [stresser._build_metadata(run, sla_anchor_at=1000.0) for run in runs]
+
+    assert [run.llm_pool_id for run in runs] == [
+        "document-small",
+        "document-medium",
+        "document-small",
+    ]
+    assert [item["pool_id"] for item in metadata] == [
+        "document-small",
+        "document-medium",
+        "document-small",
+    ]
+
+
+def test_build_dry_run_plan_previews_failure_simulation(tmp_path: Path) -> None:
+    asset_path = tmp_path / "sample.tif"
+    asset_path.write_text("x")
+
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key="system:gateway",
+        queue_name="extract",
+        planner="extract",
+        input_assets=[
+            InputAsset(
+                source_name=asset_path.name,
+                source_path=str(asset_path),
+                local_path=asset_path.resolve(),
+            )
+        ],
+        job_count=2,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=1.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config={"S3_STORAGE_BUCKET_NAME": "stress-bucket"},
+        queue_config=None,
+        metadata_template=None,
+        template_job_name=None,
+        fault_profile="normal",
+        mock_failure_mode="exception",
+        force_failure_every=2,
+        upload_companion_meta=False,
+    )
+
+    plan = stresser.build_dry_run_plan()
+    forced_submission = plan["submissions"][1]
+
+    assert plan["mock_failure_rate"] is None
+    assert plan["mock_failure_mode"] == "exception"
+    assert plan["force_failure_every"] == 2
+    assert forced_submission["force_fail"] is True
+    assert forced_submission["metadata"]["force_fail"] is True
+    assert (
+        forced_submission["request_payload"]["parameters"]["invoke_action"]["metadata"][
+            "force_fail"
+        ]
+        is True
+    )
 
 
 def test_build_metadata_applies_incremental_sla_offsets_with_cycle() -> None:
@@ -900,7 +1106,9 @@ def test_write_json_report_includes_debug_samples(tmp_path: Path) -> None:
     assert payload["debug_sampling"]["samples"][0]["stage"] == "end"
     assert payload["debug_sampling"]["samples"][0]["active_dags_count"] == 4
     assert payload["debug_sampling"]["samples"][0]["fetch_counter"] == 12
-    assert payload["debug_sampling"]["samples"][0]["llm_dispatch_running_dispatchers"] == 1
+    assert (
+        payload["debug_sampling"]["samples"][0]["llm_dispatch_running_dispatchers"] == 1
+    )
 
 
 def test_finalize_metrics_tracks_sla_compliance_and_verification() -> None:

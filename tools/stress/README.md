@@ -36,6 +36,7 @@ Use it when the goal is to test:
 - **Live progress monitoring**: configurable console progress cadence and optional live JSON or HTML snapshots during the run
 - **Latency breakdowns**: submit, scheduling, queue wait, execution, and end-to-end timing
 - **SLA verification**: stamps `soft_sla` / `hard_sla` onto each request and reports compliance
+- **Mock executor failure injection**: stamps `failure_rate`, `failure_mode`, and deterministic `force_fail` controls for mock-executor runs
 - **AIMock fault profile integration**: can switch the mock backend into `normal`, `timeout`, `error`, or randomized `chaos`
 
 #### Usage
@@ -131,6 +132,18 @@ python tools/stress/gateway_e2e_stresser.py \
     --planner extract \
     --fault-profile chaos \
     --aimock-admin-url http://localhost:4011
+
+# Force every fifth mock-executor job to fail while keeping the rest at a 10% failure rate
+python tools/stress/gateway_e2e_stresser.py \
+    --config tools/stress/gateway-e2e.config.example.json \
+    --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \
+    --job-count 50 \
+    --job-name mock_parallel_subgraphs \
+    --planner mock_parallel_subgraphs \
+    --mock-failure-rate 0.10 \
+    --mock-failure-mode exception \
+    --force-failure-every 5 \
+    --report /tmp/gateway-e2e-failures.html
 
 # Preview exactly what would be submitted without uploading or calling the gateway
 python tools/stress/gateway_e2e_stresser.py \
@@ -742,6 +755,19 @@ python tools/stress/gateway_e2e_stresser.py \
   --report /tmp/gateway-upload-report.html
 ```
 
+Cycle work across document-size LLM pools:
+
+```bash
+python tools/stress/gateway_e2e_stresser.py \
+  --config tools/stress/gateway-e2e.config.example.json \
+  --s3-uri-manifest /tmp/staged-documents.txt \
+  --job-count 60 \
+  --job-name gen5_extract \
+  --planner extract \
+  --llm-pool-cycle document-small,document-medium,document-large \
+  --debug-sample-interval 5
+```
+
 #### Important options
 
 | Option | Description |
@@ -756,6 +782,8 @@ python tools/stress/gateway_e2e_stresser.py \
 | `--live-report-format` | Override live report format; default `auto` infers from `.json` or `.html` |
 | `--job-name` | Gateway submit name / scheduler queue name |
 | `--planner` | Planner to place in metadata |
+| `--llm-pool-id` | Fixed LLM dispatch pool ID to place in `metadata.pool_id`, for example `document-small` |
+| `--llm-pool-cycle` | Comma-separated LLM dispatch pool IDs to cycle through `metadata.pool_id` by generated job index |
 | `--submit-rate` | Target submit rate in jobs per second |
 | `--dry-run-preview-count` | Number of sample submissions to show when `--dry-run` is combined with `--run-time` |
 | `--fault-profile` | Run label and AIMock control target: `normal`, `timeout`, `error`, `chaos` |

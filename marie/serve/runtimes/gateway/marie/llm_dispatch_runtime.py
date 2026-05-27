@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 from functools import partial
 from typing import Any, Callable, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from marie.engine.llm_queue.config import LlmQueueConfig
 from marie.engine.llm_queue.queue_io import ValkeyListQueueClient
+from marie.engine.llm_queue.scheduler import DrrLaneConfig
 from marie.engine.llm_queue.scheduler_config import (
     DatabaseSchedulerConfigSource,
     LlmQueueSchedulerConfig,
@@ -56,6 +58,8 @@ class GatewayLlmDispatchRuntime:
         self._queue_client = None
         self._dispatcher = None
         self._last_error: Optional[str] = None
+        self._started_pool_ids: list[str] = []
+        self._started_scheduler_policy: Optional[str] = None
 
     @property
     def enabled(self) -> bool:
@@ -65,11 +69,19 @@ class GatewayLlmDispatchRuntime:
         if self._dispatcher is not None:
             health = dict(self._dispatcher.health())
             health.setdefault("last_error", self._last_error)
+            pool_ids = _pool_ids_from_health(health) or list(self._started_pool_ids)
+            if pool_ids:
+                health.setdefault("pool_ids", pool_ids)
+                health.setdefault("pool_count", len(pool_ids))
+            if self._started_scheduler_policy:
+                health.setdefault("scheduler_policy", self._started_scheduler_policy)
             return health
 
         return {
             "enabled": self.config.enabled,
             "pool_id": self.config.pool_id,
+            "pool_ids": [self.config.pool_id],
+            "pool_count": 1,
             "valkey_configured": bool(self.config.valkey_url),
             "running": False,
             "last_error": self._last_error,
@@ -98,11 +110,7 @@ class GatewayLlmDispatchRuntime:
 
             queue_client = self._queue_client_factory(self.config.valkey_url)
             scheduler_config = ensure_default_pool(self._scheduler_config_source.load())
-            pool_ids = (
-                [lane.pool_id for lane in scheduler_config.lanes if lane.enabled]
-                if scheduler_config.is_drr
-                else [self.config.pool_id]
-            )
+            pool_ids = _runtime_pool_ids(scheduler_config, self.config.pool_id)
             for pool_id in pool_ids:
                 queue_client.request_queue_depth(pool_id)
 
@@ -125,11 +133,15 @@ class GatewayLlmDispatchRuntime:
 
             self._queue_client = queue_client
             self._dispatcher = dispatcher
+            self._started_pool_ids = pool_ids
+            self._started_scheduler_policy = scheduler_config.policy
             self._last_error = None
             self.logger.info(
-                "Started LLM dispatch runtime for pool '%s' against %s",
-                self.config.pool_id,
-                openai_base_url or "default OpenAI endpoint",
+                _format_started_runtime_log(
+                    scheduler_config=scheduler_config,
+                    fallback_pool_id=self.config.pool_id,
+                    default_endpoint_url=openai_base_url,
+                )
             )
         except Exception as exc:
             self._last_error = str(exc)
@@ -156,9 +168,13 @@ class GatewayLlmDispatchRuntime:
     async def stop(self) -> None:
         dispatcher = self._dispatcher
         queue_client = self._queue_client
+        pool_ids = self._started_pool_ids or [self.config.pool_id]
+        scheduler_policy = self._started_scheduler_policy or "fifo"
 
         self._dispatcher = None
         self._queue_client = None
+        self._started_pool_ids = []
+        self._started_scheduler_policy = None
 
         if dispatcher is not None:
             try:
@@ -174,7 +190,9 @@ class GatewayLlmDispatchRuntime:
 
         if self.enabled:
             self.logger.info(
-                "Stopped LLM dispatch runtime for pool '%s'", self.config.pool_id
+                "Stopped LLM %s dispatch runtime for %s",
+                scheduler_policy.upper(),
+                _describe_pool_scope(pool_ids),
             )
 
 
@@ -259,6 +277,97 @@ def _build_scheduler_config_source(
             default_total_concurrent_dispatch=default_total_concurrent_dispatch,
         )
     return StaticSchedulerConfigSource(LlmQueueSchedulerConfig())
+
+
+def _runtime_pool_ids(
+    scheduler_config: LlmQueueSchedulerConfig,
+    fallback_pool_id: str,
+) -> list[str]:
+    if not scheduler_config.is_drr:
+        return [fallback_pool_id]
+    return [lane.pool_id for lane in scheduler_config.lanes if lane.enabled]
+
+
+def _describe_pool_scope(pool_ids: list[str]) -> str:
+    if len(pool_ids) == 1:
+        return f"pool '{pool_ids[0]}'"
+    return f"{len(pool_ids)} pools: {', '.join(pool_ids)}"
+
+
+def _pool_ids_from_health(health: dict[str, object]) -> list[str]:
+    lanes = health.get("lanes")
+    if not isinstance(lanes, list):
+        return []
+    pool_ids: list[str] = []
+    for lane in lanes:
+        if not isinstance(lane, dict):
+            continue
+        pool_id = lane.get("pool_id")
+        if isinstance(pool_id, str) and pool_id:
+            pool_ids.append(pool_id)
+    return pool_ids
+
+
+def _format_started_runtime_log(
+    *,
+    scheduler_config: LlmQueueSchedulerConfig,
+    fallback_pool_id: str,
+    default_endpoint_url: Optional[str],
+) -> str:
+    if not scheduler_config.is_drr:
+        return "\n".join(
+            [
+                "Started LLM FIFO dispatch runtime",
+                f"  pool: {fallback_pool_id}",
+                f"  endpoint: {_display_endpoint(default_endpoint_url)}",
+            ]
+        )
+
+    lines = [
+        "Started LLM DRR dispatch runtime",
+        f"  pools: {len(_runtime_pool_ids(scheduler_config, fallback_pool_id))}",
+        "  routes:",
+    ]
+    for lane in scheduler_config.lanes:
+        if not lane.enabled:
+            continue
+        lines.append(f"    - {_format_lane_route(lane, default_endpoint_url)}")
+    return "\n".join(lines)
+
+
+def _format_lane_route(
+    lane: DrrLaneConfig,
+    default_endpoint_url: Optional[str],
+) -> str:
+    endpoint = lane.endpoint_url or default_endpoint_url
+    endpoint_source = "explicit" if lane.endpoint_url else "runtime default"
+    max_concurrent = (
+        str(lane.max_concurrent) if lane.max_concurrent is not None else "unbounded"
+    )
+    max_burst = (
+        str(lane.max_burst_per_visit)
+        if lane.max_burst_per_visit is not None
+        else "default"
+    )
+    return (
+        f"{lane.pool_id} -> {_display_endpoint(endpoint)} "
+        f"({endpoint_source}; quantum={lane.quantum}, "
+        f"protected={lane.min_concurrent}, max={max_concurrent}, burst={max_burst})"
+    )
+
+
+def _display_endpoint(endpoint_url: Optional[str]) -> str:
+    if not endpoint_url:
+        return "configured OpenAI-compatible endpoint"
+
+    parsed = urlsplit(endpoint_url)
+    if not parsed.username and not parsed.password:
+        return endpoint_url
+
+    host = parsed.hostname or ""
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
 
 
 def _scheduler_fabric_group_id(

@@ -23,21 +23,48 @@ from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (
     _scheduler_fabric_group_id,
     _scheduler_repository_config,
 )
-from marie.serve.runtimes.servers.marie_gateway import MarieServerGateway
+from marie.serve.runtimes.servers.marie_gateway import (
+    LLM_DISPATCH_RUNTIME_EVENT,
+    LLM_DISPATCH_RUNTIME_IDLE_SNAPSHOT_INTERVAL_S,
+    LLM_DISPATCH_RUNTIME_MARKER,
+    LLM_DISPATCH_RUNTIME_SOURCE,
+    MarieServerGateway,
+    _llm_dispatch_runtime_event_message,
+    _llm_queue_runtime_config,
+    _should_publish_llm_dispatch_runtime_event,
+)
+
+
+def _format_log_message(args):
+    if not args:
+        return ""
+    message = str(args[0])
+    if len(args) > 1:
+        try:
+            return message % args[1:]
+        except TypeError:
+            return message
+    return message
 
 
 class _Logger:
+    def __init__(self):
+        self.info_messages = []
+        self.warning_messages = []
+        self.error_messages = []
+        self.exception_messages = []
+
     def info(self, *args, **kwargs):
-        pass
+        self.info_messages.append(_format_log_message(args))
 
     def warning(self, *args, **kwargs):
-        pass
+        self.warning_messages.append(_format_log_message(args))
 
     def error(self, *args, **kwargs):
-        pass
+        self.error_messages.append(_format_log_message(args))
 
     def exception(self, *args, **kwargs):
-        pass
+        self.exception_messages.append(_format_log_message(args))
 
 
 def _queue_config(**overrides) -> LlmQueueConfig:
@@ -97,12 +124,20 @@ class _FakeDispatcher:
         self.running = False
 
     def health(self) -> dict[str, object]:
-        return {
+        health = {
             "enabled": self.config.enabled,
             "pool_id": self.config.pool_id,
             "running": self.running,
             "request_queue_depth": 0,
         }
+        if self.scheduler_config.is_drr:
+            health["scheduler_policy"] = "drr"
+            health["lanes"] = [
+                {"pool_id": lane.pool_id}
+                for lane in self.scheduler_config.lanes
+                if lane.enabled
+            ]
+        return health
 
 
 class _FakeSchedulerConfigRepository:
@@ -226,6 +261,76 @@ def test_llm_queue_config_reads_runtime_fabric_identity_from_env():
     assert config.gateway_id == "gateway-localhost"
 
 
+def test_llm_dispatch_runtime_event_uses_control_plane_event_shape():
+    snapshot = {
+        "contract_version": "v2",
+        "runtime_summary": {
+            "registered_dispatchers": 1,
+            "running_dispatchers": 1,
+            "pending_request_count": 2,
+        },
+        "live_requests": [],
+        "dispatchers": [],
+    }
+
+    event = _llm_dispatch_runtime_event_message(
+        snapshot=snapshot,
+        queue_config=_queue_config(
+            fabric_group_id="default",
+            gateway_id="gateway-localhost",
+        ),
+    )
+
+    assert event.event == "engine.event"
+    assert event.source == LLM_DISPATCH_RUNTIME_SOURCE
+    assert event.source == "gateway://control-plane"
+    assert event.api_key == "system:gateway"
+    assert event.jobid == "gateway"
+    assert event.jobtag == LLM_DISPATCH_RUNTIME_MARKER
+    assert event.status == "INFO"
+
+    assert event.payload["message"] == "LLM dispatch runtime snapshot updated"
+    assert event.payload["marker_start"] == LLM_DISPATCH_RUNTIME_MARKER
+    assert event.payload["component"] == "llm_dispatch_runtime"
+    assert event.payload["event_type"] == LLM_DISPATCH_RUNTIME_EVENT
+    assert event.payload["fabric_group_id"] == "default"
+    assert event.payload["gateway_id"] == "gateway-localhost"
+    assert event.payload["pool_id"] == "default"
+    assert event.payload["result"] == snapshot
+    assert event.payload["metadata"]["llm_dispatch_runtime"].value == snapshot
+
+
+def test_llm_dispatch_runtime_event_publish_policy_repeats_idle_snapshots():
+    assert _should_publish_llm_dispatch_runtime_event(
+        fingerprint="snapshot-a",
+        last_fingerprint=None,
+        last_published_at=0.0,
+        now=1.0,
+        unchanged_interval_s=LLM_DISPATCH_RUNTIME_IDLE_SNAPSHOT_INTERVAL_S,
+    )
+    assert not _should_publish_llm_dispatch_runtime_event(
+        fingerprint="snapshot-a",
+        last_fingerprint="snapshot-a",
+        last_published_at=10.0,
+        now=10.5,
+        unchanged_interval_s=LLM_DISPATCH_RUNTIME_IDLE_SNAPSHOT_INTERVAL_S,
+    )
+    assert _should_publish_llm_dispatch_runtime_event(
+        fingerprint="snapshot-a",
+        last_fingerprint="snapshot-a",
+        last_published_at=10.0,
+        now=10.0 + LLM_DISPATCH_RUNTIME_IDLE_SNAPSHOT_INTERVAL_S,
+        unchanged_interval_s=LLM_DISPATCH_RUNTIME_IDLE_SNAPSHOT_INTERVAL_S,
+    )
+    assert _should_publish_llm_dispatch_runtime_event(
+        fingerprint="snapshot-b",
+        last_fingerprint="snapshot-a",
+        last_published_at=10.0,
+        now=10.5,
+        unchanged_interval_s=LLM_DISPATCH_RUNTIME_IDLE_SNAPSHOT_INTERVAL_S,
+    )
+
+
 def test_database_scheduler_config_source_reads_repository_mapping():
     repository = _FakeSchedulerConfigRepository(
         {
@@ -294,6 +399,57 @@ def test_runtime_scheduler_repository_config_uses_llm_queue_block():
     assert _scheduler_fabric_group_id(_queue_config(), config) == "default"
 
 
+def test_llm_queue_runtime_config_inherits_job_scheduler_postgres_config():
+    config = _llm_queue_runtime_config(
+        {
+            "llm_queue": {"fabric_group_id": "default"},
+            "job_scheduler_kwargs": {
+                "provider": "postgresql",
+                "hostname": "postgres",
+                "port": 5432,
+                "username": "marie",
+                "password": "test",
+                "database": "postgres",
+                "schema": "marie_scheduler",
+            },
+        }
+    )
+
+    repository_config = _scheduler_repository_config(config)
+
+    assert repository_config is not None
+    assert repository_config["hostname"] == "postgres"
+    assert repository_config["schema"] == "marie_scheduler"
+    assert config["fabric_group_id"] == "default"
+
+
+def test_llm_queue_runtime_config_preserves_explicit_scheduler_postgres_config():
+    config = _llm_queue_runtime_config(
+        {
+            "llm_queue": {
+                "scheduler": {
+                    "psql": {
+                        "provider": "postgresql",
+                        "hostname": "llm-postgres",
+                        "schema": "llm_scheduler",
+                    }
+                }
+            },
+            "job_scheduler_kwargs": {
+                "provider": "postgresql",
+                "hostname": "job-postgres",
+                "schema": "marie_scheduler",
+            },
+        }
+    )
+
+    repository_config = _scheduler_repository_config(config)
+
+    assert repository_config is not None
+    assert repository_config["hostname"] == "llm-postgres"
+    assert repository_config["schema"] == "llm_scheduler"
+
+
 def test_build_dispatcher_uses_drr_dispatcher_for_drr_policy():
     scheduler_config = LlmQueueSchedulerConfig(
         policy="drr",
@@ -357,10 +513,17 @@ def test_build_dispatcher_builds_lane_endpoint_adapters():
 async def test_gateway_runtime_uses_injected_scheduler_config_source():
     queue_clients = []
     dispatchers = []
+    logger = _Logger()
     scheduler_config = LlmQueueSchedulerConfig(
         policy="drr",
         total_concurrent_dispatch=2,
-        lanes=(DrrLaneConfig(pool_id="interactive"), DrrLaneConfig(pool_id="backfill")),
+        lanes=(
+            DrrLaneConfig(
+                pool_id="interactive",
+                endpoint_url="http://user:secret@interactive:4000/v1",
+            ),
+            DrrLaneConfig(pool_id="backfill"),
+        ),
     )
 
     def queue_client_factory(url: str):
@@ -391,7 +554,7 @@ async def test_gateway_runtime_uses_injected_scheduler_config_source():
         return dispatcher
 
     runtime = GatewayLlmDispatchRuntime(
-        logger=_Logger(),
+        logger=logger,
         queue_config=_queue_config(),
         queue_client_factory=queue_client_factory,
         dispatcher_factory=dispatcher_factory,
@@ -406,6 +569,7 @@ async def test_gateway_runtime_uses_injected_scheduler_config_source():
         },
     ):
         await runtime.start()
+        health = runtime.health()
         await runtime.stop()
 
     assert queue_clients[0].depth_calls == [
@@ -413,6 +577,37 @@ async def test_gateway_runtime_uses_injected_scheduler_config_source():
         "backfill",
         DEFAULT_LLM_QUEUE_POOL_ID,
     ]
+    assert health["pool_ids"] == [
+        "interactive",
+        "backfill",
+        DEFAULT_LLM_QUEUE_POOL_ID,
+    ]
+    assert health["pool_count"] == 3
+    started_message = next(
+        message
+        for message in logger.info_messages
+        if message.startswith("Started LLM DRR dispatch runtime")
+    )
+    assert "  pools: 3" in started_message
+    assert (
+        "interactive -> http://interactive:4000/v1 "
+        "(explicit; quantum=1, protected=0, max=unbounded, burst=default)"
+        in started_message
+    )
+    assert (
+        "backfill -> http://queue-backend:4000/v1 "
+        "(runtime default; quantum=1, protected=0, max=unbounded, burst=default)"
+        in started_message
+    )
+    assert (
+        "default -> http://queue-backend:4000/v1 "
+        "(runtime default; quantum=1, protected=0, max=unbounded, burst=default)"
+        in started_message
+    )
+    assert (
+        "Stopped LLM DRR dispatch runtime for 3 pools: interactive, backfill, default"
+        in logger.info_messages
+    )
     assert [lane.pool_id for lane in dispatchers[0].scheduler_config.lanes] == [
         "interactive",
         "backfill",

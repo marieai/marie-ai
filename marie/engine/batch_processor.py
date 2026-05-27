@@ -304,7 +304,7 @@ class BatchProcessor:
         call: CompletionCallParams,
         task_id: str,
         request_id: str,
-        metadata: Optional[Dict[str, str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ):
         """Asynchronously performs inference for one canonical completion call."""
         start = time.time()
@@ -429,7 +429,7 @@ class BatchProcessor:
         call: CompletionCallParams,
         task_id: str,
         request_id: str,
-        metadata: Optional[Dict[str, str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ):
         try:
             """Use tenacity to retry the completion call."""
@@ -454,8 +454,8 @@ class BatchProcessor:
         calls: List[CompletionCallParams],
         request_id: str,
         on_result: Optional[Callable[[str, Optional[str]], None]] = None,
-        metadata: Optional[Dict[str, str]] = None,
-        metadata_list: Optional[List[Optional[Dict[str, str]]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        metadata_list: Optional[List[Optional[Dict[str, Any]]]] = None,
     ):
 
         # Share one limiter across all overlapping batch calls that use this
@@ -552,7 +552,7 @@ class BatchProcessor:
         system_prompt: Optional[str] = None,
         guided_json: Optional[Union[Dict, BaseModel, str]] = None,
         on_result: Optional[Callable[[str, Optional[str]], None]] = None,
-        metadata: Optional[Dict[str, str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> List[str]:
         """
@@ -634,7 +634,7 @@ class BatchProcessor:
         start_time: Optional[float] = None,
         batch_span=None,
         on_result: Optional[Callable[[str, Optional[str]], None]] = None,
-        metadata: Optional[Dict[str, str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         request_id = request_id or str(uuid.uuid4())
         start_time = start_time or time.time()
