@@ -106,7 +106,7 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
                         os.path.splitext(os.path.basename(name))[0].rsplit("_", 1)[-1]
                     ),
                 )
-                store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.tif")
+                # store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.tif")
 
                 # Todo does incominng image need to be updated?
 
