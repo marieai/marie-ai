@@ -138,7 +138,7 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
         finally:
             del frames
             torch_gc()
-            (MDC.remove("request_id"))
+            MDC.remove("request_id")
 
     @requests(on="/document/collate")
     def collate(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
@@ -221,7 +221,11 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
         pages = get_pipeline_pages(ref_id, ref_type, runtime_conf, pipeline_conf)
 
         for index, page_set in pages.items():
-            self.logger.info(f"Processing page set {index} with {len(page_set)} pages")
+            if page_set:
+                self.logger.info(
+                    f"Processing page set {index} with {len(page_set)} pages"
+                )
+
             frames = get_frames_from_docs(docs, page_set)
             root_asset_dir = create_working_dir(
                 frames,
@@ -242,7 +246,7 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
                     pages=page_set,
                 )
                 if metadata is None:
-                    self.logger.error(f"Metadata is None, this should not happen")
+                    self.logger.error("Metadata is None, this should not happen")
                     raise ValueError("Pipeline Execution Error: Metadata is None")
 
             except BaseException as error:

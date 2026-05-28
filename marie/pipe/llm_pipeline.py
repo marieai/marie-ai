@@ -144,14 +144,8 @@ class LLMPipeline(BasePipeline):
             "ref_type": ref_type,
             "job_id": job_id,
             "pipeline": self.pipeline_name,
-            f"{self.pipeline_name}": {"pages": f"{len(frames)}", "page_numbers": pages},
             "pages": f"{len(frames)}",
         }
-
-        # metadata.setdefault("pipelines", {})[self.pipeline_name] = {
-        #     "pages": f"{len(frames)}",
-        #     "page_numbers": pages,
-        # }
 
         restore_assets(
             ref_id, ref_type, root_asset_dir, full_restore=True, overwrite=True
@@ -192,7 +186,9 @@ class LLMPipeline(BasePipeline):
                 frames, metadata, ocr_results, runtime_conf, pages
             )
 
-            metadata[self.pipeline_name]["delta_time"] = tc.now()
+            metadata[
+                f"delta_time_{self.pipeline_name}{f"_{min(pages)}-{max(pages)}" if pages else None}"
+            ] = tc.now()
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
         del metadata["ocr"]

@@ -896,15 +896,6 @@ class TransformersSplittingClassifier(BaseDocumentClassifier):
                         }
                     )
 
-                # results.append(
-                #     {
-                #         "current_page_num": len(predictions) + 1,
-                #         "label": 0,
-                #         "score": 1.0,
-                #         "reasoning": "last page",
-                #     }
-                # )
-
         return results
 
     def predict(
@@ -942,12 +933,20 @@ class TransformersSplittingClassifier(BaseDocumentClassifier):
             )
             batchable_doc_pages = batchable_doc_pages[: self.max_pages]
 
+        words = []
+        images = []
+        boxes = []
+        for p in batchable_doc_pages:
+            words.append(p.words)
+            images.append(p.tensor)
+            boxes.append(p.boxes)
+
         dataset = BoundaryDetectionInferenceDataset(
             {
                 1: {
-                    "words": [p.words for p in batchable_doc_pages],
-                    "images": [p.tensor for p in batchable_doc_pages],
-                    "boxes": [p.boxes for p in batchable_doc_pages],
+                    "words": words,
+                    "images": images,
+                    "boxes": boxes,
                 }
             },
             self.processor,
