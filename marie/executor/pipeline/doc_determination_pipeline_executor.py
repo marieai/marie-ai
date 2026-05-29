@@ -1,5 +1,6 @@
 import os
 import tempfile
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from docarray import DocList
@@ -21,10 +22,12 @@ from marie.pipe.components import (
     update_existing_meta,
 )
 from marie.pipe.llm_pipeline import LLMPipeline
+from marie.storage import StorageManager
 from marie.utils.asset_util import (
     create_working_dir,
     download_asset,
     restore_assets,
+    s3_asset_path,
     split_filename,
     store_assets,
 )
@@ -76,7 +79,8 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
                 ref_type,
                 root_asset_dir,
                 overwrite=True,
-                dirs_to_restore=["rotation", "results"],
+                # dirs_to_restore=["rotation", "results"],
+                full_restore=True,  # full_restore is only option that restores tif
             )
             if s3_root_path is None:
                 raise ConnectionError("Unable to collect meta data from")
@@ -98,17 +102,33 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
 
                 self.logger.info(f"Merging TIFF pages for {ref_id}")
                 _, prefix, _ = split_filename(ref_id)
-                # merge_tiff_frames(frames, os.path.join(root_asset_dir, f"{prefix}.tif")) # produces wrong DPI
+                img_name = f"{prefix}.tif"
+                local_img_path = os.path.join(root_asset_dir, img_name)
+
+                # back up original
+                StorageManager.write(
+                    local_img_path,
+                    f"{s3_asset_path(ref_id, ref_type)}/{prefix}_prerotation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.tif",
+                )
+
+                # merge_tiff_frames(frames, os.path.join(root_asset_dir, img_name))
                 merge_tiff(
                     os.path.join(root_asset_dir, "burst"),
-                    os.path.join(root_asset_dir, f"{prefix}.tif"),
+                    local_img_path,
                     sort_key=lambda name: int(
                         os.path.splitext(os.path.basename(name))[0].rsplit("_", 1)[-1]
                     ),
                 )
-                # store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.tif")
 
-                # Todo does incominng image need to be updated?
+                store_assets(ref_id, ref_type, root_asset_dir, match_wildcard=img_name)
+
+                # If job is submitted with image not in ref_id directory, need to update it so downstream jobs access rotated tiff
+                remote_img_path = f"{s3_asset_path(ref_id, ref_type)}/{img_name}"
+                incoming_img_path = docs[0].asset_key
+                if incoming_img_path != remote_img_path:
+                    StorageManager.write(
+                        local_img_path, incoming_img_path, overwrite=True
+                    )
 
             metadata["ocr"] = ocr_frames(
                 self.ocr_engines,
@@ -157,7 +177,7 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
             )
 
             s3_root_path = restore_assets(
-                ref_id, ref_type, root_asset_dir, overwrite=True
+                ref_id, ref_type, root_asset_dir, overwrite=True, full_restore=True
             )
             if s3_root_path is None:
                 raise ConnectionError("Unable to collect meta data from")
@@ -174,7 +194,7 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
 
             store_json_object(metadata, meta_path)
             stored_assets = store_assets(
-                ref_id, ref_type, root_asset_dir, match_wildcard=meta_path
+                ref_id, ref_type, root_asset_dir, match_wildcard=f"{ref_id}.meta.json"
             )
 
             return {
@@ -497,7 +517,6 @@ def doc_determination_collation(meta: Dict[str, Any]) -> Dict[str, Any]:
             # Fill missing pages in range (e.g., [2,3,5] -> [2,3,4,5])
             start_page, end_page = page_numbers[0], page_numbers[-1]
             collated_pages = []
-            new_page = 1
             for page_num in range(start_page, end_page + 1):
                 rot = (
                     rotation_pages.get(str(page_num), rotation_pages.get(page_num, {}))
@@ -506,12 +525,10 @@ def doc_determination_collation(meta: Dict[str, Any]) -> Dict[str, Any]:
                 collated_pages.append(
                     {
                         "page": page_num,
-                        "new_page": new_page,
                         "rotation": rot.get("rotate"),
                         "medical-page-classification": medical_by_page.get(page_num),
                     }
                 )
-                new_page += 1
 
             documents.append(
                 {
