@@ -220,16 +220,13 @@ def merge_tiff_frames(
 
     print(f"Creating multipage tiff : {dst_img_path}")
     with Image() as composite:
-        try:
-            for src_img in frames:
-                src_img = Image.from_array(src_img)
-                frame = src_img.image_get()
-                composite.image_add(frame)
-        except Exception as ident:
-            raise ident
-
         composite.compression = "group4"
         composite.resolution = (300, 300)
+        for f in frames:
+            with Image.from_array(f) as src_img:
+                src_img.compression = "group4"
+                src_img.resolution = (300, 300)
+                composite.image_add(src_img)
         composite.save(filename=dst_img_path)
 
 
