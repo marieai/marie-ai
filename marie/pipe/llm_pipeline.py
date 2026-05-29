@@ -259,6 +259,23 @@ class LLMPipeline(BasePipeline):
                 metadata=metadata,
             )
             if "indexes" in results:
+                # Re-assign original page numbers
+                if pages:
+                    zero_index_pages = results["indexes"]["pages"]
+                    assert len(zero_index_pages) == len(pages)
+                    results["indexes"]["page_numbers"] = pages
+                    reconciled_pages = {}
+                    for page, index in zip(pages, zero_index_pages.values()):
+                        best = index["best"]
+                        if hasattr(best, "page"):
+                            best.page = page
+                        else:
+                            best["page"] = page
+                        for detail in index["details"]:
+                            detail["page"] = page
+                        reconciled_pages[page] = index
+                    results["indexes"]["pages"] = reconciled_pages
+
                 for task_name, index in results["indexes"].items():
                     metadata["indexes"].append(
                         {
