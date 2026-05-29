@@ -173,7 +173,7 @@ class LLMPipeline(BasePipeline):
             queue_id=queue_id,
             force=any_rotated,
         )
-        if pages is not None and not any_rotated:
+        if pages is not None and not any_rotated and len(ocr_results) != len(pages):
             # If we did not do new OCR and are filtering by pages, we need to filter results
             ocr_results[:] = [
                 result for i, result in enumerate(ocr_results) if i in pages
@@ -187,11 +187,13 @@ class LLMPipeline(BasePipeline):
             )
 
             metadata[
-                f"delta_time_{self.pipeline_name}{f"_{min(pages)}-{max(pages)}" if pages else None}"
+                f"delta_time_{self.pipeline_name}{f'_{min(pages)}-{max(pages)}' if pages else ''}"
             ] = tc.now()
+
+        # OCR only stored in results directory until merger node, Preserves S3 and local disk space
+        del metadata["ocr"]
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
-        del metadata["ocr"]
 
         return metadata
 
@@ -256,7 +258,6 @@ class LLMPipeline(BasePipeline):
                 ocr_results,
                 f"{self.pipeline_name}_{group}",
                 include_ocr_lines=True,
-                metadata=metadata,
             )
             if "indexes" in results:
                 # Re-assign original page numbers
