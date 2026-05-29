@@ -7,7 +7,6 @@ from typing import Any, List, Optional, Union
 import numpy as np
 import torch
 from PIL import Image
-from tqdm import tqdm
 
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
@@ -36,9 +35,8 @@ from marie.ocr import CoordinateFormat, OcrEngine
 from marie.overlay.overlay import NoopOverlayProcessor, OverlayProcessor
 from marie.utils.asset_util import filename_supplier_page, split_filename
 from marie.utils.image_utils import (
-    detect_page_rotation,
-    ensure_max_page_size,
     hash_frames_fast,
+    rotate_image_frames,
 )
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.tiff_ops import burst_tiff_frames
@@ -503,23 +501,8 @@ def rotate_frames(
             logger.info(f"Skipping rotation for {ref_id} as frames have not changed")
             return existing_rotation_meta, False
 
-    any_rotated = False
-    page_rotation = dict()
+    page_rotation, any_rotated = rotate_image_frames(frames)
 
-    enumerated_frames = tqdm(
-        enumerate(frames), total=len(frames), desc="page rotation", unit="frame"
-    )
-    for i, frame in enumerated_frames:
-        results = detect_page_rotation(frame)
-        if rotation := results.get("rotate", 0):
-            logger.info(f"Rotating frame {i} by {rotation} degrees")
-            frames[i] = np.rot90(frame, k=-rotation // 90)
-            changed, resized = ensure_max_page_size([frames[i]])
-            if changed:
-                logger.info(f"Resized frame {i} after rotation")
-                frames[i] = resized[0]
-            any_rotated = True
-        page_rotation[i] = results
     result_hash = hash_frames_fast(frames)
     results = {"any_rotated": any_rotated, "hash": result_hash, "pages": page_rotation}
     store_json_object(results, json_path)

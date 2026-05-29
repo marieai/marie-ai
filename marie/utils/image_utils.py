@@ -11,6 +11,7 @@ import PIL.Image
 import pytesseract
 from PIL import Image
 from rich import print
+from tqdm import tqdm
 
 from marie.logging_core.predefined import default_logger as logger
 
@@ -323,7 +324,9 @@ def ensure_max_page_size(
 
 
 def detect_page_rotation(
-    img: str | Image.Image | np.ndarray, compress_size: bool = False
+    img: str | Image.Image | np.ndarray,
+    compress: bool = False,
+    compress_size: Tuple[int, int] = (2000, 2000),
 ) -> dict:
     """detect single page (single image) orientation/rotation"""
     if isinstance(img, (str, bytes, os.PathLike)):
@@ -333,8 +336,17 @@ def detect_page_rotation(
     elif isinstance(img, Image.Image):
         img = img.convert("RGB")
 
-    if compress_size:
-        img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
+    if compress:
+        # This reduces accuracy
+        logger.debug(
+            f"Compressing image to max size {compress_size} for rotation detection"
+        )
+        if isinstance(img, Image.Image):
+            img.thumbnail((compress_size, Image.Resampling.LANCZOS))
+        elif isinstance(img, np.ndarray):
+            _, resized = ensure_max_page_size([img], compress_size)
+            img = resized[0]
+
     try:
         osd = pytesseract.image_to_osd(img, output_type="dict")
         return {
@@ -342,7 +354,30 @@ def detect_page_rotation(
         }
     except pytesseract.TesseractError as e:
         logger.warning(
-            f"Failed to detect page rotation using Tesseract. Probably a blank page."
+            "Failed to detect page rotation using Tesseract. Probably a blank page."
         )
         logger.debug(f"Tesseract Error: {e}")
         return {"rotate": 0, "orientation": 0, "orientation_conf": 0, "error": e}
+
+
+def rotate_image_frames(frames: list[np.ndarray]) -> Tuple[dict, bool]:
+    any_rotated = False
+    page_rotation = dict()
+
+    # yappi.start()
+    enumerated_frames = tqdm(
+        enumerate(frames), total=len(frames), desc="page rotation", unit="frame"
+    )
+    for i, frame in enumerated_frames:
+        results = detect_page_rotation(frame)
+        if rotation := results.get("rotate", 0):
+            logger.info(f"Rotating frame {i} by {rotation} degrees")
+            frames[i] = np.rot90(frame, k=-rotation // 90)
+            changed, resized = ensure_max_page_size([frames[i]])
+            if changed:
+                logger.info(f"Resized frame {i} after rotation")
+                frames[i] = resized[0]
+            any_rotated = True
+        page_rotation[i] = results
+    # yappi.stop()
+    return page_rotation, any_rotated
