@@ -360,24 +360,33 @@ def detect_page_rotation(
         return {"rotate": 0, "orientation": 0, "orientation_conf": 0, "error": e}
 
 
-def rotate_image_frames(frames: list[np.ndarray]) -> Tuple[dict, bool]:
+def rotate_image_frames(
+    frames: list[np.ndarray], threshold: float = 2.0
+) -> Tuple[dict, bool]:
     any_rotated = False
     page_rotation = dict()
 
-    # yappi.start()
     enumerated_frames = tqdm(
         enumerate(frames), total=len(frames), desc="page rotation", unit="frame"
     )
     for i, frame in enumerated_frames:
         results = detect_page_rotation(frame)
-        if rotation := results.get("rotate", 0):
-            logger.info(f"Rotating frame {i} by {rotation} degrees")
+        rotation = results.get("rotate", 0)
+        conf = results.get("orientation_conf", 0)
+        page_rotation[i] = results
+        if rotation:
+            if conf <= threshold:
+                logger.info(
+                    f"Frame: {i} Degrees: {rotation} - Skipping with low confidence: {conf}"
+                )
+                continue
+            logger.info(
+                f"Frame: {i} Degrees: {rotation} - Rotating with confidence: {conf}"
+            )
             frames[i] = np.rot90(frame, k=-rotation // 90)
             changed, resized = ensure_max_page_size([frames[i]])
             if changed:
                 logger.info(f"Resized frame {i} after rotation")
                 frames[i] = resized[0]
             any_rotated = True
-        page_rotation[i] = results
-    # yappi.stop()
     return page_rotation, any_rotated

@@ -485,6 +485,7 @@ def rotate_frames(
     frames: List[np.ndarray],
     root_asset_dir: str,
     force: bool = False,
+    threshold: float = 2.0,
 ) -> tuple[dict, bool]:
     """Rotate frames in-place based on detected orientation"""
     output_dir = ensure_exists(os.path.join(root_asset_dir, "rotation"))
@@ -501,10 +502,15 @@ def rotate_frames(
             logger.info(f"Skipping rotation for {ref_id} as frames have not changed")
             return existing_rotation_meta, False
 
-    page_rotation, any_rotated = rotate_image_frames(frames)
+    page_rotation, any_rotated = rotate_image_frames(frames, threshold=threshold)
 
     result_hash = hash_frames_fast(frames)
-    results = {"any_rotated": any_rotated, "hash": result_hash, "pages": page_rotation}
+    results = {
+        "any_rotated": any_rotated,
+        "hash": result_hash,
+        "threshold": threshold,
+        "pages": page_rotation,
+    }
     store_json_object(results, json_path)
 
     return results, any_rotated
