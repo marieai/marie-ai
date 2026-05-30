@@ -1,4 +1,15 @@
 {{- if .Values.enabled }}
+{{- $postgresql := .Values.global.postgresql | default dict }}
+{{- $postgresqlAuth := $postgresql.auth | default dict }}
+{{- $postgresqlExternal := $postgresql.external | default dict }}
+{{- $rabbitmq := .Values.global.rabbitmq | default dict }}
+{{- $rabbitmqExternal := $rabbitmq.external | default dict }}
+{{- $etcd := .Values.global.etcd | default dict }}
+{{- $etcdExternal := $etcd.external | default dict }}
+{{- $minio := .Values.global.minio | default dict }}
+{{- $minioExternal := $minio.external | default dict }}
+{{- $storage := .Values.global.storage | default dict }}
+{{- $storageS3 := $storage.s3 | default dict }}
 # Environment variables ConfigMap
 apiVersion: v1
 kind: ConfigMap
@@ -21,6 +32,13 @@ metadata:
   labels:
     {{- include "server.labels" . | nindent 4 }}
 data:
+  {{- $gatewayConfig := .Files.Get "files/service/marie-gateway-4.0.0.yml" }}
+  {{- $gatewayConfig = replace "__ETCD_HOST__" (printf "%s-etcd" .Release.Name) $gatewayConfig }}
+  {{- $gatewayConfig = replace "__CLICKHOUSE_HOST__" (printf "%s-clickhouse" .Release.Name) $gatewayConfig }}
+  {{- $gatewayConfig = replace "__OTEL_HOST__" "localhost" $gatewayConfig }}
+  {{- $gatewayConfig = replace "__OTEL_ENDPOINT__" "http://localhost:4317" $gatewayConfig }}
+  marie-gateway-4.0.0.yml: |
+{{ $gatewayConfig | indent 4 }}
   marie.yml: |
     jtype: Flow
     version: '1'
@@ -30,62 +48,70 @@ data:
     shared_config:
       storage:
         psql:
-          {{- if .Values.global.postgresql }}
+          {{- if $postgresql.enabled }}
           enabled: true
           hostname: {{ printf "%s-postgresql" .Release.Name }}
           port: 5432
-          database: {{ .Values.global.postgresql.auth.database | default "marie_scheduler" }}
-          username: {{ .Values.global.postgresql.auth.username | default "postgres" }}
+          database: {{ $postgresqlAuth.database | default "marie_scheduler" }}
+          username: {{ $postgresqlAuth.username | default "postgres" }}
+          {{- else if $postgresqlExternal.host }}
+          enabled: true
+          hostname: {{ $postgresqlExternal.host }}
+          port: {{ $postgresqlExternal.port | default 5432 }}
+          database: {{ $postgresqlExternal.database | default "marie" }}
+          username: {{ $postgresqlExternal.username | default "marie" }}
           {{- else }}
           enabled: false
           {{- end }}
 
         s3:
-          {{- if .Values.global.minio }}
-          {{- if .Values.global.minio.enabled }}
+          {{- if $minio.enabled }}
           enabled: true
-          endpoint_url: http://{{ printf "%s-minio" .Release.Name }}:9000
-          bucket_name: {{ .Values.global.minio.defaultBuckets | default "marie" }}
+          endpoint_url: http://{{ printf "%s-minio" .Release.Name }}:{{ $minio.port | default 8000 }}
+          bucket_name: {{ $minio.defaultBuckets | default "marie" }}
           region: us-east-1
           insecure: true
           addressing_style: path
-          {{- else if .Values.global.storage }}
-          enabled: {{ eq .Values.global.storage.type "s3" }}
-          {{- if eq .Values.global.storage.type "s3" }}
-          bucket_name: {{ .Values.global.storage.s3.bucket | default "marie" }}
-          region: {{ .Values.global.storage.s3.region | default "us-east-1" }}
-          {{- if .Values.global.storage.s3.endpoint }}
-          endpoint_url: {{ .Values.global.storage.s3.endpoint }}
-          {{- end }}
-          {{- end }}
-          {{- end }}
-          {{- else if .Values.global.storage }}
-          enabled: {{ eq .Values.global.storage.type "s3" }}
-          {{- if eq .Values.global.storage.type "s3" }}
-          bucket_name: {{ .Values.global.storage.s3.bucket | default "marie" }}
-          region: {{ .Values.global.storage.s3.region | default "us-east-1" }}
+          {{- else if eq ($storage.type | default "") "s3" }}
+          enabled: true
+          bucket_name: {{ $storageS3.bucket | default $minioExternal.bucket | default "marie" }}
+          region: {{ $storageS3.region | default "us-east-1" }}
+          {{- if or $storageS3.endpoint $minioExternal.endpoint }}
+          endpoint_url: {{ $storageS3.endpoint | default $minioExternal.endpoint }}
           {{- end }}
           {{- else }}
           enabled: false
           {{- end }}
 
       discovery:
-        {{- if .Values.global.etcd }}
+        {{- if $etcd.enabled }}
         etcd:
           enabled: true
           endpoints:
             - {{ printf "http://%s-etcd:2379" .Release.Name }}
+        {{- else if $etcdExternal.endpoints }}
+        etcd:
+          enabled: true
+          endpoints:
+            {{- range $endpoint := $etcdExternal.endpoints }}
+            - {{ $endpoint }}
+            {{- end }}
         {{- else }}
         etcd:
           enabled: false
         {{- end }}
 
       messaging:
-        {{- if .Values.global.rabbitmq }}
+        {{- if $rabbitmq.enabled }}
         rabbitmq:
           enabled: true
           hostname: {{ printf "%s-rabbitmq" .Release.Name }}
           port: 5672
+        {{- else if $rabbitmqExternal.host }}
+        rabbitmq:
+          enabled: true
+          hostname: {{ $rabbitmqExternal.host }}
+          port: {{ $rabbitmqExternal.port | default 5672 }}
         {{- else }}
         rabbitmq:
           enabled: false
@@ -94,7 +120,7 @@ data:
     toast:
       native:
         enabled: true
-      {{- if .Values.global.rabbitmq }}
+      {{- if or $rabbitmq.enabled $rabbitmqExternal.host }}
       rabbitmq:
         enabled: true
       {{- end }}

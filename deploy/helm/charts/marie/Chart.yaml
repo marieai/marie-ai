@@ -4,7 +4,7 @@ description: Marie-AI - Agentic Document Intelligence Platform
 
 type: application
 version: 0.1.0
-appVersion: "3.0.0"
+appVersion: "4.5rc1"
 
 keywords:
   - document-processing
@@ -34,28 +34,34 @@ dependencies:
     repository: "file://charts/executor"
     condition: executor.enabled
 
-  # Optional: Bitnami PostgreSQL
+  # Optional: PostgreSQL/DocumentDB matching docker-compose/bootstrap image
   - name: postgresql
-    version: "13.2.24"
-    repository: "https://charts.bitnami.com/bitnami"
+    version: "0.1.0"
+    repository: "file://charts/postgresql"
     condition: postgresql.enabled
 
-  # Optional: Bitnami RabbitMQ
+  # Optional: RabbitMQ matching docker-compose/bootstrap image
   - name: rabbitmq
-    version: "12.5.6"
-    repository: "https://charts.bitnami.com/bitnami"
+    version: "0.1.0"
+    repository: "file://charts/rabbitmq"
     condition: rabbitmq.enabled
 
-  # Optional: Bitnami etcd
+  # Optional: etcd matching docker-compose/bootstrap image
   - name: etcd
-    version: "9.10.0"
-    repository: "https://charts.bitnami.com/bitnami"
+    version: "0.1.0"
+    repository: "file://charts/etcd"
     condition: etcd.enabled
 
-  # Optional: Bitnami MinIO
+  # Optional: Valkey queue/cache store
+  - name: valkey
+    version: "0.1.0"
+    repository: "file://charts/valkey"
+    condition: valkey.enabled
+
+  # Optional: MinIO matching docker-compose/bootstrap image
   - name: minio
-    version: "14.1.0"
-    repository: "https://charts.bitnami.com/bitnami"
+    version: "0.1.0"
+    repository: "file://charts/minio"
     condition: minio.enabled
 
   # Optional: ClickHouse (analytics database for marie-ai)

@@ -1,0 +1,37 @@
+enabled: true
+
+image:
+  registry: docker.io
+  repository: rabbitmq
+  tag: "3-management-alpine"
+  pullPolicy: IfNotPresent
+
+auth:
+  username: marie
+  password: ""
+  existingSecret: ""
+  existingSecretPasswordKey: rabbitmq-password
+
+service:
+  type: ClusterIP
+  port: 5672
+  managementPort: 15672
+  annotations: {}
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 8Gi
+  accessModes:
+    - ReadWriteOnce
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podSecurityContext:
+  fsGroup: 999
+
+securityContext:
+  allowPrivilegeEscalation: false

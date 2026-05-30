@@ -58,9 +58,10 @@ Executor image for a pool
 {{- $pool := index . 0 }}
 {{- $global := index . 1 }}
 {{- $appVersion := index . 2 }}
+{{- $image := default dict $pool.image }}
 {{- $registry := $global.imageRegistry | default "" -}}
-{{- $repository := $pool.image.repository | default $global.marie.image.repository | default "marieai/marie" -}}
-{{- $tag := $pool.image.tag | default $global.marie.image.tag | default $appVersion -}}
+{{- $repository := $image.repository | default $global.marie.image.repository | default "marieai/marie" -}}
+{{- $tag := $image.tag | default $global.marie.image.tag | default $appVersion -}}
 {{- if $registry }}
 {{- printf "%s/%s:%s" $registry $repository $tag -}}
 {{- else }}

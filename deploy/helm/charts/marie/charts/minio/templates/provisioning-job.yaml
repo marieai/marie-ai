@@ -1,0 +1,71 @@
+{{- if and .Values.enabled .Values.provisioning.enabled }}
+{{- $users := .Values.provisioning.users | default list }}
+{{- $user := dict }}
+{{- if gt (len $users) 0 }}
+{{- $user = index $users 0 }}
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "minio.fullname" . }}-provision
+  labels:
+    {{- include "minio.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "minio.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: minio-provisioning
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: {{ include "minio.mcImage" . }}
+          imagePullPolicy: {{ .Values.provisioning.image.pullPolicy }}
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "minio.secretName" . }}
+                  key: {{ .Values.auth.rootUserKey }}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "minio.secretName" . }}
+                  key: {{ .Values.auth.rootPasswordKey }}
+            - name: MINIO_APP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "minio.secretName" . }}
+                  key: app-user
+                  optional: true
+            - name: MINIO_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "minio.secretName" . }}
+                  key: app-password
+                  optional: true
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              until mc alias set localminio "http://{{ include "minio.fullname" . }}:{{ .Values.service.port }}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
+                sleep 2
+              done
+
+              if [ -n "${MINIO_APP_USER:-}" ] && [ -n "${MINIO_APP_PASSWORD:-}" ]; then
+                mc admin user add localminio "$MINIO_APP_USER" "$MINIO_APP_PASSWORD" || true
+                mc admin policy attach localminio "{{ $user.policy | default "readwrite" }}" --user "$MINIO_APP_USER" || true
+              fi
+
+              IFS=','
+              for bucket in {{ .Values.defaultBuckets | quote }}; do
+                [ -z "$bucket" ] && continue
+                mc mb "localminio/$bucket" --ignore-existing
+                mc encrypt clear "localminio/$bucket" 2>/dev/null || true
+              done
+{{- end }}

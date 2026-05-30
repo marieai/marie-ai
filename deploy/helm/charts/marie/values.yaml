@@ -13,19 +13,114 @@ global:
   labels: {}
   # Common annotations applied to all resources
   annotations: {}
+  # Values consumed by bundled subcharts.
+  serviceAccount:
+    create: true
+    name: ""
+  marie:
+    image:
+      repository: marieai/marie
+      tag: "4.5rc1-cuda"
+    logging:
+      level: INFO
+    debugQueryPlanner: "FALSE"
+  grpc:
+    trace: ""
+    verbosity: ""
+  openai:
+    apiBase: ""
+    apiKey: ""
+    existingSecret: ""
+    existingSecretApiKeyKey: api-key
+  schedulerTrace:
+    enabled: false
+    path: /tmp/marie-scheduler-trace.jsonl
+  # Valkey connection exposed to Marie subcharts. `enabled` means Marie services
+  # should receive Valkey connection settings; chart ownership is controlled by
+  # the top-level `valkey.enabled` dependency flag.
+  valkey:
+    enabled: true
+    host: ""
+    port: 6379
+    database: 0
+    tls: false
+    auth:
+      enabled: false
+      existingSecret: ""
+      existingSecretPasswordKey: password
+  llmQueue:
+    enabled: false
+    poolId: default
+    fabricGroupId: default
+    gatewayId: default
+    producerId: ""
+    producerTtlSeconds: 30
+    producerRefreshIntervalSeconds: 10
+    replyQueueTtlSeconds: 300
+    replyPopTimeoutSeconds: "1.0"
+    dispatchPopTimeoutSeconds: "1.0"
+    maxBatchItems: 8
+    maxBatchWaitMs: 100
+    maxBufferedRequestsPerPool: 32
+    maxInlinePayloadBytes: "16777216"
+  postgresql:
+    enabled: true
+    auth:
+      username: postgres
+      database: postgres
+    external:
+      host: ""
+      port: 5432
+      database: marie
+      username: marie
+      existingSecret: ""
+      existingSecretPasswordKey: password
+  rabbitmq:
+    enabled: true
+    auth:
+      username: marie
+    external:
+      host: ""
+      port: 5672
+      username: marie
+      existingSecret: ""
+      existingSecretPasswordKey: password
+  etcd:
+    enabled: true
+    external:
+      endpoints: []
+  minio:
+    enabled: true
+    port: 8000
+    defaultBuckets: "marie"
+    external:
+      endpoint: ""
+      bucket: marie
+      existingSecret: ""
+      existingSecretAccessKeyKey: access-key
+      existingSecretSecretKeyKey: secret-key
+  storage:
+    type: minio
+    s3:
+      bucket: marie
+      region: us-east-1
+      endpoint: ""
+      existingSecret: ""
+      existingSecretAccessKeyKey: access-key
+      existingSecretSecretKeyKey: secret-key
 
 # Marie-AI core settings
 marie:
   image:
     repository: marieai/marie
-    tag: "3.0-cuda"
+    tag: "4.5rc1-cuda"
     pullPolicy: IfNotPresent
 
   # Configuration that maps to marie.yml
   config:
     protocol: grpc
     port: 52000
-    httpPort: 8080
+    httpPort: 51000
 
   # Service discovery settings
   discovery:
@@ -54,13 +149,28 @@ server:
   replicas: 1
 
   image:
-    repository: ""
-    tag: ""
+    repository: marieai/marie-gateway
+    tag: "4.5rc1-cpu"
+
+  config:
+    configFile: /etc/marie/config/service/marie-gateway-4.0.0.yml
+    extraSearchPaths: /etc/marie/config/extra_py_modules
+    metrics:
+      enabled: true
+      exporterHost: localhost
+      exporterPort: 4317
+    tracing:
+      enabled: true
+      exporterHost: localhost
+      exporterPort: 4317
 
   service:
     type: ClusterIP
     port: 52000
-    httpPort: 8080
+    httpPort: 51000
+    nodePorts:
+      grpc: ""
+      http: ""
 
   resources:
     requests:
@@ -206,9 +316,9 @@ postgresql:
 
   auth:
     postgresPassword: ""
-    username: marie
+    username: postgres
     password: ""
-    database: marie
+    database: postgres
 
   primary:
     persistence:
@@ -229,6 +339,11 @@ postgresql:
 # -----------------------------------------------------------------------------
 rabbitmq:
   enabled: true
+
+  image:
+    registry: docker.io
+    repository: rabbitmq
+    tag: "3-management-alpine"
 
   auth:
     username: marie
@@ -252,7 +367,12 @@ rabbitmq:
 etcd:
   enabled: true
 
-  replicaCount: 3
+  replicaCount: 1
+
+  image:
+    registry: quay.io
+    repository: coreos/etcd
+    tag: "v3.6.1"
 
   auth:
     rbac:
@@ -271,6 +391,52 @@ etcd:
     # - http://etcd-2:2379
 
 # -----------------------------------------------------------------------------
+# Valkey Configuration
+# -----------------------------------------------------------------------------
+valkey:
+  enabled: true
+
+  image:
+    repository: valkey/valkey
+    tag: "9-alpine"
+    pullPolicy: IfNotPresent
+
+  auth:
+    enabled: false
+    password: ""
+    existingSecret: ""
+    existingSecretPasswordKey: password
+
+  service:
+    port: 6379
+
+  persistence:
+    enabled: true
+    storageClass: ""
+    size: 8Gi
+
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  # External Valkey (when enabled=false)
+  external:
+    host: ""
+    port: 6379
+    database: 0
+    tls: false
+    existingSecret: ""
+    existingSecretPasswordKey: password
+
+# -----------------------------------------------------------------------------
 # MinIO Configuration (S3-compatible storage)
 # -----------------------------------------------------------------------------
 minio:
@@ -282,6 +448,11 @@ minio:
     tag: latest
 
   mode: standalone
+
+  service:
+    type: ClusterIP
+    port: 8000
+    consolePort: 9001
 
   auth:
     rootUser: minioadmin

@@ -1,0 +1,229 @@
+# Marie-AI Helm Chart - Production Values
+# This example keeps stateful dependencies external and references existing
+# Kubernetes Secrets instead of storing secret values inline.
+
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+  marie:
+    image:
+      repository: marieai/marie
+      tag: "4.5rc1-cuda"
+    logging:
+      level: INFO
+    debugQueryPlanner: "FALSE"
+  grpc:
+    trace: ""
+    verbosity: ""
+  openai:
+    apiBase: https://openai.example.internal
+    existingSecret: marie-openai
+    existingSecretApiKeyKey: api-key
+  schedulerTrace:
+    enabled: false
+    path: /tmp/marie-scheduler-trace.jsonl
+  valkey:
+    enabled: true
+    host: valkey.example.internal
+    port: 6379
+    database: 0
+    tls: true
+    auth:
+      enabled: true
+      existingSecret: marie-valkey
+      existingSecretPasswordKey: password
+  llmQueue:
+    enabled: true
+    poolId: default
+    fabricGroupId: default
+    gatewayId: default
+    maxInlinePayloadBytes: "16777216"
+  postgresql:
+    enabled: false
+    external:
+      host: postgres.example.internal
+      port: 5432
+      database: marie
+      username: marie
+      existingSecret: marie-postgresql
+      existingSecretPasswordKey: password
+  rabbitmq:
+    enabled: false
+    external:
+      host: rabbitmq.example.internal
+      port: 5672
+      username: marie
+      existingSecret: marie-rabbitmq
+      existingSecretPasswordKey: password
+  etcd:
+    enabled: false
+    external:
+      endpoints:
+        - http://etcd-0.example.internal:2379
+        - http://etcd-1.example.internal:2379
+        - http://etcd-2.example.internal:2379
+  minio:
+    enabled: false
+    external:
+      endpoint: https://s3.example.internal
+      bucket: marie
+  storage:
+    type: s3
+    s3:
+      bucket: marie
+      region: us-east-1
+      endpoint: https://s3.example.internal
+      existingSecret: marie-s3
+
+marie:
+  image:
+    repository: marieai/marie
+    tag: "4.5rc1-cuda"
+    pullPolicy: IfNotPresent
+  discovery:
+    mechanism: etcd
+
+server:
+  enabled: true
+  replicas: 2
+  image:
+    repository: marieai/marie-gateway
+    tag: "4.5rc1-cpu"
+  config:
+    configFile: /etc/marie/config/service/marie-gateway-4.0.0.yml
+    extraSearchPaths: /etc/marie/config/extra_py_modules
+    metrics:
+      enabled: true
+      exporterHost: localhost
+      exporterPort: 4317
+    tracing:
+      enabled: true
+      exporterHost: localhost
+      exporterPort: 4317
+  service:
+    type: ClusterIP
+    port: 52000
+    httpPort: 51000
+  ingress:
+    enabled: true
+    className: nginx
+    hosts:
+      - host: marie.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+  resources:
+    requests:
+      cpu: "1"
+      memory: "2Gi"
+    limits:
+      cpu: "4"
+      memory: "8Gi"
+
+executor:
+  enabled: true
+  pools:
+    - name: cpu-general
+      enabled: true
+      replicas: 2
+      gpu: false
+      resources:
+        requests:
+          cpu: "2"
+          memory: "4Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+    - name: gpu-ocr
+      enabled: false
+
+postgresql:
+  enabled: false
+  external:
+    host: postgres.example.internal
+    port: 5432
+    database: marie
+    username: marie
+    existingSecret: marie-postgresql
+    existingSecretPasswordKey: password
+
+rabbitmq:
+  enabled: false
+  external:
+    host: rabbitmq.example.internal
+    port: 5672
+    username: marie
+    existingSecret: marie-rabbitmq
+    existingSecretPasswordKey: password
+
+etcd:
+  enabled: false
+  external:
+    endpoints:
+      - http://etcd-0.example.internal:2379
+      - http://etcd-1.example.internal:2379
+      - http://etcd-2.example.internal:2379
+
+valkey:
+  enabled: false
+  external:
+    host: valkey.example.internal
+    port: 6379
+    database: 0
+    tls: true
+    existingSecret: marie-valkey
+    existingSecretPasswordKey: password
+
+minio:
+  enabled: false
+  external:
+    endpoint: https://s3.example.internal
+    bucket: marie
+
+storage:
+  type: s3
+  s3:
+    bucket: marie
+    region: us-east-1
+    endpoint: https://s3.example.internal
+    existingSecret: marie-s3
+
+clickhouse:
+  enabled: false
+
+gitea:
+  enabled: false
+
+observability:
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+  grafana:
+    dashboards:
+      enabled: true
+  jaeger:
+    enabled: false
+  otel:
+    enabled: true
+    endpoint: http://otel-collector.observability.svc:4317
+    insecure: false
+
+security:
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  networkPolicy:
+    enabled: true
+  tls:
+    enabled: true
+    secretName: marie-tls

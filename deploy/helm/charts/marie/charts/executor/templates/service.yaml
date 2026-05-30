@@ -1,6 +1,8 @@
 {{- if .Values.enabled }}
 {{- range $pool := .Values.pools }}
 {{- if $pool.enabled }}
+{{- $service := default dict $pool.service }}
+{{- $port := default 52010 $service.port }}
 ---
 apiVersion: v1
 kind: Service
@@ -10,9 +12,9 @@ metadata:
   labels:
     {{- include "executor.poolLabels" (list $pool $) | nindent 4 }}
 spec:
-  type: {{ $pool.service.type | default "ClusterIP" }}
+  type: {{ $service.type | default "ClusterIP" }}
   ports:
-    - port: {{ $pool.service.port }}
+    - port: {{ $port }}
       targetPort: grpc
       protocol: TCP
       name: grpc
@@ -32,7 +34,7 @@ spec:
   type: ClusterIP
   clusterIP: None
   ports:
-    - port: {{ $pool.service.port }}
+    - port: {{ $port }}
       targetPort: grpc
       protocol: TCP
       name: grpc

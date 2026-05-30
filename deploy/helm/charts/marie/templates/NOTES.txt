@@ -67,7 +67,7 @@ Message queue is running within the cluster.
 ## MinIO (S3-compatible storage)
 
 Object storage is running within the cluster.
-  API: {{ .Release.Name }}-minio:9000
+  API: {{ .Release.Name }}-minio:{{ .Values.minio.service.port | default 8000 }}
   Console: kubectl port-forward -n {{ .Release.Namespace }} svc/{{ .Release.Name }}-minio 9001:9001
 {{- end }}
 

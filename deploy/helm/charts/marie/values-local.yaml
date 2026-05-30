@@ -5,12 +5,57 @@
 # - PostgreSQL: ghcr.io/ferretdb/postgres-documentdb:17-0.103.0
 # - MinIO: minio/minio:latest
 # - RabbitMQ: rabbitmq:3-management-alpine
+# - Valkey: valkey/valkey:9-alpine
+
+global:
+  marie:
+    image:
+      repository: marieai/marie
+      tag: "4.5rc1-cuda"
+    logging:
+      level: INFO
+    debugQueryPlanner: "FALSE"
+  grpc:
+    trace: ALL
+    verbosity: DEBUG
+  openai:
+    apiBase: http://192.222.48.192
+    apiKey: EMPTY
+  schedulerTrace:
+    enabled: true
+    path: /tmp/marie-scheduler-trace.jsonl
+  valkey:
+    enabled: true
+    auth:
+      enabled: true
+  llmQueue:
+    enabled: true
+    poolId: default
+    fabricGroupId: default
+    gatewayId: default
+  postgresql:
+    enabled: true
+    auth:
+      username: postgres
+      database: postgres
+  rabbitmq:
+    enabled: true
+    auth:
+      username: marie
+  etcd:
+    enabled: true
+  minio:
+    enabled: true
+    port: 8000
+    defaultBuckets: "marie"
+  storage:
+    type: minio
 
 # Marie-AI core settings
 marie:
   image:
     repository: marieai/marie
-    tag: "3.0"
+    tag: "4.5rc1-cuda"
     pullPolicy: IfNotPresent
 
   logging:
@@ -26,10 +71,29 @@ server:
   enabled: true
   replicas: 1
 
+  image:
+    repository: marieai/marie-gateway
+    tag: "4.5rc1-cpu"
+
+  config:
+    configFile: /etc/marie/config/service/marie-gateway-4.0.0.yml
+    extraSearchPaths: /etc/marie/config/extra_py_modules
+    metrics:
+      enabled: true
+      exporterHost: localhost
+      exporterPort: 4317
+    tracing:
+      enabled: true
+      exporterHost: localhost
+      exporterPort: 4317
+
   service:
     type: NodePort
     port: 52000
-    httpPort: 8080
+    httpPort: 51000
+    nodePorts:
+      grpc: 30052
+      http: 30080
 
   resources:
     requests:
@@ -49,6 +113,8 @@ executor:
       replicas: 1
       gpu: false
       stateful: false
+      strategy:
+        type: Recreate
 
       resources:
         requests:
@@ -75,7 +141,7 @@ postgresql:
     postgresPassword: "marie-password"
     username: postgres
     password: "marie-password"
-    database: marie
+    database: postgres
 
   primary:
     persistence:
@@ -105,9 +171,8 @@ minio:
 
   service:
     type: NodePort
-    ports:
-      api: 9000
-      console: 9001
+    port: 8000
+    consolePort: 9001
 
 # RabbitMQ - message queue
 rabbitmq:
@@ -126,9 +191,25 @@ rabbitmq:
     enabled: true
     size: 2Gi
 
-# etcd - disabled for local (using Kubernetes service discovery)
+# Valkey - queued LLM request/reply store
+valkey:
+  enabled: true
+
+  image:
+    repository: valkey/valkey
+    tag: "9-alpine"
+
+  auth:
+    enabled: true
+    password: "marie-valkey-password"
+
+  persistence:
+    enabled: true
+    size: 2Gi
+
+# etcd - service discovery, matching bootstrap
 etcd:
-  enabled: false
+  enabled: true
 
 # ClickHouse - analytics database (used by marie-ai)
 clickhouse:

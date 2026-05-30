@@ -1,0 +1,47 @@
+enabled: true
+
+image:
+  repository: valkey/valkey
+  tag: "9-alpine"
+  pullPolicy: IfNotPresent
+
+auth:
+  enabled: false
+  password: ""
+  existingSecret: ""
+  existingSecretPasswordKey: password
+
+service:
+  port: 6379
+  annotations: {}
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 8Gi
+  accessModes:
+    - ReadWriteOnce
+
+resources:
+  requests:
+    cpu: "250m"
+    memory: "256Mi"
+  limits:
+    cpu: "1"
+    memory: "1Gi"
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

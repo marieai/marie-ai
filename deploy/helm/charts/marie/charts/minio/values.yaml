@@ -1,0 +1,58 @@
+enabled: true
+
+image:
+  registry: docker.io
+  repository: minio/minio
+  tag: latest
+  pullPolicy: IfNotPresent
+
+auth:
+  rootUser: minioadmin
+  rootPassword: ""
+  existingSecret: ""
+  rootUserKey: root-user
+  rootPasswordKey: root-password
+
+service:
+  type: ClusterIP
+  port: 8000
+  consolePort: 9001
+  annotations: {}
+
+defaultBuckets: "marie"
+
+provisioning:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: minio/mc
+    tag: latest
+    pullPolicy: IfNotPresent
+  users:
+    - username: marie-access-key
+      password: marie-secret-key
+      policy: readwrite
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 20Gi
+  accessModes:
+    - ReadWriteOnce
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  runAsGroup: 1000
+  runAsNonRoot: true
+  runAsUser: 1000

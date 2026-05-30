@@ -59,9 +59,20 @@ else
   # shellcheck disable=SC2090
   docker run --rm -u 0 --user root -it --shm-size=4g --ulimit memlock=-1 --ulimit stack=67108864 \
     -e COLUMNS=180 \
+    -e PYTHONUNBUFFERED=1 \
+    -e GRPC_TRACE="${GRPC_TRACE:-ALL}" \
+    -e GRPC_VERBOSITY="${GRPC_VERBOSITY:-DEBUG}" \
     -e MARIE_PORT=$PORT \
-    -e MARIE_DEBUG_QUERY_PLANNER=TRUE \
+    -e MARIE_DEBUG_QUERY_PLANNER="${MARIE_DEBUG_QUERY_PLANNER:-FALSE}" \
     -e MARIE_DEFAULT_MOUNT=/mnt/data/marie-ai \
+    -e MARIE_SCHEDULER_TRACE_ENABLED="${MARIE_SCHEDULER_TRACE_ENABLED:-true}" \
+    -e MARIE_SCHEDULER_TRACE_PATH="${MARIE_SCHEDULER_TRACE_PATH:-/tmp/marie-scheduler-trace.jsonl}" \
+    -e LLM_QUEUE_ENABLED="${LLM_QUEUE_ENABLED:-true}" \
+    -e LLM_QUEUE_FABRIC_GROUP_ID="${LLM_QUEUE_FABRIC_GROUP_ID:-default}" \
+    -e LLM_QUEUE_GATEWAY_ID="${LLM_QUEUE_GATEWAY_ID:-default}" \
+    -e LLM_QUEUE_VALKEY_URL="${LLM_QUEUE_VALKEY_URL:-redis://localhost:6379/0}" \
+    -e OPENAI_API_BASE="${OPENAI_API_BASE:-http://192.222.48.192}" \
+    -e OPENAI_API_KEY="${OPENAI_API_KEY:-EMPTY}" \
     --env-file ./service.env \
     --name $NAME \
     -v $CONFIG_DIR:/etc/marie:rw \
@@ -73,7 +84,7 @@ else
     -p $PORT:51000 \
     -p $GRPC_PORT:52000 \
     ${CONTAINER_REGISTRY}${CONTAINER_NAME}:${CONTAINER_VERSION} \
-    gateway --uses /etc/marie/service/gateway.yml --protocols HTTP GRPC --ports 51000 52000 --extra-search-paths /mnt/data/marie-ai/config/extra_py_modules
-#docker run --rm  -it --entrypoint /bin/bash  marieai/marie-gateway:4.0.0-cpu
+    gateway --uses /etc/marie/service/marie-gateway-4.0.0.yml --protocols HTTP GRPC --ports 51000 52000 --extra-search-paths /mnt/data/marie-ai/config/extra_py_modules --metrics --metrics-exporter-host localhost --metrics-exporter-port 4317 --tracing --traces-exporter-host localhost --traces-exporter-port 4317
+#docker run --rm  -it --entrypoint /bin/bash  marieai/marie-gateway:4.5rc1-cpu
 # docker exec -it  marie-gateway  bash
 fi

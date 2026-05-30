@@ -7,14 +7,26 @@ metadata:
   labels:
     {{- include "executor.labels" . | nindent 4 }}
 data:
+  {{- $postgresql := .Values.global.postgresql | default dict }}
+  {{- $postgresqlAuth := $postgresql.auth | default dict }}
+  {{- $postgresPassword := $postgresqlAuth.password | default $postgresqlAuth.postgresPassword | default "marie-password" }}
+  {{- $extractConfig := .Files.Get "files/service/extract/marie-extract-4.0.0.yml" }}
+  {{- $extractConfig = replace "__ETCD_HOST__" (printf "%s-etcd" .Release.Name) $extractConfig }}
+  {{- $extractConfig = replace "__POSTGRES_HOST__" (printf "%s-postgresql" .Release.Name) $extractConfig }}
+  {{- $extractConfig = replace "__POSTGRES_PASSWORD__" $postgresPassword $extractConfig }}
+  {{- $extractConfig = replace "__CLICKHOUSE_HOST__" (printf "%s-clickhouse" .Release.Name) $extractConfig }}
+  {{- $extractConfig = replace "__OTEL_HOST__" "localhost" $extractConfig }}
+  marie-extract-4.0.0.yml: |
+{{ $extractConfig | indent 4 }}
   # Executor pools configuration
   EXECUTOR_POOLS: |
     {{- range $pool := .Values.pools }}
     {{- if $pool.enabled }}
+    {{- $service := default dict $pool.service }}
     - name: {{ $pool.name }}
       gpu: {{ $pool.gpu }}
       replicas: {{ $pool.replicas }}
-      port: {{ $pool.service.port }}
+      port: {{ $service.port | default 52010 }}
     {{- end }}
     {{- end }}
 {{- end }}

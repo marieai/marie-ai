@@ -1,12 +1,62 @@
 # Marie-AI Server subchart values
 # Runs `marie server --start` which combines gateway and scheduler
 
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  serviceAccount:
+    create: true
+    name: ""
+  marie:
+    image:
+      repository: marieai/marie
+      tag: "4.5rc1-cuda"
+    logging:
+      level: INFO
+    debugQueryPlanner: "FALSE"
+  grpc:
+    trace: ""
+    verbosity: ""
+  openai:
+    apiBase: ""
+    apiKey: ""
+    existingSecret: ""
+    existingSecretApiKeyKey: api-key
+  schedulerTrace:
+    enabled: false
+    path: /tmp/marie-scheduler-trace.jsonl
+  valkey:
+    enabled: false
+    host: ""
+    port: 6379
+    database: 0
+    tls: false
+    auth:
+      enabled: false
+      existingSecret: ""
+      existingSecretPasswordKey: password
+  llmQueue:
+    enabled: false
+    poolId: default
+    fabricGroupId: default
+    gatewayId: default
+    producerId: ""
+    producerTtlSeconds: 30
+    producerRefreshIntervalSeconds: 10
+    replyQueueTtlSeconds: 300
+    replyPopTimeoutSeconds: "1.0"
+    dispatchPopTimeoutSeconds: "1.0"
+    maxBatchItems: 8
+    maxBatchWaitMs: 100
+    maxBufferedRequestsPerPool: 32
+    maxInlinePayloadBytes: "16777216"
+
 enabled: true
 replicas: 1
 
 image:
-  repository: marieai/marie
-  tag: ""
+  repository: marieai/marie-gateway
+  tag: "4.5rc1-cpu"
   pullPolicy: IfNotPresent
 
 # Service configuration
@@ -15,13 +65,25 @@ service:
   # gRPC port
   port: 52000
   # HTTP port for REST API
-  httpPort: 8080
+  httpPort: 51000
   annotations: {}
+  nodePorts:
+    grpc: ""
+    http: ""
 
 # Marie server configuration
 config:
-  # Path to marie.yml config file (mounted via ConfigMap)
-  configFile: /config/marie.yml
+  # Path to bootstrap gateway config file (mounted via ConfigMap)
+  configFile: /etc/marie/config/service/marie-gateway-4.0.0.yml
+  extraSearchPaths: /etc/marie/config/extra_py_modules
+  metrics:
+    enabled: true
+    exporterHost: localhost
+    exporterPort: 4317
+  tracing:
+    enabled: true
+    exporterHost: localhost
+    exporterPort: 4317
   # Additional CLI arguments
   args: []
 
@@ -81,3 +143,4 @@ probes:
     initialDelaySeconds: 5
     periodSeconds: 5
     timeoutSeconds: 5
+    path: /status

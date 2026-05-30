@@ -98,7 +98,7 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 RUN curl -O https://bootstrap.pypa.io/get-pip.py \
     && python3 get-pip.py \
-    && python3 -m pip install --upgrade setuptools \
+    && python3 -m pip install 'setuptools<81' \
     && python3 -m pip install 'pybind11[global]'
 
 # verify that virtual environment is used and python version is correct

@@ -59,7 +59,7 @@ COPY requirements.txt extra-requirements.txt setup.py /tmp/
 RUN python3.10 -m venv /opt/venv && \
     . /opt/venv/bin/activate && \
     pip install --no-cache-dir -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2 && \
-    pip install --no-cache-dir --upgrade setuptools && \
+    pip install --no-cache-dir 'setuptools<81' && \
     pip install "pybind11[global]" && \
     pip install intel-openmp && \
     pip install --pre torch[dynamo] torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cpu --force && \

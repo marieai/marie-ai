@@ -1,0 +1,11 @@
+{{- if and .Values.enabled .Values.initdb.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "postgresql.fullname" . }}-initdb
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+data:
+  init.sql: |
+{{ .Values.initdb.scripts.initSql | indent 4 }}
+{{- end }}

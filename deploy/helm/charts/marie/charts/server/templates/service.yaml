@@ -17,10 +17,16 @@ spec:
       targetPort: grpc
       protocol: TCP
       name: grpc
+      {{- if and (eq .Values.service.type "NodePort") .Values.service.nodePorts.grpc }}
+      nodePort: {{ .Values.service.nodePorts.grpc }}
+      {{- end }}
     - port: {{ .Values.service.httpPort }}
       targetPort: http
       protocol: TCP
       name: http
+      {{- if and (eq .Values.service.type "NodePort") .Values.service.nodePorts.http }}
+      nodePort: {{ .Values.service.nodePorts.http }}
+      {{- end }}
   selector:
     {{- include "server.selectorLabels" . | nindent 4 }}
 {{- end }}

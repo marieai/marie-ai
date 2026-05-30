@@ -1,0 +1,29 @@
+enabled: true
+replicaCount: 1
+
+image:
+  registry: quay.io
+  repository: coreos/etcd
+  tag: "v3.6.1"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  clientPort: 2379
+  peerPort: 2380
+  annotations: {}
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 8Gi
+  accessModes:
+    - ReadWriteOnce
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}

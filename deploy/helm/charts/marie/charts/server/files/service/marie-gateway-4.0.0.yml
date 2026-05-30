@@ -1,0 +1,262 @@
+!MarieGateway
+uses: MarieGateway
+py_modules:
+  - marie.serve.runtimes.gateway.marie
+
+# Currently the parameters have to be passed in as runtime arguments from command line
+# This will be changed in the future
+# marie gateway --uses /mnt/data/marie-ai/config/service/gateway.yml --protocols HTTP GRPC --ports 51000 52000
+
+#protocols:
+#  - "GRPC"
+#  - "HTTP"
+#
+#ports:
+#  - 54000
+#  - 55000
+
+
+# Shared configuration
+shared_config:
+  storage: &storage
+    psql: &psql_conf_shared
+      provider: postgresql
+      hostname: ${{ ENV.POSTGRES_HOSTNAME }}
+      port: 5432
+      username: ${{ ENV.POSTGRES_USER }}
+      password: ${{ ENV.POSTGRES_PASSWORD }}
+      database: postgres
+      default_table: shared_docs
+
+  message: &message
+    amazon_mq :  &amazon_mq_conf_shared
+      provider: amazon-rabbitmq
+      hostname: ${{ ENV.AWS_MQ_HOSTNAME }}
+      port: 15672
+      username: ${{ ENV.AWS_MQ_USERNAME }}
+      password: ${{ ENV.AWS_MQ_PASSWORD }}
+      tls: True
+      virtualhost: /
+
+    rabbitmq :  &rabbitmq_conf_shared
+      provider: rabbitmq
+      hostname: ${{ ENV.RABBIT_MQ_HOSTNAME }}
+      port: ${{ ENV.RABBIT_MQ_PORT }}
+      username: ${{ ENV.RABBIT_MQ_USERNAME }}
+      password: ${{ ENV.RABBIT_MQ_PASSWORD }}
+      tls: False
+      virtualhost: /
+
+# this will be passed in as runtime arguments in kwargs
+with:
+  # Enable OTel metrics
+  metrics: true
+  metrics_exporter_host: __OTEL_HOST__  # or marie-hyperdx if in Docker
+  metrics_exporter_port: 4317       # OTLP gRPC port
+
+  # Optional: Enable tracing too
+  tracing: true
+  traces_exporter_host: __OTEL_HOST__
+  traces_exporter_port: 4317
+
+  discovery: true
+#  discovery_host: mariectl-002:2379,mariectl-003:2379,mariectl-004:2379 # SINGLE HOST OR A LIST OF HOSTS
+  discovery_host: __ETCD_HOST__ # SINGLE HOST OR A LIST OF HOSTS
+  discovery_port: 2379
+  discovery_watchdog_interval: 5 # DEPRECATED replace by discovery_heartbeat_sec
+  discovery_service_name: gateway/marie
+  discovery_namespace: marie
+  discovery_lease_sec: 6
+  discovery_heartbeat_sec: 1.5
+  discovery_timeout_sec: 10
+  discovery_retry_times : 5
+
+#  discovery_ca_cert: "/path/to/ca.crt"
+#  discovery_cert_key: "/path/to/client.key"
+#  discovery_cert_cert: "/path/to/client.crt"
+#  discovery_grpc_options: "grpc.keepalive_time_ms:30000,grpc.keepalive_timeout_ms:5000"
+
+  discovery_ca_cert:
+  discovery_cert_key:
+  discovery_cert_cert:
+  discovery_grpc_options:
+  # Key Value Store
+  kv_store_kwargs:
+    <<: *psql_conf_shared
+    schema: marie_scheduler
+    default_table: kv_store_worker
+    max_pool_size: 5
+    max_connections: 5
+
+    # Job Scheduler
+  job_scheduler_kwargs:
+    <<: *psql_conf_shared
+    default_table: job_scheduler
+    max_workers: 2
+    max_pool_size: 5
+    max_connections: 5
+    queue_names: [extract,classify,transform,load, gen5_extract] # Queue names for the job scheduler to monitor
+
+    # DAG Concurrency Management
+    dag_manager:
+      strategy: dynamic # fixed or dynamic
+      min_concurrent_dags: 2      # Minimum number of concurrent DAGs (safety floor)
+      max_concurrent_dags: 4     # Maximum number of concurrent DAGs (resource ceiling)
+      cache_ttl_seconds: 10       # Cache TTL for capacity calculations
+
+    # Heartbeat & Monitoring Configuration
+    heartbeat:
+      interval: 5.0               # Heartbeat loop interval in seconds
+      window_minutes: 10          # Rolling throughput window in minutes
+      trend_points: 12            # Number of data points for trend calculation
+      recent_window_minutes: 1    # Recent throughput window in minutes (replaces heartbeat-based instant)
+      max_retries: 3              # Max retries for heartbeat operations
+      error_backoff: 5.0          # Backoff time in seconds after errors
+      enable_trend_arrows: true   # Show trend arrows in logs
+      enable_per_queue_stats: true # Show detailed per-queue statistics
+
+    # Planners have to be available in the python path.
+    # When running in a container, the planners should be available in the container's python path.
+    # Planners are auto-discovered by scanning packages for @register_query_plan decorator
+    # MARIE_DEFAULT_MOUNT: /mnt/data/marie-ai (local) or /etc/marie (docker)
+    query_planners:
+      watch_wheels: False
+      wheel_directories: []
+      # Auto-discover planners from packages
+      discover_packages: []
+      # Explicit planners (mock planners for testing)
+      planners: []
+
+  # Toast event tracking system
+  # It can be backed by Message Queue or Database backed
+  toast:
+    native:
+      enabled: True
+      path: /tmp/marie/events.json
+    rabbitmq:
+      <<: *rabbitmq_conf_shared
+      enabled : True
+    psql:
+      <<: *psql_conf_shared
+      schema: marie_scheduler
+      default_table: event_tracking
+      enabled : True
+
+    # OTEL toast handler for ClickHouse event storage
+    otel:
+      enabled: True
+      endpoint: __OTEL_ENDPOINT__  # or marie-hyperdx:4317 in Docker
+      service_name: "marie-ai"
+      queue:
+        maxsize: 4096
+        drop_if_full: false
+      batch:
+        max_export_batch_size: 512
+        schedule_delay_millis: 5000
+
+    # SSE backend for real-time UI via /sse/{api_key}
+    sse:
+      enabled: False
+      broker:
+        replay_size: 200            # per-topic (api_key) replay buffer used for Last-Event-ID
+        subscriber_q_max: 1024      # bound per client; drops oldest on overflow
+        heartbeat_interval_s: 15.0
+      # handler (producer) queue/backoff knobs
+      queue:
+        maxsize: 4096
+        drop_if_full: false
+        enqueue_timeout_s: 0
+      retry:
+        backoff_base_s: 0.1
+        backoff_max_s: 2.0
+        max_attempts: 0            # 0 => infinite
+
+    # Supperceeds the SSE backend for real-time UI
+    grpc:
+      enabled: true
+      broker:
+        replay_size: 200
+        max_in_flight: 100
+        ack_timeout_s: 30.0
+        heartbeat_interval_s: 15.0
+        redelivery_delay_s: 5.0
+        backpressure_threshold_pct: 80
+        max_redelivery_attempts: 5
+
+  # Document Storage
+  # The storage service is used to store the data that is being processed
+  # Storage can be backed by S3 compatible
+
+  storage:
+    # S3 configuration. Will be used only if value of backend is "s3"
+    s3:
+      enabled: True
+      metadata_only: False # If True, only metadata will be stored in the storage backend
+      # api endpoint to connect to. use AWS S3 or any S3 compatible object storage endpoint.
+      endpoint_url: ${{ ENV.S3_ENDPOINT_URL }}
+      # optional.
+      # access key id when using static credentials.
+      access_key_id: ${{ ENV.S3_ACCESS_KEY_ID }}
+      # optional.
+      # secret key when using static credentials.
+      secret_access_key: ${{ ENV.S3_SECRET_ACCESS_KEY }}
+      # Bucket name in s3
+      bucket_name: ${{ ENV.S3_BUCKET_NAME }}
+      # optional.
+      # Example: "region: us-east-2"
+      region: ${{ ENV.S3_REGION }}
+      # optional.
+      # enable if endpoint is http
+      insecure: True
+      # optional.
+      # enable if you want to use path style requests
+      addressing_style: path
+
+    # postgresql configuration. Will be used only if value of backend is "psql"
+    psql:
+      <<: *psql_conf_shared
+      default_table: store_metadata
+      enabled : False
+
+  # LLM Tracking / Instrumentation configuration
+  #
+  # Console span output (OTel spans printed to stdout) can be enabled 3 ways:
+  #
+  #   1. Set exporter to "console" — automatically enables console spans:
+  #        exporter: console
+  #
+  #   2. Explicit opt-in alongside any exporter (e.g. otel + console):
+  #        console_spans: true
+  #
+  #   3. Env var (applies to gateway infra spans, independent of this section):
+  #        MARIE_OTEL_CONSOLE_EXPORT=true
+  #
+  llm_tracking:
+    enabled: true
+    exporter: console
+    project_id: marie-ai
+    worker:
+      enabled: true
+    # Postgres is REQUIRED for rabbitmq exporter (stores event metadata)
+    postgres:
+      <<: *psql_conf_shared
+    rabbitmq:
+      <<: *rabbitmq_conf_shared
+      exchange: llm-events
+    clickhouse:
+      host: __CLICKHOUSE_HOST__
+      port: 9000
+      database: marie
+
+  # Authentication and Authorization configuration
+  auth:
+    keys:
+      - name : service-A
+        api_key : mas_0aPJ9Q9nUO1Ac1vJTfffXEXs9FyGLf9BzfYgZ_RaHm707wmbfHJNPQ
+        enabled : True
+        roles : [admin, user]
+
+      - name : service-B
+        api_key : mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ
+        enabled : True
+        roles : [admin, user]

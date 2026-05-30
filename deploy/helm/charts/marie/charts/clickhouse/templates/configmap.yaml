@@ -29,10 +29,6 @@ data:
         <!-- MySQL wire protocol -->
         <mysql_port>{{ .Values.service.mysqlPort }}</mysql_port>
 
-        <!-- Memory limits -->
-        <max_memory_usage>{{ .Values.config.maxMemoryUsage }}</max_memory_usage>
-        <max_memory_usage_for_user>{{ .Values.config.maxMemoryUsageForUser }}</max_memory_usage_for_user>
-
         <!-- Data paths -->
         <path>/var/lib/clickhouse/</path>
         <tmp_path>/var/lib/clickhouse/tmp/</tmp_path>

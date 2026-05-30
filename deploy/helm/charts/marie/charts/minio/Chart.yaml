@@ -1,0 +1,6 @@
+apiVersion: v2
+name: minio
+description: MinIO dependency for Marie-AI local deployments
+type: application
+version: 0.1.0
+appVersion: "latest"

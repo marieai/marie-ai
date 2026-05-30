@@ -5,7 +5,7 @@
 
 services:
   marie-gateway:
-    image: marieai/marie-gateway:${GATEWAY_IMAGE_TAG:-4.0.0-cpu}
+    image: marieai/marie-gateway:${GATEWAY_IMAGE_TAG:-4.5rc1-cpu}
     restart: unless-stopped
     container_name: 'marieai-gateway'
     init: true
@@ -18,17 +18,31 @@ services:
       --uses /etc/marie/config/service/${GATEWAY_CONFIG_TAG:-marie-gateway-4.0.0.yml}
       --protocols HTTP GRPC
       --ports 51000 52000
-      --extra-search-paths /etc/marie/config/config/extra_py_modules
+      --extra-search-paths /etc/marie/config/extra_py_modules
+      --metrics
+      --metrics-exporter-host localhost
+      --metrics-exporter-port 4317
+      --tracing
+      --traces-exporter-host localhost
+      --traces-exporter-port 4317
 
     environment:
+      - PYTHONUNBUFFERED=1
       - MARIE_CACHE_SKIP_LOAD=true
       - MARIE_DEFAULT_MOUNT=/etc/marie
       - MARIE_LOG_CONFIG=docker
       - MARIE_DEPLOYMENT_NAME=marie
+      - MARIE_DEBUG_QUERY_PLANNER=${MARIE_DEBUG_QUERY_PLANNER:-FALSE}
+      - MARIE_SCHEDULER_TRACE_ENABLED=${MARIE_SCHEDULER_TRACE_ENABLED:-true}
+      - MARIE_SCHEDULER_TRACE_PATH=${MARIE_SCHEDULER_TRACE_PATH:-/tmp/marie-scheduler-trace.jsonl}
       - COLUMNS=180
+      - GRPC_TRACE=${GRPC_TRACE:-ALL}
+      - GRPC_VERBOSITY=${GRPC_VERBOSITY:-DEBUG}
       - JINA_MP_START_METHOD=fork
       - JINA_LOG_LEVEL=${GATEWAY_LOG_LEVEL:-DEBUG}
-      - LLM_QUEUE_ENABLED=${LLM_QUEUE_ENABLED:-false}
+      - LLM_QUEUE_ENABLED=${LLM_QUEUE_ENABLED:-true}
+      - LLM_QUEUE_FABRIC_GROUP_ID=${LLM_QUEUE_FABRIC_GROUP_ID:-default}
+      - LLM_QUEUE_GATEWAY_ID=${LLM_QUEUE_GATEWAY_ID:-default}
       - LLM_QUEUE_VALKEY_URL=${LLM_QUEUE_VALKEY_URL:-redis://localhost:6379/0}
       - LLM_QUEUE_POOL_ID=${LLM_QUEUE_POOL_ID:-default}
       - LLM_QUEUE_PRODUCER_ID=${LLM_QUEUE_PRODUCER_ID:-}
@@ -41,6 +55,8 @@ services:
       - LLM_QUEUE_MAX_BATCH_WAIT_MS=${LLM_QUEUE_MAX_BATCH_WAIT_MS:-100}
       - LLM_QUEUE_MAX_BUFFERED_REQUESTS_PER_POOL=${LLM_QUEUE_MAX_BUFFERED_REQUESTS_PER_POOL:-32}
       - LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=${LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES:-16777216}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-http://192.222.48.192}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-EMPTY}
 
     volumes:
       - /mnt/data/marie-ai/config:/etc/marie/config:ro
@@ -63,7 +79,7 @@ services:
 
     labels:
       - "marie.service=gateway"
-      - "marie.version=${GATEWAY_IMAGE_TAG:-4.0.0-cpu}"
+      - "marie.version=${GATEWAY_IMAGE_TAG:-4.5rc1-cpu}"
 
 networks:
   marie_default:

@@ -1,4 +1,21 @@
 {{- if .Values.enabled }}
+{{- $postgresql := .Values.global.postgresql | default dict }}
+{{- $postgresqlAuth := $postgresql.auth | default dict }}
+{{- $postgresqlExternal := $postgresql.external | default dict }}
+{{- $rabbitmq := .Values.global.rabbitmq | default dict }}
+{{- $rabbitmqAuth := $rabbitmq.auth | default dict }}
+{{- $rabbitmqExternal := $rabbitmq.external | default dict }}
+{{- $etcd := .Values.global.etcd | default dict }}
+{{- $etcdExternal := $etcd.external | default dict }}
+{{- $minio := .Values.global.minio | default dict }}
+{{- $minioExternal := $minio.external | default dict }}
+{{- $storage := .Values.global.storage | default dict }}
+{{- $storageS3 := $storage.s3 | default dict }}
+{{- $metrics := .Values.config.metrics | default dict }}
+{{- $tracing := .Values.config.tracing | default dict }}
+{{- $grpc := .Values.global.grpc | default dict }}
+{{- $openai := .Values.global.openai | default dict }}
+{{- $schedulerTrace := .Values.global.schedulerTrace | default dict }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -42,13 +59,32 @@ spec:
         - name: server
           image: {{ include "server.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command:
-            - marie
           args:
-            - server
-            - --start
+            - gateway
             - --uses
             - {{ .Values.config.configFile }}
+            - --protocols
+            - HTTP
+            - GRPC
+            - --ports
+            - {{ .Values.service.httpPort | quote }}
+            - {{ .Values.service.port | quote }}
+            - --extra-search-paths
+            - {{ .Values.config.extraSearchPaths | default "/etc/marie/config/extra_py_modules" }}
+            {{- if ($metrics.enabled | default false) }}
+            - --metrics
+            - --metrics-exporter-host
+            - {{ $metrics.exporterHost | default "localhost" | quote }}
+            - --metrics-exporter-port
+            - {{ $metrics.exporterPort | default 4317 | quote }}
+            {{- end }}
+            {{- if ($tracing.enabled | default false) }}
+            - --tracing
+            - --traces-exporter-host
+            - {{ $tracing.exporterHost | default "localhost" | quote }}
+            - --traces-exporter-port
+            - {{ $tracing.exporterPort | default 4317 | quote }}
+            {{- end }}
             {{- with .Values.config.args }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -81,44 +117,176 @@ spec:
                   fieldPath: metadata.name
             - name: MARIE_COMPONENT
               value: server
-            {{- if .Values.global.postgresql }}
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MARIE_CACHE_SKIP_LOAD
+              value: "true"
+            - name: MARIE_DEFAULT_MOUNT
+              value: /etc/marie
+            - name: MARIE_LOG_CONFIG
+              value: docker
+            - name: MARIE_DEPLOYMENT_NAME
+              value: {{ .Release.Name | quote }}
+            - name: MARIE_DEBUG_QUERY_PLANNER
+              value: {{ .Values.global.marie.debugQueryPlanner | default "FALSE" | quote }}
+            - name: MARIE_SCHEDULER_TRACE_ENABLED
+              value: {{ $schedulerTrace.enabled | default false | quote }}
+            - name: MARIE_SCHEDULER_TRACE_PATH
+              value: {{ $schedulerTrace.path | default "/tmp/marie-scheduler-trace.jsonl" | quote }}
+            - name: COLUMNS
+              value: "180"
+            - name: JINA_MP_START_METHOD
+              value: fork
+            - name: JINA_LOG_LEVEL
+              value: {{ .Values.global.marie.logging.level | default "INFO" | quote }}
+            {{- if $grpc.trace }}
+            - name: GRPC_TRACE
+              value: {{ $grpc.trace | quote }}
+            {{- end }}
+            {{- if $grpc.verbosity }}
+            - name: GRPC_VERBOSITY
+              value: {{ $grpc.verbosity | quote }}
+            {{- end }}
+            {{- if $openai.apiBase }}
+            - name: OPENAI_API_BASE
+              value: {{ $openai.apiBase | quote }}
+            {{- end }}
+            {{- if $openai.apiKey }}
+            - name: OPENAI_API_KEY
+              value: {{ $openai.apiKey | quote }}
+            {{- else if $openai.existingSecret }}
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $openai.existingSecret }}
+                  key: {{ $openai.existingSecretApiKeyKey | default "api-key" }}
+            {{- end }}
+            {{- if $postgresql.enabled }}
             - name: DATABASE_HOST
+              value: {{ printf "%s-postgresql" .Release.Name | quote }}
+            - name: POSTGRES_HOSTNAME
               value: {{ printf "%s-postgresql" .Release.Name | quote }}
             - name: DATABASE_PORT
               value: "5432"
             - name: DATABASE_NAME
-              value: {{ .Values.global.postgresql.auth.database | default "marie_scheduler" | quote }}
+              value: {{ $postgresqlAuth.database | default "marie_scheduler" | quote }}
             - name: DATABASE_USER
-              value: {{ .Values.global.postgresql.auth.username | default "postgres" | quote }}
+              value: {{ $postgresqlAuth.username | default "postgres" | quote }}
+            - name: POSTGRES_USER
+              value: {{ $postgresqlAuth.username | default "postgres" | quote }}
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ printf "%s-postgresql" .Release.Name }}
                   key: postgres-password
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "%s-postgresql" .Release.Name }}
+                  key: postgres-password
+            {{- else if $postgresqlExternal.host }}
+            - name: DATABASE_HOST
+              value: {{ $postgresqlExternal.host | quote }}
+            - name: POSTGRES_HOSTNAME
+              value: {{ $postgresqlExternal.host | quote }}
+            - name: DATABASE_PORT
+              value: {{ $postgresqlExternal.port | default 5432 | quote }}
+            - name: DATABASE_NAME
+              value: {{ $postgresqlExternal.database | default "marie" | quote }}
+            - name: DATABASE_USER
+              value: {{ $postgresqlExternal.username | default "marie" | quote }}
+            - name: POSTGRES_USER
+              value: {{ $postgresqlExternal.username | default "marie" | quote }}
+            {{- if $postgresqlExternal.existingSecret }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $postgresqlExternal.existingSecret }}
+                  key: {{ $postgresqlExternal.existingSecretPasswordKey | default "password" }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $postgresqlExternal.existingSecret }}
+                  key: {{ $postgresqlExternal.existingSecretPasswordKey | default "password" }}
             {{- end }}
-            {{- if .Values.global.etcd }}
+            {{- end }}
+            {{- if $etcd.enabled }}
             - name: ETCD_ENDPOINTS
-              value: {{ printf "http://%s-etcd:2379" .Release.Name | quote }}
+              value: {{ printf "%s-etcd:2379" .Release.Name | quote }}
+            - name: ETCD_HOSTNAME
+              value: {{ printf "%s-etcd" .Release.Name | quote }}
+            - name: ETCD_PORT
+              value: "2379"
+            {{- else if $etcdExternal.endpoints }}
+            - name: ETCD_ENDPOINTS
+              value: {{ join "," $etcdExternal.endpoints | quote }}
+            - name: ETCD_HOSTNAME
+              value: {{ first $etcdExternal.endpoints | quote }}
+            - name: ETCD_PORT
+              value: "2379"
             {{- end }}
-            {{- if .Values.global.rabbitmq }}
+            - name: OTEL_EXPORTER_HOST
+              value: localhost
+            - name: OTEL_EXPORTER_ENDPOINT
+              value: http://localhost:4317
+            - name: CLICKHOUSE_HOSTNAME
+              value: {{ printf "%s-clickhouse" .Release.Name | quote }}
+            {{- if $rabbitmq.enabled }}
             - name: RABBITMQ_HOST
+              value: {{ printf "%s-rabbitmq" .Release.Name | quote }}
+            - name: RABBIT_MQ_HOSTNAME
               value: {{ printf "%s-rabbitmq" .Release.Name | quote }}
             - name: RABBITMQ_PORT
               value: "5672"
+            - name: RABBIT_MQ_PORT
+              value: "5672"
             - name: RABBITMQ_USER
-              value: {{ .Values.global.rabbitmq.auth.username | default "user" | quote }}
+              value: {{ $rabbitmqAuth.username | default "user" | quote }}
+            - name: RABBIT_MQ_USERNAME
+              value: {{ $rabbitmqAuth.username | default "user" | quote }}
             - name: RABBITMQ_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ printf "%s-rabbitmq" .Release.Name }}
                   key: rabbitmq-password
+            - name: RABBIT_MQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "%s-rabbitmq" .Release.Name }}
+                  key: rabbitmq-password
+            {{- else if $rabbitmqExternal.host }}
+            - name: RABBITMQ_HOST
+              value: {{ $rabbitmqExternal.host | quote }}
+            - name: RABBIT_MQ_HOSTNAME
+              value: {{ $rabbitmqExternal.host | quote }}
+            - name: RABBITMQ_PORT
+              value: {{ $rabbitmqExternal.port | default 5672 | quote }}
+            - name: RABBIT_MQ_PORT
+              value: {{ $rabbitmqExternal.port | default 5672 | quote }}
+            - name: RABBITMQ_USER
+              value: {{ $rabbitmqExternal.username | default "user" | quote }}
+            - name: RABBIT_MQ_USERNAME
+              value: {{ $rabbitmqExternal.username | default "user" | quote }}
+            {{- if $rabbitmqExternal.existingSecret }}
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $rabbitmqExternal.existingSecret }}
+                  key: {{ $rabbitmqExternal.existingSecretPasswordKey | default "password" }}
+            - name: RABBIT_MQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $rabbitmqExternal.existingSecret }}
+                  key: {{ $rabbitmqExternal.existingSecretPasswordKey | default "password" }}
             {{- end }}
-            {{- if .Values.global.minio }}
-            {{- if .Values.global.minio.enabled }}
+            {{- end }}
+            {{- if $minio.enabled }}
             - name: S3_ENDPOINT_URL
-              value: http://{{ printf "%s-minio" .Release.Name }}:9000
+              value: http://{{ printf "%s-minio" .Release.Name }}:{{ $minio.port | default 8000 }}
             - name: S3_BUCKET_NAME
-              value: {{ .Values.global.minio.defaultBuckets | default "marie" | quote }}
+              value: {{ $minio.defaultBuckets | default "marie" | quote }}
+            - name: S3_REGION
+              value: us-east-1
             - name: S3_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
@@ -129,11 +297,72 @@ spec:
                 secretKeyRef:
                   name: {{ printf "%s-minio" .Release.Name }}
                   key: root-password
+            {{- else if eq ($storage.type | default "") "s3" }}
+            - name: S3_ENDPOINT_URL
+              value: {{ $storageS3.endpoint | default $minioExternal.endpoint | quote }}
+            - name: S3_BUCKET_NAME
+              value: {{ $storageS3.bucket | default $minioExternal.bucket | default "marie" | quote }}
+            - name: S3_REGION
+              value: {{ $storageS3.region | default "us-east-1" | quote }}
+            {{- if $storageS3.existingSecret }}
+            - name: S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $storageS3.existingSecret }}
+                  key: {{ $storageS3.existingSecretAccessKeyKey | default "access-key" }}
+            - name: S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $storageS3.existingSecret }}
+                  key: {{ $storageS3.existingSecretSecretKeyKey | default "secret-key" }}
             {{- end }}
+            {{- end }}
+            {{- if .Values.global.valkey.enabled }}
+            {{- $valkeyHost := default (printf "%s-valkey" .Release.Name) .Values.global.valkey.host }}
+            {{- $valkeyPort := default 6379 .Values.global.valkey.port }}
+            {{- $valkeyDatabase := default 0 .Values.global.valkey.database }}
+            {{- $valkeyTls := default false .Values.global.valkey.tls }}
+            {{- if .Values.global.valkey.auth.enabled }}
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (printf "%s-valkey-auth" .Release.Name) .Values.global.valkey.auth.existingSecret }}
+                  key: {{ .Values.global.valkey.auth.existingSecretPasswordKey | default "password" }}
+            {{- end }}
+            - name: LLM_QUEUE_ENABLED
+              value: {{ .Values.global.llmQueue.enabled | default false | quote }}
+            - name: LLM_QUEUE_VALKEY_URL
+              value: {{ printf "%s://%s%s:%v/%v" (ternary "rediss" "redis" $valkeyTls) (ternary ":$(VALKEY_PASSWORD)@" "" .Values.global.valkey.auth.enabled) $valkeyHost $valkeyPort $valkeyDatabase | quote }}
+            - name: LLM_QUEUE_POOL_ID
+              value: {{ .Values.global.llmQueue.poolId | default "default" | quote }}
+            - name: LLM_QUEUE_FABRIC_GROUP_ID
+              value: {{ .Values.global.llmQueue.fabricGroupId | default "default" | quote }}
+            - name: LLM_QUEUE_GATEWAY_ID
+              value: {{ .Values.global.llmQueue.gatewayId | default "default" | quote }}
+            - name: LLM_QUEUE_PRODUCER_ID
+              value: {{ .Values.global.llmQueue.producerId | default "" | quote }}
+            - name: LLM_QUEUE_PRODUCER_TTL_SECONDS
+              value: {{ .Values.global.llmQueue.producerTtlSeconds | default 30 | quote }}
+            - name: LLM_QUEUE_PRODUCER_REFRESH_INTERVAL_SECONDS
+              value: {{ .Values.global.llmQueue.producerRefreshIntervalSeconds | default 10 | quote }}
+            - name: LLM_QUEUE_REPLY_QUEUE_TTL_SECONDS
+              value: {{ .Values.global.llmQueue.replyQueueTtlSeconds | default 300 | quote }}
+            - name: LLM_QUEUE_REPLY_POP_TIMEOUT_SECONDS
+              value: {{ .Values.global.llmQueue.replyPopTimeoutSeconds | default "1.0" | quote }}
+            - name: LLM_QUEUE_DISPATCH_POP_TIMEOUT_SECONDS
+              value: {{ .Values.global.llmQueue.dispatchPopTimeoutSeconds | default "1.0" | quote }}
+            - name: LLM_QUEUE_MAX_BATCH_ITEMS
+              value: {{ .Values.global.llmQueue.maxBatchItems | default 8 | quote }}
+            - name: LLM_QUEUE_MAX_BATCH_WAIT_MS
+              value: {{ .Values.global.llmQueue.maxBatchWaitMs | default 100 | quote }}
+            - name: LLM_QUEUE_MAX_BUFFERED_REQUESTS_PER_POOL
+              value: {{ .Values.global.llmQueue.maxBufferedRequestsPerPool | default 32 | quote }}
+            - name: LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES
+              value: {{ .Values.global.llmQueue.maxInlinePayloadBytes | default "16777216" | quote }}
             {{- end }}
           startupProbe:
             httpGet:
-              path: /health
+              path: {{ .Values.probes.readiness.path | default "/status" }}
               port: http
             initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
@@ -141,14 +370,14 @@ spec:
             timeoutSeconds: 10
           livenessProbe:
             httpGet:
-              path: /health
+              path: {{ .Values.probes.readiness.path | default "/status" }}
               port: http
             initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
           readinessProbe:
             httpGet:
-              path: /health
+              path: {{ .Values.probes.readiness.path | default "/status" }}
               port: http
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
@@ -159,7 +388,10 @@ spec:
           {{- end }}
           volumeMounts:
             - name: config
-              mountPath: /config
+              mountPath: /etc/marie/config/service
+              readOnly: true
+            - name: psql-config
+              mountPath: /etc/marie/config/psql
               readOnly: true
             {{- if .Values.persistence.enabled }}
             - name: data
@@ -173,6 +405,20 @@ spec:
         - name: config
           configMap:
             name: {{ include "server.fullname" . }}-config
+        - name: psql-config
+          configMap:
+            name: {{ include "server.fullname" . }}-psql
+            items:
+              - key: cron_job_init.sql
+                path: cron_job_init.sql
+              {{- range $path, $_ := .Files.Glob "files/psql/schema/*.sql" }}
+              - key: {{ base $path }}
+                path: schema/{{ base $path }}
+              {{- end }}
+              {{- range $path, $_ := .Files.Glob "files/psql/schema/lease/*.sql" }}
+              - key: lease-{{ base $path }}
+                path: schema/lease/{{ base $path }}
+              {{- end }}
         {{- if .Values.persistence.enabled }}
         - name: data
           persistentVolumeClaim:

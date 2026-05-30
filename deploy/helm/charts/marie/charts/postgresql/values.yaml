@@ -1,0 +1,78 @@
+enabled: true
+
+image:
+  registry: ghcr.io
+  repository: ferretdb/postgres-documentdb
+  tag: "17-0.103.0"
+  pullPolicy: IfNotPresent
+
+auth:
+  postgresPassword: ""
+  username: postgres
+  password: ""
+  database: postgres
+  schema: marie_scheduler
+
+service:
+  type: ClusterIP
+  port: 5432
+  annotations: {}
+
+primary:
+  persistence:
+    enabled: true
+    storageClass: ""
+    size: 20Gi
+    accessModes:
+      - ReadWriteOnce
+  resources: {}
+
+initdb:
+  enabled: true
+  scripts:
+    initSql: |
+      ALTER SYSTEM SET max_connections = 500;
+
+      SET search_path = public, marie_scheduler, pg_catalog;
+
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='pg_stat_statements') THEN
+          EXECUTE 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements';
+        END IF;
+
+        IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='pg_cron') THEN
+          EXECUTE 'CREATE EXTENSION IF NOT EXISTS pg_cron';
+        END IF;
+
+        IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='vector') THEN
+          EXECUTE 'CREATE EXTENSION IF NOT EXISTS vector';
+        END IF;
+
+        IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='documentdb') THEN
+          EXECUTE 'CREATE EXTENSION IF NOT EXISTS documentdb CASCADE';
+        END IF;
+      END$$;
+
+      CREATE TABLE IF NOT EXISTS embeddings (
+        id SERIAL PRIMARY KEY,
+        embedding vector,
+        text text,
+        created_at timestamptz DEFAULT now()
+      );
+
+      SELECT 'CREATE DATABASE gitea'
+      WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'gitea')\gexec
+
+      SELECT 'CREATE DATABASE litellm'
+      WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'litellm')\gexec
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}
+
+migrations:
+  enabled: true
