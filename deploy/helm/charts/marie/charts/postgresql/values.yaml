@@ -73,6 +73,3 @@ affinity: {}
 podAnnotations: {}
 podSecurityContext: {}
 securityContext: {}
-
-migrations:
-  enabled: true

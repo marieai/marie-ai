@@ -64,7 +64,7 @@ These tables are defined here and also used by Marie-Studio:
        WHEN duplicate_column THEN NULL;
    END $$;
    ```
-3. Sync to runtime: `cp *.sql /mnt/data/marie-ai/config/psql/schema/`
+3. Build and deploy a Marie-AI image containing `config/psql`
 4. Notify Marie-Studio team to update Prisma schema
 
 ### Adding New Tables
@@ -93,6 +93,13 @@ Marie-Studio uses Prisma ORM and maintains its own schema definitions. When this
 - **marie_studio**: Studio-only tables (owned by Marie-Studio)
 
 Marie-AI is not aware of `marie_studio` tables. This allows Marie-AI to run independently.
+
+## Deployment Ownership
+
+`config/psql` is the canonical SQL source. Helm charts must not carry
+copied schema SQL; Kubernetes deployments should point `MARIE_PSQL_DIR`
+and `MARIE_SCHEMA_DIR` at the packaged image paths, or at an explicitly
+managed external runtime mount.
 
 ## Testing Changes
 

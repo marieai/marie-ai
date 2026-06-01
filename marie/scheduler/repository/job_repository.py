@@ -46,6 +46,18 @@ DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
 
 
+def _scheduler_sql_paths() -> tuple[str, str]:
+    psql_dir = os.environ.get("MARIE_PSQL_DIR", __default_psql_dir__)
+    schema_dir = os.environ.get("MARIE_SCHEMA_DIR")
+    if schema_dir is None:
+        schema_dir = (
+            os.path.join(psql_dir, "schema")
+            if psql_dir != __default_psql_dir__
+            else __default_schema_dir__
+        )
+    return psql_dir, schema_dir
+
+
 class JobRepository(PostgresqlMixin):
     """
     Repository for all database operations related to jobs and DAGs.
@@ -1983,8 +1995,7 @@ class JobRepository(PostgresqlMixin):
         """
         version = 1
 
-        # Auto-discover SQL files in schema directory
-        schema_dir = __default_schema_dir__
+        psql_dir, schema_dir = _scheduler_sql_paths()
         all_sql_paths = glob.glob(os.path.join(schema_dir, "*.sql"))
 
         # Separate numbered files (e.g., 001_schema.sql) from non-numbered files
@@ -2019,9 +2030,7 @@ class JobRepository(PostgresqlMixin):
 
         # Add cron job initialization
         commands.append(
-            create_sql_from_file(
-                schema, os.path.join(__default_psql_dir__, "cron_job_init.sql")
-            )
+            create_sql_from_file(schema, os.path.join(psql_dir, "cron_job_init.sql"))
         )
 
         query = ";\n".join(commands)

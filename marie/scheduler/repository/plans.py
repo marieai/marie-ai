@@ -278,7 +278,10 @@ def version_table_exists(schema: str) -> str:
 
 
 def insert_version(schema: str, version: str) -> str:
-    query = f"INSERT INTO {schema}.version(version) VALUES ('{version}')"
+    query = (
+        f"INSERT INTO {schema}.version(version) VALUES ('{version}') "
+        "ON CONFLICT DO NOTHING"
+    )
     return query
 
 

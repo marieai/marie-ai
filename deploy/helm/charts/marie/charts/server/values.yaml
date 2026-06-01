@@ -76,6 +76,9 @@ config:
   # Path to bootstrap gateway config file (mounted via ConfigMap)
   configFile: /etc/marie/config/service/marie-gateway-4.0.0.yml
   extraSearchPaths: /etc/marie/config/extra_py_modules
+  # SQL schema files are packaged with the Marie image, not copied into Helm.
+  psqlDir: /marie/config/psql
+  schemaDir: /marie/config/psql/schema
   metrics:
     enabled: true
     exporterHost: localhost

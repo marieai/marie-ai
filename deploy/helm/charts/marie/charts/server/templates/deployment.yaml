@@ -123,6 +123,10 @@ spec:
               value: "true"
             - name: MARIE_DEFAULT_MOUNT
               value: /etc/marie
+            - name: MARIE_PSQL_DIR
+              value: {{ .Values.config.psqlDir | default "/marie/config/psql" | quote }}
+            - name: MARIE_SCHEMA_DIR
+              value: {{ .Values.config.schemaDir | default "/marie/config/psql/schema" | quote }}
             - name: MARIE_LOG_CONFIG
               value: docker
             - name: MARIE_DEPLOYMENT_NAME
@@ -390,9 +394,6 @@ spec:
             - name: config
               mountPath: /etc/marie/config/service
               readOnly: true
-            - name: psql-config
-              mountPath: /etc/marie/config/psql
-              readOnly: true
             {{- if .Values.persistence.enabled }}
             - name: data
               mountPath: /data
@@ -405,20 +406,6 @@ spec:
         - name: config
           configMap:
             name: {{ include "server.fullname" . }}-config
-        - name: psql-config
-          configMap:
-            name: {{ include "server.fullname" . }}-psql
-            items:
-              - key: cron_job_init.sql
-                path: cron_job_init.sql
-              {{- range $path, $_ := .Files.Glob "files/psql/schema/*.sql" }}
-              - key: {{ base $path }}
-                path: schema/{{ base $path }}
-              {{- end }}
-              {{- range $path, $_ := .Files.Glob "files/psql/schema/lease/*.sql" }}
-              - key: lease-{{ base $path }}
-                path: schema/lease/{{ base $path }}
-              {{- end }}
         {{- if .Values.persistence.enabled }}
         - name: data
           persistentVolumeClaim:
