@@ -8,12 +8,18 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import transformers
 from docarray import DocList
 from PIL import Image
 from torch.nn import Module
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    LayoutLMv3ImageProcessor,
+    LayoutLMv3Processor,
+    pipeline,
+)
 
 from marie.api.docs import BatchableMarieDoc, MarieDoc
 from marie.components.document_classifier import BaseDocumentClassifier
@@ -242,7 +248,7 @@ class TransformersPageLevelClassifier(BaseDocumentClassifier):
             tokenizer = model_name_or_path
 
         if task == "zero-shot-classification":
-            self.model = transformers.pipeline(
+            self.model = pipeline(
                 task=task,
                 model=model_name_or_path,
                 tokenizer=tokenizer,
@@ -251,7 +257,7 @@ class TransformersPageLevelClassifier(BaseDocumentClassifier):
                 device=self.device,
             )
         elif task == "text-classification":
-            self.model = transformers.pipeline(
+            self.model = pipeline(
                 task=task,
                 model=model_name_or_path,
                 tokenizer=tokenizer,
@@ -273,13 +279,13 @@ class TransformersPageLevelClassifier(BaseDocumentClassifier):
             model_class = (
                 resolve_architecture(architecture)
                 if architecture
-                else transformers.AutoModelForSequenceClassification
+                else AutoModelForSequenceClassification
             )
 
             self.model = model_class.from_pretrained(model_name_or_path)
             self.model = optimize_model(self.model, self.logger)
             self.model = self.model.eval().to(self.device)
-            self.tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer)
+            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
 
             if os.path.exists(
                 os.path.join(model_name_or_path, "preprocessor_config.json")
@@ -288,14 +294,14 @@ class TransformersPageLevelClassifier(BaseDocumentClassifier):
                     "Found preprocessor_config.json, loading processor from %s",
                     model_name_or_path,
                 )
-                self.processor = transformers.LayoutLMv3Processor.from_pretrained(
+                self.processor = LayoutLMv3Processor.from_pretrained(
                     model_name_or_path, tokenizer=self.tokenizer
                 )
             else:
-                feature_extractor = transformers.LayoutLMv3ImageProcessor(
+                feature_extractor = LayoutLMv3ImageProcessor(
                     apply_ocr=False, do_resize=True, resample=Image.BILINEAR
                 )
-                self.processor = transformers.LayoutLMv3Processor(
+                self.processor = LayoutLMv3Processor(
                     feature_extractor, tokenizer=self.tokenizer
                 )
 
@@ -522,8 +528,6 @@ class TransformersDocumentLevelClassifier(BaseDocumentClassifier):
         """
         Load a text classification model from ModelRepository or HuggingFace model hub.
 
-        TODO: ADD EXAMPLE AND CODE SNIPPET
-
         See https://huggingface.co/models for full list of available models.
         Filter for text classification models: https://huggingface.co/models?pipeline_tag=text-classification&sort=downloads
         Filter for zero-shot classification models (NLI): https://huggingface.co/models?pipeline_tag=zero-shot-classification&sort=downloads&search=nli
@@ -609,27 +613,27 @@ class TransformersDocumentLevelClassifier(BaseDocumentClassifier):
         model_class = (
             resolve_architecture(architecture)
             if architecture
-            else transformers.AutoModelForSequenceClassification
+            else AutoModelForSequenceClassification
         )
 
         self.model = model_class.from_pretrained(model_name_or_path)
         self.model = optimize_model(self.model, self.logger)
         self.model = self.model.eval().to(self.device)
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer)
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
 
         if os.path.exists(os.path.join(model_name_or_path, "preprocessor_config.json")):
             self.logger.info(
                 "Found preprocessor_config.json, loading processor from %s",
                 model_name_or_path,
             )
-            self.processor = transformers.LayoutLMv3Processor.from_pretrained(
+            self.processor = LayoutLMv3Processor.from_pretrained(
                 model_name_or_path, tokenizer=self.tokenizer
             )
         else:
-            feature_extractor = transformers.LayoutLMv3ImageProcessor(
+            feature_extractor = LayoutLMv3ImageProcessor(
                 apply_ocr=False, do_resize=True, resample=Image.BILINEAR
             )
-            self.processor = transformers.LayoutLMv3Processor(
+            self.processor = LayoutLMv3Processor(
                 feature_extractor, tokenizer=self.tokenizer
             )
 
@@ -752,8 +756,6 @@ class TransformersSplittingClassifier(BaseDocumentClassifier):
         """
         Load a text classification model from ModelRepository or HuggingFace model hub.
 
-        TODO: ADD EXAMPLE AND CODE SNIPPET
-
         See https://huggingface.co/models for full list of available models.
         Filter for text classification models: https://huggingface.co/models?pipeline_tag=text-classification&sort=downloads
         Filter for zero-shot classification models (NLI): https://huggingface.co/models?pipeline_tag=zero-shot-classification&sort=downloads&search=nli
@@ -839,13 +841,13 @@ class TransformersSplittingClassifier(BaseDocumentClassifier):
         model_class = (
             resolve_architecture(architecture)
             if architecture
-            else transformers.AutoModelForSequenceClassification
+            else AutoModelForSequenceClassification
         )
 
         self.model = model_class.from_pretrained(model_name_or_path)
         self.model = optimize_model(self.model, self.logger)
         self.model = self.model.eval().to(self.device)
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer)
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
 
         self.context_pages_num = int(
             self.model_config.get("custom_model_parameters", {}).get(
@@ -858,14 +860,14 @@ class TransformersSplittingClassifier(BaseDocumentClassifier):
                 "Found preprocessor_config.json, loading processor from %s",
                 model_name_or_path,
             )
-            self.processor = transformers.LayoutLMv3Processor.from_pretrained(
+            self.processor = LayoutLMv3Processor.from_pretrained(
                 model_name_or_path, tokenizer=self.tokenizer
             )
         else:
-            feature_extractor = transformers.LayoutLMv3ImageProcessor(
+            feature_extractor = LayoutLMv3ImageProcessor(
                 apply_ocr=False, do_resize=True, resample=Image.BILINEAR
             )
-            self.processor = transformers.LayoutLMv3Processor(
+            self.processor = LayoutLMv3Processor(
                 feature_extractor, tokenizer=self.tokenizer
             )
 
@@ -965,7 +967,7 @@ class TransformersSplittingClassifier(BaseDocumentClassifier):
 
         predictions = self.predict_document_boundaries(data_loader)
 
-        # TODO fixme
+        # We cannot split on the last page
         predictions.append(
             {
                 "current_page_num": page_count,
