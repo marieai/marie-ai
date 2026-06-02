@@ -1,0 +1,12 @@
+apiVersion: marie.ai/v1alpha1
+kind: ExtensionPackage
+metadata:
+  id: ext.test.invalid-traversal
+  name: invalid-traversal
+  version: 0.1.0
+providers:
+  - ref: provider/bad
+    type: tool_provider
+    implementation:
+      language: python
+      source: ../outside.py

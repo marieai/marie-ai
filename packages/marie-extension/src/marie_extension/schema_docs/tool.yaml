@@ -1,0 +1,15 @@
+ref: tools/example
+name: example
+displayName: Example Tool
+invocationSchema:
+  parameters:
+    - key: query
+      type: string
+      required: true
+      x-marie-form: llm
+configurationSchema:
+  parameters:
+    - key: max_results
+      type: number
+      default: 10
+      x-marie-form: form

@@ -1,0 +1,35 @@
+apiVersion: marie.ai/v1alpha1
+kind: ExtensionPackage
+metadata:
+  id: ext.test.minimal-tool
+  name: minimal-tool
+  version: 0.1.0
+  displayName: Minimal Tool
+runtime:
+  type: metadata_only
+permissions:
+  network:
+    enabled: false
+  secrets:
+    enabled: false
+providers:
+  - ref: provider/minimal
+    type: tool_provider
+    displayName: Minimal
+    tools:
+      - ref: tools/echo
+        name: echo
+        invocationSchema:
+          required:
+            - text
+          parameters:
+            - key: text
+              type: string
+              required: true
+              x-marie-form: llm
+        configurationSchema:
+          parameters:
+            - key: uppercase
+              type: boolean
+              default: false
+              x-marie-form: form
