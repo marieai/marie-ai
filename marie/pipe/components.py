@@ -13,8 +13,6 @@ from marie.common.file_io import get_file_count
 from marie.components.document_classifier import (
     TransformersDocumentLevelClassifier,
     TransformersPageLevelClassifier,
-)
-from marie.components.document_classifier.transformers import (
     TransformersSplittingClassifier,
 )
 from marie.components.document_indexer import TransformersDocumentIndexer

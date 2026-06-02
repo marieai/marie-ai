@@ -1,9 +1,4 @@
-"""
-Using LayoutLMv3 to classify multipage documents
-    LayoutLMv3Model - backbone-model to extract features
-    LayoutLMv3ForSequenceClassification - LayoutLMv3Model + head (Linear) to classification tasks
-Warning: LayoutLMv3 has max of 512 tokens per sample (around 1 A4-page with full of text)
-"""
+from typing import Any
 
 import inspect
 import json
@@ -11,81 +6,58 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 import torch
-import torch.nn as nn
-from torch import Tensor
-from typing import Any, Optional
 import transformers
+from torch import Tensor, nn as nn
 
-from marie.models.multimodal.util.attention_pooling import AttentionPooling
 
-
-class LayoutLMv3DocumentClassifier(nn.Module):
+class LayoutLMv3DocumentSplitter(nn.Module):
 
     def __init__(
         self,
         model_name: str,
-        num_classes: int,
         freeze_mode: str = "freeze_all",
-        unfreeze_last_n: Any = None,
-        process_emb_mode: str = "mean",
-        add_page_input: bool = False,
-        num_page_classes: Optional[int] = None,
-        page_emb_dim: int = 64,
+        unfreeze_last_n: int | None = None,
+        process_emb_mode: str = "bi_lstm",
+        context_pages_num: int = 5,
     ) -> None:
 
         super().__init__()
         self.model_name = model_name
-        self.num_classes = num_classes
+        self.num_classes = 2
         self.freeze_mode = freeze_mode
         self.unfreeze_last_n = unfreeze_last_n
         self.process_emb_mode = process_emb_mode
-        self.add_page_input = add_page_input
+        self.context_len = context_pages_num
 
         # backbone LayoutLMv3 INIT
         self.backbone = transformers.LayoutLMv3Model.from_pretrained(self.model_name)
         self.hidden_size: int = self.backbone.config.hidden_size
         self._set_trainable()
-
-        # optional: page input embedding
-        if self.add_page_input:
-            assert isinstance(
-                num_page_classes, int
-            ), "num_page_classes must be an int (not None)"
-            self.page_class_embedding = nn.Embedding(
-                num_page_classes + 1, page_emb_dim, padding_idx=0
-            )
-            self.page_class_bridge = nn.Linear(page_emb_dim, self.hidden_size)
-
-        # embedding processor
         self.sequence_encoder = None
-        sequence_input_size = self.hidden_size
-        if self.add_page_input:
-            sequence_input_size += self.hidden_size
+
         if self.process_emb_mode == "lstm":
             self.sequence_encoder = nn.LSTM(
-                input_size=sequence_input_size,
+                input_size=self.hidden_size,
                 hidden_size=self.hidden_size,
                 batch_first=True,
                 bidirectional=False,
             )
         elif self.process_emb_mode == "bi_lstm":
             self.sequence_encoder = nn.LSTM(
-                input_size=sequence_input_size,
+                input_size=self.hidden_size,
                 hidden_size=self.hidden_size,
                 batch_first=True,
                 bidirectional=True,
             )
         elif self.process_emb_mode == "attention":
-            self.attention_layer = AttentionPooling(sequence_input_size)
+            self.attention_layer = AttentionPooling(self.hidden_size)
 
-        # classifier INIT
+        # classifier INIT (boundary: yes/no)
         clf_input_size = (
-            self.hidden_size * 2
+            self.hidden_size * 4
             if self.process_emb_mode == "bi_lstm"
             else self.hidden_size
         )
-        if self.add_page_input:
-            clf_input_size *= 2
         self.classifier = nn.Sequential(
             nn.Linear(clf_input_size, self.hidden_size),
             nn.ReLU(),
@@ -100,7 +72,7 @@ class LayoutLMv3DocumentClassifier(nn.Module):
         map_location: str | torch.device = "cpu",
         strict: bool = True,
         **kwargs: Any,
-    ) -> "LayoutLMv3DocumentClassifier":
+    ) -> "LayoutLMv3DocumentSplitter":
         model_path = Path(model_name_or_path)
         config_path = model_path / "config.json"
         if not config_path.exists():
@@ -185,12 +157,12 @@ class LayoutLMv3DocumentClassifier(nn.Module):
         bbox: Tensor,
         pixel_values: Tensor,
         page_mask: Tensor,
-        page_labels: Optional[Tensor] = None,
+        center_page_idx: Any,
     ) -> Any:
-
-        if page_mask.sum() == 0:
-            raise ValueError("Batch contains documents without valid pages")
-
+        """
+        input_ids, attention_mask, bbox, pixel_values: (B, P, S, ...)
+        page_mask: (B, P)
+        """
         B, P, S = input_ids.shape
 
         # extract LayoutLMv3 embeddings for batch (all pages in batch)
@@ -202,7 +174,7 @@ class LayoutLMv3DocumentClassifier(nn.Module):
             B * P, 3, pixel_values.size(-2), pixel_values.size(-1)
         )
 
-        # extract embs
+        # extract emb
         outputs = self.backbone(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -210,27 +182,15 @@ class LayoutLMv3DocumentClassifier(nn.Module):
             pixel_values=pixel_values,
         )
         cls_embeddings = outputs.last_hidden_state[:, 0]  # (B * P, hidden_size)
-        doc_embeddings = cls_embeddings.view(
-            B, P, -1
-        )  # (B, P, hidden_size) - back to per-document
+        doc_embeddings = cls_embeddings.view(B, P, -1)  # (B, P, hidden_size)
 
-        # optional: concat page categories embs
-        if self.add_page_input and page_labels is not None:
-            page_label_emb = self.page_class_embedding(
-                page_labels
-            )  # (B, P, page_emb_dim)
-            page_label_emb = self.page_class_bridge(
-                page_label_emb
-            )  # (B, P, hidden_size)
-            doc_embeddings = torch.cat(
-                [doc_embeddings, page_label_emb], dim=-1
-            )  # (B, P, hidden_size * 2)
-
-        # process embeddings - 1 embedding per each document
-        final_embeddings = self._process_emb(page_mask, doc_embeddings)  # (B, hidden)
+        # process embeddings
+        final_embeddings = self._process_emb(
+            page_mask, doc_embeddings, center_page_idx
+        )  # (B, hid_size) or (B, 2*hid)
 
         # classification layer
-        logits = self.classifier(final_embeddings)  # (B, num_classes)
+        logits = self.classifier(final_embeddings)  # (B, 2)
         return logits
 
     def _set_trainable(self) -> None:
@@ -252,6 +212,7 @@ class LayoutLMv3DocumentClassifier(nn.Module):
         if self.freeze_mode == "freeze_all":
             pass
         elif self.freeze_mode == "unfreeze_n":
+            assert self.unfreeze_last_n is not None
             for layer in encoder_layers[-self.unfreeze_last_n :]:
                 for param in layer.parameters():
                     param.requires_grad = True
@@ -261,43 +222,52 @@ class LayoutLMv3DocumentClassifier(nn.Module):
         else:
             raise ValueError(f"Unknown mode: {self.freeze_mode}")
 
-    def check_trainable(self) -> None:
-        for name, param in self.backbone.named_parameters():
-            if param.requires_grad:
-                print("Trainable:", name)
-
-    def _process_emb(self, page_mask: Tensor, doc_embs: Tensor) -> Any:
-        """
-        LayoutLMv3 embeddings processor based on selected mode. Inclusion of masking of padded pages.
+    def _process_emb(self, page_mask: Any, doc_embs: Any, center_page_idx: Any) -> Any:
+        """LayoutLMv3 embeddings processor based on selected mode. Inclusion of masking of padded pages.
         Modes: 1.mean - mean of embeddings from all pages; 2.lstm - sequence of embeddings.
         """
+        assert doc_embs.size(1) == self.context_len, (
+            f"Expected exactly {self.context_len} pages in the sequence. "
+            f"Got:{doc_embs.size(1)}"
+        )
+
         if self.process_emb_mode == "lstm":
-            assert self.sequence_encoder is not None
+            # lstm - sequence of embeddings for each page sequence in batch
             lengths = page_mask.sum(dim=1).cpu()
             packed = nn.utils.rnn.pack_padded_sequence(
                 doc_embs, lengths, batch_first=True, enforce_sorted=False
             )
+            assert self.sequence_encoder is not None
             _, (h_n, _) = self.sequence_encoder(packed)
             final_embedding = h_n.squeeze(0)  # (B, hidden)
 
         elif self.process_emb_mode == "bi_lstm":
-            assert self.sequence_encoder is not None
             lengths = page_mask.sum(dim=1).cpu()
             packed = nn.utils.rnn.pack_padded_sequence(
                 doc_embs, lengths, batch_first=True, enforce_sorted=False
             )
-            _, (h_n, _) = self.sequence_encoder(packed)
-            final_embedding = torch.cat([h_n[-2], h_n[-1]], dim=1)  # (B, 2 * hidden)
+            assert self.sequence_encoder is not None
+            output, _ = self.sequence_encoder(packed)
+            unpacked, _ = nn.utils.rnn.pad_packed_sequence(
+                output, batch_first=True
+            )  # (B, P, 2*hidden)
+            b = unpacked.size(0)
+            batch_idx = torch.arange(b, device=unpacked.device)
+            curr_repr = unpacked[batch_idx, center_page_idx, :]  # (B, 2*hidden)
+            next1_repr = unpacked[batch_idx, center_page_idx + 1, :]  # (B, 2*hidden)
+            final_embedding = torch.cat(
+                [curr_repr, next1_repr], dim=1
+            )  # (B, 4 * hidden)
 
         elif self.process_emb_mode == "attention":
-            final_embedding = self.attention_layer(doc_embs, page_mask)  # (B, hidden)
+            final_embedding = self.attention_layer(doc_embs, page_mask)
 
         elif self.process_emb_mode == "mean":
             page_mask_exp = page_mask.unsqueeze(-1)  # (B, P, 1)
-            masked_embed = doc_embs * page_mask_exp
-            final_embedding = masked_embed.sum(dim=1) / page_mask_exp.sum(dim=1).clamp(
+            masked_emb = doc_embs * page_mask_exp
+            final_embedding = masked_emb.sum(dim=1) / page_mask_exp.sum(dim=1).clamp(
                 min=1e-9
-            )  # (B, hidden)
+            )
 
         else:
             raise ValueError(
@@ -307,14 +277,24 @@ class LayoutLMv3DocumentClassifier(nn.Module):
         return final_embedding
 
 
-if __name__ == "__main__":
-    model_name_ = "gordonlim/layoutlmv3-base-finetuned-rvlcdip"
-    num_classes_ = 13
-    model_obj = LayoutLMv3DocumentClassifier(
-        model_name_,
-        num_classes_,
-        freeze_mode="unfreeze_n",
-        unfreeze_last_n=1,
-        process_emb_mode="lstm",
-    )
-    model_obj.check_trainable()
+class AttentionPooling(nn.Module):
+    def __init__(self, hidden_dim: int) -> None:
+        super().__init__()
+        self.score_layer = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1),  # attention per each page
+        )
+
+    def forward(self, embeddings: Any, mask: Any) -> Any:
+        """
+        Args:
+            embeddings:  (B, P, H)
+            mask: (B, P)
+        Returns: (B, H)
+        """
+        scores = self.score_layer(embeddings).squeeze(-1)  # (B, P)
+        scores = scores.masked_fill(~mask, -1e9)  # mask out padded pages
+        attn_weights = torch.softmax(scores, dim=1)  # (B, P)
+        output = torch.sum(embeddings * attn_weights.unsqueeze(-1), dim=1)  # (B, H)
+        return output
