@@ -116,8 +116,32 @@ def convert_name_format(value: str, field_def: Dict[str, Any]) -> dict[str, None
     from nameparser import HumanName
 
     name = HumanName(full_name, string_format=string_format)
-    parsed_name = {"first": name.first, "middle": name.middle, "last": name.last}
 
+    first, middle, last = name.first, name.middle, name.last
+
+    # nameparser may misclassify a last name as a suffix (e.g., "CAP" as Captain).
+    # If the suffix is a known last name and the parsed last is NOT, shift:
+    # last → middle, suffix → last.
+    suffix_token = name.suffix.rstrip(".")
+    if (
+        suffix_token
+        and _is_known_last_name(suffix_token)
+        and not _is_known_last_name(last.rstrip("."))
+    ):
+        middle = f"{middle} {last}".strip() if middle else last
+        last = name.suffix
+
+    # Fix compound first names: if the middle contains known first name(s)
+    # followed by a middle initial (single char), move them into first.
+    # E.g., "EL NORA S. POLACEK" → first="EL NORA", middle="S.", last="POLACEK"
+    middle_parts = middle.split()
+    if len(middle_parts) >= 2 and len(middle_parts[-1].rstrip(".")) == 1:
+        prefix_parts = middle_parts[:-1]
+        if all(_is_known_first_name(p) for p in prefix_parts):
+            first = f"{first} {' '.join(prefix_parts)}"
+            middle = middle_parts[-1]
+
+    parsed_name = {"first": first, "middle": middle, "last": last}
     return parsed_name
 
 
