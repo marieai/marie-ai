@@ -36,6 +36,36 @@ A state passing system that enables tasks within a DAG run to share state via si
 - In-memory backend for testing
 - Retry-safe with try_number scoping
 
+### 📦 marie-extension
+**Extension package schema, loader, and validator**
+
+A metadata-first package contract for Marie extensions. It validates `marie-extension.yaml` packages from local directories or standard ZIP archives without executing package code.
+
+- **Purpose**: Extension authoring schema, safe package loading, and validation
+- **Install**: `pip install marie-extension`
+- **Docs**: [packages/marie-extension/README.md](./marie-extension/README.md)
+
+**Features**:
+- YAML-first extension package schema
+- Standard ZIP discovery by `marie-extension.yaml`
+- Safe path validation for package files
+- Deny-by-default permission models
+
+### 📦 marie-plugin-daemon
+**Decode-only extension daemon for runtime broker integration**
+
+A Go service that exposes health/version endpoints and decodes Marie extension directories or standard ZIP archives containing `marie-extension.yaml` without executing package code.
+
+- **Purpose**: Extension package decode/stub runtime boundary
+- **Build**: `cd packages/marie-plugin-daemon && go test ./... && go build -o dist/marie-plugin-daemon ./cmd/server`
+- **Docs**: [packages/marie-plugin-daemon/README.md](./marie-plugin-daemon/README.md)
+
+**Features**:
+- Health and version endpoints
+- Decode endpoint for Marie ZIP/directory packages
+- `.difypkg` runtime rejection
+- Runtime invocation endpoints disabled in decode-only mode
+
 ## Monorepo Structure
 
 ```
@@ -50,10 +80,18 @@ marie-ai/
     │   ├── src/marie_mcp/
     │   ├── pyproject.toml      # Separate PyPI package
     │   └── README.md
-    └── marie-kernel/           # State management kernel
-        ├── src/marie_kernel/
-        ├── pyproject.toml      # Separate PyPI package
-        └── README.md
+    ├── marie-kernel/           # State management kernel
+    │   ├── src/marie_kernel/
+    │   ├── pyproject.toml      # Separate PyPI package
+    │   └── README.md
+    ├── marie-extension/        # Extension package schema and validator
+    │   ├── src/marie_extension/
+    │   ├── pyproject.toml      # Separate PyPI package
+    │   └── README.md
+    └── marie-plugin-daemon/    # Decode-only Go daemon
+        ├── cmd/server/
+        ├── internal/
+        └── go.mod
 ```
 
 ## Development
@@ -71,6 +109,10 @@ pip install -e .
 # Install State Kernel package
 cd packages/marie-kernel
 pip install -e ".[dev]"  # Include test dependencies
+
+# Install Extension package
+cd packages/marie-extension
+pip install -e ".[dev]"
 ```
 
 ### Publishing
@@ -91,6 +133,16 @@ twine upload dist/*
 cd packages/marie-kernel
 python -m build
 twine upload dist/*
+
+# Publish Extension package
+cd packages/marie-extension
+python -m build
+twine upload dist/*
+
+# Build Plugin Daemon package
+cd packages/marie-plugin-daemon
+go test ./...
+go build -o dist/marie-plugin-daemon ./cmd/server
 ```
 
 ### Shared Tooling
@@ -145,6 +197,14 @@ Maintain compatibility matrix in each package README:
 |--------------|----------|--------|
 | 0.1.x        | 3.0.x    | 🚧 Development |
 
+| marie-extension | marie-ai | Status |
+|-----------------|----------|--------|
+| 0.1.x           | 3.0.x    | 🚧 Development |
+
+| marie-plugin-daemon | marie-ai | Status |
+|---------------------|----------|--------|
+| 0.1.x               | 3.0.x    | 🚧 Development |
+
 ## Future Packages
 
 Potential packages to add:
@@ -152,7 +212,6 @@ Potential packages to add:
 - `marie-cli` - Enhanced CLI tools
 - `marie-storage` - Storage adapters (S3, GCS, Azure)
 - `marie-monitoring` - Observability tools
-- `marie-plugins` - Plugin system
 
 ## Questions?
 

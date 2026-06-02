@@ -1,0 +1,7 @@
+ref: provider/example
+type: tool_provider
+displayName: Example Provider
+credentials:
+  - key: api_key
+    type: secret
+    required: false

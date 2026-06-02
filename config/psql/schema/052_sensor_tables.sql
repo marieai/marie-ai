@@ -1,4 +1,4 @@
-create table marie_scheduler.sensor
+create table if not exists marie_scheduler.sensor
 (
     id                       uuid                           default gen_random_uuid()                          not null
         primary key,
@@ -20,7 +20,7 @@ create table marie_scheduler.sensor
     status                   marie_scheduler.trigger_status default 'inactive'::marie_scheduler.trigger_status not null
 );
 
-create table marie_scheduler.sensor_run_key
+create table if not exists marie_scheduler.sensor_run_key
 (
     sensor_id  uuid                                   not null
         references marie_scheduler.sensor
@@ -31,7 +31,7 @@ create table marie_scheduler.sensor_run_key
     primary key (sensor_id, run_key)
 );
 
-create table marie_scheduler.sensor_tick
+create table if not exists marie_scheduler.sensor_tick
 (
     id               uuid                     default gen_random_uuid() not null
         primary key,
@@ -50,4 +50,3 @@ create table marie_scheduler.sensor_tick
     duration_ms      integer,
     trigger_payload  jsonb
 );
-

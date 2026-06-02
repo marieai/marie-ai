@@ -45,6 +45,7 @@ DO $$ BEGIN
 EXCEPTION
     WHEN duplicate_object THEN NULL;
     WHEN duplicate_table THEN NULL;
+    WHEN invalid_table_definition THEN NULL;
 END $$;
 
 COMMENT ON TABLE {schema}.job IS 'Main job queue table - partitioned by queue name';

@@ -1,0 +1,12 @@
+ref: provider/example-models
+type: model_provider
+providerId: example
+displayName: Example Models
+supportedModelTypes:
+  - llm
+models:
+  - ref: models/example-chat
+    modelId: example-chat
+    modelType: llm
+    features:
+      - tool-call

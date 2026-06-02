@@ -1,0 +1,40 @@
+apiVersion: marie.ai/v1alpha1
+kind: ExtensionPackage
+metadata:
+  id: ext.test.minimal-model
+  name: minimal-model
+  version: 0.1.0
+  displayName: Minimal Model Provider
+providers:
+  - ref: provider/models
+    type: model_provider
+    providerId: test-models
+    displayName: Test Models
+    supportedModelTypes:
+      - llm
+      - text_embedding
+    credentials:
+      - key: api_key
+        type: secret
+        required: true
+    models:
+      - ref: models/chat
+        modelId: test-chat
+        modelType: llm
+        features:
+          - tool-call
+          - stream-tool-call
+        properties:
+          mode: chat
+          contextSize: 8192
+        parameters:
+          - key: temperature
+            type: float
+            default: 0.7
+            min: 0
+            max: 2
+        pricing:
+          input: "1"
+          output: "2"
+          unit: "0.000001"
+          currency: USD

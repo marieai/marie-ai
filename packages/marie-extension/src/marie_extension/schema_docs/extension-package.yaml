@@ -1,0 +1,24 @@
+apiVersion: marie.ai/v1alpha1
+kind: ExtensionPackage
+metadata:
+  id: ext.example.tool
+  name: example-tool
+  version: 0.1.0
+  displayName: Example Tool
+runtime:
+  type: metadata_only
+permissions:
+  network:
+    enabled: false
+providers:
+  - ref: provider/example
+    type: tool_provider
+    displayName: Example
+    tools:
+      - ref: tools/example
+        name: example
+        invocationSchema:
+          parameters:
+            - key: query
+              type: string
+              x-marie-form: llm

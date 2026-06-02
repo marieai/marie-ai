@@ -1,9 +1,24 @@
-create type marie_scheduler.sensor_status as enum ('active', 'inactive', 'paused', 'error');
+DO $$ BEGIN
+    CREATE TYPE marie_scheduler.sensor_status AS ENUM ('active', 'inactive', 'paused', 'error');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-create type marie_scheduler.sensor_type as enum ('manual', 'schedule', 'webhook', 'polling', 'event', 'run_status', 'asset');
+DO $$ BEGIN
+    CREATE TYPE marie_scheduler.sensor_type AS ENUM ('manual', 'schedule', 'webhook', 'polling', 'event', 'run_status', 'asset');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-create type marie_scheduler.tick_status as enum ('started', 'success', 'skipped', 'failed');
+DO $$ BEGIN
+    CREATE TYPE marie_scheduler.tick_status AS ENUM ('started', 'success', 'skipped', 'failed');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-create type marie_scheduler.trigger_status as enum ('active', 'inactive', 'paused', 'error');
+DO $$ BEGIN
+    CREATE TYPE marie_scheduler.trigger_status AS ENUM ('active', 'inactive', 'paused', 'error');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-create type marie_scheduler.trigger_type as enum ('manual', 'schedule', 'webhook', 'polling', 'event', 'run_status');
+DO $$ BEGIN
+    CREATE TYPE marie_scheduler.trigger_type AS ENUM ('manual', 'schedule', 'webhook', 'polling', 'event', 'run_status');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;

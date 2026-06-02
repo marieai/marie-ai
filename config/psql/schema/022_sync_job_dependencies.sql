@@ -31,6 +31,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 
+DROP TRIGGER IF EXISTS trg_sync_job_dependencies ON {schema}.job;
+
 CREATE TRIGGER trg_sync_job_dependencies
 AFTER INSERT OR UPDATE OF dependencies ON {schema}.job
 FOR EACH ROW
