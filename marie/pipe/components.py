@@ -484,6 +484,7 @@ def rotate_frames(
     root_asset_dir: str,
     force: bool = False,
     threshold: float = 2.0,
+    api=None,
 ) -> tuple[dict, bool]:
     """Rotate frames in-place based on detected orientation"""
     output_dir = ensure_exists(os.path.join(root_asset_dir, "rotation"))
@@ -500,7 +501,9 @@ def rotate_frames(
             logger.info(f"Skipping rotation for {ref_id} as frames have not changed")
             return existing_rotation_meta, False
 
-    page_rotation, any_rotated = rotate_image_frames(frames, threshold=threshold)
+    page_rotation, any_rotated = rotate_image_frames(
+        frames, threshold=threshold, api=api
+    )
 
     result_hash = hash_frames_fast(frames)
     results = {

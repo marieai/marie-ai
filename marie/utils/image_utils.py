@@ -3,14 +3,13 @@ import io
 import os
 import time
 from math import ceil
-from typing import List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
-import PIL.Image
-import pytesseract
 from PIL import Image
 from rich import print
+from tesserocr import PSM, PyTessBaseAPI
 from tqdm import tqdm
 
 from marie.logging_core.predefined import default_logger as logger
@@ -36,7 +35,7 @@ def read_image(image):
         elif len(image.shape) == 3 and image.shape[2] == 4:  # RGBA
             img = image[:, :, :3]
             img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-    elif type(image) == PIL.Image.Image:  # convert pil to OpenCV
+    elif type(image) == Image.Image:  # convert pil to OpenCV
         img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
     else:
         raise Exception(f"Unhandled image type : {type(image)}")
@@ -152,7 +151,7 @@ def hash_frames_fast(frames: List[np.ndarray], blocksize=2**20) -> str:
 
 
 def convert_to_bytes(
-    frame: Union[np.ndarray, PIL.Image.Image],
+    frame: Union[np.ndarray, Image.Image],
     fmt: str = "PNG",
     dpi: Tuple[int, int] = None,
 ) -> bytes:
@@ -165,8 +164,8 @@ def convert_to_bytes(
     """
 
     if isinstance(frame, np.ndarray):
-        pil_img = PIL.Image.fromarray(frame)
-    elif isinstance(frame, PIL.Image.Image):
+        pil_img = Image.fromarray(frame)
+    elif isinstance(frame, Image.Image):
         pil_img = frame
     else:
         raise TypeError(f"Unsupported type : {type(frame)}")
@@ -256,7 +255,7 @@ def crop_to_content(frame: np.ndarray, content_aware=True) -> np.ndarray:
 def ensure_max_page_size(
     frames: List[np.ndarray],
     max_page_size: Tuple[int, int] = (2550, 3300),
-    expand_ratio: float = 0.15,
+    expand_ratio: float = 0.0,  # Todo ask greg why 0.15, reducing mitigates CUDA errors from too large images ex.270048624 (2550, 4073, 3) -> (2375, 3795, 3)
 ) -> Tuple[bool, List[np.ndarray]]:
     """
     Ensure frames do not exceed the max page size. Resize if necessary, considering the orientation.
@@ -323,45 +322,57 @@ def ensure_max_page_size(
     return changed, resized_frames
 
 
-def detect_page_rotation(
-    img: str | Image.Image | np.ndarray,
-    compress: bool = False,
-    compress_size: Tuple[int, int] = (2000, 2000),
-) -> dict:
-    """detect single page (single image) orientation/rotation"""
-    if isinstance(img, (str, bytes, os.PathLike)):
-        from marie.utils.docs import load_image
-
-        img = load_image(img)
-    elif isinstance(img, Image.Image):
-        img = img.convert("RGB")
-
-    if compress:
-        # This reduces accuracy
-        logger.debug(
-            f"Compressing image to max size {compress_size} for rotation detection"
-        )
-        if isinstance(img, Image.Image):
-            img.thumbnail((compress_size, Image.Resampling.LANCZOS))
-        elif isinstance(img, np.ndarray):
-            _, resized = ensure_max_page_size([img], compress_size)
-            img = resized[0]
-
+def detect_page_rotation(img, api: Optional[PyTessBaseAPI] = None) -> Dict[str, Any]:
+    owns_api = api is None
+    _img = img.copy()
     try:
-        osd = pytesseract.image_to_osd(img, output_type="dict")
+        if owns_api:
+            api = PyTessBaseAPI(lang="osd", psm=PSM.OSD_ONLY)
+        else:
+            api.Clear()
+
+        if isinstance(_img, (str, bytes, os.PathLike)):
+            from marie.utils.docs import load_image
+
+            _img = load_image(_img)
+        if isinstance(_img, np.ndarray):
+            _img = Image.fromarray(_img).convert("RGB")
+        elif isinstance(_img, Image.Image):
+            _img = _img.convert("RGB")
+
+        api.SetImage(_img)
+
+        osd = api.DetectOrientationScript()
+        if not osd:
+            raise RuntimeError("No OSD result returned")
+
+        orientation = int(osd["orient_deg"])
+        rotate = (360 - orientation) % 360
         return {
-            k: osd[k] for k in ("orientation", "rotate", "orientation_conf") if k in osd
+            "orientation": orientation,
+            "rotate": rotate,
+            "orientation_conf": float(osd["orient_conf"]),
         }
-    except pytesseract.TesseractError as e:
+    except Exception as e:
         logger.warning(
             "Failed to detect page rotation using Tesseract. Probably a blank page."
         )
-        logger.debug(f"Tesseract Error: {e}")
-        return {"rotate": 0, "orientation": 0, "orientation_conf": 0, "error": e}
+        logger.error(f"Tesseract Error: {e}")
+        return {
+            "rotate": 0,
+            "orientation": 0,
+            "orientation_conf": 0,
+            "error": e,
+        }
+    finally:
+        if api is not None:
+            api.End() if owns_api else api.Clear()
 
 
 def rotate_image_frames(
-    frames: list[np.ndarray], threshold: float = 2.0
+    frames: list[np.ndarray],
+    threshold: float = 2.0,
+    api: Optional[PyTessBaseAPI] = None,
 ) -> Tuple[dict, bool]:
     any_rotated = False
     page_rotation = dict()
@@ -370,7 +381,7 @@ def rotate_image_frames(
         enumerate(frames), total=len(frames), desc="page rotation", unit="frame"
     )
     for i, frame in enumerated_frames:
-        results = detect_page_rotation(frame)
+        results = detect_page_rotation(frame, api=api)
         rotation = results.get("rotate", 0)
         conf = results.get("orientation_conf", 0)
         page_rotation[i] = results

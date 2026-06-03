@@ -1,6 +1,5 @@
 import os
 import tempfile
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from docarray import DocList
@@ -15,24 +14,14 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import torch_gc
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_known_ocr_engines
-from marie.pipe.components import (
-    burst_frames,
-    ocr_frames,
-    rotate_frames,
-    update_existing_meta,
-)
 from marie.pipe.llm_pipeline import LLMPipeline
-from marie.storage import StorageManager
 from marie.utils.asset_util import (
     create_working_dir,
     download_asset,
     restore_assets,
-    s3_asset_path,
-    split_filename,
     store_assets,
 )
 from marie.utils.json import load_json_file, store_json_object
-from marie.utils.tiff_ops import merge_tiff
 from marie.utils.utils import ensure_exists
 
 
@@ -55,110 +44,6 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
         if pipelines:
             logger.info(f"Pipelines config: {pipelines}")
             self.pipeline = LLMPipeline(pipelines_config=pipelines, device=self.device)
-
-    @requests(on="/document/rotate")
-    def rotate_frames(
-        self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
-    ):
-        """
-        :param docs: DocList containing a single AssetKeyDoc.
-        :param parameters: Dictionary of request parameters including payload.
-        :returns: Dictionary with merge status, runtime_info, and stored assets.
-        :raises ConnectionError: If unable to fetch existing assets.
-        """
-        job_id, ref_id, ref_type, queue_id, payload = parse_parameters(parameters)
-
-        try:
-            frames = get_frames_from_docs(docs)
-            root_asset_dir = create_working_dir(
-                frames, ref_id=ref_id, ref_type=ref_type, job_id=job_id
-            )
-
-            s3_root_path = restore_assets(
-                ref_id,
-                ref_type,
-                root_asset_dir,
-                overwrite=True,
-                # dirs_to_restore=["rotation", "results"],
-                full_restore=True,  # full_restore is only option that restores tif
-            )
-            if s3_root_path is None:
-                raise ConnectionError("Unable to collect meta data from")
-
-            metadata = {
-                "ref_id": ref_id,
-                "ref_type": ref_type,
-                "job_id": job_id,
-                "pages": f"{len(frames)}",
-            }
-
-            metadata["rotation"], any_rotated = rotate_frames(
-                ref_id, frames, root_asset_dir
-            )
-
-            if any_rotated:
-                self.logger.info(f"Re-bursting frames for {ref_id} due to rotation")
-                burst_frames(ref_id, frames, root_asset_dir, force=True)
-
-                self.logger.info(f"Merging TIFF pages for {ref_id}")
-                _, prefix, _ = split_filename(ref_id)
-                img_name = f"{prefix}.tif"
-                local_img_path = os.path.join(root_asset_dir, img_name)
-
-                # back up original
-                StorageManager.write(
-                    local_img_path,
-                    f"{s3_asset_path(ref_id, ref_type)}/{prefix}_prerotation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.tif",
-                )
-
-                # merge_tiff_frames(frames, os.path.join(root_asset_dir, img_name))
-                merge_tiff(
-                    os.path.join(root_asset_dir, "burst"),
-                    local_img_path,
-                    sort_key=lambda name: int(
-                        os.path.splitext(os.path.basename(name))[0].rsplit("_", 1)[-1]
-                    ),
-                )
-
-                store_assets(ref_id, ref_type, root_asset_dir, match_wildcard=img_name)
-
-                # If job is submitted with image not in ref_id directory, need to update it so downstream jobs access rotated tiff
-                remote_img_path = f"{s3_asset_path(ref_id, ref_type)}/{img_name}"
-                incoming_img_path = docs[0].asset_key
-                if incoming_img_path != remote_img_path:
-                    StorageManager.write(
-                        local_img_path, incoming_img_path, overwrite=True
-                    )
-
-            metadata["ocr"] = ocr_frames(
-                self.ocr_engines,
-                ref_id,
-                frames,
-                root_asset_dir,
-                queue_id=queue_id,
-                force=any_rotated,  # Force if pages have been rotated
-            )
-
-            meta_path = os.path.join(root_asset_dir, f"{ref_id}.meta.json")
-            self.logger.info(f"Storing rotation metadata : {meta_path}")
-            if os.path.exists(meta_path):
-                metadata = update_existing_meta(
-                    load_json_file(meta_path, True), metadata
-                )
-            store_json_object(metadata, meta_path)
-            stored_assets = store_assets(
-                ref_id, ref_type, root_asset_dir, match_wildcard="*.json"
-            )
-
-            return {
-                "status": "success",
-                "runtime_info": self.runtime_info,
-                "assets": stored_assets,
-            }
-        finally:
-            del frames
-            torch_gc()
-            MDC.remove("request_id")
 
     @requests(on="/document/collate")
     def collate(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):

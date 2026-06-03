@@ -145,10 +145,10 @@ prefetch: 4
 executors:
   - name: rotation_executor
     uses:
-      jtype: DocDeterminationPipelineExecutor
+      jtype: RotationExecutor
       metas:
         py_modules:
-          - marie.executor.pipeline
+          - marie.executor.rotation
       with:
         device: cuda
         storage:
