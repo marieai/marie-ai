@@ -43,6 +43,7 @@ from marie.storage.database.postgres import PostgresqlMixin
 
 DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
+DEFAULT_DAG_TABLE = "dag"
 
 
 class JobRepository(PostgresqlMixin):
@@ -154,9 +155,7 @@ class JobRepository(PostgresqlMixin):
 
         return await self._loop.run_in_executor(self._db_executor, db_call)
 
-    async def get_jobs_by_policy(
-        self, ref_type: str, ref_id: str
-    ) -> Optional[WorkInfo]:
+    async def get_dags_by_policy(self, ref_type: str, ref_id: str) -> Set[str]:
         """
         Find a job by its reference type and reference ID.
 
@@ -168,35 +167,22 @@ class JobRepository(PostgresqlMixin):
         def db_call():
             cursor = None
             conn = None
-            results = []
+            dag_ids = []
             try:
                 conn = self._get_connection()
                 cursor = conn.cursor()
                 cursor.execute(
-                    f"""
-                        SELECT
-                        id,
-                        name,
-                        priority,
-                        state,
-                        retry_limit,
-                        start_after,
-                        expire_in,
-                        data,
-                        retry_delay,
-                        retry_backoff,
-                        keep_until,
-                        dag_id,
-                        job_level
-                    FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
-                    WHERE data->'metadata'->>'ref_type' = '{ref_type}'
-                    AND data->'metadata'->>'ref_id' = '{ref_id}'
+                    f"""                    
+                    SELECT DISTINCT dag_id
+                    FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE} j
+                        JOIN {DEFAULT_SCHEMA}.{DEFAULT_DAG_TABLE} d on j.dag_id = d.id and d.state <> '{WorkState.CANCELLED.value}'
+                    WHERE j.data->'metadata'->>'ref_type' = '{ref_type}'
+                    AND j.data->'metadata'->>'ref_id' = '{ref_id}'
                     """
                 )
-                results = [
-                    self._record_to_work_info(record) for record in cursor.fetchall()
-                ]
+                results = cursor.fetchall()
                 conn.commit()
+                dag_ids = {str(record[0]) for record in results}
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error getting job: {error}")
                 if conn:
@@ -204,7 +190,7 @@ class JobRepository(PostgresqlMixin):
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)
-            return results
+            return dag_ids
 
         return await self._loop.run_in_executor(self._db_executor, db_call)
 
@@ -956,7 +942,7 @@ class JobRepository(PostgresqlMixin):
                 cursor = conn.cursor()
 
                 # Build parameterized query
-                placeholders = ','.join(['%s'] * len(dag_ids))
+                placeholders = ",".join(["%s"] * len(dag_ids))
                 query = f"""
                     SELECT id FROM {DEFAULT_SCHEMA}.dag
                     WHERE id IN ({placeholders}) AND state = 'active'
@@ -1349,7 +1335,7 @@ class JobRepository(PostgresqlMixin):
         query_file = os.path.join(tmp_path, f"locked_query_{timestamp}.sql")
 
         try:
-            with open(query_file, 'w') as f:
+            with open(query_file, "w") as f:
                 f.write(locked_query)
             self.logger.info(f"Wrote locked query to: {query_file}")
         except Exception as e:
@@ -1681,7 +1667,7 @@ class JobRepository(PostgresqlMixin):
                 final_state = result[1] if len(result) > 1 else None
 
                 if count > 0:
-                    if final_state == 'retry':
+                    if final_state == "retry":
                         self.logger.info(
                             f"Job {job_id} marked for retry (will be retried)"
                         )
@@ -1773,7 +1759,7 @@ class JobRepository(PostgresqlMixin):
         """
         Close the repository and cleanup resources.
         """
-        if hasattr(self, '_db_executor'):
+        if hasattr(self, "_db_executor"):
             self._db_executor.shutdown(wait=True)
-        if hasattr(self, 'postgreSQL_pool'):
+        if hasattr(self, "postgreSQL_pool"):
             self.postgreSQL_pool.closeall()

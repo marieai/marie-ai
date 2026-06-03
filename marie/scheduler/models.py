@@ -44,7 +44,6 @@ class ExistingWorkPolicy(Enum):
     ALLOW_ALL = "allow_all"  # allow all submissions
     REJECT_ALL = "reject_all"  # reject all submissions
     REPLACE = "replace"  # replace existing submission that is not in terminal state
-    ALLOW_DUPLICATE = "allow_duplicate"  # allow duplicate submissions
     REJECT_DUPLICATE = "reject_duplicate"  # reject duplicate submissions
 
     @staticmethod
