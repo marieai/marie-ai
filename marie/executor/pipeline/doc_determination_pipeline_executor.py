@@ -382,23 +382,20 @@ def filter_pages_by_classifier_results(
                 continue
 
             # Find existing metadata results to filter on
-            target_results = next(
-                (
-                    c
-                    for c in metadata.get("classifications", [])
-                    if c.get("group") == group
-                ),
-                None,
-            )
+            target_results = [
+                c
+                for c in metadata.get("classifications", [])
+                if c.get("group") == group
+            ] or None
             if not target_results:
                 logger.warning(
                     f"Classification '{group}' not found in metadata, skipping page filtering."
                 )
                 continue
 
-            classification_pages: Dict = target_results.get("classification", {}).get(
-                "pages", {}
-            )
+            classification_pages = {}
+            for t in target_results:
+                classification_pages |= t.get("classification", {}).get("pages", {})
 
             matched_pages = []
             if method == "exclude":
@@ -433,7 +430,6 @@ def filter_pages_by_classifier_results(
                             i: list(int(k) for k in classification_pages.keys())
                         }
 
-                    # if result_pages:
                     split_after = set(matched_pages)
                     out = {}
                     chunk: List[int] = []
