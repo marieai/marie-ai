@@ -97,8 +97,8 @@ class RecordBackedMatchSectionBuilderVisitor(BaseProcessingVisitor):
         data_source: str,
     ) -> MatchSection:
         """Create a single CONTENT MatchSection from one extracted record."""
-        claim_uid = record.get("claim_uid", "unknown")
-        source = record.get("source", {})
+        record_uid = next((v for k, v in record.items() if k.endswith("_uid") and v), "unknown")
+        source = record.get("source") or {}
 
         # Build span from primary source
         spans = self._build_spans(record, source)
@@ -106,13 +106,13 @@ class RecordBackedMatchSectionBuilderVisitor(BaseProcessingVisitor):
         section = MatchSection()
         section.type = MatchSectionType.CONTENT
         section.owner_layer = layer
-        section.label = f"{layer.layer_name}::{claim_uid}"
+        section.label = f"{layer.layer_name}::{record_uid}"
         section.span = spans
         section.row_extraction_strategy = layer.row_extraction_strategy
 
         # Store provenance in tags
         section.tags["match_section_source_strategy"] = "record_backed"
-        section.tags["record_uid"] = claim_uid
+        section.tags["record_uid"] = record_uid
         section.tags["data_source"] = data_source
         section.tags["source_record_json"] = json.dumps(record)
 
