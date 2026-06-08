@@ -13,16 +13,16 @@
  *   docker-compose -f docker-compose.mock-llm-programmatic.yml up
  */
 
-import { LLMock } from "@copilotkit/aimock";
+import { getTextContent, LLMock, type ChatCompletionRequest, type FixtureResponse } from "@copilotkit/aimock";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 const PORT = parseInt(process.env.AIMOCK_PORT || "4010", 10);
 const ADMIN_PORT = parseInt(process.env.AIMOCK_ADMIN_PORT || "4011", 10);
+const HOST = process.env.AIMOCK_HOST || "127.0.0.1";
 const VALID_FAULT_PROFILES = new Set(["normal", "timeout", "error", "chaos"]);
 
 type FaultProfile = "normal" | "timeout" | "error" | "chaos";
-type MockResponse = Record<string, unknown>;
-type MessageHandler = (message: string) => MockResponse | Promise<MockResponse>;
+type MessageHandler = (request: ChatCompletionRequest) => FixtureResponse | Promise<FixtureResponse>;
 
 // Document processing state for stateful mocks
 const processingState = new Map<string, { status: string; progress: number }>();
@@ -51,7 +51,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function applyFaultProfile(): Promise<MockResponse | null> {
+async function applyFaultProfile(): Promise<FixtureResponse | null> {
   if (faultState.profile === "normal") {
     return null;
   }
@@ -93,13 +93,23 @@ async function applyFaultProfile(): Promise<MockResponse | null> {
   return null;
 }
 
-function withFaultProfile(handler: MessageHandler | MockResponse): MessageHandler {
-  return async (message: string) => {
+function lastUserMessageText(request: ChatCompletionRequest): string {
+  for (let index = request.messages.length - 1; index >= 0; index -= 1) {
+    const message = request.messages[index];
+    if (message.role === "user") {
+      return getTextContent(message.content) || "";
+    }
+  }
+  return "";
+}
+
+function withFaultProfile(handler: MessageHandler | FixtureResponse): MessageHandler {
+  return async (request: ChatCompletionRequest) => {
     const override = await applyFaultProfile();
     if (override) {
       return override;
     }
-    return typeof handler === "function" ? await handler(message) : handler;
+    return typeof handler === "function" ? await handler(request) : handler;
   };
 }
 
@@ -195,15 +205,15 @@ function startAdminServer(): Server {
     }
   });
 
-  server.listen(ADMIN_PORT, () => {
-    console.log(`AIMock admin server listening on http://localhost:${ADMIN_PORT}`);
+  server.listen(ADMIN_PORT, HOST, () => {
+    console.log(`AIMock admin server listening on http://${HOST}:${ADMIN_PORT}`);
   });
 
   return server;
 }
 
 async function main() {
-  const mock = new LLMock({ port: PORT });
+  const mock = new LLMock({ port: PORT, host: HOST });
   const adminServer = startAdminServer();
 
   // ==========================================================================
@@ -211,7 +221,8 @@ async function main() {
   // ==========================================================================
 
   // Invoice extraction with dynamic field detection
-  mock.onMessage(/extract.*invoice/i, withFaultProfile(async (message: string) => {
+  mock.onMessage(/extract.*invoice/i, withFaultProfile(async (request: ChatCompletionRequest) => {
+    const message = lastUserMessageText(request);
     const hasLineItems = message.toLowerCase().includes("line item");
     const hasTotal = message.toLowerCase().includes("total");
 
@@ -260,7 +271,8 @@ async function main() {
   // Document Classification Handlers
   // ==========================================================================
 
-  mock.onMessage(/classify/i, withFaultProfile(async (message: string) => {
+  mock.onMessage(/classify/i, withFaultProfile(async (request: ChatCompletionRequest) => {
+    const message = lastUserMessageText(request);
     // Detect document type hints in the message
     const typeHints: Record<string, { type: string; confidence: number }> = {
       invoice: { type: "invoice", confidence: 0.97 },
@@ -308,7 +320,8 @@ async function main() {
   // Document Summarization Handlers
   // ==========================================================================
 
-  mock.onMessage(/summarize/i, withFaultProfile(async (message: string) => {
+  mock.onMessage(/summarize/i, withFaultProfile(async (request: ChatCompletionRequest) => {
+    const message = lastUserMessageText(request);
     const wordCount = message.split(/\s+/).length;
     const summaryLength = Math.min(Math.floor(wordCount * 0.3), 100);
 
@@ -350,38 +363,30 @@ async function main() {
 
   // Document processing tool call
   mock.onMessage(/process.*document|document.*process/i, withFaultProfile({
-    content: null,
-    tool_calls: [
+    toolCalls: [
       {
         id: "call_" + Math.random().toString(36).substr(2, 9),
-        type: "function",
-        function: {
-          name: "process_document",
-          arguments: JSON.stringify({
-            document_id: "doc_" + Math.random().toString(36).substr(2, 9),
-            operations: ["ocr", "extract", "classify"],
-            output_format: "json",
-          }),
-        },
+        name: "process_document",
+        arguments: JSON.stringify({
+          document_id: "doc_" + Math.random().toString(36).substr(2, 9),
+          operations: ["ocr", "extract", "classify"],
+          output_format: "json",
+        }),
       },
     ],
   }));
 
   // Search tool call
   mock.onMessage(/search.*knowledge|knowledge.*search/i, withFaultProfile({
-    content: null,
-    tool_calls: [
+    toolCalls: [
       {
         id: "call_" + Math.random().toString(36).substr(2, 9),
-        type: "function",
-        function: {
-          name: "search_knowledge_base",
-          arguments: JSON.stringify({
-            query: "relevant search query",
-            top_k: 5,
-            filters: { document_type: "all" },
-          }),
-        },
+        name: "search_knowledge_base",
+        arguments: JSON.stringify({
+          query: "relevant search query",
+          top_k: 5,
+          filters: { document_type: "all" },
+        }),
       },
     ],
   }));
@@ -428,13 +433,13 @@ async function main() {
 ╔══════════════════════════════════════════════════════════════════╗
 ║  Marie AI Mock Server (Programmatic Mode)                        ║
 ╠══════════════════════════════════════════════════════════════════╣
-║  Server running at: http://localhost:${PORT}                        ║
+║  Server running at: http://${HOST}:${PORT}                        ║
 ║                                                                  ║
 ║  Endpoints:                                                      ║
-║    OpenAI:    http://localhost:${PORT}/v1                           ║
-║    Anthropic: http://localhost:${PORT}/anthropic                    ║
-║    Metrics:   http://localhost:${PORT}/metrics                      ║
-║    Admin:     http://localhost:${ADMIN_PORT}/fault-profile              ║
+║    OpenAI:    http://${HOST}:${PORT}/v1                           ║
+║    Anthropic: http://${HOST}:${PORT}/anthropic                    ║
+║    Metrics:   http://${HOST}:${PORT}/metrics                      ║
+║    Admin:     http://${HOST}:${ADMIN_PORT}/fault-profile              ║
 ║                                                                  ║
 ║  Custom Handlers:                                                ║
 ║    - Document extraction (invoice, general)                      ║

@@ -284,6 +284,7 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             job_id=job_id,
             dag_id=parameters.get("dag_id"),
             node_task_id=parameters.get("node_task_id"),
+            pool_id=parameters.get("pool_id"),
             purge_annotators=purge_annotators,
         )
 

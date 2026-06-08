@@ -47,6 +47,93 @@ from openinference.instrumentation import (
 from .config import configure_from_yaml
 from .tracker import get_tracker
 
+_DEFAULT_OTEL_GRPC_MAX_MESSAGE_BYTES = 128 * 1024 * 1024
+_DEFAULT_OTEL_MAX_EXPORT_BATCH_SIZE = 32
+_HTTP_PROTOBUF_PROTOCOLS = {"http", "http/protobuf"}
+
+
+def _read_positive_int_env(name: str, default: int | None) -> int | None:
+    raw_value = os.environ.get(name)
+    if raw_value is None or raw_value.strip() == "":
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return default
+    if value <= 0:
+        return default
+    return value
+
+
+def _otlp_trace_protocol() -> str:
+    return (
+        (
+            os.environ.get("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")
+            or os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL")
+            or "grpc"
+        )
+        .strip()
+        .lower()
+    )
+
+
+def _http_trace_endpoint(endpoint: str) -> str:
+    normalized = endpoint.rstrip("/")
+    if normalized.endswith("/v1/traces"):
+        return normalized
+    return f"{normalized}/v1/traces"
+
+
+def _grpc_channel_options() -> tuple[tuple[str, int], ...]:
+    max_message_bytes = _read_positive_int_env(
+        "MARIE_OTEL_GRPC_MAX_MESSAGE_BYTES",
+        _DEFAULT_OTEL_GRPC_MAX_MESSAGE_BYTES,
+    )
+    return (
+        ("grpc.max_send_message_length", int(max_message_bytes)),
+        ("grpc.max_receive_message_length", int(max_message_bytes)),
+    )
+
+
+def _create_otlp_span_exporter(endpoint: str):
+    protocol = _otlp_trace_protocol()
+    if protocol in _HTTP_PROTOBUF_PROTOCOLS:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
+
+        return OTLPSpanExporter(endpoint=_http_trace_endpoint(endpoint))
+
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+        OTLPSpanExporter,
+    )
+
+    try:
+        return OTLPSpanExporter(
+            endpoint=endpoint,
+            insecure=True,
+            channel_options=_grpc_channel_options(),
+        )
+    except TypeError as exc:
+        if "channel_options" not in str(exc):
+            raise
+        return OTLPSpanExporter(endpoint=endpoint, insecure=True)
+
+
+def _batch_span_processor_kwargs() -> dict[str, int]:
+    max_queue_size = _read_positive_int_env("OTEL_BSP_MAX_QUEUE_SIZE", None)
+    max_export_batch_size = _read_positive_int_env(
+        "OTEL_BSP_MAX_EXPORT_BATCH_SIZE",
+        _DEFAULT_OTEL_MAX_EXPORT_BATCH_SIZE,
+    )
+    if max_queue_size is not None:
+        max_export_batch_size = min(max_export_batch_size, max_queue_size)
+        return {
+            "max_queue_size": max_queue_size,
+            "max_export_batch_size": max_export_batch_size,
+        }
+    return {"max_export_batch_size": max_export_batch_size}
+
 
 def register(
     *,
@@ -98,13 +185,11 @@ def register(
 
     otlp_endpoint = endpoint or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
     if otlp_endpoint:
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-            OTLPSpanExporter,
-        )
-
-        exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
+        exporter = _create_otlp_span_exporter(otlp_endpoint)
         processor = (
-            BatchSpanProcessor(exporter) if batch else SimpleSpanProcessor(exporter)
+            BatchSpanProcessor(exporter, **_batch_span_processor_kwargs())
+            if batch
+            else SimpleSpanProcessor(exporter)
         )
         provider.add_span_processor(processor)
 

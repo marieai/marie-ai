@@ -15,6 +15,7 @@ The actual plan definitions are organized by category in mock_plans/:
     - mock_plans/hitl.py: Human-in-the-Loop workflow plans
 
 Traditional Plans:
+    - query_planner_mock_annotator_llm: Production-shaped annotator LLM route
     - query_planner_mock_simple: Basic linear execution (3 nodes)
     - query_planner_mock_medium: Parallel execution with merge (7 nodes)
     - query_planner_mock_complex: Complex multi-stage pipeline (12 nodes)
@@ -104,6 +105,7 @@ from tests.integration.scheduler.mock_plans.hitl import (
 
 # Traditional plans (linear and parallel execution patterns)
 from tests.integration.scheduler.mock_plans.traditional import (
+    query_planner_mock_annotator_llm,
     query_planner_mock_complex,
     query_planner_mock_medium,
     query_planner_mock_parallel_subgraphs,
@@ -132,6 +134,7 @@ __all__ = [
     "QueryType",
     "register_query_plan",
     # Traditional plans
+    "query_planner_mock_annotator_llm",
     "query_planner_mock_simple",
     "query_planner_mock_medium",
     "query_planner_mock_complex",
@@ -177,6 +180,7 @@ if __name__ == "__main__":
     output_dir.mkdir(parents=True, exist_ok=True)
 
     plans_to_test = [
+        ("mock_annotator_llm", "Annotator LLM Mock Plan"),
         ("mock_simple", "Simple Mock Plan"),
         ("mock_medium", "Medium Mock Plan"),
         ("mock_complex", "Complex Mock Plan"),

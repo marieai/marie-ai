@@ -46,6 +46,13 @@ def sanitize_path(path: str) -> Optional[str]:
     return os.path.basename(path) if path else None
 
 
+def _non_empty_str(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
 class LLMAnnotator(DocumentAnnotator):
     """LLM Annotator with optional multi-pass refinement."""
 
@@ -179,6 +186,9 @@ class LLMAnnotator(DocumentAnnotator):
         self.job_id = kwargs.get("job_id")
         self.dag_id = kwargs.get("dag_id")
         self.node_task_id = kwargs.get("node_task_id")
+        self.llm_pool_id = _non_empty_str(kwargs.get("pool_id")) or _non_empty_str(
+            self.model_config.get("pool_id")
+        )
 
         if self.model_name is None:
             raise ValueError("Model name must be provided in the configuration.")
@@ -409,6 +419,8 @@ class LLMAnnotator(DocumentAnnotator):
             meta["dag_id"] = self.dag_id
         if self.node_task_id:
             meta["node_task_id"] = self.node_task_id
+        if self.llm_pool_id:
+            meta["pool_id"] = self.llm_pool_id
         return meta
 
     async def _arun_single_extraction(

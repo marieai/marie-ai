@@ -1,0 +1,27 @@
+validation:
+  enabled: true
+  fail_on_errors: false
+  fail_on_critical: false
+  default_validators: null
+  strict_directories: false
+
+aggregation:
+  type: default
+
+processing:
+  render_markdown: false
+  visitors: []
+
+annotators: {}
+
+grounding:
+  claim: []
+  key-value: []
+  remark: []
+  table: []
+
+annotation_config:
+  type_priority:
+    CLAIM: 1
+    ANNOTATION: 2
+  conflict_resolution: none

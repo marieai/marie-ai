@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from tools.stress.gateway_e2e_reporting import resolve_report_format
 from tools.stress.gateway_e2e_stresser import (
+    REDACTED_SECRET,
     GatewayE2EStresser,
     InputAsset,
     JobRun,
@@ -20,8 +22,11 @@ from tools.stress.gateway_e2e_stresser import (
     _extract_template,
     _parse_duration_seconds,
     _resolve_inputs,
+    _resolve_runtime_config,
     _resolve_s3_inputs,
 )
+
+VALID_FAKE_API_KEY = "mau_" + ("A" * 54)
 
 
 class _FakeDebugResponse:
@@ -73,6 +78,74 @@ def test_extract_template_from_invoke_action_payload() -> None:
     }
 
 
+def test_mock_annotator_llm_template_builds_upload_shaped_dry_run(
+    tmp_path: Path,
+) -> None:
+    template_payload = json.loads(
+        Path("tools/stress/mock_annotator_llm.invoke.json").read_text()
+    )
+    template_job_name, metadata_template = _extract_template(template_payload)
+    source_path = tmp_path / "sample.tif"
+    source_path.write_text("fake image bytes")
+
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key=VALID_FAKE_API_KEY,
+        queue_name=template_job_name or "gen5_extract",
+        planner="mock_annotator_llm",
+        input_assets=[
+            InputAsset(
+                source_name="sample.tif",
+                source_path=str(source_path),
+                local_path=source_path,
+            )
+        ],
+        job_count=1,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=1.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config=None,
+        queue_config=None,
+        metadata_template=metadata_template,
+        template_job_name=template_job_name,
+        fault_profile="normal",
+        ref_type="stress",
+    )
+
+    plan = stresser.build_dry_run_plan()
+    submission = plan["submissions"][0]
+    invoke_action = submission["request_payload"]["parameters"]["invoke_action"]
+
+    assert template_job_name == "gen5_extract"
+    assert plan["planner"] == "mock_annotator_llm"
+    assert plan["job_name"] == "gen5_extract"
+    assert submission["input_mode"] == "upload"
+    assert submission["upload_planned"] is True
+    assert submission["source_path"] == str(source_path)
+    assert invoke_action["name"] == "gen5_extract"
+    assert invoke_action["api_key"] == REDACTED_SECRET
+    assert invoke_action["metadata"]["planner"] == "mock_annotator_llm"
+    assert invoke_action["metadata"]["ref_id"] == "sample.tif"
+    assert invoke_action["metadata"]["ref_type"] == "stress"
+    assert invoke_action["metadata"]["uri"].startswith("s3://")
+    assert invoke_action["metadata"]["uri"].endswith("sample.tif")
+    assert "/sample/" in invoke_action["metadata"]["uri"]
+    assert invoke_action["metadata"]["features"] == [
+        {
+            "type": "pipeline",
+            "name": "stress-purge-annotators",
+            "purge_annotators": ["mock-llm"],
+        }
+    ]
+    assert VALID_FAKE_API_KEY not in json.dumps(plan)
+
+
 def test_resolve_inputs_supports_manifest_and_absolute_glob(tmp_path: Path) -> None:
     first = tmp_path / "one.tif"
     second = tmp_path / "two.tif"
@@ -97,6 +170,30 @@ def test_resolve_inputs_supports_manifest_and_absolute_glob(tmp_path: Path) -> N
 
     assert manifest_inputs == [first.resolve(), second.resolve()]
     assert glob_inputs == [first.resolve(), second.resolve()]
+
+
+def test_resolve_runtime_config_rejects_explicit_empty_api_key(tmp_path: Path) -> None:
+    config = tmp_path / "gateway-e2e.json"
+    config.write_text(
+        json.dumps(
+            {
+                "api_base_url": "http://127.0.0.1:51000",
+                "api_key": VALID_FAKE_API_KEY,
+            }
+        )
+    )
+
+    args = SimpleNamespace(
+        config=str(config),
+        protocol=None,
+        gateway_host=None,
+        gateway_port=None,
+        http_port=None,
+        api_key="",
+    )
+
+    with pytest.raises(ValueError, match="API key is required"):
+        _resolve_runtime_config(args)
 
 
 def test_extract_ref_id_and_failure_reason_from_scheduler_event() -> None:
@@ -185,7 +282,7 @@ def test_build_dry_run_plan_includes_resolved_payload_for_local_input(
         http_port=51000,
         protocol="http",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[
@@ -227,6 +324,69 @@ def test_build_dry_run_plan_includes_resolved_payload_for_local_input(
     assert submission["transport"]["url"] == "http://localhost:51000/api/v1/invoke"
 
 
+def test_upload_to_s3_preserves_source_ref_id_for_companion_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset_path = tmp_path / "sample.tif"
+    asset_path.write_text("image")
+    companion_meta = tmp_path / "sample.tif.meta.json"
+    companion_meta.write_text(json.dumps({"doc_id": "sample"}))
+
+    writes: list[tuple[str, str, dict]] = []
+
+    def fake_write(source: str, destination: str, **kwargs: object) -> bool:
+        payload = {}
+        if source.endswith(".stress.meta.json"):
+            payload = json.loads(Path(source).read_text())
+        writes.append((source, destination, payload))
+        return True
+
+    monkeypatch.setattr(
+        "tools.stress.gateway_e2e_stresser.StorageManager.write",
+        fake_write,
+    )
+
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key=VALID_FAKE_API_KEY,
+        queue_name="gen5_extract",
+        planner="mock_annotator_llm",
+        input_assets=[
+            InputAsset(
+                source_name=asset_path.name,
+                source_path=str(asset_path),
+                local_path=asset_path,
+            )
+        ],
+        job_count=1,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=1.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config=None,
+        queue_config=None,
+        metadata_template=None,
+        template_job_name=None,
+        fault_profile="normal",
+        ref_type="stress",
+    )
+
+    run = stresser._build_run(stresser.input_assets[0], 0)
+    stresser._upload_to_s3(run)
+
+    assert run.ref_id == "sample.tif"
+    assert writes[0][1].endswith("/stress/sample/sample.tif")
+    assert writes[1][1].endswith("/stress/sample/sample.tif.meta.json")
+    assert writes[1][2]["ref_id"] == "sample.tif"
+    assert writes[1][2]["uri"] == writes[0][1]
+
+
 def test_build_dry_run_plan_previews_duration_mode(tmp_path: Path) -> None:
     asset_path = tmp_path / "sample.tif"
     asset_path.write_text("x")
@@ -237,7 +397,7 @@ def test_build_dry_run_plan_previews_duration_mode(tmp_path: Path) -> None:
         http_port=51000,
         protocol="http",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[
@@ -283,7 +443,7 @@ def test_live_status_payload_and_report_file(tmp_path: Path) -> None:
         http_port=51000,
         protocol="http",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[
@@ -364,7 +524,7 @@ def test_live_report_supports_html_output(tmp_path: Path) -> None:
         http_port=51000,
         protocol="http",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[
@@ -433,7 +593,7 @@ def test_write_report_supports_html_output(tmp_path: Path) -> None:
         http_port=51000,
         protocol="http",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[
@@ -502,7 +662,7 @@ def test_log_submit_summary_includes_source_and_s3_uri(
         http_port=51000,
         protocol="http",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[],
@@ -635,7 +795,7 @@ def test_build_metadata_applies_relative_sla_offsets() -> None:
         http_port=51000,
         protocol="http",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[
@@ -677,7 +837,7 @@ def test_build_metadata_injects_mock_failure_controls() -> None:
         http_port=51000,
         protocol="http",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[
@@ -736,7 +896,7 @@ def test_build_metadata_injects_fixed_llm_pool_controls() -> None:
         http_port=51000,
         protocol="http",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[
@@ -774,7 +934,7 @@ def test_build_metadata_cycles_llm_pool_controls() -> None:
         http_port=51000,
         protocol="http",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[
@@ -813,6 +973,49 @@ def test_build_metadata_cycles_llm_pool_controls() -> None:
     ]
 
 
+def test_build_metadata_injects_purge_annotators_feature_for_mock_llm() -> None:
+    stresser = GatewayE2EStresser(
+        gateway_host="localhost",
+        gateway_port=51000,
+        http_port=51000,
+        protocol="http",
+        endpoint="/api/v1/invoke",
+        api_key=VALID_FAKE_API_KEY,
+        queue_name="gen5_extract",
+        planner="mock_annotator_llm",
+        input_assets=[
+            InputAsset(
+                source_name="sample.tif",
+                source_path="s3://marie/sample.tif",
+                existing_s3_uri="s3://marie/sample.tif",
+            )
+        ],
+        job_count=1,
+        run_time_seconds=None,
+        submit_concurrency=1,
+        submit_rate=1.0,
+        timeout=10.0,
+        terminal_timeout=10.0,
+        s3_config=None,
+        queue_config=None,
+        metadata_template=None,
+        template_job_name=None,
+        fault_profile="normal",
+        purge_annotators=["mock-llm"],
+    )
+    run = stresser._build_run(stresser.input_assets[0], 0)
+
+    metadata = stresser._build_metadata(run, sla_anchor_at=1000.0)
+
+    assert metadata["features"] == [
+        {
+            "type": "pipeline",
+            "name": "stress-purge-annotators",
+            "purge_annotators": ["mock-llm"],
+        }
+    ]
+
+
 def test_build_dry_run_plan_previews_failure_simulation(tmp_path: Path) -> None:
     asset_path = tmp_path / "sample.tif"
     asset_path.write_text("x")
@@ -823,7 +1026,7 @@ def test_build_dry_run_plan_previews_failure_simulation(tmp_path: Path) -> None:
         http_port=51000,
         protocol="http",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[
@@ -872,7 +1075,7 @@ def test_build_metadata_applies_incremental_sla_offsets_with_cycle() -> None:
         http_port=51000,
         protocol="http",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[
@@ -983,7 +1186,7 @@ async def test_capture_debug_snapshot_records_gateway_debug_state() -> None:
         http_port=51000,
         protocol="grpc",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[
@@ -1052,7 +1255,7 @@ def test_write_json_report_includes_debug_samples(tmp_path: Path) -> None:
         http_port=51000,
         protocol="http",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[
@@ -1118,7 +1321,7 @@ def test_finalize_metrics_tracks_sla_compliance_and_verification() -> None:
         http_port=51000,
         protocol="http",
         endpoint="/api/v1/invoke",
-        api_key="system:gateway",
+        api_key=VALID_FAKE_API_KEY,
         queue_name="extract",
         planner="extract",
         input_assets=[

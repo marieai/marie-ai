@@ -47,7 +47,7 @@ timeline:
 
 ```bash
 export MARIE_SCHEDULER_TRACE_ENABLED=true
-export MARIE_SCHEDULER_TRACE_PATH=/home/gbugaj/tmp/marie-scheduler-trace.jsonl
+export MARIE_SCHEDULER_TRACE_PATH=~/tmp/marie-scheduler-trace.jsonl
 export MARIE_SCHEDULER_TRACE_PROFILE=full
 ```
 
@@ -71,7 +71,7 @@ After a run, summarize the slowest handoffs:
 
 ```bash
 python tools/stress/analyze_scheduler_trace.py \
-    /home/gbugaj/tmp/marie-scheduler-trace.jsonl \
+    ~/tmp/marie-scheduler-trace.jsonl \
     --sort frontier_to_dispatch \
     --limit 25
 ```
@@ -81,7 +81,7 @@ pressure, control-flow balance, and latency percentiles:
 
 ```bash
 python tools/stress/analyze_scheduler_trace.py \
-    /home/gbugaj/tmp/marie-scheduler-trace.jsonl \
+    ~/tmp/marie-scheduler-trace.jsonl \
     --report
 ```
 
@@ -89,7 +89,7 @@ python tools/stress/analyze_scheduler_trace.py \
 # Full end-to-end extract test using the local stress config example
 python tools/stress/gateway_e2e_stresser.py \
     --config tools/stress/gateway-e2e.config.example.json \
-    --input-dir /mnt/data/marie-ai/generators \
+    --input-dir ~/.marie/generators \
     --job-count 25 \
     --job-name extract \
     --planner extract
@@ -144,6 +144,22 @@ python tools/stress/gateway_e2e_stresser.py \
     --mock-failure-mode exception \
     --force-failure-every 5 \
     --report /tmp/gateway-e2e-failures.html
+
+# Exercise the real LLM annotator executor path with AIMock behind OpenAIEngine
+# The mock_annotator_llm template purges mock-llm output so repeated runs submit
+# fresh LLM dispatch work instead of reusing agent-output/mock-llm.
+python tools/stress/gateway_e2e_stresser.py \
+    --config tools/stress/gateway-e2e.config.json \
+    --api-key "$GATEWAY_API_KEY" \
+    --input-dir ~/.marie/generators \
+    --job-count 1 \
+    --job-name gen5_extract \
+    --planner mock_annotator_llm \
+    --llm-pool-id document-small \
+    --ref-type stress \
+    --project-id mock-annotator-llm-stress \
+    --request-template tools/stress/mock_annotator_llm.invoke.json \
+    --dry-run
 
 # Preview exactly what would be submitted without uploading or calling the gateway
 python tools/stress/gateway_e2e_stresser.py \
@@ -458,7 +474,7 @@ python tools/stress/gateway_e2e_stresser.py \
 ```
 
 
-python tools/stress/gateway_e2e_stresser.py   --config tools/stress/gateway-e2e.config.example.json   --input-dir /mnt/data/marie-ai/generators   --run-time 5m   --job-name extract   --planner extract   --submit-concurrency 1   --submit-rate 1   --soft-sla-seconds 30   --hard-sla-seconds 120   --min-soft-sla-compliance-pct 95   --min-hard-sla-compliance-pct 99   --progress-interval 5   --terminal-timeout 1800   --fault-profile normal   --live-report ~/tmp/gateway-e2e-8h-live.html   --report ~/tmp/gateway-e2e-8h-final.json
+python tools/stress/gateway_e2e_stresser.py   --config tools/stress/gateway-e2e.config.example.json   --input-dir ~/.marie/generators   --run-time 5m   --job-name extract   --planner extract   --submit-concurrency 1   --submit-rate 1   --soft-sla-seconds 30   --hard-sla-seconds 120   --min-soft-sla-compliance-pct 95   --min-hard-sla-compliance-pct 99   --progress-interval 5   --terminal-timeout 1800   --fault-profile normal   --live-report ~/tmp/gateway-e2e-8h-live.html   --report ~/tmp/gateway-e2e-8h-final.json
 
 
 
@@ -475,7 +491,7 @@ export MARIE_SCHEDULER_TRACE_PROFILE=compact
 
 python tools/stress/gateway_e2e_stresser.py \
   --config tools/stress/gateway-e2e.config.example.json \
-  --input-dir /mnt/data/marie-ai/generators \
+  --input-dir ~/.marie/generators \
   --run-time 8h \
   --job-name extract \
   --planner extract \
@@ -747,7 +763,7 @@ True full-pipeline run with local upload:
 ```bash
 python tools/stress/gateway_e2e_stresser.py \
   --config tools/stress/gateway-e2e.config.example.json \
-  --input-dir /mnt/data/marie-ai/generators \
+  --input-dir ~/.marie/generators \
   --job-count 100 \
   --job-name gen5_extract \
   --planner extract \
@@ -773,6 +789,7 @@ python tools/stress/gateway_e2e_stresser.py \
 | Option | Description |
 |--------|-------------|
 | `--config` | Stress config JSON with `api_base_url`, `api_key`, `storage`, and `queue` |
+| `--api-key` | Gateway API key override; use this when the stress runner cannot read the gateway service YAML |
 | `--input-dir` / `--input-glob` / `--input-manifest` | Local source file discovery for upload mode |
 | `--s3-uri` / `--s3-uri-manifest` | Pre-staged S3 objects for submit-only mode |
 | `--job-count` | Number of jobs to submit in fixed-count mode |
@@ -784,6 +801,7 @@ python tools/stress/gateway_e2e_stresser.py \
 | `--planner` | Planner to place in metadata |
 | `--llm-pool-id` | Fixed LLM dispatch pool ID to place in `metadata.pool_id`, for example `document-small` |
 | `--llm-pool-cycle` | Comma-separated LLM dispatch pool IDs to cycle through `metadata.pool_id` by generated job index |
+| `--purge-annotators` | Comma-separated annotator names to purge before annotation, for example `mock-llm` |
 | `--submit-rate` | Target submit rate in jobs per second |
 | `--dry-run-preview-count` | Number of sample submissions to show when `--dry-run` is combined with `--run-time` |
 | `--fault-profile` | Run label and AIMock control target: `normal`, `timeout`, `error`, `chaos` |
@@ -891,6 +909,10 @@ python gateway_stresser.py --protocol http --http-port 51000 \
 # With reusable mock planner payload
 python gateway_stresser.py --protocol http --http-port 51000 \
     --parameters "$(cat tools/stress/mock_parallel_subgraphs.invoke.json)"
+
+# With reusable mock annotator LLM payload
+python gateway_stresser.py --protocol http --http-port 51000 \
+    --parameters "$(cat tools/stress/mock_annotator_llm.invoke.json)"
 
 # The payload can vary values per request
 # Supported placeholders: {{request_id}}, {{timestamp}}, {{timestamp_ms}}, {{api_key}}

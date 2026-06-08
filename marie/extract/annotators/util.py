@@ -26,6 +26,7 @@ from qwen_vl_utils import smart_resize
 from marie.components.document_taxonomy.verbalizers import verbalizers
 from marie.engine import EngineLM
 from marie.engine.llm_ops import LLMCall
+from marie.engine.llm_queue.config import DEFAULT_LLM_QUEUE_POOL_ID
 from marie.engine.multimodal_ops import MultimodalLLMCall
 from marie.engine.openai_engine import OpenAIEngine
 from marie.engine.output_parser import (
@@ -102,6 +103,17 @@ _engine_cache: Dict[Tuple[str, bool, bool, Optional[str], str], EngineLM] = {}
 _engine_lock = Lock()
 
 
+def _resolve_queue_pool_id_env() -> str:
+    pool_id = os.environ.get("LLM_QUEUE_POOL_ID")
+    if not pool_id:
+        return DEFAULT_LLM_QUEUE_POOL_ID
+
+    pool_id = pool_id.strip()
+    if not pool_id or pool_id.startswith("$"):
+        return DEFAULT_LLM_QUEUE_POOL_ID
+    return pool_id
+
+
 def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
     """
     Route the LLM call to the appropriate engine based on the model name.
@@ -113,7 +125,7 @@ def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
     """
     queue_enabled = to_bool(os.environ.get("LLM_QUEUE_ENABLED"), False)
     queue_valkey_url = os.environ.get("LLM_QUEUE_VALKEY_URL")
-    queue_pool_id = os.environ.get("LLM_QUEUE_POOL_ID", "default")
+    queue_pool_id = _resolve_queue_pool_id_env()
     cache_key = (
         model_name,
         is_multimodal,

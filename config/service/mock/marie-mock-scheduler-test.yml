@@ -166,11 +166,76 @@ with:
       summary: Process document
       tags:
         - document
+    /annotator/llm:
+      methods: ["POST"]
+      summary: Mock LLM annotation
+      tags:
+        - annotator
+
+  job_scheduler_kwargs:
+    <<: *psql_conf_shared
+    default_table: job_scheduler
+    max_workers: 2
+    max_pool_size: 5
+    max_connections: 5
+    queue_names:
+      - extract
+      - classify
+      - transform
+      - load
+      - gen5_extract
+      - mock_parallel_subgraphs
+      - mock_annotator_llm
+
+    query_planners:
+      watch_wheels: True
+      wheel_directories:
+        - ${{ ENV.MARIE_DEFAULT_MOUNT }}/config/wheels
+      planners:
+        - name: mock_planners
+          py_module: tests.integration.scheduler.mock_query_plans
 
 prefetch: 4
 
 # Multiple mock executors with different configurations for scheduler testing
 executors:
+  # Real LLM annotator executor for AIMock-backed gateway stress testing.
+  # This must stay on DocumentAnnotatorLLMExecutor so the path exercises:
+  # gateway -> scheduler -> annotator_llm://annotator/llm -> LLMAnnotator -> OpenAIEngine.
+  - name: annotator_llm
+    uses:
+      jtype: DocumentAnnotatorLLMExecutor
+      metas:
+        py_modules:
+          - marie.executor.extract
+      with:
+        storage:
+          psql:
+            <<: *psql_conf_shared
+            schema: marie_scheduler
+            default_table: extract_metadata
+            enabled: True
+            asset_tracking_enabled: True
+          s3:
+            <<: *s3_conf_shared
+            enabled: True
+        llm_tracking:
+          enabled: true
+          exporter: otel
+          project_id: marie-ai-mock
+          worker:
+            enabled: false
+        parsers:
+          load_core_components: true
+    timeout_ready: 3000000
+    replicas: 1
+    env:
+      OPENAI_API_KEY: ${{ ENV.OPENAI_API_KEY }}
+      OPENAI_API_BASE: ${{ ENV.OPENAI_API_BASE }}
+      LLM_QUEUE_ENABLED: ${{ ENV.LLM_QUEUE_ENABLED }}
+      LLM_QUEUE_VALKEY_URL: ${{ ENV.LLM_QUEUE_VALKEY_URL }}
+      LLM_QUEUE_POOL_ID: document-small
+
   # Fast, reliable executor
   - name: mock_executor_a
     uses:

@@ -83,6 +83,7 @@ from .rag_indexing import (
 
 # Import traditional plans (this registers them via @register_query_plan decorator)
 from .traditional import (
+    query_planner_mock_annotator_llm,
     query_planner_mock_complex,
     query_planner_mock_medium,
     query_planner_mock_parallel_subgraphs,
@@ -104,6 +105,7 @@ __all__ = [
     "increment_uuid7str",
     "register_query_plan",
     # Traditional plans
+    "query_planner_mock_annotator_llm",
     "query_planner_mock_simple",
     "query_planner_mock_medium",
     "query_planner_mock_complex",

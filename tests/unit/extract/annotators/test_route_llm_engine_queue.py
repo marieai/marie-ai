@@ -46,3 +46,24 @@ def test_route_llm_engine_cache_includes_queue_configuration():
     assert engine_cls.call_args_list[1].kwargs["queue_pool_id"] == "default"
 
     annotator_util.clear_engine_cache()
+
+
+def test_route_llm_engine_treats_unresolved_pool_env_as_default():
+    annotator_util.clear_engine_cache()
+
+    with mock.patch.dict(
+        "os.environ",
+        {
+            "OPENAI_API_KEY": "EMPTY",
+            "OPENAI_API_BASE": "http://llm-backend/v1",
+            "LLM_QUEUE_ENABLED": "true",
+            "LLM_QUEUE_VALKEY_URL": "redis://localhost:6379/0",
+            "LLM_QUEUE_POOL_ID": "$LLM_QUEUE_POOL_ID",
+        },
+    ):
+        with mock.patch.object(annotator_util, "OpenAIEngine") as engine_cls:
+            annotator_util.route_llm_engine("model-a", True)
+
+    assert engine_cls.call_args.kwargs["queue_pool_id"] == "default"
+
+    annotator_util.clear_engine_cache()

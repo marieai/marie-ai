@@ -57,6 +57,23 @@ docker compose --env-file ./config/.env.dev \
 docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 ```
 
+## Full Prompt Trace Payloads
+
+Runtime Fabric LLM dispatch spans intentionally store full prompt and completion
+payloads in OpenInference `input.value` and `output.value` attributes. The local
+collector is tuned for those larger spans:
+
+- OTLP gRPC receive messages up to 128 MiB.
+- Collector batches are capped at 200 telemetry items.
+- The Marie Python SDK defaults trace export batches to 32 spans.
+
+Override the SDK batch size only when you know the average prompt size:
+
+```bash
+OTEL_BSP_MAX_EXPORT_BATCH_SIZE=16
+MARIE_OTEL_GRPC_MAX_MESSAGE_BYTES=134217728
+```
+
 ## Connection Credentials
 
 ### ClickHouse

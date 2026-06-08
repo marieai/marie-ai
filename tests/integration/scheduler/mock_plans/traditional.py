@@ -4,6 +4,7 @@ Traditional Mock Query Plans
 Linear and parallel execution patterns for basic performance testing.
 
 Plans:
+    - query_planner_mock_annotator_llm: Production-shaped annotator LLM route
     - query_planner_mock_simple: Basic linear execution (3 nodes)
     - query_planner_mock_medium: Parallel execution with merge (7 nodes)
     - query_planner_mock_complex: Complex multi-stage pipeline (12 nodes)
@@ -22,6 +23,47 @@ from .base import (
     increment_uuid7str,
     register_query_plan,
 )
+
+
+@register_query_plan("mock_annotator_llm")
+def query_planner_mock_annotator_llm(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+    """
+    Production-shaped mock plan for the LLM annotator executor.
+
+    Structure: START -> ANNOTATOR_LLM -> END
+    """
+    base_id = planner_info.base_id
+    root = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: START",
+        dependencies=[],
+        node_type=QueryType.COMPUTE,
+        definition=NoopQueryDefinition(),
+    )
+    planner_info.current_id += 1
+
+    annotate = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: Annotator LLM",
+        dependencies=[root.task_id],
+        node_type=QueryType.COMPUTE,
+        definition=LlmQueryDefinition(
+            model_name="gpt-5.2-mock",
+            endpoint="annotator_llm://annotator/llm",
+            params={"layout": "mock-llm", "key": "mock-llm"},
+        ),
+    )
+    planner_info.current_id += 1
+
+    end = Query(
+        task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
+        query_str=f"{planner_info.current_id}: END",
+        dependencies=[annotate.task_id],
+        node_type=QueryType.COMPUTE,
+        definition=NoopQueryDefinition(),
+    )
+
+    return QueryPlan(nodes=[root, annotate, end])
 
 
 @register_query_plan("mock_simple")

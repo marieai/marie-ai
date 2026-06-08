@@ -91,6 +91,16 @@ def _is_pool_timeout(exc: BaseException) -> bool:
         return False
 
 
+def _resolve_effective_queue_pool_id(
+    fallback_pool_id: str, metadata: Optional[Dict[str, Any]]
+) -> str:
+    if isinstance(metadata, dict):
+        value = metadata.get("pool_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return fallback_pool_id
+
+
 def _should_retry(exc: BaseException) -> bool:
     """Return True if the exception is retryable.
 
@@ -664,10 +674,14 @@ class BatchProcessor:
         try:
             self._log_queue_mode_once()
             if self._queue_enabled():
+                effective_pool_id = _resolve_effective_queue_pool_id(
+                    self._queue_config.pool_id,
+                    metadata,
+                )
                 self.logger.info(
                     "Submitting batch %s to LLM dispatch queue: pool=%s items=%s",
                     request_id,
-                    self._queue_config.pool_id,
+                    effective_pool_id,
                     len(calls),
                 )
                 batch_results = self._get_queued_executor().execute(

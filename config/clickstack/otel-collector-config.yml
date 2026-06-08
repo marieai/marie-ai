@@ -12,6 +12,7 @@ receivers:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
+        max_recv_msg_size_mib: 128
       http:
         endpoint: 0.0.0.0:4318
 
@@ -56,15 +57,15 @@ receivers:
 processors:
   # Batch processor for efficient exports
   batch:
-    send_batch_size: 1000
-    send_batch_max_size: 1500
-    timeout: 5s
+    send_batch_size: 100
+    send_batch_max_size: 200
+    timeout: 2s
 
   # Memory limiter to prevent OOM
   memory_limiter:
     check_interval: 1s
-    limit_mib: 512
-    spike_limit_mib: 128
+    limit_mib: 768
+    spike_limit_mib: 256
 
   # Resource detection for host metadata
   resourcedetection:

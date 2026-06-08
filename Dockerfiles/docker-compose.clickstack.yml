@@ -57,9 +57,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${OTEL_COLLECTOR_MEMORY_LIMIT:-512M}
+          memory: ${OTEL_COLLECTOR_MEMORY_LIMIT:-1G}
         reservations:
-          memory: ${OTEL_COLLECTOR_MEMORY_RESERVATION:-128M}
+          memory: ${OTEL_COLLECTOR_MEMORY_RESERVATION:-256M}
 
   # ############### Log Collector Sidecar ###############
   # Collects Docker container logs and forwards to OTel Collector
