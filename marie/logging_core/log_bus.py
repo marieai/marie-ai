@@ -121,6 +121,7 @@ class BatchingQueueListener:
         # self._buf: List[logging.LogRecord] = []
         self._buf: deque[logging.LogRecord] = deque()
         self._buf_lock = threading.Lock()
+        self._handlers_lock = threading.RLock()
 
     # -------------------- lifecycle --------------------
 
@@ -138,27 +139,28 @@ class BatchingQueueListener:
         Use this in long-running services (e.g., before rotating files or at checkpoints)
         or in tests to ensure all pending records are emitted.
         """
-        sinks = list(self.handlers)
+        with self._handlers_lock:
+            sinks = list(self.handlers)
 
-        # Drain queue
-        q_recs: List[logging.LogRecord] = []
-        while True:
-            try:
-                rec = self.q.get_nowait()
-            except queue.Empty:
-                break
-            if rec is self._SENTINEL:
-                continue
-            q_recs.append(rec)
+            # Drain queue
+            q_recs: List[logging.LogRecord] = []
+            while True:
+                try:
+                    rec = self.q.get_nowait()
+                except queue.Empty:
+                    break
+                if rec is self._SENTINEL:
+                    continue
+                q_recs.append(rec)
 
-        # Drain shared buffer
-        buf_recs = self._pop_buffer()
+            # Drain shared buffer
+            buf_recs = self._pop_buffer()
 
-        # Emit & flush
-        all_recs = buf_recs + q_recs
-        if all_recs:
-            self._emit_to_handlers(all_recs, sinks)
-        self._flush_sinks(sinks)
+            # Emit & flush
+            all_recs = buf_recs + q_recs
+            if all_recs:
+                self._emit_to_handlers(all_recs, sinks)
+            self._flush_sinks(sinks)
 
     def stop(self, timeout: Optional[float] = 5.0) -> None:
         """
@@ -280,7 +282,11 @@ class BatchingQueueListener:
                 _stderr(f"[logbus] sink {h.__class__.__name__} failed: {e}\n")
 
     def _flush_sinks(self, sinks: Optional[Iterable[logging.Handler]] = None) -> None:
-        targets = list(sinks if sinks is not None else self.handlers)
+        if sinks is None:
+            with self._handlers_lock:
+                targets = list(self.handlers)
+        else:
+            targets = list(sinks)
         for h in targets:
             try:
                 flush = getattr(h, "flush", None)
@@ -290,7 +296,19 @@ class BatchingQueueListener:
                 pass
 
     def _flush_safe(self, recs: List[logging.LogRecord]) -> None:
-        self._emit_to_handlers(recs, self.handlers)
+        with self._handlers_lock:
+            self._emit_to_handlers(recs, list(self.handlers))
+
+    def replace_handlers(
+        self, handlers: Iterable[logging.Handler], *, flush: bool = True
+    ) -> List[logging.Handler]:
+        new_handlers = list(handlers)
+        with self._handlers_lock:
+            old_handlers = list(self.handlers)
+            if flush:
+                self.flush()
+            self.handlers = new_handlers
+        return old_handlers
 
 
 class _GlobalLogBus:
@@ -351,13 +369,9 @@ class _GlobalLogBus:
     def set_sinks(self, sinks: Iterable[logging.Handler]) -> None:
         new_handlers = list(sinks)
         with self._lock:
-            old_handlers = list(self._listener.handlers)
-            if not self._stopped:
-                try:
-                    self._listener.flush()
-                except Exception:
-                    pass
-            self._listener.handlers = new_handlers
+            old_handlers = self._listener.replace_handlers(
+                new_handlers, flush=not self._stopped
+            )
 
         stale_handlers = [
             handler
