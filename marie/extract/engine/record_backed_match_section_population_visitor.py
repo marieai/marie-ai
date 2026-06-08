@@ -213,9 +213,8 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
             field_def.setdefault("type", "ALPHA")
 
             transformed_value = transform_field_value(field_def, matched_value)
-            faux_line = LineWithMeta(line=matched_value, metadata=LineMetadata(page_id, None, None), annotations=[])
             created_fields = _create_fields(
-                field_def, matched_value, transformed_value, faux_line
+                field_def, matched_value, transformed_value, page_id=page_id
             )
             extracted_fields.extend(created_fields)
             populated_fields.add(field_name)
@@ -292,9 +291,8 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                 field_def.setdefault("type", "ALPHA")
 
                 transformed_value = transform_field_value(field_def, resolved)
-                faux_line = LineWithMeta(line=resolved, metadata=LineMetadata(page_id, None, None), annotations=[])
                 created = _create_fields(
-                    field_def, resolved, transformed_value, faux_line
+                    field_def, resolved, transformed_value, page_id
                 )
                 extracted_fields.extend(created)
                 populated_fields.add(field_name)
@@ -345,9 +343,8 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
             field_def.setdefault("type", "MONEY")
 
             transformed_value = transform_field_value(field_def, source_value)
-            faux_line = LineWithMeta(line=source_value, metadata=LineMetadata(page_id, None, None), annotations=[])
             created = _create_fields(
-                field_def, source_value, transformed_value, faux_line
+                field_def, source_value, transformed_value, page_id
             )
             extracted_fields.extend(created)
             populated_fields.add(field_name)
@@ -545,12 +542,12 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                 field_def["name"] = field_name
 
                 transformed_value = transform_field_value(field_def, cell_value)
-                faux_line = LineWithMeta(line=cell_value, metadata=LineMetadata(page_id, None, None), annotations=[])
                 created = _create_fields(
-                    field_def, cell_value, transformed_value, faux_line
+                    field_def, cell_value, transformed_value, page_id
                 )
                 row_fields.extend(created)
 
+            # _inherit_field_pages(row_fields, fallback_page=page_id)
             if not is_child_row:
                 # Parent row — create new MatchFieldRow and track it
                 matched_row = MatchFieldRow(fields=row_fields)
@@ -851,6 +848,27 @@ def distribute_resolved_values(
                 count += 1
     return count
 
+def _inherit_field_pages(fields: List[Field], fallback_page: int) -> None:
+    """Update empty fields with page=0 to inherit row page.
+    Prefer the first non-zero page already present on the row. If no row field
+    has a non-zero page, fall back to the page passed in.
+    """
+    # Pull page from row (may be a continuation from another page)
+    row_page = None
+    for field in fields:
+        page = field.page or 0
+        if page > 0:
+            row_page = page
+            break
+    inherited_page = row_page or fallback_page
+    if inherited_page <= 0:
+        return # page is already expected to be 0
+
+    # Only update those that do not have valid page data (None or 0)
+    for field in fields:
+        if not field.page:
+            field.page = inherited_page
+
 def _find_region_entry(
     regions_cfg: List[Dict], section_title: str, expected_type: str
 ) -> Optional[Dict]:
@@ -993,13 +1011,12 @@ def _create_fields(
     field_def: Dict[str, Any],
     value: str,
     transformed_value: TransformReturnType,
-    line: Optional[LineWithMeta],
+    page_id: int = 0,
 ) -> List[Field]:
     """Create Field objects, handling derived fields (composite parent + children).
 
     Mirrors ``MatchSectionExtractionProcessingVisitor.create_fields``.
     """
-    page_id = line.metadata.page_id if line and line.metadata else 0
     field_name = field_def.get("name")
     derived_fields = field_def.get("derived_fields") or None
     fields: List[Field] = []
