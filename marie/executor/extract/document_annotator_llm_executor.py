@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import torch
 from docarray import DocList
@@ -22,9 +22,9 @@ class DocumentAnnotatorLLMExecutor(DocumentAnnotatorExecutor):
         name: str = "",
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
-        storage: dict[str, any] = None,
-        llm_tracking: dict[str, any] = None,
-        parsers: dict[str, any] = None,
+        storage: dict[str, Any] = None,
+        llm_tracking: dict[str, Any] = None,
+        parsers: dict[str, Any] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ) -> None:

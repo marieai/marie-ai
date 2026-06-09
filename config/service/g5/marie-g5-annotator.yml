@@ -168,7 +168,7 @@ prefetch: 4
 executors:
    - name: annotator_executor
      uses:
-       jtype: self._etcd_clientotatorExecutor
+       jtype: DocumentAnnotatorExecutor
        metas:
          py_modules:
            - marie.executor.extract

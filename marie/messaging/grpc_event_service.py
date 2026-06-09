@@ -12,7 +12,7 @@ Handles:
 import asyncio
 import logging
 import uuid
-from typing import AsyncIterator, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
 import grpc
 from google.protobuf import struct_pb2
@@ -175,7 +175,7 @@ class EventStreamServicer(event_stream_pb2_grpc.EventStreamServiceServicer):
         topics = set(req.topics) if req.topics else {"*"}
         events = set(req.events) if req.events else set()
 
-        filter_config: Dict[str, any] = {}
+        filter_config: Dict[str, Any] = {}
         if req.HasField("filter"):
             f = req.filter
             filter_config = {

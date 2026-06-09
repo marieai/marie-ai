@@ -4,7 +4,7 @@ import re
 from collections import OrderedDict
 from functools import lru_cache
 from itertools import cycle
-from typing import Callable, List, Optional, Type, Union
+from typing import Any, Callable, List, Optional, Type, Union
 
 import cv2
 import numpy as np
@@ -369,7 +369,7 @@ def process_extractions(
 
 
 def extract_tables(
-    doc: UnstructuredDocument, frames: list, metadata: dict[str, any], output_dir: str
+    doc: UnstructuredDocument, frames: list, metadata: dict[str, Any], output_dir: str
 ):
     raise NotImplementedError("extract_tables is deprecated, use table parser instead")
     YELLOW_COLOR = (0, 255, 255)  # OpenCV uses BGR, so this represents yellow

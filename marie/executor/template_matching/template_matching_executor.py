@@ -1,5 +1,5 @@
 import os
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 import torch
@@ -44,7 +44,7 @@ class TemplateMatchingExecutor(Executor):
         name: str = "",
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
-        pipeline: Optional[dict[str, any]] = None,
+        pipeline: Optional[dict[str, Any]] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):

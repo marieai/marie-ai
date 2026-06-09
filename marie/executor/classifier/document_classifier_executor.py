@@ -33,8 +33,8 @@ class DocumentClassificationExecutor(MarieExecutor):
         name: str = "",
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
-        storage: dict[str, any] = None,
-        pipelines: List[dict[str, any]] = None,
+        storage: dict[str, Any] = None,
+        pipelines: List[dict[str, Any]] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
