@@ -77,6 +77,15 @@ DEFAULT_EXTENSIONS = (
     ".pdf",
 )
 
+MARIE_GENERATED_ARTIFACT_DIRS = {
+    "agent-output",
+    "assets",
+    "burst",
+    "clean",
+    "frames",
+    "pdf",
+}
+
 MOCK_FAILURE_MODES = ("exception", "timeout", "random")
 REDACTED_SECRET = "<redacted>"
 
@@ -207,6 +216,7 @@ def _resolve_inputs(
     input_dir: Optional[str],
     input_manifest: Optional[str],
     extensions: Tuple[str, ...] = DEFAULT_EXTENSIONS,
+    include_generated_artifacts: bool = False,
 ) -> List[Path]:
     paths: List[Path] = []
 
@@ -224,7 +234,17 @@ def _resolve_inputs(
     elif input_dir:
         base = Path(input_dir).expanduser()
         for ext in extensions:
-            paths.extend(sorted(base.rglob(f"*{ext}")))
+            matches = sorted(base.rglob(f"*{ext}"))
+            if not include_generated_artifacts:
+                matches = [
+                    path
+                    for path in matches
+                    if not any(
+                        part in MARIE_GENERATED_ARTIFACT_DIRS
+                        for part in path.relative_to(base).parts[:-1]
+                    )
+                ]
+            paths.extend(matches)
     else:
         raise ValueError(
             "One of --input-glob, --input-dir, or --input-manifest is required"
@@ -282,12 +302,14 @@ def _build_input_assets(
     input_manifest: Optional[str],
     s3_uri: Optional[str],
     s3_uri_manifest: Optional[str],
+    include_generated_artifacts: bool = False,
 ) -> List[InputAsset]:
     local_inputs = (
         _resolve_inputs(
             input_glob=input_glob,
             input_dir=input_dir,
             input_manifest=input_manifest,
+            include_generated_artifacts=include_generated_artifacts,
         )
         if any((input_glob, input_dir, input_manifest))
         else []
@@ -2697,6 +2719,14 @@ Examples:
         type=str,
         help="Text file with one existing s3:// URI per line",
     )
+    parser.add_argument(
+        "--include-generated-artifacts",
+        action="store_true",
+        help=(
+            "Include files under generated Marie artifact directories "
+            "when resolving --input-dir"
+        ),
+    )
 
     workload_group = parser.add_mutually_exclusive_group(required=True)
     workload_group.add_argument(
@@ -3128,6 +3158,7 @@ async def main() -> None:
         input_manifest=args.input_manifest,
         s3_uri=args.s3_uri,
         s3_uri_manifest=args.s3_uri_manifest,
+        include_generated_artifacts=args.include_generated_artifacts,
     )
     if not input_assets:
         raise ValueError("No inputs resolved for stress run")

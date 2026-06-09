@@ -172,6 +172,36 @@ def test_resolve_inputs_supports_manifest_and_absolute_glob(tmp_path: Path) -> N
     assert glob_inputs == [first.resolve(), second.resolve()]
 
 
+def test_resolve_inputs_skips_marie_generated_artifacts_by_default(
+    tmp_path: Path,
+) -> None:
+    generators = tmp_path / "generators"
+    asset_root = generators / "abc123"
+    source = asset_root / "source.tif"
+    generated_artifacts = [
+        asset_root / "assets" / "source.tif",
+        asset_root / "burst" / "source_00001.tif",
+        asset_root / "clean" / "0.tif",
+        asset_root / "frames" / "00001.png",
+        asset_root / "agent-output" / "mock-llm" / "00001.png",
+        asset_root / "pdf" / "results.pdf",
+    ]
+
+    source.parent.mkdir(parents=True)
+    source.write_text("source")
+    for path in generated_artifacts:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("generated")
+
+    inputs = _resolve_inputs(
+        input_glob=None,
+        input_dir=str(generators),
+        input_manifest=None,
+    )
+
+    assert inputs == [source.resolve()]
+
+
 def test_resolve_runtime_config_rejects_explicit_empty_api_key(tmp_path: Path) -> None:
     config = tmp_path / "gateway-e2e.json"
     config.write_text(
