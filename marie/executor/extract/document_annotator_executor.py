@@ -1,7 +1,7 @@
 import os
 import random
 import time
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import torch
 from docarray import DocList
@@ -19,7 +19,6 @@ from marie.extract.readers.meta_reader.meta_reader import MetaReader
 from marie.extract.structures import UnstructuredDocument
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.mdc import MDC
-from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import torch_gc
 from marie.utils.asset_util import prepare_asset_directory, store_assets
 from marie.utils.docs import docs_from_asset, frames_from_docs
@@ -48,8 +47,8 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         name: str = "",
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
-        storage: dict[str, any] = None,
-        llm_tracking: dict[str, any] = None,
+        storage: dict[str, Any] = None,
+        llm_tracking: dict[str, Any] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
@@ -60,12 +59,12 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             getattr(self.metas, "name", self.__class__.__name__)
         ).logger
 
-        logger.info(f"Starting executor : {self.__class__.__name__}")
-        logger.info(f"Runtime args : {kwargs.get('runtime_args')}")
-        logger.info(f"Storage config: {storage}")
-        logger.info(f"Device : {device}")
-        logger.info(f"Num worker preprocess : {num_worker_preprocess}")
-        logger.info(f"Kwargs : {kwargs}")
+        self.logger.info(f"Starting executor : {self.__class__.__name__}")
+        self.logger.info(f"Runtime args : {kwargs.get('runtime_args')}")
+        self.logger.info(f"Storage config: {storage}")
+        self.logger.info(f"Device : {device}")
+        self.logger.info(f"Num worker preprocess : {num_worker_preprocess}")
+        self.logger.info(f"Kwargs : {kwargs}")
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
         instance_name = "not_defined"
@@ -128,6 +127,8 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         for key, value in parameters.items():
             self.logger.info("The value of {} is {}".format(key, value))
 
+        return None
+
     async def _process_annotation_request(
         self,
         docs: DocList[AssetKeyDoc],
@@ -167,8 +168,9 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                 self.logger.info(f"Sleeping... {i + 1}/{sec} seconds elapsed")
 
             return {"status": "success", "message": "Documents annotated successfully"}
-
-        self._setup_request(docs, parameters)
+        ret_val = self._setup_request(docs, parameters)
+        if ret_val is not None:
+            return ret_val
 
         # load documents from specified document asset key
         doc: AssetKeyDoc = docs[0]
