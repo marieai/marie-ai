@@ -15,7 +15,12 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from openinference.semconv.trace import MessageAttributes, SpanAttributes
+from openinference.semconv.trace import (
+    ImageAttributes,
+    MessageAttributes,
+    MessageContentAttributes,
+    SpanAttributes,
+)
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
@@ -27,7 +32,9 @@ from opentelemetry.trace import StatusCode
 
 from marie.agent.message import Message
 from marie.agent.tools.base import AgentTool, ToolMetadata, ToolOutput
+from marie.engine.completion_contract import RequestContext
 from marie.instrumentation import set_llm_io
+from marie.utils.asset_util import s3_asset_path
 
 # ---------------------------------------------------------------------------
 # Lightweight in-memory exporter (OTel SDK 1.19 lacks InMemorySpanExporter)
@@ -114,6 +121,11 @@ def sample_messages():
 
 def test_set_llm_io_expands_multimodal_message_content(otel_setup):
     tracer = trace.get_tracer("test.llm_io")
+    source_ref = s3_asset_path(
+        ref_id="document.tif",
+        ref_type="stress",
+        include_filename=True,
+    )
     messages = [
         {"role": "system", "content": "You are helpful."},
         {
@@ -129,19 +141,85 @@ def test_set_llm_io_expands_multimodal_message_content(otel_setup):
     ]
 
     with tracer.start_as_current_span("llm-span") as span:
+        set_llm_io(
+            span,
+            input_messages=messages,
+            context=RequestContext(
+                ref_id="document.tif",
+                ref_type="stress",
+                page_number=1,
+            ),
+        )
+
+    finished_span = otel_setup.get_finished_spans()[0]
+    attrs = finished_span.attributes
+
+    input_value = attrs[SpanAttributes.INPUT_VALUE]
+    assert "data:image/" not in input_value
+    assert "base64," not in input_value
+    assert "ZmFrZQ==" not in input_value
+
+    for value in attrs.values():
+        if isinstance(value, str):
+            assert "data:image/" not in value
+            assert "base64," not in value
+            assert "ZmFrZQ==" not in value
+
+    text_base = (
+        f"{SpanAttributes.LLM_INPUT_MESSAGES}.1."
+        f"{MessageAttributes.MESSAGE_CONTENTS}.0"
+    )
+    image_base = (
+        f"{SpanAttributes.LLM_INPUT_MESSAGES}.1."
+        f"{MessageAttributes.MESSAGE_CONTENTS}.1"
+    )
+    assert (
+        attrs[f"{text_base}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}"]
+        == "text"
+    )
+    assert (
+        attrs[f"{text_base}.{MessageContentAttributes.MESSAGE_CONTENT_TEXT}"]
+        == "describe the image"
+    )
+    assert (
+        attrs[f"{image_base}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}"]
+        == "image"
+    )
+    assert (
+        attrs[
+            f"{image_base}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}."
+            f"{ImageAttributes.IMAGE_URL}"
+        ]
+        == source_ref
+    )
+
+    assert attrs["marie.otel.media.input.1.1.ref_id"] == "document.tif"
+    assert attrs["marie.otel.media.input.1.1.ref_type"] == "stress"
+    assert attrs["marie.otel.media.input.1.1.page_number"] == 1
+
+    list_content_key = (
+        f"{SpanAttributes.LLM_INPUT_MESSAGES}.1."
+        f"{MessageAttributes.MESSAGE_CONTENT}"
+    )
+    assert list_content_key not in attrs
+
+
+def test_set_llm_io_keeps_plain_string_message_content(otel_setup):
+    tracer = trace.get_tracer("test.llm_io")
+    messages = [{"role": "user", "content": "hello"}]
+
+    with tracer.start_as_current_span("llm-span") as span:
         set_llm_io(span, input_messages=messages)
 
     finished_span = otel_setup.get_finished_spans()[0]
     attrs = finished_span.attributes
-    user_content_key = (
-        f"{SpanAttributes.LLM_INPUT_MESSAGES}.1."
-        f"{MessageAttributes.MESSAGE_CONTENT}"
+    assert (
+        attrs[
+            f"{SpanAttributes.LLM_INPUT_MESSAGES}.0."
+            f"{MessageAttributes.MESSAGE_CONTENT}"
+        ]
+        == "hello"
     )
-    content = json.loads(attrs[user_content_key])
-    assert content == [
-        {"type": "text", "text": "describe the image"},
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,ZmFrZQ=="}},
-    ]
 
 
 # ---------------------------------------------------------------------------

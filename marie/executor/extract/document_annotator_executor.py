@@ -53,8 +53,8 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
-        kwargs['storage'] = storage
-        kwargs['llm_tracking'] = llm_tracking
+        kwargs["storage"] = storage
+        kwargs["llm_tracking"] = llm_tracking
         super().__init__(**kwargs)
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
@@ -166,13 +166,14 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                 time.sleep(1)
                 self.logger.info(f"Sleeping... {i + 1}/{sec} seconds elapsed")
 
-            return {'status': 'success', 'message': 'Documents annotated successfully'}
+            return {"status": "success", "message": "Documents annotated successfully"}
 
         self._setup_request(docs, parameters)
 
         # load documents from specified document asset key
         doc: AssetKeyDoc = docs[0]
         self.logger.info(f"doc.asset_key = {doc.asset_key}")
+        requested_pages = doc.pages
         docs, local_downloaded_s3_path = docs_from_asset(
             doc.asset_key, doc.pages, return_file_path=True
         )
@@ -187,8 +188,8 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             "op_params"
         )  # These are operator parameters (Layout, Config Key, etc.)
 
-        op_key = op_params.get('key')
-        op_layout = op_params.get('layout')
+        op_key = op_params.get("key")
+        op_layout = op_params.get("layout")
 
         # Extract purge_annotators from features (follows TextExtractionExecutor pattern)
         pipeline_features = get_payload_features(payload, f_type="pipeline")
@@ -209,7 +210,7 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             if annotator == op_key:
                 annotator_conf = cfg.annotators[annotator]
                 # we need to set the name of the annotator as they are keys in conf
-                annotator_conf['name'] = annotator
+                annotator_conf["name"] = annotator
                 break
 
         if annotator_conf is None:
@@ -238,10 +239,11 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
 
         metadata = load_json_file(metadata_file)
         unstructured_meta = {
-            'ref_id': ref_id,
-            'ref_type': ref_type,
-            'job_id': job_id,
-            'source_metadata': metadata,
+            "ref_id": ref_id,
+            "ref_type": ref_type,
+            "job_id": job_id,
+            "requested_pages": requested_pages,
+            "source_metadata": metadata,
         }
 
         doc: UnstructuredDocument = MetaReader.from_data(
@@ -285,6 +287,9 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             dag_id=parameters.get("dag_id"),
             node_task_id=parameters.get("node_task_id"),
             pool_id=parameters.get("pool_id"),
+            ref_id=ref_id,
+            ref_type=ref_type,
+            requested_pages=requested_pages,
             purge_annotators=purge_annotators,
         )
 

@@ -3,7 +3,11 @@ import asyncio
 import pytest
 
 from marie.engine.batch_processor import BatchProcessor, BatchResult
-from marie.engine.completion_contract import CompletionCallParams, build_completion_call
+from marie.engine.completion_contract import (
+    CompletionCallParams,
+    RequestContext,
+    build_completion_call,
+)
 from marie.excepts import BatchExecutionError, CircuitOpenError
 from marie.serve.networking.balancer.circuit_breaker import (
     CircuitBreaker,
@@ -159,17 +163,27 @@ def test_openai_engine_normalizes_calls_before_strategy_split():
                 is_multimodal=False,
             )
 
-            def fake_batch_generate_calls(*, calls, on_result=None, metadata=None, **kwargs):
+            def fake_batch_generate_calls(
+                *, calls, on_result=None, metadata=None, **kwargs
+            ):
                 captured["calls"] = calls
                 captured["metadata"] = metadata
+                captured["extra_kwargs"] = kwargs
                 return ["ok"]
 
             engine.batch_processor.batch_generate_calls = fake_batch_generate_calls
+
+            context = RequestContext(
+                ref_id="PID_1",
+                ref_type="stress",
+                page_number=1,
+            )
 
             responses = engine.batch_generate(
                 ["hello"],
                 guided_json={"type": "object"},
                 metadata={"source": "unit-test"},
+                request_contexts=[context],
                 completion_params={"temperature": 0.25},
             )
 
@@ -182,7 +196,62 @@ def test_openai_engine_normalizes_calls_before_strategy_split():
     assert call.messages[1]["content"] == "hello"
     assert call.temperature == 0.25
     assert call.extra_body["guided_json"] == {"type": "object"}
+    assert call.context == context
     assert captured["metadata"] == {"source": "unit-test"}
+    assert "request_contexts" not in captured["extra_kwargs"]
+
+
+def test_completion_call_context_is_not_provider_payload():
+    context = RequestContext(
+        ref_id="PID_1.tif",
+        ref_type="stress",
+        page_number=1,
+    )
+    call = build_completion_call(
+        model="test-model",
+        messages=[{"role": "user", "content": "a"}],
+        completion_params={"temperature": 0.25, "context": {"ref_id": "bad"}},
+        context=context,
+    )
+
+    create_kwargs = call.to_create_kwargs()
+
+    assert call.context == context
+    assert create_kwargs["temperature"] == 0.25
+    assert "context" not in create_kwargs
+
+
+def test_openai_engine_request_context_length_mismatch_warns_and_falls_back():
+    class _RecordingLogger(_Logger):
+        def __init__(self):
+            self.warnings = []
+
+        def warning(self, *args, **kwargs):
+            self.warnings.append(args)
+
+    from marie.engine.openai_engine import OpenAIEngine
+
+    engine = object.__new__(OpenAIEngine)
+    engine.logger = _RecordingLogger()
+    engine.model_string = "test-model"
+    engine.system_prompt = None
+    engine.is_multimodal = False
+    engine.batch_processor = type(
+        "BatchProcessor",
+        (),
+        {"default_completion_params": {}},
+    )()
+
+    calls = engine._build_completion_calls(
+        batch_content=["a", "b"],
+        request_contexts=[RequestContext(page_number=1)],
+    )
+
+    assert [call.context for call in calls] == [None, None]
+    assert engine.logger.warnings
+    assert engine.logger.warnings[0][0].startswith(
+        "Ignoring request_contexts length mismatch"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -389,9 +458,7 @@ def test_process_batch_does_not_retry_batch_execution_error():
     async def run():
         nonlocal call_count
         # We patch the llm_call.acall to raise BatchExecutionError
-        with mock.patch(
-            "marie.engine.llm_ops.LLMCall.acall", side_effect=fake_acall
-        ):
+        with mock.patch("marie.engine.llm_ops.LLMCall.acall", side_effect=fake_acall):
             with pytest.raises(BatchExecutionError):
                 await process_batch(
                     batch=batch,
@@ -420,13 +487,13 @@ def test_process_batch_uses_async_sleep_on_retry():
     source = inspect.getsource(util.process_batch)
 
     # Should NOT contain time.sleep
-    assert "time.sleep" not in source, (
-        "process_batch still uses blocking time.sleep for retry backoff"
-    )
+    assert (
+        "time.sleep" not in source
+    ), "process_batch still uses blocking time.sleep for retry backoff"
     # Should contain asyncio.sleep
-    assert "asyncio.sleep" in source, (
-        "process_batch should use asyncio.sleep for retry backoff"
-    )
+    assert (
+        "asyncio.sleep" in source
+    ), "process_batch should use asyncio.sleep for retry backoff"
 
 
 # ---------------------------------------------------------------------------

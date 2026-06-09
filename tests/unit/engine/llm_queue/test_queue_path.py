@@ -12,11 +12,13 @@ from marie.engine.completion_contract import (
     CompletionCallParams,
     CompletionReplyEnvelope,
     QueuedCompletionEnvelope,
+    RequestContext,
     build_completion_call,
     completion_payload_to_text,
 )
 from marie.engine.llm_queue import dispatcher as dispatcher_module
 from marie.engine.llm_queue import queue_io as queue_io_module
+from marie.engine.llm_queue import submitter as submitter_module
 from marie.engine.llm_queue.adapters.openai_compatible import (
     OpenAICompatibleExecutionAdapter,
 )
@@ -83,12 +85,18 @@ def _queue_config(**overrides) -> LlmQueueConfig:
     return LlmQueueConfig(**values)
 
 
-def _call(messages, **overrides) -> CompletionCallParams:
+def _call(
+    messages,
+    *,
+    context: RequestContext | None = None,
+    **overrides,
+) -> CompletionCallParams:
     return build_completion_call(
         model="test-model",
         messages=messages,
         completion_params=overrides or None,
         stream=False,
+        context=context,
     )
 
 
@@ -361,8 +369,8 @@ def test_queued_batch_executor_skips_malformed_reply_and_keeps_waiting():
             )
             .to_json()
             .replace(
-                f"\"contract_version\":\"{COMPLETION_QUEUE_CONTRACT_VERSION}\"",
-                "\"contract_version\":\"v1\"",
+                f'"contract_version":"{COMPLETION_QUEUE_CONTRACT_VERSION}"',
+                '"contract_version":"v1"',
             )
         )
         queue_client.push_reply(
@@ -388,6 +396,54 @@ def test_queued_batch_executor_skips_malformed_reply_and_keeps_waiting():
 
     assert [result.task_id for result in results] == ["batch-malformed-reply_task_0"]
     assert [result.response for result in results] == ["good"]
+
+
+def test_queued_batch_executor_preserves_trace_headers(monkeypatch):
+    queue_client = InMemoryListQueueClient()
+    executor = QueuedBatchExecutor(
+        queue_client=queue_client,
+        config=_queue_config(),
+        logger=_Logger(),
+    )
+    traceparent = "00-11111111111111111111111111111111-2222222222222222-01"
+    tracestate = "vendor=value"
+    monkeypatch.setattr(
+        submitter_module,
+        "_current_trace_headers",
+        lambda: (traceparent, tracestate),
+    )
+
+    def worker():
+        request = queue_client.pop_request("default", timeout=1.0)
+        assert request is not None
+        assert request.traceparent == traceparent
+        assert request.tracestate == tracestate
+        queue_client.push_reply(
+            CompletionReplyEnvelope(
+                request_id=request.request_id,
+                producer_id=request.producer_id,
+                pool_id=request.pool_id,
+                status="ok",
+                completion=_completion_payload("done"),
+                completed_at=time.time(),
+            ),
+            ttl_seconds=60,
+        )
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    try:
+        results = executor.execute(
+            calls=[_call([{"role": "user", "content": "hello"}])],
+            batch_request_id="batch-trace",
+            batch_timeout=2.0,
+        )
+    finally:
+        thread.join(timeout=1.0)
+        executor.close()
+
+    assert [result.response for result in results] == ["done"]
 
 
 def test_queue_keyspace_is_versioned():
@@ -534,8 +590,8 @@ def test_envelopes_reject_mismatched_contract_version():
         )
         .to_json()
         .replace(
-            f"\"contract_version\":\"{COMPLETION_QUEUE_CONTRACT_VERSION}\"",
-            "\"contract_version\":\"v1\"",
+            f'"contract_version":"{COMPLETION_QUEUE_CONTRACT_VERSION}"',
+            '"contract_version":"v1"',
         )
     )
     with pytest.raises(ValueError, match="Unsupported request contract version"):
@@ -552,8 +608,8 @@ def test_envelopes_reject_mismatched_contract_version():
         )
         .to_json()
         .replace(
-            f"\"contract_version\":\"{COMPLETION_QUEUE_CONTRACT_VERSION}\"",
-            "\"contract_version\":\"v1\"",
+            f'"contract_version":"{COMPLETION_QUEUE_CONTRACT_VERSION}"',
+            '"contract_version":"v1"',
         )
     )
     with pytest.raises(ValueError, match="Unsupported reply contract version"):
@@ -639,8 +695,8 @@ def test_dispatcher_skips_malformed_request_and_processes_next_live_one():
         )
         .to_json()
         .replace(
-            f"\"contract_version\":\"{COMPLETION_QUEUE_CONTRACT_VERSION}\"",
-            "\"contract_version\":\"v1\"",
+            f'"contract_version":"{COMPLETION_QUEUE_CONTRACT_VERSION}"',
+            '"contract_version":"v1"',
         )
     )
     queue_client._lists[request_queue_key("default")].append(malformed_payload)
@@ -676,13 +732,21 @@ def test_dispatcher_records_openinference_input_and_output(monkeypatch):
         logger=_Logger(),
     )
     messages = [{"role": "user", "content": "keep"}]
+    context = RequestContext(
+        ref_id="PID_1.tif",
+        ref_type="stress",
+        page_number=1,
+    )
     recorded_io = []
 
-    def record_llm_io(span, *, input_messages=None, output_messages=None):
+    def record_llm_io(
+        span, *, input_messages=None, output_messages=None, context=None
+    ):
         recorded_io.append(
             {
                 "input_messages": input_messages,
                 "output_messages": output_messages,
+                "context": context,
             }
         )
 
@@ -694,14 +758,22 @@ def test_dispatcher_records_openinference_input_and_output(monkeypatch):
             producer_id="producer-live",
             pool_id="default",
             submitted_at=time.time(),
-            call=_call(messages),
+            call=_call(messages, context=context),
         )
     )
 
     assert dispatcher.run_once() == 1
     assert recorded_io == [
-        {"input_messages": messages, "output_messages": None},
-        {"input_messages": None, "output_messages": "done:keep"},
+        {
+            "input_messages": messages,
+            "output_messages": None,
+            "context": context,
+        },
+        {
+            "input_messages": None,
+            "output_messages": "done:keep",
+            "context": None,
+        },
     ]
 
 
@@ -1146,6 +1218,12 @@ def test_reply_to_batch_result_preserves_dispatcher_error_origin():
 
 def test_multimodal_queue_request_round_trip_preserves_content_shape():
     queue_client = InMemoryListQueueClient()
+    context = RequestContext(
+        ref_id="PID_1.tif",
+        ref_type="stress",
+        page_number=1,
+        requested_pages=(0,),
+    )
     request = QueuedCompletionEnvelope(
         request_id="req-mm-1",
         producer_id="producer-A",
@@ -1170,7 +1248,9 @@ def test_multimodal_queue_request_round_trip_preserves_content_shape():
                 },
             ],
             temperature=0.0,
+            context=context,
         ),
+        metadata={"job_id": "job-1", "pool_id": "default"},
     )
 
     queue_client.push_request(request)
@@ -1179,6 +1259,70 @@ def test_multimodal_queue_request_round_trip_preserves_content_shape():
     assert restored is not None
     assert restored.call.messages == request.call.messages
     assert restored.call.temperature == request.call.temperature
+    assert restored.call.context == context
+    assert restored.call.context.requested_pages == (0,)
+    assert restored.metadata == request.metadata
+
+
+def test_queued_batch_executor_preserves_call_context_separate_from_metadata():
+    queue_client = InMemoryListQueueClient()
+    executor = QueuedBatchExecutor(
+        queue_client=queue_client,
+        config=_queue_config(),
+        logger=_Logger(),
+    )
+    seen_metadata = []
+    seen_contexts = []
+
+    def worker():
+        for _ in range(2):
+            request = queue_client.pop_request("default", timeout=1.0)
+            assert request is not None
+            seen_metadata.append(request.metadata)
+            seen_contexts.append(request.call.context)
+            queue_client.push_reply(
+                CompletionReplyEnvelope(
+                    request_id=request.request_id,
+                    producer_id=request.producer_id,
+                    pool_id=request.pool_id,
+                    status="ok",
+                    completion=_completion_payload(f"resp:{request.request_id}"),
+                    completed_at=time.time(),
+                ),
+                ttl_seconds=60,
+            )
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    context_a = RequestContext(
+        ref_id="PID_1.tif",
+        ref_type="stress",
+        page_number=1,
+    )
+    context_b = RequestContext(
+        ref_id="PID_1.tif",
+        ref_type="stress",
+        page_number=2,
+    )
+    call_a = _call([{"role": "user", "content": "a"}], context=context_a)
+    call_b = _call([{"role": "user", "content": "b"}], context=context_b)
+    try:
+        results = executor.execute(
+            calls=[call_a, call_b],
+            batch_request_id="batch-meta",
+            batch_timeout=2.0,
+            metadata={"job_id": "job-1", "pool_id": "default"},
+        )
+    finally:
+        thread.join(timeout=1.0)
+        executor.close()
+
+    assert [result.error for result in results] == [None, None]
+    assert seen_contexts == [context_a, context_b]
+    assert seen_metadata == [
+        {"job_id": "job-1", "pool_id": "default"},
+        {"job_id": "job-1", "pool_id": "default"},
+    ]
 
 
 def test_batch_processor_forwards_guided_json_to_queued_executor(monkeypatch):
@@ -1211,9 +1355,11 @@ def test_batch_processor_forwards_guided_json_to_queued_executor(monkeypatch):
     processor.batch_generate(
         messages_list=[[{"role": "user", "content": "a"}]],
         guided_json={"type": "object"},
+        metadata={"job_id": "job-1"},
     )
 
     assert captured["calls"][0].extra_body["guided_json"] == {"type": "object"}
+    assert "request_contexts" not in captured
 
 
 def test_direct_and_queued_paths_return_same_text_for_same_completion_payload():

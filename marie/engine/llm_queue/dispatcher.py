@@ -29,7 +29,12 @@ from marie.engine.llm_queue.scheduler import (
     DrrLaneScheduler,
     request_cost_units,
 )
-from marie.instrumentation import get_tracer, set_llm_io, start_as_current_span
+from marie.instrumentation import (
+    MarieSpanAttributes,
+    get_tracer,
+    set_llm_io,
+    start_as_current_span,
+)
 from marie.instrumentation.openinference import infer_llm_system
 
 _UNSET = object()
@@ -693,27 +698,39 @@ def _set_dispatch_span_base_attributes(
     queue_wait_ms = max(0.0, (started_wall - request.submitted_at) * 1000.0)
     span.set_attribute(SpanAttributes.LLM_MODEL_NAME, request.call.model)
     span.set_attribute(SpanAttributes.LLM_SYSTEM, infer_llm_system(request.call.model))
-    span.set_attribute("marie.llm_dispatch.request_id", request.request_id)
-    span.set_attribute("marie.llm_dispatch.producer_id", request.producer_id)
-    span.set_attribute("marie.llm_dispatch.pool_id", request.pool_id)
+    span.set_attribute(MarieSpanAttributes.LLM_DISPATCH_REQUEST_ID, request.request_id)
     span.set_attribute(
-        "marie.llm_dispatch.fabric_group_id", config.fabric_group_id or ""
+        MarieSpanAttributes.LLM_DISPATCH_PRODUCER_ID, request.producer_id
     )
-    span.set_attribute("marie.llm_dispatch.gateway_id", config.gateway_id or "")
-    span.set_attribute("marie.llm_dispatch.dispatcher_id", dispatcher_id)
+    span.set_attribute(MarieSpanAttributes.LLM_DISPATCH_POOL_ID, request.pool_id)
     span.set_attribute(
-        "marie.llm_dispatch.dispatch_profile_key",
+        MarieSpanAttributes.LLM_DISPATCH_FABRIC_GROUP_ID,
+        config.fabric_group_id or "",
+    )
+    span.set_attribute(
+        MarieSpanAttributes.LLM_DISPATCH_GATEWAY_ID,
+        config.gateway_id or "",
+    )
+    span.set_attribute(MarieSpanAttributes.LLM_DISPATCH_DISPATCHER_ID, dispatcher_id)
+    span.set_attribute(
+        MarieSpanAttributes.LLM_DISPATCH_PROFILE_KEY,
         request.dispatch_profile_key or request.call.model,
     )
-    span.set_attribute("marie.llm_dispatch.backend_address", backend_address or "")
-    span.set_attribute("marie.llm_dispatch.model", request.call.model)
-    span.set_attribute("marie.llm_dispatch.queue_wait_ms", queue_wait_ms)
-    span.set_attribute("marie.llm_dispatch.message_count", len(request.call.messages))
     span.set_attribute(
-        "marie.llm_dispatch.contract_version",
+        MarieSpanAttributes.LLM_DISPATCH_BACKEND_ADDRESS,
+        backend_address or "",
+    )
+    span.set_attribute(MarieSpanAttributes.LLM_DISPATCH_MODEL, request.call.model)
+    span.set_attribute(MarieSpanAttributes.LLM_DISPATCH_QUEUE_WAIT_MS, queue_wait_ms)
+    span.set_attribute(
+        MarieSpanAttributes.LLM_DISPATCH_MESSAGE_COUNT,
+        len(request.call.messages),
+    )
+    span.set_attribute(
+        MarieSpanAttributes.LLM_DISPATCH_CONTRACT_VERSION,
         COMPLETION_QUEUE_CONTRACT_VERSION,
     )
-    set_llm_io(span, input_messages=request.call.messages)
+    set_llm_io(span, input_messages=request.call.messages, context=request.call.context)
 
 
 def _set_dispatch_span_success_attributes(
@@ -725,9 +742,12 @@ def _set_dispatch_span_success_attributes(
 ) -> None:
     execution_ms = max(0.0, (time.monotonic() - started_monotonic) * 1000.0)
     total_latency_ms = max(0.0, (time.time() - request.submitted_at) * 1000.0)
-    span.set_attribute("marie.llm_dispatch.status", "ok")
-    span.set_attribute("marie.llm_dispatch.execution_ms", execution_ms)
-    span.set_attribute("marie.llm_dispatch.total_latency_ms", total_latency_ms)
+    span.set_attribute(MarieSpanAttributes.LLM_DISPATCH_STATUS, "ok")
+    span.set_attribute(MarieSpanAttributes.LLM_DISPATCH_EXECUTION_MS, execution_ms)
+    span.set_attribute(
+        MarieSpanAttributes.LLM_DISPATCH_TOTAL_LATENCY_MS,
+        total_latency_ms,
+    )
     _set_completion_output_attributes(span, completion)
     _set_usage_attributes(span, completion)
     span.set_status(StatusCode.OK)
@@ -742,11 +762,14 @@ def _set_dispatch_span_error_attributes(
 ) -> None:
     execution_ms = max(0.0, (time.monotonic() - started_monotonic) * 1000.0)
     total_latency_ms = max(0.0, (time.time() - request.submitted_at) * 1000.0)
-    span.set_attribute("marie.llm_dispatch.status", "error")
-    span.set_attribute("marie.llm_dispatch.error_type", type(exc).__name__)
-    span.set_attribute("marie.llm_dispatch.error_message", str(exc))
-    span.set_attribute("marie.llm_dispatch.execution_ms", execution_ms)
-    span.set_attribute("marie.llm_dispatch.total_latency_ms", total_latency_ms)
+    span.set_attribute(MarieSpanAttributes.LLM_DISPATCH_STATUS, "error")
+    span.set_attribute(MarieSpanAttributes.LLM_DISPATCH_ERROR_TYPE, type(exc).__name__)
+    span.set_attribute(MarieSpanAttributes.LLM_DISPATCH_ERROR_MESSAGE, str(exc))
+    span.set_attribute(MarieSpanAttributes.LLM_DISPATCH_EXECUTION_MS, execution_ms)
+    span.set_attribute(
+        MarieSpanAttributes.LLM_DISPATCH_TOTAL_LATENCY_MS,
+        total_latency_ms,
+    )
     span.record_exception(exc)
     span.set_status(StatusCode.ERROR, str(exc))
 
@@ -759,7 +782,7 @@ def _set_completion_output_attributes(span, completion: Any) -> None:
 
     if extracted_text is not None:
         set_llm_io(span, output_messages=extracted_text)
-    span.set_attribute("marie.has_reasoning", reasoning_content is not None)
+    span.set_attribute(MarieSpanAttributes.HAS_REASONING, reasoning_content is not None)
 
 
 def _set_usage_attributes(span, completion: Any) -> None:

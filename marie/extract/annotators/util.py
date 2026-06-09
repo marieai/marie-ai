@@ -25,6 +25,7 @@ from qwen_vl_utils import smart_resize
 
 from marie.components.document_taxonomy.verbalizers import verbalizers
 from marie.engine import EngineLM
+from marie.engine.completion_contract import RequestContext
 from marie.engine.llm_ops import LLMCall
 from marie.engine.llm_queue.config import DEFAULT_LLM_QUEUE_POOL_ID
 from marie.engine.multimodal_ops import MultimodalLLMCall
@@ -79,9 +80,50 @@ def _extract_page_number_from_filename(filename: str) -> Optional[int]:
     # Match patterns like: frame_0001, page_1, 0001, etc.
     match = re.search(r"_?(\d+)$", base)
     if match:
-        return int(match.group(1))
+        page_number = int(match.group(1))
+        if page_number >= 1:
+            return page_number
 
     return None
+
+
+def _build_request_contexts(
+    batch_mapping: Dict[int, Tuple[Image.Image, str, str, str]],
+    request_context: Optional[RequestContext],
+) -> Optional[List[RequestContext | None]]:
+    """Expand a base request context into one context per batch item."""
+    if request_context is None:
+        return None
+
+    contexts: List[RequestContext | None] = []
+    has_context = False
+    for index in sorted(batch_mapping):
+        _, _, image_path, _ = batch_mapping[index]
+        page_number = _extract_page_number_from_filename(os.path.basename(image_path))
+
+        if (
+            request_context.ref_id
+            or request_context.ref_type
+            or page_number is not None
+            or request_context.requested_pages is not None
+        ):
+            has_context = True
+            contexts.append(
+                RequestContext(
+                    ref_id=request_context.ref_id,
+                    ref_type=request_context.ref_type,
+                    page_number=(
+                        page_number
+                        if page_number is not None
+                        else request_context.page_number
+                    ),
+                    requested_pages=request_context.requested_pages,
+                )
+            )
+        else:
+            contexts.append(None)
+
+    return contexts if has_context else None
 
 
 def load_prompt(prompt_file: str) -> str:
@@ -146,8 +188,8 @@ def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
             )
             return _engine_cache[cache_key]
 
-        api_key = os.environ.get('OPENAI_API_KEY')
-        api_base = os.environ.get('OPENAI_API_BASE')
+        api_key = os.environ.get("OPENAI_API_KEY")
+        api_base = os.environ.get("OPENAI_API_BASE")
 
         if not api_key or not api_base:
             raise ValueError("OPENAI_API_KEY and OPENAI_API_BASE must be set")
@@ -343,7 +385,8 @@ async def process_batch(
     is_multimodal: bool = False,
     expect_output: str = None,
     completion_params: Optional[Dict[str, Any]] = None,
-    metadata: Optional[Dict[str, str]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    request_context: Optional[RequestContext] = None,
 ) -> list[Any] | None:
     """
     Processes a batch of images using the specified engine.
@@ -357,6 +400,10 @@ async def process_batch(
         output_path: Directory to write output files
         is_multimodal: Whether to use multimodal LLM call
         expect_output: Expected output format ("json", "markdown", "none")
+        completion_params: Optional provider completion parameters.
+        metadata: Optional batch/span/queue metadata, such as job and pool identifiers.
+        request_context: Optional source provenance applied to each request. The
+            per-item page number is derived from each image filename when possible.
 
     Returns:
         List of converted results in original order
@@ -373,7 +420,7 @@ async def process_batch(
     else:
         llm_call = LLMCall(engine, system_prompt=system_prompt)
 
-    # Build mapping from batch index to metadata
+    # Build mapping from batch index to the image/prompt/output tuple.
     # batch is a list of tuples: (image, prompt, image_path) or (image, prompt, image_path, output_suffix)
     batch_mapping: Dict[int, Tuple[Image.Image, str, str, str]] = {}
     for i, item in enumerate(batch):
@@ -438,6 +485,12 @@ async def process_batch(
                 call_kwargs["completion_params"] = completion_params
             if metadata:
                 call_kwargs["metadata"] = metadata
+            request_contexts = _build_request_contexts(
+                batch_mapping,
+                request_context,
+            )
+            if request_contexts:
+                call_kwargs["request_contexts"] = request_contexts
 
             if is_multimodal:
                 batch_t = [[b[0], b[1]] for b in batch]
@@ -585,7 +638,7 @@ def prepare_batch_with_meta(
                 lines_by_page = decorated_lines_by_page.get(page_number - 1, [])
                 decorated_lines = []
                 for line_id, line in enumerate(lines_by_page):
-                    line_text = line['text']
+                    line_text = line["text"]
                     decorated_line = decorator(line_text, line_id + 1)
                     decorated_lines.append(decorated_line)
                 content = "\n".join(decorated_lines)
@@ -723,7 +776,7 @@ def prepare_batch_with_meta_units(
             filtered_decorated_lines = []
             for line_id, line in enumerate(lines_by_page):
                 actual_line_number = line_id + 1  # 1-indexed line number
-                line_text = line['text']
+                line_text = line["text"]
                 decorated_line = decorator(line_text, actual_line_number)
                 decorated_lines.append(decorated_line)
 
@@ -792,7 +845,8 @@ def scan_and_process_images(
     completion_params: Optional[Dict[str, Any]] = None,
     mm_processor_kwargs: Optional[Dict[str, Any]] = None,
     mini_batch_size: int = 16,
-    metadata: Optional[Dict[str, str]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    request_context: Optional[RequestContext] = None,
 ) -> None:
     """
     Synchronous wrapper for the ascan_and_process_images function.
@@ -811,9 +865,13 @@ def scan_and_process_images(
         expect_output (str): Expected output format ("json", "markdown", "none").
         context_manager: Optional ContextProviderManager for injecting context
                         into prompts and determining eligible pages.
+        completion_params: Optional provider completion parameters.
         mm_processor_kwargs: Optional dict with min_pixels/max_pixels for image preprocessing.
         mini_batch_size: Number of items per processing batch. Different annotators
                         may need different sizes depending on model memory and image complexity.
+        metadata: Optional batch/span/queue metadata, such as job and pool identifiers.
+        request_context: Optional source provenance applied to each request. The
+                        per-item page number is derived from each image filename when possible.
     Returns:
         None
     """
@@ -830,6 +888,7 @@ def scan_and_process_images(
         mm_processor_kwargs=mm_processor_kwargs,
         mini_batch_size=mini_batch_size,
         metadata=metadata,
+        request_context=request_context,
     )
 
     return run_async(coroutine)
@@ -865,7 +924,8 @@ async def ascan_and_process_images(
     completion_params: Optional[Dict[str, Any]] = None,
     mm_processor_kwargs: Optional[Dict[str, Any]] = None,
     mini_batch_size: int = 16,
-    metadata: Optional[Dict[str, str]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    request_context: Optional[RequestContext] = None,
 ) -> None:
     """
     Scans the source directory for image files, processes each image
@@ -886,8 +946,13 @@ async def ascan_and_process_images(
         expect_output: Expected output format ("json", "markdown", "none").
         context_manager: Optional ContextProviderManager for injecting context
                         into prompts and determining eligible pages.
+        completion_params: Optional provider completion parameters.
+        mm_processor_kwargs: Optional dict with min_pixels/max_pixels for image preprocessing.
         mini_batch_size: Number of items per processing batch. Different annotators
                         may need different sizes depending on model memory and image complexity.
+        metadata: Optional batch/span/queue metadata, such as job and pool identifiers.
+        request_context: Optional source provenance applied to each request. The
+                        per-item page number is derived from each image filename when possible.
     """
     if not os.path.exists(source_dir):
         raise FileNotFoundError(f"Source directory {source_dir} does not exist.")
@@ -1016,6 +1081,7 @@ async def ascan_and_process_images(
                 expect_output=expect_output,
                 completion_params=completion_params,
                 metadata=metadata,
+                request_context=request_context,
             )
 
     tasks = [asyncio.create_task(_worker(batch)) for batch in batched_items]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Optional
 
 COMPLETION_QUEUE_CONTRACT_VERSION = "v2"
@@ -25,6 +25,51 @@ def normalize_guided_json(
     return str(guided_json)
 
 
+@dataclass(frozen=True, slots=True)
+class RequestContext:
+    """Source provenance carried with one model request for tracing.
+
+    requested_pages=None means the request covers all available pages.
+    """
+
+    ref_id: str | None = None
+    ref_type: str | None = None
+    page_number: int | None = None
+    requested_pages: tuple[int, ...] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {}
+        if self.ref_id is not None:
+            data["ref_id"] = self.ref_id
+        if self.ref_type is not None:
+            data["ref_type"] = self.ref_type
+        if self.page_number is not None:
+            data["page_number"] = self.page_number
+        if self.requested_pages is not None:
+            data["requested_pages"] = list(self.requested_pages)
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "RequestContext | None":
+        if not data:
+            return None
+
+        requested_pages = data.get("requested_pages")
+        if requested_pages is not None:
+            requested_pages = tuple(int(page) for page in requested_pages)
+
+        page_number = data.get("page_number")
+        if page_number is not None:
+            page_number = int(page_number)
+
+        return cls(
+            ref_id=data.get("ref_id"),
+            ref_type=data.get("ref_type"),
+            page_number=page_number,
+            requested_pages=requested_pages,
+        )
+
+
 @dataclass
 class CompletionCallParams:
     model: str
@@ -43,6 +88,7 @@ class CompletionCallParams:
     stream_options: Optional[dict[str, Any]] = None
     extra_body: Optional[dict[str, Any]] = None
     extra_create_kwargs: dict[str, Any] = field(default_factory=dict)
+    context: RequestContext | None = None
 
     def to_create_kwargs(self) -> dict[str, Any]:
         create_kwargs = {
@@ -66,11 +112,16 @@ class CompletionCallParams:
         return {key: value for key, value in create_kwargs.items() if value is not None}
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = {item.name: getattr(self, item.name) for item in fields(self)}
+        if self.context is not None:
+            data["context"] = self.context.to_dict()
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "CompletionCallParams":
-        return cls(**data)
+        values = dict(data)
+        values["context"] = RequestContext.from_dict(values.get("context"))
+        return cls(**values)
 
 
 def build_completion_call(
@@ -85,12 +136,14 @@ def build_completion_call(
     n: int = 1,
     stream: bool = False,
     stream_options: Optional[dict[str, Any]] = None,
+    context: RequestContext | None = None,
 ) -> CompletionCallParams:
     effective = dict(default_completion_params or {})
     if completion_params:
         effective.update(completion_params)
 
     normalized_guided_json = normalize_guided_json(guided_json)
+    effective.pop("context", None)
     response_format = effective.pop("response_format", None)
     extra_body = effective.pop("extra_body", None)
     if extra_body is not None and not isinstance(extra_body, dict):
@@ -117,6 +170,7 @@ def build_completion_call(
         stream_options=effective.pop("stream_options", stream_options),
         extra_body=extra_body_dict or None,
         extra_create_kwargs=effective,
+        context=context,
     )
 
 
@@ -148,7 +202,8 @@ class QueuedCompletionEnvelope:
         return self.dispatch_profile_key or self.call.model
 
     def to_json(self) -> str:
-        data = asdict(self)
+        data = {item.name: getattr(self, item.name) for item in fields(self)}
+        data["call"] = self.call.to_dict()
         return json.dumps(data, separators=(",", ":"), sort_keys=True)
 
     @classmethod
