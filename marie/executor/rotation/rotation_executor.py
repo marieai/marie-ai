@@ -30,7 +30,7 @@ from marie.utils.asset_util import (
 )
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.network import get_ip_address
-from marie.utils.tiff_ops import merge_tiff
+from marie.utils.tiff_ops import merge_tiff_frames_ifd
 
 
 class RotationExecutor(MarieExecutor):
@@ -143,8 +143,7 @@ class RotationExecutor(MarieExecutor):
                     f"{s3_asset_path(ref_id, ref_type)}/{prefix}_prerotation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.tif",
                 )
 
-                # merge_tiff_frames(frames, os.path.join(root_asset_dir, img_name))
-                merge_tiff(
+                merge_tiff_frames_ifd(
                     os.path.join(root_asset_dir, "burst"),
                     local_img_path,
                     sort_key=lambda name: int(
