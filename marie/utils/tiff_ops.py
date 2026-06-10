@@ -5,7 +5,6 @@ import shutil
 import tempfile
 import uuid
 from concurrent.futures.thread import ThreadPoolExecutor
-from datetime import datetime
 from typing import Callable, List, Optional
 
 import cv2
@@ -256,63 +255,6 @@ def merge_tiff_frames_ifd(
         merged["ifds"].extend(part["ifds"])
 
     write_tiff(merged, str(dst_img_path), allowExisting=True)
-
-
-def merge_tiff_frames_with_splits(
-    frames: List[np.ndarray],
-    split_indices: Optional[List[int]],
-    output_dir: str,
-    filename_generator: Optional[Callable[[int], str]] = None,
-) -> List[str]:
-    """
-    Create one or more multipage TIFF files by splitting frames on start indices.
-
-    `split_indices` mark the first frame index for each subsequent TIFF.
-    Example with 10 frames and split indices [1, 6]:
-    - TIFF 0: frames[0:1]
-    - TIFF 1: frames[1:6]
-    - TIFF 2: frames[6:10]
-    """
-    if not frames:
-        raise ValueError("frames must contain at least one frame")
-
-    split_indices = split_indices or []
-    frame_count = len(frames)
-    normalized_splits = set()
-
-    for idx in split_indices:
-        if not isinstance(idx, int):
-            raise TypeError(f"split index must be int, got {type(idx).__name__}")
-        if idx < 0 or idx >= frame_count:
-            raise ValueError(f"split index {idx} out of range for {frame_count} frames")
-        if idx > 0:
-            normalized_splits.add(idx)
-
-    ordered_splits = sorted(normalized_splits)
-    chunk_starts = [0] + ordered_splits
-    chunk_ends = ordered_splits + [frame_count]
-
-    os.makedirs(output_dir, exist_ok=True)
-    filename_generator = filename_generator or (
-        lambda chunk_index: f"{chunk_index}.tif"
-    )
-
-    output_paths = []
-    for chunk_index, (start, end) in enumerate(zip(chunk_starts, chunk_ends)):
-        chunk_frames = frames[start:end]
-        if not chunk_frames:
-            continue
-
-        output_name = filename_generator(chunk_index)
-        output_path = (
-            output_name
-            if os.path.isabs(output_name)
-            else os.path.join(output_dir, output_name)
-        )
-        merge_tiff_frames(chunk_frames, output_path)
-        output_paths.append(output_path)
-
-    return output_paths
 
 
 def save_frame_as_tiff_g4(frame, output_filename):

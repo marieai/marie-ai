@@ -633,19 +633,21 @@ class TransformersDocumentLevelClassifier(BaseDocumentClassifier):
                 feature_extractor, tokenizer=self.tokenizer
             )
 
-    def predict_document_class(self, data_loader: Iterable) -> list:
+    def _predict_document_class(self, data_loader: Iterable) -> list:
         """Predict single multi-pages document class"""
         results = []
         with torch.no_grad():
             for batch in tqdm(
-                data_loader, desc="Running Inference", total=len(data_loader)
+                data_loader,
+                desc="Running Inference",
+                total=len(data_loader),
+                unit="batch",
+                delay=0.1,
+                disable=not self.progress_bar,
             ):
                 for k in batch:
                     batch[k] = batch[k].to(self.device)
                 outputs = self.model(**batch)
-
-                # probs = F.softmax(outputs, dim=1)
-                # predictions = outputs.argmax(dim=1)
 
                 probabilities = F.softmax(outputs, dim=-1).squeeze().tolist()
                 predicted_class = outputs.argmax(dim=-1)
@@ -694,7 +696,6 @@ class TransformersDocumentLevelClassifier(BaseDocumentClassifier):
             )
             batchable_doc_pages = batchable_doc_pages[: self.max_pages]
 
-        predictions = []
         dataset = DocumentClassificationInferenceDataset(
             batchable_doc_pages, self.processor
         )
@@ -707,9 +708,10 @@ class TransformersDocumentLevelClassifier(BaseDocumentClassifier):
             shuffle=False,
             num_workers=0,
             drop_last=False,
+            pin_memory=True,
         )
 
-        predictions.extend(self.predict_document_class(data_loader))
+        predictions = self._predict_document_class(data_loader)
 
         self.logger.info(f"Classification: {predictions[0]}")
         formatted_prediction = {
@@ -867,12 +869,17 @@ class TransformersSplittingClassifier(BaseDocumentClassifier):
                 feature_extractor, tokenizer=self.tokenizer
             )
 
-    def predict_document_boundaries(self, data_loader: Iterable) -> list:
+    def _predict_document_boundaries(self, data_loader: Iterable) -> list:
         """Predict boundaries between pages for single LbxID"""
         results = []
         with torch.no_grad():
             for batch in tqdm(
-                data_loader, desc="Running Inference", total=len(data_loader)
+                data_loader,
+                desc="Running Inference",
+                total=len(data_loader),
+                unit="batch",
+                delay=0.1,
+                disable=not self.progress_bar,
             ):
                 exclude_keys = {"seq_id", "general_page_idx"}
                 for k in batch:
@@ -959,9 +966,10 @@ class TransformersSplittingClassifier(BaseDocumentClassifier):
             shuffle=False,
             num_workers=0,
             drop_last=False,
+            pin_memory=True,
         )
 
-        predictions = self.predict_document_boundaries(data_loader)
+        predictions = self._predict_document_boundaries(data_loader)
 
         # We cannot split on the last page
         predictions.append(
