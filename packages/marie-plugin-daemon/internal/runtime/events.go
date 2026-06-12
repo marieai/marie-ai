@@ -2,7 +2,13 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+)
+
+var (
+	ErrInvalidEvent   = errors.New("invalid_plugin_event")
+	ErrInvalidMessage = errors.New("invalid_session_message")
 )
 
 type EventType string
@@ -37,10 +43,10 @@ type SessionMessage struct {
 func ParsePluginUniversalEvent(line []byte) (PluginUniversalEvent, error) {
 	var event PluginUniversalEvent
 	if err := json.Unmarshal(line, &event); err != nil {
-		return event, fmt.Errorf("invalid plugin event: %w", err)
+		return event, fmt.Errorf("%w: %v", ErrInvalidEvent, err)
 	}
 	if event.Event == "" {
-		return event, fmt.Errorf("invalid plugin event: missing event type")
+		return event, fmt.Errorf("%w: missing event type", ErrInvalidEvent)
 	}
 	return event, nil
 }
@@ -48,7 +54,10 @@ func ParsePluginUniversalEvent(line []byte) (PluginUniversalEvent, error) {
 func (event PluginUniversalEvent) SessionMessage() (SessionMessage, error) {
 	var message SessionMessage
 	if err := json.Unmarshal(event.Data, &message); err != nil {
-		return message, fmt.Errorf("invalid session message: %w", err)
+		return message, fmt.Errorf("%w: %v", ErrInvalidMessage, err)
+	}
+	if message.Type == "" {
+		return message, fmt.Errorf("%w: missing message type", ErrInvalidMessage)
 	}
 	return message, nil
 }
