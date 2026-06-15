@@ -1,6 +1,7 @@
 package decoder
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -61,6 +62,7 @@ func TestDecodeMarieExtensionFixture(t *testing.T) {
 		"..",
 		"..",
 		"..",
+		"..",
 		"marie-extension",
 		"tests",
 		"fixtures",
@@ -104,6 +106,53 @@ func TestDecodeZip(t *testing.T) {
 	}
 	if result.Checksum == "" {
 		t.Fatal("checksum missing")
+	}
+}
+
+func TestRejectOversizedZipEntry(t *testing.T) {
+	previousEntry, previousArchive := maxEntryBytes, maxArchiveBytes
+	maxEntryBytes, maxArchiveBytes = 1024, 4096
+	defer func() { maxEntryBytes, maxArchiveBytes = previousEntry, previousArchive }()
+
+	archive, err := ZipFixture(map[string][]byte{
+		"marie-extension.yaml": []byte(manifest),
+		"payload.bin":          bytes.Repeat([]byte{0}, 2048),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	zipPath := filepath.Join(t.TempDir(), "oversized.zip")
+	if err := os.WriteFile(zipPath, archive, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := DecodePath(zipPath); !errors.Is(err, ErrPackageTooLarge) {
+		t.Fatalf("expected package too large error, got %v", err)
+	}
+}
+
+func TestRejectOversizedArchiveTotal(t *testing.T) {
+	previousEntry, previousArchive := maxEntryBytes, maxArchiveBytes
+	maxEntryBytes, maxArchiveBytes = 4096, 4096
+	defer func() { maxEntryBytes, maxArchiveBytes = previousEntry, previousArchive }()
+
+	archive, err := ZipFixture(map[string][]byte{
+		"marie-extension.yaml": []byte(manifest),
+		"a.bin":                bytes.Repeat([]byte{0}, 3000),
+		"b.bin":                bytes.Repeat([]byte{0}, 3000),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	zipPath := filepath.Join(t.TempDir(), "oversized-total.zip")
+	if err := os.WriteFile(zipPath, archive, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := DecodePath(zipPath); !errors.Is(err, ErrPackageTooLarge) {
+		t.Fatalf("expected package too large error, got %v", err)
 	}
 }
 

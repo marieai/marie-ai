@@ -1,4 +1,4 @@
-package runtime
+package plugin_entities
 
 import (
 	"encoding/json"

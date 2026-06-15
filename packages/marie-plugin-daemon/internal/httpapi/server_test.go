@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marieai/marie-ai/packages/marie-plugin-daemon/internal/auth"
+	"github.com/marieai/marie-ai/packages/marie-plugin-daemon/internal/marie/auth"
 )
 
 func TestHealthAndDecode(t *testing.T) {

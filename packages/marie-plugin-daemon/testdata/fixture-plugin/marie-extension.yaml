@@ -1,0 +1,12 @@
+apiVersion: marie.ai/v1alpha1
+kind: ExtensionPackage
+metadata:
+  id: ext.test.fixture-echo
+  author: marie
+  name: fixture-echo
+  version: 0.0.1
+runtime:
+  type: python_source
+  language: python
+  version: "3.12"
+  entrypoint: main

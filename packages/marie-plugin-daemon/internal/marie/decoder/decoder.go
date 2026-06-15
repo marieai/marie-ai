@@ -17,7 +17,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var ErrUnsupportedPackageFormat = errors.New("unsupported package format")
+var (
+	ErrUnsupportedPackageFormat = errors.New("unsupported package format")
+	ErrPackageTooLarge          = errors.New("package_too_large")
+)
+
+// tests mutate these; keep decoder tests serial (no t.Parallel)
+var (
+	maxEntryBytes   int64 = 256 << 20
+	maxArchiveBytes int64 = 1 << 30
+)
 
 type PackageIdentity struct {
 	PackageRef string `json:"packageRef"`
@@ -131,6 +140,10 @@ func readDirectory(root string) ([]packageFile, error) {
 			return err
 		}
 		if entry.IsDir() {
+			// .venv is daemon-generated runtime state, not package content.
+			if entry.Name() == ".venv" {
+				return fs.SkipDir
+			}
 			return nil
 		}
 
@@ -156,6 +169,7 @@ func readZip(sourcePath string) ([]packageFile, error) {
 	defer reader.Close()
 
 	files := []packageFile{}
+	remaining := maxArchiveBytes
 	for _, file := range reader.File {
 		if file.FileInfo().IsDir() {
 			continue
@@ -170,7 +184,8 @@ func readZip(sourcePath string) ([]packageFile, error) {
 		if err != nil {
 			return nil, err
 		}
-		data, readErr := io.ReadAll(opened)
+		limit := min(maxEntryBytes, remaining)
+		data, readErr := io.ReadAll(io.LimitReader(opened, limit+1))
 		closeErr := opened.Close()
 		if readErr != nil {
 			return nil, readErr
@@ -178,6 +193,10 @@ func readZip(sourcePath string) ([]packageFile, error) {
 		if closeErr != nil {
 			return nil, closeErr
 		}
+		if int64(len(data)) > limit {
+			return nil, fmt.Errorf("%w: %s", ErrPackageTooLarge, name)
+		}
+		remaining -= int64(len(data))
 		files = append(files, packageFile{path: name, data: data})
 	}
 	return files, nil
