@@ -138,10 +138,11 @@ class RotationExecutor(MarieExecutor):
                 local_img_path = os.path.join(root_asset_dir, img_name)
 
                 # back up original
-                StorageManager.write(
-                    local_img_path,
-                    f"{s3_asset_path(ref_id, ref_type)}/{prefix}_prerotation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.tif",
-                )
+                if os.path.exists(local_img_path):
+                    StorageManager.write(
+                        local_img_path,
+                        f"{s3_asset_path(ref_id, ref_type)}/{prefix}_prerotation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.tif",
+                    )
 
                 merge_tiff_frames_ifd(
                     os.path.join(root_asset_dir, "burst"),
