@@ -299,6 +299,10 @@ def filter_pages_by_classifier_results(
                     in filtered_classifications
                 ]
 
+            if not result_pages:
+                # NOTE: Pages which were skipped by the classification we are filtering on will be filtered out in the result pages
+                result_pages = {i: list(int(k) for k in classification_pages.keys())}
+
             if matched_pages:
                 if method in ("include", "exclude"):
                     if not result_pages:
