@@ -720,8 +720,8 @@ sandbox:
       cidr: ''
       port: 443
 
-  # ---- Seed configuration (Waves 1–3) ------------------------------------
-  # Populated via values-sandbox.yaml; all sub-keys default to off/empty here.
+  # ---- Seed configuration (Wave 1 + Studio-orchestrated seeding) ----------
+  # Populated via values-sandbox.yaml.
   seed:
     # Name of the k8s Secret that holds the sandbox admin API key.
     # Key within the Secret is controlled by adminApiKeySecretKey below.
@@ -731,35 +731,21 @@ sandbox:
     adminApiKeySecret: ''
     adminApiKeySecretKey: 'api_key'
 
-    # Gateway HTTP service address (in-namespace cluster DNS).
-    # If empty, derived as <release-name>-server.
-    gatewayServiceName: ''
-    # HTTP port on the gateway service (matches server.service.httpPort).
-    gatewayHttpPort: 51000
+    # ---- Informational metadata read by the Studio Sandbox Service --------
+    # Blueprint + plugin seeding (Waves 2–3) is Studio-orchestrated: after
+    # Argo reports the sandbox Synced and the Wave-1 defaults Job is done,
+    # the Studio Sandbox Service calls the sandbox gateway using Studio's
+    # existing blueprint-import.service with these values.
+    # They are NOT consumed by any in-namespace Job.
 
-    # Wave-2 — blueprint install
-    blueprint:
-      # Set to true in values-sandbox.yaml when a blueprintId is provided.
-      enabled: false
-      # Blueprint slug / identifier, e.g. "ner-vlm-ocr-entity-extraction".
-      id: ''
-      # Base URL of the blueprint registry.
-      # Job GETs: <registryUrl>/<id>.blueprint
-      # Must be reachable from the sandbox namespace (add to egress allowlist
-      # if the registry is external).
-      registryUrl: ''
+    # Blueprint identifier to install after defaults, e.g.
+    # "ner-vlm-ocr-entity-extraction".  Empty = no blueprint seeding.
+    blueprintId: ''
 
-    # Wave-3 — plugin / extension install
-    plugins:
-      # Set to true in values-sandbox.yaml when plugin refs are provided.
-      enabled: false
-      # Base URL of the plugin marketplace registry.
-      # Job GETs: <registryUrl>/<packageId>/<version>.plugin
-      registryUrl: ''
-      # List of plugin ref objects from the blueprint's extension_package.
-      # Each entry must have at minimum: { packageId: "...", version: "..." }
-      # Optional fields: installMode, credentialBindings
-      refs: []
+    # Plugin refs from the blueprint's extension_package.
+    # Each entry must have at minimum: { packageId: "...", version: "..." }
+    # Read by the Studio Sandbox Service after blueprint import completes.
+    pluginRefs: []
 
 sandboxSizes:
   small:

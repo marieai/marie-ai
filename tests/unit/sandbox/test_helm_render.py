@@ -1,20 +1,23 @@
 """
-Helm render tests for the sandbox seed Jobs (Slices 1–2).
+Helm render tests for the sandbox seed-defaults Job (Slice 2).
 
-Uses ``helm template`` via subprocess to render the umbrella chart and asserts
-that the Wave-1/2/3 seed Jobs:
-  - Are present with correct names when sandbox.enabled=true + seed flags set.
-  - Carry the expected argocd.argoproj.io/sync-wave annotations.
-  - Are ordered (wave 1 < 2 < 3).
-  - Are absent when sandbox.enabled=false.
+Blueprint + plugin seeding is Studio-orchestrated (post-Argo-sync via
+Studio's blueprint-import.service), so NO blueprint/plugin seed Jobs should
+appear in the chart.
 
-Requires helm ≥ 3.x on PATH.
+Asserts:
+  - Wave-1 seed-defaults Job renders when sandbox.enabled=true.
+  - seed-defaults carries the correct argocd.argoproj.io/sync-wave and
+    helm.sh/hook-weight annotations.
+  - No blueprint or plugin seed Jobs are present in ANY render.
+  - All Jobs are absent when sandbox.enabled=false.
+
+Requires helm >= 3.x on PATH.
 """
 
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +25,7 @@ import pytest
 import yaml
 
 # Absolute path to the umbrella chart directory.
-# __file__ is tests/unit/sandbox/test_helm_render.py → parents[3] = project root.
+# __file__ is tests/unit/sandbox/test_helm_render.py -> parents[3] = project root.
 _CHART_DIR = str(
     Path(__file__).resolve().parents[3]
     / 'deploy'
@@ -33,7 +36,7 @@ _CHART_DIR = str(
 
 
 def _render(extra_sets: list[str] | None = None) -> list[dict[str, Any]]:
-    """Run ``helm template`` and return parsed YAML documents."""
+    """Run helm template and return parsed YAML documents."""
     cmd = [
         'helm',
         'template',
@@ -59,242 +62,125 @@ def _jobs(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [d for d in docs if d.get('kind') == 'Job']
 
 
-def _job_by_name(docs: list[dict[str, Any]], name_suffix: str) -> dict[str, Any] | None:
+def _job_by_name_suffix(docs: list[dict[str, Any]], suffix: str) -> dict[str, Any] | None:
     for j in _jobs(docs):
-        if j.get('metadata', {}).get('name', '').endswith(name_suffix):
+        if j.get('metadata', {}).get('name', '').endswith(suffix):
             return j
     return None
 
 
 def _sync_wave(job: dict[str, Any]) -> int:
-    annotations = job.get('metadata', {}).get('annotations', {})
-    wave_str = annotations.get('argocd.argoproj.io/sync-wave', '')
-    return int(wave_str) if wave_str else -1
+    return int(
+        job.get('metadata', {}).get('annotations', {}).get(
+            'argocd.argoproj.io/sync-wave', '-1'
+        )
+    )
 
 
 def _hook_weight(job: dict[str, Any]) -> int:
-    annotations = job.get('metadata', {}).get('annotations', {})
-    weight_str = annotations.get('helm.sh/hook-weight', '')
-    return int(weight_str) if weight_str else -1
+    return int(
+        job.get('metadata', {}).get('annotations', {}).get('helm.sh/hook-weight', '-1')
+    )
 
 
 # ============================================================== test cases ===
 
 
 class TestWave1DefaultsJob:
-    """Wave-1 seed-defaults Job appears when sandbox.enabled=true."""
+    """Wave-1 seed-defaults Job is the only seed Job in the chart."""
 
-    def test_job_present_when_sandbox_enabled(self):
+    def test_present_when_sandbox_enabled(self):
         docs = _render()
-        job = _job_by_name(docs, '-sandbox-seed-defaults')
-        assert job is not None, 'Wave-1 seed-defaults Job must be rendered'
+        job = _job_by_name_suffix(docs, '-sandbox-seed-defaults')
+        assert job is not None, 'sandbox-seed-defaults Job must render when sandbox.enabled=true'
 
     def test_sync_wave_is_1(self):
         docs = _render()
-        job = _job_by_name(docs, '-sandbox-seed-defaults')
+        job = _job_by_name_suffix(docs, '-sandbox-seed-defaults')
         assert _sync_wave(job) == 1
 
     def test_hook_weight_is_1(self):
         docs = _render()
-        job = _job_by_name(docs, '-sandbox-seed-defaults')
+        job = _job_by_name_suffix(docs, '-sandbox-seed-defaults')
         assert _hook_weight(job) == 1
 
-    def test_command_is_seed(self):
+    def test_command_invokes_seed(self):
         docs = _render()
-        job = _job_by_name(docs, '-sandbox-seed-defaults')
-        containers = job['spec']['template']['spec']['containers']
-        cmd = containers[0]['command']
+        job = _job_by_name_suffix(docs, '-sandbox-seed-defaults')
+        cmd = job['spec']['template']['spec']['containers'][0]['command']
         assert 'seed' in cmd
 
     def test_absent_when_sandbox_disabled(self):
         cmd = [
-            'helm',
-            'template',
-            'sbx-test',
-            _CHART_DIR,
-            '--set',
-            'sandbox.enabled=false',
+            'helm', 'template', 'sbx-test', _CHART_DIR,
+            '--set', 'sandbox.enabled=false',
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
             pytest.fail(f'helm template failed:\n{result.stderr}')
-        docs = list(yaml.safe_load_all(result.stdout))
-        docs = [d for d in docs if d is not None]
-        job = _job_by_name(docs, '-sandbox-seed-defaults')
-        assert job is None, 'Wave-1 Job must NOT be rendered when sandbox.enabled=false'
+        docs = [d for d in yaml.safe_load_all(result.stdout) if d]
+        assert _job_by_name_suffix(docs, '-sandbox-seed-defaults') is None
 
 
-class TestWave2BlueprintJob:
-    """Wave-2 seed-blueprint Job gated on blueprint.enabled=true."""
+class TestNoBlueprintOrPluginJobs:
+    """Blueprint and plugin Jobs must not appear -- seeding is Studio-orchestrated."""
 
-    def test_absent_when_blueprint_disabled(self):
-        docs = _render()  # blueprint.enabled defaults to false
-        job = _job_by_name(docs, '-sandbox-seed-blueprint')
-        assert job is None, 'Wave-2 Job must be absent when blueprint.enabled=false'
-
-    def test_present_when_blueprint_enabled(self):
-        docs = _render([
-            'sandbox.seed.blueprint.enabled=true',
-            'sandbox.seed.blueprint.id=test-bp',
-            'sandbox.seed.blueprint.registryUrl=https://reg.example.com',
-            'sandbox.seed.adminApiKeySecret=sbx-test-admin',
-        ])
-        job = _job_by_name(docs, '-sandbox-seed-blueprint')
-        assert job is not None, 'Wave-2 seed-blueprint Job must be rendered'
-
-    def test_sync_wave_is_2(self):
-        docs = _render([
-            'sandbox.seed.blueprint.enabled=true',
-            'sandbox.seed.blueprint.id=test-bp',
-            'sandbox.seed.blueprint.registryUrl=https://reg.example.com',
-            'sandbox.seed.adminApiKeySecret=sbx-test-admin',
-        ])
-        job = _job_by_name(docs, '-sandbox-seed-blueprint')
-        assert _sync_wave(job) == 2
-
-    def test_hook_weight_is_2(self):
-        docs = _render([
-            'sandbox.seed.blueprint.enabled=true',
-            'sandbox.seed.blueprint.id=test-bp',
-            'sandbox.seed.blueprint.registryUrl=https://reg.example.com',
-            'sandbox.seed.adminApiKeySecret=sbx-test-admin',
-        ])
-        job = _job_by_name(docs, '-sandbox-seed-blueprint')
-        assert _hook_weight(job) == 2
-
-    def test_command_is_install_blueprint(self):
-        docs = _render([
-            'sandbox.seed.blueprint.enabled=true',
-            'sandbox.seed.blueprint.id=test-bp',
-            'sandbox.seed.blueprint.registryUrl=https://reg.example.com',
-            'sandbox.seed.adminApiKeySecret=sbx-test-admin',
-        ])
-        job = _job_by_name(docs, '-sandbox-seed-blueprint')
-        containers = job['spec']['template']['spec']['containers']
-        cmd = containers[0]['command']
-        assert 'install-blueprint' in cmd
-
-    def test_gateway_url_env_var_set(self):
-        docs = _render([
-            'sandbox.seed.blueprint.enabled=true',
-            'sandbox.seed.blueprint.id=test-bp',
-            'sandbox.seed.blueprint.registryUrl=https://reg.example.com',
-            'sandbox.seed.adminApiKeySecret=sbx-test-admin',
-        ])
-        job = _job_by_name(docs, '-sandbox-seed-blueprint')
-        containers = job['spec']['template']['spec']['containers']
-        env = {e['name']: e for e in containers[0]['env']}
-        assert 'SANDBOX_GATEWAY_URL' in env
-        # Should reference the in-namespace server service
-        gw = env['SANDBOX_GATEWAY_URL']['value']
-        assert 'sbx-test-server' in gw
-
-    def test_absent_when_sandbox_disabled(self):
-        cmd = [
-            'helm',
-            'template',
-            'sbx-test',
-            _CHART_DIR,
-            '--set',
-            'sandbox.enabled=false',
-            '--set',
-            'sandbox.seed.blueprint.enabled=true',
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        docs = list(yaml.safe_load_all(result.stdout))
-        docs = [d for d in docs if d is not None]
-        job = _job_by_name(docs, '-sandbox-seed-blueprint')
-        assert job is None
-
-
-class TestWave3PluginsJob:
-    """Wave-3 seed-plugins Job gated on plugins.enabled=true."""
-
-    _SETS = [
-        'sandbox.seed.plugins.enabled=true',
-        'sandbox.seed.plugins.registryUrl=https://plugins.example.com',
-        'sandbox.seed.adminApiKeySecret=sbx-test-admin',
-    ]
-
-    def test_absent_when_plugins_disabled(self):
+    def test_no_seed_blueprint_job(self):
         docs = _render()
-        job = _job_by_name(docs, '-sandbox-seed-plugins')
-        assert job is None
+        job = _job_by_name_suffix(docs, '-sandbox-seed-blueprint')
+        assert job is None, (
+            'sandbox-seed-blueprint Job must NOT render; '
+            'blueprint seeding is done by the Studio Sandbox Service post-sync'
+        )
 
-    def test_present_when_plugins_enabled(self):
-        docs = _render(self._SETS)
-        job = _job_by_name(docs, '-sandbox-seed-plugins')
-        assert job is not None
+    def test_no_seed_plugins_job(self):
+        docs = _render()
+        job = _job_by_name_suffix(docs, '-sandbox-seed-plugins')
+        assert job is None, (
+            'sandbox-seed-plugins Job must NOT render; '
+            'plugin seeding is done by the Studio Sandbox Service post-sync'
+        )
 
-    def test_sync_wave_is_3(self):
-        docs = _render(self._SETS)
-        job = _job_by_name(docs, '-sandbox-seed-plugins')
-        assert _sync_wave(job) == 3
-
-    def test_hook_weight_is_3(self):
-        docs = _render(self._SETS)
-        job = _job_by_name(docs, '-sandbox-seed-plugins')
-        assert _hook_weight(job) == 3
-
-    def test_command_is_install_plugins(self):
-        docs = _render(self._SETS)
-        job = _job_by_name(docs, '-sandbox-seed-plugins')
-        containers = job['spec']['template']['spec']['containers']
-        cmd = containers[0]['command']
-        assert 'install-plugins' in cmd
-
-    def test_absent_when_sandbox_disabled(self):
-        cmd = [
-            'helm',
-            'template',
-            'sbx-test',
-            _CHART_DIR,
-            '--set',
-            'sandbox.enabled=false',
-            '--set',
-            'sandbox.seed.plugins.enabled=true',
+    def test_exactly_one_sandbox_seed_job_total(self):
+        """Exactly one sandbox-seed Job (defaults) renders, nothing else."""
+        docs = _render()
+        sandbox_seed_jobs = [
+            j
+            for j in _jobs(docs)
+            if 'sandbox-seed' in j.get('metadata', {}).get('name', '')
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        docs = list(yaml.safe_load_all(result.stdout))
-        docs = [d for d in docs if d is not None]
-        job = _job_by_name(docs, '-sandbox-seed-plugins')
-        assert job is None
+        names = [j['metadata']['name'] for j in sandbox_seed_jobs]
+        assert len(sandbox_seed_jobs) == 1, (
+            f'Expected exactly 1 sandbox-seed Job, found {len(sandbox_seed_jobs)}: {names}'
+        )
 
 
-class TestWaveOrdering:
-    """Verify wave-1 < wave-2 < wave-3 across all three Jobs rendered together."""
+class TestInformationalSeedMetadata:
+    """Setting blueprintId / pluginRefs must not break rendering."""
 
-    def test_sync_waves_are_strictly_ordered(self):
+    def test_blueprint_id_renders_without_error(self):
+        docs = _render(['sandbox.seed.blueprintId=ner-vlm-ocr-entity-extraction'])
+        assert docs
+
+    def test_plugin_refs_render_without_error(self):
         docs = _render([
-            'sandbox.seed.blueprint.enabled=true',
-            'sandbox.seed.blueprint.id=test-bp',
-            'sandbox.seed.blueprint.registryUrl=https://reg.example.com',
-            'sandbox.seed.plugins.enabled=true',
-            'sandbox.seed.plugins.registryUrl=https://plugins.example.com',
-            'sandbox.seed.adminApiKeySecret=sbx-test-admin',
+            r'sandbox.seed.pluginRefs[0].packageId=connector.ocr-engine',
+            r'sandbox.seed.pluginRefs[0].version=2.1.0',
         ])
-        w1 = _sync_wave(_job_by_name(docs, '-sandbox-seed-defaults'))
-        w2 = _sync_wave(_job_by_name(docs, '-sandbox-seed-blueprint'))
-        w3 = _sync_wave(_job_by_name(docs, '-sandbox-seed-plugins'))
-        assert w1 < w2 < w3, f'Expected wave ordering 1<2<3, got {w1}<{w2}<{w3}'
+        assert docs
 
-    def test_hook_weights_are_strictly_ordered(self):
-        docs = _render([
-            'sandbox.seed.blueprint.enabled=true',
-            'sandbox.seed.blueprint.id=test-bp',
-            'sandbox.seed.blueprint.registryUrl=https://reg.example.com',
-            'sandbox.seed.plugins.enabled=true',
-            'sandbox.seed.plugins.registryUrl=https://plugins.example.com',
-            'sandbox.seed.adminApiKeySecret=sbx-test-admin',
-        ])
-        h1 = _hook_weight(_job_by_name(docs, '-sandbox-seed-defaults'))
-        h2 = _hook_weight(_job_by_name(docs, '-sandbox-seed-blueprint'))
-        h3 = _hook_weight(_job_by_name(docs, '-sandbox-seed-plugins'))
-        assert h1 < h2 < h3, f'Expected hook weight ordering 1<2<3, got {h1}<{h2}<{h3}'
+    def test_blueprint_id_does_not_produce_extra_jobs(self):
+        docs = _render(['sandbox.seed.blueprintId=some-bp'])
+        sandbox_seed_jobs = [
+            j
+            for j in _jobs(docs)
+            if 'sandbox-seed' in j.get('metadata', {}).get('name', '')
+        ]
+        assert len(sandbox_seed_jobs) == 1
 
 
 class TestHelmLint:
-    """The chart must pass helm lint after Slice-2 additions."""
+    """Chart must pass helm lint after Slice-2 rework."""
 
     def test_helm_lint_passes(self):
         result = subprocess.run(
