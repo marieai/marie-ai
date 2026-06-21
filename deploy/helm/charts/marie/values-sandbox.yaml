@@ -95,6 +95,96 @@ sandbox:
     #       version: "1.4.2"
     pluginRefs: []
 
+  # ---- Secret delivery via External Secrets Operator (Slice 6) -----------
+  #
+  # ESO API: external-secrets.io/v1  (requires ESO v0.10+ on the cluster)
+  # Alternatives (documented, not implemented): Sealed Secrets, SOPS + Argo plugin.
+  #
+  # The chart template (sandbox-secrets.yaml) renders one ExternalSecret CRD per
+  # configured entry when both sandbox.enabled=true and sandbox.secrets.enabled=true.
+  # Argo CD applies these alongside the rest of the chart resources.
+  #
+  # STUDIO RENDERER CONTRACT — values that sandbox-renderer.ts MUST emit in
+  # sandboxes/<ns>/values.yaml for each sandbox:
+  #
+  #   sandbox.secrets.storeRef.name         — ClusterSecretStore name provisioned
+  #                                            by the platform operator.
+  #   sandbox.secrets.storeRef.kind         — ClusterSecretStore (default) or SecretStore.
+  #   sandbox.secrets.secrets.adminApiKey.remoteKey
+  #       Path in the remote store for this sandbox's admin API key.
+  #       Convention: "sandboxes/<namespace>/admin"
+  #   sandbox.secrets.secrets.dbPassword.remoteKey
+  #       Path for the dedicated PostgreSQL password.
+  #       Convention: "sandboxes/<namespace>/db"
+  #   sandbox.secrets.secrets.storageCredentials.remoteKey
+  #       Path for MinIO access-key + secret-key (stored as a JSON map).
+  #       Convention: "sandboxes/<namespace>/storage"
+  #   sandbox.secrets.secrets.runnerSecret.remoteKey
+  #       Path for the runner registration token.
+  #       Convention: "sandboxes/<namespace>/runner"
+  #
+  # Values the renderer MUST NOT set (chart supplies defaults):
+  #   secretName  — defaults to <fullname>-sandbox-{admin|db|storage|runner}
+  #   property    — defaults to api_key / password / access-key,secret-key / token
+  #   refreshInterval — defaults to "1h"
+  secrets:
+    enabled: true
+
+    storeRef:
+      # STUDIO RENDERER MUST POPULATE.  The ClusterSecretStore named here must be
+      # pre-provisioned on the cluster before sandboxes are created.
+      name: "marie-sandbox-secrets"
+      kind: ClusterSecretStore
+
+    refreshInterval: "1h"
+
+    secrets:
+      adminApiKey:
+        # Produced Secret name MUST match sandbox.seed.adminApiKeySecret default
+        # (<fullname>-sandbox-admin) so the Wave-1 seed-defaults Job finds it.
+        # Override only when also overriding sandbox.seed.adminApiKeySecret.
+        secretName: ""
+        # STUDIO RENDERER MUST SET per sandbox.
+        # Example: "sandboxes/sbx-<orgId>-<shortId>/admin"
+        remoteKey: ""
+        property: api_key
+
+      dbPassword:
+        # Subchart seam: the Studio renderer must also add to values.yaml:
+        #   postgresql.auth.existingSecret: <secretName>   (default: <fullname>-sandbox-db)
+        #   postgresql.auth.secretKeys.userPasswordKey: password
+        secretName: ""
+        # STUDIO RENDERER MUST SET per sandbox.
+        # Example: "sandboxes/sbx-<orgId>-<shortId>/db"
+        remoteKey: ""
+        property: password
+
+      storageCredentials:
+        # Subchart seam: the Studio renderer must also add to values.yaml:
+        #   minio.auth.existingSecret: <secretName>   (default: <fullname>-sandbox-storage)
+        # The remote secret must expose fields "access-key" and "secret-key".
+        secretName: ""
+        # STUDIO RENDERER MUST SET per sandbox.
+        # Example: "sandboxes/sbx-<orgId>-<shortId>/storage"
+        remoteKey: ""
+        accessKeyProperty: access-key
+        secretKeyProperty: secret-key
+
+      runnerSecret:
+        # Subchart seam: the Studio renderer must reference this Secret in the
+        # executor pool env, e.g.:
+        #   executor.pools[*].env:
+        #     - name: RUNNER_REGISTRATION_TOKEN
+        #       valueFrom:
+        #         secretKeyRef:
+        #           name: <secretName>   (default: <fullname>-sandbox-runner)
+        #           key: token
+        secretName: ""
+        # STUDIO RENDERER MUST SET per sandbox.
+        # Example: "sandboxes/sbx-<orgId>-<shortId>/runner"
+        remoteKey: ""
+        property: token
+
 # ----------------------------------------------------------------
 # Sizing presets — values overridden by sandbox-governance template
 # based on sandbox.size.  Not referenced directly by sub-charts;
