@@ -1,0 +1,171 @@
+{{/*
+Sandbox governance objects — rendered only when sandbox.enabled=true.
+
+Includes:
+  - Namespace labels for Pod Security Admission (restricted profile)
+  - ResourceQuota driven by sandbox.size preset
+  - LimitRange with sane defaults/ceilings
+  - Default-deny NetworkPolicy: allows intra-namespace + ingress-controller
+    ingress, DNS egress, and optional egress allowlist entries.
+*/}}
+{{- if .Values.sandbox.enabled }}
+
+{{/* ----------------------------------------------------------------
+  Namespace — PSA labels applied via a Namespace resource so Helm can
+  manage them.  Helm reconciles (but does not delete) Namespace objects
+  by default when --create-namespace is used.
+  PSA profile: restricted (no host paths, no privileged, non-root).
+---------------------------------------------------------------- */}}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Release.Namespace }}
+  labels:
+    {{- include "marie.labels" . | nindent 4 }}
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    marie.ai/sandbox: "true"
+    marie.ai/sandbox-size: {{ .Values.sandbox.size | quote }}
+
+---
+{{/* ----------------------------------------------------------------
+  ResourceQuota — hard caps on CPU/memory/pods/PVCs/storage.
+  Size preset is looked up from sandboxSizes.<tier>.quota.
+---------------------------------------------------------------- */}}
+{{- $size   := .Values.sandbox.size | default "small" }}
+{{- $preset := index .Values.sandboxSizes $size }}
+{{- if not $preset }}
+  {{- fail (printf "sandbox.size '%s' is not defined in sandboxSizes" $size) }}
+{{- end }}
+{{- $quota  := $preset.quota }}
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "marie.fullname" . }}-sandbox-quota
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marie.labels" . | nindent 4 }}
+spec:
+  hard:
+    requests.cpu: {{ $quota.cpu | quote }}
+    requests.memory: {{ $quota.memory | quote }}
+    limits.cpu: {{ $quota.cpu | quote }}
+    limits.memory: {{ $quota.memory | quote }}
+    pods: {{ $quota.pods | quote }}
+    persistentvolumeclaims: {{ $quota.pvcs | quote }}
+    requests.storage: {{ $quota.storage | quote }}
+
+---
+{{/* ----------------------------------------------------------------
+  LimitRange — default requests/limits so unconfigured pods can't
+  grab unbounded resources; also provides a per-container ceiling.
+---------------------------------------------------------------- */}}
+{{- $lim := $preset.limits }}
+
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: {{ include "marie.fullname" . }}-sandbox-limits
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marie.labels" . | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: {{ $lim.defaultCpu | quote }}
+        memory: {{ $lim.defaultMemory | quote }}
+      defaultRequest:
+        cpu: {{ $lim.defaultRequestCpu | quote }}
+        memory: {{ $lim.defaultRequestMemory | quote }}
+      max:
+        cpu: {{ $lim.maxCpu | quote }}
+        memory: {{ $lim.maxMemory | quote }}
+
+---
+{{/* ----------------------------------------------------------------
+  NetworkPolicy — default-deny with explicit allowances:
+    Ingress:
+      - intra-namespace (all pods in this namespace can talk to each other)
+      - ingress-controller namespace (standard nginx label)
+    Egress:
+      - intra-namespace
+      - kube-dns / CoreDNS (UDP+TCP 53)
+      - optional: plugin registry CIDR
+      - optional: external LLM gateway CIDR
+---------------------------------------------------------------- */}}
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "marie.fullname" . }}-sandbox-default-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marie.labels" . | nindent 4 }}
+spec:
+  podSelector: {}   # applies to ALL pods in the namespace
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Allow all traffic between pods in the same sandbox namespace
+    - from:
+        - podSelector: {}
+
+    # Allow ingress from the ingress controller (nginx)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+
+  egress:
+    # Allow all traffic between pods in the same sandbox namespace
+    - to:
+        - podSelector: {}
+
+    # Allow DNS resolution (CoreDNS in kube-system, UDP+TCP port 53)
+    {{- if .Values.sandbox.egress.dns.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.sandbox.egress.dns.clusterDnsCidr | quote }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+
+    {{/* Optional: plugin marketplace / registry */}}
+    {{- if and .Values.sandbox.egress.pluginRegistry.enabled .Values.sandbox.egress.pluginRegistry.cidr }}
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.sandbox.egress.pluginRegistry.cidr | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.sandbox.egress.pluginRegistry.port }}
+    {{- end }}
+
+    {{/* Optional: external LLM gateway */}}
+    {{- if and .Values.sandbox.egress.llmGateway.enabled .Values.sandbox.egress.llmGateway.cidr }}
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.sandbox.egress.llmGateway.cidr | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.sandbox.egress.llmGateway.port }}
+    {{- end }}
+
+{{- end }}{{/* sandbox.enabled */}}

@@ -696,6 +696,75 @@ security:
     selfSigned: false
 
 # -----------------------------------------------------------------------------
+# Sandbox Configuration
+# Governance objects (ResourceQuota, LimitRange, NetworkPolicy, Namespace PSA
+# labels) are rendered only when sandbox.enabled=true.  Use values-sandbox.yaml
+# as the overlay; this section only carries the off-by-default flag and the
+# sizing presets referenced by the governance template.
+# -----------------------------------------------------------------------------
+sandbox:
+  # Set to true via values-sandbox.yaml overlay (never in production values).
+  enabled: false
+  host: ''
+  size: small
+  egress:
+    dns:
+      enabled: true
+      clusterDnsCidr: '10.96.0.0/12'
+    pluginRegistry:
+      enabled: false
+      cidr: ''
+      port: 443
+    llmGateway:
+      enabled: false
+      cidr: ''
+      port: 443
+
+sandboxSizes:
+  small:
+    quota:
+      cpu: '8'
+      memory: 16Gi
+      pods: '20'
+      pvcs: '8'
+      storage: 100Gi
+    limits:
+      defaultCpu: '500m'
+      defaultMemory: 512Mi
+      defaultRequestCpu: '100m'
+      defaultRequestMemory: 128Mi
+      maxCpu: '4'
+      maxMemory: 8Gi
+  medium:
+    quota:
+      cpu: '24'
+      memory: 48Gi
+      pods: '40'
+      pvcs: '12'
+      storage: 300Gi
+    limits:
+      defaultCpu: '1'
+      defaultMemory: 1Gi
+      defaultRequestCpu: '200m'
+      defaultRequestMemory: 256Mi
+      maxCpu: '8'
+      maxMemory: 16Gi
+  large:
+    quota:
+      cpu: '64'
+      memory: 128Gi
+      pods: '80'
+      pvcs: '20'
+      storage: 1Ti
+    limits:
+      defaultCpu: '2'
+      defaultMemory: 2Gi
+      defaultRequestCpu: '500m'
+      defaultRequestMemory: 512Mi
+      maxCpu: '16'
+      maxMemory: 32Gi
+
+# -----------------------------------------------------------------------------
 # ServiceAccount Configuration
 # -----------------------------------------------------------------------------
 serviceAccount:

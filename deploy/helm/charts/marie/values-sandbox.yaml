@@ -1,0 +1,208 @@
+# Marie-AI Helm Chart — Sandbox Values Overlay
+#
+# This overlay renders a full Marie system into an isolated sandbox namespace.
+# Apply on top of values.yaml (and optionally values-local.yaml or values-production.yaml):
+#
+#   helm install sbx-<id> . \
+#     -f values.yaml \
+#     -f values-sandbox.yaml \
+#     -n sbx-<id> --create-namespace \
+#     --set sandbox.host=<id>.sbx.example.com \
+#     --set sandbox.size=small
+#
+# Sizing tiers (sandbox.size):
+#   small   — demos / ephemeral previews
+#   medium  — short-lived team sandboxes
+#   large   — load-test / full-featured evaluation
+#
+# Each tier maps to the ResourceQuota + LimitRange values in the
+# sandbox-governance.yaml template.
+
+# ----------------------------------------------------------------
+# Sandbox identity — required overrides per sandbox instance
+# ----------------------------------------------------------------
+sandbox:
+  # Gate: renders governance objects (ResourceQuota, LimitRange,
+  # NetworkPolicy, Namespace labels) and activates sandbox-specific
+  # sizing and ingress defaults.
+  enabled: true
+
+  # Per-sandbox ingress hostname. Each sandbox gets its own subdomain.
+  # Example: a1b2.sbx.example.com
+  # Override at install time: --set sandbox.host=<id>.sbx.example.com
+  host: ""
+
+  # Sizing tier: small | medium | large
+  # Drives ResourceQuota + LimitRange values applied to the namespace.
+  size: small
+
+  # Egress allowlist — CIDRs or service-name annotations reachable from
+  # sandbox pods beyond intra-namespace and ingress-controller traffic.
+  # Add plugin marketplace and LLM gateway endpoints here.
+  egress:
+    # DNS (kube-dns / CoreDNS) — always needed; matches kube-system 53/UDP+TCP
+    dns:
+      enabled: true
+      # CoreDNS CIDR — override to match your cluster's kube-dns Service IP.
+      # Use: kubectl get svc -n kube-system kube-dns -o jsonpath='{.spec.clusterIP}'
+      clusterDnsCidr: '10.96.0.0/12'
+
+    # External plugin marketplace / registry reachable from sandbox executors.
+    # Set to the cluster-internal Service IP or an external CIDR range.
+    pluginRegistry:
+      enabled: false
+      cidr: ''
+      port: 443
+
+    # External LLM gateway (if not served cluster-internally).
+    llmGateway:
+      enabled: false
+      cidr: ''
+      port: 443
+
+# ----------------------------------------------------------------
+# Sizing presets — values overridden by sandbox-governance template
+# based on sandbox.size.  Not referenced directly by sub-charts;
+# the governance template reads these to build ResourceQuota +
+# LimitRange objects.
+# ----------------------------------------------------------------
+sandboxSizes:
+  small:
+    quota:
+      cpu: '8'
+      memory: 16Gi
+      pods: '20'
+      pvcs: '8'
+      storage: 100Gi
+    limits:
+      defaultCpu: '500m'
+      defaultMemory: 512Mi
+      defaultRequestCpu: '100m'
+      defaultRequestMemory: 128Mi
+      maxCpu: '4'
+      maxMemory: 8Gi
+
+  medium:
+    quota:
+      cpu: '24'
+      memory: 48Gi
+      pods: '40'
+      pvcs: '12'
+      storage: 300Gi
+    limits:
+      defaultCpu: '1'
+      defaultMemory: 1Gi
+      defaultRequestCpu: '200m'
+      defaultRequestMemory: 256Mi
+      maxCpu: '8'
+      maxMemory: 16Gi
+
+  large:
+    quota:
+      cpu: '64'
+      memory: 128Gi
+      pods: '80'
+      pvcs: '20'
+      storage: 1Ti
+    limits:
+      defaultCpu: '2'
+      defaultMemory: 2Gi
+      defaultRequestCpu: '500m'
+      defaultRequestMemory: 512Mi
+      maxCpu: '16'
+      maxMemory: 32Gi
+
+# ----------------------------------------------------------------
+# Server — sandbox-sized ingress override
+# ----------------------------------------------------------------
+server:
+  enabled: true
+  replicas: 1
+
+  resources:
+    requests:
+      cpu: '500m'
+      memory: 1Gi
+    limits:
+      cpu: '2'
+      memory: 4Gi
+
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: 128m
+    hosts:
+      - host: ''   # populated at install time via --set sandbox.host=...
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+# ----------------------------------------------------------------
+# Executor — single small CPU pool; GPU disabled for sandboxes by default
+# ----------------------------------------------------------------
+executor:
+  enabled: true
+  pools:
+    - name: cpu-sandbox
+      enabled: true
+      replicas: 1
+      gpu: false
+      resources:
+        requests:
+          cpu: '500m'
+          memory: 1Gi
+        limits:
+          cpu: '2'
+          memory: 4Gi
+      env: []
+
+    - name: gpu-ocr
+      enabled: false
+
+# ----------------------------------------------------------------
+# Stateful deps — small persistence for sandboxes
+# ----------------------------------------------------------------
+postgresql:
+  primary:
+    persistence:
+      size: 5Gi
+
+minio:
+  persistence:
+    size: 5Gi
+
+rabbitmq:
+  persistence:
+    size: 2Gi
+
+valkey:
+  persistence:
+    size: 1Gi
+
+etcd:
+  persistence:
+    size: 1Gi
+
+clickhouse:
+  enabled: false
+
+gitea:
+  enabled: false
+
+# ----------------------------------------------------------------
+# Observability — minimal for sandboxes
+# ----------------------------------------------------------------
+observability:
+  prometheus:
+    enabled: false
+    serviceMonitor:
+      enabled: false
+  grafana:
+    dashboards:
+      enabled: false
+  jaeger:
+    enabled: false
+  otel:
+    enabled: false
