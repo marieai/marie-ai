@@ -1,0 +1,92 @@
+{{/*
+Sandbox Wave-1 seed-defaults Job.
+
+Seeds a freshly provisioned sandbox with the minimum defaults needed to make
+the system operational: default org, workspace, admin user, and admin API key.
+
+Implements the Wave-1 step of the seed pipeline defined in:
+  analysis/sandbox/04-seeding-blueprints.md § Wave 1 — Defaults seed
+
+Ordering:
+  argocd.argoproj.io/sync-wave: "1"   — after Wave-0 infra (deps up + migrations)
+  helm.sh/hook-weight: "1"            — plainHelminstalls without Argo
+
+Entrypoint:  python -m marie.sandbox seed
+Source:      marie/sandbox/seed.py
+
+Rendered only when sandbox.enabled=true.
+*/}}
+{{- if .Values.sandbox.enabled }}
+
+{{- $fullname := include "marie.fullname" . }}
+{{- $adminSecret := .Values.sandbox.seed.adminApiKeySecret | default (printf "%s-sandbox-admin" $fullname) }}
+{{- $adminKey    := .Values.sandbox.seed.adminApiKeySecretKey | default "api_key" }}
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-sandbox-seed-defaults
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marie.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-seed-defaults
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "marie.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: sandbox-seed-defaults
+    spec:
+      restartPolicy: OnFailure
+      {{- include "marie.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: seed-defaults
+          image: {{ include "marie.image" . }}
+          imagePullPolicy: {{ .Values.marie.image.pullPolicy }}
+          command:
+            - python
+            - -m
+            - marie.sandbox
+            - seed
+          env:
+            # Database connection — seed.py reads POSTGRES_* env vars
+            - name: POSTGRES_HOSTNAME
+              value: {{ include "marie.postgresql.host" . | quote }}
+            - name: POSTGRES_PORT
+              value: {{ include "marie.postgresql.port" . | quote }}
+            - name: POSTGRES_DB
+              value: {{ include "marie.postgresql.database" . | quote }}
+            - name: POSTGRES_USER
+              {{- if .Values.postgresql.enabled }}
+              value: {{ .Values.postgresql.auth.username | quote }}
+              {{- else }}
+              value: {{ .Values.postgresql.external.username | quote }}
+              {{- end }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "marie.postgresql.secretName" . }}
+                  key: {{ if .Values.postgresql.enabled }}password{{ else }}{{ .Values.postgresql.external.existingSecretPasswordKey }}{{ end }}
+            # Admin API key — optional; seed generates a random key when absent.
+            # Pre-create this Secret before install (Slice 6 automates via ESO/Sealed/SOPS).
+            - name: SANDBOX_ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $adminSecret }}
+                  key: {{ $adminKey }}
+                  optional: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+{{- end }}{{/* sandbox.enabled */}}
