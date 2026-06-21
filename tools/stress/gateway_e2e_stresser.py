@@ -77,7 +77,17 @@ DEFAULT_EXTENSIONS = (
     ".pdf",
 )
 
+MARIE_GENERATED_ARTIFACT_DIRS = {
+    "agent-output",
+    "assets",
+    "burst",
+    "clean",
+    "frames",
+    "pdf",
+}
+
 MOCK_FAILURE_MODES = ("exception", "timeout", "random")
+REDACTED_SECRET = "<redacted>"
 
 
 def _parse_duration_seconds(duration_str: str) -> float:
@@ -130,6 +140,57 @@ def _render_template_value(value: Any, template_vars: Dict[str, str]) -> Any:
     return value
 
 
+def _redact_secret_value(value: Any, secret: str) -> Any:
+    if not secret:
+        return value
+    if isinstance(value, dict):
+        return {key: _redact_secret_value(item, secret) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_secret_value(item, secret) for item in value]
+    if isinstance(value, str):
+        return value.replace(secret, REDACTED_SECRET)
+    return value
+
+
+def _inject_purge_annotators_feature(
+    metadata: Dict[str, Any], purge_annotators: List[str]
+) -> None:
+    if not purge_annotators:
+        return
+
+    features = metadata.get("features")
+    if features is None:
+        features = []
+    if not isinstance(features, list):
+        raise ValueError("metadata.features must be a list when provided")
+
+    for feature in features:
+        if (
+            isinstance(feature, dict)
+            and feature.get("type") == "pipeline"
+            and "purge_annotators" in feature
+        ):
+            existing = feature.get("purge_annotators")
+            if not isinstance(existing, list):
+                raise ValueError("pipeline purge_annotators must be a list")
+            merged = list(existing)
+            for annotator_name in purge_annotators:
+                if annotator_name not in merged:
+                    merged.append(annotator_name)
+            feature["purge_annotators"] = merged
+            metadata["features"] = features
+            return
+
+    features.append(
+        {
+            "type": "pipeline",
+            "name": "stress-purge-annotators",
+            "purge_annotators": list(purge_annotators),
+        }
+    )
+    metadata["features"] = features
+
+
 def _extract_template(
     template_payload: Dict[str, Any],
 ) -> Tuple[Optional[str], Dict[str, Any]]:
@@ -155,6 +216,7 @@ def _resolve_inputs(
     input_dir: Optional[str],
     input_manifest: Optional[str],
     extensions: Tuple[str, ...] = DEFAULT_EXTENSIONS,
+    include_generated_artifacts: bool = False,
 ) -> List[Path]:
     paths: List[Path] = []
 
@@ -172,7 +234,17 @@ def _resolve_inputs(
     elif input_dir:
         base = Path(input_dir).expanduser()
         for ext in extensions:
-            paths.extend(sorted(base.rglob(f"*{ext}")))
+            matches = sorted(base.rglob(f"*{ext}"))
+            if not include_generated_artifacts:
+                matches = [
+                    path
+                    for path in matches
+                    if not any(
+                        part in MARIE_GENERATED_ARTIFACT_DIRS
+                        for part in path.relative_to(base).parts[:-1]
+                    )
+                ]
+            paths.extend(matches)
     else:
         raise ValueError(
             "One of --input-glob, --input-dir, or --input-manifest is required"
@@ -230,12 +302,14 @@ def _build_input_assets(
     input_manifest: Optional[str],
     s3_uri: Optional[str],
     s3_uri_manifest: Optional[str],
+    include_generated_artifacts: bool = False,
 ) -> List[InputAsset]:
     local_inputs = (
         _resolve_inputs(
             input_glob=input_glob,
             input_dir=input_dir,
             input_manifest=input_manifest,
+            include_generated_artifacts=include_generated_artifacts,
         )
         if any((input_glob, input_dir, input_manifest))
         else []
@@ -860,6 +934,7 @@ class GatewayE2EStresser:
         project_id: Optional[str] = None,
         llm_pool_id: Optional[str] = None,
         llm_pool_cycle: Optional[List[str]] = None,
+        purge_annotators: Optional[List[str]] = None,
         mock_failure_rate: Optional[float] = None,
         mock_failure_mode: str = "exception",
         force_failure_every: Optional[int] = None,
@@ -916,6 +991,13 @@ class GatewayE2EStresser:
         self.llm_pool_cycle = [
             item.strip() for item in llm_pool_cycle or [] if item.strip()
         ]
+        self.purge_annotators = []
+        seen_purge_annotators: set[str] = set()
+        for item in purge_annotators or []:
+            annotator_name = item.strip()
+            if annotator_name and annotator_name not in seen_purge_annotators:
+                self.purge_annotators.append(annotator_name)
+                seen_purge_annotators.add(annotator_name)
         self.mock_failure_rate = mock_failure_rate
         self.mock_failure_mode = mock_failure_mode
         self.force_failure_every = force_failure_every
@@ -1410,9 +1492,11 @@ class GatewayE2EStresser:
                     "sla_bucket_index": run.sla_bucket_index,
                     "soft_sla_offset_seconds": run.soft_sla_offset_seconds,
                     "hard_sla_offset_seconds": run.hard_sla_offset_seconds,
-                    "metadata": metadata,
-                    "request_payload": request_payload,
-                    "transport": transport,
+                    "metadata": _redact_secret_value(metadata, self.api_key),
+                    "request_payload": _redact_secret_value(
+                        request_payload, self.api_key
+                    ),
+                    "transport": _redact_secret_value(transport, self.api_key),
                 }
             )
 
@@ -1609,7 +1693,7 @@ class GatewayE2EStresser:
 
     def _build_run(self, asset: InputAsset, job_index: int) -> JobRun:
         request_id = f"job-{job_index}-{uuid.uuid4().hex[:10]}"
-        ref_id = f"{request_id}-{asset.source_name}"
+        ref_id = asset.source_name
         s3_uri = asset.existing_s3_uri or s3_asset_path(
             ref_id=ref_id,
             ref_type=self.ref_type,
@@ -1715,6 +1799,7 @@ class GatewayE2EStresser:
         if run.llm_pool_id:
             metadata["pool_id"] = run.llm_pool_id
 
+        _inject_purge_annotators_feature(metadata, self.purge_annotators)
         metadata["planner"] = self.planner
         metadata["project_id"] = self.project_id
         metadata["ref_id"] = run.ref_id
@@ -2634,6 +2719,14 @@ Examples:
         type=str,
         help="Text file with one existing s3:// URI per line",
     )
+    parser.add_argument(
+        "--include-generated-artifacts",
+        action="store_true",
+        help=(
+            "Include files under generated Marie artifact directories "
+            "when resolving --input-dir"
+        ),
+    )
 
     workload_group = parser.add_mutually_exclusive_group(required=True)
     workload_group.add_argument(
@@ -2766,6 +2859,12 @@ Examples:
         type=str,
         default=None,
         help="Comma-separated LLM dispatch pool IDs to cycle through metadata.pool_id by generated job index",
+    )
+    parser.add_argument(
+        "--purge-annotators",
+        type=str,
+        default=None,
+        help="Comma-separated annotator names to purge before annotation, for example mock-llm",
     )
 
     parser.add_argument(
@@ -2923,10 +3022,13 @@ Examples:
     if args.hard_sla_step_seconds is not None and args.hard_sla_seconds is None:
         parser.error("--hard-sla-step-seconds requires --hard-sla-seconds")
     llm_pool_cycle = _parse_csv_values(args.llm_pool_cycle)
+    purge_annotators = _parse_csv_values(args.purge_annotators)
     if args.llm_pool_cycle is not None and not llm_pool_cycle:
         parser.error("--llm-pool-cycle must contain at least one pool ID")
     if args.llm_pool_id is not None and not args.llm_pool_id.strip():
         parser.error("--llm-pool-id cannot be empty")
+    if args.purge_annotators is not None and not purge_annotators:
+        parser.error("--purge-annotators must contain at least one annotator name")
     if args.min_soft_sla_compliance_pct is not None and not (
         0.0 <= args.min_soft_sla_compliance_pct <= 100.0
     ):
@@ -2943,6 +3045,9 @@ Examples:
     args.report = args.report or args.report_json_compat
     args.llm_pool_cycle_values = (
         llm_pool_cycle if args.llm_pool_cycle is not None else None
+    )
+    args.purge_annotators_values = (
+        purge_annotators if args.purge_annotators is not None else None
     )
     return args
 
@@ -2990,7 +3095,9 @@ def _resolve_runtime_config(
     else:
         http_port = None
 
-    api_key = args.api_key or config_payload.get("api_key")
+    api_key = (
+        args.api_key if args.api_key is not None else config_payload.get("api_key")
+    )
     if not api_key:
         raise ValueError("API key is required. Provide --api-key or config.api_key")
 
@@ -3051,6 +3158,7 @@ async def main() -> None:
         input_manifest=args.input_manifest,
         s3_uri=args.s3_uri,
         s3_uri_manifest=args.s3_uri_manifest,
+        include_generated_artifacts=args.include_generated_artifacts,
     )
     if not input_assets:
         raise ValueError("No inputs resolved for stress run")
@@ -3103,6 +3211,7 @@ async def main() -> None:
         project_id=args.project_id,
         llm_pool_id=args.llm_pool_id,
         llm_pool_cycle=args.llm_pool_cycle_values,
+        purge_annotators=args.purge_annotators_values,
         mock_failure_rate=args.mock_failure_rate,
         mock_failure_mode=args.mock_failure_mode,
         force_failure_every=args.force_failure_every,

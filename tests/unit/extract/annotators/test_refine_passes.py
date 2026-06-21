@@ -201,6 +201,7 @@ def _make_annotator(
     pass_temperatures: Optional[List[float]] = None,
     pass_models: Optional[List[str]] = None,
     refinement_validation: Optional[dict] = None,
+    **annotator_kwargs: Any,
 ):
     """Create a minimal LLMAnnotator with mocked dependencies."""
     # Create required directories
@@ -254,6 +255,7 @@ def _make_annotator(
             annotator_conf=annotator_conf,
             layout_conf=layout_conf,
             prompt_dir=prompt_dir,
+            **annotator_kwargs,
         )
     return ann
 
@@ -467,6 +469,17 @@ class TestEngineForPass:
         )
         # Index 5 is out of range
         assert ann._engine_for_pass(5) is ann.engine
+
+
+class TestSpanMetadata:
+    def test_includes_queue_pool_id_when_provided(self, tmp_path):
+        ann = _make_annotator(tmp_path, pool_id="document-small")
+        ann.engine = MagicMock()
+        ann.engine.model_string = "test-model"
+
+        metadata = ann._build_span_metadata()
+
+        assert metadata["pool_id"] == "document-small"
 
 
 # ======================================================================

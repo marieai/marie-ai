@@ -26,7 +26,11 @@ from PIL import Image
 from pydantic import BaseModel
 
 from marie.engine.base import EngineLM
-from marie.engine.completion_contract import CompletionCallParams, build_completion_call
+from marie.engine.completion_contract import (
+    CompletionCallParams,
+    RequestContext,
+    build_completion_call,
+)
 from marie.engine.engine_utils import (
     convert_openai_to_transformers_format,
     extract_text_info,
@@ -152,9 +156,9 @@ class OpenAIEngine(EngineLM):
                 close = getattr(self.batch_processor, "close", None)
                 if callable(close):
                     close()
-            if hasattr(self, 'client') and self.client is not None:
+            if hasattr(self, "client") and self.client is not None:
                 # Detach internal httpx client to prevent async cleanup issues
-                if hasattr(self.client, '_client'):
+                if hasattr(self.client, "_client"):
                     self.client._client = None
                 self.client = None
         except Exception:
@@ -299,7 +303,10 @@ class OpenAIEngine(EngineLM):
         :param on_result: Optional callback invoked when each task completes.
                          Signature: (task_id: str, response: Optional[str]) -> None
                          This enables incremental result processing (e.g., writing to disk as each completes).
-        :param kwargs: Additional inference parameters. This can include: reasoning_model (bool), mm_processor_kwargs (dict)
+        :param kwargs: Additional inference parameters. Recognized keys include
+            reasoning_model (bool), mm_processor_kwargs (dict), completion_params
+            (dict), metadata (dict), and request_contexts (list[RequestContext | None])
+            aligned with batch_content.
 
         :return: A list of generated outputs corresponding to each input in batch_content.
         """
@@ -357,6 +364,9 @@ class OpenAIEngine(EngineLM):
 
         reasoning_model = kwargs.get("reasoning_model", False)
         completion_params = kwargs.get("completion_params")
+        request_contexts: Optional[List[RequestContext | None]] = kwargs.get(
+            "request_contexts"
+        )
 
         def transform_prompt_for_reasoning(reasoning_enabled: bool, prompt):
             if not reasoning_enabled:
@@ -378,6 +388,14 @@ class OpenAIEngine(EngineLM):
             for content in batch_content
         ]
 
+        if request_contexts is not None and len(request_contexts) != len(messages_list):
+            self.logger.warning(
+                "Ignoring request_contexts length mismatch: expected=%s actual=%s",
+                len(messages_list),
+                len(request_contexts),
+            )
+            request_contexts = None
+
         return [
             build_completion_call(
                 model=self.model_string,
@@ -389,8 +407,11 @@ class OpenAIEngine(EngineLM):
                 stop=[],
                 n=1,
                 stream=False,
+                context=(
+                    request_contexts[index] if request_contexts is not None else None
+                ),
             )
-            for messages in messages_list
+            for index, messages in enumerate(messages_list)
         ]
 
     def openai_generate(

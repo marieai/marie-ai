@@ -6,7 +6,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
-import psycopg2.extras
+from psycopg.types.json import Jsonb
 
 from marie.logging_core.logger import MarieLogger
 
@@ -100,7 +100,7 @@ class AssetTracker:
                         (
                             asset_key,
                             asset.get("kind", "unknown"),
-                            psycopg2.extras.Json(asset.get("metadata", {})),
+                            Jsonb(asset.get("metadata", {})),
                         ),
                     )
 
@@ -131,7 +131,7 @@ class AssetTracker:
                             asset.get("size_bytes"),
                             asset.get("checksum"),
                             asset.get("uri"),
-                            psycopg2.extras.Json(asset.get("metadata", {})),
+                            Jsonb(asset.get("metadata", {})),
                         ),
                     )
                     mat_id = cursor.fetchone()[0]
@@ -194,8 +194,16 @@ class AssetTracker:
                 if conn:
                     self.storage_handler._close_connection(conn)
 
-        # Run in thread pool
-        return self._loop.run_in_executor(self._db_executor, db_call)
+        future = self._loop.run_in_executor(self._db_executor, db_call)
+        future.add_done_callback(self._mark_exception_retrieved)
+        return future
+
+    @staticmethod
+    def _mark_exception_retrieved(future):
+        try:
+            future.exception()
+        except asyncio.CancelledError:
+            pass
 
     @staticmethod
     def compute_version(*parts: bytes) -> str:

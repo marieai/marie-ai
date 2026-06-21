@@ -29,6 +29,7 @@ from marie.extract.models.match import (
     MatchSectionType,
     SubzeroResult,
 )
+from marie.extract.structures.line_metadata import LineMetadata
 from marie.extract.structures.line_with_meta import LineWithMeta
 
 logger = logging.getLogger(__name__)
@@ -184,6 +185,7 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
             if mapping.field_def:
                 template_field_mappings[mapping.field_def["name"]] = mapping.field_def
 
+        page_id = _get_page_id(claim_record)
         extracted_fields: List[Field] = []
 
         for field_name, field_info in fields_cfg.items():
@@ -211,7 +213,7 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
             field_def.setdefault("type", "ALPHA")
 
             transformed_value = transform_field_value(field_def, matched_value)
-            faux_line = LineWithMeta(line=matched_value, metadata=None, annotations=[])
+            faux_line = LineWithMeta(line=matched_value, metadata=LineMetadata(page_id, None, None), annotations=[])
             created_fields = _create_fields(
                 field_def, matched_value, transformed_value, faux_line
             )
@@ -267,6 +269,7 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
         extracted_fields: List[Field],
     ) -> None:
         """Resolve fields with qualified selectors (SOURCE:section_path)."""
+        page_id = _get_page_id(claim_record)
         for field_name, field_info in fields_cfg.items():
             if field_name in populated_fields:
                 continue
@@ -289,7 +292,7 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                 field_def.setdefault("type", "ALPHA")
 
                 transformed_value = transform_field_value(field_def, resolved)
-                faux_line = LineWithMeta(line=resolved, metadata=None, annotations=[])
+                faux_line = LineWithMeta(line=resolved, metadata=LineMetadata(page_id, None, None), annotations=[])
                 created = _create_fields(
                     field_def, resolved, transformed_value, faux_line
                 )
@@ -316,6 +319,7 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
         if not vl_fields:
             return
 
+        page_id = _get_page_id(claim_record)
         for field_name, field_cfg in vl_fields.items():
             vl_cfg = field_cfg["value_lookup"]
             source_path = vl_cfg.get("source", "")
@@ -341,7 +345,7 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
             field_def.setdefault("type", "MONEY")
 
             transformed_value = transform_field_value(field_def, source_value)
-            faux_line = LineWithMeta(line=source_value, metadata=None, annotations=[])
+            faux_line = LineWithMeta(line=source_value, metadata=LineMetadata(page_id, None, None), annotations=[])
             created = _create_fields(
                 field_def, source_value, transformed_value, faux_line
             )
@@ -459,8 +463,7 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
 
         # Build rows
         matched_field_rows: List[MatchFieldRow] = []
-        source = claim_record.get("source", {})
-        page_id = source.get("page_index", 0)
+        page_id = _get_page_id(claim_record)
 
         current_parent: Optional[MatchFieldRow] = None
 
@@ -542,7 +545,7 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                 field_def["name"] = field_name
 
                 transformed_value = transform_field_value(field_def, cell_value)
-                faux_line = LineWithMeta(line=cell_value, metadata=None, annotations=[])
+                faux_line = LineWithMeta(line=cell_value, metadata=LineMetadata(page_id, None, None), annotations=[])
                 created = _create_fields(
                     field_def, cell_value, transformed_value, faux_line
                 )
@@ -930,6 +933,12 @@ def _get_row_match_key(
         return selector
 
     return str(row_idx + 1)
+
+
+def _get_page_id(claim_record: Dict[str, Any]) -> int:
+    """Get the page ID from the claim record."""
+    # NOTE: page_index may resolve to None. Default to 0.
+    return claim_record.get("source", {}).get("page_index", 0) or 0
 
 
 def _create_fields(

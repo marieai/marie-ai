@@ -1,6 +1,7 @@
 import io
 import os
 import time
+import warnings
 from pathlib import Path
 from typing import Any
 from typing import Dict, List, Optional, Union
@@ -21,6 +22,12 @@ except ImportError:
 StrOrBytesPath = Union[str, Path, os.PathLike]
 
 from marie.logging_core.predefined import default_logger as logger
+
+# Suppress urllib3 HeaderParsingError warnings caused by MinIO's HTTP keep-alive
+# responses being misinterpreted by Python's http.client parser. The S3 operations
+# succeed despite the warning. TODO: Upgrade urllib3 to 2.x to resolve this
+# properly (requires verifying compatibility with boto3/botocore).
+warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
 # Disable thread use/transfer concurrency
 # this need to be configurable
 # doding tthis to prevent: cannot schedule new futures after interpreter shutdown

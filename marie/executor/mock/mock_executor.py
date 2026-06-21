@@ -2,7 +2,7 @@ import asyncio
 import os
 import random
 import time
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import torch
 from docarray import DocList
@@ -24,8 +24,8 @@ class IntegrationExecutorMock(MarieExecutor):
         name: str = "",
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
-        storage: dict[str, any] = None,
-        pipeline: Optional[dict[str, any]] = None,
+        storage: dict[str, Any] = None,
+        pipeline: Optional[dict[str, Any]] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         process_time: float = 3.0,
         failure_rate: float = 0.0,
@@ -203,15 +203,13 @@ class IntegrationExecutorMock(MarieExecutor):
 
     def persist(
         self,
-        results: any,
+        results: Any,
         job_id: Optional[str] = None,
         dag_id: Optional[str] = None,
         node_task_id: Optional[str] = None,
         partition_key: Optional[str] = None,
     ) -> None:
         """Persist results and optionally track assets"""
-        from typing import Any
-
         from marie.api.docs import StorageDoc
 
         def _tags(index: int, ftype: str, checksum: str):

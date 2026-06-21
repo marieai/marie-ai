@@ -205,14 +205,15 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
 
         batches = batch_iterator(batchable_docs, batch_size)
         predictions = []
-        pb = tqdm(
-            total=len(documents),
-            disable=not self.progress_bar,
-            desc="Classifying documents",
-        )
 
         id2label = self.id2label
-        for batch in batches:
+        for batch in tqdm(
+            batches,
+            desc=f"Running Inference (batch size: {batch_size})",
+            unit="batch",
+            delay=0.1,
+            disable=not self.progress_bar,
+        ):
             batch_results = []
             if self.task == "zero-shot-classification":
                 batch_results = self.model(
@@ -265,10 +266,8 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                         self.logger.error(err_msg)
                     else:
                         self.logger.debug(err_msg)
-
             elif self.task == "text-classification-multimodal":
-                batch_results = []
-                for doc in batchable_docs:
+                for doc in batch:
                     batch_results.append(
                         self.predict_document_image(
                             doc.tensor,
@@ -279,8 +278,6 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                     )
 
             predictions.extend(batch_results)
-            pb.update(len(batch))
-        pb.close()
 
         for document, prediction in zip(documents, predictions):
             if (

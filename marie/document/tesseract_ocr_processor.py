@@ -3,6 +3,7 @@ import multiprocessing
 import os
 import typing
 from concurrent.futures import ProcessPoolExecutor
+from typing import Any
 
 from pytesseract import image_to_data
 
@@ -43,7 +44,7 @@ class TesseractOcrProcessor(OcrProcessor):
 
     def recognize_from_fragments(
         self, images, **kwargs
-    ) -> typing.List[typing.Dict[str, any]]:
+    ) -> typing.List[typing.Dict[str, Any]]:
         """Recognize text from image fragments
 
         Args:

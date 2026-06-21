@@ -1,22 +1,24 @@
-FROM node:20-alpine
+FROM node:24-bookworm-slim
 
 WORKDIR /app
 
-# Copy package files
-COPY package.json ./
+ENV AIMOCK_HOST=0.0.0.0
 
-# Install dependencies
-RUN npm install
+# Copy package files
+COPY package.json package-lock.json ./
+
+# Install dependencies with enough output to diagnose slow registry/package steps.
+RUN npm ci --loglevel=verbose --foreground-scripts --timing
 
 # Copy source files
-COPY *.ts ./
+COPY *.ts *.mjs ./
 
 # Expose the default port
-EXPOSE 4010
+EXPOSE 4010 4011
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:${AIMOCK_PORT:-4010}/health || exit 1
+  CMD ["node", "healthcheck.mjs"]
 
 # Run the server
 CMD ["npm", "start"]

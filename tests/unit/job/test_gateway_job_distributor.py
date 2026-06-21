@@ -32,3 +32,18 @@ async def test_build_payload_passes_mock_failure_controls_to_executor_parameters
     assert parameters["failure_mode"] == "timeout"
     assert parameters["force_fail"] is True
     assert parameters["randomize_time"] is True
+
+
+def test_resolve_endpoint_accepts_mock_annotator_llm_route() -> None:
+    distributor = GatewayJobDistributor(
+        deployment_nodes={
+            "annotator_llm": [
+                {"endpoint": "/annotator/llm"},
+            ],
+        }
+    )
+
+    assert distributor._resolve_endpoint(
+        "job-a",
+        "annotator_llm://annotator/llm",
+    ) == ("annotator_llm", "/annotator/llm")

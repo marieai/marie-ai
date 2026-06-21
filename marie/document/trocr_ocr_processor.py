@@ -248,7 +248,7 @@ class TrOcrProcessor(OcrProcessor):
     def is_available(self) -> bool:
         return self.MODEL_SPEC.model is not None
 
-    def recognize_from_fragments(self, src_images, **kwargs) -> List[Dict[str, any]]:
+    def recognize_from_fragments(self, src_images, **kwargs) -> List[Dict[str, Any]]:
         start = time.time()
 
         # get CUDA total available memory and calculate batch size
@@ -271,7 +271,7 @@ class TrOcrProcessor(OcrProcessor):
     @torch.no_grad()
     def __recognize_from_fragments(
         self, src_images, batch_size=32, **kwargs
-    ) -> List[Dict[str, any]]:
+    ) -> List[Dict[str, Any]]:
         """Recognize text from image fragments synchronously.
 
         Args:

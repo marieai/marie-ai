@@ -1,5 +1,5 @@
 import os
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import numpy as np
 from black.trans import defaultdict
@@ -58,7 +58,7 @@ class LLMPipeline(BasePipeline):
 
     def __init__(
         self,
-        pipelines_config: List[dict[str, any]] = None,
+        pipelines_config: List[dict[str, Any]] = None,
         device: Optional[str] = "cuda",
         silence_exceptions: bool = False,
         **kwargs,
@@ -108,9 +108,9 @@ class LLMPipeline(BasePipeline):
         frames: List[np.ndarray],
         root_asset_dir: str,
         job_id: str,
-        runtime_conf: Optional[dict[str, any]] = None,
+        runtime_conf: Optional[dict[str, Any]] = None,
         queue_id: str = None,
-    ) -> dict[str, any]:
+    ) -> dict[str, Any]:
         if ref_type is None or ref_id is None:
             raise ValueError("Invalid reference type or id")
 
@@ -239,7 +239,7 @@ class LLMPipeline(BasePipeline):
         ref_id: str,
         ref_type: str,
         root_asset_dir: str,
-        metadata: dict[str, any],
+        metadata: dict[str, Any],
         infix: str = "meta",
     ) -> None:
         """
@@ -281,8 +281,8 @@ class LLMPipeline(BasePipeline):
         regions: List = None,
         queue_id: str = None,
         job_id: str = None,
-        runtime_conf: Optional[dict[str, any]] = None,
-    ) -> dict[str, any]:
+        runtime_conf: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """
         Execute the pipeline for the document with the given frames.If regions are specified,
         then only the specified regions will be extracted from the document with the rest of the steps being skipped.

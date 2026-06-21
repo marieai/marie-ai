@@ -28,7 +28,13 @@ curl http://localhost:4010/health
 
 ```bash
 # Start AIMock server with custom handlers
-docker compose -f docker-compose.mock-llm-programmatic.yml up -d
+docker compose -f docker-compose.mock-llm-programmatic.yml up -d --build
+
+# Verify health and an OpenAI-compatible request
+curl http://localhost:4010/health
+curl -X POST http://localhost:4010/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"extract invoice data"}]}'
 
 # Or run directly
 cd aimock/programmatic
@@ -46,6 +52,8 @@ npm start
 | `http://localhost:4010/mcp` | MCP protocol |
 | `http://localhost:4010/vector` | Vector DB APIs |
 | `http://localhost:4010/metrics` | Prometheus metrics |
+
+`/v1` is the OpenAI client base URL. A direct `GET /v1` returns a JSON 404; use `/health` or a provider endpoint such as `/v1/chat/completions` for checks.
 
 ## Usage Examples
 

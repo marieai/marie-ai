@@ -12,6 +12,7 @@ from marie.excepts import (
     RepetitionError,
 )
 from marie.instrumentation import (
+    MarieSpanAttributes,
     get_tracer,
     set_llm_io,
     start_as_current_span,
@@ -55,6 +56,7 @@ from tenacity import (
 
 from marie.engine.completion_contract import (
     CompletionCallParams,
+    RequestContext,
     build_completion_call,
     completion_finish_reason,
     extract_completion_text,
@@ -89,6 +91,16 @@ def _is_pool_timeout(exc: BaseException) -> bool:
         return isinstance(cause, httpx.PoolTimeout)
     except ImportError:
         return False
+
+
+def _resolve_effective_queue_pool_id(
+    fallback_pool_id: str, metadata: Optional[Dict[str, Any]]
+) -> str:
+    if isinstance(metadata, dict):
+        value = metadata.get("pool_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return fallback_pool_id
 
 
 def _should_retry(exc: BaseException) -> bool:
@@ -319,12 +331,12 @@ class BatchProcessor:
             span.set_attribute(
                 SpanAttributes.LLM_SYSTEM, infer_llm_system(self.model_string)
             )
-            span.set_attribute("marie.task_id", task_id)
-            span.set_attribute("marie.request_id", request_id)
+            span.set_attribute(MarieSpanAttributes.TASK_ID, task_id)
+            span.set_attribute(MarieSpanAttributes.REQUEST_ID, request_id)
             if metadata:
                 for mk, mv in metadata.items():
-                    span.set_attribute(f"marie.{mk}", str(mv))
-            set_llm_io(span, input_messages=call.messages)
+                    span.set_attribute(MarieSpanAttributes.marie(mk), str(mv))
+            set_llm_io(span, input_messages=call.messages, context=call.context)
 
             try:
                 # persist the prompt for debugging
@@ -367,8 +379,11 @@ class BatchProcessor:
                 )
 
                 set_llm_io(span, output_messages=extracted_text)
-                span.set_attribute("marie.latency_seconds", total_time)
-                span.set_attribute("marie.has_reasoning", reasoning_content is not None)
+                span.set_attribute(MarieSpanAttributes.LATENCY_SECONDS, total_time)
+                span.set_attribute(
+                    MarieSpanAttributes.HAS_REASONING,
+                    reasoning_content is not None,
+                )
 
                 # Set token usage from provider response
                 provider_usage = getattr(completion, "usage", None)
@@ -455,7 +470,6 @@ class BatchProcessor:
         request_id: str,
         on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        metadata_list: Optional[List[Optional[Dict[str, Any]]]] = None,
     ):
 
         # Share one limiter across all overlapping batch calls that use this
@@ -486,11 +500,7 @@ class BatchProcessor:
                             call=call,
                             task_id=tid,
                             request_id=request_id,
-                            metadata=(
-                                metadata_list[i]
-                                if metadata_list is not None
-                                else metadata
-                            ),
+                            metadata=metadata,
                         )
                         return BatchResult(tid, resp, None)
                     except asyncio.CancelledError:
@@ -565,7 +575,10 @@ class BatchProcessor:
             on_result: Optional callback invoked when each task completes.
                        Signature: (task_id: str, response: Optional[str]) -> None
                        This enables incremental result processing.
-            **kwargs: Additional arguments
+            metadata: Optional batch/span/queue metadata, such as job and pool identifiers.
+            **kwargs: Additional arguments. Recognized keys include
+                completion_params and request_contexts, where request_contexts is an
+                optional list of RequestContext values aligned with messages_list.
 
         Returns:
             List of generated responses in original order
@@ -589,11 +602,11 @@ class BatchProcessor:
             span_kind="chain",
         )
         batch_span.set_attribute(SpanAttributes.LLM_MODEL_NAME, self.model_string)
-        batch_span.set_attribute("marie.request_id", request_id)
-        batch_span.set_attribute("marie.batch_size", len(messages_list))
+        batch_span.set_attribute(MarieSpanAttributes.REQUEST_ID, request_id)
+        batch_span.set_attribute(MarieSpanAttributes.BATCH_SIZE, len(messages_list))
         if metadata:
             for mk, mv in metadata.items():
-                batch_span.set_attribute(f"marie.{mk}", str(mv))
+                batch_span.set_attribute(MarieSpanAttributes.marie(mk), str(mv))
         batch_span.set_input(
             {
                 "model": self.model_string,
@@ -603,6 +616,17 @@ class BatchProcessor:
         )
 
         completion_params = kwargs.get("completion_params")
+        request_contexts: Optional[List[RequestContext | None]] = kwargs.get(
+            "request_contexts"
+        )
+        if request_contexts is not None and len(request_contexts) != len(messages_list):
+            self.logger.warning(
+                "Ignoring request_contexts length mismatch: expected=%s actual=%s",
+                len(messages_list),
+                len(request_contexts),
+            )
+            request_contexts = None
+
         calls = [
             build_completion_call(
                 model=self.model_string,
@@ -614,8 +638,11 @@ class BatchProcessor:
                 stop=[],
                 n=1,
                 stream=False,
+                context=(
+                    request_contexts[index] if request_contexts is not None else None
+                ),
             )
-            for messages in messages_list
+            for index, messages in enumerate(messages_list)
         ]
         return self.batch_generate_calls(
             calls=calls,
@@ -646,11 +673,11 @@ class BatchProcessor:
                 span_kind="chain",
             )
             batch_span.set_attribute(SpanAttributes.LLM_MODEL_NAME, self.model_string)
-            batch_span.set_attribute("marie.request_id", request_id)
-            batch_span.set_attribute("marie.batch_size", len(calls))
+            batch_span.set_attribute(MarieSpanAttributes.REQUEST_ID, request_id)
+            batch_span.set_attribute(MarieSpanAttributes.BATCH_SIZE, len(calls))
             if metadata:
                 for mk, mv in metadata.items():
-                    batch_span.set_attribute(f"marie.{mk}", str(mv))
+                    batch_span.set_attribute(MarieSpanAttributes.marie(mk), str(mv))
             batch_span.set_input(
                 {
                     "model": self.model_string,
@@ -664,10 +691,14 @@ class BatchProcessor:
         try:
             self._log_queue_mode_once()
             if self._queue_enabled():
+                effective_pool_id = _resolve_effective_queue_pool_id(
+                    self._queue_config.pool_id,
+                    metadata,
+                )
                 self.logger.info(
                     "Submitting batch %s to LLM dispatch queue: pool=%s items=%s",
                     request_id,
-                    self._queue_config.pool_id,
+                    effective_pool_id,
                     len(calls),
                 )
                 batch_results = self._get_queued_executor().execute(
@@ -716,9 +747,12 @@ class BatchProcessor:
 
             elapsed_time = time.time() - start_time
 
-            batch_span.set_attribute("marie.latency_seconds", elapsed_time)
-            batch_span.set_attribute("marie.successful_count", successful_count)
-            batch_span.set_attribute("marie.failed_count", failed_count)
+            batch_span.set_attribute(MarieSpanAttributes.LATENCY_SECONDS, elapsed_time)
+            batch_span.set_attribute(
+                MarieSpanAttributes.SUCCESSFUL_COUNT,
+                successful_count,
+            )
+            batch_span.set_attribute(MarieSpanAttributes.FAILED_COUNT, failed_count)
             batch_span.set_output(
                 {
                     "successful": successful_count,

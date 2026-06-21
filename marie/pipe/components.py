@@ -1,7 +1,7 @@
 import os
 from collections import defaultdict
 from functools import partial
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import numpy as np
 import torch
@@ -83,7 +83,7 @@ def setup_classifiers(
     key: str = "page_classifier",
     device: str = "cuda",
     ocr_engine: Optional[OcrEngine] = None,
-) -> dict[str, any]:
+) -> dict[str, Any]:
     """
     Setup the document classifiers (Document Classification) for the pipeline
     :param pipeline_config: pipeline configuration
@@ -167,7 +167,7 @@ def setup_indexers(
     key: str = "page_indexer",
     device: str = "cuda",
     ocr_engine: Optional[OcrEngine] = None,
-) -> dict[str, any]:
+) -> dict[str, Any]:
     """
     Setup the document indexers(Named Entity Recognition) for the pipeline
     :param pipeline_config: pipeline configuration
@@ -318,7 +318,7 @@ def setup_template_matching(
 
 
 def ocr_frames(
-    ocr_engines: dict[str, any],
+    ocr_engines: dict[str, Any],
     ref_id: str,
     frames: Union[List[np.ndarray], List[Image.Image]],
     root_asset_dir: str,
@@ -327,7 +327,7 @@ def ocr_frames(
     ps_mode: PSMode = PSMode.SPARSE,
     coord_format: CoordinateFormat = CoordinateFormat.XYWH,
     regions: [] = None,
-    runtime_conf: Optional[dict[str, any]] = None,
+    runtime_conf: Optional[dict[str, Any]] = None,
     engine_name: str = "default",
 ) -> dict:
     """
@@ -522,8 +522,8 @@ def setup_llm_tasks(pipeline_config, document_indexers):
 
 
 def load_pipeline(
-    pipeline_config: dict[str, any], ocr_engine: Optional[OcrEngine] = None
-) -> tuple[str, dict[str, any], dict[str, any]]:
+    pipeline_config: dict[str, Any], ocr_engine: Optional[OcrEngine] = None
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
     # TODO : Need to refactor this (use the caller to get the device and then fallback to the pipeline config)
     # sometimes we have CUDA/GPU support but want to only use CPU
     use_cuda = torch.cuda.is_available()

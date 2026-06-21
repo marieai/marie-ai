@@ -879,7 +879,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         session_id = params.get("dag_id") or params.get("job_id")
 
         if self.tracer:
-            from marie.instrumentation import start_as_current_span
+            from marie.instrumentation import MarieSpanAttributes, start_as_current_span
 
             # Phoenix-style span name: ClassName.method_name
             # e.g. "DocumentAnnotatorLLMExecutor.annotator_llm" instead of "/annotator/llm"
@@ -909,16 +909,24 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                     span.set_attribute("session.id", session_id)
 
                 # Set executor and request context attributes for traceability
-                span.set_attribute("marie.executor", self.__class__.__name__)
-                span.set_attribute("marie.endpoint", req_endpoint)
+                span.set_attribute(
+                    MarieSpanAttributes.EXECUTOR,
+                    self.__class__.__name__,
+                )
+                span.set_attribute(MarieSpanAttributes.ENDPOINT, req_endpoint)
                 payload = params.get("payload") or {}
                 op_params = payload.get("op_params") or {}
                 if op_params.get("key"):
-                    span.set_attribute("marie.annotator_name", op_params["key"])
+                    span.set_attribute(
+                        MarieSpanAttributes.ANNOTATOR_NAME,
+                        op_params["key"],
+                    )
                 if op_params.get("layout"):
-                    span.set_attribute("marie.layout_id", op_params["layout"])
+                    span.set_attribute(
+                        MarieSpanAttributes.LAYOUT_ID, op_params["layout"]
+                    )
                 if params.get("job_id"):
-                    span.set_attribute("marie.job_id", params["job_id"])
+                    span.set_attribute(MarieSpanAttributes.JOB_ID, params["job_id"])
 
                 # Generic input: endpoint + executor class (always available)
                 span.set_input(

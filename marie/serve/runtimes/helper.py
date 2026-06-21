@@ -270,7 +270,7 @@ def _get_field_from_type(
 
 
 def _create_pydantic_model_from_schema(
-    schema: Dict[str, any],
+    schema: Dict[str, Any],
     model_name: str,
     cached_models: Dict,
     base_class=BaseDoc,

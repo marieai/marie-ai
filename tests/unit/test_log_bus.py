@@ -43,6 +43,28 @@ class _BlockingFlushSink(logging.Handler):
             pass
 
 
+class _BlockingBatchCloseSink(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.emit_started = threading.Event()
+        self.release_emit = threading.Event()
+        self.close_calls = 0
+        self.closed_during_emit = False
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.handle_many([record])
+
+    def handle_many(self, records: list[logging.LogRecord]) -> None:
+        self.emit_started.set()
+        self.release_emit.wait(timeout=2.0)
+
+    def close(self) -> None:
+        if self.emit_started.is_set() and not self.release_emit.is_set():
+            self.closed_during_emit = True
+        self.close_calls += 1
+        super().close()
+
+
 class _BatchAwareSink(logging.Handler):
     def __init__(self) -> None:
         super().__init__()
@@ -188,6 +210,51 @@ def test_global_log_bus_set_sinks_closes_replaced_handlers() -> None:
 
     reused.close()
     replacement.close()
+
+
+def test_global_log_bus_set_sinks_waits_for_active_emit_before_closing() -> None:
+    bus = _GlobalLogBus(maxsize=8, batch_size=1, flush_interval=0.01)
+    active_sink = _BlockingBatchCloseSink()
+    replacement = _CloseTrackingSink()
+    logger = logging.getLogger("test.logbus.active-replacement")
+    logger.handlers = []
+    logger.propagate = False
+    setter_done = threading.Event()
+
+    def replace_sinks() -> None:
+        bus.set_sinks([replacement])
+        setter_done.set()
+
+    replace_thread = threading.Thread(target=replace_sinks, daemon=True)
+
+    try:
+        bus.set_sinks([active_sink])
+        bus.attach_logger(logger)
+        logger.warning("message handled by active sink")
+
+        assert active_sink.emit_started.wait(timeout=1.0)
+
+        replace_thread.start()
+        time.sleep(0.05)
+
+        assert not setter_done.is_set()
+        assert not active_sink.closed_during_emit
+
+        active_sink.release_emit.set()
+        replace_thread.join(timeout=1.0)
+
+        assert setter_done.is_set()
+        assert active_sink.close_calls == 1
+        assert not active_sink.closed_during_emit
+    finally:
+        active_sink.release_emit.set()
+        replace_thread.join(timeout=1.0)
+        bus.set_sinks([])
+        bus.stop(timeout=0.5)
+        for handler in list(logger.handlers):
+            logger.removeHandler(handler)
+            handler.close()
+        replacement.close()
 
 
 def test_job_log_sink_unregisters_atexit_callback_on_close(

@@ -1,7 +1,7 @@
 import os
 import sys
 import typing
-from typing import Callable
+from typing import Any, Callable
 
 import torch
 import torch.nn.functional as F
@@ -183,7 +183,7 @@ class CraftOcrProcessor(OcrProcessor):
 
     def recognize_from_fragments(
         self, images, **kwargs
-    ) -> typing.List[typing.Dict[str, any]]:
+    ) -> typing.List[typing.Dict[str, Any]]:
         """Recognize text from image fragments
 
         Args:

@@ -10,6 +10,7 @@ import yaml
 
 from marie.constants import __config_dir__
 from marie.engine import EngineLM
+from marie.engine.completion_contract import RequestContext
 from marie.extract.annotators.base import AnnotatorCapabilities, DocumentAnnotator
 from marie.extract.annotators.context_provider import ContextProviderManager
 from marie.extract.annotators.refinement_provider import (
@@ -25,7 +26,11 @@ from marie.extract.annotators.util import (
 )
 from marie.extract.structures.unstructured_document import UnstructuredDocument
 from marie.helper import run_async
-from marie.instrumentation import get_tracer, start_as_current_span
+from marie.instrumentation import (
+    MarieSpanAttributes,
+    get_tracer,
+    start_as_current_span,
+)
 from marie.logging_core.logger import MarieLogger
 from marie.prompt import PromptTemplate
 from marie.utils.types import to_bool
@@ -46,6 +51,23 @@ def sanitize_path(path: str) -> Optional[str]:
     return os.path.basename(path) if path else None
 
 
+def _non_empty_str(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _requested_pages_tuple(value: Any) -> tuple[int, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return (value,)
+    if isinstance(value, (list, tuple, set)):
+        return tuple(int(page) for page in value)
+    return None
+
+
 class LLMAnnotator(DocumentAnnotator):
     """LLM Annotator with optional multi-pass refinement."""
 
@@ -63,6 +85,9 @@ class LLMAnnotator(DocumentAnnotator):
         :param annotator_conf: Configuration for the annotator including execution_context.
         :param layout_conf: Layout configuration.
         :param run_context: Optional RunContext for accessing upstream task results.
+        :param kwargs: Optional runtime fields. Recognized request provenance keys
+            are ref_id, ref_type, and requested_pages; these are converted to a
+            RequestContext for model calls.
         """
         super().__init__()
         self.logger = MarieLogger(context=self.__class__.__name__)
@@ -72,31 +97,31 @@ class LLMAnnotator(DocumentAnnotator):
         # should we merge layout_conf and annotator_conf ?
         self.annotator_conf = annotator_conf
         self.layout_conf = layout_conf
-        self.layout_id = layout_conf.get('layout_id', None)
+        self.layout_id = layout_conf.get("layout_id", None)
         if self.layout_id is None:
             raise ValueError("Layout ID is required in the configuration.")
 
         # configurations from annotator_conf
-        self.name = annotator_conf.get('name', None)
+        self.name = annotator_conf.get("name", None)
         if self.name is None:
             raise ValueError("Annotator name is required in the configuration.")
-        self.annotator_type = annotator_conf.get('annotator_type', None)
-        self.model_config = annotator_conf.get('model_config', {})
+        self.annotator_type = annotator_conf.get("annotator_type", None)
+        self.model_config = annotator_conf.get("model_config", {})
 
         #  specific configurations from model_config
-        self.model_name = self.model_config.get('model_name', None)
-        self.prompt_path = self.model_config.get('prompt_path')
-        self.system_prompt_text = self.model_config.get('system_prompt_text', None)
-        self.top_p = self.model_config.get('top_p', 1.0)
-        self.frequency_penalty = self.model_config.get('frequency_penalty', 0)
-        self.presence_penalty = self.model_config.get('presence_penalty', 0)
-        self.multimodal = self.model_config.get('multimodal', False)
-        self.expect_output = self.model_config.get('expect_output', None)
-        self.temperature = self.model_config.get('temperature', 0.0)
-        self.extra_body = self.model_config.get('extra_body', None)
-        self.min_pixels = self.model_config.get('min_pixels', 512 * 28 * 28)
-        self.max_pixels = self.model_config.get('max_pixels', 2048 * 28 * 28)
-        self.mini_batch_size = self.model_config.get('mini_batch_size', 16)
+        self.model_name = self.model_config.get("model_name", None)
+        self.prompt_path = self.model_config.get("prompt_path")
+        self.system_prompt_text = self.model_config.get("system_prompt_text", None)
+        self.top_p = self.model_config.get("top_p", 1.0)
+        self.frequency_penalty = self.model_config.get("frequency_penalty", 0)
+        self.presence_penalty = self.model_config.get("presence_penalty", 0)
+        self.multimodal = self.model_config.get("multimodal", False)
+        self.expect_output = self.model_config.get("expect_output", None)
+        self.temperature = self.model_config.get("temperature", 0.0)
+        self.extra_body = self.model_config.get("extra_body", None)
+        self.min_pixels = self.model_config.get("min_pixels", 512 * 28 * 28)
+        self.max_pixels = self.model_config.get("max_pixels", 2048 * 28 * 28)
+        self.mini_batch_size = self.model_config.get("mini_batch_size", 16)
 
         # Build completion_params dict from config
         self.completion_params = {
@@ -166,7 +191,7 @@ class LLMAnnotator(DocumentAnnotator):
             os.path.join(working_dir, "agent-output", self.name)
         )
         self.frames_dir = os.path.join(working_dir, "frames")
-        self.logger.info(f'Annotator output dir : {self.output_dir}')
+        self.logger.info(f"Annotator output dir : {self.output_dir}")
 
         # Store run_context for direct access to upstream data when needed
         # Usage: self.run_context.get("ANNOTATOR_RESULTS", from_task="tables")
@@ -179,6 +204,12 @@ class LLMAnnotator(DocumentAnnotator):
         self.job_id = kwargs.get("job_id")
         self.dag_id = kwargs.get("dag_id")
         self.node_task_id = kwargs.get("node_task_id")
+        self.llm_pool_id = _non_empty_str(kwargs.get("pool_id")) or _non_empty_str(
+            self.model_config.get("pool_id")
+        )
+        self.ref_id = kwargs.get("ref_id")
+        self.ref_type = kwargs.get("ref_type")
+        self.requested_pages = kwargs.get("requested_pages")
 
         if self.model_name is None:
             raise ValueError("Model name must be provided in the configuration.")
@@ -204,7 +235,7 @@ class LLMAnnotator(DocumentAnnotator):
         # output file after LLM inference.
         # Signature: fn(data: dict, annotator_conf: dict) -> dict
         self.output_transform: Optional[str] = annotator_conf.get(
-            'output_transform', None
+            "output_transform", None
         )
 
         # Load refinement prompt if configured
@@ -231,7 +262,7 @@ class LLMAnnotator(DocumentAnnotator):
                 )
 
         # Get processing mode from annotator config (per-page or per-table)
-        self.processing_mode = annotator_conf.get('mode', 'per-table')
+        self.processing_mode = annotator_conf.get("mode", "per-table")
         self.logger.info(f"Processing mode: {self.processing_mode}")
 
         self.context_manager: Optional[ContextProviderManager] = ContextProviderManager(
@@ -395,10 +426,12 @@ class LLMAnnotator(DocumentAnnotator):
                 return route_llm_engine(model_name, self.multimodal)
         return self.engine
 
-    def _build_span_metadata(self, engine: Optional[EngineLM] = None) -> Dict[str, str]:
-        """Build metadata dict for span attribution."""
+    def _build_span_metadata(
+        self,
+        engine: Optional[EngineLM] = None,
+    ) -> Dict[str, Any]:
         actual_engine = engine or self.engine
-        meta: Dict[str, str] = {
+        meta: Dict[str, Any] = {
             "annotator_name": self.name,
             "layout_id": self.layout_id,
             "model_name": actual_engine.model_string,
@@ -409,7 +442,20 @@ class LLMAnnotator(DocumentAnnotator):
             meta["dag_id"] = self.dag_id
         if self.node_task_id:
             meta["node_task_id"] = self.node_task_id
+        if self.llm_pool_id:
+            meta["pool_id"] = self.llm_pool_id
         return meta
+
+    def _build_model_request_context(self) -> RequestContext | None:
+        """Build source provenance for model requests from annotator runtime fields."""
+        requested_pages = _requested_pages_tuple(self.requested_pages)
+        if not self.ref_id or not self.ref_type:
+            return None
+        return RequestContext(
+            ref_id=self.ref_id,
+            ref_type=self.ref_type,
+            requested_pages=requested_pages,
+        )
 
     async def _arun_single_extraction(
         self,
@@ -436,6 +482,7 @@ class LLMAnnotator(DocumentAnnotator):
             mm_processor_kwargs=self.mm_processor_kwargs,
             mini_batch_size=self.mini_batch_size,
             metadata=self._build_span_metadata(actual_engine),
+            request_context=self._build_model_request_context(),
         )
 
     def _build_pass_context_manager(
@@ -720,7 +767,7 @@ class LLMAnnotator(DocumentAnnotator):
                 }
             )
         try:
-            with open(debug_context_path, 'w') as f:
+            with open(debug_context_path, "w") as f:
                 json.dump(context_debug, f, indent=2, default=str)
             self.logger.info(f"Context debug written to {debug_context_path}")
         except Exception as e:
@@ -747,9 +794,12 @@ class LLMAnnotator(DocumentAnnotator):
         with start_as_current_span(
             _tracer, "LLMAnnotator._arun_refine_passes.initial", span_kind="chain"
         ) as pass0_span:
-            pass0_span.set_attribute("marie.pass_index", "0")
-            pass0_span.set_attribute("marie.pass_type", "initial")
-            pass0_span.set_attribute("marie.model_name", pass0_engine.model_string)
+            pass0_span.set_attribute(MarieSpanAttributes.PASS_INDEX, "0")
+            pass0_span.set_attribute(MarieSpanAttributes.PASS_TYPE, "initial")
+            pass0_span.set_attribute(
+                MarieSpanAttributes.MODEL_NAME,
+                pass0_engine.model_string,
+            )
 
             await self._arun_single_extraction(
                 frames_dir=self.frames_dir,
@@ -799,9 +849,15 @@ class LLMAnnotator(DocumentAnnotator):
                     f"LLMAnnotator._arun_refine_passes.refine_{i}",
                     span_kind="chain",
                 ) as pass_span:
-                    pass_span.set_attribute("marie.pass_index", str(i))
-                    pass_span.set_attribute("marie.pass_type", "refinement")
-                    pass_span.set_attribute("marie.model_name", engine.model_string)
+                    pass_span.set_attribute(MarieSpanAttributes.PASS_INDEX, str(i))
+                    pass_span.set_attribute(
+                        MarieSpanAttributes.PASS_TYPE,
+                        "refinement",
+                    )
+                    pass_span.set_attribute(
+                        MarieSpanAttributes.MODEL_NAME,
+                        engine.model_string,
+                    )
 
                     await self._arun_single_extraction(
                         frames_dir=self.frames_dir,
@@ -854,15 +910,19 @@ class LLMAnnotator(DocumentAnnotator):
         meta = self._build_span_metadata(engine)
         for k, v in meta.items():
             try:
-                span.set_attribute(f"marie.{k}", str(v))
+                span.set_attribute(MarieSpanAttributes.marie(k), str(v))
             except Exception:
                 pass
         try:
-            span.set_attribute("marie.refine_passes", str(self.refine_passes))
             span.set_attribute(
-                "marie.processing_mode", self.processing_mode or "default"
+                MarieSpanAttributes.REFINE_PASSES,
+                str(self.refine_passes),
             )
-            span.set_attribute("marie.multimodal", str(self.multimodal))
+            span.set_attribute(
+                MarieSpanAttributes.PROCESSING_MODE,
+                self.processing_mode or "default",
+            )
+            span.set_attribute(MarieSpanAttributes.MULTIMODAL, str(self.multimodal))
         except Exception:
             pass
 
@@ -905,6 +965,7 @@ class LLMAnnotator(DocumentAnnotator):
                     mm_processor_kwargs=self.mm_processor_kwargs,
                     mini_batch_size=self.mini_batch_size,
                     metadata=self._build_span_metadata(),
+                    request_context=self._build_model_request_context(),
                 )
 
             if self.output_transform:
@@ -952,6 +1013,7 @@ class LLMAnnotator(DocumentAnnotator):
                     mm_processor_kwargs=self.mm_processor_kwargs,
                     mini_batch_size=self.mini_batch_size,
                     metadata=self._build_span_metadata(),
+                    request_context=self._build_model_request_context(),
                 )
 
             if self.output_transform:

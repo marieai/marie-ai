@@ -1,0 +1,24 @@
+{
+  "invoke_action": {
+    "action_type": "command",
+    "command": "job",
+    "action": "submit",
+    "name": "gen5_extract",
+    "api_key": "{{api_key}}",
+    "metadata": {
+      "planner": "mock_annotator_llm",
+      "project_id": "mock-annotator-llm-stress",
+      "ref_type": "stress",
+      "ref_id": "stress-run-{{request_id}}",
+      "policy": "allow_all",
+      "uri": "{{s3_uri}}",
+      "features": [
+        {
+          "type": "pipeline",
+          "name": "stress-purge-annotators",
+          "purge_annotators": ["mock-llm"]
+        }
+      ]
+    }
+  }
+}

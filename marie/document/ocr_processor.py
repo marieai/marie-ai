@@ -65,7 +65,7 @@ class OcrProcessor(BaseHandler):
             return r["text"], r["confidence"]
         return None, 0
 
-    def recognize_from_boxes(self, image, boxes, **kwargs) -> List[Dict[str, any]]:
+    def recognize_from_boxes(self, image, boxes, **kwargs) -> List[Dict[str, Any]]:
         """Recognize text from image using lists of bounding boxes.
 
         Args:

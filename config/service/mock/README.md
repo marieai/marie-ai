@@ -16,12 +16,14 @@ Basic single mock executor configuration. Use this for:
 - `failure_mode: exception` - Exception-based failures
 
 ### marie-mock-scheduler-test.yml
-Advanced configuration with 8 different mock executors for comprehensive scheduler testing. Use this for:
+Advanced configuration with 8 different mock executors plus a real LLM annotator
+executor for comprehensive scheduler and AIMock testing. Use this for:
 - Testing parallel subgraph execution
 - SLA enforcement testing
 - Error handling and retry logic
 - Resource allocation testing
 - Job distribution performance testing
+- Full gateway -> `DocumentAnnotatorLLMExecutor` -> AIMock failure testing
 
 **Executors:**
 | Name | Process Time | Failure Rate | Purpose |
@@ -34,6 +36,7 @@ Advanced configuration with 8 different mock executors for comprehensive schedul
 | mock_executor_f | 3.0s | 20% | Moderate flakiness |
 | mock_executor_g | 8.0s | 0% | Very slow, timeout testing |
 | mock_executor_h | 2.0s | 50% | Heavy error testing |
+| annotator_llm | AIMock/LiteLLM bound | AIMock profile | Real LLM annotator path |
 
 ## Mock Executor Parameters
 
@@ -124,7 +127,37 @@ Use `marie-mock-scheduler-test.yml` with `mock_parallel_subgraphs` query plan to
 - Load balancing
 - Job distribution algorithms
 
-#### 4. Realistic Simulation
+#### 4. LLM Annotator Gateway Testing
+Use `marie-mock-scheduler-test.yml` with `mock_annotator_llm` to exercise the
+same executor class, executor name, and endpoint shape as the G5 LLM annotator
+config. This is not handled by `IntegrationExecutorMock`; it runs
+`DocumentAnnotatorLLMExecutor`, which creates `LLMAnnotator` and calls
+`OpenAIEngine`.
+
+```text
+gateway -> scheduler -> annotator_llm://annotator/llm -> LLMAnnotator -> AIMock
+```
+
+```bash
+python tools/stress/gateway_e2e_stresser.py \
+    --config tools/stress/gateway-e2e.config.json \
+    --api-key "$GATEWAY_API_KEY" \
+    --input-dir ~/.marie/generators \
+    --job-count 1 \
+    --job-name gen5_extract \
+    --planner mock_annotator_llm \
+    --llm-pool-id document-small \
+    --ref-type stress \
+    --project-id mock-annotator-llm-stress \
+    --request-template tools/stress/mock_annotator_llm.invoke.json \
+    --dry-run
+```
+
+Use `gen5_extract` as the job queue unless the running gateway config explicitly
+monitors a dedicated mock queue. The mock planner still routes the DAG node to
+`annotator_llm://annotator/llm`.
+
+#### 5. Realistic Simulation
 Override parameters per-request for realistic variability:
 ```python
 # Simulate variable execution times
@@ -161,6 +194,28 @@ parameters = {
 **Best config:** `marie-mock-scheduler-test.yml`
 **Purpose:** Comprehensive scheduler stress testing
 
+### mock_annotator_llm
+**Nodes:** 3 (linear)
+**Best config:** `marie-mock-scheduler-test.yml`
+**Purpose:** Gateway and AIMock-backed LLM failure testing through `DocumentAnnotatorLLMExecutor`
+
+This plan uses:
+- layout: `mock-llm`
+- annotator key: `mock-llm`
+- model: `gpt-5.2-mock`
+
+The matching extract config lives at:
+
+```text
+config/extract/TID-mock-llm/annotator/config.yml
+```
+
+For Docker launches, mirror it under:
+
+```text
+/mnt/data/marie-ai/config/extract/TID-mock-llm/annotator/config.yml
+```
+
 ## Environment Variables
 
 Ensure these environment variables are set:
@@ -181,6 +236,10 @@ export S3_ACCESS_KEY_ID=minioadmin
 export S3_SECRET_ACCESS_KEY=minioadmin
 export S3_BUCKET_NAME=marie-test
 export S3_REGION=us-east-1
+
+# LLM backend for DocumentAnnotatorLLMExecutor
+export OPENAI_API_KEY=EMPTY
+export OPENAI_API_BASE=http://localhost:4010/v1
 ```
 
 ## Troubleshooting
