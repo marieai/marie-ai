@@ -1,0 +1,96 @@
+{{/*
+Sandbox Wave-2 blueprint install Job.
+
+Downloads a named blueprint archive from the configured registry and installs
+its connector and query-plan artifacts into the sandbox gateway.
+
+Implements the Wave-2 step of the seed pipeline defined in:
+  analysis/sandbox/04-seeding-blueprints.md § Wave 2 — Blueprint install
+
+Ordering:
+  argocd.argoproj.io/sync-wave: "2"   — after Wave-1 seed-defaults Job
+  helm.sh/hook-weight: "2"            — plain Helm installs without Argo
+
+Entrypoint:  python -m marie.sandbox install-blueprint
+Source:      marie/sandbox/install_blueprint.py
+
+Integration seam — WHAT IS ASSUMED vs CONFIRMED:
+  Confirmed gateway endpoints (marie_gateway.py):
+    POST /api/connectors/deploy
+    POST /api/planners
+  Assumed / NOT YET BUILT:
+    - Blueprint package registry serving <id>.blueprint tarballs
+    - Full blueprint importer for non-connector artifact kinds
+      (prompts, RAG indexes, workflows, agents, webapps, sample data)
+
+Rendered only when sandbox.enabled=true AND sandbox.seed.blueprint.enabled=true.
+*/}}
+{{- if and .Values.sandbox.enabled .Values.sandbox.seed.blueprint.enabled }}
+
+{{- $fullname   := include "marie.fullname" . }}
+{{- $seed       := .Values.sandbox.seed }}
+{{- $bp         := $seed.blueprint }}
+{{- $adminSecret := $seed.adminApiKeySecret | default (printf "%s-sandbox-admin" $fullname) }}
+{{- $adminKey    := $seed.adminApiKeySecretKey | default "api_key" }}
+
+{{/* Derive gateway service name: use configured value or fall back to <release>-server */}}
+{{- $gwService  := $seed.gatewayServiceName | default (printf "%s-server" .Release.Name) }}
+{{- $gwPort     := $seed.gatewayHttpPort | default 51000 }}
+{{- $gwUrl      := printf "http://%s:%v" $gwService $gwPort }}
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-sandbox-seed-blueprint
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marie.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-seed-blueprint
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "2"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "marie.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: sandbox-seed-blueprint
+    spec:
+      restartPolicy: OnFailure
+      {{- include "marie.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: seed-blueprint
+          image: {{ include "marie.image" . }}
+          imagePullPolicy: {{ .Values.marie.image.pullPolicy }}
+          command:
+            - python
+            - -m
+            - marie.sandbox
+            - install-blueprint
+          env:
+            # Gateway URL — in-namespace cluster DNS; never leaves the namespace
+            - name: SANDBOX_GATEWAY_URL
+              value: {{ $gwUrl | quote }}
+            # Admin API key produced by Wave-1 seed-defaults
+            - name: SANDBOX_ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $adminSecret }}
+                  key: {{ $adminKey }}
+            # Blueprint identity
+            - name: SANDBOX_BLUEPRINT_ID
+              value: {{ $bp.id | quote }}
+            - name: SANDBOX_BLUEPRINT_REGISTRY_URL
+              value: {{ $bp.registryUrl | quote }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+{{- end }}{{/* sandbox.enabled && sandbox.seed.blueprint.enabled */}}

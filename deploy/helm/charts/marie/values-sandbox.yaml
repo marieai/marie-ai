@@ -60,6 +60,50 @@ sandbox:
       cidr: ''
       port: 443
 
+  # ---- Seed configuration — Waves 1, 2, 3 --------------------------------
+  #
+  # Wave-1 (seed-defaults) always runs when sandbox.enabled=true.
+  # Waves 2 and 3 are opt-in via seed.blueprint.enabled / seed.plugins.enabled.
+  #
+  # Ordering is enforced by argocd.argoproj.io/sync-wave annotations and
+  # Helm hook weights:
+  #   Wave 1: sync-wave "1", hook-weight "1"
+  #   Wave 2: sync-wave "2", hook-weight "2"
+  #   Wave 3: sync-wave "3", hook-weight "3"
+  seed:
+    # Name of the k8s Secret holding the sandbox admin API key.
+    # Must be pre-created before install (or managed by ESO/Sealed/SOPS in Slice 6).
+    # Defaults to <release-fullname>-sandbox-admin when empty.
+    adminApiKeySecret: ''
+    adminApiKeySecretKey: 'api_key'
+
+    # Gateway in-namespace service DNS.  Leave empty to auto-derive from release name.
+    # Auto-derived value: <release-name>-server
+    gatewayServiceName: ''
+    gatewayHttpPort: 51000
+
+    # Wave-2 — blueprint install
+    # Set blueprint.enabled=true and provide blueprint.id + blueprint.registryUrl
+    # to install a blueprint after Wave-1 defaults.
+    blueprint:
+      enabled: false
+      id: ''           # e.g. "ner-vlm-ocr-entity-extraction"
+      registryUrl: ''  # e.g. "https://blueprints.example.com"
+
+    # Wave-3 — plugin / extension install
+    # Set plugins.enabled=true and list the blueprint's extension_package refs.
+    plugins:
+      enabled: false
+      registryUrl: ''  # e.g. "https://plugins.example.com"
+      # Example refs:
+      #   refs:
+      #     - packageId: "connector.ocr-engine"
+      #       version: "2.1.0"
+      #     - packageId: "connector.ner-model"
+      #       version: "1.4.2"
+      #       installMode: "install-from-registry"
+      refs: []
+
 # ----------------------------------------------------------------
 # Sizing presets — values overridden by sandbox-governance template
 # based on sandbox.size.  Not referenced directly by sub-charts;
