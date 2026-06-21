@@ -112,17 +112,64 @@ The `sandbox.seed.adminApiKeySecret` and `adminApiKeySecretKey` fields from
 
 ### `sandboxes/<ns>/secrets-ref.yaml`
 
-Git-safe record of what secrets exist in the sandbox namespace and which remote-store
-keys back them.  Contains NO secret values.
+Git audit record of which per-sandbox secrets were provisioned and which remote-store
+paths back them.  Contains NO secret values.
 
-In Slice 6 (OD4) this becomes real ESO `ExternalSecret` or Sealed Secrets objects.
-Until then it is a Marie-internal `ExternalSecretReferenceList` marker that is read
-by the Sandbox Service from git and used to provision the backing secret material
-via the chosen mechanism.
+**Secret delivery mechanism (Slice 6 — OD4 resolved):** External Secrets Operator (ESO)
+with `external-secrets.io/v1` (ESO v0.10+, current stable).
 
-Argo CD does NOT apply `secrets-ref.yaml` to the cluster — only `values.yaml` is
-consumed as a Helm values source; the other files in the sandbox directory are git
-metadata.
+The actual `ExternalSecret` CRDs are rendered by the umbrella chart template
+(`templates/sandbox-secrets.yaml`) from `sandbox.secrets.*` values in `values.yaml`.
+Argo CD applies them alongside the rest of the chart resources.
+
+`secrets-ref.yaml` is NOT applied to the cluster by Argo CD — it is git metadata
+read by the Sandbox Service at sandbox creation and deletion time to track which remote
+secret paths were provisioned.
+
+**Documented alternatives (not implemented):**
+- Sealed Secrets — encrypted `SealedSecret` objects committed to git, decrypted in-cluster.
+- SOPS + Argo plugin — encrypted values decrypted at sync time.
+
+---
+
+### Studio renderer seam — `sandbox.secrets.*` values Studio MUST emit
+
+The Studio Sandbox Service (`sandbox-renderer.ts § renderValuesYaml`) MUST write
+the following `sandbox.secrets.*` paths into `sandboxes/<ns>/values.yaml` for each
+new sandbox.  These values control which ExternalSecret objects the chart renders and
+which remote paths ESO reads.
+
+| `values.yaml` path | Required | Description |
+|---|---|---|
+| `sandbox.secrets.enabled` | Yes | Always `true` in sandbox overlays |
+| `sandbox.secrets.storeRef.name` | Yes | Name of the `ClusterSecretStore` provisioned by the platform operator; Studio carries this from the platform configuration |
+| `sandbox.secrets.storeRef.kind` | Yes | `ClusterSecretStore` (default) or `SecretStore` |
+| `sandbox.secrets.secrets.adminApiKey.remoteKey` | Yes | Path in remote store for this sandbox's admin API key; convention: `sandboxes/<namespace>/admin` |
+| `sandbox.secrets.secrets.dbPassword.remoteKey` | Yes | Path for the dedicated PostgreSQL password; convention: `sandboxes/<namespace>/db` |
+| `sandbox.secrets.secrets.storageCredentials.remoteKey` | Yes | Path for MinIO access-key + secret-key (stored as a JSON map with fields `access-key`, `secret-key`); convention: `sandboxes/<namespace>/storage` |
+| `sandbox.secrets.secrets.runnerSecret.remoteKey` | Yes | Path for the runner registration token; convention: `sandboxes/<namespace>/runner` |
+
+Values the renderer MUST NOT set (chart supplies correct defaults):
+- `sandbox.secrets.secrets.*.secretName` — defaults to `<fullname>-sandbox-{admin|db|storage|runner}`
+- `sandbox.secrets.secrets.*.property` — defaults to `api_key` / `password` / `access-key,secret-key` / `token`
+- `sandbox.secrets.refreshInterval` — defaults to `1h`
+
+The Studio renderer MUST also emit these subchart seam values in `values.yaml` so the
+subcharts consume the ESO-materialized Secrets:
+
+| `values.yaml` path | Value to set | Description |
+|---|---|---|
+| `postgresql.auth.existingSecret` | `<release>-marie-sandbox-db` | Points PostgreSQL subchart at the ESO-materialized db password Secret |
+| `postgresql.auth.secretKeys.userPasswordKey` | `password` | Key within that Secret |
+| `minio.auth.existingSecret` | `<release>-marie-sandbox-storage` | Points MinIO subchart at the ESO-materialized storage credentials Secret |
+
+The runner secret seam (`<release>-marie-sandbox-runner`, key `token`) is referenced in
+`executor.pools[*].env` as `RUNNER_REGISTRATION_TOKEN`; the renderer emits this under
+`executor.pools`.
+
+**Note:** `<release>` above is the Helm release name, which equals the sandbox namespace
+(`sbx-<orgId>-<shortId>`).  The chart fullname is `<release>-marie` (e.g.
+`sbx-12345678-1234-1234-1234-123456789abc-a1b2c3-marie`).
 
 ---
 
