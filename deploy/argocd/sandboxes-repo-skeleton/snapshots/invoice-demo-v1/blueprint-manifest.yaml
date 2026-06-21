@@ -1,0 +1,24 @@
+# Blueprint Manifest — invoice-demo-v1
+#
+# Identifies the blueprint to install after Wave-1 defaults seeding completes.
+# Installation is Studio-orchestrated: the Sandbox Service calls the sandbox
+# gateway's blueprint-import endpoint (using the existing blueprint-import.service)
+# once Argo reports the Application Synced and the seed-defaults Job has succeeded.
+#
+# Only the 'ref' (blueprint identifier) is embedded in values.yaml by the renderer;
+# the Sandbox Service reads the full manifest from here via git when it needs to
+# resolve the source URL or extension package details.
+#
+# See analysis/sandbox/04-seeding-blueprints.md for the full seeding wave order.
+#
+ref: "ner-vlm-ocr-entity-extraction"
+version: "2.0.0"
+source: builtin          # builtin | marketplace | custom
+
+# Extension packages included in this blueprint (resolved from here at Studio install time).
+extensionPackage:
+  plugins:
+    - packageId: "connector.ocr-engine"
+      version: "2.1.0"
+    - packageId: "connector.ner-model"
+      version: "1.4.2"

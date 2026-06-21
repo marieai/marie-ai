@@ -1,0 +1,18 @@
+# Plugin Manifest — invoice-demo-v1
+#
+# Lists the plugins the Sandbox Service installs (via Studio blueprint-import.service)
+# after the blueprint import step completes (Wave-3 seeding).
+#
+# The renderer (sandbox-renderer.ts) extracts the 'plugins' array from this manifest
+# and writes it as 'sandbox.seed.pluginRefs' in the per-sandbox values.yaml.
+# The Sandbox Service reads pluginRefs from the Argo Application values after Synced.
+#
+# Each entry must have at minimum: { packageId, version }
+#
+plugins:
+  - packageId: "connector.ocr-engine"
+    version: "2.1.0"
+    source: builtin
+  - packageId: "connector.ner-model"
+    version: "1.4.2"
+    source: builtin

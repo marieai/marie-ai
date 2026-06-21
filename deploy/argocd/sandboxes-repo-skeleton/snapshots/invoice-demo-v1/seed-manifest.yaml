@@ -1,0 +1,26 @@
+# Seed Manifest — invoice-demo-v1
+#
+# Defines the Wave-1 defaults seeded into every sandbox created from this snapshot.
+# The in-namespace seed-defaults Job (marie.sandbox.seed, chart Wave-1) uses these
+# values to bootstrap the minimum runtime state (org, workspace, admin user, API key).
+#
+# These are *defaults* — the sandbox admin can change them after provisioning.
+# Nothing here contains secret values; the admin API key is provisioned via the
+# sandbox-admin Secret (Slice 6 / secrets-ref.yaml).
+#
+version: "1.0"
+
+defaults:
+  org:
+    name: "Demo Org"
+    slug: "demo-org"
+
+  workspace:
+    name: "Default"
+    slug: "default"
+
+  admin:
+    username: "admin"
+    # Actual password/api_key is read from the sandbox-admin Secret (Slice 6).
+    # This placeholder is overridden by the SANDBOX_ADMIN_API_KEY env var in the Job.
+    email: "admin@sandbox.local"
