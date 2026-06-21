@@ -18,6 +18,10 @@ WAIT_TIMEOUT="${WAIT_TIMEOUT:-20m}"
 K3D_IMAGE_IMPORT_MODE="${K3D_IMAGE_IMPORT_MODE:-direct}"
 K3D_AGENTS="${K3D_AGENTS:-2}"
 KIND_WORKERS="${KIND_WORKERS:-2}"
+# Optional: install Argo CD (control plane for the sandbox/snapshot feature). Off by default.
+INSTALL_ARGOCD="${INSTALL_ARGOCD:-false}"
+ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
+ARGOCD_VERSION="${ARGOCD_VERSION:-stable}"
 
 usage() {
     cat <<EOF
@@ -35,6 +39,9 @@ Environment:
   K3D_IMAGE_IMPORT_MODE k3d image import mode (default: direct)
   K3D_AGENTS         k3d agent count for new smoke clusters (default: 2)
   KIND_WORKERS       kind worker count for new smoke clusters (default: 2)
+  INSTALL_ARGOCD     Install Argo CD (sandbox/snapshot control plane) into the cluster (default: false)
+  ARGOCD_NAMESPACE   Namespace for Argo CD (default: argocd)
+  ARGOCD_VERSION     Argo CD install manifest channel/tag, e.g. stable or v2.13.0 (default: stable)
   HTTP_HOST_PORT     Marie HTTP host port passed to setup-local-k8s.sh
   GRPC_HOST_PORT     Marie gRPC host port passed to setup-local-k8s.sh
 EOF
@@ -81,6 +88,18 @@ check_executor_image() {
         echo "Rebuild/publish the image with setuptools<81 before running the Helm smoke test." >&2
         exit 1
     fi
+}
+
+install_argocd() {
+    # Argo CD is the control plane for the Marie sandbox/snapshot feature.
+    # Platform-level, installed once per cluster; not part of the Marie Helm release.
+    # Ref: https://argo-cd.readthedocs.io/en/stable/operator-manual/installation/
+    log "Installing Argo CD (${ARGOCD_VERSION}) into namespace ${ARGOCD_NAMESPACE}"
+    kubectl create namespace "${ARGOCD_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+    kubectl apply -n "${ARGOCD_NAMESPACE}" \
+        -f "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml"
+    kubectl -n "${ARGOCD_NAMESPACE}" rollout status deploy/argocd-server --timeout="${WAIT_TIMEOUT}"
+    log "Argo CD ready. API/UI: kubectl -n ${ARGOCD_NAMESPACE} port-forward svc/argocd-server 8080:443"
 }
 
 cluster_exists() {
@@ -153,6 +172,10 @@ fi
 
 log "Installing Marie-AI Helm release ${RELEASE} in namespace ${NAMESPACE}"
 helm "${helm_args[@]}"
+
+if [[ "${INSTALL_ARGOCD}" == "true" ]]; then
+    install_argocd
+fi
 
 log "Waiting for core workloads"
 kubectl -n "${NAMESPACE}" rollout status "deploy/${RELEASE}-server" --timeout="${WAIT_TIMEOUT}"

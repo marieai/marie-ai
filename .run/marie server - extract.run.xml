@@ -1,6 +1,5 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="marie server - extract" type="PythonConfigurationType" factoryName="Python" singleton="false">
-    <output_file path="$USER_HOME$/tmp/extract-executor.log" is_save="true" />
     <module name="marie-ai" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
@@ -17,6 +16,7 @@
       <env name="MARIE_DEFAULT_MOUNT" value="/mnt/data/marie-ai" />
       <env name="MARIE_SCHEDULER_TRACE_ENABLED" value="true" />
       <env name="MARIE_SCHEDULER_TRACE_PATH" value="$USER_HOME$/tmp/marie-scheduler-trace.jsonl" />
+      <env name="MARIE_SCHEDULER_TRACE_PROFILE" value="compact" />
     </envs>
     <option name="SDK_HOME" value="" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/" />
