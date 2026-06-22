@@ -1,0 +1,39 @@
+# Snapshot: invoice-demo-v1
+#
+# A Snapshot is a versioned, reusable template for creating sandboxes.
+# It carries: chart reference, image digests, resource profile, seed manifest
+# references, and TTL defaults.  The Studio Snapshot catalog reads these files
+# and stores them in the snapshots table in Studio Postgres.
+#
+# This file is read by the Studio Sandbox Service (Slice 3: snapshot data model).
+# The ApplicationSet generator does NOT read snapshot.yaml; it only reads
+# sandboxes/*/sandbox.yaml.
+#
+id: invoice-demo-v1
+name: "Invoice Demo"
+version: "1.0.0"
+description: >
+  Starter snapshot with invoice processing pipeline: NER-VLM-OCR entity extraction
+  blueprint, OCR engine, and NER model connector plugins.
+
+sourceType: built          # built | captured | imported
+
+# OCI or Helm chart reference used when the Sandbox Service renders values.yaml.
+# In v1 this is the git path; for OCI publish set to oci://ghcr.io/marieai/marie:<tag>
+chartRef: "https://github.com/marieai/marie-ai.git//deploy/helm/charts/marie"
+
+# Pinned image digests — null means the chart's default tags are used.
+# For reproducible sandboxes, pin each component image by digest here.
+imageRefs: null
+
+# Default sizing tier for sandboxes created from this snapshot.
+# small | medium | large  (see deploy/helm/charts/marie/values-sandbox.yaml § sandboxSizes)
+resourceProfile: small
+
+# Default TTL applied when the sandbox is created.  Users may extend or pin.
+ttlDefaults:
+  hours: 8
+
+# Pod Security profile applied to the sandbox namespace.
+# 'restricted' is the required minimum; 'baseline' if a subchart requires it.
+securityProfile: restricted

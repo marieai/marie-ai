@@ -1,0 +1,45 @@
+# values.yaml — written by the Studio Sandbox Service (sandbox-renderer.ts).
+#
+# Per-sandbox Helm values overlay for the umbrella Marie chart.
+# This file is consumed by Argo CD via the ApplicationSet's $values source reference:
+#   $values/sandboxes/<namespace>/values.yaml
+# layered on top of deploy/helm/charts/marie/values-sandbox.yaml.
+#
+# Contract with the chart (deploy/helm/charts/marie/values-sandbox.yaml):
+#   sandbox.enabled        — must be true; gates governance + seed Job rendering
+#   sandbox.host           — set by the ApplicationSet helm.parameters.sandbox.host
+#                            (overrides the empty string here at sync time)
+#   sandbox.size           — sizing tier: small | medium | large
+#   sandbox.seed.*         — informational metadata for the Studio Sandbox Service
+#                            (NOT consumed by any in-namespace Kubernetes Job)
+#
+# Contract with the renderer (sandbox-renderer.ts § renderValuesYaml):
+#   sandbox.seed.snapshotId  — passed through from SnapshotContext.id
+#   sandbox.seed.blueprintId — extracted from blueprintManifest['ref'] or ['id']
+#   sandbox.seed.pluginRefs  — extracted from pluginManifest['plugins'] array
+#   global.imageRefs         — present only when SnapshotContext.imageRefs is non-null
+#
+# NEVER modify this file by hand in production — it is written and managed by the
+# Sandbox Service.  Manual edits will be overwritten on the next Sandbox Service write.
+
+sandbox:
+  enabled: true
+
+  # Intentionally empty: the ApplicationSet helm.parameters block sets
+  # sandbox.host to "{{namespace}}.SANDBOX_DOMAIN" at sync time.
+  host: ""
+
+  # Sizing tier — drives ResourceQuota + LimitRange values in the namespace.
+  size: small
+
+  # Seed metadata read by the Studio Sandbox Service after the Application is Synced.
+  # The Wave-1 seed-defaults Job uses POSTGRES_* env vars (not these fields) for DB access.
+  # Blueprint and plugin installation is Studio-orchestrated (not in-namespace Jobs).
+  seed:
+    snapshotId: invoice-demo-v1
+    blueprintId: ner-vlm-ocr-entity-extraction
+    pluginRefs:
+      - packageId: connector.ocr-engine
+        version: "2.1.0"
+      - packageId: connector.ner-model
+        version: "1.4.2"

@@ -696,6 +696,158 @@ security:
     selfSigned: false
 
 # -----------------------------------------------------------------------------
+# Sandbox Configuration
+# Governance objects (ResourceQuota, LimitRange, NetworkPolicy, Namespace PSA
+# labels) are rendered only when sandbox.enabled=true.  Use values-sandbox.yaml
+# as the overlay; this section only carries the off-by-default flag and the
+# sizing presets referenced by the governance template.
+# -----------------------------------------------------------------------------
+sandbox:
+  # Set to true via values-sandbox.yaml overlay (never in production values).
+  enabled: false
+  host: ''
+  size: small
+  egress:
+    dns:
+      enabled: true
+      clusterDnsCidr: '10.96.0.0/12'
+    pluginRegistry:
+      enabled: false
+      cidr: ''
+      port: 443
+    llmGateway:
+      enabled: false
+      cidr: ''
+      port: 443
+
+  # ---- Seed configuration (Wave 1 + Studio-orchestrated seeding) ----------
+  # Populated via values-sandbox.yaml.
+  seed:
+    # Name of the k8s Secret that holds the sandbox admin API key.
+    # Key within the Secret is controlled by adminApiKeySecretKey below.
+    # If empty, defaults to <release-fullname>-sandbox-admin.
+    # The Secret must be pre-created before install (Slice 6 automates this
+    # via ESO/Sealed Secrets/SOPS).
+    adminApiKeySecret: ''
+    adminApiKeySecretKey: 'api_key'
+
+    # ---- Informational metadata read by the Studio Sandbox Service --------
+    # Blueprint + plugin seeding (Waves 2–3) is Studio-orchestrated: after
+    # Argo reports the sandbox Synced and the Wave-1 defaults Job is done,
+    # the Studio Sandbox Service calls the sandbox gateway using Studio's
+    # existing blueprint-import.service with these values.
+    # They are NOT consumed by any in-namespace Job.
+
+    # Blueprint identifier to install after defaults, e.g.
+    # "ner-vlm-ocr-entity-extraction".  Empty = no blueprint seeding.
+    blueprintId: ''
+
+    # Plugin refs from the blueprint's extension_package.
+    # Each entry must have at minimum: { packageId: "...", version: "..." }
+    # Read by the Studio Sandbox Service after blueprint import completes.
+    pluginRefs: []
+
+  # ---- Secret delivery (Slice 6 — External Secrets Operator) -------------
+  # Renders ExternalSecret CRDs (external-secrets.io/v1) that materialize
+  # per-sandbox Kubernetes Secrets from a configured SecretStore.
+  # Gated on BOTH sandbox.enabled=true AND sandbox.secrets.enabled=true.
+  # See templates/sandbox-secrets.yaml.
+  #
+  # Alternatives (not implemented): Sealed Secrets, SOPS + Argo plugin.
+  secrets:
+    # Set to true via values-sandbox.yaml overlay.  Never enable in production.
+    enabled: false
+
+    # Reference to the ClusterSecretStore or SecretStore to read from.
+    # The named store must be pre-created on the cluster (platform prerequisite).
+    storeRef:
+      name: ""             # e.g. "marie-sandbox-secrets" or "vault-backend"
+      kind: ClusterSecretStore   # ClusterSecretStore | SecretStore
+
+    # How often ESO re-reads from the remote store.
+    refreshInterval: "1h"
+
+    # Per-secret configuration.  The chart renders one ExternalSecret per entry
+    # whose remoteKey is non-empty.
+    #
+    # Fields per entry:
+    #   secretName  — name of the Kubernetes Secret ESO creates in the sandbox ns.
+    #                 Defaults to <fullname>-sandbox-<purpose> when empty.
+    #   remoteKey   — path/key in the remote store; MUST be set per sandbox.
+    #                 STUDIO RENDERER populates this in values.yaml at create time.
+    #   property    — property within the remote secret (e.g. vault KV field name).
+    secrets:
+      adminApiKey:
+        # MUST produce Secret named <fullname>-sandbox-admin with key api_key.
+        # Matches sandbox.seed.adminApiKeySecret default + adminApiKeySecretKey default.
+        secretName: ""
+        remoteKey: ""      # STUDIO RENDERER MUST SET per sandbox
+        property: api_key
+
+      dbPassword:
+        # Seam: set postgresql.auth.existingSecret=<secretName> in values overlay.
+        secretName: ""
+        remoteKey: ""      # STUDIO RENDERER MUST SET per sandbox
+        property: password
+
+      storageCredentials:
+        # Seam: set minio.auth.existingSecret=<secretName> in values overlay.
+        secretName: ""
+        remoteKey: ""      # STUDIO RENDERER MUST SET per sandbox
+        accessKeyProperty: access-key
+        secretKeyProperty: secret-key
+
+      runnerSecret:
+        # Seam: reference in executor.pools[*].env in values overlay.
+        secretName: ""
+        remoteKey: ""      # STUDIO RENDERER MUST SET per sandbox
+        property: token
+
+sandboxSizes:
+  small:
+    quota:
+      cpu: '8'
+      memory: 16Gi
+      pods: '20'
+      pvcs: '8'
+      storage: 100Gi
+    limits:
+      defaultCpu: '500m'
+      defaultMemory: 512Mi
+      defaultRequestCpu: '100m'
+      defaultRequestMemory: 128Mi
+      maxCpu: '4'
+      maxMemory: 8Gi
+  medium:
+    quota:
+      cpu: '24'
+      memory: 48Gi
+      pods: '40'
+      pvcs: '12'
+      storage: 300Gi
+    limits:
+      defaultCpu: '1'
+      defaultMemory: 1Gi
+      defaultRequestCpu: '200m'
+      defaultRequestMemory: 256Mi
+      maxCpu: '8'
+      maxMemory: 16Gi
+  large:
+    quota:
+      cpu: '64'
+      memory: 128Gi
+      pods: '80'
+      pvcs: '20'
+      storage: 1Ti
+    limits:
+      defaultCpu: '2'
+      defaultMemory: 2Gi
+      defaultRequestCpu: '500m'
+      defaultRequestMemory: 512Mi
+      maxCpu: '16'
+      maxMemory: 32Gi
+
+# -----------------------------------------------------------------------------
 # ServiceAccount Configuration
 # -----------------------------------------------------------------------------
 serviceAccount:

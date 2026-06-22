@@ -1,0 +1,100 @@
+{{/*
+Sandbox Wave-0 PostgreSQL initialisation Job.
+
+Performs one-time, idempotent setup steps that cannot run inside the subchart's
+docker-entrypoint-initdb.d script because they require connecting to a database
+other than the bootstrap database:
+
+  1. Create the `mem0` database (Mem0 SDK stores vector embeddings here).
+  2. Enable the `vector` (pgvector) extension inside the `mem0` database.
+     The extension ships with the FerretDB DocumentDB image used by the
+     postgresql subchart and is also required in the `postgres` default DB
+     (done by initdb.sql), but must be separately enabled per-database.
+
+Bootstrap parity:  mirrors `initialize_databases()` in bootstrap-marie.sh
+  lines 1325-1336 (CREATE DATABASE mem0 + CREATE EXTENSION IF NOT EXISTS vector).
+
+Ordering:
+  argocd.argoproj.io/sync-wave: "0"  — same wave as infra StatefulSets.
+    Argo waits for all wave-0 resources to be Healthy/Succeeded before
+    applying wave-1 (sandbox-seed-defaults Job).
+
+Rendered only when sandbox.enabled=true.
+*/}}
+{{- if .Values.sandbox.enabled }}
+
+{{- $fullname := include "marie.fullname" . }}
+{{- $pgHost   := printf "%s-postgresql" .Release.Name }}
+{{- $pgImage  := printf "%s/%s:%s"
+      (.Values.postgresql.image.registry | default "ghcr.io")
+      .Values.postgresql.image.repository
+      .Values.postgresql.image.tag }}
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-sandbox-pg-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marie.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-pg-init
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "marie.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: sandbox-pg-init
+    spec:
+      restartPolicy: OnFailure
+      {{- include "marie.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: pg-init
+          image: {{ $pgImage | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PGHOST
+              value: {{ $pgHost | quote }}
+            - name: PGPORT
+              value: "5432"
+            - name: PGUSER
+              value: {{ .Values.postgresql.auth.username | default "postgres" | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $pgHost }}
+                  key: postgres-password
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              echo "Waiting for PostgreSQL to accept connections..."
+              until pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER"; do
+                sleep 2
+              done
+              echo "PostgreSQL ready."
+
+              # Create mem0 database (idempotent)
+              psql -d postgres -tc \
+                "SELECT 1 FROM pg_database WHERE datname = 'mem0'" \
+                | grep -q 1 \
+                || psql -d postgres -c "CREATE DATABASE mem0"
+              echo "Database mem0 ensured."
+
+              # Enable pgvector in mem0 (idempotent, requires connection to mem0)
+              psql -d mem0 -c "CREATE EXTENSION IF NOT EXISTS vector"
+              echo "pgvector extension enabled in mem0."
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+{{- end }}{{/* sandbox.enabled */}}
