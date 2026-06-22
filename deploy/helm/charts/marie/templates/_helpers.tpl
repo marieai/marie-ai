@@ -122,11 +122,16 @@ PostgreSQL database
 {{- end }}
 
 {{/*
-PostgreSQL secret name
+PostgreSQL secret name.
+
+The in-cluster PostgreSQL subchart names its Secret after the release, not the
+umbrella chart fullname:  `<release>-postgresql`  (e.g. "sbx-a1b2-postgresql").
+Using `marie.fullname` here would produce `<release>-marie-postgresql` — a
+different name that does not exist — so we use `.Release.Name` directly.
 */}}
 {{- define "marie.postgresql.secretName" -}}
 {{- if .Values.postgresql.enabled }}
-{{- printf "%s-postgresql" (include "marie.fullname" .) }}
+{{- printf "%s-postgresql" .Release.Name }}
 {{- else }}
 {{- .Values.postgresql.external.existingSecret }}
 {{- end }}
