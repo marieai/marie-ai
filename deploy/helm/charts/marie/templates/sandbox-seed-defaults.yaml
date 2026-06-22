@@ -72,7 +72,9 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ include "marie.postgresql.secretName" . }}
-                  key: {{ if .Values.postgresql.enabled }}password{{ else }}{{ .Values.postgresql.external.existingSecretPasswordKey }}{{ end }}
+                  {{- /* In-cluster PG: key is postgres-password (matches server deployment).
+                         External PG: key comes from the caller-supplied existingSecret. */}}
+                  key: {{ if .Values.postgresql.enabled }}postgres-password{{ else }}{{ .Values.postgresql.external.existingSecretPasswordKey }}{{ end }}
             # Admin API key — optional; seed generates a random key when absent.
             # Pre-create this Secret before install (Slice 6 automates via ESO/Sealed/SOPS).
             - name: SANDBOX_ADMIN_API_KEY

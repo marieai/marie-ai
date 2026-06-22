@@ -11,6 +11,10 @@ metadata:
   labels:
     {{- include "minio.labels" . | nindent 4 }}
   annotations:
+    # Wave 0: Argo CD waits for bucket provisioning to complete before
+    # advancing to wave 1 (sandbox-seed-defaults Job), which requires
+    # the `marie` bucket to exist.
+    argocd.argoproj.io/sync-wave: "0"
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
