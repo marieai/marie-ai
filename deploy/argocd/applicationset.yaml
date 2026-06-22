@@ -1,0 +1,120 @@
+# Marie Sandboxes ApplicationSet
+#
+# Platform-owned ApplicationSet that converts each sandboxes/<id>/ directory in
+# the desired-state repo into an Argo CD Application.  One Application is created
+# per sandbox directory; removing the directory deletes the Application and
+# cascade-deletes the namespace and all of its resources.
+#
+# SUBSTITUTION REQUIRED before applying (see deploy/argocd/bootstrap-argocd.md):
+#
+#   DESIRED_STATE_REPO_URL   — Git URL of the desired-state repo
+#                              (marie-sandbox-deployments, or the marie-ai repo for v1;
+#                               see bootstrap doc for the v1 single-repo path adjustment)
+#   CHART_REPO_URL           — Git URL of the marie-ai repo that contains
+#                              deploy/helm/charts/marie
+#   CLUSTER_SERVER           — Kubernetes API server URL
+#                              (e.g. https://kubernetes.default.svc for in-cluster)
+#   SANDBOX_DOMAIN           — wildcard subdomain for per-sandbox ingress hostnames
+#                              (e.g. sbx.example.com → each sandbox gets <ns>.sbx.example.com)
+#
+# Requires Argo CD >= 2.6.0 (multiple-source Applications GA).
+# CRD: argoproj.io/v1alpha1 ApplicationSet
+#
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: marie-sandboxes
+  namespace: argocd
+spec:
+  # When a sandbox directory is removed from git (sandbox deleted), delete the
+  # generated Application.  The finalizer on the Application then cascade-deletes
+  # the namespace and all contained resources.
+  preserveResourcesOnDeletion: false
+
+  # The Git files generator parses sandbox.yaml in each sandboxes/<id>/ directory
+  # and exposes all top-level fields as template parameters.  One Application is
+  # produced per discovered sandbox.yaml.
+  #
+  # Parameters available in the template from sandbox.yaml:
+  #   {{project}}           — "org-<orgId>" (AppProject binding, enforces org isolation)
+  #   {{namespace}}         — "sbx-<orgId>-<shortId>" (namespace + dir name)
+  #   {{snapshotId}}        — snapshot identifier
+  #   {{snapshotVersion}}   — snapshot version tag
+  #   {{chartRef}}          — chart OCI/git ref from the snapshot
+  #   {{resourceProfile}}   — sizing tier: small | medium | large
+  #   {{ttlHours}}          — default TTL hours
+  generators:
+    - git:
+        repoURL: DESIRED_STATE_REPO_URL        # ← substitute before applying
+        revision: HEAD
+        files:
+          - path: "sandboxes/*/sandbox.yaml"
+
+  template:
+    metadata:
+      # Application name == namespace == git directory name.
+      name: "{{namespace}}"
+      namespace: argocd
+      annotations:
+        # Propagated for observability; not consumed by Argo.
+        marie.ai/snapshot-id: "{{snapshotId}}"
+        marie.ai/resource-profile: "{{resourceProfile}}"
+      finalizers:
+        # Cascade-delete all namespace resources (including the namespace itself)
+        # when this Application is deleted.  Required for clean sandbox teardown.
+        - resources-finalizer.argocd.argoproj.io
+
+    spec:
+      # project is read from the 'project' field in sandbox.yaml: "org-<orgId>".
+      # The AppProject for this org must exist (see appproject-template.yaml) before
+      # the Application can sync; the Sandbox Service creates it on first use.
+      project: "{{project}}"
+
+      # Two sources — requires Argo CD >= 2.6.0:
+      #   Source 1 (ref: values) holds the desired-state repo as a reference so that
+      #   the $values alias resolves in Source 2's valueFiles list.
+      #   Source 2 renders the umbrella Marie chart with the per-sandbox overlay.
+      sources:
+        # Source 1 — desired-state repo reference (values alias only; not rendered).
+        - repoURL: DESIRED_STATE_REPO_URL      # ← substitute
+          targetRevision: HEAD
+          ref: values
+
+        # Source 2 — umbrella Marie chart rendered with the per-sandbox values overlay.
+        - repoURL: CHART_REPO_URL             # ← substitute
+          targetRevision: HEAD
+          path: deploy/helm/charts/marie
+          helm:
+            # Release name matches the namespace so kubectl/helm commands are unambiguous.
+            releaseName: "{{namespace}}"
+            valueFiles:
+              # Layer 1: chart-level sandbox sizing defaults (values-sandbox.yaml).
+              - values-sandbox.yaml
+              # Layer 2: per-sandbox overlay rendered by the Studio Sandbox Service.
+              #   Sets sandbox.enabled, sandbox.size, sandbox.seed.{blueprintId,pluginRefs}.
+              #   The $values alias resolves to Source 1 (the desired-state repo).
+              - $values/sandboxes/{{namespace}}/values.yaml
+            parameters:
+              # Per-sandbox ingress hostname: <namespace>.SANDBOX_DOMAIN
+              # Substitute SANDBOX_DOMAIN with your wildcard subdomain base.
+              # If wildcard DNS is unavailable, remove this parameter and use the
+              # proxy fallback (Slice 9 / networking doc §OD2).
+              - name: sandbox.host
+                value: "{{namespace}}.SANDBOX_DOMAIN"  # ← substitute SANDBOX_DOMAIN
+
+      destination:
+        server: CLUSTER_SERVER                # ← substitute
+        namespace: "{{namespace}}"
+
+      syncPolicy:
+        automated:
+          # Remove cluster resources that are no longer declared in git.
+          prune: true
+          # Revert any manual cluster changes back to the declared state.
+          selfHeal: true
+        syncOptions:
+          # Create the sandbox namespace if it does not exist.
+          # The chart's sandbox-governance.yaml also applies PSA labels to it.
+          - CreateNamespace=true
+          # Use server-side apply for better field manager semantics.
+          - ServerSideApply=true

@@ -103,6 +103,16 @@ spec:
             - configMapRef:
                 name: {{ include "server.fullname" . }}-env
           env:
+            # Stub env vars for the amazon_mq shared_config anchor in
+            # marie-gateway-4.0.0.yml.  The anchor is defined but never
+            # merged (<<:) in the sandbox config; stubs prevent JAML from
+            # leaving unresolved $AWS_MQ_* placeholders in the parsed YAML.
+            - name: AWS_MQ_HOSTNAME
+              value: ""
+            - name: AWS_MQ_USERNAME
+              value: ""
+            - name: AWS_MQ_PASSWORD
+              value: ""
             - name: POD_UID
               valueFrom:
                 fieldRef:

@@ -51,6 +51,7 @@ Install these locally:
 - `kubectl`
 - `helm`
 - `k3d` or `kind`
+- Argo CD — _optional_, only for the sandbox/snapshot feature (see [Argo CD](#argo-cd-sandboxsnapshot-control-plane))
 
 If `k3d` or `kind` is missing, `deploy/setup-local-k8s.sh` can install it into `$HOME/.local/bin`.
 
@@ -262,6 +263,45 @@ Headlamp references:
 - https://github.com/kubernetes-sigs/headlamp
 - https://headlamp.dev/docs/latest/installation/
 - https://headlamp.dev/docs/latest/installation/in-cluster/
+
+## Argo CD (sandbox/snapshot control plane)
+
+Skip this for normal local development. Argo CD is the GitOps control plane for the **sandbox/snapshot**
+feature: marie-studio writes per-sandbox desired state to Git and Argo CD reconciles each sandbox as a
+complete, isolated Marie system in its own namespace. It is a platform-level dependency, installed once per
+cluster — **not** part of the Marie Helm release.
+
+The smoke script can install it for you:
+
+```bash
+INSTALL_ARGOCD=true ./deploy/bootstrap.sh k3d
+```
+
+Or install it directly (the smoke script does the equivalent):
+
+```bash
+kubectl create namespace argocd
+kubectl apply -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl -n argocd rollout status deploy/argocd-server
+```
+
+Reach the Argo CD API/UI (the API backs realtime sandbox status/control from marie-studio):
+
+```bash
+kubectl -n argocd port-forward svc/argocd-server 8080:443
+# UI: https://localhost:8080  ·  OpenAPI: https://localhost:8080/swagger-ui
+# initial admin password:
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath='{.data.password}' | base64 -d; echo
+```
+
+Override the namespace or version with `ARGOCD_NAMESPACE` / `ARGOCD_VERSION` (e.g. `ARGOCD_VERSION=v2.13.0`).
+
+Argo CD references:
+
+- https://argo-cd.readthedocs.io/en/stable/operator-manual/installation/
+- https://argo-cd.readthedocs.io/en/latest/developer-guide/api-docs/
 
 ## Verify Gateway Health
 

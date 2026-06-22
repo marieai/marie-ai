@@ -1,0 +1,46 @@
+# sandbox.yaml — written by the Studio Sandbox Service (sandbox-renderer.ts).
+#
+# This file is the primary input to the ApplicationSet Git files generator.
+# All top-level fields are exposed as template parameters in the generated Application.
+#
+# Key contract with the ApplicationSet (applicationset.yaml):
+#   project:   → spec.project of the generated Application ("org-<orgId>")
+#   namespace: → spec.destination.namespace + Application name ("sbx-<orgId>-<shortId>")
+#
+# The ApplicationSet reads ONLY this file per sandbox directory; values.yaml,
+# secrets-ref.yaml, and snapshot files are not read by the generator.
+#
+# NEVER modify this file by hand in production — it is written and managed by the
+# Sandbox Service.  Manual edits will be overwritten on the next Sandbox Service write.
+
+# AppProject binding — enforces org isolation in Argo CD.
+# The ApplicationSet templates this field onto each generated Application's spec.project.
+# The AppProject org-<orgId> must exist (appproject-template.yaml) before sync.
+project: org-12345678-1234-1234-1234-123456789abc
+
+# Kubernetes namespace and git directory name.
+# Format: sbx-<orgId>-<shortId>  (max 63 chars, DNS-1123 compliant)
+namespace: sbx-12345678-1234-1234-1234-123456789abc-a1b2c3
+
+# Snapshot provenance
+snapshotId: invoice-demo-v1
+snapshotVersion: 1.0.0
+chartRef: "https://github.com/marieai/marie-ai.git//deploy/helm/charts/marie"
+
+# Ownership
+owner:
+  userId: usr-00000000-0000-0000-0000-000000000001
+  organizationId: 12345678-1234-1234-1234-123456789abc
+  workspaceId: ws-00000000-0000-0000-0000-000000000001
+
+# Sizing
+resourceProfile: small
+ttlHours: 8
+
+# Labels — carried for observability; also read by the Sandbox Service when
+# querying Argo Application lists to filter by org or sandbox identifier.
+labels:
+  marie.ai/org: 12345678-1234-1234-1234-123456789abc
+  marie.ai/sandbox: sbx-12345678-1234-1234-1234-123456789abc-a1b2c3
+
+createdAt: "2026-06-21T00:00:00.000Z"

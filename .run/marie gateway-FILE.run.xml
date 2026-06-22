@@ -20,6 +20,7 @@
       <env name="OPENAI_API_BASE" value="http://localhost:4010" />
       <env name="OPENAI_API_KEY" value="EMPTY" />
       <env name="PYTHONUNBUFFERED" value="1" />
+      <env name="MARIE_SCHEDULER_TRACE_PROFILE" value="compact" />
     </envs>
     <option name="SDK_HOME" value="" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/" />

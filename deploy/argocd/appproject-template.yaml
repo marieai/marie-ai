@@ -1,0 +1,155 @@
+# Per-org AppProject Template
+#
+# Create one AppProject per Marie organization.  The Sandbox Service applies this
+# template (with substitutions) when an org provisions its first sandbox.
+#
+# SUBSTITUTION VARIABLES — all must be replaced before applying:
+#
+#   __ORG_ID__                 — org UUID, lowercase (e.g. 12345678-1234-1234-1234-123456789abc)
+#                                Matches the orgId embedded in sandbox namespace names:
+#                                sbx-<orgId>-<shortId>
+#   __CLUSTER_SERVER__         — Kubernetes API server URL
+#                                (e.g. https://kubernetes.default.svc)
+#   __CHART_REPO_URL__         — Git URL of the marie-ai chart repo
+#   __DESIRED_STATE_REPO_URL__ — Git URL of the desired-state repo (marie-sandbox-deployments)
+#
+# Application method (Sandbox Service):
+#
+#   # Using envsubst (simple substitution):
+#   export ORG_ID="12345678-1234-1234-1234-123456789abc"
+#   export CLUSTER_SERVER="https://kubernetes.default.svc"
+#   export CHART_REPO_URL="https://github.com/marieai/marie-ai.git"
+#   export DESIRED_STATE_REPO_URL="https://github.com/marieai/marie-sandbox-deployments.git"
+#   sed -e "s|__ORG_ID__|${ORG_ID}|g" \
+#       -e "s|__CLUSTER_SERVER__|${CLUSTER_SERVER}|g" \
+#       -e "s|__CHART_REPO_URL__|${CHART_REPO_URL}|g" \
+#       -e "s|__DESIRED_STATE_REPO_URL__|${DESIRED_STATE_REPO_URL}|g" \
+#     deploy/argocd/appproject-template.yaml \
+#     | kubectl apply -n argocd -f -
+#
+#   # Or via the Argo CD API (SDK call from the Sandbox Service):
+#   POST /api/v1/projects  body: <substituted AppProject JSON>
+#
+# CRD: argoproj.io/v1alpha1 AppProject
+#
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: org-__ORG_ID__
+  namespace: argocd
+  annotations:
+    # Carried for traceability; the Sandbox Service sets these at creation time.
+    marie.ai/org-id: "__ORG_ID__"
+    marie.ai/managed-by: "sandbox-service"
+spec:
+  description: "Marie sandbox project for organization __ORG_ID__"
+
+  # Source repositories this project's Applications may reference.
+  # Restricts which repos can be used as chart or values sources.
+  sourceRepos:
+    - __CHART_REPO_URL__                  # umbrella Marie chart (deploy/helm/charts/marie)
+    - __DESIRED_STATE_REPO_URL__          # per-sandbox values overlay + sandbox.yaml
+
+  # Destinations — this org's sandbox namespaces only, on the approved cluster.
+  #
+  # The namespace wildcard sbx-<orgId>-* is enforceable because namespaces embed
+  # the org UUID as a prefix.  An Application in this project cannot target any
+  # other org's namespaces, production namespaces, or a different cluster.
+  destinations:
+    - server: __CLUSTER_SERVER__
+      namespace: "sbx-__ORG_ID__-*"
+
+  # Cluster-scoped resources this project may create.
+  # Namespace is required: the chart's sandbox-governance.yaml applies PSA labels
+  # via a managed Namespace object; CreateNamespace=true alone does not set labels.
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+
+  # Namespace-scoped resources this project may deploy into its sandbox namespaces.
+  # Only resource kinds legitimately needed by the umbrella Marie chart + governance
+  # objects are listed.  This whitelist is enforced at the Argo CD layer regardless
+  # of Studio RBAC or namespace-level RBAC.
+  namespaceResourceWhitelist:
+    # ---- Core workloads ----
+    - group: ""
+      kind: Pod
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: Endpoints
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: ServiceAccount
+    - group: ""
+      kind: Secret
+    - group: ""
+      kind: PersistentVolumeClaim
+    - group: "apps"
+      kind: Deployment
+    - group: "apps"
+      kind: StatefulSet
+    - group: "apps"
+      kind: ReplicaSet
+    - group: "batch"
+      kind: Job
+    - group: "batch"
+      kind: CronJob
+    # ---- Networking ----
+    - group: "networking.k8s.io"
+      kind: Ingress
+    - group: "networking.k8s.io"
+      kind: NetworkPolicy
+    # ---- Governance (sandbox-governance.yaml template) ----
+    - group: ""
+      kind: ResourceQuota
+    - group: ""
+      kind: LimitRange
+    # ---- Autoscaling ----
+    - group: "autoscaling"
+      kind: HorizontalPodAutoscaler
+    # ---- Availability ----
+    - group: "policy"
+      kind: PodDisruptionBudget
+    # ---- RBAC (in-namespace roles for chart components) ----
+    - group: "rbac.authorization.k8s.io"
+      kind: Role
+    - group: "rbac.authorization.k8s.io"
+      kind: RoleBinding
+    # ---- Secret delivery (Slice 6 — ESO/Sealed Secrets/SOPS) ----
+    # Add one of the following blocks once the secret mechanism is chosen (OD4):
+    #
+    # External Secrets Operator:
+    - group: "external-secrets.io"
+      kind: ExternalSecret
+    - group: "external-secrets.io"
+      kind: SecretStore
+    #
+    # Sealed Secrets (uncomment if using Sealed Secrets instead of ESO):
+    # - group: "bitnami.com"
+    #   kind: SealedSecret
+
+  # Argo CD RBAC — scopes API token access to this project.
+  #
+  # The Sandbox Service holds a project-scoped token for each org.  An API call
+  # using org A's token cannot read or sync org B's Applications — this is the
+  # Argo CD layer of the three-layer isolation model (Studio RBAC → Argo AppProject
+  # + RBAC → namespace/NetworkPolicy/quotas).
+  #
+  # After applying this AppProject, generate the token:
+  #   argocd proj role create-token org-__ORG_ID__ sandbox-service-org-__ORG_ID__
+  # Store the token in the Sandbox Service's secret store (never in git).
+  roles:
+    - name: "sandbox-service-org-__ORG_ID__"
+      description: "Project-scoped Argo CD token used by the Sandbox Service for org __ORG_ID__"
+      policies:
+        # Read Application status, health, resource-tree, and logs.
+        - "p, proj:org-__ORG_ID__:sandbox-service-org-__ORG_ID__, applications, get, org-__ORG_ID__/*, allow"
+        # Trigger a manual sync (the Studio Retry button).
+        - "p, proj:org-__ORG_ID__:sandbox-service-org-__ORG_ID__, applications, sync, org-__ORG_ID__/*, allow"
+        # Request a hard refresh (bypass cache, re-evaluate git).
+        - "p, proj:org-__ORG_ID__:sandbox-service-org-__ORG_ID__, applications, update, org-__ORG_ID__/*, allow"
+        # Read application logs (seed Job output surfaced in Studio provisioning timeline).
+        - "p, proj:org-__ORG_ID__:sandbox-service-org-__ORG_ID__, logs, get, org-__ORG_ID__/*, allow"
+      jwtTokens: []

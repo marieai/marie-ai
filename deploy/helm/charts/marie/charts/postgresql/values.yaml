@@ -67,6 +67,9 @@ initdb:
       SELECT 'CREATE DATABASE litellm'
       WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'litellm')\gexec
 
+      SELECT 'CREATE DATABASE mem0'
+      WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'mem0')\gexec
+
 nodeSelector: {}
 tolerations: []
 affinity: {}
