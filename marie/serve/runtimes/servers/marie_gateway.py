@@ -51,6 +51,7 @@ from marie.messaging.events import (
 )
 from marie.messaging.grpc_event_broker import GrpcEventBroker
 from marie.proto import jina_pb2, jina_pb2_grpc
+from marie.sandbox.blueprints.gateway_routes import register_blueprint_routes
 from marie.scheduler import PostgreSQLJobScheduler
 from marie.scheduler.models import DEFAULT_RETRY_POLICY, JobSubmissionModel, WorkInfo
 from marie.scheduler.state import WorkState
@@ -1380,6 +1381,9 @@ class MarieServerGateway(CompositeServer):
 
             # Register Wasm compilation routes
             register_wasm_routes(app)
+
+            # Register sandbox blueprint-import and plugin-install routes
+            register_blueprint_routes(app)
 
             return app
 
