@@ -218,3 +218,4 @@ ansible/inventories/hosts.dev.yml
 
 .gradle
 G5-ERRORS/
+!/.agent-debug/

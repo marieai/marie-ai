@@ -44,6 +44,12 @@ HITL (Human-in-the-Loop) Plans:
     - query_planner_mock_hitl_router: HITL routing based on approval decision
     - query_planner_mock_hitl_complete_workflow: Complete HITL workflow with all patterns
 
+Plugin Plans (one per plugin family, dispatched to the plugin daemon executor):
+    - query_planner_mock_plugin_tool: START -> PLUGIN(tool) -> END
+    - query_planner_mock_plugin_model: START -> PLUGIN(model) -> END
+    - query_planner_mock_plugin_datasource: START -> PLUGIN(datasource) -> END
+    - query_planner_mock_plugin_trigger: START -> PLUGIN(trigger) -> END
+
 Usage:
     from tests.integration.scheduler.mock_query_plans import (
         query_planner_mock_simple,
@@ -103,6 +109,14 @@ from tests.integration.scheduler.mock_plans.hitl import (
     query_planner_mock_hitl_router,
 )
 
+# Plugin plans (one per plugin family, dispatched to the plugin daemon executor)
+from tests.integration.scheduler.mock_plans.plugin import (
+    query_planner_mock_plugin_datasource,
+    query_planner_mock_plugin_model,
+    query_planner_mock_plugin_tool,
+    query_planner_mock_plugin_trigger,
+)
+
 # Traditional plans (linear and parallel execution patterns)
 from tests.integration.scheduler.mock_plans.traditional import (
     query_planner_mock_annotator_llm,
@@ -159,6 +173,11 @@ __all__ = [
     "query_planner_mock_hitl_correction",
     "query_planner_mock_hitl_router",
     "query_planner_mock_hitl_complete_workflow",
+    # Plugin plans
+    "query_planner_mock_plugin_tool",
+    "query_planner_mock_plugin_model",
+    "query_planner_mock_plugin_datasource",
+    "query_planner_mock_plugin_trigger",
 ]
 
 
@@ -203,6 +222,11 @@ if __name__ == "__main__":
         ("mock_guardrail_retry_loop", "Guardrail Retry Loop Plan"),
         ("mock_guardrail_executor_metric", "Guardrail Executor Metric Plan"),
         ("mock_guardrail_multi_metric", "Guardrail Multi-Metric Plan"),
+        # Plugin Plans
+        ("mock_plugin_tool", "Plugin Tool Plan"),
+        ("mock_plugin_model", "Plugin Model Plan"),
+        ("mock_plugin_datasource", "Plugin Datasource Plan"),
+        ("mock_plugin_trigger", "Plugin Trigger Plan"),
     ]
 
     for plan_name, description in plans_to_test:

@@ -374,12 +374,18 @@ def resolve_tools(
             result[tool.name] = tool
 
         elif isinstance(spec, dict):
+            from marie.agent.tools.plugin_tool import is_plugin_tool_spec
             from marie.mcp.runtime import MCPToolSpec, is_mcp_tool_spec
 
             if is_mcp_tool_spec(spec):
                 from marie.agent.tools.mcp_tool import MCPRemoteTool
 
                 tool = MCPRemoteTool(MCPToolSpec.model_validate(spec))
+                result[tool.name] = tool
+            elif is_plugin_tool_spec(spec):
+                from marie.agent.tools.plugin_tool import PluginTool, PluginToolSpec
+
+                tool = PluginTool(PluginToolSpec.model_validate(spec))
                 result[tool.name] = tool
             else:
                 name = spec.get("name")

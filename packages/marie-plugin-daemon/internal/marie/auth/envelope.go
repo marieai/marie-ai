@@ -31,6 +31,11 @@ type EnvelopeVerifier struct {
 	keys map[string][]byte
 	now  func() time.Time
 
+	// insecure, when true, makes Verify accept ANY envelope without checking the
+	// signature. DEV ONLY — used for local end-to-end testing before envelope
+	// signing is wired on the marie-ai side.
+	insecure bool
+
 	mu     sync.Mutex
 	nonces map[string]time.Time
 }
@@ -60,7 +65,23 @@ func NewEnvelopeVerifier(keys []SigningKey, now func() time.Time) *EnvelopeVerif
 	}
 }
 
+// NewInsecureEnvelopeVerifier returns a verifier that accepts ANY envelope without
+// checking its signature. DEV ONLY — for local end-to-end testing before envelope
+// signing is wired on the marie-ai side. Never enable in a shared environment.
+// The runtime policy checks (package/action/mode claims) still apply.
+func NewInsecureEnvelopeVerifier() *EnvelopeVerifier {
+	return &EnvelopeVerifier{
+		keys:     map[string][]byte{},
+		now:      time.Now,
+		insecure: true,
+		nonces:   map[string]time.Time{},
+	}
+}
+
 func (verifier *EnvelopeVerifier) Verify(envelope map[string]any) error {
+	if verifier != nil && verifier.insecure {
+		return nil
+	}
 	if verifier == nil || len(verifier.keys) == 0 {
 		return fmt.Errorf("%w: no verifier keys configured", ErrInvalidSignature)
 	}

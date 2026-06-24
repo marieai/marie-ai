@@ -876,6 +876,43 @@ class ExecutorEndpointQueryDefinition(QueryDefinition):
         pass
 
 
+@QueryTypeRegistry.register("PLUGIN")
+class PluginQueryDefinition(QueryDefinition):
+    """
+    Represents an installed-plugin invocation.
+
+    A PLUGIN node is dispatched to the plugin daemon executor
+    (``MariePluginDaemonExecutor``), which runs the installed plugin through the
+    marie-plugin-daemon. The dedicated ``method == "PLUGIN"`` is the routing
+    signal the scheduler uses to select that executor; the typed fields below
+    identify which plugin and action to invoke.
+    """
+
+    method: str = "PLUGIN"
+    endpoint: str = "/v1/dispatch/invoke"
+    plugin_type: str = Field(
+        ...,
+        description="Plugin family: tool | model | datasource | trigger.",
+    )
+    plugin_ref: str = Field(
+        ...,
+        description="Installed plugin package reference, e.g. 'ext.m3forge.reader'.",
+    )
+    action: str = Field(
+        ...,
+        description="Plugin action to invoke (tool / provider / datasource / trigger name).",
+    )
+    params: dict = Field(default_factory=lambda: {"layout": None})
+
+    def validate_params(self):
+        if not self.plugin_type:
+            raise ValueError("PLUGIN queries must specify 'plugin_type'.")
+        if not self.plugin_ref:
+            raise ValueError("PLUGIN queries must specify 'plugin_ref'.")
+        if not self.action:
+            raise ValueError("PLUGIN queries must specify 'action'.")
+
+
 class QueryType(str, enum.Enum):
     """
     Enumeration representing the types of queries that can be asked to a question answer system.

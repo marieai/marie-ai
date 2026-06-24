@@ -2,6 +2,7 @@ package local_runtime
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -209,9 +210,15 @@ func (i *Instance) readLoop(stdout io.Reader) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 5*1024*1024)
 	for scanner.Scan() {
-		event, err := plugin_entities.ParsePluginUniversalEvent(scanner.Bytes())
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			// Blank line between events on the plugin's stdout — ignore quietly.
+			continue
+		}
+		event, err := plugin_entities.ParsePluginUniversalEvent(line)
 		if err != nil {
-			fmt.Fprintf(i.logs, "plugin stdout: %v\n", err)
+			// Non-event output on the plugin's stdout (stray prints / framing).
+			// The plugin's real logs arrive as EventLog, so drop this quietly.
 			continue
 		}
 		switch event.Event {

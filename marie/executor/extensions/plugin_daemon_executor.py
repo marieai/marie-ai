@@ -487,18 +487,19 @@ def child_discovery(binary: Path, daemon_addr: str, source: str) -> DaemonDiscov
 
 
 def local_dist_binary() -> Path | None:
-    suffix = platform_suffix()
-    if suffix is None:
-        return None
     repo_root = Path(__file__).resolve().parents[3]
-    return (
-        repo_root
-        / "packages"
-        / "marie-plugin-daemon"
-        / "dist"
-        / suffix
-        / "marie-plugin-daemon"
-    )
+    dist = repo_root / "packages" / "marie-plugin-daemon" / "dist"
+    # Prefer the platform-suffixed build, but fall back to a flat dist/ binary
+    # (what `make build` produces: dist/marie-plugin-daemon).
+    suffix = platform_suffix()
+    candidates = []
+    if suffix is not None:
+        candidates.append(dist / suffix / "marie-plugin-daemon")
+    candidates.append(dist / "marie-plugin-daemon")
+    for candidate in candidates:
+        if executable(candidate):
+            return candidate
+    return candidates[0] if candidates else None
 
 
 def platform_suffix() -> str | None:

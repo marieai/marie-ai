@@ -229,6 +229,16 @@ func NewServer(version VersionInfo, options ...ServerOption) http.Handler {
 		}
 
 		frames, err := config.pool.Invoke(r.Context(), tenant, packageRef, envelope["payload"], envelopeTimeout(envelope))
+		if errors.Is(err, io_tunnel.ErrNotRunning) {
+			// The plugin is installed but has no running instance (e.g. after a
+			// daemon restart). Lazy-deploy it from its existing working dir and
+			// retry once — Deploy needs only the packageRef, not the archive.
+			if _, derr := config.pool.Deploy(r.Context(), tenant, packageRef); derr != nil {
+				writeJSON(w, http.StatusInternalServerError, errorBody("deploy_failed", derr.Error()))
+				return
+			}
+			frames, err = config.pool.Invoke(r.Context(), tenant, packageRef, envelope["payload"], envelopeTimeout(envelope))
+		}
 		if err != nil {
 			if errors.Is(err, io_tunnel.ErrNotRunning) {
 				writeJSON(w, http.StatusConflict, errorBody("instance_not_running", err.Error()))
