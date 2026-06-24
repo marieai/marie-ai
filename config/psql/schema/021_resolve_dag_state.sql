@@ -4,40 +4,32 @@ LANGUAGE plpgsql
 AS
 $$
 DECLARE
-    v_any_failed    BOOLEAN;
-    v_all_completed BOOLEAN;
     v_updated_rows  INT;
     v_new_state     TEXT := NULL;
 BEGIN
-    -- 1) If any job is "failed," mark the DAG as "failed."
-    SELECT EXISTS (
-        SELECT 1
-        FROM {schema}.job
-        WHERE dag_id = p_dag_id
-          AND state = 'failed'
-    )
-    INTO v_any_failed;
-
-    IF v_any_failed THEN
-        v_new_state := 'failed';
-
-    ELSE
-        -- 2) If all jobs are "completed," mark the DAG as "completed."
-        SELECT NOT EXISTS (
-            SELECT 1
-            FROM {schema}.job
-            WHERE dag_id = p_dag_id
-              AND state <> 'completed'
-        )
-        INTO v_all_completed;
-
-        IF v_all_completed THEN
-            v_new_state := 'completed';
-        ELSE
-            -- 3) Otherwise, mark the DAG as "active."
-            v_new_state := 'active';
-        END IF;
-    END IF;
+    SELECT CASE
+               -- 1) If any job is "failed," mark the DAG as "failed."
+               WHEN EXISTS (SELECT 1
+                            FROM {schema}.job
+                            WHERE dag_id = p_dag_id
+                              AND state = 'failed')
+                   THEN 'failed'
+               -- 2) If all jobs are "completed," mark the DAG as "completed."
+               WHEN NOT EXISTS (SELECT 1
+                                FROM {schema}.job
+                                WHERE dag_id = p_dag_id
+                                  AND state <> 'completed')
+                   THEN 'completed'
+               -- 3) If any jobs are "cancelled," mark the DAG as "cancelled."
+               WHEN EXISTS (SELECT 1
+                                FROM {schema}.job
+                                WHERE dag_id = p_dag_id
+                                  AND state = 'cancelled')
+                   THEN 'cancelled'
+               -- 4) Otherwise, mark the DAG as "active."
+               ELSE 'active'
+               END
+    INTO v_new_state;
 
     -- Update DAG state and completed_on
     UPDATE {schema}.dag

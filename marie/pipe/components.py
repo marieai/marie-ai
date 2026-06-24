@@ -1,7 +1,8 @@
 import os
 from collections import defaultdict
 from functools import partial
-from typing import List, Optional, Union
+from pathlib import Path
+from typing import Any, List, Optional, Union
 
 import numpy as np
 import torch
@@ -9,7 +10,11 @@ from PIL import Image
 
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
-from marie.components.document_classifier import TransformersDocumentClassifier
+from marie.components.document_classifier import (
+    TransformersDocumentLevelClassifier,
+    TransformersPageLevelClassifier,
+    TransformersSplittingClassifier,
+)
 from marie.components.document_indexer import TransformersDocumentIndexer
 from marie.components.document_indexer.llm import MMLLMDocumentIndexer
 from marie.components.document_registration.unilm_dit import (
@@ -24,14 +29,23 @@ from marie.components.template_matching import (
 from marie.constants import __config_dir__, __model_path__
 from marie.excepts import BadConfigSource
 from marie.logging_core.predefined import default_logger as logger
-from marie.logging_core.profile import TimeContext
 from marie.ocr import CoordinateFormat, OcrEngine
 from marie.overlay.overlay import NoopOverlayProcessor, OverlayProcessor
 from marie.utils.asset_util import filename_supplier_page, split_filename
+from marie.utils.image_utils import (
+    hash_frames_fast,
+    rotate_image_frames,
+)
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.tiff_ops import burst_tiff_frames
 from marie.utils.types import strtobool
 from marie.utils.utils import ensure_exists
+
+CLASSIFIER_REGISTRY = {
+    "transformers": TransformersPageLevelClassifier,
+    "transformers_document_level": TransformersDocumentLevelClassifier,
+    "splitter": TransformersSplittingClassifier,
+}
 
 
 def setup_overlay(
@@ -83,7 +97,7 @@ def setup_classifiers(
     key: str = "page_classifier",
     device: str = "cuda",
     ocr_engine: Optional[OcrEngine] = None,
-) -> dict[str, any]:
+) -> dict[str, Any]:
     """
     Setup the document classifiers (Document Classification) for the pipeline
     :param pipeline_config: pipeline configuration
@@ -122,6 +136,7 @@ def setup_classifiers(
         task = config["task"] if "task" in config else "text-classification"
         batch_size = config["batch_size"] if "batch_size" in config else 1
         model_filter = config["filter"] if "filter" in config else {}
+        max_pages = config["max_pages"] if "max_pages" in config else None
 
         if "group" not in config:
             raise BadConfigSource(f"Missing group in classifier config : {config}")
@@ -142,23 +157,27 @@ def setup_classifiers(
                 f"Duplicate classifier name : {name} in group : {group}"
             )
 
-        if model_type == "transformers":
-            classifier = TransformersDocumentClassifier(
-                model_name_or_path=model_name_or_path,
-                batch_size=batch_size,
-                use_gpu=use_cuda,
-                task=task,
-                id2label=id2label,
+        classifier_class = CLASSIFIER_REGISTRY.get(model_type)
+        if classifier_class is None:
+            raise BadConfigSource(
+                f"Invalid classifier type : {model_type}. "
+                f"Supported types: {list(CLASSIFIER_REGISTRY.keys())}"
             )
+        classifier = classifier_class(
+            model_name_or_path=model_name_or_path,
+            batch_size=batch_size,
+            use_gpu=use_cuda,
+            task=task,
+            id2label=id2label,
+            max_pages=max_pages,
+        )
 
-            document_classifiers[group][name] = {
-                "classifier": classifier,
-                "group": group,
-                "filter": model_filter,
-            }
-        else:
-            raise ValueError(f"Invalid classifier type : {model_type}")
-
+        document_classifiers[group][name] = {
+            "classifier": classifier,
+            "group": group,
+            "filter": model_filter,
+            "key": key,
+        }
     return document_classifiers
 
 
@@ -167,7 +186,7 @@ def setup_indexers(
     key: str = "page_indexer",
     device: str = "cuda",
     ocr_engine: Optional[OcrEngine] = None,
-) -> dict[str, any]:
+) -> dict[str, Any]:
     """
     Setup the document indexers(Named Entity Recognition) for the pipeline
     :param pipeline_config: pipeline configuration
@@ -318,7 +337,7 @@ def setup_template_matching(
 
 
 def ocr_frames(
-    ocr_engines: dict[str, any],
+    ocr_engines: dict[str, Any],
     ref_id: str,
     frames: Union[List[np.ndarray], List[Image.Image]],
     root_asset_dir: str,
@@ -327,8 +346,9 @@ def ocr_frames(
     ps_mode: PSMode = PSMode.SPARSE,
     coord_format: CoordinateFormat = CoordinateFormat.XYWH,
     regions: [] = None,
-    runtime_conf: Optional[dict[str, any]] = None,
+    runtime_conf: Optional[dict[str, Any]] = None,
     engine_name: str = "default",
+    save: bool = True,
 ) -> dict:
     """
     Perform OCR on the frames and return the results
@@ -343,6 +363,7 @@ def ocr_frames(
     :param regions: regions to perform OCR on (default: None)
     :param runtime_conf: runtime configuration for the pipeline (e.g. which steps to execute) default is None.
     :param engine_name: OCR engine to use (default: default)
+    :param save: save results to disk (default: True)
     :return: OCR results
 
     Example runtime_conf payload:
@@ -407,7 +428,8 @@ def ocr_frames(
             regions,
             queue_id=queue_id,
         )
-        store_json_object(results, json_path)
+        if save:
+            store_json_object(results, json_path)
     else:
         logger.debug(f"Skipping OCR : {json_path}")
         results = load_json_file(json_path)
@@ -430,7 +452,10 @@ def burst_frames(
     :return:
     """
     output_dir = ensure_exists(os.path.join(root_asset_dir, "burst"))
+    # NOTE: filename = prefix = refId when refId is not a filename
     filename, prefix, suffix = split_filename(ref_id)
+    suffix = suffix or "tif"
+
     filename_generator = partial(filename_supplier_page, filename, prefix, suffix)
 
     file_count = get_file_count(output_dir)
@@ -439,6 +464,10 @@ def burst_frames(
     )
     if force or file_count != len(frames):
         logger.info(f"Bursting frames for {ref_id}")
+        # Clear existing burst dir
+        for t in Path(output_dir).iterdir():
+            if t.is_file():
+                t.unlink()
         burst_tiff_frames(frames, output_dir, filename_generator=filename_generator)
     else:
         logger.info(f"Skipping bursting for {ref_id}")
@@ -449,11 +478,57 @@ def burst_frames(
         logger.warning(f"File count mismatch [burst] : {file_count} != {len(frames)}")
 
 
+def rotate_frames(
+    ref_id: str,
+    frames: List[np.ndarray],
+    root_asset_dir: str,
+    force: bool = False,
+    threshold: float = 2.0,
+    api=None,
+) -> tuple[dict, bool]:
+    """Rotate frames in-place based on detected orientation"""
+    output_dir = ensure_exists(os.path.join(root_asset_dir, "rotation"))
+    _, prefix, _ = split_filename(ref_id)
+    json_path = os.path.join(output_dir, f"{prefix}_rotation.json")
+
+    if not force and os.path.exists(json_path):
+        existing_rotation_meta = load_json_file(json_path)
+        prev_hash = existing_rotation_meta.get("hash", None)
+        curr_hash = hash_frames_fast(frames)
+        if (
+            prev_hash == curr_hash
+        ):  # A double check that the source image has been rotated
+            logger.info(f"Skipping rotation for {ref_id} as frames have not changed")
+            return existing_rotation_meta, False
+
+    page_rotation, any_rotated = rotate_image_frames(
+        frames, threshold=threshold, api=api
+    )
+
+    result_hash = hash_frames_fast(frames)
+    results = {
+        "any_rotated": any_rotated,
+        "hash": result_hash,
+        "threshold": threshold,
+        "pages": page_rotation,
+    }
+    store_json_object(results, json_path)
+
+    return results, any_rotated
+
+
 def update_existing_meta(existing_meta: dict, metadata: dict):
     if not existing_meta:
         return metadata
     if not metadata:
         return existing_meta
+
+    def _merge_key(
+        unit: dict[str, Any], identifier_key: str
+    ) -> tuple[Any | None, tuple[int, ...]]:
+        pages: List[int] = unit.get("classification", {}).get("page_numbers", [])
+        identification = unit.get(identifier_key)
+        return identification, tuple(sorted(pages))
 
     # List elements are overridden on dict.update, so they need to be merged independently
     # New metadata lists take priority when handling duplicate elements with the same identifier value
@@ -464,12 +539,16 @@ def update_existing_meta(existing_meta: dict, metadata: dict):
         new_list = metadata.get(category, [])
 
         # Determine if existing keys are stale
-        existing_keys = {unit[identifier]: False for unit in existing_list}
+        existing_keys = {_merge_key(unit, identifier): False for unit in existing_list}
         for unit in new_list:
-            existing_keys[unit[identifier]] = unit[identifier] in existing_keys
+            key = _merge_key(unit, identifier)
+            existing_keys[key] = key in existing_keys
+
         # Filter out stale categories
         merged_list = [
-            unit for unit in existing_list if not existing_keys[unit[identifier]]
+            unit
+            for unit in existing_list
+            if not existing_keys[_merge_key(unit, identifier)]
         ]
         merged_list.extend(new_list)
 
@@ -522,8 +601,8 @@ def setup_llm_tasks(pipeline_config, document_indexers):
 
 
 def load_pipeline(
-    pipeline_config: dict[str, any], ocr_engine: Optional[OcrEngine] = None
-) -> tuple[str, dict[str, any], dict[str, any]]:
+    pipeline_config: dict[str, Any], ocr_engine: Optional[OcrEngine] = None
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
     # TODO : Need to refactor this (use the caller to get the device and then fallback to the pipeline config)
     # sometimes we have CUDA/GPU support but want to only use CPU
     use_cuda = torch.cuda.is_available()

@@ -324,6 +324,7 @@ def restore_assets(
     root_asset_dir: str,
     full_restore=False,
     overwrite=False,
+    dirs_to_restore: Optional[List[str]] = None,
 ) -> Optional[str]:
     """
     Restore assets from primary storage (S3) into root asset directory. This restores
@@ -334,6 +335,7 @@ def restore_assets(
     :param root_asset_dir: root asset directory
     :param full_restore: if True, restore all assets, otherwise only restore subset of assets (clean, results, pdf)
     that are required for the extract pipeline.
+    :param dirs_to_restore: Subset of assets to restore if full_restore = false. Default: ["clean", "results", "pdf"]
     :param overwrite: if True, overwrite existing assets in root asset directory
     :return:
     """
@@ -358,7 +360,9 @@ def restore_assets(
         except Exception as e:
             logger.error(f"Error restoring assets : {e}")
     else:
-        dirs_to_restore = ["clean", "results", "pdf"]
+        if dirs_to_restore is None:
+            dirs_to_restore = ["clean", "results", "pdf"]
+
         for dir_to_restore in dirs_to_restore:
             try:
                 StorageManager.copy_remote(

@@ -1,6 +1,6 @@
 from abc import ABC
 from collections import defaultdict
-from typing import List
+from typing import Any, List
 
 from docarray import DocList
 
@@ -148,14 +148,17 @@ class BasePipeline(ABC):
     def execute_pipeline(
         self,
         processing_pipeline: List[PipelineComponent],
-        sub_classifiers: dict[str, any],
+        sub_classifiers: dict[str, Any],
         frames: List,
         ocr_results: dict,
         pipeline_id: str = "default_pipeline",
         include_ocr_lines: bool = False,
-    ) -> dict[str, any]:
+        metadata=None,
+    ) -> dict[str, Any]:
         """Execute processing pipeline"""
 
+        if metadata is None:
+            metadata = {}
         words = []
         boxes = []
         lines = []
@@ -176,7 +179,7 @@ class BasePipeline(ABC):
             assert len(words) == len(lines)
 
         context = PipelineContext(pipeline_id=pipeline_id)
-        context["metadata"] = {}
+        context["metadata"] = metadata
 
         for pipe in processing_pipeline:
             try:

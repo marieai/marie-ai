@@ -9,7 +9,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from math import inf
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Set
 
 import psycopg2
 
@@ -58,7 +58,7 @@ from marie.scheduler.services import (
     MaintenanceService,
     NotificationService,
 )
-from marie.scheduler.state import WorkState
+from marie.scheduler.state import WorkState, is_terminal_state
 from marie.scheduler.util import (
     adjust_backoff,
     available_slots_by_executor,
@@ -140,6 +140,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.distributed_scheduler = config.get("distributed_scheduler", False)
 
         self._event_queue = Queue()
+
+        existing_work_policy = config.get("existing_work_policy")
+        try:
+            self.default_existing_work_policy = (
+                ExistingWorkPolicy[existing_work_policy.upper()]
+                if existing_work_policy is not None
+                else ExistingWorkPolicy.REJECT_DUPLICATE
+            )
+        except KeyError:
+            raise BadConfigSource(
+                f"Argument {existing_work_policy!r} is invalid for existing_work_policy. "
+                f"Must be one of {', '.join(ExistingWorkPolicy.__members__)}."
+            )
+
         self._status_update_lock = AsyncJobLock()
         self._dag_resolution_lock = AsyncJobLock()
         self._terminal_dag_states: dict[str, str] = {}
@@ -199,7 +213,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         # Register handler for DAG state changes (delegate to DAGManagementService)
         self.notification_service.register_handler(
-            channel='dag_state_changed', handler=self.dag_service.handle_state_change
+            channel="dag_state_changed", handler=self.dag_service.handle_state_change
         )
 
         # Initialize MaintenanceService for periodic cleanup tasks
@@ -401,7 +415,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     def _is_branch_node(self, node) -> bool:
         """Check if a node is a BRANCH or SWITCH node."""
-        if not node or not hasattr(node, 'definition'):
+        if not node or not hasattr(node, "definition"):
             return False
 
         # Check if it's a BRANCH or SWITCH query type
@@ -411,7 +425,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     def _is_guardrail_node(self, node) -> bool:
         """Check if a node is a GUARDRAIL node."""
-        if not node or not hasattr(node, 'definition'):
+        if not node or not hasattr(node, "definition"):
             return False
 
         return isinstance(node.definition, GuardrailQueryDefinition)
@@ -627,7 +641,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     "selected_path_ids": active_path_ids,
                     "evaluation_mode": (
                         branch_def.evaluation_mode.value
-                        if hasattr(branch_def.evaluation_mode, 'value')
+                        if hasattr(branch_def.evaluation_mode, "value")
                         else branch_def.evaluation_mode
                     ),
                     "default_path_id": branch_def.default_path_id,
@@ -703,7 +717,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                 # Add default case nodes to all targets
                 if branch_def.default_case:
-                    path_to_nodes['default'] = branch_def.default_case
+                    path_to_nodes["default"] = branch_def.default_case
                     all_target_nodes.update(branch_def.default_case)
 
             # Nodes to skip are all targets minus active targets
@@ -1074,6 +1088,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         - DELETE: {'dag_id': '<id>', 'op': 'DELETE'}
 
         :param payload: The notification payload with minimal fields (dag_id, state, op)
+
+        .. note:: Not used. Duplicates :meth:`marie.scheduler.services.dag_management_service.DAGManagementService.handle_state_change`
         """
         try:
             op = payload.get("op")
@@ -1634,12 +1650,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 for job_name, ids in ids_by_job_name.items():
                     try:
                         self.logger.info(
-                            f'[WORK_DIST] Attempting DB lease for job={job_name}, count={len(ids)}'
+                            f"[WORK_DIST] Attempting DB lease for job={job_name}, count={len(ids)}"
                         )
                         got = await self._lease_jobs_db(job_name, ids)
                         leased_ids.update(got)
                         self.logger.info(
-                            f'[WORK_DIST] DB lease result for job={job_name}: leased {len(got)}/{len(ids)}'
+                            f"[WORK_DIST] DB lease result for job={job_name}: leased {len(got)}/{len(ids)}"
                         )
                         if len(got) < len(ids):
                             missing_ids = set(ids) - set(got)
@@ -1755,7 +1771,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             self._semaphore_store.reserve,
                             slot_type,
                             wi.id,  # ticket_id
-                            node='',  # at this time we don't know the placement where the job wil be executed yet
+                            node="",  # at this time we don't know the placement where the job wil be executed yet
                             ttl=self._sem_default_ttl,
                             owner=wi.id,
                         )
@@ -1962,7 +1978,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 try:
                     await asyncio.wait_for(task, timeout)
                 except asyncio.TimeoutError:
-                    task_name = getattr(task, '_name', task.__class__.__name__)
+                    task_name = getattr(task, "_name", task.__class__.__name__)
                     self.logger.warning(
                         f"Task did not complete in time, cancelling it : {task_name}"
                     )
@@ -2118,8 +2134,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             # These are needed by executors to record asset materializations
             job_metadata = work_info.data.copy()
             if work_info.dag_id:
-                job_metadata['dag_id'] = work_info.dag_id
-                job_metadata['node_task_id'] = (
+                job_metadata["dag_id"] = work_info.dag_id
+                job_metadata["node_task_id"] = (
                     work_info.id
                 )  # job ID serves as node task ID
 
@@ -2182,7 +2198,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         return work_item
 
-    async def get_job_for_policy(self, work_info: WorkInfo) -> Optional[WorkInfo]:
+    async def get_dags_for_policy(self, work_info: WorkInfo) -> Set[str]:
         """
         Find a job by its name and data (used for policy checks).
         :param work_info: WorkInfo containing metadata with ref_type and ref_id
@@ -2191,7 +2207,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         ref_type = work_info.data.get("metadata", {}).get("ref_type", "")
         ref_id = work_info.data.get("metadata", {}).get("ref_id", "")
 
-        return await self.repository.get_job_by_policy(ref_type, ref_id)
+        return await self.repository.get_dags_by_policy(ref_type, ref_id)
 
     async def list_jobs(
         self, state: Optional[str | list[str]] = None, batch_size: int = 0
@@ -2406,7 +2422,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         submission_id = work_info.id
         submission_policy = ExistingWorkPolicy.create(
-            work_info.policy, default_policy=ExistingWorkPolicy.REJECT_DUPLICATE
+            work_info.policy, default_policy=self.default_existing_work_policy
         )
 
         is_valid = await self.is_valid_submission(work_info, submission_policy)
@@ -2575,26 +2591,50 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :raises ValueError: If an unsupported policy is provided
         """
         try:
-            if policy in (
-                ExistingWorkPolicy.ALLOW_ALL,
-                ExistingWorkPolicy.ALLOW_DUPLICATE,
-            ):
+            if policy == ExistingWorkPolicy.ALLOW_ALL:
                 return True
 
             if policy == ExistingWorkPolicy.REJECT_ALL:
                 return False
 
-            existing_job = await self._loop.run_in_executor(
-                self._db_executor, self.get_job_for_policy, work_info
-            )
+            existing_dags = await self.get_dags_for_policy(work_info)
 
             if policy == ExistingWorkPolicy.REJECT_DUPLICATE:
-                return existing_job is None
+                return len(existing_dags) == 0
 
             if policy == ExistingWorkPolicy.REPLACE:
-                return not existing_job or (
-                    existing_job.state is not None and existing_job.state.is_terminal()
+                if len(existing_dags) == 0:
+                    return True
+
+                ref_id = work_info.data.get("metadata", {}).get("ref_id", "")
+                self.logger.warning(
+                    f"Job: {work_info.id}. {len(existing_dags)} existing dags with ref_id: {ref_id}"
                 )
+                for dag_id in existing_dags:
+                    dag_state = await self.repository.resolve_dag_state(dag_id)
+                    if not is_terminal_state(dag_state):
+                        self.logger.warning(
+                            f"Cancelling DAG to due to policy: {policy}, dag_id: {dag_id}, state: {dag_state}"
+                        )
+                        cancelled = await self.repository.cancel_pending_jobs_for_dag(
+                            dag_id=dag_id,
+                            output_metadata={
+                                "on_complete": WorkState.CANCELLED.value,  # Q: current values are done and failed. populated to jobs.output, doesn't seem to be used anywhere?
+                                "cancel_reason": f"Removing due to policy: {policy}",
+                                "terminal_dag_state": WorkState.CANCELLED.value,
+                                "resolved_by_job_id": work_info.id,
+                            },
+                        )
+                        self.logger.debug(
+                            f"Cancelled {cancelled} jobs for DAG: {dag_id}"
+                        )
+                        dag_state = await self.repository.resolve_dag_state(dag_id)
+                        if dag_state != WorkState.CANCELLED.value:
+                            self.logger.warning(
+                                f"Cancellation of existing DAG {dag_id} failed. State: {dag_state}"
+                            )
+
+                return True
 
             raise ValueError(f"Unsupported policy: {policy}")
 
@@ -2988,7 +3028,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             self.repository.resolve_dag_state(dag_id), self._loop
                         )
                         dag_state = future.result(timeout=30)
-                        if dag_state in ("completed", "failed"):
+                        if is_terminal_state(dag_state):
                             resolved_terminal_dags.add(dag_id)
                     except Exception as resolve_error:
                         self.logger.warning(
@@ -3234,7 +3274,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     dag_state = await self.repository.resolve_dag_state(dag_id)
 
                     self.logger.info(f"Resolved DAG state: {dag_state}")
-                    if dag_state not in ("completed", "failed"):
+                    if not is_terminal_state(dag_state):
                         self.logger.debug(f"DAG is still in progress: {dag_id}")
                         return False
 
@@ -3255,7 +3295,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             f"Removed DAG from cache: {dag_id}, size = {len(self.active_dags)}"
                         )
 
-                    if dag_state == "failed":
+                    if not WorkState(dag_state.lower()).is_successful_terminal():
                         cancelled = await self.repository.cancel_pending_jobs_for_dag(
                             dag_id=dag_id,
                             output_metadata={

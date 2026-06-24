@@ -25,6 +25,7 @@ from marie.scheduler.repository.plans import (
     count_dag_states,
     count_job_states,
     create_queue,
+    delete_dags_and_jobs,
     fail_jobs_by_id,
     insert_dag,
     insert_job,
@@ -42,6 +43,7 @@ from marie.storage.database.postgres import PostgresqlMixin
 
 DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
+DEFAULT_DAG_TABLE = "dag"
 
 
 class JobRepository(PostgresqlMixin):
@@ -150,6 +152,45 @@ class JobRepository(PostgresqlMixin):
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
+    async def get_dags_by_policy(self, ref_type: str, ref_id: str) -> Set[str]:
+        """
+        Find a job by its reference type and reference ID.
+
+        :param ref_type: Reference type from job metadata
+        :param ref_id: Reference ID from job metadata
+        :return: WorkInfo object if found, None otherwise
+        """
+
+        def db_call():
+            cursor = None
+            conn = None
+            dag_ids = []
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""                    
+                    SELECT DISTINCT dag_id
+                    FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE} j
+                        JOIN {DEFAULT_SCHEMA}.{DEFAULT_DAG_TABLE} d on j.dag_id = d.id and d.state <> '{WorkState.CANCELLED.value}'
+                    WHERE j.data->'metadata'->>'ref_type' = '{ref_type}'
+                    AND j.data->'metadata'->>'ref_id' = '{ref_id}'
+                    """
+                )
+                results = cursor.fetchall()
+                conn.commit()
+                dag_ids = {str(record[0]) for record in results}
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error getting job: {error}")
+                if conn:
+                    conn.rollback()
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+            return dag_ids
 
         return await self._loop.run_in_executor(self._db_executor, db_call)
 
@@ -901,7 +942,7 @@ class JobRepository(PostgresqlMixin):
                 cursor = conn.cursor()
 
                 # Build parameterized query
-                placeholders = ','.join(['%s'] * len(dag_ids))
+                placeholders = ",".join(["%s"] * len(dag_ids))
                 query = f"""
                     SELECT id FROM {DEFAULT_SCHEMA}.dag
                     WHERE id IN ({placeholders}) AND state = 'active'
@@ -1294,7 +1335,7 @@ class JobRepository(PostgresqlMixin):
         query_file = os.path.join(tmp_path, f"locked_query_{timestamp}.sql")
 
         try:
-            with open(query_file, 'w') as f:
+            with open(query_file, "w") as f:
                 f.write(locked_query)
             self.logger.info(f"Wrote locked query to: {query_file}")
         except Exception as e:
@@ -1567,6 +1608,27 @@ class JobRepository(PostgresqlMixin):
 
         return await self._loop.run_in_executor(self._db_executor, db_call)
 
+    async def delete_dag(self, dag_id: str) -> bool:
+        self.logger.info(f"Deleting dag_id : {dag_id}")
+
+        def db_call():
+            cursor = None
+            conn = None
+            try:
+                conn = self._get_connection()
+                self._execute_sql_gracefully(
+                    delete_dags_and_jobs(DEFAULT_SCHEMA, [dag_id]), connection=conn
+                )
+                return True
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error completing failed job: {error}")
+                return False
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
     async def fail_job(
         self,
         job_id: str,
@@ -1605,7 +1667,7 @@ class JobRepository(PostgresqlMixin):
                 final_state = result[1] if len(result) > 1 else None
 
                 if count > 0:
-                    if final_state == 'retry':
+                    if final_state == "retry":
                         self.logger.info(
                             f"Job {job_id} marked for retry (will be retried)"
                         )
@@ -1697,7 +1759,7 @@ class JobRepository(PostgresqlMixin):
         """
         Close the repository and cleanup resources.
         """
-        if hasattr(self, '_db_executor'):
+        if hasattr(self, "_db_executor"):
             self._db_executor.shutdown(wait=True)
-        if hasattr(self, 'postgreSQL_pool'):
+        if hasattr(self, "postgreSQL_pool"):
             self.postgreSQL_pool.closeall()

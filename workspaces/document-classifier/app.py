@@ -8,7 +8,7 @@ import gradio as gr
 import numpy as np
 import torch as torch
 
-from marie.components import TransformersDocumentClassifier
+from marie.components.document_classifier import TransformersPageLevelClassifier
 from marie.helper import colored
 from marie.logging_core.mdc import MDC
 from marie.logging_core.predefined import default_logger as logger
@@ -29,7 +29,7 @@ else:
 def process_frames(
     frames: Union[np.ndarray, List[np.ndarray]],
     model_name_or_path: str,
-    classifier: TransformersDocumentClassifier,
+    classifier: TransformersPageLevelClassifier,
 ):
     MDC.put("request_id", "1")
 
@@ -65,7 +65,7 @@ gallery_selection = None
 
 
 def process_all_frames(
-    model_name_or_path: str, classifier: TransformersDocumentClassifier, image_src
+    model_name_or_path: str, classifier: TransformersPageLevelClassifier, image_src
 ):
     MDC.put("request_id", "2")
     frames = gradio_src_to_frames(image_src)
@@ -77,7 +77,7 @@ def process_all_frames(
 
 def process_selection(
     model_name_or_path: str,
-    classifier: TransformersDocumentClassifier,
+    classifier: TransformersPageLevelClassifier,
     gallery_selection,
 ):
     print("process_selection")
@@ -103,7 +103,7 @@ def gradio_src_to_frames(image_src):
     return frames_from_file(image_src.name)
 
 
-def interface(model_name_or_path: str, classifier: TransformersDocumentClassifier):
+def interface(model_name_or_path: str, classifier: TransformersPageLevelClassifier):
     def gallery_click_handler(src_gallery, evt: gr.SelectData):
         global gallery_selection
         gallery_selection = src_gallery[evt.index]
@@ -213,7 +213,7 @@ if __name__ == "__main__":
     model_name_or_path = ensure_model(args.pretrained_model_name_or_path)
 
     logger.info(f"Using model : {model_name_or_path}")
-    classifier = TransformersDocumentClassifier(model_name_or_path=model_name_or_path)
+    classifier = TransformersPageLevelClassifier(model_name_or_path=model_name_or_path)
 
     interface(model_name_or_path=model_name_or_path, classifier=classifier)
 

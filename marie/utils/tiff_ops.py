@@ -5,7 +5,6 @@ import shutil
 import tempfile
 import uuid
 from concurrent.futures.thread import ThreadPoolExecutor
-from datetime import datetime
 from typing import Callable, List, Optional
 
 import cv2
@@ -13,7 +12,9 @@ import numpy as np
 
 # http://148.216.108.129/vython38/lib/python3.8/site-packages/willow/plugins/wand.py
 from tifffile import TiffWriter
+from tqdm import tqdm
 
+from marie.api import logger
 from marie.utils.docs import frames_from_file, get_document_type
 
 # https://github.com/joeatwork/python-lzw
@@ -123,7 +124,13 @@ def burst_tiff_frames(
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         if sequential:
-            for i, frame in enumerate(frames):
+            for i, frame in tqdm(
+                enumerate(frames),
+                total=len(frames),
+                desc="bursting frames",
+                unit="frame",
+                delay=0.1,
+            ):
                 index = i + 1
                 generated_name = filename_generator(pagenumber=index)
                 __process_burst(
@@ -191,9 +198,6 @@ def merge_tiff(src_dir, dst_img_path, sort_key):
     with Image() as composite:
         for _path in sorted(glob.glob(os.path.join(src_dir, "*.*")), key=sort_key):
             try:
-                if False:
-                    curren_time = datetime.now().strftime("%H:%M:%S.%f")
-                    print(f"Merging document :{curren_time} {_path}")
                 with Image(filename=_path) as src_img:
                     frame = src_img.image_get()
                     composite.image_add(frame)
@@ -214,17 +218,43 @@ def merge_tiff_frames(
 
     print(f"Creating multipage tiff : {dst_img_path}")
     with Image() as composite:
-        try:
-            for src_img in frames:
-                src_img = Image.from_array(src_img)
-                frame = src_img.image_get()
-                composite.image_add(frame)
-        except Exception as ident:
-            raise ident
-
         composite.compression = "group4"
         composite.resolution = (300, 300)
+        for f in frames:
+            with Image.from_array(f) as src_img:
+                src_img.compression = "group4"
+                src_img.resolution = (300, 300)
+                composite.image_add(src_img)
         composite.save(filename=dst_img_path)
+
+
+def merge_tiff_frames_ifd(
+    src_dir: os.PathLike | str, dst_img_path: os.PathLike | str, sort_key
+):
+    """
+    Merge single-page TIFFs into one multipage TIFF by combining their IFDs
+    (reads TIFF metadata and copies the already-compressed image data without decompressing & re-compressing it)
+    Preserves each page's existing compressed image data and TIFF tags, including compression and DPI.
+    Faster and more memory-efficient than :func: 'merge_tiff_frames' and :func: 'merge_tiff', especially for large documents.
+
+    :param src_dir: Directory with single page tiffs
+    :param dst_img_path: Path to write merged tiff
+    :param sort_key: glob patter to sort files in src_dir
+    """
+    from tifftools import read_tiff, write_tiff
+
+    logger.info(f"Merging TIFFs from {src_dir} to {dst_img_path} using IFD merge")
+    paths = sorted(glob.glob(os.path.join(src_dir, "*.*")), key=sort_key)
+    if not paths:
+        raise ValueError(f"No TIFF files found in {src_dir}")
+
+    merged = read_tiff(str(paths[0]))
+
+    for path in paths[1:]:
+        part = read_tiff(str(path))
+        merged["ifds"].extend(part["ifds"])
+
+    write_tiff(merged, str(dst_img_path), allowExisting=True)
 
 
 def save_frame_as_tiff_g4(frame, output_filename):
