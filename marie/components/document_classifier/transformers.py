@@ -8,10 +8,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from boundary_detection.dataset import BoundaryDetectionInferenceDataset
-from boundary_detection.lmv3_document_splitter import LayoutLMv3DocumentSplitter
-from doc_classification.dataset import DocumentClassificationInferenceDataset
-from doc_classification.lmv3_document_classifier import LayoutLMv3DocumentClassifier
 from docarray import DocList
 from PIL import Image
 from torch.nn import Module
@@ -32,6 +28,16 @@ from marie.constants import __model_path__
 from marie.helper import batch_iterator
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.profile import TimeContext
+from marie.models.boundary_detection.dataset import BoundaryDetectionInferenceDataset
+from marie.models.boundary_detection.lmv3_document_splitter import (
+    LayoutLMv3DocumentSplitter,
+)
+from marie.models.doc_classification.dataset import (
+    DocumentClassificationInferenceDataset,
+)
+from marie.models.doc_classification.lmv3_document_classifier import (
+    LayoutLMv3DocumentClassifier,
+)
 from marie.models.utils import initialize_device_settings
 from marie.registry.model_registry import ModelRegistry
 
