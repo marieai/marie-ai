@@ -457,7 +457,6 @@ from marie.scheduler.models import ExistingWorkPolicy
 ExistingWorkPolicy.ALLOW_ALL        # Accept all submissions
 ExistingWorkPolicy.REJECT_ALL       # Reject all submissions
 ExistingWorkPolicy.REPLACE          # Replace non-terminal jobs
-ExistingWorkPolicy.ALLOW_DUPLICATE  # Allow duplicate submissions
 ExistingWorkPolicy.REJECT_DUPLICATE # Reject duplicates (default)
 ```
 

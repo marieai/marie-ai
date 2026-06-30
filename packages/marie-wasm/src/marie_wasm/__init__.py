@@ -5,6 +5,8 @@ This package provides compilation and host function implementations
 for executing workflow nodes in WebAssembly.
 """
 
+from pathlib import Path
+
 from marie_wasm.compiler import CompilationError, WasmCompilerService
 from marie_wasm.host import HostImplementations
 from marie_wasm.types import (
@@ -18,7 +20,18 @@ from marie_wasm.types import (
 
 __version__ = "0.1.0"
 
+# The built-in WASM node library ships with this package. `__file__` is
+# .../packages/marie-wasm/src/marie_wasm/__init__.py, so parents[2] is the
+# package root (.../packages/marie-wasm). Use these instead of CWD-relative
+# paths. (For non-editable wheels the `nodes/` tree must be included as package
+# data — tracked as a packaging follow-up.)
+NODES_DIR = Path(__file__).resolve().parents[2] / "nodes"
+BUILTIN_NODES_DIR = NODES_DIR / "compiled"
+
 __all__ = [
+    # Built-in node library paths
+    "NODES_DIR",
+    "BUILTIN_NODES_DIR",
     # Types
     "Language",
     "Permissions",

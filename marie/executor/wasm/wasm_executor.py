@@ -297,6 +297,15 @@ class WasmNodeExecutor(MarieExecutor):
     """
     Marie executor that runs pre-compiled Wasm components.
 
+    DEPRECATED (2026-06-29): legacy/test-only. WASM execution now runs through
+    the plugin daemon as a daemon-managed plugin via `marie_wasm.daemon_runner`
+    (see analysis/marie-plugin-dify-parity-plan/plans W1; proven end-to-end). This
+    Jina-executor path bypasses the daemon and is retained only until the
+    daemon_runner path reaches full parity, then removed. Known-broken on current
+    wasmtime (imports `from wasmtime import Component`, which moved to the
+    `wasmtime.component` submodule; and used pre-2026-06-29 host binding names) —
+    not being fixed here.
+
     Loads .wasm modules from storage (compiled at build time by Gateway)
     and executes them with the Wasmtime runtime.
 
@@ -316,7 +325,7 @@ class WasmNodeExecutor(MarieExecutor):
 
     def __init__(
         self,
-        builtin_nodes_dir: Path = Path("nodes/compiled"),
+        builtin_nodes_dir: Optional[Path] = None,
         max_cached_components: int = 100,
         default_timeout_ms: int = 30000,
         default_max_fuel: int = 1_000_000_000,
@@ -327,7 +336,9 @@ class WasmNodeExecutor(MarieExecutor):
     ):
         """
         Args:
-            builtin_nodes_dir: Path to pre-compiled built-in nodes.
+            builtin_nodes_dir: Path to pre-compiled built-in nodes. Defaults to
+                the node library shipped with the marie-wasm package
+                (`marie_wasm.BUILTIN_NODES_DIR`), falling back to `nodes/compiled`.
             max_cached_components: LRU cache size (both main + per-worker).
             default_timeout_ms: Default execution timeout in milliseconds.
             default_max_fuel: Default CPU fuel limit.
@@ -339,6 +350,13 @@ class WasmNodeExecutor(MarieExecutor):
         super().__init__(**kwargs)
 
         self.logger = MarieLogger(self.__class__.__name__).logger
+        if builtin_nodes_dir is None:
+            try:
+                from marie_wasm import BUILTIN_NODES_DIR
+
+                builtin_nodes_dir = BUILTIN_NODES_DIR
+            except ImportError:
+                builtin_nodes_dir = Path("nodes/compiled")
         self.builtin_nodes_dir = Path(builtin_nodes_dir)
         self.default_timeout_ms = default_timeout_ms
         self.default_max_fuel = default_max_fuel

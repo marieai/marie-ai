@@ -303,8 +303,6 @@ class PromptTemplate:
             + "\n".join(f"  - {p}" for p in candidates)
         )
 
-    # -- Rendering -----------------------------------------------------------
-
     def render(self, variables: Optional[Dict[str, str]] = None) -> str:
         """Render the template with the given variables.
 
@@ -365,8 +363,6 @@ class PromptTemplate:
                     var,
                 )
 
-    # -- Derivation ----------------------------------------------------------
-
     def fork(
         self,
         *,
@@ -391,8 +387,6 @@ class PromptTemplate:
             functions=new_functions,
             name=name if name is not None else self._name,
         )
-
-    # -- Helpers -------------------------------------------------------------
 
     @staticmethod
     def _sanitize_filename(filename: str) -> Optional[str]:

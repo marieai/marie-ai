@@ -21,6 +21,9 @@ from marie.logging_core.logger import MarieLogger
 
 DEFAULT_DAEMON_ADDR = "127.0.0.1:8099"
 DEFAULT_DAEMON_BIN = Path("/opt/marie/bin/marie-plugin-daemon")
+# Execution-time fallback when the job/request context carries no tenant yet.
+# Kept out of saved node definitions; daemon install + invoke must share it.
+DEFAULT_TENANT_UUID = "00000000-0000-0000-0000-000000000000"
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,85 @@ class MariePluginDaemonExecutor(MarieExecutor):
             or ""
         )
         return frames_to_docs(self._post_stub_invocation(envelope, request_id))
+
+    @requests(on="/execute")
+    async def connector_invoke(
+        self,
+        docs: DocList[TextDoc],
+        parameters: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> DocList[TextDoc]:
+        """Dispatch a CONNECTOR node to the plugin daemon and return its frames.
+
+        Routed here by the fixed endpoint ``plugin_daemon_executor://execute``.
+        All plugin identity + credentials ride in ``parameters`` (the endpoint
+        carries none); tenant claims come from the execution context, falling
+        back to the nil UUID when absent (W2 scope; install + invoke must share
+        the same fallback tenant or the daemon returns ``plugin_not_installed``).
+        """
+        # Lazy imports: plugin_daemon_client imports DEFAULT_DAEMON_ADDR from this
+        # module, so importing it at module level would create a circular import.
+        from marie.agent.tools.plugin_daemon_client import build_invocation_envelope
+        from marie.agent.tools.plugin_tool import PluginToolSpec
+        from marie.secrets.resolver import CredentialRequirement, CredentialResolver
+
+        params = parameters or {}
+        request_id = str(params.get("job_id") or "")
+        plugin = params.get("plugin") or {}
+        try:
+            spec = PluginToolSpec(
+                tool_ref=plugin["tool_ref"],
+                tool_name=plugin["tool_ref"],
+                package_ref=plugin["package_ref"],
+                package_digest=plugin["package_digest"],
+                package_trust_level=plugin.get("package_trust_level", "community"),
+                install_id=plugin.get("install_id"),
+                provider_id=plugin.get("provider_id"),
+                package_id=plugin.get("package_id"),
+            )
+        except KeyError as error:
+            return frames_to_docs(
+                [
+                    runtime_error_frame(
+                        request_id,
+                        f"connector node missing plugin identity field: {error}",
+                        "invalid_envelope",
+                    )
+                ]
+            )
+
+        requirements = [
+            CredentialRequirement(**req)
+            for req in params.get("credential_requirements", [])
+        ]
+        credentials = CredentialResolver().resolve(requirements)
+
+        organization_id = str(params.get("organization_id") or DEFAULT_TENANT_UUID)
+        workspace_id = str(params.get("workspace_id") or DEFAULT_TENANT_UUID)
+        user_id = str(params.get("user_id") or "")
+
+        control_keys = {
+            "plugin",
+            "credential_requirements",
+            "organization_id",
+            "workspace_id",
+            "user_id",
+            "job_id",
+            "payload",
+        }
+        op_payload = {k: v for k, v in params.items() if k not in control_keys}
+        payload = {**op_payload, "credentials": credentials, "user_id": user_id}
+
+        envelope = build_invocation_envelope(
+            spec,
+            payload=payload,
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            action_type=plugin.get("action_type", "tool"),
+            request_id=request_id or None,
+        )
+        return frames_to_docs(self._invoke_daemon(envelope, request_id))
 
     def status_payload(self) -> dict[str, Any]:
         self._ensure_child()
@@ -310,6 +392,54 @@ class MariePluginDaemonExecutor(MarieExecutor):
                 runtime_error_frame(
                     request_id,
                     f"daemon stub invocation returned HTTP {error.code}",
+                    "runtime_http_error",
+                )
+            ]
+        except (OSError, URLError, TimeoutError) as error:
+            return [runtime_error_frame(request_id, str(error))]
+
+        return parse_daemon_frames(raw, request_id)
+
+    def _invoke_daemon(
+        self, envelope: dict[str, Any], request_id: str
+    ) -> list[dict[str, Any]]:
+        """POST a built envelope to the daemon's real ``/v1/dispatch/invoke`` and
+        return parsed frames. Mirrors ``_post_stub_invocation`` but the real path."""
+        self._ensure_child()
+        if self.discovery.mode == "unavailable":
+            return [
+                runtime_error_frame(
+                    request_id,
+                    self.discovery.message or "marie-plugin-daemon is not configured",
+                )
+            ]
+
+        url = self.discovery.url
+        if not url:
+            return [
+                runtime_error_frame(
+                    request_id, "marie-plugin-daemon URL is not configured"
+                )
+            ]
+
+        body = json.dumps(envelope, separators=(",", ":")).encode("utf-8")
+        request = Request(
+            f"{url.rstrip('/')}/v1/dispatch/invoke",
+            data=body,
+            headers={
+                "Accept": "text/event-stream, application/x-ndjson, application/json",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=self.invoke_timeout_s) as response:
+                raw = response.read().decode("utf-8")
+        except HTTPError as error:
+            return [
+                runtime_error_frame(
+                    request_id,
+                    f"daemon invoke returned HTTP {error.code}",
                     "runtime_http_error",
                 )
             ]

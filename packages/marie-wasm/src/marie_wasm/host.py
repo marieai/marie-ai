@@ -341,22 +341,26 @@ class HostImplementations:
 
         Returns dict mapping interface names to function dicts.
         """
+        # Interface + function names MUST match the WIT world (marie-node.wit,
+        # package marie:node@1.0.0). Instance names are VERSIONED — the compiled
+        # component imports e.g. `marie:node/http-client@1.0.0`. Proven E2E
+        # 2026-06-29 (see packages/marie-plugin-daemon/_spike_wasm/SPIKE-FINDINGS.md).
         return {
-            "marie:node/http-client": {
-                "request": self.http_request,
+            "marie:node/http-client@1.0.0": {
+                "fetch": self.http_request,
             },
-            "marie:node/secrets": {
+            "marie:node/secrets@1.0.0": {
                 "get": self.secrets_get,
             },
-            "marie:node/key-value": {
+            "marie:node/kv@1.0.0": {
                 "get": self.kv_get,
-                "set": self.kv_set,
+                "put": self.kv_set,
                 "delete": self.kv_delete,
             },
-            "marie:node/logging": {
+            "marie:node/console@1.0.0": {
                 "log": self.log,
             },
-            "marie:node/events": {
+            "marie:node/events@1.0.0": {
                 "emit": self.emit,
             },
         }

@@ -1,4 +1,4 @@
-"""Unit tests for the sandbox blueprint-import and plugin-install service layer.
+"""Unit tests for the sandbox blueprint-import service layer.
 
 Coverage:
   - Payload parsing / validation (request body shapes).
@@ -7,11 +7,9 @@ Coverage:
   - Idempotency: re-importing the same query_plan does not raise.
   - Auth rejection is exercised at the TokenBearer level (tested separately in
     tests/auth/); here we only test the service and registry in isolation.
-  - Plugin install: already-registered connector → 'installed';
-    unknown plugin → 'deferred' (honest report of dify-parity gap).
 
 All tests run without a live Postgres, MinIO, or ETCD.  External I/O is
-mocked only where unavoidable (ConnectorRegistry, QueryPlanRegistry state).
+mocked only where unavoidable (QueryPlanRegistry state).
 """
 
 from __future__ import annotations
@@ -26,10 +24,9 @@ import pytest
 from marie.sandbox.blueprints.models import (
     ArtifactResult,
     BlueprintImportResponse,
-    PluginInstallResponse,
 )
 from marie.sandbox.blueprints.registry import BlueprintRegistry
-from marie.sandbox.blueprints.service import BlueprintImportService, install_plugin
+from marie.sandbox.blueprints.service import BlueprintImportService
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -293,43 +290,6 @@ class TestPartialResultContract:
         assert d['status'] == 'partial'
         assert d['applied'][0]['status'] == 'applied'
         assert d['deferred'][0]['reason'] == 'no backend'
-
-
-# ---------------------------------------------------------------------------
-# Plugin install
-# ---------------------------------------------------------------------------
-
-
-class TestPluginInstall:
-    @patch('marie.sandbox.blueprints.service.ConnectorRegistry')
-    def test_already_registered_connector_returns_installed(self, mock_cr: MagicMock) -> None:
-        mock_cr.get.return_value = MagicMock()  # connector found
-
-        result = install_plugin('connector.ocr-engine', '2.1.0')
-
-        assert result['status'] == 'installed'
-        assert result['package_id'] == 'connector.ocr-engine'
-        assert result['version'] == '2.1.0'
-
-    @patch('marie.sandbox.blueprints.service.ConnectorRegistry')
-    def test_unknown_plugin_returns_deferred(self, mock_cr: MagicMock) -> None:
-        mock_cr.get.return_value = None  # not found
-
-        result = install_plugin('connector.unknown-plugin', '1.0.0')
-
-        assert result['status'] == 'deferred'
-        assert 'dify-parity' in result.get('message', '')
-
-    @patch('marie.sandbox.blueprints.service.ConnectorRegistry')
-    def test_plugin_install_response_shape(self, mock_cr: MagicMock) -> None:
-        mock_cr.get.return_value = None
-
-        result = install_plugin('connector.ner-model', '1.4.2')
-
-        assert 'package_id' in result
-        assert 'version' in result
-        assert 'status' in result
-        assert result['status'] in ('installed', 'deferred', 'failed')
 
 
 # ---------------------------------------------------------------------------
