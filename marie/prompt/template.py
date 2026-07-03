@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import pathlib
 import re
 from typing import Callable, Dict, FrozenSet, Optional
 
@@ -257,8 +258,8 @@ class PromptTemplate:
           1. {config_dir}/extract/TID-{layout_id}/annotator/{filename}
           2. {config_dir}/extract/base/{filename}
 
-        The filename is sanitized via ``os.path.basename()`` to prevent path
-        traversal — callers can pass the raw config value directly.
+        The filename is sanitized as a safe relative path so callers can pass
+        package-local prompt paths directly.
         """
         safe_name = cls._sanitize_filename(prompt_filename)
         if not safe_name:
@@ -396,8 +397,13 @@ class PromptTemplate:
 
     @staticmethod
     def _sanitize_filename(filename: str) -> Optional[str]:
-        """Strip directory components to prevent path traversal."""
-        return os.path.basename(filename) if filename else None
+        """Preserve safe relative prompt subpaths and reject traversal."""
+        if not filename:
+            return None
+        path = pathlib.PurePosixPath(str(filename).replace("\\", "/"))
+        if path.is_absolute() or ".." in path.parts:
+            raise PromptLoadError(f"Unsafe prompt path: {filename}")
+        return str(path)
 
     def __repr__(self) -> str:
         parts = [f"PromptTemplate(name={self._name!r}"]

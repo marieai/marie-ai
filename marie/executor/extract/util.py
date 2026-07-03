@@ -1,10 +1,50 @@
 import os
+from pathlib import Path
 from typing import Optional
 
 from omegaconf import OmegaConf
 
 from marie.logging_core.predefined import default_logger as logger
 from marie.utils.utils import ensure_exists
+
+
+def _safe_relative_config_path(raw_path: str) -> str:
+    path = Path(str(raw_path))
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"Unsafe include path: {raw_path}")
+    return str(path)
+
+
+def _load_layout_includes(
+    base_dir: str, layout_dir: str, specific_cfg: OmegaConf
+) -> list[OmegaConf]:
+    include_cfgs: list[OmegaConf] = []
+    for raw_path in specific_cfg.get("includes", []) or []:
+        rel_path = _safe_relative_config_path(str(raw_path))
+        candidates = [
+            os.path.join(layout_dir, rel_path),
+            os.path.join(base_dir, rel_path),
+        ]
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                include_cfgs.append(OmegaConf.load(candidate))
+                break
+        else:
+            raise FileNotFoundError(f"Include config not found: {raw_path}")
+    return include_cfgs
+
+
+def _merge_grounding_lists(*configs: OmegaConf) -> dict[str, list[str]]:
+    merged: dict[str, list[str]] = {}
+    for cfg in configs:
+        grounding = cfg.get("grounding", {}) or {}
+        for key, values in grounding.items():
+            bucket = merged.setdefault(key, [])
+            for entry in values or []:
+                normalized = str(entry).replace(" ", "_")
+                if normalized not in bucket:
+                    bucket.append(normalized)
+    return merged
 
 
 def load_layout_config(base_dir: str, layout_dir: str, debug_config=False) -> OmegaConf:
@@ -20,7 +60,8 @@ def load_layout_config(base_dir: str, layout_dir: str, debug_config=False) -> Om
     base_cfg = OmegaConf.load(base_cfg_path)
     field_cfg = OmegaConf.load(field_cfg_path)
     specific_cfg = OmegaConf.load(layout_cfg_path)
-    merged_conf = OmegaConf.merge(field_cfg, base_cfg, specific_cfg)
+    include_cfgs = _load_layout_includes(base_dir, layout_dir, specific_cfg)
+    merged_conf = OmegaConf.merge(field_cfg, base_cfg, *include_cfgs, specific_cfg)
 
     # Keys can come in few formats
     # - PATIENT NAME
@@ -28,10 +69,18 @@ def load_layout_config(base_dir: str, layout_dir: str, debug_config=False) -> Om
     # - PATIENT_NAME
     # for that we will normalize spaces into underscores (_)
 
-    merged_conf.grounding = {
-        k: [entry.replace(" ", "_") for entry in v]
-        for k, v in merged_conf.grounding.items()
-    }
+    if include_cfgs:
+        merged_conf.grounding = _merge_grounding_lists(
+            field_cfg,
+            base_cfg,
+            *include_cfgs,
+            specific_cfg,
+        )
+    else:
+        merged_conf.grounding = {
+            k: [entry.replace(" ", "_") for entry in v]
+            for k, v in merged_conf.grounding.items()
+        }
 
     if debug_config:
         with open("merged_config_output.yml", "w") as yaml_file:
