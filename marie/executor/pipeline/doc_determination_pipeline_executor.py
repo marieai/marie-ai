@@ -349,6 +349,7 @@ def filter_pages_by_classifier_results(
 def doc_determination_collation(meta: Dict[str, Any]) -> Dict[str, Any]:
     documents: List[Dict[str, Any]] = []
     try:
+        rotation_threshold = meta.get("rotation", {}).get("threshold", 0)
         rotation_pages = meta.get("rotation", {}).get("pages", {})
 
         # page_number -> medical page classification string (e.g., "EOB")
@@ -406,11 +407,11 @@ def doc_determination_collation(meta: Dict[str, Any]) -> Dict[str, Any]:
                 rot = (
                     rotation_pages.get(str(page_num), rotation_pages.get(page_num, {}))
                     or {}
-                )
+                ).get("rotate", 0)
                 collated_pages.append(
                     {
                         "page": page_num,
-                        "rotation": rot.get("rotate"),
+                        "rotation": rot if rot >= rotation_threshold else 0,
                         "medical-page-classification": medical_by_page.get(page_num),
                     }
                 )
