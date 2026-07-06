@@ -1,5 +1,7 @@
+import copy
 import os
 import tempfile
+from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
 from docarray import DocList
@@ -75,7 +77,7 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
             metadata: Dict[str, Any] = load_json_file(meta_path, True)
             metadata["pages"] = f"{len(frames)}"
 
-            doc_determination_collation(metadata)
+            metadata = doc_determination_collation(metadata)
 
             store_json_object(metadata, meta_path)
             stored_assets = store_assets(
@@ -305,20 +307,9 @@ def filter_pages_by_classifier_results(
 
             if matched_pages:
                 if method in ("include", "exclude"):
-                    if not result_pages:
-                        result_pages[i] = sorted(matched_pages)
-                        i = i + 1
-                    else:
-                        for k, v in result_pages.items():
-                            result_pages[k] = [
-                                page for page in v if page in matched_pages
-                            ]
+                    for k, v in result_pages.items():
+                        result_pages[k] = [page for page in v if page in matched_pages]
                 elif method == "split":
-                    if not result_pages:
-                        result_pages = {
-                            i: list(int(k) for k in classification_pages.keys())
-                        }
-
                     split_after = set(matched_pages)
                     out = {}
                     chunk: List[int] = []
@@ -348,51 +339,44 @@ def filter_pages_by_classifier_results(
 
 def doc_determination_collation(meta: Dict[str, Any]) -> Dict[str, Any]:
     documents: List[Dict[str, Any]] = []
+    _meta = copy.deepcopy(meta)
     try:
-        rotation_threshold = meta.get("rotation", {}).get("threshold", 0)
-        rotation_pages = meta.get("rotation", {}).get("pages", {})
+        rotation_threshold = _meta.get("rotation", {}).get("threshold", 0)
+        rotation_pages = _meta.get("rotation", {}).get("pages", {})
+
+        _all_pages = [int(x) for x in rotation_pages.keys()]
+        first_page, last_page = min(_all_pages), max(_all_pages)
+
+        classifications_by_group = defaultdict(list)
+        for item in _meta.get("classifications", []):
+            classifications_by_group[item.get("group")].append(
+                item.get("classification") or {}
+            )
 
         # page_number -> medical page classification string (e.g., "EOB")
         medical_by_page: Dict[int, Optional[str]] = {}
-        for item in meta.get("classifications", []):
-            if item.get("group") != "medical-page-classifier":
-                continue
-            pages = (item.get("classification") or {}).get("pages") or {}
+        for item in classifications_by_group["medical-page-classifier"]:
+            pages = item.get("pages") or {}
             for p, pnode in pages.items():
-                try:
-                    pnum = int(p)
-                except (TypeError, ValueError):
-                    continue
                 best = (pnode or {}).get("best") or {}
-                medical_by_page[pnum] = best.get("classification")
+                medical_by_page[int(p)] = best.get("classification")
 
-        for item in meta.get("classifications", []):
-            if item.get("group") != "doc-determination-classifier":
-                continue
-
-            cls = item.get("classification", {})
-            pages_map = cls.get("pages", {}) or {}
-
-            raw_page_numbers = cls.get("page_numbers")
-            if raw_page_numbers is None:
-                raw_page_numbers = pages_map.keys()
-
-            page_numbers = sorted({int(p) for p in raw_page_numbers})
+        doc_determinations = classifications_by_group["doc-determination-classifier"]
+        doc_determinations.sort(
+            key=lambda x: min({int(p) for p in x.get("pages", {}).keys()} or {0})
+        )
+        for idx, item in enumerate(doc_determinations):
+            pages_map = item.get("pages", {}) or {}
+            page_numbers = sorted({int(p) for p in pages_map.keys()})
             if not page_numbers:
                 continue
 
             # All pages in group should share one doc-determination value.
-            labels = set()
-            for p in page_numbers:
-                node = pages_map.get(str(p), pages_map.get(p, {})) or {}
-                best = node.get("best", {}) or {}
-                label = best.get("classification")
-                if label is None:
-                    details = node.get("details", []) or []
-                    if details:
-                        label = details[0].get("classification")
-                if label is not None:
-                    labels.add(label)
+            labels = {
+                (node.get("best") or {}).get("classification")
+                for node in pages_map.values()
+            }
+            labels.discard(None)
 
             if len(labels) > 1:
                 raise ValueError(
@@ -401,7 +385,12 @@ def doc_determination_collation(meta: Dict[str, Any]) -> Dict[str, Any]:
             doc_label = next(iter(labels), None)
 
             # Fill missing pages in range (e.g., [2,3,5] -> [2,3,4,5])
-            start_page, end_page = page_numbers[0], page_numbers[-1]
+            # Make sure first and last pages are accounted for (e.g., if FIRST classification is [2,3,5] -> [1,2,3,4,5])
+            start_page = first_page if idx == 0 else page_numbers[0]
+            end_page = (
+                last_page if idx == len(doc_determinations) - 1 else page_numbers[-1]
+            )
+
             collated_pages = []
             for page_num in range(start_page, end_page + 1):
                 rot = (
@@ -427,11 +416,11 @@ def doc_determination_collation(meta: Dict[str, Any]) -> Dict[str, Any]:
         logger.info(f"Final document count: {len(documents)}")
     except Exception as e:
         logger.error(f"Error during document collation: {e}")
-        meta.setdefault("doc_determination_collation", {})["Error"] = e
+        _meta.setdefault("doc_determination_collation", {})["Error"] = e
 
-    meta["doc_determination_collation"] = {
+    _meta["doc_determination_collation"] = {
         "doc_count": len(documents),
         "docs": documents,
     }
 
-    return meta
+    return _meta
