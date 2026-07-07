@@ -63,10 +63,6 @@ class BlueprintRegistry:
         )
         return None
 
-    # ------------------------------------------------------------------
-    # Private
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _resolve_dir() -> Path:
         env = os.environ.get('MARIE_BLUEPRINTS_DIR', '').strip()
