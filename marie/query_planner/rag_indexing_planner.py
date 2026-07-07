@@ -46,6 +46,9 @@ def query_planner_rag_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan
     layout = planner_info.name
     base_id = planner_info.base_id
 
+    metadata = planner_info.metadata or {}
+    run_params = metadata.get("run_params", {})
+
     nodes = []
 
     # START node
@@ -74,6 +77,21 @@ def query_planner_rag_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan
             params={
                 "layout": layout,
                 "ocr_fallback": True,
+                **(
+                    {"parse_mode": run_params["parse_mode"]}
+                    if "parse_mode" in run_params
+                    else {}
+                ),
+                **(
+                    {"layout_options": run_params["layout_options"]}
+                    if "layout_options" in run_params
+                    else {}
+                ),
+                **(
+                    {"cache_options": run_params["cache_options"]}
+                    if "cache_options" in run_params
+                    else {}
+                ),
             },
         ),
     )
@@ -91,6 +109,22 @@ def query_planner_rag_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan
             endpoint="vector_store_executor://embed_and_store",
             params={
                 "layout": layout,
+                **(
+                    {"source_id": metadata["source_id"]}
+                    if "source_id" in metadata
+                    else {}
+                ),
+                **(
+                    {"index_name": metadata["index_name"]}
+                    if "index_name" in metadata
+                    else {}
+                ),
+                **(
+                    {"multimodal": run_params["multimodal"]}
+                    if "multimodal" in run_params
+                    else {}
+                ),
+                "node_type": "document",
             },
         ),
     )

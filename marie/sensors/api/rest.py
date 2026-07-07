@@ -317,7 +317,8 @@ async def test_sensor(
 
     # Get evaluator and evaluate
     registry = SensorRegistry.get_instance()
-    evaluator_class = registry.get_evaluator(sensor_type)
+    subtype = sensor.get("config", {}).get("subtype")
+    evaluator_class = registry.get_evaluator(sensor_type, subtype=subtype)
     evaluator = evaluator_class(sensor)
 
     try:

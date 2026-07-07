@@ -89,8 +89,10 @@ from marie.types_core.request.data import DataRequest, Response
 from marie.types_core.request.status import StatusMessage
 from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.server_runtime import (
+    attach_sensor_worker_scheduler,
     setup_auth,
     setup_llm_tracking,
+    setup_sensor_worker,
     setup_storage,
     setup_toast_events,
 )
@@ -109,6 +111,15 @@ MAX_AGE_S = 30 * 60  # hard age cap (30 min)
 STATUS_DEGRADED_SINCE = "status_degraded_since"
 STATUS_DEGRADED_REASON = "status_degraded_reason"
 STATUS_DEGRADED_LIVE_MISSING = "live_node_missing_status"
+
+ALLOWED_EXECUTOR_OPS = {
+    "search": "/search",
+    "hybrid_search": "/hybrid_search",
+    "index_stats": "/index_stats",
+    "source_stats": "/source_stats",
+    "delete_source": "/delete_source",
+    "delete_index": "/delete_index",
+}
 
 
 class EventKind(str, Enum):
@@ -497,32 +508,6 @@ class MarieServerGateway(CompositeServer):
             async def _shutdown():
                 self.logger.info("Shutting down")
                 await self._shutdown_background_services()
-
-            @app.api_route(
-                path="/job/submit",
-                methods=["GET"],
-                summary=f"Submit a job /api/submit",
-            )
-            async def job_submit(text: str):
-                now = datetime.now(timezone.utc)
-                self.logger.info(f"Received request at {now}")
-                work_info = WorkInfo(
-                    name="extract",
-                    priority=0,
-                    data={},
-                    state=WorkState.CREATED,
-                    retry_limit=0,
-                    retry_delay=0,
-                    retry_backoff=False,
-                    start_after=now,
-                    expire_in_seconds=0,
-                    keep_until=now + timedelta(days=2),
-                    soft_sla=now,
-                    hard_sla=now + timedelta(hours=4),
-                )
-
-                result = await self.job_scheduler.submit_job(work_info)
-                return {"result": result}
 
             @app.get("/check")
             async def get_health(text: str):
@@ -1204,6 +1189,8 @@ class MarieServerGateway(CompositeServer):
             return self.handle_job_command(invoke_action)
         elif command == "nodes":
             return self.handle_nodes_command(invoke_action)
+        elif command == "executor":
+            return self.handle_executor_command(invoke_action)
         else:
             return self.error_response(
                 f"Command not recognized or not implemented : {command}", None
@@ -1244,6 +1231,62 @@ class MarieServerGateway(CompositeServer):
             yield req
         else:
             yield self.error_response(f"Action not recognized : {action}", None)
+
+    async def handle_executor_command(
+        self, message: dict
+    ) -> AsyncGenerator[Request, None]:
+        """
+        Handle executor command by forwarding an allow-listed op to the
+        vector_store_executor deployment via the gateway streamer.
+
+        :param message: Dictionary containing the executor command details.
+                        It should have the "action" key specifying the op
+                        and an optional "metadata" dict passed through as
+                        executor parameters.
+        :return: Response object containing the result of the executor call.
+        """
+        action = message.get("action")
+        self.logger.info(f"Handling executor action : {action}")
+        endpoint = ALLOWED_EXECUTOR_OPS.get(action)
+        if endpoint is None:
+            yield self.error_response(f"Executor action not allowed : {action}", None)
+            return
+
+        params = message.get("metadata", {}) or {}
+        req = DataRequest()
+        req.header.exec_endpoint = endpoint
+        req.header.target_executor = "vector_store_executor"
+        req.parameters = params
+
+        response = await self.streamer.process_single_data(request=req)
+
+        docs_payload = []
+        for doc in response.docs:
+            text_score = getattr(doc, "text_score", None)
+            rrf_score = getattr(doc, "rrf_score", None)
+            similarity = getattr(doc, "similarity", None)
+            payload = {
+                "id": doc.id,
+                "text": doc.text,
+                "score": rrf_score if rrf_score is not None else similarity,
+                "source_id": getattr(doc, "source_id", None),
+                "node_type": getattr(doc, "node_type", None),
+                "index_name": getattr(doc, "index_name", None),
+                "ref_doc_id": getattr(doc, "ref_doc_id", None),
+            }
+            if text_score is not None:
+                payload["text_score"] = text_score
+            if rrf_score is not None:
+                payload["rrf_score"] = rrf_score
+            docs_payload.append(payload)
+
+        out = Response()
+        out.parameters = {
+            "status": "ok",
+            "result": response.parameters,
+            "docs": docs_payload,
+        }
+        yield out
 
     async def handle_job_command(self, message: dict) -> AsyncGenerator[Request, None]:
         """
@@ -1569,6 +1612,9 @@ class MarieServerGateway(CompositeServer):
         setup_storage(storage_config)
         setup_auth(self.args.get("auth", {}))
         setup_llm_tracking(self.args.get("llm_tracking", {}), storage_config)
+        setup_sensor_worker(
+            self.args.get("sensors", {}), self.args.get("kv_store_kwargs", {})
+        )
 
         await self.setup_service_discovery(
             etcd_host=self.args["discovery_host"],
@@ -1764,6 +1810,11 @@ class MarieServerGateway(CompositeServer):
                 )
 
         await self.job_scheduler.start()
+
+        attached = attach_sensor_worker_scheduler(self.job_scheduler)
+        self.logger.info(
+            f"SensorWorker job scheduler attachment: {'attached' if attached else 'skipped (no SensorWorker)'}"
+        )
 
     async def setup_service_discovery(
         self,

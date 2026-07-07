@@ -24,6 +24,18 @@ MOCK_EXECUTOR_PARAMETER_KEYS = (
     "randomize_time",
 )
 
+# spec A0.2: identity fields promoted from the metadata envelope to
+# top-level executor parameters (e.g. VectorStoreExecutor.embed_and_store
+# requires a top-level source_id).
+IDENTITY_PARAMETER_KEYS = (
+    "source_id",
+    "index_name",
+    "tenant_id",
+    "ref_id",
+    "ref_type",
+    "uri",
+)
+
 
 class GatewayJobDistributor(JobDistributor):
     def __init__(
@@ -92,12 +104,20 @@ class GatewayJobDistributor(JobDistributor):
     async def _build_payload(self, submission_id: str, job_info: JobInfo):
         # parse the incoming metadata into parameters + document
         metadata = job_info.metadata.get("metadata", {})
+        # snapshot identity fields before parse_payload_to_docs mutates metadata
+        # in place (e.g. it pops "uri" when clearing the payload)
+        identity_values = {
+            key: metadata[key] for key in IDENTITY_PARAMETER_KEYS if key in metadata
+        }
         parameters, asset_doc = await parse_payload_to_docs(metadata)
         parameters["job_id"] = submission_id
         parameters["payload"] = metadata
         for key in MOCK_EXECUTOR_PARAMETER_KEYS:
             if key in metadata:
                 parameters[key] = metadata[key]
+        for key, value in identity_values.items():
+            if key not in parameters:
+                parameters[key] = value
 
         # Pass through DAG tracking parameters for asset materialization
         # These are set by the scheduler when dispatching DAG jobs
