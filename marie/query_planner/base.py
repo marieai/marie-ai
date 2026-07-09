@@ -1,6 +1,7 @@
 import enum
 import importlib
 import json
+import os
 import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from marie.logging_core.predefined import default_logger as logger
 from marie.query_planner.model import QueryPlannersConf
+from marie.utils.types import strtobool
 from marie.wheel_manager import PipWheelManager, WheelDirectoryWatcher
 
 DEFAULT_NAME = "query_plan_tool"
@@ -148,9 +150,28 @@ class QueryPlanRegistry:
             planner_name = name or func.__name__
 
             if planner_name in cls._plans:
-                raise ValueError(
-                    f"Query planner '{planner_name}' is already registered"
+                # Default (today's behaviour): duplicate registration is an error.
+                # Set MARIE_ALLOW_PLANNER_REREGISTRATION to skip the duplicate and
+                # keep the first registration -- needed when a module that self-
+                # registers via @register_query_plan is both imported by its package
+                # __init__ and re-executed as __main__ (e.g. `python -m ...query`).
+                if not strtobool(
+                    os.environ.get("MARIE_ALLOW_PLANNER_REREGISTRATION", "false")
+                ):
+                    raise ValueError(
+                        f"Query planner '{planner_name}' is already registered. "
+                        f"This is expected when a self-registering module is both "
+                        f"imported by its package and re-executed as __main__ "
+                        f"(e.g. `python -m ...query`). To allow the duplicate and "
+                        f"keep the first registration, set "
+                        f"MARIE_ALLOW_PLANNER_REREGISTRATION=1."
+                    )
+                logger.warning(
+                    f"Query planner '{planner_name}' is already registered; "
+                    f"skipping duplicate registration "
+                    f"(MARIE_ALLOW_PLANNER_REREGISTRATION is set)"
                 )
+                return cls._plans[planner_name]
 
             cls._plans[planner_name] = wrapper
 
@@ -874,6 +895,43 @@ class ExecutorEndpointQueryDefinition(QueryDefinition):
 
     def validate_params(self):
         pass
+
+
+@QueryTypeRegistry.register("PLUGIN")
+class PluginQueryDefinition(QueryDefinition):
+    """
+    Represents an installed-plugin invocation.
+
+    A PLUGIN node is dispatched to the plugin daemon executor
+    (``MariePluginDaemonExecutor``), which runs the installed plugin through the
+    marie-plugin-daemon. The dedicated ``method == "PLUGIN"`` is the routing
+    signal the scheduler uses to select that executor; the typed fields below
+    identify which plugin and action to invoke.
+    """
+
+    method: str = "PLUGIN"
+    endpoint: str = "/v1/dispatch/invoke"
+    plugin_type: str = Field(
+        ...,
+        description="Plugin family: tool | model | datasource | trigger.",
+    )
+    plugin_ref: str = Field(
+        ...,
+        description="Installed plugin package reference, e.g. 'ext.m3forge.reader'.",
+    )
+    action: str = Field(
+        ...,
+        description="Plugin action to invoke (tool / provider / datasource / trigger name).",
+    )
+    params: dict = Field(default_factory=lambda: {"layout": None})
+
+    def validate_params(self):
+        if not self.plugin_type:
+            raise ValueError("PLUGIN queries must specify 'plugin_type'.")
+        if not self.plugin_ref:
+            raise ValueError("PLUGIN queries must specify 'plugin_ref'.")
+        if not self.action:
+            raise ValueError("PLUGIN queries must specify 'action'.")
 
 
 class QueryType(str, enum.Enum):

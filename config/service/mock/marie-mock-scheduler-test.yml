@@ -236,6 +236,19 @@ executors:
       LLM_QUEUE_VALKEY_URL: ${{ ENV.LLM_QUEUE_VALKEY_URL }}
       LLM_QUEUE_POOL_ID: document-small
 
+  - name: plugin_daemon_executor          # MUST equal the scheme: plugin_daemon_executor://
+    uses:
+      jtype: MariePluginDaemonExecutor
+      metas:
+        py_modules:
+          - marie.executor.extensions.plugin_daemon_executor
+      with:
+        start: false                      # proxy to the EXTERNAL daemon; don't spawn a child
+    timeout_ready: 3000000
+    replicas: 1
+    env:
+      MARIE_PLUGIN_DAEMON_URL: ${{ ENV.MARIE_PLUGIN_DAEMON_URL }}
+
   # Fast, reliable executor
   - name: mock_executor_a
     uses:

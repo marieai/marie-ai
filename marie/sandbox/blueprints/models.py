@@ -1,4 +1,4 @@
-"""Pydantic models for blueprint-import and plugin-install gateway endpoints."""
+"""Pydantic models for the blueprint-import gateway endpoint."""
 
 from __future__ import annotations
 
@@ -42,20 +42,4 @@ class BlueprintImportResponse(BaseModel):
     applied: list[ArtifactResult] = Field(default_factory=list)
     deferred: list[ArtifactResult] = Field(default_factory=list)
     failed: list[ArtifactResult] = Field(default_factory=list)
-    message: str | None = None
-
-
-class PluginInstallResponse(BaseModel):
-    """Response body for POST /api/v1/plugins/install."""
-
-    package_id: str
-    version: str
-    status: Literal['installed', 'deferred', 'failed'] = Field(
-        ...,
-        description=(
-            'installed — found in local connector/plugin registry; '
-            'deferred — install daemon endpoint not yet implemented (dify-parity pending); '
-            'failed — attempted and errored'
-        ),
-    )
     message: str | None = None

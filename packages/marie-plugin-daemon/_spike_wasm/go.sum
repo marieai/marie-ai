@@ -1,0 +1,4 @@
+github.com/bytecodealliance/wasmtime-go/v33 v33.0.0 h1:4G7TVmR9QdTDXeGDeo+8vMsv7c3szvV299uFUpyUSXY=
+github.com/bytecodealliance/wasmtime-go/v33 v33.0.0/go.mod h1:TOAKW0do1AEO86oplo66qYM08Kbl3FPxQlqVTDtzf08=
+github.com/bytecodealliance/wasmtime-go/v46 v46.0.1 h1:3jSQdjL+8V3iXYSZlhcd7iU9VAz88qcitTAen+8VzDM=
+github.com/bytecodealliance/wasmtime-go/v46 v46.0.1/go.mod h1:7iIBM15/gdBgfl36+ZzXYIY8QvrOWvHETnxa3s2l4KE=

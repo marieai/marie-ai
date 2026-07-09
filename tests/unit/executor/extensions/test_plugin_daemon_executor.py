@@ -302,3 +302,135 @@ import sys
 
 sys.exit(7)
 """
+
+
+# ── W2: CONNECTOR node /execute handler ─────────────────────────────────────
+
+
+class DispatchHandler(BaseHTTPRequestHandler):
+    """Fake daemon: records the posted envelope, streams one structured frame."""
+
+    envelopes: list[dict] = []
+
+    def do_GET(self):
+        if self.path != "/health":
+            self.send_response(404)
+            self.end_headers()
+            return
+        body = json.dumps({"ok": True, "ready": True, "version": "0.1.0-test"}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        if self.path != "/v1/dispatch/invoke":
+            self.send_response(404)
+            self.end_headers()
+            return
+        raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        self.__class__.envelopes.append(json.loads(raw.decode("utf-8")))
+        body = "\n".join(
+            [
+                'data: {"type":"structured_object","payload":{"ok":true},"sequence":0,"final":true}',
+                "data: [DONE]",
+            ]
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        pass
+
+
+def _run_connector_invoke(parameters: dict):
+    DispatchHandler.envelopes = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), DispatchHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}"
+        executor = MariePluginDaemonExecutor(daemon_url=url, start=False, env={"PATH": ""})
+        out = asyncio.run(
+            executor.connector_invoke(DocList[TextDoc]([]), parameters=parameters)
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+    return out, DispatchHandler.envelopes
+
+
+_PLUGIN = {
+    "tool_ref": "web_reader",
+    "package_ref": "ext.test.reader",
+    "package_digest": "sha256:abc",
+    "package_trust_level": "community",
+    "install_id": "i1",
+    "provider_id": "p1",
+    "package_id": "pk1",
+    "action_type": "tool",
+}
+
+
+def test_connector_invoke_reads_identity_from_params():
+    out, envelopes = _run_connector_invoke(
+        {
+            "resource": "pages",
+            "operation": "web_reader",
+            "url": "https://example.com",
+            "plugin": dict(_PLUGIN),
+            "credential_requirements": [],
+            "organization_id": "org-1",
+            "workspace_id": "ws-1",
+            "user_id": "u1",
+        }
+    )
+    # plugin output streamed back as docs
+    assert any('"ok":true' in d.text for d in out), [d.text for d in out]
+    # identity came from params.plugin (not the endpoint), and tenant from context
+    assert len(envelopes) == 1
+    env = envelopes[0]
+    assert env["packageRef"] == "ext.test.reader"
+    assert env["packageDigest"] == "sha256:abc"
+    assert env["actionId"] == "tools/web_reader"
+    assert env["organizationId"] == "org-1"
+    assert env["workspaceId"] == "ws-1"
+
+
+def test_connector_invoke_nil_uuid_tenant_fallback():
+    out, envelopes = _run_connector_invoke(
+        {
+            "operation": "web_reader",
+            "plugin": dict(_PLUGIN),
+            "credential_requirements": [],
+        }
+    )
+    assert any('"ok":true' in d.text for d in out)
+    env = envelopes[0]
+    assert env["organizationId"] == "00000000-0000-0000-0000-000000000000"
+    assert env["workspaceId"] == "00000000-0000-0000-0000-000000000000"
+
+
+def test_connector_invoke_resolves_credentials_into_payload(monkeypatch):
+    # W2 Task 3: a credential requirement with an env: secret_ref resolves in
+    # marie-ai (CredentialResolver) and is injected into the daemon payload.
+    monkeypatch.setenv("READER_API_KEY", "s3cr3t")
+    out, envelopes = _run_connector_invoke(
+        {
+            "operation": "web_reader",
+            "plugin": dict(_PLUGIN),
+            "credential_requirements": [
+                {"name": "api_key", "secret_ref": "env:READER_API_KEY", "required": True}
+            ],
+            "organization_id": "org-1",
+            "workspace_id": "ws-1",
+        }
+    )
+    assert any('"ok":true' in d.text for d in out)
+    env = envelopes[0]
+    # build_invocation_envelope forwards the op payload (incl. resolved creds)
+    assert env["payload"]["credentials"] == {"api_key": "s3cr3t"}

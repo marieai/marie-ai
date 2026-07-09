@@ -47,3 +47,20 @@ def test_resolve_endpoint_accepts_mock_annotator_llm_route() -> None:
         "job-a",
         "annotator_llm://annotator/llm",
     ) == ("annotator_llm", "/annotator/llm")
+
+
+def test_resolve_endpoint_routes_connector_to_plugin_daemon_execute() -> None:
+    # W2: a CONNECTOR node serializes to the FIXED endpoint
+    # plugin_daemon_executor://execute (identity rides in params, not the path).
+    distributor = GatewayJobDistributor(
+        deployment_nodes={
+            "plugin_daemon_executor": [
+                {"endpoint": "/execute"},
+            ],
+        }
+    )
+
+    assert distributor._resolve_endpoint(
+        "job-a",
+        "plugin_daemon_executor://execute",
+    ) == ("plugin_daemon_executor", "/execute")

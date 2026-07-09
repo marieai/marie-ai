@@ -1,14 +1,17 @@
-"""FastAPI route registration for blueprint-import and plugin-install endpoints.
+"""FastAPI route registration for the blueprint-import endpoint.
 
 Call :func:`register_blueprint_routes` from the gateway's
 ``_extend_rest_function`` hook to mount:
 
     POST /api/v1/blueprints/import
-    POST /api/v1/plugins/install
 
-Both endpoints require ``Authorization: Bearer <token>`` validated by
+The endpoint requires ``Authorization: Bearer <token>`` validated by
 :class:`~marie.auth.auth_bearer.TokenBearer`, matching the pattern used by
 ``/api/v1/invoke``.
+
+Plugin installation is NOT a gateway concern: plugins are installed and managed
+system-wide by the daemon-plugin system via Studio (the Extensions package
+store).  The gateway only *invokes* installed plugins (plugin_daemon_executor).
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from typing import TYPE_CHECKING
 
 from marie.logging_core.logger import MarieLogger
 from marie.sandbox.blueprints.registry import BlueprintRegistry
-from marie.sandbox.blueprints.service import BlueprintImportService, install_plugin
+from marie.sandbox.blueprints.service import BlueprintImportService
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -100,49 +103,3 @@ def register_blueprint_routes(
         _logger.info(f'Importing blueprint {blueprint_id!r}')
         result = _service.import_blueprint(blueprint_id, manifest)
         return JSONResponse(status_code=200, content=result.model_dump())
-
-    @app.post(
-        '/api/v1/plugins/install',
-        summary='Install a plugin/extension into this gateway (sandbox seeding)',
-        tags=['Sandbox'],
-        dependencies=[Depends(TokenBearer())],
-    )
-    async def install_plugin_endpoint(
-        request: Request,
-        _token: str = Depends(TokenBearer()),
-    ) -> JSONResponse:
-        """Install a plugin into this gateway.
-
-        Request body::
-
-            { "packageId": "<id>", "version": "<semver>" }
-
-        The Studio seam calls this endpoint once per plugin ref in the Snapshot's
-        ``pluginRefs`` array, after blueprint import completes.
-
-        Current reality: plugin daemon install is not yet implemented (pending
-        dify-parity slices 03/05).  The endpoint always returns HTTP 200; the
-        ``status`` field in the body reports the true outcome.
-        """
-        try:
-            body = await request.json()
-        except Exception:
-            return JSONResponse(status_code=400, content={'error': 'invalid JSON body'})
-
-        package_id = body.get('packageId') or body.get('package_id')
-        version = body.get('version')
-
-        if not package_id or not isinstance(package_id, str):
-            return JSONResponse(
-                status_code=400,
-                content={'error': "missing or invalid 'packageId' field"},
-            )
-        if not version or not isinstance(version, str):
-            return JSONResponse(
-                status_code=400,
-                content={'error': "missing or invalid 'version' field"},
-            )
-
-        _logger.info(f'Plugin install request: {package_id!r}@{version}')
-        result = install_plugin(package_id, version)
-        return JSONResponse(status_code=200, content=result)

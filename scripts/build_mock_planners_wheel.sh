@@ -37,6 +37,8 @@ cp "$PROJECT_ROOT/tests/integration/scheduler/mock_plans/branching.py" "$BUILD_D
 cp "$PROJECT_ROOT/tests/integration/scheduler/mock_plans/guardrail.py" "$BUILD_DIR/tests/integration/scheduler/mock_plans/"
 cp "$PROJECT_ROOT/tests/integration/scheduler/mock_plans/hitl.py" "$BUILD_DIR/tests/integration/scheduler/mock_plans/"
 cp "$PROJECT_ROOT/tests/integration/scheduler/mock_plans/traditional.py" "$BUILD_DIR/tests/integration/scheduler/mock_plans/"
+cp "$PROJECT_ROOT/tests/integration/scheduler/mock_plans/plugin.py" "$BUILD_DIR/tests/integration/scheduler/mock_plans/"
+cp "$PROJECT_ROOT/tests/integration/scheduler/mock_plans/connector.py" "$BUILD_DIR/tests/integration/scheduler/mock_plans/"
 
 # Create pyproject.toml
 cat > "$BUILD_DIR/pyproject.toml" << 'EOF'

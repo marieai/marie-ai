@@ -44,10 +44,17 @@ HITL (Human-in-the-Loop) Plans:
     - query_planner_mock_hitl_router: HITL routing based on approval decision
     - query_planner_mock_hitl_complete_workflow: Complete HITL workflow with all patterns
 
+Plugin Plans (one per plugin family, dispatched to the plugin daemon executor):
+    - query_planner_mock_plugin_tool: START -> PLUGIN(tool) -> END
+    - query_planner_mock_plugin_model: START -> PLUGIN(model) -> END
+    - query_planner_mock_plugin_datasource: START -> PLUGIN(datasource) -> END
+    - query_planner_mock_plugin_trigger: START -> PLUGIN(trigger) -> END
+
 Usage:
     from tests.integration.scheduler.mock_query_plans import (
         query_planner_mock_simple,
         query_planner_mock_medium,
+
         query_planner_mock_complex,
         query_planner_mock_with_subgraphs,
         query_planner_mock_parallel_subgraphs,
@@ -56,6 +63,7 @@ Usage:
         query_planner_mock_branch_multi_condition,
         query_planner_mock_nested_branches,
     )
+
 
     planner_info = PlannerInfo(name="mock_simple", base_id=generate_job_id())
     plan = query_planner_mock_simple(planner_info)
@@ -87,6 +95,11 @@ from tests.integration.scheduler.mock_plans.branching import (
     query_planner_mock_switch_complexity,
 )
 
+# Connector plan (W2: EXECUTOR_ENDPOINT -> plugin_daemon_executor://execute, identity in params.plugin)
+from tests.integration.scheduler.mock_plans.connector import (
+    query_planner_mock_connector_tool,
+)
+
 # Guardrail plans (quality validation nodes)
 from tests.integration.scheduler.mock_plans.guardrail import (
     query_planner_mock_guardrail_executor_metric,
@@ -101,6 +114,14 @@ from tests.integration.scheduler.mock_plans.hitl import (
     query_planner_mock_hitl_complete_workflow,
     query_planner_mock_hitl_correction,
     query_planner_mock_hitl_router,
+)
+
+# Plugin plans (one per plugin family, dispatched to the plugin daemon executor)
+from tests.integration.scheduler.mock_plans.plugin import (
+    query_planner_mock_plugin_datasource,
+    query_planner_mock_plugin_model,
+    query_planner_mock_plugin_tool,
+    query_planner_mock_plugin_trigger,
 )
 
 # Traditional plans (linear and parallel execution patterns)
@@ -159,6 +180,13 @@ __all__ = [
     "query_planner_mock_hitl_correction",
     "query_planner_mock_hitl_router",
     "query_planner_mock_hitl_complete_workflow",
+    # Connector plan (W2)
+    "query_planner_mock_connector_tool",
+    # Plugin plans
+    "query_planner_mock_plugin_tool",
+    "query_planner_mock_plugin_model",
+    "query_planner_mock_plugin_datasource",
+    "query_planner_mock_plugin_trigger",
 ]
 
 
@@ -203,6 +231,13 @@ if __name__ == "__main__":
         ("mock_guardrail_retry_loop", "Guardrail Retry Loop Plan"),
         ("mock_guardrail_executor_metric", "Guardrail Executor Metric Plan"),
         ("mock_guardrail_multi_metric", "Guardrail Multi-Metric Plan"),
+        # Connector Plan (W2)
+        ("mock_connector_tool", "Connector Tool Plan"),
+        # Plugin Plans
+        ("mock_plugin_tool", "Plugin Tool Plan"),
+        ("mock_plugin_model", "Plugin Model Plan"),
+        ("mock_plugin_datasource", "Plugin Datasource Plan"),
+        ("mock_plugin_trigger", "Plugin Trigger Plan"),
     ]
 
     for plan_name, description in plans_to_test:

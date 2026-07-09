@@ -1,0 +1,15 @@
+apiVersion: marie.ai/v1alpha1
+kind: ExtensionPackage
+metadata:
+  id: ext.test.http-request-wasm
+  author: marie
+  name: http-request-wasm
+  version: 0.0.1
+runtime:
+  type: python_source
+  language: python
+  version: "3.12"
+  entrypoint: marie_wasm.daemon_runner
+  engine: python-wasmtime
+  module: node.wasm
+  permissions: http-request

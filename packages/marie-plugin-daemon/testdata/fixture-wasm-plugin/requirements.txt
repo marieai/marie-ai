@@ -1,0 +1,1 @@
+marie-wasm @ file:///home/gbugaj/dev/marieai/marie-ai/packages/marie-wasm

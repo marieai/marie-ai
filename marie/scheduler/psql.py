@@ -13,8 +13,6 @@ from typing import Any, Dict, List, Optional
 
 import psycopg
 
-from marie.connectors.builtin import register_all_known_connectors
-from marie.connectors.model import ConnectorsConf
 from marie.excepts import BadConfigSource, RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobInfo, JobStatus
@@ -311,24 +309,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             QueryPlannersConf.from_dict(config.get("query_planners", {}))
         )
 
-        register_all_known_connectors(
-            ConnectorsConf.from_dict(config.get("connectors", {}))
-        )
-
-        # Initialize BranchEvaluator for conditional branching
         self.branch_evaluator = BranchEvaluator()
-
-        # Initialize GuardrailEvaluator for quality validation
         self.guardrail_evaluator = GuardrailEvaluator()
-
-        # Asset mapper kept for static utility methods (e.g., get_upstream_assets_for_node)
-        # No longer used for pre-registration
-        from marie.assets import DAGAssetMapper
-
-        self.asset_mapper = DAGAssetMapper()
-        self.logger.debug(
-            "Initialized asset mapper (used for upstream asset queries only)"
-        )
 
         dag_cache_size = int(
             dag_config.get("dag_cache_size", 5000)
@@ -3677,9 +3659,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             if policy == ExistingWorkPolicy.REJECT_ALL:
                 return False
 
-            existing_job = await self._loop.run_in_executor(
-                self._db_executor, self.get_job_for_policy, work_info
-            )
+            existing_job = await self.get_job_for_policy(work_info)
 
             if policy == ExistingWorkPolicy.REJECT_DUPLICATE:
                 return existing_job is None

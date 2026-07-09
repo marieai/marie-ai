@@ -31,7 +31,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from marie.connectors.registry import ConnectorRegistry
 from marie.logging_core.logger import MarieLogger
 from marie.query_planner.base import QueryPlanRegistry
 from marie.sandbox.blueprints.models import ArtifactResult, BlueprintImportResponse
@@ -231,55 +230,3 @@ class BlueprintImportService:
             status='applied',
             reason='acknowledged in memory (no persistent storage required)',
         )
-
-
-# ---------------------------------------------------------------------------
-# Plugin install helper (separate from blueprint artifacts)
-# ---------------------------------------------------------------------------
-
-
-def install_plugin(package_id: str, version: str) -> dict[str, Any]:
-    """Attempt to install a plugin/extension into this gateway.
-
-    Current reality (honest):
-
-    * If the ``package_id`` is already present in ``ConnectorRegistry`` the call
-      is considered a no-op success (idempotent).
-    * Otherwise the plugin daemon ``install`` endpoint is not yet implemented
-      (pending dify-parity slice 03/05), so the call returns ``deferred``.
-
-    The Studio seam treats any HTTP 2xx as success, so we always return HTTP 200.
-    The ``status`` field in the body tells the truth.
-
-    Args:
-        package_id: Plugin/connector identifier (e.g. ``'connector.ocr-engine'``).
-        version:    Requested version string.
-
-    Returns:
-        Dict suitable for serialising as the JSON response body.
-    """
-    manifest = ConnectorRegistry.get(package_id)
-    if manifest is not None:
-        _logger.info(
-            f'Plugin {package_id!r}@{version} already in ConnectorRegistry (idempotent)'
-        )
-        return {
-            'package_id': package_id,
-            'version': version,
-            'status': 'installed',
-            'message': 'already registered in ConnectorRegistry (idempotent)',
-        }
-
-    _logger.info(
-        f'Plugin {package_id!r}@{version} not found locally; '
-        f'deferring (plugin-daemon install not yet implemented)'
-    )
-    return {
-        'package_id': package_id,
-        'version': version,
-        'status': 'deferred',
-        'message': (
-            'plugin daemon install endpoint not yet implemented; '
-            'pending dify-parity slice 03/05 (connector/plugin marketplace)'
-        ),
-    }
