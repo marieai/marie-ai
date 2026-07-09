@@ -31,7 +31,7 @@
 
 
 pybind11:                    standard,core
-numpy:                       standard,core
+numpy==2.4.6:                standard,core
 # Pinning to version 3.20.2 as this will cause issues with tensorboard
 #protobuf==3.20.2:            standard,core
 protobuf>=5.29.0,<6.0.0:     standard,core
@@ -99,7 +99,6 @@ strawberry-graphql>=0.96.0: cicd,devel
 watchfiles>=0.18.0:           devel
 urllib3>=1.25.9,<2.0.0:       core
 transformers==4.49:           standard,core
-#flash-attn==2.7.2.post1:      standard,core
 anyconfig:                    standard,core
 
 # python-consul2:               standard,devel
@@ -140,8 +139,6 @@ munch:                        standard,core
 # opentelemetry-api:          standard,core
 
 onnx:                         standard,core
-onnxruntime:                  standard,core
-onnxruntime-gpu:              standard,core
 # onnxconverter_common==1.13.0: standard,core
 # onnxmltools:                  standard,core
 
@@ -163,7 +160,6 @@ Pillow>=11.0,<13:             standard,core
 # https://github.com/facebookresearch/detectron2/issues/5010
 # pillow~=9.5:                  standard,core
 
-pytesseract:                  standard,core
 patchify==0.2.3:              standard,core
 colorcet:                     standard,core
 fast_pytorch_kmeans:          standard,core
@@ -179,15 +175,12 @@ textual_fastdatatable:        standard,core
 # etcd3:                        standard,core
 
 typing_extensions>=4.12.2:    standard,core
-# DIRECTLY INSTALLED IN container
-vllm==0.7.3:                  standard,core
 rtree:                        standard,core
 scikit-image:                  standard,core
 filetype:                      standard,core
 dataclasses_json:              standard,core
 diskcache:                     standard,core
 
-faiss-gpu-cu12:                standard,core
 sentence-transformers==5.1.0:  standard,core
 watchdog:                      standard,core
 cachetools==5.5.0:             standard,core

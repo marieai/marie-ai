@@ -31,7 +31,7 @@
 
 
 pybind11:                    standard,core
-numpy:                       standard,core
+numpy==2.4.6:                standard,core
 # Pinning to version 3.20.2 as this will cause issues with tensorboard
 #protobuf==3.20.2:            standard,core
 protobuf>=5.29.0,<6.0.0:     standard,core

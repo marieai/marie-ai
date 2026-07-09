@@ -1,7 +1,7 @@
 # !!! An ARG declared before a FROM is outside of a build stage, so it can’t be used in any instruction after a FROM
-ARG CUDA_VERSION=12.4.1
+ARG CUDA_VERSION=13.0.1
 
-FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu22.04 as build-image
+FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS build-image
 
 ARG http_proxy
 ARG https_proxy
@@ -37,7 +37,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Tweak this list to reduce build time
 # https://developer.nvidia.com/cuda-gpus
-ENV TORCH_CUDA_ARCH_LIST "7.0;7.2;7.5;8.0;8.6;8.9;9.0"
+ENV TORCH_CUDA_ARCH_LIST "7.5;8.0;8.6;8.9;9.0"
 
 ENV PIP_DEFAULT_TIMEOUT=100 \
     # Allow statements and log messages to immediately appear
@@ -78,7 +78,7 @@ RUN apt-get update && \
         g++ \
         imagemagick \
         libmagickwand-dev \
-        libtiff5-dev \
+        libtiff-dev \
         libjpeg-dev \
         libpng-dev \
         libpq-dev \
@@ -111,10 +111,32 @@ RUN curl -O https://bootstrap.pypa.io/get-pip.py \
 RUN python3 --version \
     && which python3
 
-# install custom wheels
-RUN python3 -m pip install /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl \
-    && python3 -m pip install /tmp/wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl
+# Install torch separately with retries to handle transient download corruption (BadZipFile CRC-32 errors).
+# Override PIP_NO_CACHE_DIR so retries can use cached downloads; BuildKit cache mount avoids bloating the image
+RUN --mount=type=cache,target=/root/.cache/pip \
+    export PIP_NO_CACHE_DIR=0 && \
+    for i in 1 2 3; do \
+        python3 -m pip install torch==2.12.1 torchvision==0.27.1 --index-url https://download.pytorch.org/whl/cu130 \
+        && break \
+        || { echo "Attempt $i failed, purging pip cache and retrying..."; pip cache purge 2>/dev/null; sleep 5; }; \
+    done
 
+RUN set -eux; \
+    test -f /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl; \
+    test -f /tmp/wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl; \
+    test "$(find /tmp/wheels -maxdepth 1 -name 'fairseq-*.whl' | wc -l)" -eq 1; \
+    test "$(find /tmp/wheels -maxdepth 1 -name 'detectron2-*.whl' | wc -l)" -eq 1; \
+    test "$(find /tmp/wheels -maxdepth 1 \( -name 'faiss*.whl' -o -name 'faiss_gpu_cu13-*.whl' \) | wc -l)" -eq 1; \
+    sha256sum \
+        /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl \
+        /tmp/wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl \
+        /tmp/wheels/fairseq-*.whl \
+        /tmp/wheels/detectron2-*.whl \
+        /tmp/wheels/faiss*.whl
+
+# Install custom wheels that are distributed with the repo.
+RUN python3 -m pip install --no-deps /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl \
+    && python3 -m pip install --no-deps /tmp/wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl
 
 RUN python3 -m pip install omegaconf==2.3.0 \
     && python3 /tmp/patches/patch-omegaconf-py312.py --no-confirm
@@ -126,34 +148,20 @@ RUN python3 -m pip install /tmp/packages/marie-kernel \
     && python3 -m pip install /tmp/packages/marie-mem0 \
     && python3 -m pip install /tmp/packages/marie-mcp
 
-# Order is important, need to install detectron2 last expected version is 0.6
-# We also disable build isolation to avoid issues with error in detectron2 : No module named 'torch'
-
-# Install torch separately with retries to handle transient download corruption (BadZipFile CRC-32 errors)
-# Override PIP_NO_CACHE_DIR so retries can use cached downloads; BuildKit cache mount avoids bloating the image
-RUN --mount=type=cache,target=/root/.cache/pip \
-    export PIP_NO_CACHE_DIR=0 && \
-    for i in 1 2 3; do \
-        python3 -m pip install torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 \
-        && break \
-        || { echo "Attempt $i failed, purging pip cache and retrying..."; pip cache purge 2>/dev/null; sleep 5; }; \
-    done
-
-RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore \
-    && python3 -m pip install git+https://github.com/marieai/fairseq.git  \
-    && python3 -m pip install --no-build-isolation  git+https://github.com/facebookresearch/detectron2.git -v
-
-# Installing VLLM independently to avoid issues with torch version, down the road we will use as  --constraint constraints.txt
-RUN python3 -m pip install psutil
-RUN python3 -m pip install flash-attn==2.7.2.post1 --no-build-isolation
-RUN python3 -m pip install vllm==0.7.3
-# ISSUE https://github.com/marieai/marie-ai/issues/136
-RUN python3 -m pip install pillow==9.5.0
-
 # Install marie-ai package with dependencies
 # Use --prefer-binary to speed up installation by using pre-built wheels when available
 RUN cd /tmp/ \
     && python3 -m pip install --default-timeout=100 --compile --prefer-binary .
+
+# Install native CUDA wheels proven by the PyTorch 2.12/cu130 local build lane.
+# Rebuild them intentionally with tools/scripts/setup-py312-torch212-cu130.sh when
+# torch/CUDA/Python/base OS/compiler/GPU architecture changes.
+RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore \
+    && python3 -m pip install --force-reinstall --no-deps /tmp/wheels/fairseq-*.whl \
+    && python3 -m pip install --force-reinstall --no-deps /tmp/wheels/detectron2-*.whl \
+    && python3 -m pip install --force-reinstall --no-deps /tmp/wheels/faiss*.whl \
+    && python3 /tmp/patches/patch-detectron2-metadata.py --no-confirm \
+    && python3 -m pip check
 
 
 # No inference is being done currently 
@@ -162,13 +170,16 @@ RUN cd /tmp/ \
 #    sed -i '/check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/d' setup.py && \
 #    python3 setup.py install --cpp_ext --cuda_ext
 
-FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu22.04 
+FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04
 
 ARG http_proxy
 ARG https_proxy
 ARG no_proxy="${no_proxy}"
 ARG socks_proxy
 ARG TZ="Etc/UTC"
+ARG VCS_REF
+ARG BUILD_DATE
+ARG MARIE_VERSION
 
 ENV TERM=xterm-256color \
     http_proxy=${http_proxy}   \
