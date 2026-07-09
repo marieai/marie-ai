@@ -280,7 +280,7 @@ def load_and_cache_examples(
 
     if cached_features_file is not None and os.path.exists(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
-        features = torch.load(cached_features_file)
+        features = torch.load(cached_features_file, weights_only=False)
     else:
         logger.info("Creating features from dataset file at %s", example_file)
 
@@ -330,7 +330,7 @@ def load_and_cache_line_order_examples(
 
     if cached_features_file is not None and os.path.exists(cached_features_file) and False:
         logger.info("Loading features from cached file %s", cached_features_file)
-        features = torch.load(cached_features_file)
+        features = torch.load(cached_features_file, weights_only=False)
     else:
         logger.info("Creating features from dataset at %s", example_path)
 
@@ -411,7 +411,7 @@ def load_and_cache_layoutlm_examples(
 
     if cached_features_file is not None and os.path.exists(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
-        features = torch.load(cached_features_file)
+        features = torch.load(cached_features_file, weights_only=False)
     else:
         logger.info("Creating features from dataset at %s", example_path)
 
@@ -605,4 +605,3 @@ def get_everything_from_src_and_index(src, index, modifier=None):
         i = min(i, len(src) - 1)
         result.append(src[i])
     return result
-

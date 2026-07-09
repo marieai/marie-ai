@@ -33,7 +33,7 @@ def get_checkpoint_from_transformer_cache(
         logger.info("loading weights file {} from cache at {}".format(
             archive_file, resolved_archive_file))
 
-    return torch.load(resolved_archive_file, map_location='cpu')
+    return torch.load(resolved_archive_file, map_location='cpu', weights_only=True)
 
 
 def hf_roberta_to_hf_bert(state_dict):

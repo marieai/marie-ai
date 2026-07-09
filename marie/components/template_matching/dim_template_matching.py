@@ -5,7 +5,6 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from patchify import patchify
 from sewar.full_ref import rmse
 from skimage import metrics
 from torch import nn
@@ -13,6 +12,7 @@ from torchvision import models, transforms
 
 from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
+from marie.utils.patches import patchify
 
 from ...utils.image_utils import crop_to_content
 from ...utils.resize_image import resize_image

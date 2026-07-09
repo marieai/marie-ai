@@ -92,6 +92,7 @@ class OpenAITransformerEmbeddings(EmbeddingsBase):
         checkpoint = torch.load(
             "/mnt/data/marie-ai/model_zoo/clip/snippet/clip-vit-base-patch32/pytorch_model.bin",
             map_location=device,
+            weights_only=True,
         )
         print(checkpoint.keys())
         model.load_state_dict(checkpoint['model_state_dict'])

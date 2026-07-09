@@ -317,7 +317,7 @@ def load_torch_model(load_path: str, device: torch.device):
     if isinstance(model, torch.nn.DataParallel):
         model = model.module
     print("loading the model from %s" % load_path)
-    state_dict = torch.load(load_path, map_location=device)
+    state_dict = torch.load(load_path, map_location=device, weights_only=True)
     model.load_state_dict(state_dict)
     model.to(device)
     model = model.eval()

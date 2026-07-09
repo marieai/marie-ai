@@ -108,7 +108,11 @@ class BertPreTrainedForSeq2SeqModel(BertPreTrainedModel):
                     state_dict = state_dict_convert[model_type](state_dict)
                     kwargs["state_dict"] = state_dict
                 elif os.path.isfile(pretrained_model_name_or_path):
-                    kwargs["state_dict"] = torch.load(pretrained_model_name_or_path, map_location='cpu')
+                    kwargs["state_dict"] = torch.load(
+                        pretrained_model_name_or_path,
+                        map_location='cpu',
+                        weights_only=True,
+                    )
 
         if kwargs["state_dict"] is None:
             logger.info("s2s-ft does't support the model !")
@@ -805,4 +809,3 @@ class LayoutlmForSequenceToSequence(BertPreTrainedForSeq2SeqModel):
             masked_lm_loss.float(), target_mask)
 
         return pseudo_lm_loss
-

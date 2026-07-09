@@ -23,7 +23,7 @@ def model_eff_b0():
     models_name_or_path = os.path.join(
         __model_path__, "template_matching", "efficientnet_b0", "ef_model_tuned.pth"
     )
-    checkpoint = torch.load(models_name_or_path, map_location=DEVICE)
+    checkpoint = torch.load(models_name_or_path, map_location=DEVICE, weights_only=True)
 
     model_state_dict = checkpoint["model_state_dict"]
     # remove the keys that are not in the model for feature extraction, we are pre-training our model on custom classes
@@ -55,7 +55,7 @@ def model_effv2_s():
     models_name_or_path: str = os.path.join(
         __model_path__, "template_matching", "efficientnetv2_s", "ef_model_tuned.pth"
     )
-    checkpoint = torch.load(models_name_or_path, map_location=DEVICE)
+    checkpoint = torch.load(models_name_or_path, map_location=DEVICE, weights_only=True)
 
     model_state_dict = checkpoint["model_state_dict"]
     # remove the keys that are not in the model for feature extraction, we are pre-training our model on custom classes

@@ -1,9 +1,59 @@
+from collections.abc import Sequence
+
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
-from numpy.core.fromnumeric import size
 
 from . import resize_image
+
+
+def patchify(
+    img_arr: np.ndarray,
+    patch_shape: Sequence[int],
+    step: int | Sequence[int],
+) -> np.ndarray:
+    """Return a sliding-window patch view of an array."""
+    patch_shape = tuple(int(value) for value in patch_shape)
+    if img_arr.ndim != len(patch_shape):
+        raise ValueError(
+            f"patch_shape length must match array dimensions: "
+            f"{len(patch_shape)} != {img_arr.ndim}"
+        )
+
+    if isinstance(step, int):
+        steps = (step,) * img_arr.ndim
+    else:
+        steps = tuple(int(value) for value in step)
+        if len(steps) != img_arr.ndim:
+            raise ValueError(
+                f"step length must match array dimensions: {len(steps)} != {img_arr.ndim}"
+            )
+
+    if any(value <= 0 for value in patch_shape):
+        raise ValueError("patch dimensions must be positive")
+    if any(value <= 0 for value in steps):
+        raise ValueError("step dimensions must be positive")
+    if any(
+        patch > dimension_size
+        for patch, dimension_size in zip(patch_shape, img_arr.shape)
+    ):
+        raise ValueError(
+            f"patch_shape {patch_shape} must fit inside array shape {img_arr.shape}"
+        )
+
+    grid_shape = tuple(
+        ((dimension - patch) // stride) + 1
+        for dimension, patch, stride in zip(img_arr.shape, patch_shape, steps)
+    )
+    grid_strides = tuple(
+        stride * img_arr.strides[index] for index, stride in enumerate(steps)
+    )
+    return np.lib.stride_tricks.as_strided(
+        img_arr,
+        shape=grid_shape + patch_shape,
+        strides=grid_strides + img_arr.strides,
+        writeable=False,
+    )
 
 
 def plot_patches(img_arr, org_img_size, stride=None, size=None):

@@ -49,7 +49,7 @@ if __name__ == "__main__":
     sess_options.intra_op_num_threads = psutil.cpu_count(logical=True)
 
     # PyTorch model
-    torch_model = torch.load("resnet.pth")
+    torch_model = torch.load("resnet.pth", weights_only=False)
     torch_model.eval()
 
     providers = [

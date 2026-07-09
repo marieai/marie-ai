@@ -35,7 +35,7 @@ class Architecture(str, Enum):
 
 def load_model(model_path: str, device="cpu") -> torch.nn.Module:
     map_location = torch.device(device)
-    model = torch.load(model_path, map_location=map_location)
+    model = torch.load(model_path, map_location=map_location, weights_only=False)
     return model
 
 

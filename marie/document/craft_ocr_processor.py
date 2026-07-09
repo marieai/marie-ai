@@ -142,7 +142,9 @@ class CraftOcrProcessor(OcrProcessor):
         if True:
             model = model.to(self.device)
             model = torch.nn.DataParallel(model, device_ids=None).to(self.device)
-            model.load_state_dict(torch.load(opt.saved_model, map_location=self.device))
+            model.load_state_dict(
+                torch.load(opt.saved_model, map_location=self.device, weights_only=True)
+            )
             model = self.optimize_model(model)
 
         # CPU only
@@ -159,7 +161,9 @@ class CraftOcrProcessor(OcrProcessor):
             model = WrappedModel(model)
             model = model.to(self.device)
 
-            state_dict = torch.load(opt.saved_model, map_location=self.device)
+            state_dict = torch.load(
+                opt.saved_model, map_location=self.device, weights_only=True
+            )
             model.load_state_dict(state_dict)
 
         return converter, model

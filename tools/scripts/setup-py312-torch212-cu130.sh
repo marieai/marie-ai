@@ -29,7 +29,6 @@ MARIE_BUILD_JOBS="${MARIE_BUILD_JOBS:-$(nproc)}"
 
 FAIRSEQ_PATCH="${MARIE_TORCH_WORKTREE}/patches/fairseq-marie-torch212-wheel-metadata.patch"
 FAISS_PATCH="${MARIE_TORCH_WORKTREE}/patches/faiss-cuda13-profiler-api.patch"
-PATCHIFY_PATCH="${MARIE_TORCH_WORKTREE}/patches/patch-patchify-numpy2.py"
 
 STEP_NO=0
 
@@ -300,8 +299,7 @@ test -d \"${MARIE_WHEELS_DIR}\"
 test -f \"${MARIE_WHEELS_DIR}/fastwer-0.1.3.tar.gz\"
 test -f \"${MARIE_WHEELS_DIR}/etcd3-0.12.0-py2.py3-none-any.whl\"
 test -f \"${FAIRSEQ_PATCH}\"
-test -f \"${FAISS_PATCH}\"
-test -f \"${PATCHIFY_PATCH}\""
+test -f \"${FAISS_PATCH}\""
 }
 
 step_venv() {
@@ -343,9 +341,8 @@ python -m pip install -e .
 python -m pip install pytest openai 'gradio==6.20.0' 'timm==1.0.27' nltk
 python -m pip uninstall -y Pillow-SIMD || true
 python -m pip install --force-reinstall 'Pillow>=11.0,<13'
-python -m pip install -U 'opencv-python>=5.0.0,<5.1' 'opencv-python-headless>=5.0.0,<5.1'
+python -m pip install -U 'opencv-python==5.0.0.93' 'opencv-python-headless==5.0.0.93'
 python -m pip install -U \"numpy==${MARIE_NUMPY_VERSION}\"
-python patches/patch-patchify-numpy2.py --no-confirm
 python -m pip check || true
 python - <<'PY'
 import importlib.util
@@ -524,10 +521,9 @@ python -m pip install --force-reinstall --no-deps \"${MARIE_WHEELS_DIR}\"/detect
 python -m pip install --force-reinstall --no-deps \"${MARIE_WHEELS_DIR}\"/faiss*.whl
 python -m pip uninstall -y Pillow-SIMD || true
 python -m pip install --force-reinstall 'Pillow>=11.0,<13'
-python -m pip install diskcache tenacity json_repair bitarray sacrebleu scikit-learn black cloudpickle pycocotools 'tensorboard<2.20' 'protobuf>=5.29.0,<6.0.0' 'grpcio>=1.60.0,<1.66.0' 'opencv-python>=5.0.0,<5.1' 'opencv-python-headless>=5.0.0,<5.1' git+https://github.com/facebookresearch/fvcore
+python -m pip install diskcache tenacity json_repair bitarray sacrebleu scikit-learn black cloudpickle pycocotools 'tensorboard<2.20' 'protobuf>=5.29.0,<6.0.0' 'grpcio>=1.60.0,<1.66.0' 'opencv-python==5.0.0.93' 'opencv-python-headless==5.0.0.93' git+https://github.com/facebookresearch/fvcore
 python patches/patch-detectron2-metadata.py --no-confirm
 python -m pip install -U \"numpy==${MARIE_NUMPY_VERSION}\"
-python patches/patch-patchify-numpy2.py --no-confirm
 python -m pip check"
 }
 
@@ -541,9 +537,9 @@ import torchvision
 import fairseq
 import detectron2
 import faiss
-from patchify import patchify, unpatchify
 from detectron2 import _C
 from detectron2.layers import ROIAlign
+from marie.utils.patches import patchify
 
 print('python packages')
 for dist in ('torch', 'torchvision', 'numpy', 'fairseq', 'detectron2', 'faiss-gpu-cu13', 'fastwer', 'timm'):
@@ -567,7 +563,7 @@ index.add(xb)
 distances, indices = index.search(xb[:2], 2)
 image = np.random.default_rng(0).integers(0, 255, (512, 512, 3), dtype=np.uint8)
 patches = patchify(image, (128, 128, 3), step=128)
-reconstructed = unpatchify(patches, image.shape)
+reconstructed = patches[:, :, 0].transpose(0, 2, 1, 3, 4).reshape(image.shape)
 assert patches.shape == (4, 4, 1, 128, 128, 3), patches.shape
 assert np.array_equal(image, reconstructed)
 print('detectron2_ext', _C.__name__, tuple(out.shape), out.device)

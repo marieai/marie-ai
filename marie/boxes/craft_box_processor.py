@@ -270,10 +270,16 @@ class BoxProcessorCraft(BoxProcessor):
 
         print("Loading weights from checkpoint (" + args.trained_model + ")")
         if cuda:
-            net.load_state_dict(copyStateDict(torch.load(args.trained_model)))
+            net.load_state_dict(
+                copyStateDict(torch.load(args.trained_model, weights_only=True))
+            )
         else:
             net.load_state_dict(
-                copyStateDict(torch.load(args.trained_model, map_location="cpu"))
+                copyStateDict(
+                    torch.load(
+                        args.trained_model, map_location="cpu", weights_only=True
+                    )
+                )
             )
 
         if cuda:
@@ -298,13 +304,17 @@ class BoxProcessorCraft(BoxProcessor):
             )
             if cuda:
                 refine_net.load_state_dict(
-                    copyStateDict(torch.load(args.refiner_model))
+                    copyStateDict(torch.load(args.refiner_model, weights_only=True))
                 )
                 refine_net = refine_net.cuda()
                 refine_net = torch.nn.DataParallel(refine_net)
             else:
                 refine_net.load_state_dict(
-                    copyStateDict(torch.load(args.refiner_model, map_location="cpu"))
+                    copyStateDict(
+                        torch.load(
+                            args.refiner_model, map_location="cpu", weights_only=True
+                        )
+                    )
                 )
 
             refine_net.eval()

@@ -88,7 +88,7 @@ pytest-reraise:             test
 mock:                       test
 requests-mock:              test
 pytest-custom_exit_code:    test
-black==24.3.0:              test
+black==24.3.0:              test,standard,core
 kubernetes>=18.20.0,<31.0.0: test
 pytest-kind==22.11.1:       test
 pytest-lazy-fixture:        test
@@ -110,7 +110,8 @@ natsort:                      standard,core
 celery:                       standard,core
 
 # MEMORY LEAK FIXED RELATED TO  https://github.com/opencv/opencv/issues/23633
-opencv-python>=5.0.0,<5.1:    standard,core
+opencv-python==5.0.0.93:      standard,core
+opencv-python-headless==5.0.0.93: standard,core
 
 imagecodecs:                  standard,core
 imutils:                      standard,core
@@ -147,10 +148,15 @@ omegaconf==2.3.0:             standard,core
 hydra-core==1.3.1:            standard,core
 Pillow>=11.0,<13:             standard,core
 
+# Runtime dependencies declared by the local fairseq/detectron2 CUDA wheels.
+bitarray:                      standard,core
+cloudpickle:                   standard,core
+sacrebleu:                     standard,core
+tensorboard<2.20:              standard,core
+
 # https://github.com/facebookresearch/detectron2/issues/5010
 # pillow~=9.5:                  standard,core
 
-patchify==0.2.3:              standard,core
 colorcet:                     standard,core
 timm==1.0.27:                 standard,core
 seaborn:                      standard,core

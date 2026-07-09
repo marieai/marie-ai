@@ -25,7 +25,7 @@ from transformers.onnx.utils import compute_effective_axis_dimension
 
 def profile():
     # PyTorch model
-    torch_model = torch.load("resnet.pth")
+    torch_model = torch.load("resnet.pth", weights_only=False)
     # ONNX model
     onnx_model = onnxruntime.InferenceSession("resnet.onnx")
 
