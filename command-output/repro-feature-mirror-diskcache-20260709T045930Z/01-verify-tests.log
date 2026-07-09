@@ -1,0 +1,260 @@
+### STEP: verify-tests
+### START: 2026-07-09T00:00:57-05:00
+### MARIE_TORCH_WORKTREE: /home/greg/dev/marieai/worktrees/marie-ai-pytorch-2-12
+### COMMAND:
+source "/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/bin/activate"; export VIRTUAL_ENV="/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z"; export CUDA_HOME="/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/nvidia/cu13"; export PATH="/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/nvidia/cu13/bin:${PATH}"; export LD_LIBRARY_PATH="/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/nvidia/cu13/lib:/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/nvidia/cu13/lib64:${LD_LIBRARY_PATH:-}";  cd "/home/greg/dev/marieai/worktrees/marie-ai-pytorch-2-12"
+python -m pytest tests/unit/engine/ -x -q
+
+ImportError while loading conftest '/home/greg/dev/marieai/worktrees/marie-ai-pytorch-2-12/tests/conftest.py'.
+tests/conftest.py:10: in <module>
+    from marie import helper
+marie/__init__.py:167: in <module>
+    from marie.orchestrate.deployments import Deployment
+marie/orchestrate/deployments/__init__.py:22: in <module>
+    from hubble.executor.helper import replace_secret_of_hub_uri
+hubble/__init__.py:12: in <module>
+    from importlib_metadata import version
+E   ModuleNotFoundError: No module named 'importlib_metadata'
+
+### EXIT: 4
+### END: 2026-07-09T00:00:58-05:00
+### STEP: verify-tests
+### START: 2026-07-09T00:01:12-05:00
+### MARIE_TORCH_WORKTREE: /home/greg/dev/marieai/worktrees/marie-ai-pytorch-2-12
+### COMMAND:
+source "/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/bin/activate"; export VIRTUAL_ENV="/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z"; export CUDA_HOME="/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/nvidia/cu13"; export PATH="/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/nvidia/cu13/bin:${PATH}"; export LD_LIBRARY_PATH="/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/nvidia/cu13/lib:/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/nvidia/cu13/lib64:${LD_LIBRARY_PATH:-}";  cd "/home/greg/dev/marieai/worktrees/marie-ai-pytorch-2-12"
+python -m pytest tests/unit/engine/ -x -q
+
+.................................................INFO  2026-07-09 00:01:14,625:            :                  [07/09/26 00:01:14]
+      OpenAIEngine[]@614921 Initiating batch inference with                     
+      1 requests.                                                               
+INFO  2026-07-09 00:01:14,625:            :                                     
+      OpenAIEngine[]@614921 Batch inference completed in                        
+      0.00 sec                                                                  
+.............           [100%]
+=============================== warnings summary ===============================
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/base_doc/doc.py:608
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/base_doc/doc.py:608)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/id.py:65: 11 warnings
+tests/unit/engine/test_batch_processor.py: 5 warnings
+  [1;33mDeprecationWarning: `general_plain_validator_function` is deprecated, use `with_info_plain_validator_function` instead.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/id.py:65)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/pydantic_core/core_schema.py:4434: 29 warnings
+tests/unit/engine/test_batch_processor.py: 11 warnings
+  [1;33mDeprecationWarning: `general_plain_validator_function` is deprecated, use `with_info_plain_validator_function` instead.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/pydantic_core/core_schema.py:4434)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/base_doc/any_doc.py:8
+  [1;33mPydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/base_doc/any_doc.py:8)[0m
+
+marie/utils/__init__.py:15
+  [1;33mDeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/marie-ai-pytorch-2-12/marie/utils/__init__.py:15)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/audio.py:102
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/audio.py:102)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/audio.py:111
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/audio.py:111)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/audio.py:120
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/audio.py:120)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/url/any_url.py:59
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/url/any_url.py:59
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/url/any_url.py:59
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/url/any_url.py:59
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/url/any_url.py:59
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/url/any_url.py:59
+tests/unit/engine/test_batch_processor.py::test_process_batch_does_not_retry_batch_execution_error
+tests/unit/engine/test_batch_processor.py::test_process_batch_does_not_retry_batch_execution_error
+  [1;33mDeprecationWarning: `general_after_validator_function` is deprecated, use `with_info_after_validator_function` instead.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/url/any_url.py:59)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/pydantic_core/core_schema.py:4396: 9 warnings
+tests/unit/engine/test_batch_processor.py: 4 warnings
+  [1;33mDeprecationWarning: `general_after_validator_function` is deprecated, use `with_info_after_validator_function` instead.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/pydantic_core/core_schema.py:4396)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/tensor/abstract_tensor.py:398: 16 warnings
+tests/unit/engine/test_batch_processor.py: 6 warnings
+  [1;33mDeprecationWarning: `general_plain_validator_function` is deprecated, use `with_info_plain_validator_function` instead.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/tensor/abstract_tensor.py:398)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/bytes/base_bytes.py:50
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/bytes/base_bytes.py:50
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/bytes/base_bytes.py:50
+tests/unit/engine/test_batch_processor.py::test_process_batch_does_not_retry_batch_execution_error
+tests/unit/engine/test_batch_processor.py::test_process_batch_does_not_retry_batch_execution_error
+  [1;33mDeprecationWarning: `general_after_validator_function` is deprecated, use `with_info_after_validator_function` instead.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/bytes/base_bytes.py:50)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/image.py:100
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/image.py:100)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/image.py:109
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/image.py:109)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/mesh/mesh_3d.py:112
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/mesh/mesh_3d.py:112)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/mesh/mesh_3d.py:117
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/mesh/mesh_3d.py:117)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/point_cloud/point_cloud_3d.py:115
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/point_cloud/point_cloud_3d.py:115)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/point_cloud/point_cloud_3d.py:120
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/point_cloud/point_cloud_3d.py:120)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/point_cloud/point_cloud_3d.py:125
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/point_cloud/point_cloud_3d.py:125)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/text.py:111
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/text.py:111)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/text.py:116
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/text.py:116)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/text.py:121
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/text.py:121)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/video.py:108
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/video.py:108)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/video.py:121
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/video.py:121)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/video.py:126
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/video.py:126)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/array/doc_list/doc_list.py:362
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/array/doc_list/doc_list.py:362
+  [1;33mDeprecationWarning: `general_plain_validator_function` is deprecated, use `with_info_plain_validator_function` instead.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/array/doc_list/doc_list.py:362)[0m
+
+marie/parsers/helper.py:20
+marie/parsers/helper.py:20
+  [1;33mDeprecationWarning: Nesting argument groups is deprecated.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/marie-ai-pytorch-2-12/marie/parsers/helper.py:20)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/_pytest/config/__init__.py:1464
+  [1;33mPytestConfigWarning: Unknown config option: asyncio_mode
+  [0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/_pytest/config/__init__.py:1464)[0m
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+62 passed, 128 warnings in 1.38s
+INFO  2026-07-09 00:01:14,860:            : MARIE[]@614921                      
+      expect_output: json                                                       
+
+### EXIT: 0
+### END: 2026-07-09T00:01:15-05:00
+### STEP: verify-tests
+### START: 2026-07-09T00:02:37-05:00
+### MARIE_TORCH_WORKTREE: /home/greg/dev/marieai/worktrees/marie-ai-pytorch-2-12
+### COMMAND:
+source "/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/bin/activate"; export VIRTUAL_ENV="/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z"; export CUDA_HOME="/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/nvidia/cu13"; export PATH="/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/nvidia/cu13/bin:${PATH}"; export LD_LIBRARY_PATH="/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/nvidia/cu13/lib:/home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/nvidia/cu13/lib64:${LD_LIBRARY_PATH:-}";  cd "/home/greg/dev/marieai/worktrees/marie-ai-pytorch-2-12"
+python -m pytest tests/unit/engine/ -x -q
+
+..............................................................           [100%]
+=============================== warnings summary ===============================
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/base_doc/doc.py:608
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/base_doc/doc.py:608)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/id.py:65: 11 warnings
+tests/unit/engine/test_batch_processor.py: 5 warnings
+  [1;33mDeprecationWarning: `general_plain_validator_function` is deprecated, use `with_info_plain_validator_function` instead.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/id.py:65)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/pydantic_core/core_schema.py:4434: 29 warnings
+tests/unit/engine/test_batch_processor.py: 11 warnings
+  [1;33mDeprecationWarning: `general_plain_validator_function` is deprecated, use `with_info_plain_validator_function` instead.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/pydantic_core/core_schema.py:4434)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/base_doc/any_doc.py:8
+  [1;33mPydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/base_doc/any_doc.py:8)[0m
+
+marie/utils/__init__.py:15
+  [1;33mDeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/marie-ai-pytorch-2-12/marie/utils/__init__.py:15)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/audio.py:102
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/audio.py:102)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/audio.py:111
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/audio.py:111)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/audio.py:120
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/audio.py:120)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/url/any_url.py:59
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/url/any_url.py:59
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/url/any_url.py:59
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/url/any_url.py:59
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/url/any_url.py:59
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/url/any_url.py:59
+tests/unit/engine/test_batch_processor.py::test_process_batch_does_not_retry_batch_execution_error
+tests/unit/engine/test_batch_processor.py::test_process_batch_does_not_retry_batch_execution_error
+  [1;33mDeprecationWarning: `general_after_validator_function` is deprecated, use `with_info_after_validator_function` instead.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/url/any_url.py:59)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/pydantic_core/core_schema.py:4396: 9 warnings
+tests/unit/engine/test_batch_processor.py: 4 warnings
+  [1;33mDeprecationWarning: `general_after_validator_function` is deprecated, use `with_info_after_validator_function` instead.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/pydantic_core/core_schema.py:4396)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/tensor/abstract_tensor.py:398: 16 warnings
+tests/unit/engine/test_batch_processor.py: 6 warnings
+  [1;33mDeprecationWarning: `general_plain_validator_function` is deprecated, use `with_info_plain_validator_function` instead.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/tensor/abstract_tensor.py:398)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/bytes/base_bytes.py:50
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/bytes/base_bytes.py:50
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/bytes/base_bytes.py:50
+tests/unit/engine/test_batch_processor.py::test_process_batch_does_not_retry_batch_execution_error
+tests/unit/engine/test_batch_processor.py::test_process_batch_does_not_retry_batch_execution_error
+  [1;33mDeprecationWarning: `general_after_validator_function` is deprecated, use `with_info_after_validator_function` instead.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/typing/bytes/base_bytes.py:50)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/image.py:100
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/image.py:100)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/image.py:109
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/image.py:109)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/mesh/mesh_3d.py:112
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/mesh/mesh_3d.py:112)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/mesh/mesh_3d.py:117
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/mesh/mesh_3d.py:117)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/point_cloud/point_cloud_3d.py:115
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/point_cloud/point_cloud_3d.py:115)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/point_cloud/point_cloud_3d.py:120
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/point_cloud/point_cloud_3d.py:120)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/point_cloud/point_cloud_3d.py:125
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/point_cloud/point_cloud_3d.py:125)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/text.py:111
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/text.py:111)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/text.py:116
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/text.py:116)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/text.py:121
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/text.py:121)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/video.py:108
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/video.py:108)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/video.py:121
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/video.py:121)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/video.py:126
+  [1;33mPydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/documents/video.py:126)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/array/doc_list/doc_list.py:362
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/array/doc_list/doc_list.py:362
+  [1;33mDeprecationWarning: `general_plain_validator_function` is deprecated, use `with_info_plain_validator_function` instead.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/docarray/array/doc_list/doc_list.py:362)[0m
+
+marie/parsers/helper.py:20
+marie/parsers/helper.py:20
+  [1;33mDeprecationWarning: Nesting argument groups is deprecated.[0m [1;30m(raised from /home/greg/dev/marieai/worktrees/marie-ai-pytorch-2-12/marie/parsers/helper.py:20)[0m
+
+../.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/_pytest/config/__init__.py:1464
+  [1;33mPytestConfigWarning: Unknown config option: asyncio_mode
+  [0m [1;30m(raised from /home/greg/dev/marieai/worktrees/.venvs/marie-ai-pytorch-2-12-validate-main-20260709T040215Z/lib/python3.12/site-packages/_pytest/config/__init__.py:1464)[0m
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+62 passed, 128 warnings in 1.41s
+
+### EXIT: 0
+### END: 2026-07-09T00:02:40-05:00

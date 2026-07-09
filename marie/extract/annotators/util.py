@@ -21,11 +21,10 @@ from typing import (
 
 from numpy import ndarray
 from PIL import Image
-from qwen_vl_utils import smart_resize
 
-from marie.components.document_taxonomy.verbalizers import verbalizers
 from marie.engine import EngineLM
 from marie.engine.completion_contract import RequestContext
+from marie.engine.engine_utils import smart_resize
 from marie.engine.llm_ops import LLMCall
 from marie.engine.llm_queue.config import DEFAULT_LLM_QUEUE_POOL_ID
 from marie.engine.multimodal_ops import MultimodalLLMCall
@@ -584,6 +583,8 @@ def prepare_batch_with_meta(
         Batches of [image, prompt, image_path, output_suffix] tuples
     """
     # adding spatial context
+    from marie.components.document_taxonomy.verbalizers import verbalizers
+
     metadata_ocr = doc.source_metadata["ocr"]
     decorated_lines_by_page = {}
 
@@ -712,6 +713,8 @@ def prepare_batch_with_meta_units(
         Batches of [image, prompt, image_path, output_suffix] tuples
     """
     # adding spatial context
+    from marie.components.document_taxonomy.verbalizers import verbalizers
+
     metadata_ocr = doc.source_metadata["ocr"]
     decorated_lines_by_page = {}
 

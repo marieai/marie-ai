@@ -7,9 +7,8 @@ import datetime as _datetime
 import os as _os
 import sys as _sys
 from functools import wraps
+from importlib.metadata import version
 from typing import Optional
-
-from importlib_metadata import version
 
 from .client.client import Client  # noqa F401
 from .excepts import AuthenticationRequiredError

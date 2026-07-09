@@ -14,7 +14,6 @@ from marie.document import TrOcrProcessor
 from marie.document.craft_ocr_processor import CraftOcrProcessor
 from marie.document.lev_ocr_processor import LevenshteinOcrProcessor
 from marie.document.ocr_processor import OcrProcessor
-from marie.document.tesseract_ocr_processor import TesseractOcrProcessor
 from marie.ocr import CoordinateFormat, OcrEngine
 from marie.ocr.ocr_engine import reset_bbox_cache
 from marie.utils.json import store_json_object
@@ -74,10 +73,14 @@ class VotingOcrEngine(OcrEngine):
 
         self.processors["tesseract"] = {
             "enabled": False,
-            "processor": TesseractOcrProcessor(
-                work_dir=self.work_dir_icr, cuda=self.has_cuda
-            ),
+            "processor": None,
+            "factory": self._build_tesseract_processor,
         }
+
+    def _build_tesseract_processor(self) -> OcrProcessor:
+        from marie.document import TesseractOcrProcessor
+
+        return TesseractOcrProcessor(work_dir=self.work_dir_icr, cuda=self.has_cuda)
 
     def extract(
         self,
@@ -97,6 +100,9 @@ class VotingOcrEngine(OcrEngine):
                     if "default" in val and val["default"]:
                         is_default = True
                     icr_processor = val["processor"]
+                    if icr_processor is None and "factory" in val:
+                        icr_processor = val["factory"]()
+                        val["processor"] = icr_processor
                     self.logger.debug(
                         f"Processing with {icr_processor.__class__.__name__}"
                     )

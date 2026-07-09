@@ -1,0 +1,53 @@
+diff --git a/faiss/gpu/utils/DeviceUtils.cu b/faiss/gpu/utils/DeviceUtils.cu
+index 123c8e05e..b0f098ce6 100644
+--- a/faiss/gpu/utils/DeviceUtils.cu
++++ b/faiss/gpu/utils/DeviceUtils.cu
+@@ -5,7 +5,10 @@
+  * LICENSE file in the root directory of this source tree.
+  */
+ 
++#include <cuda_runtime_api.h>
++#if CUDART_VERSION < 13000
+ #include <cuda_profiler_api.h>
++#endif
+ #include <faiss/gpu/utils/DeviceUtils.h>
+ #include <faiss/impl/FaissAssert.h>
+ #include <faiss/gpu/utils/DeviceDefs.cuh>
+@@ -41,11 +44,15 @@ int getNumDevices() {
+ }
+ 
+ void profilerStart() {
++#if CUDART_VERSION < 13000
+     CUDA_VERIFY(cudaProfilerStart());
++#endif
+ }
+ 
+ void profilerStop() {
++#if CUDART_VERSION < 13000
+     CUDA_VERIFY(cudaProfilerStop());
++#endif
+ }
+ 
+ void synchronizeAllDevices() {
+diff --git a/faiss/python/setup.py b/faiss/python/setup.py
+--- a/faiss/python/setup.py
++++ b/faiss/python/setup.py
+@@ -113,7 +113,7 @@ are implemented on the GPU. It is developed by Facebook AI Research.
+ """
+ setup(
+-    name="faiss",
+-    version="1.14.1",
++    name="faiss-gpu-cu13",
++    version="1.14.1+cu130",
+     description="A library for efficient similarity search and clustering of dense vectors",
+     long_description=long_description,
+     long_description_content_type="text/plain",
+@@ -124,7 +124,7 @@ setup(
+     author_email="faiss@meta.com",
+     license="MIT",
+     keywords="search nearest neighbors",
+-    install_requires=["numpy", "packaging"],
++    install_requires=["numpy==2.4.6", "packaging"],
+     packages=["faiss", "faiss.contrib", "faiss.contrib.torch"],
+     package_data={
+         "faiss": ["*.so", "*.pyd", "*.a", "*.pyi", "py.typed"],
