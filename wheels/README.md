@@ -86,8 +86,11 @@ Updated by tools/scripts/setup-py312-torch212-cu130.sh wheels-readme.
 
 | File | Size bytes | SHA256 |
 | --- | ---: | --- |
+| detectron2-0.6-cp312-cp312-linux_x86_64.whl | 7450953 | 6e4cfa76c81b0f62977a7be4de0a3eb5d9342e16220494e47159d864f04f14f8 |
 | etcd3-0.12.0-py2.py3-none-any.whl | 39112 | 9b5c36c42a6764d4926c40d131cacd4248f5a3cefc6452fb05a2b3e1e489ed7a |
 | etcd3-0.12.0.tar.gz | 62608 | 46fd3624665bddbd0957823777d45ed91e2b7f7d698223db984c79bf225b64f3 |
+| fairseq-0.12.2+marieai.torch212cu130-cp312-cp312-linux_x86_64.whl | 30916736 | c8916b764f556cf515882acaea4f8e1fe1ee01d35ab1cc323b7334579cb18c09 |
+| faiss_gpu_cu13-1.14.1+cu130-py3-none-any.whl | 39931663 | 5d058263cb5b3b1dbd912b25f45cb93c2092b9d6922a7799c1a9d83d874db9c6 |
 | fastwer-0.1.3-cp312-cp312-linux_x86_64.whl | 855818 | 1d2cbe8bce96cfced4b65c89a9f377a147e69b4886299cde342f4c382ccb46bc |
 | fastwer-0.1.3.tar.gz | 4877 | f411662f337b588ce21aabf51f3170e891bfed3f19f6331b946ad1974401d54d |
 
