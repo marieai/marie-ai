@@ -368,15 +368,15 @@ def mixin_discovery_parser(parser):
     parser.add_argument(
         "--discovery-lease-sec",
         type=int,
-        default=6,
-        help="The lease duration in seconds for the discovery registration. Default is 6 seconds.",
+        default=30,
+        help="The lease duration in seconds for the discovery registration. Default is 30 seconds.",
     )
 
     parser.add_argument(
         "--discovery-heartbeat-sec",
         type=float,
-        default=2.0,
-        help="Time interval (seconds, can be a float) for sending heartbeat signals. Default is 2.0 seconds.",
+        default=5.0,
+        help="Time interval (seconds, can be a float) for sending heartbeat signals. Default is 5.0 seconds.",
     )
 
     parser.add_argument(

@@ -1,6 +1,6 @@
 """Timeout utilities for ETCD operations."""
 
-import concurrent.futures
+import threading
 from typing import Callable, TypeVar
 
 T = TypeVar('T')
@@ -21,22 +21,27 @@ def run_with_timeout(
     operation_name: str = "operation",
 ) -> T:
     """
-    Execute a function with a timeout.
+    Execute a function with a hard wall-clock timeout.
 
-    Args:
-        func: Zero-argument callable to execute
-        timeout: Maximum time in seconds
-        operation_name: Name for error messages
-
-    Returns:
-        Result of func()
-
-    Raises:
-        OperationTimeoutError: If timeout exceeded
+    Runs func on a daemon thread and joins with the timeout. On timeout the
+    caller is released immediately and the worker thread is abandoned (it
+    parks on the underlying call; being a daemon it never blocks process
+    exit). Exceptions from func are re-raised in the caller.
     """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(func)
+    result: list = []
+    error: list = []
+
+    def _target():
         try:
-            return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
-            raise OperationTimeoutError(operation_name, timeout)
+            result.append(func())
+        except BaseException as e:  # noqa: BLE001 - must ferry everything back
+            error.append(e)
+
+    t = threading.Thread(target=_target, daemon=True, name=f"timeout-{operation_name}")
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise OperationTimeoutError(operation_name, timeout)
+    if error:
+        raise error[0]
+    return result[0]

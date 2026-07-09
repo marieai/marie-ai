@@ -74,11 +74,11 @@ from .hitl import (
     query_planner_mock_hitl_router,
 )
 
-# Import RAG indexing plans (this registers them via @register_query_plan decorator)
-from .rag_indexing import (
-    query_planner_mock_rag_indexing_noop,
-    query_planner_mock_rag_indexing_simple,
-    query_planner_mock_rag_indexing_with_chunking,
+# Import KB indexing plans (this registers them via @register_query_plan decorator)
+from .kb_indexing import (
+    query_planner_mock_kb_indexing_noop,
+    query_planner_mock_kb_indexing_simple,
+    query_planner_mock_kb_indexing_with_chunking,
 )
 
 # Import traditional plans (this registers them via @register_query_plan decorator)
@@ -130,8 +130,8 @@ __all__ = [
     "query_planner_mock_hitl_correction",
     "query_planner_mock_hitl_router",
     "query_planner_mock_hitl_complete_workflow",
-    # RAG indexing plans
-    "query_planner_mock_rag_indexing_simple",
-    "query_planner_mock_rag_indexing_with_chunking",
-    "query_planner_mock_rag_indexing_noop",
+    # KB indexing plans
+    "query_planner_mock_kb_indexing_simple",
+    "query_planner_mock_kb_indexing_with_chunking",
+    "query_planner_mock_kb_indexing_noop",
 ]

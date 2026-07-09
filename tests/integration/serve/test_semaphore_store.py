@@ -9,7 +9,10 @@ from marie.state.semaphore_store import SemaphoreHolder, SemaphoreStore
 
 @pytest.fixture(scope="function")
 def etcd_client():
-    c = EtcdClient("localhost", 2379)
+    # Unique namespace per test: the teardown below range-deletes the client's
+    # entire namespace, which on the default "marie" namespace wiped the live
+    # keyspace (2026-07-09 outage). Never point this at "marie".
+    c = EtcdClient("localhost", 2379, namespace=f"marie-test-{uuid.uuid4().hex[:8]}")
     yield c
     try:
         c.delete_prefix("")
@@ -465,3 +468,203 @@ def test_multiple_releases_with_missing_counter(sema: SemaphoreStore):
     holders_after = sema.list_holders(slot)
     assert len(holders_after) == 0
     assert sema.read_count(slot) == 0
+
+
+def test_set_capacity_safe_never_below_concurrent_usage(sema):
+    slot = _slot()
+    sema.set_capacity(slot, 2)
+    assert sema.reserve(slot, "t1", node="n1")  # used = 1
+
+    real_get_raw = sema._get_raw
+    injected = {"done": False}
+
+    def racing_get_raw(key):
+        val = real_get_raw(key)
+        if key.endswith("/count") and not injected["done"]:
+            injected["done"] = True  # guard BEFORE reserving (reserve re-enters _get_raw)
+            assert sema.reserve(slot, "t2", node="n2")  # commits after the count read
+        return val
+
+    sema._get_raw = racing_get_raw
+    try:
+        sema.set_capacity_safe(slot, 0)
+    finally:
+        sema._get_raw = real_get_raw
+
+    assert sema.read_count(slot) == 2
+    assert sema.get_capacity(slot) >= 2  # old code writes 1 → capacity < used
+
+
+def test_set_capacity_safe_create_path_guards_count(sema, etcd_client):
+    """Create path (no capacity key yet): the count must be txn-guarded too —
+    a bare put_if_absent would commit a target computed from a stale count."""
+    slot = _slot()
+    # count exists without a capacity key (e.g. capacity key was deleted)
+    etcd_client.put(f"semaphores/{slot}/count", "5")
+
+    real_get_raw = sema._get_raw
+    injected = {"done": False}
+
+    def racing_get_raw(key):
+        val = real_get_raw(key)
+        if key.endswith("/count") and not injected["done"]:
+            injected["done"] = True
+            # count jumps AFTER set_capacity_safe read it, BEFORE it writes
+            etcd_client.put(f"semaphores/{slot}/count", "8")
+        return val
+
+    sema._get_raw = racing_get_raw
+    try:
+        result = sema.set_capacity_safe(slot, 3)
+    finally:
+        sema._get_raw = real_get_raw
+
+    assert result >= 8            # recomputed from the fresh count
+    assert sema.get_capacity(slot) >= 8   # old create path writes 5 < used 8
+
+
+def test_set_capacity_safe_refuses_malformed_count(sema, etcd_client):
+    slot = _slot()
+    etcd_client.put(f"semaphores/{slot}/count", "not-an-int")
+    with pytest.raises(RuntimeError, match="malformed count"):
+        sema.set_capacity_safe(slot, 3)
+
+
+def test_reconcile_concurrent_reserve_does_not_undercount(sema):
+    slot = _slot()
+    sema.set_capacity(slot, 3)
+    assert sema.reserve(slot, "t1", node="n1")  # count = 1
+
+    real_get_prefix = sema.etcd.client.get_prefix
+    injected = {"done": False}
+
+    def racing_get_prefix(key, *args, **kwargs):
+        results = list(real_get_prefix(key, *args, **kwargs))
+        kb = key if isinstance(key, bytes) else str(key).encode()
+        if b"/holders/" in kb and not injected["done"]:
+            injected["done"] = True
+            assert sema.reserve(slot, "t2", node="n2")  # commits mid-reconcile
+        return iter(results)
+
+    sema.etcd.client.get_prefix = racing_get_prefix
+    try:
+        sema.reconcile(slot)
+    finally:
+        sema.etcd.client.get_prefix = real_get_prefix
+
+    # old order: reconcile reads count AFTER the racing reserve (sees 2),
+    # scanned holders BEFORE it (saw 1) -> CAS passes -> count clobbered to 1.
+    assert sema.read_count(slot) == 2
+    assert sema.reserve(slot, "t3", node="n3") is True
+    assert sema.read_count(slot) == 3
+
+
+def test_malformed_count_reserve_and_release_self_repair(sema, etcd_client):
+    slot = _slot()
+    sema.set_capacity(slot, 2)
+    etcd_client.put(f"semaphores/{slot}/count", "not-an-int")
+
+    assert sema.read_count(slot) == 0          # already tolerant today
+    assert sema.reserve(slot, "t1", node="n1") is True   # ValueError today
+    assert sema.read_count(slot) == 1
+    assert sema.release(slot, "t1") is True
+    assert sema.read_count(slot) == 0
+
+
+def test_reconcile_repairs_malformed_count(sema, etcd_client):
+    slot = _slot()
+    sema.set_capacity(slot, 2)
+    assert sema.reserve(slot, "t1", node="n1")
+    etcd_client.put(f"semaphores/{slot}/count", "not-an-int")
+
+    assert sema.reconcile(slot) == 1           # ValueError today
+    assert sema.read_count(slot) == 1
+
+
+def test_fixture_cleanup_is_scoped_to_test_namespace(etcd_client):
+    """Guard for the 2026-07-09 outage class: the fixture teardown
+    (delete_prefix("")) must only ever range-delete the fixture's own
+    namespace, and that namespace must never be the production "marie"."""
+    live = EtcdClient("localhost", 2379, namespace="marie-wipe-guard")
+    try:
+        live.put("sentinel", "alive")
+        etcd_client.put("victim", "x")
+
+        # the exact teardown call the fixture performs
+        etcd_client.delete_prefix("")
+
+        assert etcd_client.get("victim") is None
+        assert live.get("sentinel") is not None  # other namespaces untouched
+        assert etcd_client.ns != "marie"
+    finally:
+        live.delete_prefix("")
+
+
+def test_scan_raises_typed_error_when_channel_closed(sema):
+    from marie.state.semaphore_store import EtcdStoreUnavailable
+
+    def _boom(_prefix):
+        raise ValueError("Cannot invoke RPC on closed channel!")
+
+    sema.etcd.client.get_prefix = _boom
+    try:
+        with pytest.raises(EtcdStoreUnavailable):
+            sema.available_count_all()
+        with pytest.raises(EtcdStoreUnavailable):
+            sema.list_slot_types()
+    finally:
+        del sema.etcd.client.get_prefix
+
+
+def test_scan_raises_typed_error_on_connection_failed(sema):
+    """etcd3's own _manage_grpc_errors translates a real outage (server down)
+    into etcd3.exceptions.ConnectionFailedError before it ever reaches
+    _scan_prefix as a grpc.RpcError — the helper must still classify it."""
+    import etcd3.exceptions
+
+    from marie.state.semaphore_store import EtcdStoreUnavailable
+
+    def _boom(_prefix):
+        raise etcd3.exceptions.ConnectionFailedError()
+
+    sema.etcd.client.get_prefix = _boom
+    try:
+        with pytest.raises(EtcdStoreUnavailable):
+            sema.available_count_all()
+    finally:
+        del sema.etcd.client.get_prefix
+
+
+def test_scan_raises_typed_error_on_connection_timeout(sema):
+    """Same as above for the paused-etcd/DEADLINE_EXCEEDED case, which etcd3
+    translates into ConnectionTimeoutError before _scan_prefix sees it."""
+    import etcd3.exceptions
+
+    from marie.state.semaphore_store import EtcdStoreUnavailable
+
+    def _boom(_prefix):
+        raise etcd3.exceptions.ConnectionTimeoutError()
+
+    sema.etcd.client.get_prefix = _boom
+    try:
+        with pytest.raises(EtcdStoreUnavailable):
+            sema.available_count_all()
+    finally:
+        del sema.etcd.client.get_prefix
+
+
+def test_scan_typed_error_covers_both_closed_channel_phrasings(sema, monkeypatch):
+    from marie.state.semaphore_store import EtcdStoreUnavailable
+
+    for msg in (
+        "Cannot invoke RPC on closed channel!",
+        "Cannot invoke RPC: Channel closed!",
+    ):
+        def _boom(_prefix, _msg=msg):
+            raise ValueError(_msg)
+
+        monkeypatch.setattr(sema.etcd.client, "get_prefix", _boom, raising=False)
+        with pytest.raises(EtcdStoreUnavailable):
+            sema.available_count_all()
+        monkeypatch.undo()
+        del sema.etcd.client.get_prefix

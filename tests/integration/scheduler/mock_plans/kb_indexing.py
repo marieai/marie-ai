@@ -1,7 +1,7 @@
 """
-Mock plans for RAG document indexing workflows.
+Mock plans for KB document indexing workflows.
 
-Plans for testing the RAG indexing pipeline with different document types
+Plans for testing the KB indexing pipeline with different document types
 and processing paths (parsed vs frames/OCR).
 """
 
@@ -17,12 +17,12 @@ from .base import (
 )
 
 
-@register_query_plan("mock_rag_indexing_simple")
-def query_planner_mock_rag_indexing_simple(
+@register_query_plan("mock_kb_indexing_simple")
+def query_planner_mock_kb_indexing_simple(
     planner_info: PlannerInfo, **kwargs
 ) -> QueryPlan:
     """
-    Basic RAG indexing pipeline (4 nodes).
+    Basic KB indexing pipeline (4 nodes).
 
     Structure:
         START -> EXTRACT -> EMBED_AND_STORE -> END
@@ -51,7 +51,7 @@ def query_planner_mock_rag_indexing_simple(
         dependencies=[start.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="document_backend_executor://extract",
+            endpoint="extract_executor://document/extract",
             params={
                 "uri": config.get("uri"),
                 "ref_id": config.get("ref_id"),
@@ -97,12 +97,12 @@ def query_planner_mock_rag_indexing_simple(
     return QueryPlan(nodes=nodes)
 
 
-@register_query_plan("mock_rag_indexing_with_chunking")
-def query_planner_mock_rag_indexing_with_chunking(
+@register_query_plan("mock_kb_indexing_with_chunking")
+def query_planner_mock_kb_indexing_with_chunking(
     planner_info: PlannerInfo, **kwargs
 ) -> QueryPlan:
     """
-    RAG indexing with explicit chunking stage (5 nodes).
+    KB indexing with explicit chunking stage (5 nodes).
 
     Structure:
         START -> EXTRACT -> CHUNK -> EMBED_AND_STORE -> END
@@ -131,7 +131,7 @@ def query_planner_mock_rag_indexing_with_chunking(
         dependencies=[start.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="document_backend_executor://extract",
+            endpoint="extract_executor://document/extract",
             params={
                 "uri": config.get("uri"),
                 "ref_id": config.get("ref_id"),
@@ -190,12 +190,12 @@ def query_planner_mock_rag_indexing_with_chunking(
     return QueryPlan(nodes=nodes)
 
 
-@register_query_plan("mock_rag_indexing_noop")
-def query_planner_mock_rag_indexing_noop(
+@register_query_plan("mock_kb_indexing_noop")
+def query_planner_mock_kb_indexing_noop(
     planner_info: PlannerInfo, **kwargs
 ) -> QueryPlan:
     """
-    Minimal RAG indexing pipeline (2 nodes) - for testing only.
+    Minimal KB indexing pipeline (2 nodes) - for testing only.
 
     Structure:
         START -> END

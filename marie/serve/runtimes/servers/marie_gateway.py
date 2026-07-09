@@ -41,6 +41,7 @@ from marie.helper import get_or_reuse_loop
 from marie.jaml import JAML
 from marie.job.gateway_job_distributor import GatewayJobDistributor
 from marie.job.job_manager import JobManager
+from marie.kb.gateway_routes import register_kb_routes
 from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import Toast, mark_as_failed, mark_as_scheduled
 from marie.messaging.events import (
@@ -111,15 +112,6 @@ MAX_AGE_S = 30 * 60  # hard age cap (30 min)
 STATUS_DEGRADED_SINCE = "status_degraded_since"
 STATUS_DEGRADED_REASON = "status_degraded_reason"
 STATUS_DEGRADED_LIVE_MISSING = "live_node_missing_status"
-
-ALLOWED_EXECUTOR_OPS = {
-    "search": "/search",
-    "hybrid_search": "/hybrid_search",
-    "index_stats": "/index_stats",
-    "source_stats": "/source_stats",
-    "delete_source": "/delete_source",
-    "delete_index": "/delete_index",
-}
 
 
 class EventKind(str, Enum):
@@ -1123,6 +1115,10 @@ class MarieServerGateway(CompositeServer):
             # Register sandbox blueprint-import and plugin-install routes
             register_blueprint_routes(app)
 
+            # Register the knowledge-base API extension (search/stats/delete);
+            # streamer resolved lazily — it does not exist at registration time
+            register_kb_routes(app, self.args.get("kb"), lambda: self.streamer)
+
             return app
 
         marie.helper.extend_rest_interface = _extend_rest_function
@@ -1189,8 +1185,6 @@ class MarieServerGateway(CompositeServer):
             return self.handle_job_command(invoke_action)
         elif command == "nodes":
             return self.handle_nodes_command(invoke_action)
-        elif command == "executor":
-            return self.handle_executor_command(invoke_action)
         else:
             return self.error_response(
                 f"Command not recognized or not implemented : {command}", None
@@ -1231,62 +1225,6 @@ class MarieServerGateway(CompositeServer):
             yield req
         else:
             yield self.error_response(f"Action not recognized : {action}", None)
-
-    async def handle_executor_command(
-        self, message: dict
-    ) -> AsyncGenerator[Request, None]:
-        """
-        Handle executor command by forwarding an allow-listed op to the
-        vector_store_executor deployment via the gateway streamer.
-
-        :param message: Dictionary containing the executor command details.
-                        It should have the "action" key specifying the op
-                        and an optional "metadata" dict passed through as
-                        executor parameters.
-        :return: Response object containing the result of the executor call.
-        """
-        action = message.get("action")
-        self.logger.info(f"Handling executor action : {action}")
-        endpoint = ALLOWED_EXECUTOR_OPS.get(action)
-        if endpoint is None:
-            yield self.error_response(f"Executor action not allowed : {action}", None)
-            return
-
-        params = message.get("metadata", {}) or {}
-        req = DataRequest()
-        req.header.exec_endpoint = endpoint
-        req.header.target_executor = "vector_store_executor"
-        req.parameters = params
-
-        response = await self.streamer.process_single_data(request=req)
-
-        docs_payload = []
-        for doc in response.docs:
-            text_score = getattr(doc, "text_score", None)
-            rrf_score = getattr(doc, "rrf_score", None)
-            similarity = getattr(doc, "similarity", None)
-            payload = {
-                "id": doc.id,
-                "text": doc.text,
-                "score": rrf_score if rrf_score is not None else similarity,
-                "source_id": getattr(doc, "source_id", None),
-                "node_type": getattr(doc, "node_type", None),
-                "index_name": getattr(doc, "index_name", None),
-                "ref_doc_id": getattr(doc, "ref_doc_id", None),
-            }
-            if text_score is not None:
-                payload["text_score"] = text_score
-            if rrf_score is not None:
-                payload["rrf_score"] = rrf_score
-            docs_payload.append(payload)
-
-        out = Response()
-        out.parameters = {
-            "status": "ok",
-            "result": response.parameters,
-            "docs": docs_payload,
-        }
-        yield out
 
     async def handle_job_command(self, message: dict) -> AsyncGenerator[Request, None]:
         """
@@ -1980,9 +1918,7 @@ class MarieServerGateway(CompositeServer):
                 else:
                     self.logger.warning(f"Unknown service ev_type: {ev.ev_type}")
 
-                # Always schedule a (debounced) rebuild
                 self._schedule_rebuild(True)
-                # Publish capacity update immediately on service change
                 await self._publish_capacity_event()
                 error_counter = 0
             except Exception as ex:
@@ -2290,19 +2226,17 @@ class MarieServerGateway(CompositeServer):
             )
             self.logger.info("Created new gateway streamer (full rebuild)")
 
-        # Store for future incremental update checks
         self._last_graph_description = graph_description
         self._last_deployments_addresses = deployments_addresses
 
         self.distributor.deployment_nodes = self.deployment_nodes
 
-        # Lets get the new deployment topology
-        self.logger.info(f'topology_graph : {self.streamer.topology_graph}')
-        self.logger.info("-----------------------------")
+        self.logger.debug(f'topology_graph : {self.streamer.topology_graph}')
+        self.logger.debug("-----------------------------")
         for node in self.streamer.topology_graph.all_nodes:
-            self.logger.info(node)
+            self.logger.debug(node)
             for outgoing in node.outgoing_nodes:
-                self.logger.info(f"\t{outgoing}")
+                self.logger.debug(f"\t{outgoing}")
 
         # FIXME : this was a bad idea, we need to use the same deployment
         ClusterState.deployments = self.deployments
@@ -2676,24 +2610,29 @@ class MarieServerGateway(CompositeServer):
 
     async def _reconcile_loop(self, interval_s: int = 10) -> None:
         self.logger.debug("Reconcile loop starting (interval=%ss)", interval_s)
+        first_pass = True
         while True:
             try:
                 self.logger.debug("Reconciling")
                 try:
+                    label = "boot" if first_pass else "periodic"
                     self.logger.debug(
-                        "[sem] boot reconcile_all: deleting orphans and fixing counters"
+                        f"[sem] {label} reconcile_all: "
+                        f"deleting orphans and fixing counters"
                     )
                     summary = self.semaphore_store.reconcile_all(
                         delete_orphan_holders=True,
                         fix_counters=True,
                     )
-                    self.logger.info(f"[sem] boot reconcile summary: {summary}")
+                    if first_pass:
+                        self.logger.info(f"[sem] boot reconcile summary: {summary}")
+                    else:
+                        self.logger.info(f"[sem] periodic reconcile summary: {summary}")
                 except Exception as e:
-                    self.logger.warning(
-                        f"[sem] reconcile_all on boot failed (non-fatal): {e}"
-                    )
+                    self.logger.warning(f"[sem] reconcile_all failed (non-fatal): {e}")
+                finally:
+                    first_pass = False
 
-                # Reconcile desire / status
                 self.logger.debug("reconciling: desire/status")
 
                 for node, depl in self.desired_store.list_pairs():

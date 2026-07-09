@@ -247,5 +247,5 @@ class GRPCServer(BaseServer):
             )
         except RpcError as exc:
             if logger:
-                logger.debug(f'Exception: {exc}')
+                logger.warn(f'is_ready failed: {exc}')
             return False

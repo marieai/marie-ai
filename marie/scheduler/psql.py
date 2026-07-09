@@ -844,17 +844,28 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def _reconcile_control_flow_lease_miss(
         self, wi: WorkInfo, db_wi: WorkInfo | None
     ) -> bool:
+        return await self._reconcile_db_lease_miss(wi, db_wi, context="control_flow")
+
+    async def _reconcile_db_lease_miss(
+        self, wi: WorkInfo, db_wi: WorkInfo | None, *, context: str
+    ) -> bool:
         if db_wi is None:
-            await self.frontier.release_lease_local(wi.id)
-            return False
+            await self._evict_missing_db_work_item(wi, context=context)
+            return True
 
         self._job_cache[wi.id] = db_wi
         state = db_wi.state
+        trace_name = (
+            "control_flow_db_lease_miss_reconciled"
+            if context == "control_flow"
+            else "db_lease_miss_reconciled"
+        )
         scheduler_trace(
-            "control_flow_db_lease_miss_reconciled",
+            trace_name,
             job_id=wi.id,
             dag_id=wi.dag_id,
             db_state=state.value if isinstance(state, WorkState) else str(state),
+            context=context,
         )
 
         if state == WorkState.COMPLETED:
@@ -876,6 +887,75 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         await self.frontier.release_lease_local(wi.id)
         return False
+
+    async def _evict_missing_db_work_item(self, wi: WorkInfo, *, context: str) -> bool:
+        self._job_cache.pop(wi.id, None)
+        reason = f"{context}: work item {wi.id} missing from database"
+        self.logger.warning(
+            f"[WORK_DIST] Evicting stale in-memory work item {wi.id} "
+            f"(dag_id={wi.dag_id}, context={context}); database row is missing"
+        )
+        scheduler_trace(
+            "db_missing_work_item_evicted",
+            job_id=wi.id,
+            dag_id=wi.dag_id,
+            context=context,
+        )
+
+        if wi.dag_id:
+            removed = await self._evict_dag_from_memory(wi.dag_id, reason)
+        else:
+            await self.frontier.on_job_cancelled(wi.id)
+            removed = True
+
+        await self.notify_event()
+        return removed
+
+    async def _reconcile_db_lease_shortfall(
+        self, selected_wis: list[WorkInfo], leased_ids: set[str]
+    ) -> int:
+        reconciled = 0
+        evicted_dag_ids: set[str] = set()
+        for wi in selected_wis:
+            if wi.id in leased_ids:
+                continue
+
+            try:
+                db_wi = await self.repository.get_job_by_id(wi.id)
+            except Exception as exc:
+                self.logger.error(
+                    f"[WORK_DIST] Failed to inspect DB lease shortfall for {wi.id}: {exc}",
+                    exc_info=True,
+                )
+                await self.frontier.release_lease_local(wi.id)
+                continue
+
+            reconciled += int(
+                await self._reconcile_db_lease_miss(
+                    wi, db_wi, context="dispatch_shortfall"
+                )
+            )
+            if db_wi is None and wi.dag_id:
+                evicted_dag_ids.add(wi.dag_id)
+
+        if evicted_dag_ids and leased_ids:
+            stale_leased_ids = [
+                wi.id
+                for wi in selected_wis
+                if wi.id in leased_ids and wi.dag_id in evicted_dag_ids
+            ]
+            if stale_leased_ids:
+                try:
+                    await self._release_lease_db(stale_leased_ids)
+                except Exception as exc:
+                    self.logger.error(
+                        f"[WORK_DIST] Failed to release leased jobs from evicted DAGs "
+                        f"{sorted(evicted_dag_ids)}: {exc}",
+                        exc_info=True,
+                    )
+                leased_ids.difference_update(stale_leased_ids)
+
+        return reconciled
 
     async def _process_control_flow_node(self, wi: WorkInfo) -> None:
         """
@@ -2310,10 +2390,16 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             f"[WORK_DIST] DB lease FAILED for '{job_name}' ({len(ids)} ids): {e}",
                             exc_info=True,
                         )
-                # put *everything* back
+                if len(leased_ids) < len(selected_wis):
+                    reconciled_shortfall = await self._reconcile_db_lease_shortfall(
+                        selected_wis, leased_ids
+                    )
+                    if reconciled_shortfall:
+                        self.logger.info(
+                            f"[WORK_DIST] Reconciled {reconciled_shortfall} DB lease shortfall(s)"
+                        )
+
                 if not leased_ids:
-                    for wi in selected_wis:
-                        await self.frontier.release_lease_local(wi.id)
                     self.logger.warning(
                         f"[WORK_DIST] NO candidates could be leased in DB; backing off. "
                         f"Attempted {len(selected_wis)} jobs across {len(ids_by_job_name)} job names. "
@@ -2328,11 +2414,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     f"[WORK_DIST] Successfully leased {len(leased_ids)} jobs in DB. "
                     f"Processing leased jobs now..."
                 )
-
-                # return non-leased back to frontier immediately
-                for wi in selected_wis:
-                    if wi.id not in leased_ids:
-                        await self.frontier.release_lease_local(wi.id)
 
                 # only process those that we leased in DB
                 leased_jobs: list[tuple[str, WorkInfo]] = ordered_leased_jobs(
@@ -4336,7 +4417,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def _evict_dag_from_memory(self, dag_id: str, reason: str) -> bool:
         self._terminal_dag_states.pop(dag_id, None)
+        dag_jobs = await self.frontier.get_jobs_by_dag_id(dag_id)
         stats = await self.frontier.finalize_dag(dag_id)
+        for dag_job in dag_jobs:
+            self._job_cache.pop(dag_job.id, None)
         removed = self.dag_service.remove_dag(dag_id, reason)
         self.logger.info(
             f"[DAG_SYNC] Evicted DAG {dag_id} from memory ({reason}), "

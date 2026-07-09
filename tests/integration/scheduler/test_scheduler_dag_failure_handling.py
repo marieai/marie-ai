@@ -136,6 +136,9 @@ def build_scheduler(
     scheduler._dag_resolution_retry_max_delay = 0.0
     scheduler.lease_owner = "test-scheduler"
 
+    def remove_dag(dag_id: str, _reason: str) -> bool:
+        return scheduler.active_dags.pop(dag_id, None) is not None
+
     async def notify_event() -> bool:
         scheduler.notify_calls.append(True)
         return True
@@ -146,6 +149,7 @@ def build_scheduler(
 
     scheduler.notify_event = notify_event
     scheduler.hydrate_single_dag_from_db = hydrate_single_dag_from_db
+    scheduler.dag_service = SimpleNamespace(remove_dag=remove_dag)
     return scheduler
 
 
@@ -981,6 +985,7 @@ async def test_evict_dag_from_memory_finalizes_frontier_and_clears_terminal_stat
 
     work_item = build_work_item("job-evict", dag_id)
     await frontier.add_dag(None, [work_item])
+    scheduler._job_cache[work_item.id] = work_item
 
     removed = await scheduler._evict_dag_from_memory(
         dag_id, "no longer active or deleted in database"
@@ -991,6 +996,89 @@ async def test_evict_dag_from_memory_finalizes_frontier_and_clears_terminal_stat
     assert dag_id not in scheduler.active_dags
     assert dag_id not in scheduler._terminal_dag_states
     assert await frontier.get_jobs_by_dag_id(dag_id) == []
+    assert work_item.id not in scheduler._job_cache
+
+
+@pytest.mark.asyncio
+async def test_control_flow_lease_miss_evicts_missing_db_job_without_requeue():
+    dag_id = "dag-missing-control"
+    frontier = RecordingFrontier()
+    repository = RecordingRepository(dag_state="active")
+    scheduler = build_scheduler(repository, frontier)
+    scheduler.active_dags[dag_id] = object()
+
+    work_item = build_work_item("job-missing-control", dag_id, name="noop")
+    await frontier.add_dag(None, [work_item])
+    await frontier.take([work_item.id])
+    scheduler._job_cache[work_item.id] = work_item
+
+    released_local: list[str] = []
+
+    async def release_lease_local(job_id: str) -> None:
+        released_local.append(job_id)
+
+    frontier.release_lease_local = release_lease_local
+
+    reconciled = await scheduler._reconcile_control_flow_lease_miss(work_item, None)
+
+    assert reconciled is True
+    assert released_local == []
+    assert frontier.finalize_calls == [dag_id]
+    assert dag_id not in scheduler.active_dags
+    assert work_item.id not in scheduler._job_cache
+    assert scheduler.notify_calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_lease_shortfall_evicts_missing_db_job_without_requeue():
+    dag_id = "dag-missing-dispatch"
+    frontier = RecordingFrontier()
+
+    class MissingJobRepository(RecordingRepository):
+        def __init__(self):
+            super().__init__(dag_state="active")
+            self.lookup_calls: list[str] = []
+
+        async def get_job_by_id(self, job_id: str):
+            self.lookup_calls.append(job_id)
+            return None
+
+    repository = MissingJobRepository()
+    scheduler = build_scheduler(repository, frontier)
+    scheduler.active_dags[dag_id] = object()
+
+    work_item = build_work_item("job-missing-dispatch", dag_id)
+    leased_item = build_work_item("job-leased-dispatch", dag_id)
+    await frontier.add_dag(None, [work_item, leased_item])
+    await frontier.take([work_item.id, leased_item.id])
+
+    released_local: list[str] = []
+    released_db: list[list[str]] = []
+
+    async def release_lease_local(job_id: str) -> None:
+        released_local.append(job_id)
+
+    async def release_lease_db(job_ids: list[str]) -> set[str]:
+        released_db.append(job_ids)
+        return set(job_ids)
+
+    frontier.release_lease_local = release_lease_local
+    scheduler._release_lease_db = release_lease_db
+
+    leased_ids = {leased_item.id}
+
+    reconciled = await scheduler._reconcile_db_lease_shortfall(
+        [work_item, leased_item], leased_ids
+    )
+
+    assert reconciled == 1
+    assert repository.lookup_calls == [work_item.id]
+    assert released_local == []
+    assert released_db == [[leased_item.id]]
+    assert leased_ids == set()
+    assert frontier.finalize_calls == [dag_id]
+    assert dag_id not in scheduler.active_dags
+    assert scheduler.notify_calls == [True]
 
 
 @pytest.mark.asyncio

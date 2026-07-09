@@ -109,6 +109,7 @@ class GatewayJobDistributor(JobDistributor):
         identity_values = {
             key: metadata[key] for key in IDENTITY_PARAMETER_KEYS if key in metadata
         }
+        run_params = metadata.get("run_params")
         parameters, asset_doc = await parse_payload_to_docs(metadata)
         parameters["job_id"] = submission_id
         parameters["payload"] = metadata
@@ -118,6 +119,13 @@ class GatewayJobDistributor(JobDistributor):
         for key, value in identity_values.items():
             if key not in parameters:
                 parameters[key] = value
+        # promote run_params (e.g. chunk_size/chunk_overlap/segmentation_mode,
+        # multimodal) so executors like VectorStoreExecutor._run_param can
+        # find them at the top level, matching how IDENTITY_PARAMETER_KEYS
+        # are promoted above - without this, run_params only survives nested
+        # under parameters["payload"]["run_params"].
+        if run_params:
+            parameters["run_params"] = run_params
 
         # Pass through DAG tracking parameters for asset materialization
         # These are set by the scheduler when dispatching DAG jobs

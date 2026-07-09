@@ -3,8 +3,9 @@ from collections import defaultdict
 from typing import Callable, Sequence
 
 from marie.job.common import JobStatus
+from marie.logging_core.predefined import default_logger as logger
 from marie.scheduler.state import WorkState
-from marie.state.semaphore_store import SemaphoreStore
+from marie.state.semaphore_store import EtcdStoreUnavailable, SemaphoreStore
 
 CONTROL_FLOW_EXECUTORS = frozenset({"noop", "branch", "switch", "merger", "guardrail"})
 
@@ -64,8 +65,19 @@ def available_slots_by_executor(sem: SemaphoreStore) -> dict[str, int]:
     """
     Snapshot available slots for all executors from the semaphore store.
     Equivalent to: capacities - used_count, based on holders/count keys.
+
+    During an etcd outage this degrades to an empty snapshot (zero slots)
+    instead of raising: callers keep cycling, control-flow nodes still
+    dispatch, and executor jobs simply wait out the outage.
     """
-    return sem.available_count_all()
+    try:
+        return sem.available_count_all()
+    except EtcdStoreUnavailable as e:
+        logger.warning(
+            f"[WORK_DIST] Slot store unavailable (etcd outage?): {e} — "
+            f"reporting zero executor slots for this cycle"
+        )
+        return {}
 
 
 def executor_name(entrypoint: str) -> str:
