@@ -1,3 +1,258 @@
 [build-system]
 requires = ["setuptools>=18.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.uv]
+package = false
+index-strategy = "unsafe-best-match"
+
+[tool.uv.sources]
+etcd3 = { path = "wheels/etcd3-0.12.0-py2.py3-none-any.whl" }
+fastwer = { path = "wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl" }
+fairseq = { path = "wheels/fairseq-0.12.2+marieai.torch212cu130-cp312-cp312-linux_x86_64.whl" }
+detectron2 = { path = "wheels/detectron2-0.6-cp312-cp312-linux_x86_64.whl" }
+faiss-gpu-cu13 = { path = "wheels/faiss_gpu_cu13-1.14.1+cu130-py3-none-any.whl" }
+
+[dependency-groups]
+
+marie-runtime-common = [
+    "pybind11",
+    "numpy==2.4.6",
+    "protobuf>=5.29.0,<6.0.0",
+    "pyyaml>=5.3.1",
+    "packaging>=20.0",
+    "psutil",
+    "uvloop",
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-instrumentation-grpc>=0.41b0",
+    "opentelemetry-exporter-otlp>=1.20.0",
+    "opentelemetry-semantic-conventions>=0.41b0",
+    "opentelemetry-instrumentation-aiohttp-client>=0.41b0",
+    "opentelemetry-instrumentation-fastapi>=0.41b0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
+    "openinference-instrumentation>=0.1.46",
+    "fastapi>=0.100.1",
+    "uvicorn[standard]>=0.23.1",
+    "docker",
+    "wasmtime>=21.0.0",
+    "pathspec",
+    "filelock",
+    "requests",
+    "websockets",
+    "python-multipart",
+    "aiofiles",
+    "aiohttp",
+    "aiostream",
+    "black==24.3.0",
+    "anyconfig",
+    "matplotlib",
+    "albumentations",
+    "dominate==2.7.0",
+    "lmdb",
+    "natsort",
+    "celery",
+    "opencv-python==5.0.0.93",
+    "opencv-python-headless==5.0.0.93",
+    "imagecodecs",
+    "imutils",
+    "PyPDF4",
+    "reportlab",
+    "nltk",
+    "Wand",
+    "Cython",
+    "jsons",
+    "shapely",
+    "psycopg2-binary==2.9.10",
+    "psycopg[binary,pool]>=3.1.0",
+    "asyncpg>=0.29.0",
+    "pytest",
+    "nlpaug",
+    "munch",
+    "pika",
+    "Levenshtein",
+    "boto3",
+    "sqlalchemy",
+    "pendulum",
+    "uuid7",
+    "orjson",
+    "omegaconf==2.3.0",
+    "hydra-core==1.3.1",
+    "Pillow>=11.0,<13",
+    "bitarray",
+    "cloudpickle",
+    "sacrebleu",
+    "tensorboard<2.20",
+    "colorcet",
+    "seaborn",
+    "textual",
+    "textual_textarea",
+    "textual_fastdatatable",
+    "typing_extensions>=4.12.2",
+    "rtree",
+    "scikit-image",
+    "filetype",
+    "dataclasses_json",
+    "diskcache",
+    "tenacity",
+    "json_repair",
+    "watchdog",
+    "cachetools==5.5.0",
+    "portalocker==3.2.0",
+    "jsonpath-ng",
+    "clickhouse-driver==0.2.10",
+    "python-dotenv",
+    "a2a-sdk>=0.3.9",
+    "python-docx>=1.1.2",
+    "python-pptx>=1.0.2",
+    "openpyxl>=3.1.5",
+    "beautifulsoup4>=4.12.3",
+    "marko",
+    "ebooklib",
+    "extract-msg",
+    "pillow-heif",
+    "pdf2image",
+    "weasyprint",
+    "docutils",
+    "grpcio>=1.60.0,<1.66.0",
+    "grpcio-reflection>=1.60.0,<1.66.0",
+    "grpcio-health-checking>=1.60.0,<1.66.0",
+    "docarray>=0.30,<=0.40.0",
+    "mcp>=1.6.0",
+    "pydantic>=2.11.0",
+    "pydantic-settings>=2.0.0",
+    "urllib3>=1.25.9,<2.0.0",
+]
+
+marie-local-wheel-common = [
+    "etcd3==0.12.0",
+    "fastwer==0.1.3",
+]
+
+marie-local-package-deps = [
+    "httpx>=0.25.0",
+    "mem0ai>=0.1.0",
+]
+
+marie-gateway-cpu = [
+    { include-group = "marie-runtime-common" },
+    { include-group = "marie-local-wheel-common" },
+    { include-group = "marie-local-package-deps" },
+    "torch==2.12.1",
+    "torchvision==0.27.1",
+]
+
+marie-cuda-extra = [
+    "transformers==4.49",
+    "pycocotools",
+    "timm==1.0.27",
+    "onnx",
+    "sentencepiece",
+    "fast_pytorch_kmeans",
+    "sahi",
+    "openai-clip",
+    "efficientnet-pytorch",
+    "sentence-transformers==5.1.0",
+    "qwen-vl-utils==0.0.14",
+    "peft==0.14.0",
+    "ruamel.yaml",
+    "graphviz",
+    "networkx",
+    "nameparser",
+    "prettytable",
+]
+
+marie-cuda-native-wheels = [
+    "fairseq==0.12.2+marieai.torch212cu130",
+    "detectron2==0.6",
+    "faiss-gpu-cu13==1.14.1+cu130",
+]
+
+marie-cuda = [
+    { include-group = "marie-runtime-common" },
+    { include-group = "marie-cuda-extra" },
+    { include-group = "marie-local-wheel-common" },
+    { include-group = "marie-local-package-deps" },
+    { include-group = "marie-cuda-native-wheels" },
+    "torch==2.12.1",
+    "torchvision==0.27.1",
+]
+
+dev = [
+    "pytest<8.0.0",
+    "pytest-timeout",
+    "pytest-mock",
+    "pytest-cov==3.0.0",
+    "coverage==6.2",
+    "pytest-repeat",
+    "pytest-asyncio<0.23.0",
+    "pytest-reraise",
+    "mock",
+    "requests-mock",
+    "pytest-custom_exit_code",
+    "black==24.3.0",
+    "kubernetes>=18.20.0,<31.0.0",
+    "pytest-kind==22.11.1",
+    "pytest-lazy-fixture",
+    "psutil",
+    "uvloop",
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-instrumentation-grpc>=0.41b0",
+    "opentelemetry-exporter-otlp>=1.20.0",
+    "opentelemetry-semantic-conventions>=0.41b0",
+    "opentelemetry-instrumentation-aiohttp-client>=0.41b0",
+    "opentelemetry-instrumentation-fastapi>=0.41b0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
+    "openinference-instrumentation>=0.1.46",
+    "fastapi>=0.100.1",
+    "uvicorn[standard]>=0.23.1",
+    "docker",
+    "pathspec",
+    "filelock",
+    "requests",
+    "websockets",
+    "python-multipart",
+    "aiofiles",
+    "aiohttp",
+    "aiostream",
+    "strawberry-graphql>=0.96.0",
+    "watchfiles>=0.18.0",
+    "gradio",
+    "python-dotenv",
+]
+
+legacy-gradio = [
+    "gradio",
+    "openai",
+    "timm==1.0.27",
+    "nltk",
+]
+
+[tool.isort]
+profile = "black"
+line_length = 127
+multi_line_output = 3
+include_trailing_comma = true
+virtual_env = "venv"
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+include = "\\.pyi?$"
+preview = false
+skip-string-normalization = true
+exclude = """
+/(
+      .eggs
+    | .git
+    | .hg
+    | .mypy_cache
+    | .tox
+    | venv
+    | _build
+    | buck-out
+    | build
+    | dist
+  )/
+"""

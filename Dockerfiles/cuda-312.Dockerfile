@@ -18,9 +18,6 @@ ARG PY_VERSION=3.12
 ARG BUILD_DATE
 ARG MARIE_VERSION
 ARG TARGETPLATFORM
-ARG PYTHON_INSTALLER=pip
-# Note: piwheels is for ARM/Raspberry Pi only, not needed for x86_64/CUDA builds
-ARG PIP_EXTRA_INDEX_URL=""
 
 # constant, wont invalidate cache
 LABEL org.opencontainers.image.vendor="Marie AI" \
@@ -42,13 +39,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # https://developer.nvidia.com/cuda-gpus
 ENV TORCH_CUDA_ARCH_LIST "7.5;8.0;8.6;8.9;9.0"
 
-ENV PIP_DEFAULT_TIMEOUT=100 \
-    # Allow statements and log messages to immediately appear
-    PYTHONUNBUFFERED=1 \
-    # disable a pip version check to reduce run-time & log-spam
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    # cache is useless in docker image, so disable to reduce image size
-    PIP_NO_CACHE_DIR=1 \
+ENV PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy
 
 
@@ -96,8 +87,8 @@ RUN ln -sf /usr/bin/python3.12 /usr/bin/python3 \
 && ln -sf /usr/bin/python3.12 /usr/bin/python
 
 # Install requirements
-# change on extra-requirements.txt, setup.py will invalid the cache
-COPY requirements.txt extra-requirements.txt setup.py /tmp/
+# change on pyproject.toml, extra-requirements.txt, or setup.py will invalidate the cache
+COPY requirements.txt extra-requirements.txt setup.py pyproject.toml /tmp/
 # Copy directories
 COPY patches/ /tmp/patches/
 COPY wheels/ /tmp/wheels/
@@ -107,34 +98,11 @@ ENV VIRTUAL_ENV=/opt/venv
 RUN python3.12 -m venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-RUN curl -O https://bootstrap.pypa.io/get-pip.py \
-    && python3 get-pip.py \
-    && if [ "$PYTHON_INSTALLER" = "uv" ]; then \
-        uv pip install --python /opt/venv/bin/python --compile-bytecode 'setuptools<81' 'pybind11[global]'; \
-    else \
-        python3 -m pip install 'setuptools<81' \
-        && python3 -m pip install 'pybind11[global]'; \
-    fi
+RUN uv pip install --python /opt/venv/bin/python --compile-bytecode 'setuptools<81' 'pybind11[global]'
 
 # verify that virtual environment is used and python version is correct
 RUN python3 --version \
     && which python3
-
-# Install torch separately with retries to handle transient download corruption (BadZipFile CRC-32 errors).
-# Override PIP_NO_CACHE_DIR so retries can use cached downloads; BuildKit cache mount avoids bloating the image
-RUN --mount=type=cache,target=/root/.cache/pip \
-    --mount=type=cache,target=/root/.cache/uv \
-    export PIP_NO_CACHE_DIR=0 && \
-    for i in 1 2 3; do \
-        if [ "$PYTHON_INSTALLER" = "uv" ]; then \
-            uv pip install --python /opt/venv/bin/python --compile-bytecode --torch-backend cu130 \
-                torch==2.12.1 torchvision==0.27.1 --index-url https://download.pytorch.org/whl/cu130; \
-        else \
-            python3 -m pip install torch==2.12.1 torchvision==0.27.1 --index-url https://download.pytorch.org/whl/cu130; \
-        fi \
-        && break \
-        || { echo "Attempt $i failed, purging installer cache and retrying..."; python3 -m pip cache purge 2>/dev/null || true; uv cache clean 2>/dev/null || true; sleep 5; }; \
-    done
 
 RUN set -eux; \
     test -f /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl; \
@@ -149,66 +117,37 @@ RUN set -eux; \
         /tmp/wheels/detectron2-*.whl \
         /tmp/wheels/faiss*.whl
 
-# Install custom wheels that are distributed with the repo.
+# Install the CUDA profile lock generated from pyproject dependency groups.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ "$PYTHON_INSTALLER" = "uv" ]; then \
-        uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl \
-        && uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode /tmp/wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl; \
-    else \
-        python3 -m pip install --no-deps /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl \
-        && python3 -m pip install --no-deps /tmp/wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl; \
-    fi
-
-RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ "$PYTHON_INSTALLER" = "uv" ]; then \
-        uv pip install --python /opt/venv/bin/python --compile-bytecode omegaconf==2.3.0; \
-    else \
-        python3 -m pip install omegaconf==2.3.0; \
-    fi \
-    && python3 /tmp/patches/patch-omegaconf-py312.py --no-confirm
+    set -eux; \
+    cd /tmp; \
+    for i in 1 2 3; do \
+        if uv pip install --python /opt/venv/bin/python --compile-bytecode --torch-backend cu130 --index-strategy unsafe-best-match -r requirements/uv/marie-cuda-torch212-cu130.lock.txt; then \
+            break; \
+        fi; \
+        if [ "$i" = "3" ]; then \
+            exit 1; \
+        fi; \
+        echo "Attempt $i failed, purging uv cache and retrying..."; \
+        uv cache clean || true; \
+        sleep 5; \
+    done; \
+    python3 /tmp/patches/patch-omegaconf-py312.py --no-confirm
 
 # Install marie packages (monorepo local packages)
 COPY packages/ /tmp/packages/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ "$PYTHON_INSTALLER" = "uv" ]; then \
-        uv pip install --python /opt/venv/bin/python --compile-bytecode --torch-backend cu130 --index-strategy unsafe-best-match -c /tmp/requirements/torch-2.12-cu130.txt /tmp/packages/marie-kernel \
-        && uv pip install --python /opt/venv/bin/python --compile-bytecode --torch-backend cu130 --index-strategy unsafe-best-match -c /tmp/requirements/torch-2.12-cu130.txt /tmp/packages/marie-wasm \
-        && uv pip install --python /opt/venv/bin/python --compile-bytecode --torch-backend cu130 --index-strategy unsafe-best-match -c /tmp/requirements/torch-2.12-cu130.txt /tmp/packages/marie-mem0 \
-        && uv pip install --python /opt/venv/bin/python --compile-bytecode --torch-backend cu130 --index-strategy unsafe-best-match -c /tmp/requirements/torch-2.12-cu130.txt /tmp/packages/marie-mcp; \
-    else \
-        python3 -m pip install /tmp/packages/marie-kernel \
-        && python3 -m pip install /tmp/packages/marie-wasm \
-        && python3 -m pip install /tmp/packages/marie-mem0 \
-        && python3 -m pip install /tmp/packages/marie-mcp; \
-    fi
+    uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode /tmp/packages/marie-kernel \
+    && uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode /tmp/packages/marie-wasm \
+    && uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode /tmp/packages/marie-mem0 \
+    && uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode /tmp/packages/marie-mcp
 
-# Install marie-ai package with dependencies
-# Use --prefer-binary to speed up installation by using pre-built wheels when available
+# Install marie-ai package from the staged source. Dependencies come from the uv lock above.
 RUN --mount=type=cache,target=/root/.cache/uv \
     cd /tmp/ \
-    && if [ "$PYTHON_INSTALLER" = "uv" ]; then \
-        uv pip install --python /opt/venv/bin/python --compile-bytecode --torch-backend cu130 --index-strategy unsafe-best-match -c /tmp/requirements/torch-2.12-cu130.txt .; \
-    else \
-        python3 -m pip install --default-timeout=100 --compile --prefer-binary .; \
-    fi
-
-# Install native CUDA wheels proven by the PyTorch 2.12/cu130 local build lane.
-# Rebuild them intentionally with tools/scripts/setup-py312-torch212-cu130.sh when
-# torch/CUDA/Python/base OS/compiler/GPU architecture changes.
-RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ "$PYTHON_INSTALLER" = "uv" ]; then \
-        uv pip install --python /opt/venv/bin/python --compile-bytecode git+https://github.com/facebookresearch/fvcore \
-        && uv pip install --python /opt/venv/bin/python --reinstall --no-deps --compile-bytecode /tmp/wheels/fairseq-*.whl \
-        && uv pip install --python /opt/venv/bin/python --reinstall --no-deps --compile-bytecode /tmp/wheels/detectron2-*.whl \
-        && uv pip install --python /opt/venv/bin/python --reinstall --no-deps --compile-bytecode /tmp/wheels/faiss*.whl; \
-    else \
-        python3 -m pip install git+https://github.com/facebookresearch/fvcore \
-        && python3 -m pip install --force-reinstall --no-deps /tmp/wheels/fairseq-*.whl \
-        && python3 -m pip install --force-reinstall --no-deps /tmp/wheels/detectron2-*.whl \
-        && python3 -m pip install --force-reinstall --no-deps /tmp/wheels/faiss*.whl; \
-    fi \
+    && uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode . \
     && python3 /tmp/patches/patch-detectron2-metadata.py --no-confirm \
-    && python3 -m pip check
+    && uv pip check --python /opt/venv/bin/python
 
 
 # No inference is being done currently 
@@ -229,7 +168,6 @@ ARG TZ="Etc/UTC"
 ARG VCS_REF
 ARG BUILD_DATE
 ARG MARIE_VERSION
-ARG PYTHON_INSTALLER=pip
 
 ENV TERM=xterm-256color \
     http_proxy=${http_proxy}   \
@@ -296,11 +234,6 @@ ENV WORKDIR /marie
 COPY --from=build-image /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 
-# Install PIP
-RUN curl -O https://bootstrap.pypa.io/get-pip.py && \
-    python3 get-pip.py
-
-
 # Install and initialize MARIE-AI, copy all necessary files
 # copy will almost always invalididate the cache
 COPY ./im-policy.xml /etc/ImageMagick-6/policy.xml
@@ -319,11 +252,7 @@ COPY ./marie/proto/docarray_v2/ /marie/proto/docarray_v2/
 
 # install marie again but this time no deps
 RUN cd /marie && \
-    if [ "$PYTHON_INSTALLER" = "uv" ]; then \
-        uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode .; \
-    else \
-        python3 -m pip install --no-deps --compile .; \
-    fi && \
+    uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode . && \
     echo "MARIE-AI installed successfully"
     #rm -rf /tmp/* && rm -rf /marie
 
