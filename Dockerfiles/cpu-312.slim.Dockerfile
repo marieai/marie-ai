@@ -1,6 +1,8 @@
 # !!! An ARG declared before a FROM is outside of a build stage, so it can’t be used in any instruction after a FROM
 FROM ubuntu:24.04 AS build-image
 
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
+
 ARG http_proxy
 ARG https_proxy
 ARG no_proxy="${no_proxy}"
@@ -14,6 +16,7 @@ ARG PY_VERSION=3.12
 ARG BUILD_DATE
 ARG MARIE_VERSION
 ARG TARGETPLATFORM
+ARG PYTHON_INSTALLER=pip
 # Note: piwheels is for ARM/Raspberry Pi only, not needed for x86_64 builds
 ARG PIP_EXTRA_INDEX_URL=""
 
@@ -40,7 +43,8 @@ ENV PIP_DEFAULT_TIMEOUT=100 \
     # disable a pip version check to reduce run-time & log-spam
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     # cache is useless in docker image, so disable to reduce image size
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    UV_LINK_MODE=copy
 
 
 RUN apt-get update -o APT::Update::Error-Mode=any && \
@@ -71,7 +75,7 @@ RUN apt-get update && \
         g++ \
         imagemagick \
         libmagickwand-dev \
-        libtiff5-dev \
+        libtiff-dev \
         libjpeg-dev \
         libpng-dev \
         libpq-dev \
@@ -91,6 +95,7 @@ COPY requirements.txt extra-requirements.txt setup.py /tmp/
 # Copy directories
 COPY patches/ /tmp/patches/
 COPY wheels/ /tmp/wheels/
+COPY requirements/ /tmp/requirements/
 
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3.12 -m venv $VIRTUAL_ENV
@@ -98,40 +103,89 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 RUN curl -O https://bootstrap.pypa.io/get-pip.py \
     && python3 get-pip.py \
-    && python3 -m pip install 'setuptools<81' \
-    && python3 -m pip install 'pybind11[global]'
+    && if [ "$PYTHON_INSTALLER" = "uv" ]; then \
+        uv pip install --python /opt/venv/bin/python --compile-bytecode 'setuptools<81' 'pybind11[global]'; \
+    else \
+        python3 -m pip install 'setuptools<81' \
+        && python3 -m pip install 'pybind11[global]'; \
+    fi
 
 # verify that virtual environment is used and python version is correct
 RUN python3 --version \
     && which python3
 
-# install custom wheels
-RUN python3 -m pip install /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl \
-    && python3 -m pip install /tmp/wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl
+# Install torch explicitly so the CPU profile is pinned to the same torch lane as the lock artifact.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=cache,target=/root/.cache/uv \
+    export PIP_NO_CACHE_DIR=0 && \
+    for i in 1 2 3; do \
+        if [ "$PYTHON_INSTALLER" = "uv" ]; then \
+            uv pip install --python /opt/venv/bin/python --compile-bytecode --torch-backend cpu \
+                torch==2.12.1 torchvision==0.27.1 --index-url https://download.pytorch.org/whl/cpu; \
+        else \
+            python3 -m pip install torch==2.12.1 torchvision==0.27.1 --index-url https://download.pytorch.org/whl/cpu; \
+        fi \
+        && break \
+        || { echo "Attempt $i failed, purging installer cache and retrying..."; python3 -m pip cache purge 2>/dev/null || true; uv cache clean 2>/dev/null || true; sleep 5; }; \
+    done
 
-RUN python3 -m pip install omegaconf==2.3.0 \
+# install custom wheels
+RUN --mount=type=cache,target=/root/.cache/uv \
+    if [ "$PYTHON_INSTALLER" = "uv" ]; then \
+        uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl \
+        && uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode /tmp/wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl; \
+    else \
+        python3 -m pip install /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl \
+        && python3 -m pip install /tmp/wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl; \
+    fi
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    if [ "$PYTHON_INSTALLER" = "uv" ]; then \
+        uv pip install --python /opt/venv/bin/python --compile-bytecode omegaconf==2.3.0; \
+    else \
+        python3 -m pip install omegaconf==2.3.0; \
+    fi \
     && python3 /tmp/patches/patch-omegaconf-py312.py --no-confirm
 
 # Install marie packages (monorepo local packages)
 COPY packages/ /tmp/packages/
-RUN python3 -m pip install /tmp/packages/marie-kernel \
-    && python3 -m pip install /tmp/packages/marie-wasm \
-    && python3 -m pip install /tmp/packages/marie-mem0 \
-    && python3 -m pip install /tmp/packages/marie-mcp
+RUN --mount=type=cache,target=/root/.cache/uv \
+    if [ "$PYTHON_INSTALLER" = "uv" ]; then \
+        uv pip install --python /opt/venv/bin/python --compile-bytecode --torch-backend cpu --index-strategy unsafe-best-match -c /tmp/requirements/torch-2.12-cpu.txt /tmp/packages/marie-kernel \
+        && uv pip install --python /opt/venv/bin/python --compile-bytecode --torch-backend cpu --index-strategy unsafe-best-match -c /tmp/requirements/torch-2.12-cpu.txt /tmp/packages/marie-wasm \
+        && uv pip install --python /opt/venv/bin/python --compile-bytecode --torch-backend cpu --index-strategy unsafe-best-match -c /tmp/requirements/torch-2.12-cpu.txt /tmp/packages/marie-mem0 \
+        && uv pip install --python /opt/venv/bin/python --compile-bytecode --torch-backend cpu --index-strategy unsafe-best-match -c /tmp/requirements/torch-2.12-cpu.txt /tmp/packages/marie-mcp; \
+    else \
+        python3 -m pip install /tmp/packages/marie-kernel \
+        && python3 -m pip install /tmp/packages/marie-wasm \
+        && python3 -m pip install /tmp/packages/marie-mem0 \
+        && python3 -m pip install /tmp/packages/marie-mcp; \
+    fi
 
 # Install marie-ai package with dependencies
 # Use --prefer-binary to speed up installation by using pre-built wheels when available
-RUN cd /tmp/ \
-    && python3 -m pip install --default-timeout=100 --compile --prefer-binary .
+RUN --mount=type=cache,target=/root/.cache/uv \
+    cd /tmp/ \
+    && if [ "$PYTHON_INSTALLER" = "uv" ]; then \
+        uv pip install --python /opt/venv/bin/python --compile-bytecode --torch-backend cpu --index-strategy unsafe-best-match -c /tmp/requirements/torch-2.12-cpu.txt .; \
+    else \
+        python3 -m pip install --default-timeout=100 --compile --prefer-binary .; \
+    fi
 
 
 FROM ubuntu:24.04
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
 
 ARG http_proxy
 ARG https_proxy
 ARG no_proxy="${no_proxy}"
 ARG socks_proxy
 ARG TZ="Etc/UTC"
+ARG VCS_REF
+ARG BUILD_DATE
+ARG MARIE_VERSION
+ARG PYTHON_INSTALLER=pip
 
 ENV TERM=xterm-256color \
     http_proxy=${http_proxy} \
@@ -140,7 +194,8 @@ ENV TERM=xterm-256color \
     socks_proxy=${socks_proxy} \
     LANG='C.UTF-8' \
     LC_ALL='C.UTF-8' \
-    TZ=${TZ}
+    TZ=${TZ} \
+    UV_LINK_MODE=copy
 
 # the following label use ARG hence will invalid the cache
 LABEL org.opencontainers.image.created=${BUILD_DATE} \
@@ -218,7 +273,11 @@ COPY ./marie/proto/docarray_v2/ /marie/proto/docarray_v2/
 
 # install marie again but this time no deps
 RUN cd /marie && \
-    python3 -m pip install --no-deps --compile . && \
+    if [ "$PYTHON_INSTALLER" = "uv" ]; then \
+        uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode .; \
+    else \
+        python3 -m pip install --no-deps --compile .; \
+    fi && \
     echo "MARIE-AI installed successfully"
     #rm -rf /tmp/* && rm -rf /marie
 

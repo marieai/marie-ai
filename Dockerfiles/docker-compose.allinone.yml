@@ -445,7 +445,7 @@ services:
 
   # --------------- Marie-AI Gateway ---------------
   marie-gateway:
-    image: marieai/marie-gateway:${GATEWAY_IMAGE_TAG:-4.5rc1-cpu}
+    image: marieai/marie-gateway:${GATEWAY_IMAGE_TAG:-5.0.0-cpu}
     restart: unless-stopped
     container_name: marieai-gateway
     init: true
@@ -510,7 +510,7 @@ services:
       start_period: 60s
     labels:
       - "marie.service=gateway"
-      - "marie.version=${GATEWAY_IMAGE_TAG:-4.5rc1-cpu}"
+      - "marie.version=${GATEWAY_IMAGE_TAG:-5.0.0-cpu}"
     profiles:
       - application
 
@@ -520,7 +520,7 @@ services:
 
   # --------------- Marie-AI Extract Executor (GPU) ---------------
   marie-extract-executor:
-    image: marieai/marie:${EXTRACT_IMAGE_TAG:-4.0.0-cuda}
+    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.0.0-cuda}
     restart: unless-stopped
     container_name: marieai-${EXTRACT_STACK_NAME:-dev}-server
     init: true
@@ -564,7 +564,7 @@ services:
         max-file: "10"
     labels:
       - "marie.service=extract-executor"
-      - "marie.version=${EXTRACT_IMAGE_TAG:-4.0.0-cuda}"
+      - "marie.version=${EXTRACT_IMAGE_TAG:-5.0.0-cuda}"
     profiles:
       - gpu
 

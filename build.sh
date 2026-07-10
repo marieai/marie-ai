@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Marie AI Docker Build Script
-# This script builds the Marie AI Docker image with profile support and standard pip configuration
+# This script builds the Marie AI Docker image with profile support and a selectable Python installer.
 set -e
 CPU_COUNT=$(grep -c ^processor /proc/cpuinfo)
 CPU_COUNT=$((CPU_COUNT-1))
@@ -12,10 +12,11 @@ if [[ -z "$DEFAULT_VERSION" ]]; then
     echo -e "\033[0;31m[ERROR]\033[0m Failed to read version from ${INIT_FILE}" >&2
     exit 1
 fi
-readonly VERSION="${MARIE_VERSION:-$DEFAULT_VERSION}"
+VERSION="${MARIE_VERSION:-$DEFAULT_VERSION}"
+INSTALLER="${MARIE_BUILD_INSTALLER:-pip}"
 
 declare -A PROFILES=(
-    ["marie-gateway"]="marieai/marie-gateway:${VERSION}-cpu:./Dockerfiles/cpu-312.slim.Dockerfile"
+    ["marie-gateway-cpu"]="marieai/marie-gateway:${VERSION}-cpu:./Dockerfiles/cpu-312.slim.Dockerfile"
     ["marie-cuda"]="marieai/marie:${VERSION}-cuda:./Dockerfiles/cuda-312.Dockerfile"
 )
 
@@ -63,7 +64,7 @@ show_profiles() {
     echo >&2
     log_info "Marie AI Docker Builder (Version: ${VERSION})"
     log_info "Available build profiles:"
-    echo "1) marie-gateway      - MarieAI Gateway (CPU) -> marieai/marie-gateway:${VERSION}-cpu" >&2
+    echo "1) marie-gateway-cpu  - MarieAI Gateway (CPU) -> marieai/marie-gateway:${VERSION}-cpu" >&2
     echo "2) marie-cuda         - MarieAI Core (CUDA) -> marieai/marie:${VERSION}-cuda" >&2
     echo "3) all                - Build all profiles" >&2
     echo "4) exit               - Exit without building" >&2
@@ -85,12 +86,25 @@ parse_arguments() {
                 VERSION="${1#*=}"
                 shift
                 ;;
+            --installer=*)
+                INSTALLER="${1#*=}"
+                shift
+                ;;
             -v|--version)
                 if [[ -n "${2:-}" && ! "${2:-}" =~ ^- ]]; then
                     VERSION="$2"
                     shift 2
                 else
                     log_error "Version argument requires a value"
+                    exit 1
+                fi
+                ;;
+            --installer)
+                if [[ -n "${2:-}" && ! "${2:-}" =~ ^- ]]; then
+                    INSTALLER="$2"
+                    shift 2
+                else
+                    log_error "Installer argument requires a value"
                     exit 1
                 fi
                 ;;
@@ -109,6 +123,17 @@ parse_arguments() {
     PROFILES["marie-cuda"]="marieai/marie:${VERSION}-cuda:./Dockerfiles/cuda-312.Dockerfile"
 }
 
+validate_installer() {
+    case "$INSTALLER" in
+        pip|uv)
+            ;;
+        *)
+            log_error "Invalid installer: $INSTALLER. Expected 'pip' or 'uv'."
+            exit 1
+            ;;
+    esac
+}
+
 show_help() {
     echo "Marie AI Docker Build Script"
     echo
@@ -116,6 +141,7 @@ show_help() {
     echo
     echo "Options:"
     echo "  -v, --version VERSION    Set the version tag (default: $DEFAULT_VERSION)"
+    echo "  --installer INSTALLER    Select Python installer for Docker build: pip or uv (default: pip)"
     echo "  -h, --help              Show this help message"
     echo
     echo "Profiles:"
@@ -126,9 +152,11 @@ show_help() {
     echo
     echo "Examples:"
     echo "  $0                                    # Interactive mode with default version"
-    echo "  $0 --version 4.1.0 marie-cuda        # Build CUDA image with version 4.1.0"
-    echo "  $0 -v 4.1.0 all                      # Build all images with version 4.1.0"
-    echo "  MARIE_VERSION=4.1.0 $0 marie-cuda    # Using environment variable"
+    echo "  $0 --version 5.0.0 marie-cuda        # Build CUDA image with version 5.0.0"
+    echo "  $0 --installer uv marie-cuda         # Build CUDA image through uv pip"
+    echo "  $0 -v 5.0.0 all                      # Build all images with version 5.0.0"
+    echo "  MARIE_VERSION=5.0.0 $0 marie-cuda    # Using environment variable"
+    echo "  MARIE_BUILD_INSTALLER=uv $0 marie-cuda # Using installer environment variable"
 }
 
 # Select build profile
@@ -227,6 +255,7 @@ stage_build_context() {
     cp -a wheels/         "$context_dir/wheels/"
     cp -a patches/        "$context_dir/patches/"
     cp -a packages/       "$context_dir/packages/"
+    cp -a requirements/   "$context_dir/requirements/"  2>/dev/null || true
 
     # Individual files
     cp setup.py           "$context_dir/"
@@ -254,6 +283,7 @@ build_image() {
     log_info "Using Dockerfile: $dockerfile_path"
     log_info "PIP tag: $PIP_TAG"
     log_info "Version: $VERSION"
+    log_info "Python installer: $INSTALLER"
 
     # Stage a clean build context (~300MB instead of scanning 86GB)
     local build_context
@@ -285,6 +315,7 @@ build_image() {
         --network=host \
         --cpuset-cpus="0-$CPU_COUNT" \
         --build-arg PIP_TAG="$PIP_TAG" \
+        --build-arg PYTHON_INSTALLER="$INSTALLER" \
         --build-arg VCS_REF=$(git rev-parse HEAD) \
         --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
         --build-arg MARIE_VERSION="$VERSION" \
@@ -386,10 +417,12 @@ main() {
 
     # Parse arguments first to get version
     parse_arguments "$@"
+    validate_installer
 
     # Remove parsed arguments, keep profile selection
     local remaining_args=()
     local skip_next=false
+    local skip_installer_value=false
 
     for arg in "$@"; do
         if [[ "$skip_next" == "true" ]]; then
@@ -397,12 +430,20 @@ main() {
             continue
         fi
 
+        if [[ "$skip_installer_value" == "true" ]]; then
+            skip_installer_value=false
+            continue
+        fi
+
         case "$arg" in
-            --version=*|--help|-h)
+            --version=*|--installer=*|--help|-h)
                 # Already handled
                 ;;
             -v|--version)
                 skip_next=true
+                ;;
+            --installer)
+                skip_installer_value=true
                 ;;
             *)
                 remaining_args+=("$arg")
