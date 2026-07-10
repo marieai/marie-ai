@@ -326,7 +326,7 @@ def load_torch_model(load_path: str, device: torch.device):
 
 
 def optimize(src_onnx, opt_onnx):
-    # pip3 install onnxoptimizer
+    # uv add onnxoptimizer
     import onnx
     import onnxoptimizer as onnxopt
 

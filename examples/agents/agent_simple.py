@@ -215,9 +215,7 @@ def image_info(image_path: str) -> str:
         return json.dumps(info)
 
     except ImportError:
-        return json.dumps(
-            {"error": "PIL/Pillow not installed. Run: pip install Pillow"}
-        )
+        return json.dumps({"error": "PIL/Pillow not installed. Run: uv add Pillow"})
     except Exception as e:
         return json.dumps({"error": str(e)})
 

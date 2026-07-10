@@ -47,11 +47,7 @@ Marie MCP uploads documents to S3. You'll need:
 ## Step 1: Install Marie MCP
 
 ```bash
-# Install using UV (recommended)
-uv pip install marie-mcp
-
-# Or using pip
-pip install marie-mcp
+uv add marie-mcp
 ```
 
 Verify installation:

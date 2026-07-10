@@ -1,4 +1,4 @@
-# pip install accelerate
+# uv add accelerate
 
 import base64
 

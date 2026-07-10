@@ -285,7 +285,7 @@ class SimplePropertyGraphStore(PropertyGraphStore):
             from yfiles_jupyter_graphs import GraphWidget
         except ImportError:
             raise ImportError(
-                "Please install yfiles_jupyter_graphs to visualize the graph: `pip install yfiles_jupyter_graphs`"
+                "Please install yfiles_jupyter_graphs to visualize the graph: `uv add yfiles_jupyter_graphs`"
             )
 
         w = GraphWidget()

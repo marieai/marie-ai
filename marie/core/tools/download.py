@@ -12,7 +12,7 @@ from marie.core.tools.tool_spec.base import BaseToolSpec
 
 @deprecated(
     "`download_tool()` is deprecated. "
-    "Please install tool using pip install directly instead."
+    "Please install tool using uv add directly instead."
 )
 def download_tool(
     tool_class: str,

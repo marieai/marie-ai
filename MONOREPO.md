@@ -20,8 +20,7 @@ marie-ai/
 │       └── pyproject.toml
 │
 ├── .github/workflows/              # Shared CI/CD
-├── setup.py                        # Main package build
-├── pyproject.toml                  # Root config + main package
+├── pyproject.toml                  # Root config, uv groups, and main package metadata
 └── MONOREPO.md                     # This file
 ```
 
@@ -47,17 +46,17 @@ marie-ai/
 
 **Install main Marie AI platform**:
 ```bash
-pip install marie-ai
+uv add marie-ai
 ```
 
 **Install MCP server** (lightweight, for AI assistants):
 ```bash
-pip install marie-mcp
+uv add marie-mcp
 ```
 
 **Install both**:
 ```bash
-pip install marie-ai marie-mcp
+uv add marie-ai marie-mcp
 ```
 
 ### For Developers
@@ -68,11 +67,11 @@ git clone https://github.com/marieai/marie-ai.git
 cd marie-ai
 
 # Install main package in editable mode
-pip install -e .
+uv sync --group dev
 
 # Install MCP package in editable mode
 cd packages/marie-mcp
-pip install -e .
+uv sync --extra dev
 cd ../..
 ```
 
@@ -205,13 +204,13 @@ Runs automatically on commit:
 ### GitHub Actions Workflows
 
 **Main Package CI** (`.github/workflows/ci-main.yml`):
-- Tests on Python 3.10, 3.11, 3.12
+- Tests on Python 3.12
 - Full test suite including GPU tests
 - Build Docker images
 - Publish to PyPI on release
 
 **MCP Package CI** (`.github/workflows/ci-mcp.yml`):
-- Tests on Python 3.10, 3.11, 3.12
+- Tests on Python 3.12
 - Lightweight tests (no GPU needed)
 - Integration tests against Marie gateway
 - Publish to PyPI on release
@@ -268,14 +267,14 @@ Document compatibility in each package README:
 ### Releasing Main Package
 
 ```bash
-# 1. Update version in setup.py
-vim setup.py  # version='3.0.31'
+# 1. Update version in marie/__init__.py
+vim marie/__init__.py  # __version__ = '3.0.31'
 
 # 2. Update CHANGELOG.md
 vim CHANGELOG.md
 
 # 3. Commit and tag
-git add setup.py CHANGELOG.md
+git add marie/__init__.py CHANGELOG.md
 git commit -m "chore: release v3.0.31"
 git tag v3.0.31
 git push origin main --tags
@@ -311,7 +310,7 @@ When releasing breaking changes that affect both packages:
 git add marie/ packages/marie-mcp/
 
 # 2. Update versions
-vim setup.py  # marie-ai v4.0.0
+vim marie/__init__.py  # marie-ai v4.0.0
 vim packages/marie-mcp/pyproject.toml  # marie-mcp v1.0.0
 
 # 3. Update changelogs
@@ -368,8 +367,8 @@ vim ../../.github/workflows/ci-your-package.yml
 
 **Solution**: Install both packages in editable mode:
 ```bash
-pip install -e .
-cd packages/marie-mcp && pip install -e .
+uv sync
+cd packages/marie-mcp && uv sync
 ```
 
 ### Test Discovery Issues
@@ -405,7 +404,7 @@ dependencies = [
 - Coordinated release process
 
 **What stayed the same**:
-- Separate PyPI packages (`pip install marie-mcp`)
+- Separate PyPI packages (`uv add marie-mcp`)
 - Independent versioning (v0.1.0, v0.2.0, etc.)
 - Separate changelogs
 - Lightweight installation (still ~5MB)

@@ -59,12 +59,10 @@ class Mem0Memory:
         try:
             from mem0 import Memory
         except ImportError as e:
-            logger.error(
-                "mem0ai package not installed. Install with: pip install mem0ai"
-            )
+            logger.error("mem0ai package not installed. Install with: uv add mem0ai")
             raise ImportError(
                 "mem0ai package required for Mem0 memory integration. "
-                "Install with: pip install marie-mem0"
+                "Install with: uv add marie-mem0"
             ) from e
 
         mem0_config = {
@@ -296,12 +294,10 @@ class AsyncMem0Memory:
         try:
             from mem0 import AsyncMemory
         except ImportError as e:
-            logger.error(
-                "mem0ai package not installed. Install with: pip install mem0ai"
-            )
+            logger.error("mem0ai package not installed. Install with: uv add mem0ai")
             raise ImportError(
                 "mem0ai package required for Mem0 memory integration. "
-                "Install with: pip install marie-mem0"
+                "Install with: uv add marie-mem0"
             ) from e
 
         mem0_config = {

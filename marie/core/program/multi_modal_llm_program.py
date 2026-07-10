@@ -57,7 +57,7 @@ class MultiModalLLMCompletionProgram(BasePydanticProgram[BaseModel]):
             except ImportError as e:
                 raise ImportError(
                     "`llama-index-multi-modal-llms-openai` package cannot be found. "
-                    "Please install it by using `pip install `llama-index-multi-modal-llms-openai`"
+                    "Please install it by using `uv add `llama-index-multi-modal-llms-openai`"
                 )
         if prompt is None and prompt_template_str is None:
             raise ValueError("Must provide either prompt or prompt_template_str.")

@@ -76,8 +76,8 @@
 
 
 # Run interactive
-# /opt/venv/lib/python3.10/site-packages/marie_server#
+# /opt/venv/lib/python3.12/site-packages/marie_server#
 # docker run --rm  -it --entrypoint /bin/bash --gpus all --name=marieai  --network=host -e JINA_LOG_LEVEL=debug -e MARIE_DEFAULT_MOUNT='/etc/marie' -v /mnt/data/marie-ai/config:/etc/marie/config:ro -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw marieai/marie:3.0.25-cuda
-# pip install debugpy
-# /opt/venv/lib/python3.10/site-packages/marie_server#
+# uv pip install --python /opt/venv/bin/python debugpy
+# /opt/venv/lib/python3.12/site-packages/marie_server#
 # MARIE_DEBUG=1;MARIE_DEBUG_PORT=5678;MARIE_DEBUG_WAIT_FOR_CLIENT=1;MARIE_DEBUG_HOST=0.0.0.0 marie server --start --uses /etc/marie/config/service/marie-3.0.2x-corr.yml

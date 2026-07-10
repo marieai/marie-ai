@@ -16,25 +16,25 @@ Marie is shipped from two package management systems, PyPi and Docker Hub. This 
 
 We follow [PEP-440](https://www.python.org/dev/peps/pep-0440/), and a form of [semantic versioning](https://semver.org/) as explained above.
 
-To install the latest final release:
+To install the latest final release into an application project:
 
 ```bash
-pip install -U marie-ai
+uv add marie-ai
 ```
 
 To install a particular final release:
 
 ```bash
-pip install marie-ai==x.y.z
+uv add marie-ai==x.y.z
 ```
 
 The term "final release" is relative to "developmental release" as described below.  
 
 ### Install Marie with Recommended Extensions
 
-`pip install -U marie-ai` only installs the core dependencies of Marie.
+`uv add marie-ai` installs Marie into the current uv-managed project.
 
-The recommended way of installing Marie is `pip install -U marie-ai`
+The recommended way of installing Marie is `uv add marie-ai`.
 
 `"standard"` include extra dependencies that enables:
 - Executor Hub + Docker support
@@ -42,13 +42,13 @@ The recommended way of installing Marie is `pip install -U marie-ai`
 - the best compression via LZ4 algorithm
 - the best async eventloop management via `uvloop`
 
-Other extension tags such as  `[devel]` can be found in [extra-requirements.txt](extra-requirements.txt). 
+The source checkout uses [pyproject.toml](pyproject.toml) and [uv.lock](uv.lock) as the dependency source of truth.
 
 ##### Do I need "[standard]"?
 
 Depends on how you use and distribute Marie. 
 
-If you are using/distributing Marie as a microservice, you often only need to install the core dependencies via `pip install marie-ai`.
+If you are using/distributing Marie as a microservice, use the Docker images or the uv extras for the target profile.
 
 ### Developmental releases versioning
 
@@ -57,7 +57,7 @@ One every master-merging event, we create early releases directly from source co
 To install the latest development release:
 
 ```bash
-pip install --pre marie
+uv add --prerelease allow marie-ai
 ```
 
 ### Version epochs
@@ -75,7 +75,7 @@ Marie follows a form of numbered versioning. The version number of the product i
 
 The following example shows how Marie is released from 0.9 to 0.9.2 according to the schema we defined above.
 
-|Event `e` | After `e`, `pip install marie-ai` | After `e`, `pip install --pre marie-ai` | After `e`, master `__init__.py` |
+|Event `e` | After `e`, `uv add marie-ai` | After `e`, `uv add --prerelease allow marie-ai` | After `e`, master `__init__.py` |
 |--- |-----------------------------------| --- | --- |
 | Release | 0.9.0                             | 0.9.0 | 0.9.1.dev0 |
 | Master merging | 0.9.0                             | 0.9.1.dev0 | 0.9.1.dev1 |
@@ -98,12 +98,10 @@ marie-ai/marie:{version}{python_version}{extra}
     - `x.y.z`: the release of a particular version;
     - `x.y`: the alias to the last `x.y.z` patch release, i.e. `x.y` = `x.y.max(z)`;
 - `{python_version}`: The Python version of the image. Possible values:
-    - `-py310` for Python 3.10;
-    - `-py311` for Python 3.11;
+    - `-py312` for Python 3.12;
 - `{extra}`: the extra dependency installed along with Marie. Possible values:
-    - ` `: Marie is installed inside the image via `pip install marie-ai`;
-    - `-standard`: Marie is installed inside the image via `pip install marie`. It includes all recommended dependencies;  
-    - `-devel`: Marie is installed inside the image via `pip install "marie[devel]"`. It includes `standard` plus some extra dependencies;
+    - `-cpu`: Marie gateway profile built from the default `uv.lock` dependency set without torch;
+    - `-cuda`: Marie CUDA profile built from the `cu130` extra in `uv.lock`;
 
 Examples:
 
@@ -118,9 +116,7 @@ Examples:
 | On Master Merge | `marie-ai/marie:master{python_version}{extra}` | |
 | On `x.y.z` release | `marie-ai/marie:x.y.z{python_version}{extra}` | `marie-ai/marie:latest{python_version}{extra}`, `marie-ai/marie:x.y{python_version}{extra}` |
 
-Six images are built, i.e. taking the combination of:
-  - `{python_version} = ["-py37", "-py38", "-py39"]`
-  - `{extra} = ["", "-devel", "-standard"]`
+The PyTorch 2.12 release builds the Python 3.12 CPU gateway and CUDA images selected by `build.sh`.
 
 
 ## Manual Release Entrypoint

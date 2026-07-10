@@ -436,7 +436,7 @@ class BaseAgent(ABC):
         except ImportError:
             logger.warning(
                 "marie-mem0 package not installed, memory integration disabled. "
-                "Install with: pip install marie-mem0"
+                "Install with: uv add marie-mem0"
             )
         except Exception as e:
             logger.error(f"Failed to initialize Mem0 memory: {e}")

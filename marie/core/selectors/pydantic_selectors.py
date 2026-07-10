@@ -55,7 +55,7 @@ class PydanticSingleSelector(BaseSelector):
         except ImportError as e:
             raise ImportError(
                 "`llama-index-program-openai` package is missing. "
-                "Please install using `pip install llama-index-program-openai`."
+                "Please install using `uv add llama-index-program-openai`."
             )
         if program is None:
             program = OpenAIPydanticProgram.from_defaults(
@@ -131,7 +131,7 @@ class PydanticMultiSelector(BaseSelector):
         except ImportError as e:
             raise ImportError(
                 "`llama-index-program-openai` package is missing. "
-                "Please install using `pip install llama-index-program-openai`."
+                "Please install using `uv add llama-index-program-openai`."
             )
         if program is None:
             program = OpenAIPydanticProgram.from_defaults(

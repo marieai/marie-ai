@@ -75,7 +75,7 @@ class GlobalsHelper:
                 from nltk.corpus import stopwords
             except ImportError:
                 raise ImportError(
-                    "`nltk` package not found, please run `pip install nltk`"
+                    "`nltk` package not found, please run `uv add nltk`"
                 )
 
             try:
@@ -110,7 +110,7 @@ def get_tokenizer() -> Callable[[str], List]:
 
     if llama_index.core.global_tokenizer is None:
         tiktoken_import_err = (
-            "`tiktoken` package not found, please run `pip install tiktoken`"
+            "`tiktoken` package not found, please run `uv add tiktoken`"
         )
         try:
             import tiktoken
@@ -372,7 +372,7 @@ def get_transformer_tokenizer_fn(model_name: str) -> Callable[[str], List[str]]:
         from transformers import AutoTokenizer  # pants: no-infer-dep
     except ImportError:
         raise ValueError(
-            "`transformers` package not found, please run `pip install transformers`"
+            "`transformers` package not found, please run `uv add transformers`"
         )
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     return tokenizer.tokenize

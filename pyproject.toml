@@ -1,21 +1,50 @@
 [build-system]
-requires = ["setuptools>=18.0", "wheel"]
+requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.uv]
-package = false
-index-strategy = "unsafe-best-match"
-
-[tool.uv.sources]
-etcd3 = { path = "wheels/etcd3-0.12.0-py2.py3-none-any.whl" }
-fastwer = { path = "wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl" }
-fairseq = { path = "wheels/fairseq-0.12.2+marieai.torch212cu130-cp312-cp312-linux_x86_64.whl" }
-detectron2 = { path = "wheels/detectron2-0.6-cp312-cp312-linux_x86_64.whl" }
-faiss-gpu-cu13 = { path = "wheels/faiss_gpu_cu13-1.14.1+cu130-py3-none-any.whl" }
-
-[dependency-groups]
-
-marie-runtime-common = [
+[project]
+name = "marie-ai"
+dynamic = ["version"]
+description = "Python library to integrate AI-powered features into your applications"
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.12,<3.13"
+license = "Apache-2.0"
+authors = [
+    { name = "Marie AI", email = "hello@marieai.co" },
+]
+keywords = [
+    "ai",
+    "container",
+    "deep-learning",
+    "document-processing",
+    "embedding",
+    "icr",
+    "index",
+    "mlops",
+    "ocr",
+    "serving",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Unix Shell",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
     "pybind11",
     "numpy==2.4.6",
     "protobuf>=5.29.0,<6.0.0",
@@ -122,27 +151,18 @@ marie-runtime-common = [
     "pydantic>=2.11.0",
     "pydantic-settings>=2.0.0",
     "urllib3>=1.25.9,<2.0.0",
-]
-
-marie-local-wheel-common = [
     "etcd3==0.12.0",
     "fastwer==0.1.3",
-]
-
-marie-local-package-deps = [
     "httpx>=0.25.0",
     "mem0ai>=0.1.0",
+    "marie-kernel",
+    "marie-wasm",
+    "marie-mem0",
+    "marie-mcp",
 ]
 
-marie-gateway-cpu = [
-    { include-group = "marie-runtime-common" },
-    { include-group = "marie-local-wheel-common" },
-    { include-group = "marie-local-package-deps" },
-    "torch==2.12.1",
-    "torchvision==0.27.1",
-]
-
-marie-cuda-extra = [
+[project.optional-dependencies]
+cu130 = [
     "transformers==4.49",
     "pycocotools",
     "timm==1.0.27",
@@ -160,24 +180,65 @@ marie-cuda-extra = [
     "networkx",
     "nameparser",
     "prettytable",
-]
-
-marie-cuda-native-wheels = [
     "fairseq==0.12.2+marieai.torch212cu130",
     "detectron2==0.6",
     "faiss-gpu-cu13==1.14.1+cu130",
-]
-
-marie-cuda = [
-    { include-group = "marie-runtime-common" },
-    { include-group = "marie-cuda-extra" },
-    { include-group = "marie-local-wheel-common" },
-    { include-group = "marie-local-package-deps" },
-    { include-group = "marie-cuda-native-wheels" },
     "torch==2.12.1",
     "torchvision==0.27.1",
 ]
 
+[project.scripts]
+marie = "marie_cli:main"
+
+[project.urls]
+Documentation = "https://docs.marieai.co"
+Source = "https://github.com/marieai/marie-ai.git"
+Tracker = "https://github.com/marieai/marie-ai/issues"
+
+[tool.setuptools]
+include-package-data = true
+zip-safe = false
+
+[tool.setuptools.dynamic]
+version = { attr = "marie.__version__" }
+
+[tool.setuptools.packages.find]
+include = [
+    "hubble*",
+    "marie*",
+    "marie_cli*",
+    "marie_server*",
+]
+exclude = [
+    "tests*",
+]
+
+[tool.uv]
+index-strategy = "unsafe-best-match"
+
+[tool.uv.sources]
+etcd3 = { path = "wheels/etcd3-0.12.0-py2.py3-none-any.whl" }
+fastwer = { path = "wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl" }
+fairseq = { path = "wheels/fairseq-0.12.2+marieai.torch212cu130-cp312-cp312-linux_x86_64.whl" }
+detectron2 = { path = "wheels/detectron2-0.6-cp312-cp312-linux_x86_64.whl" }
+faiss-gpu-cu13 = { path = "wheels/faiss_gpu_cu13-1.14.1+cu130-py3-none-any.whl" }
+marie-kernel = { path = "packages/marie-kernel" }
+marie-wasm = { path = "packages/marie-wasm" }
+marie-mem0 = { path = "packages/marie-mem0" }
+marie-mcp = { path = "packages/marie-mcp" }
+torch = [
+    { index = "pytorch-cu130", extra = "cu130" },
+]
+torchvision = [
+    { index = "pytorch-cu130", extra = "cu130" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[dependency-groups]
 dev = [
     "pytest<8.0.0",
     "pytest-timeout",

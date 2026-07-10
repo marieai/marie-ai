@@ -1018,7 +1018,7 @@ def _update_policy():
                 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
         except ModuleNotFoundError:
             warnings.warn(
-                'Install `uvloop` via `pip install "marie[uvloop]"` for better performance.'
+                'Install `uvloop` via `uv add uvloop` for better performance.'
             )
 
 

@@ -45,7 +45,7 @@ class JSONPathEvaluator:
         if not JSONPATH_AVAILABLE:
             raise ImportError(
                 "JSONPath support requires jsonpath-ng-ext. "
-                "Install with: pip install jsonpath-ng-ext"
+                "Install with: uv add jsonpath-ng-ext"
             )
 
         self.use_extended = use_extended

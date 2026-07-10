@@ -18,8 +18,8 @@ By the end of this tutorial, you'll have a working pipeline that:
 
 ## Prerequisites
 
-- Marie-AI installed (`pip install marie-ai`)
-- Python 3.10+
+- Marie-AI installed (`uv add marie-ai`)
+- Python 3.12
 - Basic understanding of [Executors](../guides/executor.md) and [Flows](../guides/flow.md)
 
 ## Project structure
@@ -36,7 +36,7 @@ invoice-processor/
 │   └── (model files go here)
 ├── flow.yml
 ├── client.py
-└── requirements.txt
+└── pyproject.toml
 ```
 
 ## Step 1: Define document types

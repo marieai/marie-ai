@@ -138,7 +138,7 @@ def create_backend_from_url(url: str) -> StateBackend:
         except ImportError:
             raise ImportError(
                 "psycopg is required for PostgreSQL backend. "
-                "Install with: pip install marie-kernel[postgres]"
+                "Install with: uv add marie-kernel[postgres]"
             )
         pool = ConnectionPool(url)
         from marie_kernel.backends.postgres import PostgresStateBackend
@@ -151,7 +151,7 @@ def create_backend_from_url(url: str) -> StateBackend:
         except ImportError:
             raise ImportError(
                 "boto3 is required for S3 backend. "
-                "Install with: pip install marie-kernel[s3]"
+                "Install with: uv add marie-kernel[s3]"
             )
         # Parse s3://bucket/prefix format
         path = url[5:]  # Remove "s3://"

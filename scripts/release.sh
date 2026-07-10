@@ -3,7 +3,6 @@
 # Requirements
 # brew install hub
 # npm install -g git-release-notes
-# pip install twine wheel
 
 set -ex
 
@@ -40,9 +39,8 @@ function clean_egg {
 function pub_pypi {
     # publish to pypi
     clean_egg
-    cp extra-requirements.txt marie/resources/
-    python setup.py sdist
-    twine upload dist/*
+    uv build --sdist
+    uv publish dist/*
     clean_build
 }
 
@@ -50,7 +48,7 @@ function git_commit {
     git config --local user.email "dev-bot@marieai.co"
     git config --local user.name "Marie Dev Bot"
     git tag "v$RELEASE_VER" -m "$(cat ./CHANGELOG.tmp)"
-    git add $INIT_FILE ./CHANGELOG.md marie/resources/extra-requirements.txt
+    git add $INIT_FILE ./CHANGELOG.md
     git commit -m "chore(version): the next version will be $NEXT_VER" -m "build($RELEASE_ACTOR): $RELEASE_REASON"
 }
 

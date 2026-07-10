@@ -5,7 +5,7 @@ All scripts must be run from the **marie-ai root directory**.
 ## Prerequisites
 
 ```bash
-pip install twine wheel
+uv --version
 npm install -g git-release-notes
 ```
 

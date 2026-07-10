@@ -2592,8 +2592,7 @@ class Flow(
                 with ImportExtensions(
                     required=True,
                     logger=self.logger,
-                    help_text='''reload requires watchfiles dependency to be installed. You can do `pip install 
-                    watchfiles''',
+                    help_text="reload requires watchfiles dependency to be installed. You can do `uv add watchfiles`.",
                 ):
                     from watchfiles import watch
 

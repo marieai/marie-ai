@@ -97,7 +97,7 @@ graph LR
 ### 1. Install
 
 ```bash
-uv pip install marie-mcp
+uv add marie-mcp
 ```
 
 ### 2. Configure

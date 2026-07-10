@@ -60,7 +60,7 @@ def resolve_embed_model(
         except ImportError:
             raise ImportError(
                 "`llama-index-embeddings-openai` package not found, "
-                "please run `pip install llama-index-embeddings-openai`"
+                "please run `uv add llama-index-embeddings-openai`"
             )
         except ValueError as e:
             raise ValueError(
@@ -87,7 +87,7 @@ def resolve_embed_model(
         except ImportError as e:
             raise ImportError(
                 "`llama-index-embeddings-clip` package not found, "
-                "please run `pip install llama-index-embeddings-clip` and `pip install git+https://github.com/openai/CLIP.git`"
+                "please run `uv add llama-index-embeddings-clip` and `uv add git+https://github.com/openai/CLIP.git`"
             )
 
     if isinstance(embed_model, str):
@@ -113,7 +113,7 @@ def resolve_embed_model(
         except ImportError:
             raise ImportError(
                 "`llama-index-embeddings-huggingface` package not found, "
-                "please run `pip install llama-index-embeddings-huggingface`"
+                "please run `uv add llama-index-embeddings-huggingface`"
             )
 
     if LCEmbeddings is not None and isinstance(embed_model, LCEmbeddings):
@@ -126,7 +126,7 @@ def resolve_embed_model(
         except ImportError as e:
             raise ImportError(
                 "`llama-index-embeddings-langchain` package not found, "
-                "please run `pip install llama-index-embeddings-langchain`"
+                "please run `uv add llama-index-embeddings-langchain`"
             )
 
     if embed_model is None:

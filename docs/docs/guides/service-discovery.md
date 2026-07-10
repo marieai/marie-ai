@@ -64,8 +64,8 @@ Install the `etcd3` package from source code  as the `GRPC` version or `marie` i
 ```bash
 git clone  git@github.com:kragniz/python-etcd3.git
 cd python-etcd3
-python setup.py install
-pip show etcd3
+uv add --editable .
+uv run python -c "import importlib.metadata as metadata; print(metadata.version('etcd3'))"
 ```
 
 # Test the registry and resolver

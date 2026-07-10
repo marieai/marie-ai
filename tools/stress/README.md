@@ -1041,7 +1041,7 @@ docker exec etcd-single etcdctl get "/marie/gateway/marie" --prefix=true
 
 2. **Python dependencies**:
    ```bash
-   pip install aiohttp grpcio
+   uv add aiohttp grpcio
    ```
 
 ## Typical Test Workflow

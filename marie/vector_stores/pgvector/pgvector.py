@@ -114,7 +114,7 @@ class PGVectorStore(BasePydanticVectorStore):
             except ImportError:
                 raise ImportError(
                     "asyncpg is required for PGVectorStore. "
-                    "Install with: pip install asyncpg"
+                    "Install with: uv add asyncpg"
                 )
 
     async def initialize(self) -> None:

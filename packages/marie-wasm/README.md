@@ -17,13 +17,13 @@ Wasmtime-based runtime for executing Marie workflow nodes in WebAssembly.
 ## Installation
 
 ```bash
-pip install marie-wasm
+uv add marie-wasm
 
 # With S3 storage support
-pip install marie-wasm[s3]
+uv add 'marie-wasm[s3]'
 
 # For development
-pip install marie-wasm[dev]
+uv add 'marie-wasm[dev]'
 ```
 
 ## Quick Start
@@ -144,13 +144,13 @@ perms = Permissions(
 
 ```bash
 # Install dev dependencies
-pip install -e ".[dev]"
+uv sync --extra dev
 
 # Run tests
-pytest
+uv run pytest
 
 # Type checking
-mypy src/marie_wasm
+uv run mypy src/marie_wasm
 
 # Formatting
 black src tests

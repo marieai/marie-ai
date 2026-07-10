@@ -38,7 +38,7 @@ If you are working from the command line, you should use these tools form the ro
 We also provide a .pre-commit-config.yaml file, which enables you to use pre-commit to automatically perform the required linting/formatting actions before you commit your changes. 
 You can install it using
 ```shell
-pip install pre-commit
+uv tool install pre-commit
 pre-commit install
 ```
 

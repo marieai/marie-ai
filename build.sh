@@ -19,12 +19,6 @@ declare -A PROFILES=(
     ["marie-cuda"]="marieai/marie:${VERSION}-cuda:./Dockerfiles/cuda-312.Dockerfile"
 )
 
-# Map profile keys to extra-requirements.txt variant suffix
-declare -A REQUIREMENTS_VARIANT=(
-    ["marie-gateway-cpu"]="CPU"
-    ["marie-cuda"]="CUDA"
-)
-
 # Default configuration (will be overridden by profile selection)
 DOCKERFILE_PATH=""
 IMAGE_NAME=""
@@ -226,12 +220,10 @@ stage_build_context() {
     cp -a wheels/         "$context_dir/wheels/"
     cp -a patches/        "$context_dir/patches/"
     cp -a packages/       "$context_dir/packages/"
-    cp -a requirements/   "$context_dir/requirements/"  2>/dev/null || true
 
     # Individual files
-    cp setup.py           "$context_dir/"
     cp pyproject.toml     "$context_dir/"
-    cp *requirements.txt  "$context_dir/"                2>/dev/null || true
+    cp uv.lock            "$context_dir/"
     cp README.md          "$context_dir/"                2>/dev/null || true
     cp MANIFEST.in        "$context_dir/"                2>/dev/null || true
     cp im-policy.xml      "$context_dir/"                2>/dev/null || true
@@ -244,7 +236,6 @@ stage_build_context() {
 build_image() {
     local dockerfile_path=$1
     local full_image_name=$2
-    local req_variant=${3:-}
 
     if [[ ! -f "$dockerfile_path" ]]; then
         log_error "Dockerfile not found at: $dockerfile_path"
@@ -260,22 +251,6 @@ build_image() {
     local build_context
     build_context=$(stage_build_context)
     trap "rm -rf '$build_context'" EXIT
-
-    # Copy the correct extra-requirements variant into the staged context
-    if [[ -n "$req_variant" ]]; then
-        local variant_file="extra-requirements.txt-${req_variant}"
-        if [[ -f "$variant_file" ]]; then
-            log_info "Using requirements variant: ${variant_file} -> extra-requirements.txt"
-            cp "$variant_file" "$build_context/extra-requirements.txt"
-        else
-            log_error "Requirements variant file not found: $variant_file"
-            rm -rf "$build_context"
-            trap - EXIT
-            return 1
-        fi
-    else
-        log_warn "No requirements variant specified, using default extra-requirements.txt"
-    fi
 
     log_info "Contents of build context:"
     ls -la "$build_context/patches/" "$build_context/wheels/" || log_warn "Some directories might be missing"
@@ -327,12 +302,11 @@ verify_image() {
 # Build single profile
 build_single_profile() {
     local profile_key=$1
-    local variant="${REQUIREMENTS_VARIANT[$profile_key]:-}"
 
     log_info "Building profile: $profile_key (Version: $VERSION)"
     parse_profile_config "$profile_key"
 
-    if build_image "$DOCKERFILE_PATH" "$FULL_IMAGE_NAME" "$variant"; then
+    if build_image "$DOCKERFILE_PATH" "$FULL_IMAGE_NAME"; then
         verify_image "$FULL_IMAGE_NAME"
         return $?
     else

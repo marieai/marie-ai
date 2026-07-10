@@ -149,9 +149,7 @@ class AutoGenAgentBackend(AgentBackend):
                 ),
             )
         except ImportError:
-            raise ImportError(
-                "AutoGen is required. Install with: pip install pyautogen"
-            )
+            raise ImportError("AutoGen is required. Install with: uv add pyautogen")
 
     def _default_result_extractor(self, messages: List[Dict[str, Any]]) -> str:
         """Extract result from conversation messages.
@@ -353,9 +351,7 @@ class AutoGenAgentBackend(AgentBackend):
         try:
             from autogen import GroupChat, GroupChatManager, UserProxyAgent
         except ImportError:
-            raise ImportError(
-                "AutoGen is required. Install with: pip install pyautogen"
-            )
+            raise ImportError("AutoGen is required. Install with: uv add pyautogen")
 
         # Create user proxy for initiation
         user_proxy = UserProxyAgent(
@@ -431,9 +427,7 @@ class SingleAgentBackend(AgentBackend):
                 code_execution_config=False,
             )
         except ImportError:
-            raise ImportError(
-                "AutoGen is required. Install with: pip install pyautogen"
-            )
+            raise ImportError("AutoGen is required. Install with: uv add pyautogen")
 
     async def run(
         self,
@@ -524,7 +518,7 @@ def create_research_backend(
     try:
         from autogen import AssistantAgent
     except ImportError:
-        raise ImportError("AutoGen is required. Install with: pip install pyautogen")
+        raise ImportError("AutoGen is required. Install with: uv add pyautogen")
 
     researcher = AssistantAgent(
         name="researcher",
@@ -582,7 +576,7 @@ def create_coding_backend(
     try:
         from autogen import AssistantAgent, GroupChat, GroupChatManager, UserProxyAgent
     except ImportError:
-        raise ImportError("AutoGen is required. Install with: pip install pyautogen")
+        raise ImportError("AutoGen is required. Install with: uv add pyautogen")
 
     coder = AssistantAgent(
         name="coder",

@@ -5,7 +5,7 @@ This backend stores state in a PostgreSQL database using JSONB columns
 for efficient JSON storage and querying.
 
 Requires the 'postgres' optional dependency:
-    pip install marie-kernel[postgres]
+    uv add 'marie-kernel[postgres]'
 """
 
 import json
@@ -57,7 +57,7 @@ class PostgresStateBackend:
         if ConnectionPool is None:
             raise ImportError(
                 "psycopg is required for PostgresStateBackend. "
-                "Install with: pip install marie-kernel[postgres]"
+                "Install with: uv add 'marie-kernel[postgres]'"
             )
         self._pool = conn_pool
 

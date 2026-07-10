@@ -474,5 +474,5 @@ class DocumentSearchTool(HaystackPipelineTool):
         except ImportError as e:
             raise ImportError(
                 f"Haystack is required for DocumentSearchTool: {e}. "
-                "Install with: pip install haystack-ai"
+                "Install with: uv add haystack-ai"
             )

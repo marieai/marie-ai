@@ -374,7 +374,7 @@ class WasmNodeExecutor(MarieExecutor):
         if not WASMTIME_AVAILABLE:
             self.logger.warning(
                 "wasmtime not installed — Wasm execution will fail. "
-                "Install with: pip install wasmtime"
+                "Install with: uv add wasmtime"
             )
             self._pool: Optional[ProcessPoolExecutor] = None
         else:
@@ -391,7 +391,7 @@ class WasmNodeExecutor(MarieExecutor):
         if not MARIE_WASM_AVAILABLE:
             self.logger.warning(
                 "marie_wasm not installed — host functions unavailable. "
-                "Install with: pip install marie-wasm"
+                "Install with: uv add marie-wasm"
             )
 
         self.logger.info(

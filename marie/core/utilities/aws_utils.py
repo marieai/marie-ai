@@ -19,7 +19,7 @@ def get_aws_service_client(
         import botocore
     except ImportError:
         raise ImportError(
-            "Please run `pip install boto3 botocore` to use AWS services."
+            "Please run `uv add boto3 botocore` to use AWS services."
         )
 
     config = botocore.config.Config(

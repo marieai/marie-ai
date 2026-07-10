@@ -1,12 +1,12 @@
 from __future__ import print_function
 
-# Unlike the rest of the PyTorch this file must be python2 compliant.
 # This script outputs relevant system environment info
 # Run it with `python collect_env.py`.
 import datetime
 import locale
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections import namedtuple
@@ -37,9 +37,8 @@ SystemEnv = namedtuple(
         'nvidia_driver_version',
         'nvidia_gpu_models',
         'cudnn_version',
-        'pip_version',  # 'pip' or 'pip3'
-        'pip_packages',
-        'conda_packages',
+        'uv_version',
+        'uv_packages',
         'hip_compiled_version',
         'hip_runtime_version',
         'miopen_runtime_version',
@@ -90,31 +89,6 @@ def run_and_return_first_line(run_lambda, command):
     if rc != 0:
         return None
     return out.split('\n')[0]
-
-
-def get_conda_packages(run_lambda):
-    conda = os.environ.get('CONDA_EXE', 'conda')
-    out = run_and_read_all(run_lambda, "{} list".format(conda))
-    if out is None:
-        return out
-
-    return "\n".join(
-        line
-        for line in out.splitlines()
-        if not line.startswith("#")
-        and any(
-            name in line
-            for name in {
-                "torch",
-                "numpy",
-                "cudatoolkit",
-                "soumith",
-                "mkl",
-                "magma",
-                "mkl",
-            }
-        )
-    )
 
 
 def get_gcc_version(run_lambda):
@@ -301,31 +275,29 @@ def get_libc_version():
     return '-'.join(platform.libc_ver())
 
 
-def get_pip_packages(run_lambda):
-    """Returns `pip list` output. Note: will also find conda-installed pytorch
-    and numpy packages."""
+def get_uv_packages(run_lambda):
+    """Returns relevant packages from the uv-managed environment."""
 
-    # People generally have `pip` as `pip` or `pip3`
-    # But here it is incoved as `python -mpip`
-    def run_with_pip(pip):
-        out = run_and_read_all(run_lambda, "{} list --format=freeze".format(pip))
-        return "\n".join(
-            line
-            for line in out.splitlines()
-            if any(
-                name in line
-                for name in {
-                    "torch",
-                    "numpy",
-                    "mypy",
-                }
-            )
+    uv_version = run_and_return_first_line(run_lambda, 'uv --version') or 'uv'
+    python = shlex.quote(sys.executable)
+    out = run_and_read_all(run_lambda, f"uv pip list --python {python} --format=freeze")
+    if out is None:
+        return uv_version, None
+
+    packages = "\n".join(
+        line
+        for line in out.splitlines()
+        if any(
+            name in line.lower()
+            for name in {
+                "torch",
+                "numpy",
+                "mypy",
+            }
         )
+    )
 
-    pip_version = 'pip3' if sys.version[0] == '3' else 'pip'
-    out = run_with_pip(sys.executable + ' -mpip')
-
-    return pip_version, out
+    return uv_version, packages
 
 
 def get_cachingallocator_config():
@@ -344,7 +316,7 @@ def is_xnnpack_available():
 
 def get_env_info():
     run_lambda = run
-    pip_version, pip_list_output = get_pip_packages(run_lambda)
+    uv_version, uv_list_output = get_uv_packages(run_lambda)
 
     if TORCH_AVAILABLE:
         version_str = torch.__version__
@@ -387,9 +359,8 @@ def get_env_info():
         hip_compiled_version=hip_compiled_version,
         hip_runtime_version=hip_runtime_version,
         miopen_runtime_version=miopen_runtime_version,
-        pip_version=pip_version,
-        pip_packages=pip_list_output,
-        conda_packages=get_conda_packages(run_lambda),
+        uv_version=uv_version,
+        uv_packages=uv_list_output,
         os=get_os(run_lambda),
         libc_version=get_libc_version(),
         gcc_version=get_gcc_version(run_lambda),
@@ -424,8 +395,7 @@ MIOpen runtime version: {miopen_runtime_version}
 Is XNNPACK available: {is_xnnpack_available}
 
 Versions of relevant libraries:
-{pip_packages}
-{conda_packages}
+{uv_packages}
 """.strip()
 
 
@@ -494,19 +464,11 @@ def pretty_str(envinfo):
     # Replace all None objects with 'Could not collect'
     mutable_dict = replace_nones(mutable_dict)
 
-    # If either of these are '', replace with 'No relevant packages'
-    mutable_dict['pip_packages'] = replace_if_empty(mutable_dict['pip_packages'])
-    mutable_dict['conda_packages'] = replace_if_empty(mutable_dict['conda_packages'])
+    mutable_dict['uv_packages'] = replace_if_empty(mutable_dict['uv_packages'])
 
-    # Tag conda and pip packages with a prefix
-    # If they were previously None, they'll show up as ie '[conda] Could not collect'
-    if mutable_dict['pip_packages']:
-        mutable_dict['pip_packages'] = prepend(
-            mutable_dict['pip_packages'], '[{}] '.format(envinfo.pip_version)
-        )
-    if mutable_dict['conda_packages']:
-        mutable_dict['conda_packages'] = prepend(
-            mutable_dict['conda_packages'], '[conda] '
+    if mutable_dict['uv_packages']:
+        mutable_dict['uv_packages'] = prepend(
+            mutable_dict['uv_packages'], '[{}] '.format(envinfo.uv_version)
         )
     return env_info_fmt.format(**mutable_dict)
 

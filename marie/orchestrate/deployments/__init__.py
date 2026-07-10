@@ -1681,8 +1681,7 @@ class Deployment(JAMLCompatible, PostMixin, BaseOrchestrator, metaclass=Deployme
             if watch_changes and self._is_executor_from_yaml:
                 with ImportExtensions(
                     required=True,
-                    help_text="""reload requires watchfiles dependency to be installed. You can run `pip install 
-                    watchfiles""",
+                    help_text="reload requires watchfiles dependency to be installed. You can run `uv add watchfiles`.",
                 ):
                     from watchfiles import watch
 

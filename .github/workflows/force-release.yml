@@ -1,6 +1,6 @@
 name: Manual Release
 env:
-  PYTHON_VERSION: '3.10'
+  PYTHON_VERSION: '3.12'
 
 on:
   workflow_dispatch:
@@ -53,16 +53,16 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@v6
         # https://github.com/actions/checkout#fetch-all-tags
       - run: |
           echo "Checking release token"
           git fetch --depth=1 origin +refs/tags/*:refs/tags/*
           npm install git-release-notes
-          pip install twine wheel
           ./scripts/release.sh final "${{ github.event.inputs.release_reason }}" "${{github.actor}}"
         env:
-          TWINE_USERNAME: ${{ secrets.TWINE_USERNAME }}
-          TWINE_PASSWORD: ${{ secrets.TWINE_PASSWORD }}
+          UV_PUBLISH_USERNAME: ${{ secrets.TWINE_USERNAME }}
+          UV_PUBLISH_PASSWORD: ${{ secrets.TWINE_PASSWORD }}
           MARIE_SLACK_WEBHOOK : ${{ secrets.MARIE_SLACK_WEBHOOK }}
       - if: failure()
         run: echo "nothing to release"

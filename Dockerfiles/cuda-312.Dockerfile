@@ -86,23 +86,16 @@ RUN apt-get update && \
 RUN ln -sf /usr/bin/python3.12 /usr/bin/python3 \
 && ln -sf /usr/bin/python3.12 /usr/bin/python
 
-# Install requirements
-# change on pyproject.toml, extra-requirements.txt, or setup.py will invalidate the cache
-COPY requirements.txt extra-requirements.txt setup.py pyproject.toml /tmp/
+# change on pyproject.toml or uv.lock will invalidate the dependency cache
+COPY pyproject.toml uv.lock README.md /tmp/
 # Copy directories
+COPY packages/ /tmp/packages/
 COPY patches/ /tmp/patches/
 COPY wheels/ /tmp/wheels/
-COPY requirements/ /tmp/requirements/
 
-ENV VIRTUAL_ENV=/opt/venv
-RUN python3.12 -m venv $VIRTUAL_ENV
+ENV VIRTUAL_ENV=/opt/venv \
+    UV_PROJECT_ENVIRONMENT=/opt/venv
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-
-RUN uv pip install --python /opt/venv/bin/python --compile-bytecode 'setuptools<81' 'pybind11[global]'
-
-# verify that virtual environment is used and python version is correct
-RUN python3 --version \
-    && which python3
 
 RUN set -eux; \
     test -f /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl; \
@@ -117,12 +110,12 @@ RUN set -eux; \
         /tmp/wheels/detectron2-*.whl \
         /tmp/wheels/faiss*.whl
 
-# Install the CUDA profile lock generated from pyproject dependency groups.
+# Install the CUDA profile from uv.lock.
 RUN --mount=type=cache,target=/root/.cache/uv \
     set -eux; \
     cd /tmp; \
     for i in 1 2 3; do \
-        if uv pip install --python /opt/venv/bin/python --compile-bytecode --torch-backend cu130 --index-strategy unsafe-best-match -r requirements/uv/marie-cuda-torch212-cu130.lock.txt; then \
+        if uv sync --locked --no-dev --extra cu130 --no-install-project --compile-bytecode --python /usr/bin/python3.12; then \
             break; \
         fi; \
         if [ "$i" = "3" ]; then \
@@ -134,27 +127,20 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     done; \
     python3 /tmp/patches/patch-omegaconf-py312.py --no-confirm
 
-# Install marie packages (monorepo local packages)
-COPY packages/ /tmp/packages/
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode /tmp/packages/marie-kernel \
-    && uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode /tmp/packages/marie-wasm \
-    && uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode /tmp/packages/marie-mem0 \
-    && uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode /tmp/packages/marie-mcp
+# verify that virtual environment is used and python version is correct
+RUN python3 --version \
+    && which python3
 
-# Install marie-ai package from the staged source. Dependencies come from the uv lock above.
-RUN --mount=type=cache,target=/root/.cache/uv \
-    cd /tmp/ \
-    && uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode . \
-    && python3 /tmp/patches/patch-detectron2-metadata.py --no-confirm \
+# Patch native wheel metadata after the lock install, then verify the dependency set.
+RUN python3 /tmp/patches/patch-detectron2-metadata.py --no-confirm \
     && uv pip check --python /opt/venv/bin/python
 
 
 # No inference is being done currently 
 #RUN git clone https://github.com/NVIDIA/apex && \
 #    cd apex && git checkout 2386a912164b0c5cfcd8be7a2b890fbac5607c82 && \
-#    sed -i '/check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/d' setup.py && \
-#    python3 setup.py install --cpp_ext --cuda_ext
+#    sed -i '/check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/d' pyproject.toml && \
+#    uv pip install --python /opt/venv/bin/python --no-build-isolation --config-setting=--cpp_ext --config-setting=--cuda_ext .
 
 FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04
 
@@ -177,6 +163,7 @@ ENV TERM=xterm-256color \
     LANG='C.UTF-8'  \
     LC_ALL='C.UTF-8' \
     TZ=${TZ} \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_LINK_MODE=copy
 
 # the following label use ARG hence will invalid the cache
@@ -250,9 +237,10 @@ COPY ./marie/proto/docarray_v2/ /marie/proto/docarray_v2/
 # RUN export PYTHONPATH="/marie"
 # ENV PYTHONPATH "${PYTHONPATH}:/marie"
 
-# install marie again but this time no deps
+# install marie from the locked uv project without resolving new dependencies
 RUN cd /marie && \
-    uv pip install --python /opt/venv/bin/python --no-deps --compile-bytecode . && \
+    uv sync --locked --no-dev --extra cu130 --no-editable --compile-bytecode --python /opt/venv/bin/python && \
+    uv pip check --python /opt/venv/bin/python && \
     echo "MARIE-AI installed successfully"
     #rm -rf /tmp/* && rm -rf /marie
 

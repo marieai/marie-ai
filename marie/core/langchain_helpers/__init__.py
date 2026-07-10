@@ -5,5 +5,5 @@ try:
 except ImportError:
     raise ImportError(
         "langchain not installed. "
-        "Please install langchain with `pip install llama_index[langchain]`."
+        "Please install langchain with `uv add llama_index[langchain]`."
     )

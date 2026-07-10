@@ -6,16 +6,16 @@ State management kernel for Marie AI DAG task execution. Enables tasks within a 
 
 ```bash
 # Core package (in-memory backend only)
-pip install marie-kernel
+uv add marie-kernel
 
 # With PostgreSQL support
-pip install marie-kernel[postgres]
+uv add 'marie-kernel[postgres]'
 
 # With Amazon S3 support
-pip install marie-kernel[s3]
+uv add 'marie-kernel[s3]'
 
 # All optional dependencies
-pip install marie-kernel[all]
+uv add 'marie-kernel[all]'
 ```
 
 ## Quick Start
@@ -252,17 +252,17 @@ ctx_b.get("SECRET")  # Returns None
 
 ```bash
 # Install dev dependencies
-pip install -e ".[dev]"
+uv sync --extra dev
 
 # Run tests
-pytest
+uv run pytest
 
 # Type checking
-mypy src/marie_kernel
+uv run mypy src/marie_kernel
 
 # Formatting
-black src tests
-isort src tests
+uv run black src tests
+uv run isort src tests
 ```
 
 ## License

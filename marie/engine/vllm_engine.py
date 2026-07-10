@@ -26,10 +26,7 @@ try:
     from vllm.sampling_params import GuidedDecodingParams
 except ImportError as e:
     raise ImportError(
-        "vLLM is required to run this module. Install it using:\n"
-        "  pip install vllm\n"
-        "or\n"
-        "  pip install marie[vllm]"
+        "vLLM is required to run this module. Install it using:\n" "  uv add vllm"
     ) from e
 
 try:
@@ -37,7 +34,7 @@ try:
 except ImportError as e:
     raise ImportError(
         "flash-attention 2 is required to run this module. Install it using:\n"
-        "  pip install flash-attn"
+        "  uv add flash-attn"
     )
 
 

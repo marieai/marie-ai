@@ -57,7 +57,7 @@ Steps:
   verify-native        Verify torch, fairseq, detectron2 ROIAlign CUDA, and FAISS GPU.
   verify-tests         Run the focused engine unit test baseline.
   verify-gradio        Run bounding-boxes and OCR Gradio legacy gates.
-  manifest             Write wheel SHA256s, pip freeze, and torch collect_env.
+  manifest             Write wheel SHA256s, uv freeze, and torch collect_env.
   wheels-readme        Update wheels/README.md with the current file inventory.
   all                  Run every setup/build/verification step in order.
 
@@ -231,7 +231,7 @@ cuda_home_for_venv() {
 
 venv_prefix() {
   local prefix
-  prefix="source \"${MARIE_TORCH_VENV}/bin/activate\"; export VIRTUAL_ENV=\"${MARIE_TORCH_VENV}\"; "
+  prefix="source \"${MARIE_TORCH_VENV}/bin/activate\"; export VIRTUAL_ENV=\"${MARIE_TORCH_VENV}\"; export VENV_PYTHON=\"${MARIE_TORCH_VENV}/bin/python\"; "
 
   local cuda_home=""
   if cuda_home="$(cuda_home_for_venv 2>/dev/null)"; then
@@ -285,6 +285,7 @@ MARIE_TORCH_CUDA_ARCH_LIST=${MARIE_TORCH_CUDA_ARCH_LIST}
 MARIE_FAISS_CUDA_ARCH=${MARIE_FAISS_CUDA_ARCH}
 EOF
 python3.12 --version
+uv --version
 git -C \"${MARIE_TORCH_WORKTREE}\" rev-parse --show-toplevel
 git -C \"${MARIE_TORCH_WORKTREE}\" status --short --branch
 nvidia-smi --query-gpu=name,compute_cap,driver_version --format=csv || true"
@@ -305,15 +306,17 @@ test -f \"${FAISS_PATCH}\""
 step_venv() {
   run_cmd venv "mkdir -p \"$(dirname "${MARIE_TORCH_VENV}")\"
 test ! -e \"${MARIE_TORCH_VENV}\"
-python3.12 -m venv \"${MARIE_TORCH_VENV}\"
+command -v uv
+uv venv --python 3.12 \"${MARIE_TORCH_VENV}\"
 source \"${MARIE_TORCH_VENV}/bin/activate\"
-python --version
-python -m pip install -U pip 'setuptools<81' wheel
-python -m pip install -U packaging ninja cmake pybind11 swig \"numpy==${MARIE_NUMPY_VERSION}\""
+export VENV_PYTHON=\"${MARIE_TORCH_VENV}/bin/python\"
+\"\${VENV_PYTHON}\" --version
+uv pip install --python \"\${VENV_PYTHON}\" -U 'setuptools<81' wheel
+uv pip install --python \"\${VENV_PYTHON}\" -U packaging ninja cmake pybind11 swig \"numpy==${MARIE_NUMPY_VERSION}\""
 }
 
 step_torch() {
-  run_venv torch "python -m pip install torch==2.12.1 torchvision==0.27.1 --index-url https://download.pytorch.org/whl/cu130
+  run_venv torch "uv pip install --python \"\${VENV_PYTHON}\" --torch-backend cu130 torch==2.12.1 torchvision==0.27.1
 python - <<'PY'
 import torch
 import torchvision
@@ -337,13 +340,13 @@ PY"
 
 step_app_deps() {
   run_venv app-deps "cd \"${MARIE_TORCH_WORKTREE}\"
-python -m pip install -e .
-python -m pip install pytest openai 'gradio==6.20.0' 'timm==1.0.27' nltk
-python -m pip uninstall -y Pillow-SIMD || true
-python -m pip install --force-reinstall 'Pillow>=11.0,<13'
-python -m pip install -U 'opencv-python==5.0.0.93' 'opencv-python-headless==5.0.0.93'
-python -m pip install -U \"numpy==${MARIE_NUMPY_VERSION}\"
-python -m pip check || true
+uv pip install --python \"\${VENV_PYTHON}\" -e .
+uv pip install --python \"\${VENV_PYTHON}\" pytest openai 'gradio==6.20.0' 'timm==1.0.27' nltk
+uv pip uninstall --python \"\${VENV_PYTHON}\" Pillow-SIMD || true
+uv pip install --python \"\${VENV_PYTHON}\" --reinstall 'Pillow>=11.0,<13'
+uv pip install --python \"\${VENV_PYTHON}\" -U 'opencv-python==5.0.0.93' 'opencv-python-headless==5.0.0.93'
+uv pip install --python \"\${VENV_PYTHON}\" -U \"numpy==${MARIE_NUMPY_VERSION}\"
+uv pip check --python \"\${VENV_PYTHON}\" || true
 python - <<'PY'
 import importlib.util
 for name in ('pytesseract', 'torch', 'torchvision', 'timm', 'nltk'):
@@ -352,7 +355,7 @@ PY"
 }
 
 step_cuda_toolkit() {
-  run_venv cuda-toolkit "python -m pip install 'nvidia-cuda-nvcc==13.0.88' 'nvidia-nvvm==13.0.88' 'nvidia-cuda-crt==13.0.88' 'nvidia-cuda-cccl==13.0.85'
+  run_venv cuda-toolkit "uv pip install --python \"\${VENV_PYTHON}\" 'nvidia-cuda-nvcc==13.0.88' 'nvidia-nvvm==13.0.88' 'nvidia-cuda-crt==13.0.88' 'nvidia-cuda-cccl==13.0.85'
 export CUDA_HOME=\"${MARIE_TORCH_VENV}/lib/python3.12/site-packages/nvidia/cu13\"
 export PATH=\"\${CUDA_HOME}/bin:\${PATH}\"
 export LD_LIBRARY_PATH=\"\${CUDA_HOME}/lib:\${CUDA_HOME}/lib64:\${LD_LIBRARY_PATH:-}\"
@@ -390,7 +393,7 @@ PY"
 step_build_fastwer() {
   run_venv build-fastwer "cd \"${MARIE_TORCH_WORKTREE}\"
 mkdir -p \"${MARIE_WHEELS_DIR}\"
-python -m pip wheel --no-deps \"${MARIE_WHEELS_DIR}/fastwer-0.1.3.tar.gz\" -w \"${MARIE_WHEELS_DIR}\"
+uv build --wheel --python \"\${VENV_PYTHON}\" --out-dir \"${MARIE_WHEELS_DIR}\" \"${MARIE_WHEELS_DIR}/fastwer-0.1.3.tar.gz\"
 ls -l \"${MARIE_WHEELS_DIR}\"/fastwer-0.1.3-cp312-*.whl
 sha256sum \"${MARIE_WHEELS_DIR}\"/fastwer-0.1.3-cp312-*.whl"
 }
@@ -408,8 +411,8 @@ git fetch --tags origin '+refs/heads/*:refs/remotes/origin/*'
 git checkout \"${MARIE_FAIRSEQ_REF}\"
 git rev-parse HEAD
 $(apply_patch_once_cmd "${FAIRSEQ_PATCH}")
-python -m pip install -U \"numpy==${MARIE_NUMPY_VERSION}\"
-python -m pip wheel --no-build-isolation --no-deps -v . -w \"${MARIE_WHEELS_DIR}\"
+uv pip install --python \"\${VENV_PYTHON}\" -U \"numpy==${MARIE_NUMPY_VERSION}\"
+uv build -v --wheel --python \"\${VENV_PYTHON}\" --no-build-isolation --out-dir \"${MARIE_WHEELS_DIR}\" .
 ls -l \"${MARIE_WHEELS_DIR}\"/fairseq-*.whl
 sha256sum \"${MARIE_WHEELS_DIR}\"/fairseq-*.whl"
 }
@@ -428,18 +431,21 @@ git checkout \"${MARIE_DETECTRON2_REF}\"
 git rev-parse HEAD
 export FORCE_CUDA=1
 export TORCH_CUDA_ARCH_LIST=\"${MARIE_TORCH_CUDA_ARCH_LIST}\"
-python -m pip install -U \"numpy==${MARIE_NUMPY_VERSION}\"
-python -m pip install git+https://github.com/facebookresearch/fvcore
-python -m pip wheel --no-build-isolation --no-deps -v . -w \"${MARIE_WHEELS_DIR}\"
+uv pip install --python \"\${VENV_PYTHON}\" -U \"numpy==${MARIE_NUMPY_VERSION}\"
+uv pip install --python \"\${VENV_PYTHON}\" git+https://github.com/facebookresearch/fvcore
+uv build -v --wheel --python \"\${VENV_PYTHON}\" --no-build-isolation --out-dir \"${MARIE_WHEELS_DIR}\" .
 ls -l \"${MARIE_WHEELS_DIR}\"/detectron2-*.whl
 sha256sum \"${MARIE_WHEELS_DIR}\"/detectron2-*.whl"
 }
 
 step_reject_faiss_cu12() {
   run_venv reject-faiss-cu12 "cd \"${MARIE_TORCH_WORKTREE}\"
-grep -n \"faiss-gpu-cu12\" extra-requirements.txt-CUDA
-python -m pip install --dry-run --ignore-installed faiss-gpu-cu12 || true
-python -m pip install --dry-run --ignore-installed 'faiss-gpu-cu12' \"numpy==${MARIE_NUMPY_VERSION}\" || true"
+if rg -n \"faiss-gpu-cu12\" pyproject.toml uv.lock; then
+  echo \"faiss-gpu-cu12 must not be present in the torch 2.12/cu130 lane\" >&2
+  exit 1
+fi
+uv pip install --python \"\${VENV_PYTHON}\" --dry-run --ignore-installed faiss-gpu-cu12 || true
+uv pip install --python \"\${VENV_PYTHON}\" --dry-run --ignore-installed 'faiss-gpu-cu12' \"numpy==${MARIE_NUMPY_VERSION}\" || true"
 }
 
 step_build_faiss() {
@@ -455,7 +461,7 @@ git fetch --tags origin '+refs/heads/*:refs/remotes/origin/*'
 git checkout \"${MARIE_FAISS_REF}\"
 git rev-parse HEAD
 $(apply_patch_once_cmd "${FAISS_PATCH}")
-python -m pip install -U \"numpy==${MARIE_NUMPY_VERSION}\" packaging swig cmake ninja
+uv pip install --python \"\${VENV_PYTHON}\" -U \"numpy==${MARIE_NUMPY_VERSION}\" packaging swig cmake ninja
 blas_library=\"\$(ldconfig -p | awk '/libopenblas\\.so / {print \$NF; found=1; exit} /libblas\\.so\\.3 / {fallback=\$NF} END {if (!found && fallback) print fallback}')\"
 if [[ -z \"\${blas_library}\" ]]; then
   echo \"Missing BLAS library. The Dockerfiles install libopenblas-dev; install it with: sudo apt-get install -y libopenblas-dev\" >&2
@@ -483,7 +489,7 @@ cmake -B build -S . \
   -DPython_EXECUTABLE=\"\$(python -c 'import sys; print(sys.executable)')\"
 cmake --build build -j \"${MARIE_BUILD_JOBS}\"
 cd build/faiss/python
-python -m pip wheel --no-deps . -w \"${MARIE_WHEELS_DIR}\"
+uv build --wheel --python \"\${VENV_PYTHON}\" --no-build-isolation --out-dir \"${MARIE_WHEELS_DIR}\" .
 ls -l \"${MARIE_WHEELS_DIR}\"/faiss*.whl
 sha256sum \"${MARIE_WHEELS_DIR}\"/faiss*.whl"
 }
@@ -512,19 +518,11 @@ find \"${MARIE_WHEELS_DIR}\" -maxdepth 1 -type f -name '*.whl' -printf '%f\\n' |
 
 step_install_wheels() {
   run_venv install-wheels "cd \"${MARIE_TORCH_WORKTREE}\"
-python -m pip install --force-reinstall --no-deps \"${MARIE_WHEELS_DIR}\"/fastwer-0.1.3-cp312-*.whl
-python -m pip install --force-reinstall --no-deps \"${MARIE_WHEELS_DIR}\"/etcd3-0.12.0-py2.py3-none-any.whl
-python -m pip install omegaconf==2.3.0
+export UV_PROJECT_ENVIRONMENT=\"${MARIE_TORCH_VENV}\"
+uv sync --locked --extra cu130 --group dev --group legacy-gradio --python \"\${VENV_PYTHON}\"
 python patches/patch-omegaconf-py312.py --no-confirm
-python -m pip install --force-reinstall --no-deps \"${MARIE_WHEELS_DIR}\"/fairseq-*.whl
-python -m pip install --force-reinstall --no-deps \"${MARIE_WHEELS_DIR}\"/detectron2-*.whl
-python -m pip install --force-reinstall --no-deps \"${MARIE_WHEELS_DIR}\"/faiss*.whl
-python -m pip uninstall -y Pillow-SIMD || true
-python -m pip install --force-reinstall 'Pillow>=11.0,<13'
-python -m pip install diskcache tenacity json_repair bitarray sacrebleu scikit-learn black cloudpickle pycocotools 'tensorboard<2.20' 'protobuf>=5.29.0,<6.0.0' 'grpcio>=1.60.0,<1.66.0' 'opencv-python==5.0.0.93' 'opencv-python-headless==5.0.0.93' git+https://github.com/facebookresearch/fvcore
 python patches/patch-detectron2-metadata.py --no-confirm
-python -m pip install -U \"numpy==${MARIE_NUMPY_VERSION}\"
-python -m pip check"
+uv pip check --python \"\${VENV_PYTHON}\""
 }
 
 step_verify_native() {
@@ -641,7 +639,7 @@ step_manifest() {
   ls -l \"${MARIE_WHEELS_DIR}\"/*.whl
   sha256sum \"${MARIE_WHEELS_DIR}\"/*.whl
 } > \"${MARIE_REPRO_LOG_DIR}/manifest.md\"
-python -m pip freeze > \"${MARIE_REPRO_LOG_DIR}/pip-freeze.txt\"
+uv pip freeze --python \"\${VENV_PYTHON}\" > \"${MARIE_REPRO_LOG_DIR}/uv-freeze.txt\"
 python -m torch.utils.collect_env > \"${MARIE_REPRO_LOG_DIR}/torch-collect-env.txt\"
 cat \"${MARIE_REPRO_LOG_DIR}/manifest.md\""
 }

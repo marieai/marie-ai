@@ -348,7 +348,7 @@ class KnowledgeGraphIndex(BaseIndex[KG]):
             import networkx as nx
         except ImportError:
             raise ImportError(
-                "Please install networkx to visualize the graph: `pip install networkx`"
+                "Please install networkx to visualize the graph: `uv add networkx`"
             )
 
         g = nx.Graph()

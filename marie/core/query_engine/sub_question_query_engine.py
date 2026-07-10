@@ -109,7 +109,7 @@ class SubQuestionQueryEngine(BaseQueryEngine):
             except ImportError as e:
                 raise ImportError(
                     "`llama-index-question-gen-openai` package cannot be found. "
-                    "Please install it by using `pip install `llama-index-question-gen-openai`"
+                    "Please install it by using `uv add `llama-index-question-gen-openai`"
                 )
             except ValueError:
                 question_gen = LLMQuestionGenerator.from_defaults(llm=llm)

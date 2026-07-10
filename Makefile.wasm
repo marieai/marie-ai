@@ -38,7 +38,7 @@ wasm-setup: compilers-build compilers-test verify-wasmtime
 # Install marie-wasm package in development mode
 install-marie-wasm:
 	@echo "Installing marie-wasm package..."
-	@pip install -e packages/marie-wasm[dev]
+	@uv pip install -e packages/marie-wasm[dev]
 
 # Run marie-wasm tests
 test-marie-wasm:

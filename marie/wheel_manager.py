@@ -1,5 +1,6 @@
 import importlib
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -30,7 +31,7 @@ class WheelInstallationCallback(Protocol):
 
 
 class PipWheelManager:
-    """Manages Python wheel installation and uninstallation using pip"""
+    """Manages Python wheel installation and uninstallation using uv"""
 
     def __init__(self):
         self.installed_wheels: Dict[str, Dict[str, Any]] = {}
@@ -71,21 +72,25 @@ class PipWheelManager:
             except Exception as e:
                 logger.error(f"Error in wheel error callback: {e}")
 
-    def _run_pip_command(
+    def _run_uv_pip_command(
         self, args: List[str], capture_output: bool = True
     ) -> subprocess.CompletedProcess:
-        """Run a pip command safely"""
-        cmd = [sys.executable, '-m', 'pip'] + args
+        """Run a uv pip command safely"""
+        uv_path = shutil.which('uv')
+        if uv_path is None:
+            raise RuntimeError('uv is required to manage runtime wheels')
+
+        cmd = [uv_path, 'pip', *args, '--python', sys.executable]
         try:
             result = subprocess.run(
                 cmd, capture_output=capture_output, text=True, check=False, timeout=60
             )
             return result
         except subprocess.TimeoutExpired:
-            logger.error(f"Pip command timed out: {' '.join(cmd)}")
+            logger.error(f"uv command timed out: {' '.join(cmd)}")
             raise
         except Exception as e:
-            logger.error(f"Failed to run pip command {' '.join(cmd)}: {e}")
+            logger.error(f"Failed to run uv command {' '.join(cmd)}: {e}")
             raise
 
     def _extract_package_name_from_wheel(self, wheel_path: str) -> str:
@@ -102,7 +107,7 @@ class PipWheelManager:
     ) -> Optional[Dict[str, Any]]:
         """Get information about an installed package"""
         try:
-            result = self._run_pip_command(['show', package_name])
+            result = self._run_uv_pip_command(['show', package_name])
             if result.returncode == 0:
                 info = {}
                 for line in result.stdout.splitlines():
@@ -151,7 +156,7 @@ class PipWheelManager:
     def install_wheel(
         self, wheel_path: str, force_reinstall: bool = False
     ) -> Dict[str, Any]:
-        """Install a wheel using pip"""
+        """Install a wheel using uv"""
         if not os.path.exists(wheel_path):
             raise FileNotFoundError(f"Wheel file not found: {wheel_path}")
 
@@ -167,11 +172,10 @@ class PipWheelManager:
                 return installed_info
 
         try:
-            # Prepare pip install command
-            pip_args = ['install', '--force-reinstall', '--no-deps', wheel_path]
-
             logger.info(f"Installing wheel: {wheel_name}")
-            result = self._run_pip_command(pip_args)
+            result = self._run_uv_pip_command(
+                ['install', '--reinstall', '--no-deps', wheel_path]
+            )
 
             if result.returncode != 0:
                 error_msg = f"Failed to install wheel {wheel_name}: {result.stderr}"
@@ -205,7 +209,7 @@ class PipWheelManager:
                 'install_time': time.time(),
                 'package_info': package_info,
                 'modules': modules,
-                'pip_output': result.stdout,
+                'installer_output': result.stdout,
             }
 
             self.installed_wheels[wheel_name] = wheel_info
@@ -230,10 +234,10 @@ class PipWheelManager:
             raise
 
     def uninstall_package(self, package_name: str) -> bool:
-        """Uninstall a package using pip"""
+        """Uninstall a package using uv"""
         try:
             logger.info(f"Uninstalling package: {package_name}")
-            result = self._run_pip_command(['uninstall', '-y', package_name])
+            result = self._run_uv_pip_command(['uninstall', package_name])
 
             if result.returncode == 0:
                 # Remove from our tracking

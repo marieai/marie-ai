@@ -315,7 +315,7 @@ class AutoGenTeamTool(AgentTool):
             except ImportError:
                 raise ImportError(
                     "AutoGen is required for AutoGenTeamTool. "
-                    "Install with: pip install pyautogen"
+                    "Install with: uv add pyautogen"
                 )
 
         metadata = ToolMetadata(
@@ -437,9 +437,7 @@ class AutoGenAgentTool(AgentTool):
         try:
             from autogen import UserProxyAgent
         except ImportError:
-            raise ImportError(
-                "AutoGen is required. Install with: pip install pyautogen"
-            )
+            raise ImportError("AutoGen is required. Install with: uv add pyautogen")
 
         # Get defaults from agent
         if name is None:
@@ -493,7 +491,7 @@ def create_research_team_tool(
     try:
         from autogen import AssistantAgent, GroupChat, GroupChatManager, UserProxyAgent
     except ImportError:
-        raise ImportError("AutoGen is required. Install with: pip install pyautogen")
+        raise ImportError("AutoGen is required. Install with: uv add pyautogen")
 
     # Create specialized agents
     researcher = AssistantAgent(

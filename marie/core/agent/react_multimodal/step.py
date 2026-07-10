@@ -140,7 +140,7 @@ class MultimodalReActAgentWorker(BaseAgentWorker):
             except ImportError:
                 raise ImportError(
                     "`llama-index-multi-modal-llms-openai` package cannot be found. "
-                    "Please install it by using `pip install `llama-index-multi-modal-llms-openai`"
+                    "Please install it by using `uv add `llama-index-multi-modal-llms-openai`"
                 )
 
         self._add_user_step_to_reasoning = partial(
@@ -193,7 +193,7 @@ class MultimodalReActAgentWorker(BaseAgentWorker):
             except ImportError:
                 raise ImportError(
                     "`llama-index-multi-modal-llms-openai` package cannot be found. "
-                    "Please install it by using `pip install `llama-index-multi-modal-llms-openai`"
+                    "Please install it by using `uv add `llama-index-multi-modal-llms-openai`"
                 )
         return cls(
             tools=tools or [],

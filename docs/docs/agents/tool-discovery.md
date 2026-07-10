@@ -256,13 +256,13 @@ print(f"Indexed skills: {index.num_skills}")
 The BM25 search functionality requires the `bm25s` library:
 
 ```bash
-pip install 'bm25s[core]>=0.2.0'
+uv add 'bm25s[core]>=0.2.0'
 ```
 
 Or install with Marie-AI:
 
 ```bash
-pip install 'marieai[standard]'
+uv add marie-ai
 ```
 
 If `bm25s` is not installed, the system automatically falls back to linear keyword matching.

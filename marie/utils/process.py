@@ -1,6 +1,6 @@
 """Tools to read out total memory usage and get/set the number of threads.
 
-If your python is compiled against MKL (e.g. if you use *anaconda* as recommended in INSTALL),
+If your python is compiled against MKL,
 it will by default use as many threads as CPU cores are available.
 If you run a job on a cluster, you should limit this to the number of cores you reserved --
 otherwise your colleagues might get angry...
@@ -36,7 +36,7 @@ _omp_lib = None
 def memory_usage():
     """Return memory usage of the running python process.
 
-    You can ``pip install psutil`` if you get only ``-1.``.
+    You can ``uv add psutil`` if you get only ``-1.``.
 
     Returns
     -------
@@ -143,7 +143,7 @@ def mkl_get_nthreads():
         The maximum number of threads used by MKL. ``-1`` if unable to read out.
     """
     try:
-        import mkl  # available in conda MKL
+        import mkl
 
         return mkl.get_max_threads()
     except ImportError:
@@ -169,7 +169,7 @@ def mkl_set_nthreads(n):
         whether the shared library was found and set.
     """
     try:
-        import mkl  # available in conda MKL
+        import mkl
 
         mkl.set_num_threads(n)
         return True

@@ -4,7 +4,7 @@ Get up and running with Marie MCP Server in 5 minutes!
 
 ## Prerequisites
 
-- Python >= 3.10
+- Python 3.12
 - Running Marie AI gateway
 - AWS S3 credentials
 - Marie AI API key
@@ -12,13 +12,13 @@ Get up and running with Marie MCP Server in 5 minutes!
 ## Installation
 
 ```bash
-# Install via uv (recommended)
-uv pip install marie-mcp
+# Install via uv
+uv add marie-mcp
 
 # Or install from source
 git clone https://github.com/marieai/marie-mcp-server.git
 cd marie-mcp-server
-pip install -e .
+uv sync
 ```
 
 ## Configuration
@@ -208,7 +208,7 @@ Claude: → health_check()
 
 ```bash
 # Install
-uv pip install marie-mcp
+uv add marie-mcp
 
 # Run server
 marie-mcp

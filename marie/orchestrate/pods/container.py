@@ -239,8 +239,7 @@ def run(
         with ImportExtensions(
             required=True,
             logger=logger,
-            help_text="""If you see a 'DLL load failed' error, please reinstall `pywin32`.
-                If you're using conda, please use the command `conda install -c anaconda pywin32`""",
+            help_text="If you see a 'DLL load failed' error, reinstall `pywin32` with `uv add pywin32`.",
         ):
             import win32api
 

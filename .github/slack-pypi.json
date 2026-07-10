@@ -12,12 +12,12 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "You can now use `pip install -U marieai` to upgrade."
+        "text": "You can now use `uv add --upgrade marie-ai` to upgrade."
       },
       "accessory": {
         "type": "image",
         "image_url": "https://docs.marieai.co/_static/favicon.png",
-        "alt_text": "cute cat"
+        "alt_text": "Marie logo"
       }
     },
     {

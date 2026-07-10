@@ -14,14 +14,14 @@ cd marie-mcp-server
 2. **Create a virtual environment**
 
 ```bash
-python -m venv venv
+uv venv --python 3.12 venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
 3. **Install in development mode**
 
 ```bash
-pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
 4. **Set up environment**

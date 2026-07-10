@@ -121,7 +121,7 @@ def get_program_for_llm(
         except ImportError:
             raise ImportError(
                 "This mode requires the `llama-index-program-lmformatenforcer package. Please"
-                " install it by running `pip install llama-index-program-lmformatenforcer`."
+                " install it by running `uv add llama-index-program-lmformatenforcer`."
             )
 
         return LMFormatEnforcerPydanticProgram.from_defaults(

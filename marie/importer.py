@@ -1,6 +1,7 @@
 import importlib
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -8,8 +9,6 @@ import warnings
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
-
-from marie.constants import __resources_path__
 
 IMPORTED = SimpleNamespace()
 IMPORTED.executors = False
@@ -19,12 +18,12 @@ IMPORTED.schema_executors = {}
 # GB:MOD
 class ImportExtensions:
     """
-    A context manager for wrapping extension import and fallback. It guides the user to pip install correct package by looking up extra-requirements.txt.
+    A context manager for wrapping extension imports and fallback.
 
     :param required: set to True if you want to raise the ModuleNotFound error
     :param logger: when not given, built-in warnings.warn will be used
     :param help_text: the help text followed after
-    :param pkg_name: the package name to find in extra_requirements.txt, when not given the ModuleNotFound exec_val will be used as the best guess
+    :param pkg_name: the package name, when not given the ModuleNotFound exec_val will be used as the best guess
     """
 
     def __init__(
@@ -36,7 +35,6 @@ class ImportExtensions:
         verbose: bool = True,
     ):
         self._required = required
-        self._tags = []
         self._help_text = help_text
         self._logger = logger
         self._pkg_name = pkg_name
@@ -45,51 +43,11 @@ class ImportExtensions:
     def __enter__(self):
         return self
 
-    def _check_v(self, v, missing_module):
-        if (
-            v.strip()
-            and not v.startswith('#')
-            and v.startswith(missing_module)
-            and ':' in v
-        ):
-            return True
-
-    def _find_missing_module_in_extra_req(self, missing_module):
-        with open(
-            os.path.join(__resources_path__, 'extra-requirements.txt'), encoding='utf-8'
-        ) as fp:
-            for v in fp:
-                if self._check_v(v, missing_module):
-                    missing_module, install_tags = v.split(':')
-                    self._tags.append(missing_module)
-                    self._tags.extend(vv.strip() for vv in install_tags.split(','))
-                    break
-
     def _find_missing_module(self, exc_val):
-        missing_module = self._pkg_name or exc_val.name
-        missing_module = self._find_missing_module_in_extra_req(missing_module)
-        return missing_module
+        return self._pkg_name or exc_val.name
 
     def _err_msg(self, exc_val, missing_module):
-        if self._tags:
-            from marie.helper import colored
-
-            req_msg = colored('fallback to default behavior', color='yellow')
-            if self._required:
-                req_msg = colored('and it is required', color='red')
-            err_msg = f'''Python package "{colored(missing_module, attrs='bold')}" is not installed, {req_msg}.
-            You are trying to use a feature not enabled by your current Jina installation.'''
-
-            avail_tags = ' '.join(
-                colored(f'[{tag}]', attrs='bold') for tag in self._tags
-            )
-            err_msg += (
-                f'\n\nTo enable this feature, use {colored("pip install jina[TAG]", attrs="bold")}, '
-                f'where {colored("[TAG]", attrs="bold")} is one of {avail_tags}.\n'
-            )
-        else:
-            err_msg = f'{exc_val.msg}'
-        return err_msg
+        return f'Python package "{missing_module}" is not installed. {exc_val.msg}'
 
     def _log_critical(self, err_msg):
         if self._verbose and self._logger:
@@ -189,28 +147,32 @@ class PathImporter:
 
 
 class PipWheelLoader:
-    """Handles loading and reloading of Python wheels using pip"""
+    """Handles loading and reloading of Python wheels using uv"""
 
     def __init__(self):
         self.installed_wheels: Dict[str, Dict[str, Any]] = {}
         self.wheel_to_package_map: Dict[str, str] = {}
         self.package_to_modules_map: Dict[str, List[str]] = {}
 
-    def _run_pip_command(
+    def _run_uv_pip_command(
         self, args: List[str], capture_output: bool = True
     ) -> subprocess.CompletedProcess:
-        """Run a pip command safely"""
-        cmd = [sys.executable, '-m', 'pip'] + args
+        """Run a uv pip command safely"""
+        uv_path = shutil.which('uv')
+        if uv_path is None:
+            raise RuntimeError('uv is required to manage runtime wheels')
+
+        cmd = [uv_path, 'pip', *args, '--python', sys.executable]
         try:
             result = subprocess.run(
                 cmd, capture_output=capture_output, text=True, check=False, timeout=60
             )
             return result
         except subprocess.TimeoutExpired:
-            logging.error(f"Pip command timed out: {' '.join(cmd)}")
+            logging.error(f"uv command timed out: {' '.join(cmd)}")
             raise
         except Exception as e:
-            logging.error(f"Failed to run pip command {' '.join(cmd)}: {e}")
+            logging.error(f"Failed to run uv command {' '.join(cmd)}: {e}")
             raise
 
     def _extract_package_name_from_wheel(self, wheel_path: str) -> str:
@@ -227,18 +189,14 @@ class PipWheelLoader:
     ) -> Optional[Dict[str, Any]]:
         """Get information about an installed package"""
         try:
-            result = self._run_pip_command(['show', '--format', 'json', package_name])
-            if result.returncode == 0 and result.stdout.strip():
-                # pip show with --format json is not universally supported
-                # Fall back to regular pip show
-                result = self._run_pip_command(['show', package_name])
-                if result.returncode == 0:
-                    info = {}
-                    for line in result.stdout.splitlines():
-                        if ':' in line:
-                            key, value = line.split(':', 1)
-                            info[key.strip().lower()] = value.strip()
-                    return info
+            result = self._run_uv_pip_command(['show', package_name])
+            if result.returncode == 0:
+                info = {}
+                for line in result.stdout.splitlines():
+                    if ':' in line:
+                        key, value = line.split(':', 1)
+                        info[key.strip().lower()] = value.strip()
+                return info
         except Exception as e:
             logging.debug(f"Could not get package info for {package_name}: {e}")
         return None
@@ -280,7 +238,7 @@ class PipWheelLoader:
     def install_wheel(
         self, wheel_path: str, force_reinstall: bool = False
     ) -> Dict[str, Any]:
-        """Install a wheel using pip"""
+        """Install a wheel using uv"""
         if not os.path.exists(wheel_path):
             raise FileNotFoundError(f"Wheel file not found: {wheel_path}")
 
@@ -296,11 +254,10 @@ class PipWheelLoader:
                 return installed_info
 
         try:
-            # Prepare pip install command
-            pip_args = ['install', '--force-reinstall', '--no-deps', wheel_path]
-
             logging.info(f"Installing wheel: {wheel_name}")
-            result = self._run_pip_command(pip_args)
+            result = self._run_uv_pip_command(
+                ['install', '--reinstall', '--no-deps', wheel_path]
+            )
 
             if result.returncode != 0:
                 error_msg = f"Failed to install wheel {wheel_name}: {result.stderr}"
@@ -332,7 +289,7 @@ class PipWheelLoader:
                 'install_time': time.time(),
                 'package_info': package_info,
                 'modules': modules,
-                'pip_output': result.stdout,
+                'installer_output': result.stdout,
             }
 
             self.installed_wheels[wheel_name] = wheel_info
@@ -353,10 +310,10 @@ class PipWheelLoader:
             raise
 
     def uninstall_package(self, package_name: str) -> bool:
-        """Uninstall a package using pip"""
+        """Uninstall a package using uv"""
         try:
             logging.info(f"Uninstalling package: {package_name}")
-            result = self._run_pip_command(['uninstall', '-y', package_name])
+            result = self._run_uv_pip_command(['uninstall', package_name])
 
             if result.returncode == 0:
                 # Remove from our tracking

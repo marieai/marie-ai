@@ -5,10 +5,7 @@ try:
     from vllm import LLM, SamplingParams
 except ImportError as e:
     raise ImportError(
-        "vLLM is required to run this module. Install it using:\n"
-        "  pip install vllm\n"
-        "or\n"
-        "  pip install marie[vllm]"
+        "vLLM is required to run this module. Install it using:\n" "  uv add vllm"
     ) from e
 
 # Ensure flash-attention is installed before proceeding
@@ -17,7 +14,7 @@ try:
 except ImportError as e:
     raise ImportError(
         "flash-attention 2 is required to run this module. Install it using:\n"
-        "  pip install flash-attn"
+        "  uv add flash-attn"
     )
 
 
@@ -45,13 +42,13 @@ def load_format_and_quantization(
                 dtype = "bfloat16"
             except ImportError:
                 print(
-                    "❌ BitsAndBytes is NOT installed. Install it using:\n  pip install bitsandbytes"
+                    "BitsAndBytes is NOT installed. Install it using:\n  uv add bitsandbytes"
                 )
         elif quantization_method == "fp8":
             # https://www.restack.io/p/vllm-answer-fp8-quantization-techniques-cat-ai
             # git clone https://github.com/neuralmagic/AutoFP8.git
-            # pip install -e AutoFP8
-            # pip install git+https://github.com/neuralmagic/AutoFP8.git
+            # uv add --editable AutoFP8
+            # uv add git+https://github.com/neuralmagic/AutoFP8.git
             quantization = "fp8"
             dtype = "fp8"
         elif quantization_method == "awq":
@@ -67,7 +64,7 @@ def create_llm_instance(
     supports_quantization: bool = True,
     quantization_method: str = "bitsandbytes",
     mm_processor_kwargs=None,
-    **kwargs
+    **kwargs,
 ):
     """Creates an instance of the LLM with standardized settings."""
     load_format, quantization, dtype = load_format_and_quantization(
@@ -92,7 +89,7 @@ def create_llm_instance(
         enable_prefix_caching=False,
         max_num_seqs=1,
         enable_chunked_prefill=False,
-        **kwargs
+        **kwargs,
     )
 
 
@@ -106,7 +103,7 @@ def config_qwen2_5_vl(model_name: str, modality: str = "image"):
         print(
             'WARNING: `qwen-vl-utils` not installed, input images will not '
             'be automatically resized. You can enable this functionality by '
-            '`pip install qwen-vl-utils`.'
+            '`uv add qwen-vl-utils`.'
         )
         process_vision_info = None
 

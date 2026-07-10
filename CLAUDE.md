@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Marie-AI is an AI-powered document processing framework. Neural networks for OCR, NER, classification, and extraction — exposed as agent-driven pipelines. Built with Python 3.10+, FastAPI, PyTorch, gRPC, and Celery.
+Marie-AI is an AI-powered document processing framework. Neural networks for OCR, NER, classification, and extraction — exposed as agent-driven pipelines. Built with Python 3.12, FastAPI, PyTorch, gRPC, and Celery.
 
 ## Essential Commands
 

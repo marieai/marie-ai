@@ -16,7 +16,7 @@ A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) s
 
 ### Prerequisites
 
-- Python >= 3.10
+- Python 3.12
 - Running Marie AI gateway instance
 - AWS S3 credentials (for document storage)
 - Marie AI API key
@@ -24,7 +24,7 @@ A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) s
 ### Install via uv (recommended)
 
 ```bash
-uv pip install marie-mcp
+uv add marie-mcp
 ```
 
 ### Install from source
@@ -32,7 +32,7 @@ uv pip install marie-mcp
 ```bash
 git clone https://github.com/marieai/marie-mcp-server.git
 cd marie-mcp-server
-pip install -e .
+uv sync
 ```
 
 ## Configuration
@@ -293,7 +293,7 @@ git clone https://github.com/marieai/marie-mcp-server.git
 cd marie-mcp-server
 
 # Install with dev dependencies
-pip install -e ".[dev]"
+uv sync --extra dev
 
 # Copy environment template
 cp .env.example .env

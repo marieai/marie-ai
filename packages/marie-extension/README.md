@@ -12,8 +12,8 @@ V1 is metadata-only:
 
 ```bash
 cd packages/marie-extension
-pip install -e ".[dev]"
-pytest
+uv sync --extra dev
+uv run pytest
 ```
 
 ## CLI

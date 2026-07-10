@@ -481,7 +481,7 @@ if __name__ == "__main__":
 
 ```bash
 # Install dependencies
-pip install marie-ai[agent]
+uv add marie-ai
 
 # Set API key for LLM
 export OPENAI_API_KEY="your-key"

@@ -139,7 +139,7 @@ class OnnxModule(object):
         ):
             if not tensorrt_imported:
                 raise ImportError(
-                    "tensorrt package is not installed. The package can be install via `pip install tensorrt`."
+                    "tensorrt package is not installed. The package can be install via `uv add tensorrt`."
                 )
 
         self.session = ort.InferenceSession(

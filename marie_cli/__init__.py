@@ -124,7 +124,7 @@ def _try_plugin_command():
         console.print(
             f"It seems like [yellow]{project}[/yellow] is not installed in your environment."
             f"To use it via the [green]'marie {subcommand}'[/green] command, "
-            f"install it first: [green]'pip install {package}'[/green]."
+            f"install it first: [green]'uv add {package}'[/green]."
         )
         return True
     return False

@@ -338,7 +338,7 @@ class DebugExecutor(Executor):
         return docs
 ```
 
-Install with: `pip install epdb`
+Install with: `uv add epdb`
 
 :::note
 Regular `breakpoint()` or `pdb.set_trace()` won't work when Executors run in separate processes.

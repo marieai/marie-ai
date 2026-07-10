@@ -124,12 +124,12 @@ MARIE_OUTPUT_DIR=~/.marie-mcp/outputs
 
 ```bash
 # Via uv (recommended)
-uv pip install marie-mcp
+uv add marie-mcp
 
 # From source
 git clone https://github.com/marieai/marie-mcp-server.git
 cd marie-mcp-server
-pip install -e .
+uv sync
 ```
 
 ## Usage

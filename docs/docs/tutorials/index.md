@@ -27,8 +27,8 @@ These tutorials guide you through building production-ready document processing 
 
 Before starting, ensure you have:
 
-- Marie-AI installed (`pip install marie-ai`)
-- Python 3.10+
+- Marie-AI installed (`uv add marie-ai`)
+- Python 3.12
 - Completed the [Quickstart](../getting-started/quickstart.md)
 
 ## Choosing a tutorial

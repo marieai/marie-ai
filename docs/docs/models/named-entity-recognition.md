@@ -101,7 +101,7 @@ def process_dir(
 
 
 if __name__ == "__main__":
-    # pip install git+https://github.com/huggingface/transformers
+    # uv add git+https://github.com/huggingface/transformers
     # 4.18.0  -> 4.21.0.dev0 : We should pin it to this version
     print(transformers.__version__)
     _name_or_path = "CPREFIX/layoutlmv3-large-corr-ner"
@@ -127,9 +127,9 @@ if __name__ == "__main__":
 From annotation to training and inference
 
 ### Setup Development Environment
-There are two separate environments one using `pip` for Marie-AI and other using `conda` for UniLM. We could mix them
-however there are different dependencies needed for UniLM and Marie so it is safer to keep them segregated. Additionally, 
-there is no need to use `conda` as this could have been setup with `pip` as well.  
+Use the repository Python 3.12 / uv environment for Marie-AI. Keep UniLM-specific
+experiments isolated only when their dependency set conflicts with the Marie-AI
+runtime.
 
 ### Load and prepare dataset
 Data prep is done from tools from `marie-ai`, to setup development environment follow [getting started guide](/docs/getting-started/installation).
@@ -566,8 +566,8 @@ git clone https://github.com/gregbugaj/unilm.git
 Activate your PyTorch environment that will be used to train `layoutlmv3`
 
 ```shell
-conda env list
-conda activate layoutlmv3
+uv venv --python 3.12 .venv-layoutlmv3
+source .venv-layoutlmv3/bin/activate
 cd ~/dev/unilm/
 ```
 

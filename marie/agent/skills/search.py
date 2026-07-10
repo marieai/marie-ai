@@ -33,7 +33,7 @@ def _get_bm25s():
             _bm25s = bm25s
         except ImportError:
             logger.warning(
-                "bm25s not installed. Install with: pip install 'bm25s[core]>=0.2.0'"
+                "bm25s not installed. Install with: uv add 'bm25s[core]>=0.2.0'"
             )
             _bm25s = False
     return _bm25s if _bm25s else None

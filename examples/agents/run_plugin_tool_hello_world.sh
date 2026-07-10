@@ -49,7 +49,7 @@ if [ -z "${MARIE_PLUGIN_DAEMON_SIGNING_KEY_ID:-}" ] || [ -z "${MARIE_PLUGIN_DAEM
   exit 1
 fi
 
-# Prefer the project venv if present; else fall back to python3 (e.g. conda env).
+# Prefer the project venv if present; else fall back to python3.
 PYTHON="${PYTHON:-}"
 if [ -z "$PYTHON" ]; then
   if [ -x "$REPO_ROOT/.venv/bin/python" ]; then

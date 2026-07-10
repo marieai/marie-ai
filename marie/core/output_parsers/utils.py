@@ -56,7 +56,7 @@ def parse_json_markdown(text: str) -> Any:
                 f"Got JSON string: {json_string}"
             )
         except NameError as exc:
-            raise ImportError("Please pip install PyYAML.") from exc
+            raise ImportError("Please uv add PyYAML.") from exc
 
     return json_obj
 

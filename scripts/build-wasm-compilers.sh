@@ -240,10 +240,9 @@ verify_wasmtime() {
     if python3 -c "import wasmtime; print(f'Wasmtime version: {wasmtime.__version__}')" 2>/dev/null; then
         echo -e "${GREEN}✔ Wasmtime Python bindings available${NC}"
     else
-        echo -e "${YELLOW}⚠ Wasmtime not installed. Installing...${NC}"
-        pip install 'wasmtime>=21.0.0'
-        python3 -c "import wasmtime; print(f'Wasmtime version: {wasmtime.__version__}')"
-        echo -e "${GREEN}✔ Wasmtime installed${NC}"
+        echo -e "${YELLOW}⚠ Wasmtime not installed in system Python. Verifying with uv...${NC}"
+        uv run --with 'wasmtime>=21.0.0' python -c "import wasmtime; print(f'Wasmtime version: {wasmtime.__version__}')"
+        echo -e "${GREEN}✔ Wasmtime verified${NC}"
     fi
 }
 

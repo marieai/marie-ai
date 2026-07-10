@@ -51,7 +51,7 @@ name = "marie-mock-planners"
 version = "0.1.0"
 description = "Mock query planners for Marie-AI testing"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "marie-ai",  # Depends on marie for query planner base classes
 ]
@@ -73,7 +73,7 @@ Mock query planners for testing the Marie-AI scheduler and gateway.
 ## Installation
 
 ```bash
-pip install marie-mock-planners-0.1.0-py3-none-any.whl
+uv add ./marie-mock-planners-0.1.0-py3-none-any.whl
 ```
 
 ## Usage
@@ -99,7 +99,7 @@ EOF
 # Build the wheel
 echo "Building wheel..."
 cd "$BUILD_DIR"
-pip wheel . --no-deps -w dist/
+uv build --wheel --out-dir dist/ .
 
 # Copy to output directory
 mkdir -p "$OUTPUT_DIR"
@@ -115,4 +115,4 @@ echo "To install in Docker, copy to your wheels directory:"
 echo "  cp $WHEEL_FILE /mnt/data/marie-ai/config/wheels/"
 echo ""
 echo "Or install directly:"
-echo "  pip install $WHEEL_FILE"
+echo "  uv add ./$WHEEL_FILE"

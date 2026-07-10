@@ -81,7 +81,7 @@ class SentenceEmbeddingOptimizer(BaseNodePostprocessor):
             except ImportError:
                 raise ImportError(
                     "`llama-index-embeddings-openai` package not found, "
-                    "please run `pip install llama-index-embeddings-openai`"
+                    "please run `uv add llama-index-embeddings-openai`"
                 )
 
         if tokenizer_fn is None:

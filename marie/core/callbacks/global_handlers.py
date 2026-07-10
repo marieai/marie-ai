@@ -25,7 +25,7 @@ def create_global_handler(
         except ImportError:
             raise ImportError(
                 "WandbCallbackHandler is not installed. "
-                "Please install it using `pip install llama-index-callbacks-wandb`"
+                "Please install it using `uv add llama-index-callbacks-wandb`"
             )
 
         handler = WandbCallbackHandler(**eval_params)
@@ -37,7 +37,7 @@ def create_global_handler(
         except ImportError:
             raise ImportError(
                 "OpenInferenceCallbackHandler is not installed. "
-                "Please install it using `pip install llama-index-callbacks-openinference`"
+                "Please install it using `uv add llama-index-callbacks-openinference`"
             )
 
         handler = OpenInferenceCallbackHandler(**eval_params)
@@ -49,7 +49,7 @@ def create_global_handler(
         except ImportError:
             raise ImportError(
                 "ArizePhoenixCallbackHandler is not installed. "
-                "Please install it using `pip install llama-index-callbacks-arize-phoenix`"
+                "Please install it using `uv add llama-index-callbacks-arize-phoenix`"
             )
 
         handler = arize_phoenix_callback_handler(**eval_params)
@@ -61,7 +61,7 @@ def create_global_handler(
         except ImportError:
             raise ImportError(
                 "HoneyHiveCallbackHandler is not installed. "
-                "Please install it using `pip install llama-index-callbacks-honeyhive`"
+                "Please install it using `uv add llama-index-callbacks-honeyhive`"
             )
         handler = honeyhive_callback_handler(**eval_params)
     elif eval_mode == "promptlayer":
@@ -72,7 +72,7 @@ def create_global_handler(
         except ImportError:
             raise ImportError(
                 "PromptLayerHandler is not installed. "
-                "Please install it using `pip install llama-index-callbacks-promptlayer`"
+                "Please install it using `uv add llama-index-callbacks-promptlayer`"
             )
         handler = PromptLayerHandler(**eval_params)
     elif eval_mode == "deepeval":
@@ -83,7 +83,7 @@ def create_global_handler(
         except ImportError:
             raise ImportError(
                 "DeepEvalCallbackHandler is not installed. "
-                "Please install it using `pip install llama-index-callbacks-deepeval`"
+                "Please install it using `uv add llama-index-callbacks-deepeval`"
             )
         handler = deepeval_callback_handler(**eval_params)
     elif eval_mode == "simple":
@@ -96,7 +96,7 @@ def create_global_handler(
         except ImportError:
             raise ImportError(
                 "ArgillaCallbackHandler is not installed. "
-                "Please install it using `pip install llama-index-callbacks-argilla`"
+                "Please install it using `uv add llama-index-callbacks-argilla`"
             )
         handler = argilla_callback_handler(**eval_params)
     elif eval_mode == "langfuse":
@@ -107,7 +107,7 @@ def create_global_handler(
         except ImportError:
             raise ImportError(
                 "LangfuseCallbackHandler is not installed. "
-                "Please install it using `pip install llama-index-callbacks-langfuse`"
+                "Please install it using `uv add llama-index-callbacks-langfuse`"
             )
         handler = langfuse_callback_handler(**eval_params)
     elif eval_mode == "agentops":
@@ -118,7 +118,7 @@ def create_global_handler(
         except ImportError:
             raise ImportError(
                 "AgentOpsHandler is not installed. "
-                "Please install it using `pip install llama-index-instrumentation-agentops`"
+                "Please install it using `uv add llama-index-instrumentation-agentops`"
             )
         AgentOpsHandler.init(**eval_params)
     elif eval_mode == "literalai":
@@ -129,7 +129,7 @@ def create_global_handler(
         except ImportError:
             raise ImportError(
                 "Literal AI Handler is not installed. "
-                "Please install it using `pip install llama-index-callbacks-literalai`"
+                "Please install it using `uv add llama-index-callbacks-literalai`"
             )
         handler = literalai_callback_handler(**eval_params)
     elif eval_mode == "opik":
@@ -140,7 +140,7 @@ def create_global_handler(
         except ImportError:
             raise ImportError(
                 "Opik Handler is not installed. "
-                "Please install it using `pip install llama-index-callbacks-opik`"
+                "Please install it using `uv add llama-index-callbacks-opik`"
             )
         handler = opik_callback_handler(**eval_params)
     else:

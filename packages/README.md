@@ -11,7 +11,7 @@ A Model Context Protocol (MCP) server that enables AI assistants like Claude to 
 
 - **Size**: ~5MB (vs 2-5GB for main marie-ai package)
 - **Purpose**: Client-side integration for AI assistants
-- **Install**: `pip install marie-mcp`
+- **Install**: `uv add marie-mcp`
 - **Docs**: [packages/marie-mcp/README.md](./marie-mcp/README.md)
 
 **Use cases**:
@@ -26,7 +26,7 @@ A Model Context Protocol (MCP) server that enables AI assistants like Claude to 
 A state passing system that enables tasks within a DAG run to share state via simple key-value operations.
 
 - **Purpose**: Cross-task state management for workflow orchestration
-- **Install**: `pip install marie-kernel` or `pip install marie-kernel[postgres]`
+- **Install**: `uv add marie-kernel` or `uv add 'marie-kernel[postgres]'`
 - **Docs**: [packages/marie-kernel/README.md](./marie-kernel/README.md)
 
 **Features**:
@@ -42,7 +42,7 @@ A state passing system that enables tasks within a DAG run to share state via si
 A metadata-first package contract for Marie extensions. It validates `marie-extension.yaml` packages from local directories or standard ZIP archives without executing package code.
 
 - **Purpose**: Extension authoring schema, safe package loading, and validation
-- **Install**: `pip install marie-extension`
+- **Install**: `uv add marie-extension`
 - **Docs**: [packages/marie-extension/README.md](./marie-extension/README.md)
 
 **Features**:
@@ -100,19 +100,19 @@ marie-ai/
 
 ```bash
 # Install main Marie AI package
-pip install -e .
+uv sync
 
 # Install MCP package
 cd packages/marie-mcp
-pip install -e .
+uv sync
 
 # Install State Kernel package
 cd packages/marie-kernel
-pip install -e ".[dev]"  # Include test dependencies
+uv sync --extra dev
 
 # Install Extension package
 cd packages/marie-extension
-pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
 ### Publishing
@@ -121,23 +121,23 @@ Each package is published independently to PyPI:
 
 ```bash
 # Publish main package
-python -m build
-twine upload dist/*
+uv build
+uv publish
 
 # Publish MCP package
 cd packages/marie-mcp
-python -m build
-twine upload dist/*
+uv build
+uv publish
 
 # Publish State Kernel package
 cd packages/marie-kernel
-python -m build
-twine upload dist/*
+uv build
+uv publish
 
 # Publish Extension package
 cd packages/marie-extension
-python -m build
-twine upload dist/*
+uv build
+uv publish
 
 # Build Plugin Daemon package
 cd packages/marie-plugin-daemon

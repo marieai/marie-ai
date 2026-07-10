@@ -329,7 +329,7 @@ class WorkerRequestHandler:
         with ImportExtensions(
             required=True,
             logger=self.logger,
-            help_text="""hot reload requires watchfiles dependency to be installed. You can do `pip install
+            help_text="""hot reload requires watchfiles dependency to be installed. You can do `uv add
                 watchfiles""",
         ):
             from watchfiles import awatch

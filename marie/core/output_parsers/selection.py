@@ -88,7 +88,7 @@ class SelectionOutputParser(BaseOutputParser):
                     f"Got JSON string: {json_string}"
                 )
             except NameError as exc:
-                raise ImportError("Please pip install PyYAML.") from exc
+                raise ImportError("Please uv add PyYAML.") from exc
 
         if isinstance(json_obj, dict):
             json_obj = [json_obj]

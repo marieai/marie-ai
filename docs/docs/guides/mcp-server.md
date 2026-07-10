@@ -41,7 +41,7 @@ Before you begin, ensure you have:
    - AWS Secret Access Key
    - S3 Bucket name
 
-4. **Python 3.10+**: Required for running the MCP server
+4. **Python 3.12**: Required for running the MCP server
 
 5. **UV Package Manager**: For installation (recommended)
    ```bash
@@ -50,16 +50,10 @@ Before you begin, ensure you have:
 
 ## Installation
 
-### Via UV (Recommended)
+### Via uv
 
 ```bash
-uv pip install marie-mcp
-```
-
-### Via pip
-
-```bash
-pip install marie-mcp
+uv add marie-mcp
 ```
 
 ### From Source
@@ -67,7 +61,7 @@ pip install marie-mcp
 ```bash
 git clone https://github.com/marieai/marie-ai.git
 cd marie-ai/packages/marie-mcp
-pip install -e .
+uv sync
 ```
 
 ## Configuration

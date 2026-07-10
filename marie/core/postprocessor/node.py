@@ -44,7 +44,7 @@ class KeywordNodePostprocessor(BaseNodePostprocessor):
             import spacy
         except ImportError:
             raise ImportError(
-                "Spacy is not installed, please install it with `pip install spacy`."
+                "Spacy is not installed, please install it with `uv add spacy`."
             )
         from spacy.matcher import PhraseMatcher
 

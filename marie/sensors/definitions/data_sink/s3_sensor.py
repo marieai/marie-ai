@@ -81,7 +81,7 @@ class S3DataSinkSensor(DataSinkSensor):
             except ImportError:
                 raise SensorEvaluationError(
                     "boto3 is required for S3 data sink sensor. "
-                    "Install with: pip install boto3",
+                    "Install with: uv add boto3",
                     sensor_id=self.sensor_id,
                 )
 

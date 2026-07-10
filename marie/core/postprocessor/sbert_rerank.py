@@ -39,7 +39,7 @@ class SentenceTransformerRerank(BaseNodePostprocessor):
         except ImportError:
             raise ImportError(
                 "Cannot import sentence-transformers or torch package,",
-                "please `pip install torch sentence-transformers`",
+                "please `uv add torch sentence-transformers`",
             )
         device = infer_torch_device() if device is None else device
         super().__init__(

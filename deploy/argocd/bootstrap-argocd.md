@@ -260,7 +260,7 @@ argocd proj get "org-${ORG_ID}"
 ### yamllint (always available)
 
 ```bash
-pip install yamllint   # or: brew install yamllint
+uv add yamllint   # or: brew install yamllint
 yamllint deploy/argocd/applicationset.yaml
 yamllint deploy/argocd/appproject-template.yaml
 yamllint deploy/argocd/sandboxes-repo-skeleton/sandboxes/sbx-12345678-1234-1234-1234-123456789abc-a1b2c3/sandbox.yaml

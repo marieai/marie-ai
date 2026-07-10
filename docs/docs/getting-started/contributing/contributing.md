@@ -42,7 +42,7 @@ If you are working from the command line, you should use these tools form the ro
 We also provide a .pre-commit-config.yaml file, which enables you to use pre-commit to automatically perform the required linting/formatting actions before you commit your changes. 
 You can install it using
 ```shell
-pip install pre-commit
+uv tool install pre-commit
 pre-commit install
 ```
 
@@ -109,18 +109,9 @@ git clone https://github.com/marieai/marie-ai.git
 cd marie-ai
 git checkout develop
 
-# "-v" increases pip's verbosity.
-# "-e" means installing the project in editable mode,
-# That is, any local modifications on the code will take effect immediately
-
-pip install  Cython
-pip install "pybind11[global]"  # This prevents "ModuleNotFoundError: No module named 'pybind11'"
-
 sudo apt-get install libpq-dev # Required to install psycopg2
 
-
-pip install -r requirements.txt
-pip install -v -e .
+uv sync --group dev
 ```
 
 Test your installation by running the following command:

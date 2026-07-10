@@ -3,7 +3,6 @@
 # Requirements
 # brew install hub
 # npm install -g git-release-notes
-# pip install twine wheel
 
 set -ex
 

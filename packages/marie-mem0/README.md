@@ -9,14 +9,14 @@ This package provides Mem0 SDK integration for persistent agent memory, allowing
 ## Installation
 
 ```bash
-pip install marie-mem0
+uv add marie-mem0
 ```
 
 Or install from the monorepo:
 
 ```bash
 cd packages/marie-mem0
-pip install -e .
+uv sync
 ```
 
 ## Usage

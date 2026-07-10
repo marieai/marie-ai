@@ -143,7 +143,7 @@ class GeminiEmbeddings(EmbeddingsBase):
         except ImportError:
             raise ImportError(
                 "google-generativeai package not found. "
-                "Install with: pip install google-generativeai>=0.5.0"
+                "Install with: uv add google-generativeai>=0.5.0"
             )
 
     def get_embeddings(

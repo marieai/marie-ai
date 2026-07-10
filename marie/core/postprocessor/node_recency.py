@@ -62,7 +62,7 @@ class FixedRecencyPostprocessor(BaseNodePostprocessor):
             import pandas as pd
         except ImportError:
             raise ImportError(
-                "pandas is required for this function. Please install it with `pip install pandas`."
+                "pandas is required for this function. Please install it with `uv add pandas`."
             )
 
         if query_bundle is None:
@@ -114,7 +114,7 @@ class EmbeddingRecencyPostprocessor(BaseNodePostprocessor):
             import pandas as pd
         except ImportError:
             raise ImportError(
-                "pandas is required for this function. Please install it with `pip install pandas`."
+                "pandas is required for this function. Please install it with `uv add pandas`."
             )
 
         if query_bundle is None:

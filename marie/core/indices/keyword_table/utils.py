@@ -30,11 +30,11 @@ def rake_extract_keywords(
     try:
         import nltk
     except ImportError:
-        raise ImportError("Please install nltk: `pip install nltk`")
+        raise ImportError("Please install nltk: `uv add nltk`")
     try:
         from rake_nltk import Rake
     except ImportError:
-        raise ImportError("Please install rake_nltk: `pip install rake_nltk`")
+        raise ImportError("Please install rake_nltk: `uv add rake_nltk`")
 
     r = Rake(
         sentence_tokenizer=nltk.tokenize.sent_tokenize,

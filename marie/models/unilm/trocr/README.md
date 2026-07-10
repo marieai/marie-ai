@@ -26,14 +26,13 @@ The TrOCR models are also provided in the Huggingface format.[[Documentation](ht
 | TrOCR-Large (Word Accuracy) | 94.1        | 96.1    | 98.4          | 97.3           | 88.1           | 84.1           | 93.0     | 95.1     |
 ## Installation
 ~~~bash
-conda create -n trocr python=3.7
-conda activate trocr
+uv venv --python 3.12 .venv
+source .venv/bin/activate
 git clone https://github.com/microsoft/unilm.git
 cd unilm
 cd trocr
-pip install pybind11
-pip install -r requirements.txt
-pip install -v --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" 'git+https://github.com/NVIDIA/apex.git'
+uv add pybind11
+uv add -r requirements.txt
 ~~~
 
 ## Fine-tuning and evaluation

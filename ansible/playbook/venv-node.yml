@@ -20,10 +20,21 @@
       become: yes
       become_method: sudo
 
-    - name: Ensure python3-pip is installed
+    - name: Ensure curl is installed
       apt:
-        name: python3-pip
+        name: curl
         state: present
+      become_user: root
+      become: yes
+      become_method: sudo
+
+    - name: Install uv
+      shell: curl -LsSf https://astral.sh/uv/install.sh | sh
+      args:
+        creates: /usr/local/bin/uv
+        executable: /bin/bash
+      environment:
+        UV_INSTALL_DIR: /usr/local/bin
       become_user: root
       become: yes
       become_method: sudo
@@ -42,31 +53,19 @@
       become_method: sudo
 
     - name: Create a virtual environment
-      command: python3 -m venv /opt/venv
+      command: /usr/local/bin/uv venv --python /usr/bin/python3 /opt/venv
       args:
-        creates: /opt/venv/bin/activate
-      become_user: root
-      become: yes
-      become_method: sudo
-
-    - name: Upgrade pip in the virtual environment
-      command: /opt/venv/bin/pip install --upgrade pip
+        creates: /opt/venv/bin/python
       become_user: root
       become: yes
       become_method: sudo
 
     - name: Install specific version of requests and urllib3 in virtual environment
-      pip:
-        name:
-          - requests==2.31.0
-          - urllib3<2.0
-        virtualenv: /opt/venv
-        state: present
-      become_user: root 
+      command: /usr/local/bin/uv pip install --python /opt/venv/bin/python requests==2.31.0 'urllib3<2.0'
+      become_user: root
       become: yes
       become_method: sudo
 
     - name: Set the Python interpreter to the virtual environment
       set_fact:
         ansible_python_interpreter: /opt/venv/bin/python
-        

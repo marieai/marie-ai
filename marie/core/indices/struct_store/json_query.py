@@ -16,7 +16,7 @@ from marie.core.utils import print_text
 
 logger = logging.getLogger(__name__)
 IMPORT_ERROR_MSG = (
-    "`jsonpath_ng` package not found, please run `pip install jsonpath-ng`"
+    "`jsonpath_ng` package not found, please run `uv add jsonpath-ng`"
 )
 
 JSONType = Union[Dict[str, "JSONType"], List["JSONType"], str, int, float, bool, None]

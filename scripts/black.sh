@@ -1,5 +1,5 @@
 #!/bin/bash
-pip install black==22.3.0
+uv tool run --from black==22.3.0 black --version
 arrVar=()
 echo we ignore non-*.py files and files generated from protobuf
 excluded_files=(
@@ -16,7 +16,7 @@ for changed_file in $CHANGED_FILES; do
   fi
 done
 if (( ${#arrVar[@]} )); then
-  black -S --check "${arrVar[@]}"
+  uv tool run --from black==22.3.0 black -S --check "${arrVar[@]}"
 fi
 echo "no files left to check"
 exit 0

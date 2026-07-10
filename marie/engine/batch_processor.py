@@ -35,7 +35,7 @@ try:
     )
 except ImportError:
     raise ImportError(
-        "If you'd like to use OpenAI models, please install the openai package by running `pip install openai`, and add 'OPENAI_API_KEY' to your environment variables."
+        "If you'd like to use OpenAI models, install the openai package by running `uv add openai`, and add 'OPENAI_API_KEY' to your environment variables."
     )
 
 import asyncio

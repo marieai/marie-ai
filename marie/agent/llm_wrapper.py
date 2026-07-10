@@ -741,9 +741,7 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         try:
             from openai import OpenAI
         except ImportError:
-            raise ImportError(
-                "openai package required. Install with: pip install openai"
-            )
+            raise ImportError("openai package required. Install with: uv add openai")
 
         self.client = OpenAI(
             api_key=api_key,

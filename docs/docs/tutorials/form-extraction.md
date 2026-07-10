@@ -18,7 +18,7 @@ A form extraction system that:
 
 ## Prerequisites
 
-- Marie-AI installed (`pip install marie-ai`)
+- Marie-AI installed (`uv add marie-ai`)
 - Completed the [Quickstart](../getting-started/quickstart.md)
 - Familiarity with [Executors](../guides/executor.md)
 

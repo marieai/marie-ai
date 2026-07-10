@@ -2042,7 +2042,7 @@ main() {
     echo ""
     echo "Mem0 (SDK-based):"
     echo "  Database: mem0 (PostgreSQL with pgvector)"
-    echo "  Usage: pip install 'marie-ai[memory]'"
+    echo "  Usage: uv add 'marie-ai[memory]'"
 }
 
 main "$@"

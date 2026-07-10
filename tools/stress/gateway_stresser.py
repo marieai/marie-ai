@@ -59,7 +59,7 @@ try:
 except ImportError as e:
     print(f"Error importing dependencies: {e}")
     print("Make sure marie and aiohttp are installed:")
-    print("  pip install aiohttp")
+    print("  uv add aiohttp")
     sys.exit(1)
 
 logging.basicConfig(

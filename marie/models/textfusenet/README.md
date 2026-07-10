@@ -7,7 +7,7 @@ Arbitrary shape text detection in natural scenes is an extremely challenging tas
 ![image](https://github.com/ying09/TextFuseNet.pytorch/blob/master/TextFuseNet.jpg)
 
 # Installation
-This implementation is based on [Detectron2](https://github.com/facebookresearch/detectron2), the installation can refer to [step-by-step installation.txt](https://github.com/ying09/TextFuseNet/blob/master/step-by-step%20installation.txt). For more details about the environment of conda, please refer to [requirements.txt](https://github.com/ying09/TextFuseNet/blob/master/requirements.txt).
+This implementation is based on [Detectron2](https://github.com/facebookresearch/detectron2). Use the repository Python 3.12 / uv environment and the repo-local detectron2 wheel; see [step-by-step installation.txt](step-by-step%20installation.txt).
 
 # Docker
 There is also a Dockerfile for testing purposes available. See [docker](docker).

@@ -43,7 +43,7 @@ def resolve_llm(
         except ImportError:
             raise ImportError(
                 "`llama-index-llms-openai` package not found, "
-                "please run `pip install llama-index-llms-openai`"
+                "please run `uv add llama-index-llms-openai`"
             )
         except ValueError as e:
             raise ValueError(
@@ -81,7 +81,7 @@ def resolve_llm(
         except ImportError:
             raise ImportError(
                 "`llama-index-llms-llama-cpp` package not found, "
-                "please run `pip install llama-index-llms-llama-cpp`"
+                "please run `uv add llama-index-llms-llama-cpp`"
             )
 
     elif BaseLanguageModel is not None and isinstance(llm, BaseLanguageModel):
@@ -93,7 +93,7 @@ def resolve_llm(
         except ImportError:
             raise ImportError(
                 "`llama-index-llms-langchain` package not found, "
-                "please run `pip install llama-index-llms-langchain`"
+                "please run `uv add llama-index-llms-langchain`"
             )
     elif llm is None:
         print("LLM is explicitly disabled. Using MockLLM.")

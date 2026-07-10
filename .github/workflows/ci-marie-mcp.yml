@@ -14,62 +14,58 @@ on:
 
 jobs:
   test:
-    name: Test (Python ${{ matrix.python-version }})
+    name: Test (Python 3.12)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.10', '3.11', '3.12']
 
     steps:
     - uses: actions/checkout@v3
 
-    - name: Set up Python ${{ matrix.python-version }}
+    - name: Set up Python 3.12
       uses: actions/setup-python@v4
       with:
-        python-version: ${{ matrix.python-version }}
+        python-version: '3.12'
 
-    - name: Cache pip packages
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+
+    - name: Cache uv packages
       uses: actions/cache@v3
       with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('packages/marie-mcp/pyproject.toml') }}
+        path: ~/.cache/uv
+        key: ${{ runner.os }}-uv-${{ hashFiles('packages/marie-mcp/pyproject.toml') }}
         restore-keys: |
-          ${{ runner.os }}-pip-
+          ${{ runner.os }}-uv-
 
     - name: Install dependencies
       run: |
         cd packages/marie-mcp
-        pip install -e ".[dev]"
+        uv sync --extra dev
 
     - name: Lint with flake8
       run: |
         cd packages/marie-mcp
-        pip install flake8
-        flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
-        flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        uv run --with flake8 flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        uv run --with flake8 flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
     - name: Check formatting with black
       run: |
         cd packages/marie-mcp
-        pip install black
-        black --check src/
+        uv run black --check src/
 
     - name: Check imports with isort
       run: |
         cd packages/marie-mcp
-        pip install isort
-        isort --check-only src/
+        uv run isort --check-only src/
 
     - name: Type check with mypy
       run: |
         cd packages/marie-mcp
-        pip install mypy
-        mypy src/ --ignore-missing-imports || true
+        uv run mypy src/ --ignore-missing-imports || true
 
     - name: Run unit tests
       run: |
         cd packages/marie-mcp
-        pytest tests/ -v --cov=marie_mcp --cov-report=xml
+        uv run pytest tests/ -v --cov=marie_mcp --cov-report=xml
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
@@ -97,15 +93,18 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Set up Python 3.10
+    - name: Set up Python 3.12
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
+        python-version: '3.12'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
 
     - name: Install marie-mcp
       run: |
         cd packages/marie-mcp
-        pip install -e ".[dev]"
+        uv sync --extra dev
 
     - name: Wait for Marie gateway
       run: |
@@ -119,7 +118,7 @@ jobs:
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY_TEST }}
       run: |
         cd packages/marie-mcp
-        pytest tests/integration/ -v || true
+        uv run pytest tests/integration/ -v || true
 
   build:
     name: Build Package
@@ -129,24 +128,23 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Set up Python 3.10
+    - name: Set up Python 3.12
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
+        python-version: '3.12'
 
-    - name: Install build tools
-      run: |
-        pip install build twine
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
 
     - name: Build package
       run: |
         cd packages/marie-mcp
-        python -m build
+        uv build
 
     - name: Check package
       run: |
         cd packages/marie-mcp
-        twine check dist/*
+        uv tool run twine check dist/*
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v3
@@ -163,24 +161,22 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Set up Python 3.10
+    - name: Set up Python 3.12
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
+        python-version: '3.12'
 
-    - name: Install build tools
-      run: |
-        pip install build twine
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
 
     - name: Build package
       run: |
         cd packages/marie-mcp
-        python -m build
+        uv build
 
     - name: Publish to PyPI
       env:
-        TWINE_USERNAME: __token__
-        TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN_MARIE_MCP }}
+        UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN_MARIE_MCP }}
       run: |
         cd packages/marie-mcp
-        twine upload dist/*
+        uv publish

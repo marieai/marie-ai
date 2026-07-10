@@ -10,27 +10,24 @@ This guide walks you through building your first Marie-AI document processing pi
 
 Before you begin, ensure you have:
 
-- Python 3.10 or higher
-- pip package manager
+- Python 3.12
+- uv package manager
 - (Optional) CUDA-capable GPU for accelerated processing
 
 ## Step 1: Install Marie-AI
 
-Create a virtual environment and install Marie-AI:
+Create a uv-managed environment and install Marie-AI:
 
 ```bash
-# Create and activate virtual environment
-python -m venv marie-env
-source marie-env/bin/activate  # On Windows: marie-env\Scripts\activate
-
-# Install Marie-AI
-pip install marie-ai
+uv init --python 3.12 marie-project
+cd marie-project
+uv add marie-ai
 ```
 
 Verify the installation:
 
 ```bash
-marie --version
+uv run marie --version
 ```
 
 ## Step 2: Create your first executor
@@ -361,7 +358,7 @@ my-project/
 │   └── prod.yml
 ├── tests/
 │   └── test_executor.py
-├── requirements.txt
+├── pyproject.toml
 └── README.md
 ```
 

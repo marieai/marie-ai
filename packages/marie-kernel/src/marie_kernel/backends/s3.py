@@ -6,7 +6,7 @@ serverless or distributed environments where shared filesystem
 or database access is not available.
 
 Requires the 's3' optional dependency:
-    pip install marie-kernel[s3]
+    uv add 'marie-kernel[s3]'
 """
 
 import json
@@ -85,7 +85,7 @@ class S3StateBackend:
         if boto3 is None:
             raise ImportError(
                 "boto3 is required for S3StateBackend. "
-                "Install with: pip install marie-kernel[s3]"
+                "Install with: uv add 'marie-kernel[s3]'"
             )
         self._client = s3_client
         self._bucket = bucket

@@ -8,8 +8,8 @@ This guide walks you through setting up and running your first Marie-AI agent.
 
 ## Prerequisites
 
-- Python 3.10+
-- Marie-AI installed (`pip install marie-ai`)
+- Python 3.12
+- Marie-AI installed (`uv add marie-ai`)
 - An LLM backend (OpenAI API key or local model)
 
 ## Installation
@@ -17,13 +17,13 @@ This guide walks you through setting up and running your first Marie-AI agent.
 The agent framework is included with Marie-AI:
 
 ```bash
-pip install marie-ai
+uv add marie-ai
 ```
 
 For development with all agent features:
 
 ```bash
-pip install marie-ai[agent]
+uv add marie-ai
 ```
 
 ## Configuration

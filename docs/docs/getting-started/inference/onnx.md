@@ -51,7 +51,7 @@ Reference: [GitHub: Fairseq-MarieAI](https://github.com/marieai/fairseq.git)
 ```sh
 git clone https://github.com/marieai/fairseq.git
 cd fairseq
-pip install --editable .
+uv add --editable .
 ```
 
 Edit `sequence_generator.py` to apply changes to the source code.

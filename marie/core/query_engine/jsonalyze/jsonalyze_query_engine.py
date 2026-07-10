@@ -21,7 +21,7 @@ class JSONalyzeQueryEngine:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         raise DeprecationWarning(
             "JSONalyzeQueryEngine has been moved to `llama-index-experimental`.\n"
-            "`pip install llama-index-experimental`\n"
+            "`uv add llama-index-experimental`\n"
             "`from llama_index.experimental.query_engine import JSONalyzeQueryEngine`\n"
             "Note that the JSONalyzeQueryEngine allows for arbitrary file creation, \n"
             "and should be used in a secure environment."

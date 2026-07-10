@@ -125,17 +125,18 @@ See [**docs.marieai.co**](https://docs.marieai.co) for full guides and advanced 
 
 **Stable release via PyPI:**
 ```sh
-pip install --upgrade marieai
+uv tool install marie-ai
 ```
 
 **From source:**
 ```sh
-pip install -e .
+uv sync --group dev
+uv run marie --help
 ```
 
 **Docker:**
 ```sh
-DOCKER_BUILDKIT=1 docker build . --build-arg PIP_TAG="standard" -f ./Dockerfiles/gpu.Dockerfile -t marieai/marie:3.0-cuda
+./build.sh marie-cuda
 ```
 Or pull an official image:
 ```sh
@@ -209,5 +210,3 @@ Marie-AI is [Apache 2.0 licensed](LICENSE).
 This project uses and builds upon many open source components. See [NOTICE](NOTICE) for details.
 
 ---
-
-

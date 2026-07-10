@@ -68,7 +68,7 @@ class SimpleMultiModalQueryEngine(BaseQueryEngine):
             except ImportError as e:
                 raise ImportError(
                     "`llama-index-multi-modal-llms-openai` package cannot be found. "
-                    "Please install it by using `pip install `llama-index-multi-modal-llms-openai`"
+                    "Please install it by using `uv add `llama-index-multi-modal-llms-openai`"
                 )
         self._text_qa_template = text_qa_template or DEFAULT_TEXT_QA_PROMPT
         self._image_qa_template = image_qa_template or DEFAULT_TEXT_QA_PROMPT

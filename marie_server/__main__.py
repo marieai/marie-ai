@@ -99,7 +99,7 @@ def main(
 
             with ImportExtensions(
                 required=True,
-                help_text=f'debugpy is needed to enable remote debugging. Please install it with "pip install debugpy"',
+                help_text='debugpy is needed to enable remote debugging. Please install it with "uv add debugpy"',
             ):
                 import debugpy
 

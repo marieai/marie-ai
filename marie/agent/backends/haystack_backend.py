@@ -319,9 +319,7 @@ class HaystackAgentBackend(AgentBackend):
             from haystack.components.builders import PromptBuilder
             from haystack.components.generators import OpenAIGenerator
         except ImportError:
-            raise ImportError(
-                "Haystack is required. Install with: pip install haystack-ai"
-            )
+            raise ImportError("Haystack is required. Install with: uv add haystack-ai")
 
         # Create retriever
         if retriever_type == "bm25":
@@ -440,9 +438,7 @@ class SimpleHaystackBackend(AgentBackend):
             else:
                 raise ValueError(f"Unknown retriever type: {self.retriever_type}")
         except ImportError:
-            raise ImportError(
-                "Haystack is required. Install with: pip install haystack-ai"
-            )
+            raise ImportError("Haystack is required. Install with: uv add haystack-ai")
 
     async def run(
         self,

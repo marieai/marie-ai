@@ -3,8 +3,10 @@
 
 FROM python:3.13-slim-bookworm
 
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
+
 # Install componentize-py (latest version as of Jan 2026)
-RUN pip install --no-cache-dir componentize-py==0.19.3
+RUN uv pip install --system componentize-py==0.19.3
 
 # Create non-root user for security (use UID 1001 to avoid conflicts)
 RUN useradd -m -u 1001 compiler && \

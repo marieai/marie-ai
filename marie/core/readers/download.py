@@ -1,7 +1,7 @@
 """Download loader from Llama Hub.
 
 NOTE: using `download_loader` is now deprecated.
-Please do `pip install llama-index-reader-<reader_name>` instead.
+Please do `uv add llama-index-reader-<reader_name>` instead.
 
 """
 
@@ -17,7 +17,7 @@ from marie.core.readers.base import BaseReader
 
 @deprecated(
     "`download_loader()` is deprecated. "
-    "Please install tool using pip install directly instead."
+    "Please install tool using uv add directly instead."
 )
 def download_loader(
     loader_class: str,

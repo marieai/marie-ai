@@ -285,7 +285,7 @@ class AgentRunner(BaseAgentRunner):
         except ImportError:
             raise ImportError(
                 "`llama-index-llms-openai` package not found. Please "
-                "install by running `pip install llama-index-llms-openai`."
+                "install by running `uv add llama-index-llms-openai`."
             )
 
         if isinstance(llm, OpenAI) and is_function_calling_model(llm.model):

@@ -153,7 +153,7 @@ class ScheduleSensor(BaseSensor):
         if croniter is None:
             raise SensorConfigError(
                 "croniter library required for schedule sensors. "
-                "Install with: pip install croniter"
+                "Install with: uv add croniter"
             )
 
         # Validate cron expression

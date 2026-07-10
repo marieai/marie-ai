@@ -59,10 +59,10 @@ with f:
 
 ## Installation
 
-Install Marie-AI using pip:
+Install Marie-AI using uv:
 
 ```bash
-pip install marie-ai
+uv add marie-ai
 ```
 
 Or run with Docker:

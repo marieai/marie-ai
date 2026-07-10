@@ -1,12 +1,14 @@
 FROM python:3.11-slim
 
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
+
 WORKDIR /app
 
 # Install curl for healthchecks
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 # Install A2A SDK with HTTP server dependencies
-RUN pip install --no-cache-dir a2a-sdk[http-server] uvicorn
+RUN uv pip install --system 'a2a-sdk[http-server]' uvicorn
 
 # Copy agent files
 COPY *.py /app/

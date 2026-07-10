@@ -540,8 +540,8 @@ def test_asset_tracking():
 Ensure Marie CLI is properly installed:
 
 ```bash
-pip install -e .
-marie --version
+uv sync --group dev
+uv run marie --version
 ```
 
 ### Generated code has syntax errors

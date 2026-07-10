@@ -468,7 +468,7 @@ Package your Executor as a Docker container:
 FROM marieai/marie:latest
 
 COPY executor.py config.yml requirements.txt ./
-RUN pip install -r requirements.txt
+RUN uv pip install --system -r requirements.txt
 
 ENTRYPOINT ["marie", "executor", "--uses", "config.yml"]
 ```

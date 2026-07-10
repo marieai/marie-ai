@@ -23,7 +23,7 @@ set_verbosity(DEBUG)
 torch.set_float32_matmul_precision('high')
 
 # subprocess.run(
-#     "pip install flash-attn --no-build-isolation",
+#     "uv pip install flash-attn --no-build-isolation",
 #     env={"FLASH_ATTENTION_SKIP_CUDA_BUILD": "TRUE"},
 #     shell=True,
 # )
