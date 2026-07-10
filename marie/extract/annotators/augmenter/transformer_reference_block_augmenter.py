@@ -12,11 +12,10 @@ except Exception:
     torch = None
 
 try:
-    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline, set_seed
+    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, set_seed
 except Exception:
     AutoTokenizer = None
     AutoModelForSeq2SeqLM = None
-    pipeline = None
     set_seed = None
 
 from faker import Faker
@@ -94,27 +93,23 @@ class TransformerReferenceBlockAugmenter:
     # -------------- Internals --------------
 
     def _maybe_init_pipeline(self):
-        if pipeline is None or AutoTokenizer is None or AutoModelForSeq2SeqLM is None:
+        if AutoTokenizer is None or AutoModelForSeq2SeqLM is None:
             return  # transformers not installed; rely on Faker fallback
 
         device = (
-            0
+            "cuda"
             if (
                 self.opts.device in ("cuda", None)
                 and torch
                 and torch.cuda.is_available()
             )
-            else -1
+            else "cpu"
         )
         try:
             tok = AutoTokenizer.from_pretrained(self.opts.model_name)
             mdl = AutoModelForSeq2SeqLM.from_pretrained(self.opts.model_name)
-            self._nlp = pipeline(
-                "text2text-generation",
-                model=mdl,
-                tokenizer=tok,
-                device=device,
-            )
+            mdl = mdl.to(device).eval()
+            self._nlp = (tok, mdl)
         except Exception:
             self._nlp = None  # fall back gracefully
 
@@ -124,21 +119,19 @@ class TransformerReferenceBlockAugmenter:
 
         prompts = [self._build_prompt(pattern_line) for _ in range(n)]
 
-        print(prompts)
-        outputs = self._nlp(
-            prompts,
-            max_new_tokens=self.opts.max_new_tokens,
-            do_sample=True,
-            temperature=self.opts.temperature,
-            top_p=self.opts.top_p,
-            num_return_sequences=1,
-        )
-        texts = [
-            self._postprocess(
-                o[0]["generated_text"] if isinstance(o, list) else o["generated_text"]
+        tok, mdl = self._nlp
+        inputs = tok(prompts, return_tensors="pt", padding=True).to(mdl.device)
+        with torch.inference_mode():
+            output_ids = mdl.generate(
+                **inputs,
+                max_new_tokens=self.opts.max_new_tokens,
+                do_sample=True,
+                temperature=self.opts.temperature,
+                top_p=self.opts.top_p,
+                num_return_sequences=1,
             )
-            for o in outputs
-        ]
+        decoded = tok.batch_decode(output_ids, skip_special_tokens=True)
+        texts = [self._postprocess(t) for t in decoded]
         return [self._normalize_spacing(t) for t in texts]
 
     def _build_prompt(self, pattern_line: str) -> str:

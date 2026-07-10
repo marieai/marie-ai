@@ -39,7 +39,7 @@ class TableRecModelLoader(ModelLoader):
         config.encoder = encoder
 
         model = TableRecEncoderDecoderModel.from_pretrained(
-            self.checkpoint, config=config, torch_dtype=dtype
+            self.checkpoint, config=config, dtype=dtype
         )
 
         model = model.to(device)

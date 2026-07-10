@@ -1,7 +1,7 @@
 """Vector Store Executor for DAG workflows.
 
 This executor provides embed and store operations as nodes in Marie's
-DAG workflow system. It integrates JinaEmbeddingsV4 for unified text+image
+DAG workflow system. It integrates QwenVLEmbeddings for unified text+image
 embeddings with PGVectorStore for persistence.
 
 Usage in workflow:
@@ -102,7 +102,7 @@ class VectorStoreExecutor(MarieExecutor):
               s3:
                 <<: *s3_conf_shared
                 enabled: True
-            embedding_model: jinaai/jina-embeddings-v4
+            embedding_model: Qwen/Qwen3-VL-Embedding-2B
             embedding_dim: 1024
         ```
     """
@@ -110,7 +110,7 @@ class VectorStoreExecutor(MarieExecutor):
     def __init__(
         self,
         connection_string: Optional[str] = None,
-        embedding_model: str = "jinaai/jina-embeddings-v4",
+        embedding_model: str = "Qwen/Qwen3-VL-Embedding-2B",
         embedding_dim: int = 1024,
         embedding_task: str = "retrieval",
         table_name: str = "kb_vectors",
@@ -167,9 +167,9 @@ class VectorStoreExecutor(MarieExecutor):
         self.logger.info("Initializing vector store and embeddings...")
 
         # Initialize embeddings
-        from marie.embeddings.jina import JinaEmbeddingsV4
+        from marie.embeddings.qwen import QwenVLEmbeddings
 
-        self._embeddings = JinaEmbeddingsV4(
+        self._embeddings = QwenVLEmbeddings(
             model_name_or_path=self._embedding_model,
             task=self._embedding_task,
             truncate_dim=self._embedding_dim,

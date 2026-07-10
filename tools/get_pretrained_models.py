@@ -142,21 +142,6 @@ def main():
             "assets": [],
             "filename": "td-syn_dit-l_mrcnn.pth",
         },
-        # LayoutReader
-        # https://github.com/microsoft/unilm/tree/master/layoutreader
-        "LayoutReader": {
-            "url": "https://layoutlm.blob.core.windows.net/readingbank/model/layoutreader-base-readingbank.zip?sv=2022-11-02&ss=b&srt=o&sp=r&se=2033-06-08T16:48:15Z&st=2023-06-08T08:48:15Z&spr=https&sig=a9VXrihTzbWyVfaIDlIT1Z0FoR1073VB0RLQUMuudD4%3D",
-            "dir": os.path.join(__tmp_path__, "unilm/layoutreader"),
-            "assets": [],
-            "filename": "layoutreader-base-readingbank.zip",
-        },
-        # https://github.com/doc-analysis/ReadingBank
-        "ReadingBank": {
-            "url": "https://layoutlm.blob.core.windows.net/readingbank/dataset/ReadingBank.zip?sv=2022-11-02&ss=b&srt=o&sp=r&se=2033-06-08T16:48:15Z&st=2023-06-08T08:48:15Z&spr=https&sig=a9VXrihTzbWyVfaIDlIT1Z0FoR1073VB0RLQUMuudD4%3D",
-            "dir": os.path.join(__tmp_path__, "unilm/layoutreader"),
-            "assets": [],
-            "filename": "ReadingBank.zip",
-        },
         # https://github.com/clovaai/deep-text-recognition-benchmark/tree/master
         "TPS-ResNet-BiLSTM-Attn.pt": {
             "url": "https://www.dropbox.com/sh/j3xmli4di1zuv3s/AAArdcPgz7UFxIHUuKNOeKv_a?dl=1",

@@ -160,7 +160,7 @@ class RAGIndex(BaseModel):
 
     # Embedding configuration
     embedding_model: str = Field(
-        default="jinaai/jina-embeddings-v4",
+        default="Qwen/Qwen3-VL-Embedding-2B",
         description="Embedding model to use for this index",
     )
     embedding_dim: int = Field(

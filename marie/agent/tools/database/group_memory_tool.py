@@ -22,7 +22,7 @@ from marie.helper import run_async
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
-    from marie.embeddings.jina import JinaEmbeddingsV4
+    from marie.embeddings.qwen import QwenVLEmbeddings
 
 logger = MarieLogger("marie.agent.tools.group_memory")
 
@@ -89,9 +89,9 @@ class GroupMemoryTool(AgentTool):
     Example:
         ```python
         from marie.agent.tools.database import GroupMemoryTool
-        from marie.embeddings.jina import JinaEmbeddingsV4
+        from marie.embeddings.qwen import QwenVLEmbeddings
 
-        embeddings = JinaEmbeddingsV4()
+        embeddings = QwenVLEmbeddings()
         tool = GroupMemoryTool(
             group_id="document-analysis-001",
             agent_id="analyzer",
@@ -119,7 +119,7 @@ class GroupMemoryTool(AgentTool):
         self,
         group_id: str,
         agent_id: str,
-        embeddings: Optional["JinaEmbeddingsV4"] = None,
+        embeddings: Optional["QwenVLEmbeddings"] = None,
         db_config: Optional[Dict[str, Any]] = None,
         schema_name: str = "marie",
         default_ttl_seconds: Optional[int] = None,

@@ -6,7 +6,7 @@ import diskcache as dc
 import torch
 from PIL import Image
 from tenacity import retry, stop_after_attempt, wait_random_exponential
-from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig
+from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from marie.engine.base import EngineLM, cached
 from marie.engine.engine_utils import (
@@ -52,19 +52,11 @@ class TransformerEngine(EngineLM):
         self.device = resolved_devices[0]
         self.device_str = self.device.type
 
-        nf4_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-        )
-
-        self.model = AutoModelForVision2Seq.from_pretrained(
+        self.model = AutoModelForImageTextToText.from_pretrained(
             model_name_or_path,
-            torch_dtype=torch.bfloat16 if self.device.type == "cuda" else torch.float32,
+            dtype=torch.bfloat16 if self.device.type == "cuda" else torch.float32,
             device_map="auto",  # Let the library handle device allocation automatically
-            quantization_config=nf4_config if self.device.type == "cuda" else None,
-        )  # .to(self.device)
+        )
 
         self.processor = AutoProcessor.from_pretrained(
             model_name_or_path, **processor_kwargs

@@ -341,8 +341,8 @@ class SuryaADETRDecoderSdpaAttention(nn.Module):
         return attn_output
 
     def _setup_cache(self, batch_size, device, dtype=None):
-        if dtype is None and self.config.torch_dtype is not None:
-            dtype = self.config.torch_dtype
+        if dtype is None and self.config.dtype is not None:
+            dtype = self.config.dtype
         dtype = dtype if dtype is not None else torch.float32
 
         # Setup initial caches
@@ -592,8 +592,9 @@ class SuryaADETRDecoderPreTrainedModel(PreTrainedModel):
     def _tie_weights(self):
         pass
 
-    def tie_weights(self):
-        pass
+    def tie_weights(self, recompute_mapping: bool = True):
+        # Surya ADETR models tie no weights; keep the v5 loader bookkeeping.
+        self.all_tied_weights_keys = {}
 
 
 class SuryaADETRDecoderModel(SuryaADETRDecoderPreTrainedModel):

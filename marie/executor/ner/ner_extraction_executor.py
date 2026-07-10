@@ -7,7 +7,7 @@ import torch.nn.functional as nn
 from PIL import Image, ImageDraw
 from transformers import (
     AutoModelForTokenClassification,
-    LayoutLMv3FeatureExtractor,
+    LayoutLMv3ImageProcessor,
     LayoutLMv3Processor,
     LayoutLMv3TokenizerFast,
 )
@@ -121,7 +121,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
         """prepare for the model"""
         # Method:2 Create Layout processor with custom future extractor
         # Max model size is 512, so we will need to handle any documents larger than that
-        feature_extractor = LayoutLMv3FeatureExtractor(
+        image_processor = LayoutLMv3ImageProcessor(
             apply_ocr=False, do_resize=True, resample=Image.BILINEAR
         )
         tokenizer = LayoutLMv3TokenizerFast.from_pretrained(
@@ -130,7 +130,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
         )
 
         processor = LayoutLMv3Processor(
-            feature_extractor=feature_extractor, tokenizer=tokenizer
+            image_processor=image_processor, tokenizer=tokenizer
         )
 
         return processor

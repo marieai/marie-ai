@@ -668,11 +668,11 @@ def create_fastapi_router(
         from marie.api.routes.rag import create_fastapi_router
         from marie.rag import RAGRetriever
         from marie.vector_stores.pgvector import PGVectorStore
-        from marie.embeddings.jina import JinaEmbeddingsV4
+        from marie.embeddings.qwen import QwenVLEmbeddings
 
         # Initialize components
         store = PGVectorStore(connection_string="...")
-        embeddings = JinaEmbeddingsV4()
+        embeddings = QwenVLEmbeddings()
         retriever = RAGRetriever(vector_store=store, embeddings=embeddings)
 
         # Create router

@@ -140,7 +140,7 @@ class OpenAITransformerEmbeddings(EmbeddingsBase):
             inputs = processor(text=None, images=image, return_tensors="pt").to(
                 model.device
             )
-            embedding = model.get_image_features(**inputs)
+            embedding = model.get_image_features(**inputs).pooler_output
             # convert the embeddings to numpy array
             embedding_as_np = embedding.cpu().detach().numpy()
             return embedding_as_np
@@ -148,6 +148,6 @@ class OpenAITransformerEmbeddings(EmbeddingsBase):
 
 def get_single_text_embedding(model, tokenizer, text):
     inputs = tokenizer(text, return_tensors="pt").to(model.device)
-    text_embeddings = model.get_text_features(**inputs)
+    text_embeddings = model.get_text_features(**inputs).pooler_output
     embedding_as_np = text_embeddings.cpu().detach().numpy()
     return embedding_as_np

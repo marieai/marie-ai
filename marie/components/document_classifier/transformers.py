@@ -143,7 +143,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 model=model_name_or_path,
                 tokenizer=tokenizer,
                 revision=model_version,
-                use_auth_token=use_auth_token,
+                token=use_auth_token,
                 device=resolved_devices[0],
             )
         elif task == "text-classification":

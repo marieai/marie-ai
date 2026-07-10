@@ -51,6 +51,11 @@ class TableRecEncoderDecoderModel(S3DownloaderMixin, PreTrainedModel):
         self.encoder.config = self.config.encoder
         self.decoder.config = self.config.decoder
 
+        # v5 loading machinery requires the tied-weights bookkeeping that
+        # post_init()/tie_weights() populate; tie_word_embeddings is False so
+        # no weights are actually tied.
+        self.post_init()
+
     def get_encoder(self):
         return self.encoder
 
