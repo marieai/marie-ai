@@ -111,7 +111,7 @@ class RAGIngestQueryDefinition(QueryDefinition):
     single document and batch ingestion modes.
 
     Features:
-    - Multimodal embeddings (text + images via JinaEmbeddingsV4)
+    - Multimodal embeddings (text + images via QwenVLEmbeddings)
     - Batch mode for high throughput
     - Metadata attachment
     - Reference document grouping

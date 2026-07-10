@@ -52,9 +52,11 @@ uv run marie --help
 CUDA profile:
 
 ```shell
-uv sync --extra cu130 --group dev
-uv run python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
+uv sync --locked --extra cu130 --group dev
+uv run --locked --extra cu130 python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 ```
+
+Keep `--extra cu130` on CUDA `uv run` commands. A plain `uv run` does not select optional extras, so it does not enforce the CUDA/ML package pins. `--locked` also prevents the command from changing the committed dependency resolution.
 
 ## Clean Virtual Environments
 
@@ -81,15 +83,15 @@ ln -sfn ~/environments/marie-ai-py312 .venv
 uv, `uv run`, and IDE tooling resolve the `.venv` symlink normally, so from here the standard project flow works unchanged:
 
 ```shell
-uv sync --extra cu130 --group dev
-uv run marie --help
+uv sync --locked --extra cu130 --group dev
+uv run --locked --extra cu130 marie --help
 ```
 
 To rebuild the environment from a clean slate, clear the target and re-sync — the symlink stays in place (`--clear` wipes the environment at that path):
 
 ```shell
 uv venv ~/environments/marie-ai-py312 --python 3.12 --clear
-uv sync --extra cu130 --group dev
+uv sync --locked --extra cu130 --group dev
 ```
 
 Note that `rm -rf .venv` only removes the symlink, not the environment. Switching a checkout to another lane is just re-pointing the link:
@@ -262,14 +264,16 @@ uv run python -c "import marie; print(marie.__version__)"
 CUDA smoke:
 
 ```shell
-uv run python - <<'PY'
+uv run --locked --extra cu130 python - <<'PY'
 import torch
 import detectron2
 import faiss
+import transformers
 
 print("torch", torch.__version__, torch.version.cuda)
 print("cuda", torch.cuda.is_available())
 print("detectron2", detectron2.__version__)
 print("faiss_gpus", faiss.get_num_gpus())
+print("transformers", transformers.__version__)
 PY
 ```

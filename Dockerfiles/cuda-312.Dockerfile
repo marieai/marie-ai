@@ -1,93 +1,62 @@
-# !!! An ARG declared before a FROM is outside of a build stage, so it can’t be used in any instruction after a FROM
+# syntax=docker/dockerfile:1
 ARG CUDA_VERSION=13.0.1
 
 FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS build-image
 
 COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
 
-ARG http_proxy
-ARG https_proxy
-ARG no_proxy="${no_proxy}"
-ARG socks_proxy
-ARG TZ="Etc/UTC"
-ARG MARIE_CONFIGURATION="production"
-
-# given by builder's env
-ARG VCS_REF
-ARG PY_VERSION=3.12
-ARG BUILD_DATE
-ARG MARIE_VERSION
-ARG TARGETPLATFORM
-
-# constant, wont invalidate cache
-LABEL org.opencontainers.image.vendor="Marie AI" \
-      org.opencontainers.image.licenses="Apache 2.0" \
-      org.opencontainers.image.title="MarieAI" \
-      org.opencontainers.image.description="Deploy production-ready AI agent systems for document processing, content analysis, and multimodal intelligence via containerized cloud services" \
-      org.opencontainers.image.authors="hello@marieai.co" \
-      org.opencontainers.image.url="https://github.com/marieai/marie-ai" \
-      org.opencontainers.image.documentation="https://docs.marieai.co" \
-      org.opencontainers.image.created=${BUILD_DATE} \
-      org.opencontainers.image.source="https://github.com/marieai/marie-ai${VCS_REF}" \
-      org.opencontainers.image.version=${MARIE_VERSION} \
-      org.opencontainers.image.revision=${VCS_REF}
-
-
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy
 
 # Tweak this list to reduce build time
 # https://developer.nvidia.com/cuda-gpus
-ENV TORCH_CUDA_ARCH_LIST "7.5;8.0;8.6;8.9;9.0"
+ENV TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0"
 
-ENV PYTHONUNBUFFERED=1 \
-    UV_LINK_MODE=copy
+RUN test -e /usr/local/cuda/bin/nvcc && /usr/local/cuda/bin/nvcc --version
 
-
-RUN test -e /usr/local/cuda/bin/nvcc
-RUN /usr/local/cuda/bin/nvcc --version
-
+# Ubuntu 24.04 ships Python 3.12 natively; no external PPA needed.
 RUN apt-get update -o APT::Update::Error-Mode=any && \
-    DEBIAN_FRONTEND=noninteractive apt-get -qq install software-properties-common
-RUN add-apt-repository ppa:deadsnakes/ppa
-
-RUN apt-get update && \
-        apt-get install wget -y \
+    apt-get install -y --no-install-recommends \
         build-essential \
-        curl \
-        git \
-        lshw \
-        zlib1g \
-        python3.12 \
-        python3.12-venv \
-        python3.12-dev \
-        python3-opencv \
-        libopenblas-dev \
-        libopenmpi-dev \
-        openmpi-bin \
-        openmpi-common \
-        gfortran \
-        libomp-dev \
-        ninja-build \
+        ca-certificates \
         cmake \
+        curl \
         gcc \
         g++ \
+        gfortran \
+        git \
         imagemagick \
-        libmagickwand-dev \
-        libtiff-dev \
+        libgl1 \
+        libglib2.0-0 \
         libjpeg-dev \
+        libmagickwand-dev \
+        libomp-dev \
+        libopenblas-dev \
+        libopenmpi-dev \
         libpng-dev \
         libpq-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get autoremove \
-    && apt-get clean
-
+        libtiff-dev \
+        lshw \
+        ninja-build \
+        openmpi-bin \
+        openmpi-common \
+        python3.12 \
+        python3.12-dev \
+        python3.12-venv \
+        wget \
+        zlib1g && \
+    rm -rf /var/lib/apt/lists/*
 
 # Ensure the correct symbolic links
-RUN ln -sf /usr/bin/python3.12 /usr/bin/python3 \
-&& ln -sf /usr/bin/python3.12 /usr/bin/python
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python3 && \
+    ln -sf /usr/bin/python3.12 /usr/bin/python
 
 # change on pyproject.toml or uv.lock will invalidate the dependency cache
 COPY pyproject.toml uv.lock README.md /tmp/
+# the project version is dynamic (attr: marie.__version__); uv sync needs it
+# to build project metadata even with --no-install-project
+COPY marie/__init__.py /tmp/marie/__init__.py
 # Copy directories
 COPY packages/ /tmp/packages/
 COPY patches/ /tmp/patches/
@@ -110,7 +79,8 @@ RUN set -eux; \
         /tmp/wheels/detectron2-*.whl \
         /tmp/wheels/faiss*.whl
 
-# Install the CUDA profile from uv.lock.
+# Install the CUDA profile dependencies from uv.lock (project excluded so this
+# layer stays cached across source-only changes).
 RUN --mount=type=cache,target=/root/.cache/uv \
     set -eux; \
     cd /tmp; \
@@ -124,125 +94,91 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         echo "Attempt $i failed, purging uv cache and retrying..."; \
         uv cache clean || true; \
         sleep 5; \
-    done; \
-    python3 /tmp/patches/patch-omegaconf-py312.py --no-confirm
+    done
 
-# verify that virtual environment is used and python version is correct
-RUN python3 --version \
-    && which python3
+# Full source; install the project itself into the venv, apply the installed-
+# metadata patches, and verify the final dependency set. The runtime stage only
+# copies the finished /opt/venv — it never runs uv.
+COPY . /marie/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    cd /marie && \
+    uv sync --locked --no-dev --extra cu130 --no-editable --compile-bytecode --python /usr/bin/python3.12 && \
+    python3 /tmp/patches/patch-omegaconf-py312.py --no-confirm && \
+    python3 /tmp/patches/patch-detectron2-metadata.py --no-confirm && \
+    uv pip check --python /opt/venv/bin/python && \
+    python3 --version && which python3
 
-# Patch native wheel metadata after the lock install, then verify the dependency set.
-RUN python3 /tmp/patches/patch-detectron2-metadata.py --no-confirm \
-    && uv pip check --python /opt/venv/bin/python
 
+FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu24.04
 
-# No inference is being done currently 
-#RUN git clone https://github.com/NVIDIA/apex && \
-#    cd apex && git checkout 2386a912164b0c5cfcd8be7a2b890fbac5607c82 && \
-#    sed -i '/check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/d' pyproject.toml && \
-#    uv pip install --python /opt/venv/bin/python --no-build-isolation --config-setting=--cpp_ext --config-setting=--cuda_ext .
-
-FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04
-
-COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
-
-ARG http_proxy
-ARG https_proxy
-ARG no_proxy="${no_proxy}"
-ARG socks_proxy
 ARG TZ="Etc/UTC"
 ARG VCS_REF
 ARG BUILD_DATE
 ARG MARIE_VERSION
 
-ENV TERM=xterm-256color \
-    http_proxy=${http_proxy}   \
-    https_proxy=${https_proxy} \
-    no_proxy=${no_proxy} \
-    socks_proxy=${socks_proxy} \
-    LANG='C.UTF-8'  \
-    LC_ALL='C.UTF-8' \
+ENV DEBIAN_FRONTEND=noninteractive \
+    TERM=xterm-256color \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
     TZ=${TZ} \
-    UV_PROJECT_ENVIRONMENT=/opt/venv \
-    UV_LINK_MODE=copy
+    PYTHONUNBUFFERED=1
 
-# the following label use ARG hence will invalid the cache
-LABEL org.opencontainers.image.created=${BUILD_DATE} \
-      org.opencontainers.image.source="https://github.com/marieai/marie-ai${VCS_REF}" \
-      org.opencontainers.image.version=${MARIE_VERSION} \
-      org.opencontainers.image.revision=${VCS_REF}
-
-
-# Install necessary apt packages
+# Runtime libraries only: no compilers, headers, or -dev packages.
+# Ubuntu 24.04 ships Python 3.12 natively; no external PPA needed.
 RUN apt-get update -o APT::Update::Error-Mode=any && \
-    DEBIAN_FRONTEND=noninteractive apt-get -qq install software-properties-common
-RUN add-apt-repository ppa:deadsnakes/ppa
-
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get --no-install-recommends install -yq \
+    apt-get install -y --no-install-recommends \
         ca-certificates \
-        tzdata \
-        python3.12 \
-        python3.12-venv \
-        python3.12-dev \
-        python3-opencv \
-        git \
-        git-lfs \
-        ssh \
         curl \
-        vim \
-        imagemagick \
-        libtiff-dev \
-        libomp-dev \
-        libjemalloc-dev \
-        libgoogle-perftools-dev \
+        djvulibre-bin \
+        git \
         graphviz \
-        libmagickwand-dev \
-        libreoffice-core \
-        libreoffice-writer \
+        imagemagick \
+        libgl1 \
+        libglib2.0-0 \
+        libjemalloc2 \
+        libmagickwand-6.q16-7t64 \
+        libopenblas0 \
+        libpq5 \
         libreoffice-calc \
+        libreoffice-core \
         libreoffice-impress \
+        libreoffice-writer \
+        openssh-client \
         poppler-utils \
+        python3.12 \
         texlive-latex-base \
-        djvulibre-bin && \
+        tzdata && \
     ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
-    ln -s /usr/lib/x86_64-linux-gnu/libjemalloc.so /usr/lib/libjemalloc.so && \
-    ln -s /usr/lib/x86_64-linux-gnu/libtcmalloc.so /usr/lib/libtcmalloc.so && \
-    ln -s /usr/lib/x86_64-linux-gnu/libiomp5.so /usr/lib/libiomp5.so && \
     dpkg-reconfigure -f noninteractive tzdata && \
-    rm -rf /var/lib/apt/lists/* \
-    && apt-get autoremove \
-    && apt-get clean
+    rm -rf /var/lib/apt/lists/*
 
-ENV LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libjemalloc.so"
-ENV WORKDIR /marie
+# jemalloc is the chosen allocator (runtime lib, not the -dev symlink).
+ENV LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libjemalloc.so.2"
 
-# Copy python virtual environment from build-image
+# Copy the finished python virtual environment from build-image
 COPY --from=build-image /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 
-# Install and initialize MARIE-AI, copy all necessary files
-# copy will almost always invalididate the cache
 COPY ./im-policy.xml /etc/ImageMagick-6/policy.xml
 
-# copy will almost always invalid the cache
+# Runtime assets (configs, templates, protos); the package itself is already
+# installed non-editably inside /opt/venv.
 COPY . /marie/
 
-# Testing force copy
-COPY ./marie/proto/docarray_v1/ /marie/proto/docarray_v1/
-COPY ./marie/proto/docarray_v2/ /marie/proto/docarray_v2/
+WORKDIR /marie
 
+# Labels last: BUILD_DATE/VCS_REF change every build and would otherwise
+# invalidate every layer after them.
+LABEL org.opencontainers.image.vendor="Marie AI" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.title="MarieAI" \
+      org.opencontainers.image.description="Deploy production-ready AI agent systems for document processing, content analysis, and multimodal intelligence via containerized cloud services" \
+      org.opencontainers.image.authors="hello@marieai.co" \
+      org.opencontainers.image.url="https://github.com/marieai/marie-ai" \
+      org.opencontainers.image.documentation="https://docs.marieai.co" \
+      org.opencontainers.image.source="https://github.com/marieai/marie-ai" \
+      org.opencontainers.image.created=${BUILD_DATE} \
+      org.opencontainers.image.version=${MARIE_VERSION} \
+      org.opencontainers.image.revision=${VCS_REF}
 
-# this is important otherwise we will get python error that module is not found
-# RUN export PYTHONPATH="/marie"
-# ENV PYTHONPATH "${PYTHONPATH}:/marie"
-
-# install marie from the locked uv project without resolving new dependencies
-RUN cd /marie && \
-    uv sync --locked --no-dev --extra cu130 --no-editable --compile-bytecode --python /opt/venv/bin/python && \
-    uv pip check --python /opt/venv/bin/python && \
-    echo "MARIE-AI installed successfully"
-    #rm -rf /tmp/* && rm -rf /marie
-
-WORKDIR ${WORKDIR}
 ENTRYPOINT ["marie"]

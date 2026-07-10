@@ -18,7 +18,7 @@ from marie.agent.tools.base import AgentTool, ToolMetadata, ToolOutput
 from marie.logging_core.logger import MarieLogger
 
 if TYPE_CHECKING:
-    from marie.embeddings.jina import JinaEmbeddingsV4
+    from marie.embeddings.qwen import QwenVLEmbeddings
     from marie.rag.retriever import RAGRetriever
     from marie.vector_stores.pgvector import PGVectorStore
 
@@ -122,11 +122,11 @@ class RAGTool(AgentTool):
         ```python
         from marie.agent.tools import RAGTool
         from marie.vector_stores.pgvector import PGVectorStore
-        from marie.embeddings.jina import JinaEmbeddingsV4
+        from marie.embeddings.qwen import QwenVLEmbeddings
 
         # Initialize components
         store = PGVectorStore(connection_string="...")
-        embeddings = JinaEmbeddingsV4()
+        embeddings = QwenVLEmbeddings()
 
         # Create tool
         rag_tool = RAGTool(
@@ -143,7 +143,7 @@ class RAGTool(AgentTool):
     def __init__(
         self,
         vector_store: "PGVectorStore",
-        embeddings: "JinaEmbeddingsV4",
+        embeddings: "QwenVLEmbeddings",
         retriever: Optional["RAGRetriever"] = None,
         default_source_id: Optional[str] = None,
         allowed_sources: Optional[List[str]] = None,
@@ -156,7 +156,7 @@ class RAGTool(AgentTool):
 
         Args:
             vector_store: PGVectorStore instance for storage.
-            embeddings: JinaEmbeddingsV4 instance for creating embeddings.
+            embeddings: QwenVLEmbeddings instance for creating embeddings.
             retriever: Optional RAGRetriever for advanced search features.
             default_source_id: Default source ID for operations.
             allowed_sources: Limit operations to specific sources (security).
@@ -536,7 +536,7 @@ class RAGSearchTool(RAGTool):
     def __init__(
         self,
         vector_store: "PGVectorStore",
-        embeddings: "JinaEmbeddingsV4",
+        embeddings: "QwenVLEmbeddings",
         retriever: Optional["RAGRetriever"] = None,
         allowed_sources: Optional[List[str]] = None,
         name: str = "rag_search",
@@ -592,7 +592,7 @@ class RAGIngestTool(RAGTool):
     def __init__(
         self,
         vector_store: "PGVectorStore",
-        embeddings: "JinaEmbeddingsV4",
+        embeddings: "QwenVLEmbeddings",
         default_source_id: str,
         allowed_sources: Optional[List[str]] = None,
         name: str = "rag_ingest",
