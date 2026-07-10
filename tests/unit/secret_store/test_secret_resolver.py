@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from marie.secrets import (
+from marie.secret_store import (
     CredentialRequirement,
     CredentialResolver,
     DatabaseSecretProvider,

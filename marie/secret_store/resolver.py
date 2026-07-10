@@ -9,7 +9,7 @@ against a pluggable `SecretProvider` backend:
     {{$secrets.NAME}}              -> SecretProvider.get_secret(NAME)
     {{$secrets.PROVIDER.NAME}}     -> SecretProvider.get_secret(NAME)  (provider hint ignored)
 
-This lives at `marie.secrets` so any component (executors, scheduler, connectors,
+This lives at `marie.secret_store` so any component (executors, scheduler, connectors,
 agent tools, …) can reuse it. A real database/Vault backend slots in behind the
 same `SecretProvider` protocol later.
 """
@@ -20,7 +20,7 @@ import re
 
 from pydantic import BaseModel, ConfigDict
 
-from marie.secrets.providers import EnvSecretProvider, SecretProvider
+from marie.secret_store.providers import EnvSecretProvider, SecretProvider
 
 _SECRET_EXPR_RE = re.compile(r"^\{\{\s*\$secrets\.([A-Za-z0-9_.]+)\s*\}\}$")
 

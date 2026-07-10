@@ -8,13 +8,13 @@ the scheduler, connectors, and agent tools share one resolver.
 
 from __future__ import annotations
 
-from marie.secrets.database import DatabaseSecretProvider
-from marie.secrets.providers import (
+from marie.secret_store.database import DatabaseSecretProvider
+from marie.secret_store.providers import (
     EnvSecretProvider,
     MappingSecretProvider,
     SecretProvider,
 )
-from marie.secrets.resolver import (
+from marie.secret_store.resolver import (
     CredentialRequirement,
     CredentialResolver,
     parse_secret_ref,

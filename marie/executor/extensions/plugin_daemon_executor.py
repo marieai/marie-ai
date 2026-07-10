@@ -1,13 +1,8 @@
 import json
 import os
-import platform
-import shutil
 import subprocess
-import sys
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -16,23 +11,17 @@ from docarray import DocList
 from docarray.documents import TextDoc
 
 from marie import requests
+from marie.constants import DEFAULT_DAEMON_ADDR, DEFAULT_TENANT_UUID
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
-
-DEFAULT_DAEMON_ADDR = "127.0.0.1:8099"
-DEFAULT_DAEMON_BIN = Path("/opt/marie/bin/marie-plugin-daemon")
-# Execution-time fallback when the job/request context carries no tenant yet.
-# Kept out of saved node definitions; daemon install + invoke must share it.
-DEFAULT_TENANT_UUID = "00000000-0000-0000-0000-000000000000"
-
-
-@dataclass(frozen=True)
-class DaemonDiscovery:
-    mode: str
-    source: str
-    url: str | None = None
-    binary: str | None = None
-    message: str | None = None
+from marie.plugin_daemon import (
+    build_invocation_envelope,
+    discover_daemon,
+    parse_daemon_frames,
+    runtime_error_frame,
+)
+from marie.plugin_daemon.frames import as_text, first_text, now_utc
+from marie.secret_store import CredentialRequirement, CredentialResolver
 
 
 class MariePluginDaemonExecutor(MarieExecutor):
@@ -152,11 +141,9 @@ class MariePluginDaemonExecutor(MarieExecutor):
         back to the nil UUID when absent (W2 scope; install + invoke must share
         the same fallback tenant or the daemon returns ``plugin_not_installed``).
         """
-        # Lazy imports: plugin_daemon_client imports DEFAULT_DAEMON_ADDR from this
-        # module, so importing it at module level would create a circular import.
-        from marie.agent.tools.plugin_daemon_client import build_invocation_envelope
+        # Lazy import: marie.agent pulls in heavy dependencies (and itself
+        # imports marie.executor); keep it out of this module's import path.
         from marie.agent.tools.plugin_tool import PluginToolSpec
-        from marie.secrets.resolver import CredentialRequirement, CredentialResolver
 
         params = parameters or {}
         request_id = str(params.get("job_id") or "")
@@ -449,215 +436,10 @@ class MariePluginDaemonExecutor(MarieExecutor):
         return parse_daemon_frames(raw, request_id)
 
 
-def discover_daemon(
-    daemon_url: str | None,
-    daemon_bin: str | None,
-    daemon_addr: str,
-    env: Mapping[str, str] | None = None,
-) -> DaemonDiscovery:
-    values = os.environ if env is None else env
-    configured_url = first_text(daemon_url, values.get("MARIE_PLUGIN_DAEMON_URL"))
-    if configured_url:
-        return DaemonDiscovery(
-            mode="sidecar_proxy", source="url", url=configured_url.rstrip("/")
-        )
-
-    configured_bin = first_text(daemon_bin, values.get("MARIE_PLUGIN_DAEMON_BIN"))
-    if configured_bin:
-        path = Path(configured_bin)
-        if executable(path):
-            return child_discovery(path, daemon_addr, "explicit_binary")
-        return DaemonDiscovery(
-            mode="unavailable",
-            source="explicit_binary",
-            message=f"Configured marie-plugin-daemon binary is not executable: {path}",
-        )
-
-    if executable(DEFAULT_DAEMON_BIN):
-        return child_discovery(DEFAULT_DAEMON_BIN, daemon_addr, "image_binary")
-
-    dev_binary = local_dist_binary()
-    if dev_binary and executable(dev_binary):
-        return child_discovery(dev_binary, daemon_addr, "local_dist")
-
-    path_binary = shutil.which("marie-plugin-daemon", path=values.get("PATH"))
-    if path_binary:
-        return child_discovery(Path(path_binary), daemon_addr, "path")
-
-    return DaemonDiscovery(
-        mode="unavailable",
-        source="not_found",
-        message="marie-plugin-daemon is not configured and no binary was found",
-    )
-
-
 def frames_to_docs(frames: list[dict[str, Any]]) -> DocList[TextDoc]:
     return DocList[TextDoc](
         [TextDoc(text=json.dumps(frame, separators=(",", ":"))) for frame in frames]
     )
-
-
-def parse_daemon_frames(raw: str, request_id: str) -> list[dict[str, Any]]:
-    value = parse_json(raw)
-    if isinstance(value, list):
-        return [
-            normalize_daemon_frame(item, request_id, sequence)
-            for sequence, item in enumerate(value)
-        ]
-    if value is not None:
-        return [normalize_daemon_frame(value, request_id, 0)]
-
-    frames: list[dict[str, Any]] = []
-    sequence = 0
-    for line in raw.splitlines():
-        item = parse_daemon_line(line)
-        if item is None:
-            continue
-        frame = normalize_daemon_frame(item, request_id, sequence)
-        frames.append(frame)
-        sequence = int(frame.get("sequence", sequence)) + 1
-
-    if frames:
-        return frames
-    text = raw.strip()
-    return [normalize_daemon_frame(text, request_id, 0)] if text else []
-
-
-def parse_daemon_line(line: str) -> Any | None:
-    text = line.strip()
-    if not text or text == "[DONE]" or text.startswith(":"):
-        return None
-    if text.startswith("data:"):
-        text = text[5:].strip()
-    value = parse_json(text)
-    return value if value is not None else text
-
-
-def parse_json(value: str) -> Any | None:
-    try:
-        return json.loads(value)
-    except json.JSONDecodeError:
-        return None
-
-
-def normalize_daemon_frame(raw: Any, request_id: str, sequence: int) -> dict[str, Any]:
-    if isinstance(raw, dict):
-        frame = dict(raw)
-        frame["requestId"] = (
-            first_text(
-                as_text(frame.get("requestId")),
-                as_text(frame.get("request_id")),
-                request_id,
-            )
-            or request_id
-        )
-        if not isinstance(frame.get("sequence"), int):
-            frame["sequence"] = sequence
-        frame["type"] = (
-            first_text(as_text(frame.get("type")), as_text(frame.get("frameType")))
-            or "event"
-        )
-        frame.setdefault("createdAt", now_utc().isoformat())
-        frame.setdefault("final", False)
-        if frame["type"] == "error" and not isinstance(frame.get("error"), dict):
-            payload = frame.get("payload")
-            payload_map = payload if isinstance(payload, dict) else {}
-            code = (
-                first_text(as_text(frame.get("code")), as_text(payload_map.get("code")))
-                or "runtime_error"
-            )
-            message = (
-                first_text(
-                    as_text(frame.get("message")), as_text(payload_map.get("message"))
-                )
-                or "Runtime error"
-            )
-            frame["error"] = {"code": code, "message": message}
-        return frame
-
-    return {
-        "requestId": request_id,
-        "sequence": sequence,
-        "type": "text",
-        "payload": str(raw),
-        "contentType": "text/plain",
-        "artifactId": None,
-        "final": False,
-        "error": None,
-        "createdAt": now_utc().isoformat(),
-    }
-
-
-def runtime_error_frame(
-    request_id: str,
-    message: str,
-    code: str = "runtime_unavailable",
-    sequence: int = 0,
-) -> dict[str, Any]:
-    return {
-        "requestId": request_id,
-        "sequence": sequence,
-        "type": "error",
-        "payload": {"code": code, "message": message},
-        "contentType": "application/json",
-        "artifactId": None,
-        "final": True,
-        "error": {"code": code, "message": message},
-        "createdAt": now_utc().isoformat(),
-    }
-
-
-def child_discovery(binary: Path, daemon_addr: str, source: str) -> DaemonDiscovery:
-    return DaemonDiscovery(
-        mode="binary_child",
-        source=source,
-        url=f"http://{daemon_addr}",
-        binary=str(binary),
-    )
-
-
-def local_dist_binary() -> Path | None:
-    repo_root = Path(__file__).resolve().parents[3]
-    dist = repo_root / "packages" / "marie-plugin-daemon" / "dist"
-    # Prefer the platform-suffixed build, but fall back to a flat dist/ binary
-    # (what `make build` produces: dist/marie-plugin-daemon).
-    suffix = platform_suffix()
-    candidates = []
-    if suffix is not None:
-        candidates.append(dist / suffix / "marie-plugin-daemon")
-    candidates.append(dist / "marie-plugin-daemon")
-    for candidate in candidates:
-        if executable(candidate):
-            return candidate
-    return candidates[0] if candidates else None
-
-
-def platform_suffix() -> str | None:
-    os_name = {"linux": "linux", "darwin": "darwin"}.get(sys.platform)
-    arch = {
-        "x86_64": "amd64",
-        "amd64": "amd64",
-        "aarch64": "arm64",
-        "arm64": "arm64",
-    }.get(platform.machine().lower())
-    if not os_name or not arch:
-        return None
-    return f"{os_name}-{arch}"
-
-
-def executable(path: Path) -> bool:
-    return path.is_file() and os.access(path, os.X_OK)
-
-
-def first_text(*values: str | None) -> str | None:
-    for value in values:
-        if value and value.strip():
-            return value.strip()
-    return None
-
-
-def as_text(value: Any) -> str | None:
-    return value if isinstance(value, str) and value.strip() else None
 
 
 def unavailable_health(
@@ -674,7 +456,3 @@ def unavailable_health(
         "message": message,
         "checked_at": (checked_at or now_utc()).isoformat(),
     }
-
-
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)

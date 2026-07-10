@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from marie.logging_core.logger import MarieLogger
 from marie.rag.models import RAGIndex
 
-logger = MarieLogger("marie.api.routes.rag_index").logger
+logger = MarieLogger("marie.api.routes.kb_index").logger
 
 
 # -------------------------------------------------------------------------
@@ -145,7 +145,7 @@ class RAGIndexRouter:
     Example with FastAPI:
         ```python
         from fastapi import FastAPI
-        from marie.api.routes.rag_index import create_fastapi_router
+        from marie.api.routes.kb_index import create_fastapi_router
 
         app = FastAPI()
         index_router = create_fastapi_router(vector_store=store)

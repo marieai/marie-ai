@@ -3,7 +3,7 @@
 A `SecretProvider` resolves a secret *name* to its value. Backends are pluggable
 so the same secret references resolve regardless of where the value actually
 lives (environment, an in-memory mapping/mock, and — later — a database or a
-dedicated secret manager). This lives at `marie.secrets` so any component
+dedicated secret manager). This lives at `marie.secret_store` so any component
 (executors, scheduler, connectors, agent tools, …) can reuse it.
 """
 

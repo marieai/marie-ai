@@ -10,5 +10,5 @@ VALUES
      'active',
      30,
      '{"subtype": "kb_document", "provider": "s3", "prefix": "tenants/"}'::jsonb,
-     'rag_indexing')
+     'kb_indexing')
 ON CONFLICT (external_id) DO NOTHING;

@@ -386,6 +386,17 @@ class ExtractPipeline(BasePipeline):
         self.render_adlib(ref_id, frames, ocr_results, root_asset_dir)
 
         self.pack_assets(ref_id, ref_type, root_asset_dir, metadata)
+        metadata["extraction"] = {
+            "engine": "ocr",
+            "format": split_filename(ref_id)[2] or None,
+            "char_count": sum(
+                len(line["text"])
+                for page in ocr_results
+                for line in (page.get("lines") or [])
+                if "text" in line
+            ),
+            "page_count": len(ocr_results),
+        }
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir)
 

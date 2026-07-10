@@ -1,15 +1,16 @@
 """
-RAG Indexing Query Planner.
+KB Indexing Query Planner.
 
-Creates DAGs for indexing documents into vector stores.
-Uses document backend for format-aware extraction and
-VectorStoreExecutor for embedding and storage.
+Creates DAGs for indexing documents into a knowledge base's vector store.
+Uses TextExtractionExecutor (the deployed OCR/extraction executor, same one
+ocr_planner.py targets) for extraction and VectorStoreExecutor for embedding
+and storage.
 
 Runtime parameters (provided at job submission, NOT at plan creation):
     uri: S3 or file URI of the document
     ref_id: Document reference ID
     ref_type: Document type classification
-    source_id: RAG source filter (e.g., "submission:s1")
+    source_id: KB source filter (e.g., "submission:s1")
     index_name: Vector store index name
     node_type: Node classification (document, image, text)
     workflow_id: Workflow record ID for status updates
@@ -25,17 +26,16 @@ from marie.query_planner.base import (
     QueryType,
 )
 
-PLAN_ID = "rag_indexing"
+PLAN_ID = "kb_indexing"
 
 
 # Note: Registration is done in builtin.py via QueryPlanRegistry.register()
-def query_planner_rag_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+def query_planner_kb_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
     """
-    Plan a query execution graph for RAG document indexing.
+    Plan a query execution graph for KB document indexing.
 
-    Uses document backend for format-aware extraction:
-    - Parsed mode (DOCX, XLSX, etc.): Direct text extraction (fast)
-    - Frames mode (PDF, images): OCR pipeline (accurate)
+    Uses TextExtractionExecutor (extract_executor://document/extract) for
+    OCR-based extraction - the same executor ocr_planner.py targets.
 
     Pipeline: START -> EXTRACT -> EMBED_AND_STORE -> END
 
@@ -62,10 +62,19 @@ def query_planner_rag_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan
     planner_info.current_id += 1
     nodes.append(start_node)
 
-    # EXTRACT node - uses DocumentBackendExecutor
-    # Automatically routes to:
-    # - Parsed mode: DOCX, XLSX, PPTX, HTML, Markdown, CSV, Email, EPUB
-    # - Frames mode + OCR: PDF, images, legacy Office, LaTeX, RST, DjVu
+    # EXTRACT node - uses TextExtractionExecutor, the deployed extraction
+    # executor (same node ocr_planner.py targets). document_backend_executor
+    # was never part of a real deployment and is not used here.
+    #
+    # Param vocabulary of TextExtractionExecutor.extract (/document/extract):
+    #   - "layout": consumed today, but only via op_params for the tracing
+    #     span's LAYOUT_ID attribute - not read by the extraction logic itself.
+    #   - real business params it reads from `payload` (none populated by this
+    #     planner yet): "regions" (bounding boxes), "format" (coordinate
+    #     format), "mode" (PSMode), "return_ocr", "features" (pipeline config).
+    #   - "parse_mode", "layout_options", "cache_options": ride along inert -
+    #     TextExtractionExecutor does not read any of them today. Kept for
+    #     forward-compat / observability only.
     # Runtime params (uri, ref_id, ref_type) provided at job submission
     extract_node = Query(
         task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
@@ -73,10 +82,9 @@ def query_planner_rag_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan
         dependencies=[start_node.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="document_backend_executor://extract",
+            endpoint="extract_executor://document/extract",
             params={
                 "layout": layout,
-                "ocr_fallback": True,
                 **(
                     {"parse_mode": run_params["parse_mode"]}
                     if "parse_mode" in run_params
@@ -155,7 +163,7 @@ if __name__ == "__main__":
     )
 
     # Register the planner for testing (normally done via builtin.py)
-    QueryPlanRegistry.register(PLAN_ID, query_planner_rag_indexing)
+    QueryPlanRegistry.register(PLAN_ID, query_planner_kb_indexing)
 
     # Test the planner - runtime params (uri, ref_id, etc.) are NOT passed here
     # They are provided at job submission time via the job scheduler

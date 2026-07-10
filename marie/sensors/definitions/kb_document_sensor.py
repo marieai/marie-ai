@@ -1,6 +1,6 @@
-"""KB document sensor: watches the KB S3 prefix and triggers rag_indexing runs.
+"""KB document sensor: watches the KB S3 prefix and triggers kb_indexing runs.
 
-Key pattern: tenants/{tenant_id}/rag-indexes/{index_id}/sources/{source_id}/{filename}
+Key pattern: tenants/{tenant_id}/kb-indexes/{index_id}/sources/{source_id}/{filename}
 Run params come from marie_kb.index_bindings (written by marie-studio; spec D8/D11).
 """
 
@@ -18,7 +18,7 @@ from marie.sensors.types import RunRequest, SensorResult, SensorType
 
 KB_KEY_RE = re.compile(
     r"^tenants/(?P<tenant_id>[0-9a-fA-F-]{36})"
-    r"/rag-indexes/(?P<index_id>[0-9a-fA-F-]{36})"
+    r"/kb-indexes/(?P<index_id>[0-9a-fA-F-]{36})"
     r"/sources/(?P<source_id>[0-9a-fA-F-]{36})"
     r"/(?P<filename>.+)$"
 )
@@ -26,11 +26,11 @@ KB_KEY_RE = re.compile(
 
 @register_sensor(SensorType.DATA_SINK, subtype="kb_document")
 class KbDocumentSensor(S3DataSinkSensor):
-    """Sensor for monitoring KB document uploads under `tenants/.../rag-indexes/...`.
+    """Sensor for monitoring KB document uploads under `tenants/.../kb-indexes/...`.
 
     Unlike the generic S3 data sink, run params are not part of the sensor
     config: they are loaded per-index from `marie_kb.index_bindings` (owned
-    by marie-studio) so each RAG index can carry its own parse/multimodal
+    by marie-studio) so each KB index can carry its own parse/multimodal
     settings. Batch mode is not supported; each file always fires its own
     RunRequest.
     """
@@ -69,7 +69,7 @@ class KbDocumentSensor(S3DataSinkSensor):
         return {"workflow_name": row[0], "run_params": run_params}
 
     def build_run_request(self, obj: FileObject, bucket: str) -> Optional[RunRequest]:
-        """Build the rag_indexing RunRequest for a KB file, or None to skip it."""
+        """Build the kb_indexing RunRequest for a KB file, or None to skip it."""
         m = KB_KEY_RE.match(obj.key)
         if not m:
             return None
@@ -88,12 +88,12 @@ class KbDocumentSensor(S3DataSinkSensor):
         index_id = m.group("index_id")
         tenant_id = m.group("tenant_id")
         return RunRequest(
-            run_key=f"rag_indexing:{index_id}:{obj.key}",
+            run_key=f"kb_indexing:{index_id}:{obj.key}",
             job_name=binding["workflow_name"],
             run_config={
                 "uri": f"s3://{bucket}/{obj.key}",
                 "ref_id": obj.key,
-                "ref_type": "rag_document",
+                "ref_type": "kb_document",
                 "project_id": tenant_id,
                 "tenant_id": tenant_id,
                 "index_id": index_id,

@@ -189,13 +189,13 @@ class SubmissionStorage(PostgresqlMixin):
         finally:
             self._close_connection(conn)
 
-    def get_rag_indexes_for_submission(self, submission_id: str) -> List[str]:
+    def get_kb_indexes_for_submission(self, submission_id: str) -> List[str]:
         """Get RAG index IDs linked to a submission."""
         self._ensure_started()
         conn = self._get_connection()
         try:
             cursor = self._execute_sql_gracefully(
-                f"SELECT rag_index_id FROM {self._qualified_table('submission_rag_indexes')} WHERE submission_id = %s",
+                f"SELECT kb_index_id FROM {self._qualified_table('submission_kb_indexes')} WHERE submission_id = %s",
                 (submission_id,),
                 return_cursor=True,
                 connection=conn,

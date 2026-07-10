@@ -100,6 +100,14 @@ __marie_home__ = _os.path.join(str(_Path.home()), ".marie")
 
 DEPLOYMENT_STATUS_PREFIX = "deployments/status"
 
+# marie-plugin-daemon defaults, shared by the extensions executor and the
+# agent-side PluginDaemonClient.
+DEFAULT_DAEMON_ADDR = "127.0.0.1:8099"
+DEFAULT_DAEMON_BIN = _Path("/opt/marie/bin/marie-plugin-daemon")
+# Execution-time fallback when the job/request context carries no tenant yet.
+# Kept out of saved node definitions; daemon install + invoke must share it.
+DEFAULT_TENANT_UUID = "00000000-0000-0000-0000-000000000000"
+
 # default directories
 __default_extract_dir__ = _os.path.join(__config_dir__, "extract")
 __default_psql_dir__ = _os.path.join(__config_dir__, "psql")

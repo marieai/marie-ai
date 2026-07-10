@@ -17,20 +17,66 @@ Usage in workflow:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 from docarray import DocList
 from docarray.documents import TextDoc
 
 from marie import Executor, requests
+from marie.executor.kb.chunking import (
+    DEFAULT_CHUNK_OVERLAP,
+    DEFAULT_CHUNK_SIZE,
+    TextChunk,
+    chunk_text,
+)
 from marie.executor.marie_executor import MarieExecutor
-from marie.executor.rag.search_result_doc import SearchResultDoc
 from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 from marie.rag.models import SourceCitation
+from marie.storage import StorageManager
+from marie.utils.asset_util import s3_asset_path, split_filename
 
-logger = MarieLogger("marie.executor.rag.vector_store_executor").logger
+logger = MarieLogger("marie.executor.kb.vector_store_executor").logger
+
+
+def _has_usable_text(doc: Any) -> bool:
+    """True if ``doc`` already carries real text content (e.g. a TextDoc from
+    a caller other than the DAG distributor)."""
+    text = getattr(doc, "text", None)
+    return bool(text and str(text).strip())
+
+
+def _run_param(parameters: Dict[str, Any], key: str, default: Any = None) -> Any:
+    """Look up ``key`` in ``parameters["run_params"]`` (nested, studio-sent)
+    first, falling back to a top-level ``parameters[key]``."""
+    run_params = parameters.get("run_params") or {}
+    if key in run_params:
+        return run_params[key]
+    return parameters.get(key, default)
+
+
+def _connection_string_from_storage(storage: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Build a PostgreSQL DSN from the structured ``storage.psql`` block
+    (provider/hostname/port/username/password/database) that Marie service
+    configs pass to executors via ``with:``."""
+    psql = (storage or {}).get("psql") or {}
+    hostname = psql.get("hostname")
+    if not hostname:
+        return None
+    auth = ""
+    username = psql.get("username")
+    if username:
+        auth = quote(str(username), safe="")
+        password = psql.get("password")
+        if password:
+            auth += f":{quote(str(password), safe='')}"
+        auth += "@"
+    port = psql.get("port", 5432)
+    database = psql.get("database", "postgres")
+    return f"postgresql://{auth}{hostname}:{port}/{database}"
 
 
 class VectorStoreExecutor(MarieExecutor):
@@ -50,9 +96,14 @@ class VectorStoreExecutor(MarieExecutor):
         - name: vector_store
           uses: VectorStoreExecutor
           with:
-            connection_string: postgresql://user:pass@localhost/db
+            storage:
+              psql:
+                <<: *psql_conf_shared
+              s3:
+                <<: *s3_conf_shared
+                enabled: True
             embedding_model: jinaai/jina-embeddings-v4
-            embedding_dim: 2048
+            embedding_dim: 1024
         ```
     """
 
@@ -60,9 +111,9 @@ class VectorStoreExecutor(MarieExecutor):
         self,
         connection_string: Optional[str] = None,
         embedding_model: str = "jinaai/jina-embeddings-v4",
-        embedding_dim: int = 2048,
+        embedding_dim: int = 1024,
         embedding_task: str = "retrieval",
-        table_name: str = "rag_vectors",
+        table_name: str = "kb_vectors",
         use_gpu: bool = True,
         batch_size: int = 4,
         **kwargs,
@@ -84,12 +135,15 @@ class VectorStoreExecutor(MarieExecutor):
         self.logger = MarieLogger(self.__class__.__name__).logger
         self.logger.info(f"Initializing VectorStoreExecutor")
 
-        self._connection_string = connection_string or os.environ.get(
-            "PGVECTOR_CONNECTION_STRING"
+        self._connection_string = (
+            connection_string
+            or _connection_string_from_storage(kwargs.get("storage"))
+            or os.environ.get("PGVECTOR_CONNECTION_STRING")
         )
         if not self._connection_string:
             raise ValueError(
-                "connection_string required. Provide via argument or "
+                "connection_string required. Provide a storage.psql config "
+                "block, a connection_string argument, or the "
                 "PGVECTOR_CONNECTION_STRING environment variable."
             )
 
@@ -148,16 +202,29 @@ class VectorStoreExecutor(MarieExecutor):
     ) -> DocList[TextDoc]:
         """Embed documents and store in vector store.
 
-        Called from DAG workflow after document extraction.
+        Called from DAG workflow after document extraction. The DAG framework
+        is document-level and passes every node an AssetKeyDoc(uri) by
+        reference rather than chaining a prior node's output - so when the
+        incoming docs carry no usable text (the AssetKeyDoc case), this reads
+        the extraction output persisted by TextExtractionExecutor for
+        ref_id/ref_type, chunks it, and embeds the chunks directly. Callers
+        that pass real TextDocs with content already set keep working as
+        before.
 
         Args:
-            docs: DocList of documents to embed and store.
+            docs: DocList of documents to embed and store, or a single
+                AssetKeyDoc-like placeholder to resolve from storage.
             parameters: Must include:
                 - source_id: DocumentSource ID
                 Optional:
                 - index_name: Index/collection name (default: 'default')
                 - node_type: Type of nodes (text/image/document)
                 - ref_doc_id: Reference document ID
+                - ref_id / ref_type: required when resolving extraction
+                  output from storage (AssetKeyDoc case)
+                - chunk_size / chunk_overlap: character chunk window,
+                  looked up in parameters["run_params"] first, then
+                  top-level parameters. Defaults 1024/200.
 
         Returns:
             Input docs (passthrough for pipeline chaining).
@@ -171,6 +238,52 @@ class VectorStoreExecutor(MarieExecutor):
         index_name = parameters.get("index_name", "default")
         node_type = parameters.get("node_type", "text")
         ref_doc_id = parameters.get("ref_doc_id")
+
+        if docs and not any(_has_usable_text(d) for d in docs):
+            ref_id = parameters.get("ref_id")
+            ref_type = parameters.get("ref_type") or "document"
+            if not ref_id:
+                raise ValueError(
+                    "ref_id is required in parameters to resolve extraction "
+                    "output for embedding (docs carried no usable text)"
+                )
+
+            full_text, page_ranges = await asyncio.to_thread(
+                self._resolve_extraction_output, ref_id, ref_type
+            )
+
+            chunk_size = int(_run_param(parameters, "chunk_size", DEFAULT_CHUNK_SIZE))
+            chunk_overlap = int(
+                _run_param(parameters, "chunk_overlap", DEFAULT_CHUNK_OVERLAP)
+            )
+            segmentation_mode = _run_param(parameters, "segmentation_mode", "character")
+            if segmentation_mode not in (None, "character"):
+                self.logger.warning(
+                    f"Unsupported segmentation_mode={segmentation_mode!r}, "
+                    "falling back to character-based chunking"
+                )
+
+            chunks = chunk_text(
+                full_text, chunk_size=chunk_size, chunk_overlap=chunk_overlap
+            )
+            if not chunks:
+                raise ValueError(
+                    f"Extraction output for ref_id={ref_id} produced no "
+                    "chunkable text"
+                )
+
+            stored_count = await self._embed_and_store_chunks(
+                chunks=chunks,
+                page_ranges=page_ranges,
+                ref_id=ref_id,
+                source_id=source_id,
+                index_name=index_name,
+            )
+            self.logger.info(
+                f"Stored {stored_count}/{len(chunks)} chunks for ref_id={ref_id}"
+            )
+            await self._update_submission_status(parameters, stored_count, len(chunks))
+            return docs
 
         self.logger.info(f"Processing {len(docs)} documents for source_id={source_id}")
 
@@ -236,6 +349,127 @@ class VectorStoreExecutor(MarieExecutor):
         await self._update_submission_status(parameters, stored_count, len(docs))
 
         return docs
+
+    def _resolve_extraction_output(
+        self, ref_id: str, ref_type: str
+    ) -> Tuple[str, List[Tuple[int, int, int]]]:
+        """Read the extraction output TextExtractionExecutor persisted for
+        ref_id/ref_type and flatten it to plain text with page offsets.
+
+        Mirrors the read path document_annotator_executor.py uses via
+        prepare_asset_directory()/download_asset() to fetch the same
+        ``{ref_id}.meta.json`` written by ExtractPipeline.store_metadata() +
+        store_assets() (marie/pipe/extract_pipeline.py), but reads the S3
+        object directly into memory instead of restoring a full working
+        directory - the EMBED stage only needs the OCR text, not the frames.
+
+        The S3 key is rebuilt with the same split_filename()/s3_asset_path()
+        helpers the writer uses (rather than download_asset's
+        f"{ref_id}.meta.json", which mis-resolves when ref_id is a
+        slash-containing S3 key, as it is for KB documents).
+        """
+        filename, _, _ = split_filename(ref_id)
+        uri = f"{s3_asset_path(ref_id, ref_type)}/{filename}.meta.json"
+
+        connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
+        if not connected:
+            raise RuntimeError(
+                f"Unable to connect to S3 to resolve extraction output for "
+                f"ref_id={ref_id}"
+            )
+        if not StorageManager.exists(uri):
+            raise ValueError(
+                f"No extraction output found for ref_id={ref_id}, "
+                f"ref_type={ref_type} (expected {uri}). Has the EXTRACT stage "
+                "run for this document?"
+            )
+
+        raw = StorageManager.read(uri)
+        try:
+            metadata = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Extraction output at {uri} is not valid JSON: {e}"
+            ) from e
+
+        ocr_results = metadata.get("ocr")
+        if not ocr_results:
+            raise ValueError(
+                f"Extraction output at {uri} has no OCR results to embed for "
+                f"ref_id={ref_id}"
+            )
+
+        return self._flatten_ocr_pages(ocr_results)
+
+    @staticmethod
+    def _flatten_ocr_pages(
+        ocr_results: List[Dict[str, Any]],
+    ) -> Tuple[str, List[Tuple[int, int, int]]]:
+        """Concatenate per-page OCR line text (same flattening
+        TextExtractionExecutor.persist() uses for asset tracking) and return
+        (full_text, page_ranges), where page_ranges holds
+        (page_index, start, end) character offsets into full_text."""
+        parts: List[str] = []
+        page_ranges: List[Tuple[int, int, int]] = []
+        cursor = 0
+        for page_idx, page_result in enumerate(ocr_results):
+            lines = page_result.get("lines") or []
+            page_text = "\n".join(line["text"] for line in lines if "text" in line)
+            if parts:
+                parts.append("\n")
+                cursor += 1
+            start = cursor
+            parts.append(page_text)
+            cursor += len(page_text)
+            page_ranges.append((page_idx, start, cursor))
+        return "".join(parts), page_ranges
+
+    @staticmethod
+    def _page_for_offset(
+        page_ranges: List[Tuple[int, int, int]], offset: int
+    ) -> Optional[int]:
+        """Return the page index whose [start, end) range contains offset."""
+        for page_idx, start, end in page_ranges:
+            if start <= offset < end:
+                return page_idx
+        return page_ranges[-1][0] if page_ranges else None
+
+    async def _embed_and_store_chunks(
+        self,
+        chunks: List[TextChunk],
+        page_ranges: List[Tuple[int, int, int]],
+        ref_id: str,
+        source_id: str,
+        index_name: str,
+    ) -> int:
+        """Embed chunk texts and batch-insert them as text nodes, ref'd to
+        the source document (ref_doc_id = ref_id)."""
+        texts = [c.text for c in chunks]
+        embeddings = self._embeddings.embed_text(texts, is_query=False)
+
+        nodes = []
+        for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+            metadata: Dict[str, Any] = {"chunk_index": idx}
+            page = self._page_for_offset(page_ranges, chunk.start)
+            if page is not None:
+                metadata["page"] = page
+
+            nodes.append(
+                {
+                    "node_id": f"{ref_id}_{idx}",
+                    "embedding": embedding.tolist(),
+                    "content": chunk.text,
+                    "node_type": "text",
+                    "metadata": metadata,
+                    "ref_doc_id": ref_id,
+                }
+            )
+
+        return await self._vector_store.add_nodes_batch(
+            nodes=nodes,
+            source_id=source_id,
+            index_name=index_name,
+        )
 
     async def _update_submission_status(
         self,
@@ -308,7 +542,7 @@ class VectorStoreExecutor(MarieExecutor):
         docs: DocList[TextDoc],
         parameters: Dict[str, Any],
         **kwargs,
-    ) -> DocList[SearchResultDoc]:
+    ) -> Dict[str, Any]:
         """Semantic search over stored documents.
 
         Args:
@@ -355,22 +589,58 @@ class VectorStoreExecutor(MarieExecutor):
         )
 
         # Convert to DocList
-        result_docs = DocList[SearchResultDoc]()
-        for r in results:
-            result_docs.append(
-                SearchResultDoc(
-                    id=r["node_id"],
-                    text=r["content"] or "",
-                    similarity=r["similarity"],
-                    source_id=r["source_id"],
-                    node_type=r["node_type"],
-                    index_name=r.get("index_name", index_name),
-                    ref_doc_id=r.get("ref_doc_id"),
-                )
-            )
+        rows = [
+            {
+                "id": r["node_id"],
+                "content": r["content"] or "",
+                "score": r["similarity"],
+                "source_id": r["source_id"],
+                "node_type": r["node_type"],
+                "index_name": r.get("index_name", index_name),
+                "ref_doc_id": r.get("ref_doc_id"),
+            }
+            for r in results
+        ]
 
-        self.logger.info(f"Found {len(result_docs)} results")
-        return result_docs
+        self.logger.info(f"Found {len(rows)} results")
+        return {"results": rows, "count": len(rows), "index_name": index_name}
+
+    @requests(on="/embed")
+    async def embed(
+        self,
+        docs: DocList[TextDoc],
+        parameters: Dict[str, Any],
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Embed texts and return the vectors in the response parameters.
+
+        This is a pure model-execution endpoint: the gateway's ``kb`` command
+        calls it to embed a query before searching pgvector itself. Returning
+        the vectors as a small dict (which the worker places in the response
+        ``parameters``) avoids serializing embeddings through a doc schema.
+
+        Args:
+            docs: Ignored.
+            parameters:
+                - texts: List of strings to embed (required).
+                - is_query: Whether to use the query adapter. Default: False.
+
+        Returns:
+            Dictionary with ``embeddings`` (list of vectors) and ``dim``.
+        """
+        await self._ensure_initialized()
+
+        texts = parameters.get("texts")
+        if not texts:
+            raise ValueError("texts list is required in parameters")
+
+        is_query = bool(parameters.get("is_query", False))
+        embeddings = self._embeddings.embed_text(texts, is_query=is_query)
+        embeddings = [
+            e.tolist() if hasattr(e, "tolist") else list(e) for e in embeddings
+        ]
+
+        return {"embeddings": embeddings, "dim": self._embedding_dim}
 
     @requests(on="/search_with_citations")
     async def search_with_citations(
@@ -575,7 +845,7 @@ class VectorStoreExecutor(MarieExecutor):
         docs: DocList[TextDoc],
         parameters: Dict[str, Any],
         **kwargs,
-    ) -> DocList[SearchResultDoc]:
+    ) -> Dict[str, Any]:
         """Hybrid search combining vector and full-text search.
 
         Uses RRF (Reciprocal Rank Fusion) to combine results.
@@ -625,25 +895,23 @@ class VectorStoreExecutor(MarieExecutor):
             index_name=index_name,
         )
 
-        # Convert to DocList
-        result_docs = DocList[SearchResultDoc]()
-        for r in results:
-            result_docs.append(
-                SearchResultDoc(
-                    id=r["node_id"],
-                    text=r["content"] or "",
-                    similarity=r["similarity"],
-                    text_score=r.get("text_score", 0),
-                    rrf_score=r.get("rrf_score", 0),
-                    source_id=r["source_id"],
-                    node_type=r["node_type"],
-                    index_name=r.get("index_name", index_name),
-                    ref_doc_id=r.get("ref_doc_id"),
-                )
-            )
+        rows = [
+            {
+                "id": r["node_id"],
+                "content": r["content"] or "",
+                "score": r.get("rrf_score", r["similarity"]),
+                "text_score": r.get("text_score", 0),
+                "rrf_score": r.get("rrf_score", 0),
+                "source_id": r["source_id"],
+                "node_type": r["node_type"],
+                "index_name": r.get("index_name", index_name),
+                "ref_doc_id": r.get("ref_doc_id"),
+            }
+            for r in results
+        ]
 
-        self.logger.info(f"Found {len(result_docs)} results via hybrid search")
-        return result_docs
+        self.logger.info(f"Found {len(rows)} results via hybrid search")
+        return {"results": rows, "count": len(rows), "index_name": index_name}
 
     @requests(on="/ingest_batch")
     async def ingest_batch(

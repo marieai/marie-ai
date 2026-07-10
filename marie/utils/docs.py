@@ -315,21 +315,15 @@ def docs_from_file(
     return docs
 
 
-def docs_from_asset(
-    asset_key: str, pages: Optional[List[int]] = None, return_file_path: bool = False
-) -> Union[DocList[MarieDoc], Tuple[DocList[MarieDoc], str]]:
-    """
-    Create DocumentArray from image file. This will create one document per page in the image
-    file, if the image is large and has many pages this can be very memory intensive.
+def fetch_asset_to_temp(asset_key: str) -> Tuple[str, str]:
+    """Download a remote asset to /tmp/marie preserving its extension.
 
-    :param asset_key: asset key to the resource
-    :param pages: list of pages to extract from the document. NONE or empty list will extract all pages from document
-    :param return_file_path: whether to return the path of the downloaded file
-    :return: DocList[MarieDoc] with tensor content or a tuple (DocList[MarieDoc], file_path) if return_file_path is True
-    """
+    Returns (local_path, file_type) without parsing/rendering the document.
 
+    :param asset_key: asset key / URI to the resource
+    :return: tuple of (local file path, detected document format)
+    """
     uri = asset_key
-    import tempfile
 
     if not StorageManager.can_handle(uri, allow_native=True):
         raise Exception(
@@ -339,8 +333,13 @@ def docs_from_asset(
     # Ensure the directory exists
     ensure_exists(f"/tmp/marie")
 
-    # Read remote file to a byte array
-    with tempfile.NamedTemporaryFile(dir="/tmp/marie", delete=False) as temp_file_out:
+    # Read remote file to a byte array. Keep the source extension so
+    # get_document_type's extension fallback works for formats without
+    # magic bytes (csv, markdown, html, ...).
+    suffix = os.path.splitext(uri)[1]
+    with tempfile.NamedTemporaryFile(
+        dir="/tmp/marie", suffix=suffix, delete=False
+    ) as temp_file_out:
         print(f"Reading file from {uri} to {temp_file_out.name}")
 
         connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
@@ -354,7 +353,28 @@ def docs_from_asset(
         StorageManager.read_to_file(uri, temp_file_out, overwrite=True)
         path = temp_file_out.name
 
-        file_type = get_document_type(path)
+    # Detect type only after the with-block closes the handle: read_to_file
+    # writes through the still-open buffered file object, so reading `path`
+    # inside the block sees a partially-flushed (for small files: empty) file.
+    file_type = get_document_type(path)
+
+    return path, file_type
+
+
+def docs_from_asset(
+    asset_key: str, pages: Optional[List[int]] = None, return_file_path: bool = False
+) -> Union[DocList[MarieDoc], Tuple[DocList[MarieDoc], str]]:
+    """
+    Create DocumentArray from image file. This will create one document per page in the image
+    file, if the image is large and has many pages this can be very memory intensive.
+
+    :param asset_key: asset key to the resource
+    :param pages: list of pages to extract from the document. NONE or empty list will extract all pages from document
+    :param return_file_path: whether to return the path of the downloaded file
+    :return: DocList[MarieDoc] with tensor content or a tuple (DocList[MarieDoc], file_path) if return_file_path is True
+    """
+
+    path, _file_type = fetch_asset_to_temp(asset_key)
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found : {path}")
