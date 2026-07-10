@@ -5,8 +5,8 @@
 -- It supports multiple storage modes: embedding, blob, and content.
 
 CREATE TABLE IF NOT EXISTS {schema}.event_tracking (
-    doc_id VARCHAR(255) PRIMARY KEY,
-    ref_id VARCHAR(255),
+    doc_id VARCHAR PRIMARY KEY,
+    ref_id VARCHAR,
     ref_type VARCHAR(100),
     store_mode VARCHAR(50),
     tags JSONB,

@@ -6,6 +6,7 @@
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
     <envs>
+      <env name="PYTHONUNBUFFERED" value="1" />
       <env name="COLUMNS" value="180" />
       <env name="GRPC_TRACE" value="ALL" />
       <env name="GRPC_VERBOSITY" value="DEBUG" />
@@ -19,12 +20,12 @@
       <env name="MARIE_SCHEDULER_TRACE_PATH" value="$USER_HOME$/tmp/marie-scheduler-trace.jsonl" />
       <env name="OPENAI_API_BASE" value="http://localhost:4010" />
       <env name="OPENAI_API_KEY" value="EMPTY" />
-      <env name="PYTHONUNBUFFERED" value="1" />
       <env name="MARIE_SCHEDULER_TRACE_PROFILE" value="compact" />
     </envs>
     <option name="SDK_HOME" value="" />
+    <option name="SDK_NAME" value="Python 3.12 (marie-ai)" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/" />
-    <option name="IS_MODULE_SDK" value="true" />
+    <option name="IS_MODULE_SDK" value="false" />
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <option name="DEBUG_JUST_MY_CODE" value="true" />

@@ -1,165 +1,42 @@
 """Client for invoking installed plugin tools via the marie plugin daemon.
 
 Builds the marie runtime envelope and dispatches it to the daemon's real
-``POST /v1/dispatch/invoke`` endpoint, reusing the executor's daemon discovery
-(``discover_daemon``), ``binary_child`` spawn, and SSE frame parsing
-(``parse_daemon_frames``).
+``POST /v1/dispatch/invoke`` endpoint. The daemon protocol (discovery, envelope
+build/sign, SSE frame parsing) lives in the shared ``marie.plugin_daemon``
+package.
 
-Slice 3a uses the daemon dev-verifier bypass (``MARIE_PLUGIN_DAEMON_DEV_INSECURE``)
-and sends an UNSIGNED envelope; HMAC signing is added in Slice 3b. The daemon's
-runtime policy is still enforced (package/action/mode claims), so the envelope
-must be complete.
+Without a signing key the envelope is sent UNSIGNED and the daemon must run
+with the dev-verifier bypass (``MARIE_PLUGIN_DAEMON_DEV_INSECURE``). The
+daemon's runtime policy is still enforced (package/action/mode claims), so the
+envelope must be complete.
 """
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import json
 import subprocess
 import time
-from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from uuid import uuid4
 
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import StatusCode
 
 from marie.agent.tools.base import ToolOutput
 from marie.agent.tools.plugin_tool import PluginToolSpec
-from marie.executor.extensions.plugin_daemon_executor import (
-    DEFAULT_DAEMON_ADDR,
-    discover_daemon,
-    parse_daemon_frames,
-)
+from marie.constants import DEFAULT_DAEMON_ADDR
 from marie.instrumentation import start_span
 from marie.logging_core.logger import MarieLogger
-from marie.secrets import CredentialResolver
+from marie.plugin_daemon import (
+    build_invocation_envelope,
+    discover_daemon,
+    parse_daemon_frames,
+    sign_envelope,
+)
+from marie.secret_store import CredentialResolver
 
 logger = MarieLogger("marie.agent.tools.plugin_daemon")
-
-DEFAULT_RUNTIME_POLICY: dict[str, Any] = {
-    "maxConcurrent": 1,
-    "maxMemoryBytes": 536870912,
-    "timeoutMs": 30000,
-    "networkPolicy": "none",
-}
-
-
-def _normalize_for_signature(value: Any, omit_signature: bool = False) -> Any:
-    """Mirror of the Studio signer's normalizeForSignature.
-
-    Recursively sorts object keys, drops `None` (JS `undefined`) values, and omits
-    the top-level `signature` key. Must match
-    `extension-runtime-envelope.service.ts` byte-for-byte so the daemon verifies.
-    """
-    if isinstance(value, list):
-        return [_normalize_for_signature(item) for item in value]
-    if not isinstance(value, dict):
-        return value
-    out: dict[str, Any] = {}
-    for key in sorted(value.keys()):
-        if omit_signature and key == "signature":
-            continue
-        item = value[key]
-        if item is not None:
-            out[key] = _normalize_for_signature(item)
-    return out
-
-
-def canonical_runtime_envelope(envelope: dict[str, Any]) -> str:
-    """JSON canonical form used as the HMAC input (matches the daemon + Studio)."""
-    return json.dumps(
-        _normalize_for_signature(envelope, omit_signature=True),
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-
-
-def sign_envelope(
-    envelope: dict[str, Any], *, key_id: str, secret: str
-) -> dict[str, Any]:
-    """Return a copy of `envelope` with an HMAC-SHA256 `signature` attached.
-
-    Replicates `createHmac('sha256', secret).update(canonical).digest('base64url')`
-    (base64url, no padding).
-    """
-    digest = hmac.new(
-        secret.encode("utf-8"),
-        canonical_runtime_envelope(envelope).encode("utf-8"),
-        hashlib.sha256,
-    ).digest()
-    value = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
-    return {
-        **envelope,
-        "signature": {"keyId": key_id, "algorithm": "hmac-sha256", "value": value},
-    }
-
-
-def build_invocation_envelope(
-    spec: PluginToolSpec,
-    *,
-    payload: dict[str, Any],
-    organization_id: str,
-    workspace_id: str,
-    user_id: str | None = None,
-    action_type: str = "tool",
-    request_id: str | None = None,
-    trace_id: str | None = None,
-    timeout_ms: int = 30000,
-    ttl_seconds: int = 300,
-    runtime_policy: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Build a policy-compliant runtime envelope for ``/v1/dispatch/invoke``.
-
-    Satisfies ``policy.VerifyRuntimeEnvelope``: package identity claims
-    (``packageId``/``packageRef``/``packageDigest``), a valid ``actionType`` +
-    ``actionId``, ``mode == "stub"``, a ``credentialBindingIds`` array, and a
-    ``runtimePolicy`` with an allowed ``networkPolicy``. No signature is attached —
-    the daemon must run with ``MARIE_PLUGIN_DAEMON_DEV_INSECURE`` (Slice 3a).
-    """
-    if not spec.package_ref or not spec.package_digest:
-        raise ValueError(
-            "plugin invocation requires package_ref and package_digest "
-            "(hydrate them from the extension catalog)"
-        )
-    if not organization_id or not workspace_id:
-        raise ValueError("plugin invocation requires organization_id and workspace_id")
-
-    rp = dict(runtime_policy or DEFAULT_RUNTIME_POLICY)
-    rp.setdefault("networkPolicy", "none")
-    rp["timeoutMs"] = timeout_ms
-
-    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
-
-    return {
-        "requestId": request_id or str(uuid4()),
-        "traceId": trace_id or str(uuid4()),
-        "organizationId": organization_id,
-        "workspaceId": workspace_id,
-        "userId": user_id or "",
-        "installId": spec.install_id or "",
-        "packageId": spec.package_id or "",
-        "packageRef": spec.package_ref,
-        "packageDigest": spec.package_digest,
-        "packageTrustLevel": spec.package_trust_level or "community",
-        "providerId": spec.provider_id or "",
-        "actionId": f"tools/{spec.tool_name}",
-        "actionType": action_type,
-        "credentialBindingIds": [],
-        "input": payload,
-        # Opaque to the daemon; forwarded to the plugin subprocess as the request.
-        "payload": payload,
-        "runtimePolicy": rp,
-        "expiresAt": expires_at,
-        "nonce": str(uuid4()),
-        "mode": "stub",
-    }
 
 
 class PluginDaemonClient:
@@ -220,6 +97,11 @@ class PluginDaemonClient:
             raise RuntimeError(
                 discovery.message or "marie-plugin-daemon is not configured"
             )
+
+    @property
+    def url(self) -> str:
+        """Base URL of the daemon this client dispatches to (owns, if spawned)."""
+        return self._url
 
     def _wait_ready(self, attempts: int = 50, interval_s: float = 0.1) -> None:
         for _ in range(attempts):

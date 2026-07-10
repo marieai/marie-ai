@@ -1,10 +1,10 @@
 from marie.logging_core.predefined import default_logger as logger
 from marie.query_planner.base import QueryPlanRegistry
+from marie.query_planner.kb_indexing_planner import PLAN_ID as KB_INDEXING_PLAN_ID
+from marie.query_planner.kb_indexing_planner import query_planner_kb_indexing
 from marie.query_planner.model import QueryPlannersConf
 from marie.query_planner.ocr_planner import PLAN_ID as EXTRACT_PLAN_ID
 from marie.query_planner.ocr_planner import query_planner_extract
-from marie.query_planner.rag_indexing_planner import PLAN_ID as RAG_INDEXING_PLAN_ID
-from marie.query_planner.rag_indexing_planner import query_planner_rag_indexing
 
 
 def register_from_module(planner_module: str) -> None:
@@ -38,7 +38,7 @@ def register_all_known_planners(query_planners_conf: QueryPlannersConf):
     logger.info("Registering all known planners")
 
     QueryPlanRegistry.register(EXTRACT_PLAN_ID, query_planner_extract)
-    QueryPlanRegistry.register(RAG_INDEXING_PLAN_ID, query_planner_rag_indexing)
+    QueryPlanRegistry.register(KB_INDEXING_PLAN_ID, query_planner_kb_indexing)
     result = QueryPlanRegistry.initialize_from_config(query_planners_conf)
 
     logger.info(f"Planner initialization results:")

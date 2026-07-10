@@ -8,15 +8,15 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, cast
 
 import fsspec
 from dataclasses_json import DataClassJsonMixin
-from llama_index.core.bridge.pydantic import Field, PrivateAttr
-from llama_index.core.indices.query.embedding_utils import (
+
+from marie._core.schema import BaseNode
+from marie._core.utils import concat_dirs
+from marie.core.bridge.pydantic import Field, PrivateAttr
+from marie.core.indices.query.embedding_utils import (
     get_top_k_embeddings,
     get_top_k_embeddings_learner,
     get_top_k_mmr_embeddings,
 )
-
-from marie._core.schema import BaseNode
-from marie._core.utils import concat_dirs
 from marie.vector_stores.types import (
     DEFAULT_PERSIST_DIR,
     DEFAULT_PERSIST_FNAME,

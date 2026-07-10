@@ -59,7 +59,7 @@ class Submission:
     trigger_id: Optional[str] = None
     external_ref: Optional[str] = None
     query_plan_template_id: Optional[str] = None
-    rag_index_id: Optional[str] = None
+    kb_index_id: Optional[str] = None
     enable_semantic_search: bool = False
     total_documents: int = 0
     processed_documents: int = 0
@@ -85,8 +85,8 @@ class Submission:
                 if row.get("query_plan_template_id")
                 else None
             ),
-            rag_index_id=(
-                str(row["rag_index_id"]) if row.get("rag_index_id") else None
+            kb_index_id=(
+                str(row["kb_index_id"]) if row.get("kb_index_id") else None
             ),
             enable_semantic_search=row.get("enable_semantic_search", False),
             total_documents=row.get("total_documents", 0),
@@ -196,7 +196,7 @@ class SubmissionRagIndex:
 
     id: str
     submission_id: str
-    rag_index_id: str
+    kb_index_id: str
     created_at: Optional[datetime] = None
 
     @classmethod
@@ -205,6 +205,6 @@ class SubmissionRagIndex:
         return cls(
             id=str(row["id"]),
             submission_id=str(row["submission_id"]),
-            rag_index_id=str(row["rag_index_id"]),
+            kb_index_id=str(row["kb_index_id"]),
             created_at=row.get("created_at"),
         )

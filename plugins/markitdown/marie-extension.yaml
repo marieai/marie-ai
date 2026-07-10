@@ -1,0 +1,26 @@
+apiVersion: marie.ai/v1alpha1
+kind: ExtensionPackage
+metadata:
+  id: ext.marie.markitdown
+  author: marie
+  name: markitdown
+  version: 0.1.0
+runtime:
+  type: python_source
+  language: python
+  version: "3.12"
+  entrypoint: main
+# Declarative defaults for callers; runtime enforcement is done by the daemon
+# from the invoke envelope's runtimePolicy, not from this block.
+runtimePolicy:
+  timeoutMs: 120000
+  networkPolicy: none
+tools:
+  - name: convert
+    description: Convert a local born-digital document to Markdown.
+    input:
+      path: string
+      format: string
+    output:
+      markdown: string
+      metadata: object

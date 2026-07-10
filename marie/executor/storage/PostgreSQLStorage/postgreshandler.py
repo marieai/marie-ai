@@ -127,8 +127,8 @@ class PostgreSQLHandler(PostgresqlMixin):
             CREATE TABLE IF NOT EXISTS {self.qualified_table} (
                 event_id SERIAL PRIMARY KEY,
                 doc_id VARCHAR NOT NULL,
-                ref_id VARCHAR(64) not null,
-                ref_type VARCHAR(64) not null,
+                ref_id VARCHAR not null,
+                ref_type VARCHAR not null,
                 store_mode VARCHAR(32) not null,
                 tags JSONB,
                 embedding vector,

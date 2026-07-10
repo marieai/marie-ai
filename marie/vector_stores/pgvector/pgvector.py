@@ -49,8 +49,8 @@ class PGVectorStore(BasePydanticVectorStore):
         ```python
         store = PGVectorStore(
             connection_string="postgresql://user:pass@localhost/db",
-            table_name="rag_vectors",
-            embedding_dim=2048,
+            table_name="kb_vectors",
+            embedding_dim=1024,
         )
 
         # Initialize (creates table and indexes)
@@ -78,8 +78,10 @@ class PGVectorStore(BasePydanticVectorStore):
 
     # Connection settings
     connection_string: str
-    table_name: str = "rag_vectors"
-    embedding_dim: int = 2048  # jina-v4 default (Matryoshka: 128/256/512/1024/2048)
+    table_name: str = "kb_vectors"
+    embedding_dim: int = (
+        1024  # Matryoshka dim; pgvector HNSW caps at 2000, so 2048 needs halfvec
+    )
 
     # Performance settings
     hnsw_m: int = 16  # HNSW M parameter (connections per node)
@@ -93,6 +95,19 @@ class PGVectorStore(BasePydanticVectorStore):
         super().__init__(**kwargs)
         self._pool = None
         self._initialized = False
+
+    def __getattr__(self, item: str):
+        # BaseComponent inherits docarray's BaseDoc, whose __getattr__
+        # bypasses pydantic v2's private-attribute lookup: writes land in
+        # __pydantic_private__ but reads raise AttributeError. Restore the
+        # standard pydantic read path for this class's private attrs.
+        try:
+            private = object.__getattribute__(self, "__pydantic_private__")
+        except AttributeError:
+            private = None
+        if private and item in private:
+            return private[item]
+        return super().__getattr__(item)
 
     @property
     def client(self) -> Any:
@@ -1117,28 +1132,27 @@ class PGVectorStore(BasePydanticVectorStore):
             await self.initialize()
 
         embedding_db = to_db(query_embedding, dim=self.embedding_dim)
+        fetch_k = top_k * 2  # Fetch more for fusion
 
-        # Build WHERE clause
-        where_clauses = ["index_name = $4"]
-        params: List[Any] = [
-            embedding_db,
-            query_text,
-            top_k * 2,
-            index_name,
-        ]  # Fetch more for fusion
-        param_idx = 5
+        # Each statement binds only the parameters its SQL references —
+        # asyncpg raises IndeterminateDatatypeError for bound-but-unused
+        # placeholders, so vector and text queries get separate param lists
+        # ($1 = query term, $2 = limit, $3.. = shared filters).
+        def _build_where(start_idx: int) -> tuple[str, List[Any]]:
+            clauses = [f"index_name = ${start_idx}"]
+            extra: List[Any] = [index_name]
+            idx = start_idx + 1
+            if source_ids:
+                clauses.append(f"source_id = ANY(${idx})")
+                extra.append(source_ids)
+                idx += 1
+            if node_type:
+                clauses.append(f"node_type = ${idx}")
+                extra.append(node_type)
+                idx += 1
+            return " AND ".join(clauses), extra
 
-        if source_ids:
-            where_clauses.append(f"source_id = ANY(${param_idx})")
-            params.append(source_ids)
-            param_idx += 1
-
-        if node_type:
-            where_clauses.append(f"node_type = ${param_idx}")
-            params.append(node_type)
-            param_idx += 1
-
-        where_sql = " AND ".join(where_clauses)
+        where_sql, filter_params = _build_where(3)
 
         async with self._pool.acquire() as conn:
             # Get vector search results with ranks
@@ -1152,11 +1166,13 @@ class PGVectorStore(BasePydanticVectorStore):
                     FROM {self.table_name}
                     WHERE {where_sql}
                     ORDER BY embedding <=> $1
-                    LIMIT $3
+                    LIMIT $2
                 )
                 SELECT * FROM vector_results
                 """,
-                *params,
+                embedding_db,
+                fetch_k,
+                *filter_params,
             )
 
             # Get text search results with ranks
@@ -1166,23 +1182,25 @@ class PGVectorStore(BasePydanticVectorStore):
                     SELECT id, node_id, source_id, ref_doc_id, content,
                            node_type, metadata,
                            ts_rank_cd(to_tsvector('english', COALESCE(content, '')),
-                                      plainto_tsquery('english', $2)) as text_score,
+                                      plainto_tsquery('english', $1)) as text_score,
                            ROW_NUMBER() OVER (
                                ORDER BY ts_rank_cd(
                                    to_tsvector('english', COALESCE(content, '')),
-                                   plainto_tsquery('english', $2)
+                                   plainto_tsquery('english', $1)
                                ) DESC
                            ) as rank
                     FROM {self.table_name}
                     WHERE {where_sql}
                       AND to_tsvector('english', COALESCE(content, '')) @@
-                          plainto_tsquery('english', $2)
+                          plainto_tsquery('english', $1)
                     ORDER BY text_score DESC
-                    LIMIT $3
+                    LIMIT $2
                 )
                 SELECT * FROM text_results
                 """,
-                *params,
+                query_text,
+                fetch_k,
+                *filter_params,
             )
 
         # RRF fusion

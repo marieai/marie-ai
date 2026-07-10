@@ -1,6 +1,6 @@
 from docarray import DocList
 
-from marie.executor.rag.search_result_doc import SearchResultDoc
+from marie.executor.kb.search_result_doc import SearchResultDoc
 
 
 def test_search_result_doc_fields_survive_protobuf_round_trip():

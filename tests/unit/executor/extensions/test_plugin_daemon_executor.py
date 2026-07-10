@@ -10,10 +10,8 @@ from urllib.request import urlopen
 from docarray import DocList
 from docarray.documents import TextDoc
 
-from marie.executor.extensions.plugin_daemon_executor import (
-    MariePluginDaemonExecutor,
-    discover_daemon,
-)
+from marie.executor.extensions.plugin_daemon_executor import MariePluginDaemonExecutor
+from marie.plugin_daemon import discover_daemon
 
 
 class HealthHandler(BaseHTTPRequestHandler):

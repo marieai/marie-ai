@@ -3,7 +3,7 @@ from docarray import DocList
 
 from marie.api import AssetKeyDoc
 from marie.logging_core.predefined import default_logger as logger
-from marie.utils.docs import docs_from_asset, frames_from_docs
+from marie.utils.docs import docs_from_asset, docs_from_file, frames_from_docs
 from marie.utils.image_utils import ensure_max_page_size
 
 
@@ -84,6 +84,21 @@ def get_frames_from_docs(
     logger.debug(f"Document asset key: {doc.asset_key}")
     pages = doc.pages if pages is None else pages
     docs = docs_from_asset(doc.asset_key, pages)
+    return _frames_from_parsed_docs(docs)
+
+
+def get_frames_from_file(local_path: str, pages: list[int] = None) -> list[np.ndarray]:
+    """Build frames from an already-downloaded local file, skipping the fetch.
+
+    Mirrors :func:`get_frames_from_docs` but reads a local path (parsed via
+    ``docs_from_file``) so a caller that already downloaded the asset — e.g. the
+    extraction router after ``fetch_asset_to_temp`` — does not download it twice.
+    """
+    docs = docs_from_file(local_path, pages)
+    return _frames_from_parsed_docs(docs)
+
+
+def _frames_from_parsed_docs(docs: DocList) -> list[np.ndarray]:
     src_frames = frames_from_docs(docs)
     changed, frames = ensure_max_page_size(src_frames)
     if changed:

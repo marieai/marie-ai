@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS marie_scheduler.submissions (
     query_plan_template_id UUID,
 
     -- RAG Integration
-    rag_index_id UUID,
+    kb_index_id UUID,
     enable_semantic_search BOOLEAN NOT NULL DEFAULT FALSE,
 
     -- Metrics
@@ -39,17 +39,17 @@ CREATE INDEX IF NOT EXISTS submissions_status_idx ON marie_scheduler.submissions
 CREATE INDEX IF NOT EXISTS submissions_source_idx ON marie_scheduler.submissions(source);
 
 -- SubmissionRagIndex - Junction table for many-to-many Submission <-> RagIndex
-CREATE TABLE IF NOT EXISTS marie_scheduler.submission_rag_indexes (
+CREATE TABLE IF NOT EXISTS marie_scheduler.submission_kb_indexes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     submission_id UUID NOT NULL REFERENCES marie_scheduler.submissions(id) ON DELETE CASCADE,
-    rag_index_id UUID NOT NULL,
+    kb_index_id UUID NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    UNIQUE(submission_id, rag_index_id)
+    UNIQUE(submission_id, kb_index_id)
 );
 
-CREATE INDEX IF NOT EXISTS submission_rag_indexes_submission_id_idx ON marie_scheduler.submission_rag_indexes(submission_id);
-CREATE INDEX IF NOT EXISTS submission_rag_indexes_rag_index_id_idx ON marie_scheduler.submission_rag_indexes(rag_index_id);
+CREATE INDEX IF NOT EXISTS submission_kb_indexes_submission_id_idx ON marie_scheduler.submission_kb_indexes(submission_id);
+CREATE INDEX IF NOT EXISTS submission_kb_indexes_kb_index_id_idx ON marie_scheduler.submission_kb_indexes(kb_index_id);
 
 -- SubmissionDocument - Individual document within a submission
 CREATE TABLE IF NOT EXISTS marie_scheduler.submission_documents (

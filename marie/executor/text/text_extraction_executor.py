@@ -16,8 +16,14 @@ from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
 from marie.executor.request_util import (
     get_frames_from_docs,
+    get_frames_from_file,
     get_payload_features,
     parse_parameters,
+)
+from marie.executor.text.format_router import FormatRouter, pdf_yield_ok
+from marie.executor.text.markitdown_artifact import (
+    build_markitdown_metadata,
+    write_markitdown_artifact,
 )
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.mdc import MDC
@@ -29,8 +35,9 @@ from marie.models.utils import (
 )
 from marie.ocr import CoordinateFormat
 from marie.pipe import ExtractPipeline
+from marie.plugins import EmbeddedPlugins
 from marie.storage import StorageManager
-from marie.utils.docs import docs_from_asset, frames_from_docs
+from marie.utils.docs import docs_from_asset, fetch_asset_to_temp, frames_from_docs
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.network import get_ip_address
 from marie.utils.types import strtobool
@@ -50,6 +57,8 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
         num_worker_preprocess: int = 4,
         storage: dict[str, Any] = None,
         pipeline: dict[str, Any] = None,
+        plugins: list[dict[str, Any]] = None,
+        markitdown: dict[str, Any] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
@@ -144,132 +153,304 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
 
         self.pipeline = ExtractPipeline(pipeline_config=pipeline, cuda=self.has_cuda)
 
+        # Born-digital extraction plugins run in an executor-owned daemon child.
+        # Lazily started on first use (Task 4 wires the routing); construction only
+        # parses config so importing the executor never spawns a daemon.
+        logger.info(f"Plugins config: {plugins}")
+        self.embedded_plugins = EmbeddedPlugins(
+            plugins, executor_identity=instance_name
+        )
+
+        # Born-digital routing gate. Enabled by default; when disabled, or when
+        # the markitdown package is not configured, extract() routes everything
+        # to OCR (warned once). Floor is the per-page text-yield threshold below
+        # which a markitdown PDF result falls back to OCR.
+        markitdown = markitdown or {}
+        logger.info(f"Markitdown config: {markitdown}")
+        self._markitdown_enabled = bool(markitdown.get("enabled", True))
+        self._markitdown_floor = int(markitdown.get("floor_chars_per_page", 200))
+        self._markitdown_gate_warned = False
+
+    def close(self) -> None:
+        self.embedded_plugins.close()
+        super().close()
+
     @requests(on="/document/extract")
     # @safely_encoded # BREAKS WITH docarray 0.39 as it turns this into a LegacyDocument which is not supported
     def extract(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
 
         job_id, ref_id, ref_type, queue_id, payload = parse_parameters(parameters)
-        frames = get_frames_from_docs(docs)
-        ref_id = hash_frames_fast(frames) if ref_id is None else ref_id
-        ref_type = "extract" if ref_type is None else ref_type
 
+        if len(docs) == 0:
+            raise ValueError("Expected single document. No documents found")
+        if len(docs) > 1:
+            raise ValueError("Expected single document. Multiple documents found.")
+        doc: AssetKeyDoc = docs[0]
+
+        ref_type = "extract" if ref_type is None else ref_type
         MDC.put("request_id", job_id)
 
         self.logger.info("Starting OCR request")
         for key, value in parameters.items():
             self.logger.info("The value of {} is {}".format(key, value))
 
-        # https://github.com/marieai/marie-ai/issues/51
-        regions = payload.get("regions", [])
-        for region in regions:
-            region["id"] = f'{int(region["id"])}'
-            region["x"] = int(region["x"])
-            region["y"] = int(region["y"])
-            region["w"] = int(region["w"])
-            region["h"] = int(region["h"])
-            region["pageIndex"] = int(region["pageIndex"])
-
-        # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
-        coordinate_format = CoordinateFormat.from_value(
-            value_from_payload_or_args(payload, "format", default="xywh")
-        )
-        pms_mode = PSMode.from_value(
-            value_from_payload_or_args(payload, "mode", default="")
-        )
-
         include_ocr = value_from_payload_or_args(payload, "return_ocr", default=False)
 
-        self.logger.debug(
-            "ref_id, ref_type frames , regions , pms_mode, coordinate_format,"
-            f" checksum: {ref_id}, {ref_type},  {len(frames)}, {len(regions)}, {pms_mode},"
-            f" {coordinate_format}"
-        )
-
-        runtime_conf = {}
-        pipeline_features = get_payload_features(payload, f_type="pipeline")
-        if len(pipeline_features) == 1:
-            runtime_conf = pipeline_features[0]
-        else:
-            filtered_features = [
-                f
-                for f in pipeline_features
-                if f.get("name") == self.pipeline.pipeline_name
-            ]
-            if len(pipeline_features) == 1:
-                runtime_conf = filtered_features[0]
-            elif len(filtered_features) > 1:
-                self.logger.error(
-                    f"Unable to distinguish Runtime Config : {filtered_features}"
-                )
-                raise ValueError(f"Cannot Resolve Pipeline Runtime Config")
+        # Extract optional DAG tracking parameters
+        dag_id = parameters.get("dag_id")
+        node_task_id = parameters.get("node_task_id")
+        partition_key = parameters.get("partition_key")
 
         try:
-            metadata = self.pipeline.execute(
-                ref_id=ref_id,
-                ref_type=ref_type,
-                frames=frames,
-                pms_mode=pms_mode,
-                coordinate_format=coordinate_format,
-                regions=regions,
-                queue_id=queue_id,
-                job_id=job_id,
-                runtime_conf=runtime_conf,
+            # Fetch the source once, then route by format before rasterizing so
+            # born-digital documents extract via markitdown and bypass OCR. The
+            # OCR branch reuses this same download (no second fetch).
+            #
+            # Transport (asset fetch), routing, and OCR pre-processing (frame
+            # parsing, region coercion, runtime-config resolution) run OUTSIDE the
+            # inference try blocks below. A transient S3 read failure, a malformed
+            # region, or an unresolvable runtime config must raise uncaught so the
+            # executor lifecycle records the exception and the scheduler retries
+            # the job -- exactly as before the markitdown restructure -- rather
+            # than being flattened into a {status: "error"} response that the job
+            # layer treats as a completed call (letting the DAG proceed and fail
+            # confusingly downstream). Only the markitdown branch and the OCR
+            # pipeline execution convert their failures into {status: "error"}.
+            local_path, file_type = fetch_asset_to_temp(doc.asset_key)
+            parse_mode = self._parse_mode(parameters)
+
+            if self._route(file_type, parse_mode) == "markitdown":
+                try:
+                    response = self._extract_markitdown(
+                        ref_id=ref_id,
+                        ref_type=ref_type,
+                        local_path=local_path,
+                        file_type=file_type,
+                        include_ocr=include_ocr,
+                        job_id=job_id,
+                        dag_id=dag_id,
+                        node_task_id=node_task_id,
+                        partition_key=partition_key,
+                    )
+                except BaseException as error:
+                    self.logger.error(f"Extract error : {error}", exc_info=True)
+                    msg = "inference exception"
+                    if self.show_error:
+                        msg = (str(error),)
+                    return {
+                        "status": "error",
+                        "runtime_info": self.runtime_info,
+                        "error": msg,
+                    }
+                if response is not None:
+                    return response
+                # markitdown fell through (low text yield) -> continue on OCR.
+
+            frames = get_frames_from_file(local_path, doc.pages)
+            ref_id = hash_frames_fast(frames) if ref_id is None else ref_id
+
+            # https://github.com/marieai/marie-ai/issues/51
+            regions = payload.get("regions", [])
+            for region in regions:
+                region["id"] = f'{int(region["id"])}'
+                region["x"] = int(region["x"])
+                region["y"] = int(region["y"])
+                region["w"] = int(region["w"])
+                region["h"] = int(region["h"])
+                region["pageIndex"] = int(region["pageIndex"])
+
+            # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
+            coordinate_format = CoordinateFormat.from_value(
+                value_from_payload_or_args(payload, "format", default="xywh")
+            )
+            pms_mode = PSMode.from_value(
+                value_from_payload_or_args(payload, "mode", default="")
             )
 
-            if metadata is None:
-                self.logger.warning(
-                    f"Metadata is None, this can happen if no text was found"
+            self.logger.debug(
+                "ref_id, ref_type frames , regions , pms_mode, coordinate_format,"
+                f" checksum: {ref_id}, {ref_type},  {len(frames)}, {len(regions)}, {pms_mode},"
+                f" {coordinate_format}"
+            )
+
+            runtime_conf = {}
+            pipeline_features = get_payload_features(payload, f_type="pipeline")
+            if len(pipeline_features) == 1:
+                runtime_conf = pipeline_features[0]
+            else:
+                filtered_features = [
+                    f
+                    for f in pipeline_features
+                    if f.get("name") == self.pipeline.pipeline_name
+                ]
+                if len(pipeline_features) == 1:
+                    runtime_conf = filtered_features[0]
+                elif len(filtered_features) > 1:
+                    self.logger.error(
+                        f"Unable to distinguish Runtime Config : {filtered_features}"
+                    )
+                    raise ValueError(f"Cannot Resolve Pipeline Runtime Config")
+
+            try:
+                metadata = self.pipeline.execute(
+                    ref_id=ref_id,
+                    ref_type=ref_type,
+                    frames=frames,
+                    pms_mode=pms_mode,
+                    coordinate_format=coordinate_format,
+                    regions=regions,
+                    queue_id=queue_id,
+                    job_id=job_id,
+                    runtime_conf=runtime_conf,
                 )
+
+                if metadata is None:
+                    self.logger.warning(
+                        f"Metadata is None, this can happen if no text was found"
+                    )
+                    response = {
+                        "status": "failed",
+                        "runtime_info": self.runtime_info,
+                        "metadata": {},
+                    }
+                    converted = safely_encoded(lambda x: x)(response)
+                    return converted
+
+                del frames
+                del regions
+
+                self.persist(
+                    ref_id=ref_id,
+                    ref_type=ref_type,
+                    results=metadata,
+                    job_id=job_id,
+                    dag_id=dag_id,
+                    node_task_id=node_task_id,
+                    partition_key=partition_key,
+                )
+
+                # strip out ocr results from metadata
+                if not include_ocr and "ocr" in metadata:
+                    del metadata["ocr"]
+
                 response = {
-                    "status": "failed",
+                    "status": "succeeded",
                     "runtime_info": self.runtime_info,
-                    "metadata": {},
+                    "metadata": metadata,
                 }
                 converted = safely_encoded(lambda x: x)(response)
                 return converted
-
-            del frames
-            del regions
-
-            # Extract optional DAG tracking parameters
-            dag_id = parameters.get("dag_id")
-            node_task_id = parameters.get("node_task_id")
-            partition_key = parameters.get("partition_key")
-
-            self.persist(
-                ref_id=ref_id,
-                ref_type=ref_type,
-                results=metadata,
-                job_id=job_id,
-                dag_id=dag_id,
-                node_task_id=node_task_id,
-                partition_key=partition_key,
-            )
-
-            # strip out ocr results from metadata
-            if not include_ocr and "ocr" in metadata:
-                del metadata["ocr"]
-
-            response = {
-                "status": "succeeded",
-                "runtime_info": self.runtime_info,
-                "metadata": metadata,
-            }
-            converted = safely_encoded(lambda x: x)(response)
-            return converted
-        except BaseException as error:
-            self.logger.error(f"Extract error : {error}", exc_info=True)
-            msg = "inference exception"
-            if self.show_error:
-                msg = (str(error),)
-            return {
-                "status": "error",
-                "runtime_info": self.runtime_info,
-                "error": msg,
-            }
+            except BaseException as error:
+                self.logger.error(f"Extract error : {error}", exc_info=True)
+                msg = "inference exception"
+                if self.show_error:
+                    msg = (str(error),)
+                return {
+                    "status": "error",
+                    "runtime_info": self.runtime_info,
+                    "error": msg,
+                }
         finally:
             torch_gc()
             MDC.remove("request_id")
+
+    @staticmethod
+    def _parse_mode(parameters: dict) -> Optional[str]:
+        """Read ``parse_mode`` from ``parameters["run_params"]`` (studio-sent,
+        nested) first, then a top-level ``parameters["parse_mode"]``."""
+        run_params = parameters.get("run_params") or {}
+        if "parse_mode" in run_params:
+            return run_params["parse_mode"]
+        return parameters.get("parse_mode")
+
+    def _route(self, file_type: str, parse_mode: Optional[str]) -> str:
+        """Route to ``"markitdown"`` or ``"ocr"``, applying the feature gate.
+
+        When markitdown is disabled or the plugin is not configured, everything
+        routes to OCR (warned once).
+        """
+        if not self._markitdown_available():
+            return "ocr"
+        return FormatRouter.route(file_type, parse_mode)
+
+    def _markitdown_available(self) -> bool:
+        if not self._markitdown_enabled:
+            self._warn_markitdown_off("disabled by config")
+            return False
+        if "marie/markitdown" not in self.embedded_plugins.configured_packages:
+            self._warn_markitdown_off("plugin not configured")
+            return False
+        return True
+
+    def _warn_markitdown_off(self, reason: str) -> None:
+        if not self._markitdown_gate_warned:
+            self.logger.warning(
+                f"markitdown routing off ({reason}); routing all documents to OCR"
+            )
+            self._markitdown_gate_warned = True
+
+    def _extract_markitdown(
+        self,
+        *,
+        ref_id: str,
+        ref_type: str,
+        local_path: str,
+        file_type: str,
+        include_ocr: bool,
+        job_id: Optional[str],
+        dag_id: Optional[str],
+        node_task_id: Optional[str],
+        partition_key: Optional[str],
+    ) -> Optional[dict]:
+        """Extract via the markitdown plugin and persist the EMBED artifact.
+
+        Returns the succeeded-response dict, or ``None`` when a PDF result falls
+        below the text-yield floor (caller then continues on OCR). A non-PDF that
+        converts to empty markdown raises (fail loud).
+        """
+        result = self.embedded_plugins.invoke(
+            "marie/markitdown", "convert", {"path": local_path, "format": file_type}
+        )
+        markdown = result.get("markdown") or ""
+        plugin_meta = result.get("metadata") or {}
+        page_count = plugin_meta.get("page_count") or 1
+
+        if file_type == "pdf":
+            if not pdf_yield_ok(markdown, page_count, self._markitdown_floor):
+                self.logger.warning(
+                    f"markitdown low text yield for {ref_id} "
+                    f"({len(markdown)} chars / {page_count} pages); "
+                    f"falling back to OCR (fallback_reason=low_text_yield)"
+                )
+                return None
+        elif not markdown.strip():
+            raise ValueError(
+                f"markitdown produced empty markdown for {ref_id} "
+                f"(format={file_type})"
+            )
+
+        write_markitdown_artifact(ref_id, ref_type, markdown, file_type, page_count)
+
+        metadata = build_markitdown_metadata(markdown, file_type, page_count)
+        self.persist(
+            ref_id=ref_id,
+            ref_type=ref_type,
+            results=metadata,
+            job_id=job_id,
+            dag_id=dag_id,
+            node_task_id=node_task_id,
+            partition_key=partition_key,
+        )
+
+        if not include_ocr and "ocr" in metadata:
+            del metadata["ocr"]
+
+        response = {
+            "status": "succeeded",
+            "runtime_info": self.runtime_info,
+            "metadata": metadata,
+        }
+        return safely_encoded(lambda x: x)(response)
 
     @requests(on="/document/extract/status")
     def status(self, parameters, **kwargs):

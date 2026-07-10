@@ -52,9 +52,9 @@ class SubmissionDocumentSensor(S3DataSinkSensor):
             "uri": "s3://bucket/tenants/t1/submissions/s1/doc.pdf",
             "ref_id": "<document_uuid>",
             "ref_type": "submission_document",
-            "workflow_type": "rag_indexing",
+            "workflow_type": "kb_indexing",
             "source_id": "submission:<submission_id>",
-            "index_name": "<rag_index_id>",
+            "index_name": "<kb_index_id>",
             "node_type": "document",
             "tenant_id": "<tenant_id>",
             "submission_id": "<submission_id>"
@@ -183,14 +183,14 @@ class SubmissionDocumentSensor(S3DataSinkSensor):
             return []
 
         # Get linked RAG indexes
-        rag_index_ids = self.submission_storage.get_rag_indexes_for_submission(
+        kb_index_ids = self.submission_storage.get_kb_indexes_for_submission(
             submission_id
         )
-        if not rag_index_ids and submission.rag_index_id:
-            # Fallback to single rag_index_id on submission
-            rag_index_ids = [submission.rag_index_id]
+        if not kb_index_ids and submission.kb_index_id:
+            # Fallback to single kb_index_id on submission
+            kb_index_ids = [submission.kb_index_id]
 
-        if not rag_index_ids:
+        if not kb_index_ids:
             context.log_info(
                 f"No RAG indexes linked to submission {submission_id}, skipping"
             )
@@ -198,32 +198,32 @@ class SubmissionDocumentSensor(S3DataSinkSensor):
 
         # Create RunRequest for each RAG index
         run_requests = []
-        for rag_index_id in rag_index_ids:
+        for kb_index_id in kb_index_ids:
             # Create workflow record (upsert)
             workflow = self.submission_storage.create_document_workflow(
                 document_id=document.id,
-                workflow_type="rag_indexing",
+                workflow_type="kb_indexing",
             )
 
             run_key = self.build_run_key(
-                "rag_indexing",
+                "kb_indexing",
                 document.id,
-                rag_index_id,
+                kb_index_id,
             )
 
             run_requests.append(
                 RunRequest(
                     run_key=run_key,
-                    job_name="rag_indexing",
+                    job_name="kb_indexing",
                     run_config={
                         # Standard metadata fields
                         "uri": s3_uri,
                         "ref_id": document.id,
                         "ref_type": "submission_document",
-                        "workflow_type": "rag_indexing",
+                        "workflow_type": "kb_indexing",
                         # RAG-specific parameters
                         "source_id": f"submission:{submission_id}",
-                        "index_name": rag_index_id,
+                        "index_name": kb_index_id,
                         "node_type": "document",
                         # Context for status updates
                         "tenant_id": tenant_id,

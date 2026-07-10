@@ -14,7 +14,7 @@ from marie import requests
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
 
-logger = MarieLogger("marie.executor.rag.document_backend_executor").logger
+logger = MarieLogger("marie.executor.kb.document_backend_executor").logger
 
 
 class DocumentBackendExecutor(MarieExecutor):

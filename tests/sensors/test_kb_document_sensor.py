@@ -8,15 +8,15 @@ from marie.sensors.definitions.data_sink.base import FileObject
 from marie.sensors.definitions.kb_document_sensor import KB_KEY_RE, KbDocumentSensor
 from marie.sensors.types import SensorType
 
-KEY = "tenants/11111111-1111-4111-8111-111111111111/rag-indexes/22222222-2222-4222-8222-222222222222/sources/33333333-3333-4333-8333-333333333333/report.pdf"
+KEY = "tenants/11111111-1111-4111-8111-111111111111/kb-indexes/22222222-2222-4222-8222-222222222222/sources/33333333-3333-4333-8333-333333333333/report.pdf"
 TENANT = "11111111-1111-4111-8111-111111111111"
 SOURCE = "33333333-3333-4333-8333-333333333333"
 INDEX_UNBOUND = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 INDEX_BOUND = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 NON_KB_KEY = "tenants/t1/submissions/s1/file.pdf"
-UNBOUND_KEY = f"tenants/{TENANT}/rag-indexes/{INDEX_UNBOUND}/sources/{SOURCE}/unbound.pdf"
-BOUND_KEY = f"tenants/{TENANT}/rag-indexes/{INDEX_BOUND}/sources/{SOURCE}/bound.pdf"
-BOUND_KEY_2 = f"tenants/{TENANT}/rag-indexes/{INDEX_BOUND}/sources/{SOURCE}/bound2.pdf"
+UNBOUND_KEY = f"tenants/{TENANT}/kb-indexes/{INDEX_UNBOUND}/sources/{SOURCE}/unbound.pdf"
+BOUND_KEY = f"tenants/{TENANT}/kb-indexes/{INDEX_BOUND}/sources/{SOURCE}/bound.pdf"
+BOUND_KEY_2 = f"tenants/{TENANT}/kb-indexes/{INDEX_BOUND}/sources/{SOURCE}/bound2.pdf"
 
 
 def _context() -> SensorEvaluationContext:
@@ -45,15 +45,15 @@ def _sensor():
 def test_run_request_shape():
     sensor = _sensor()
     obj = FileObject(key=KEY, size=10, last_modified=datetime.now(timezone.utc), etag="x")
-    binding = {"workflow_name": "rag_indexing", "run_params": {"parse_mode": "agent", "multimodal": True}}
+    binding = {"workflow_name": "kb_indexing", "run_params": {"parse_mode": "agent", "multimodal": True}}
     with patch.object(sensor, "load_binding", return_value=binding):
         rr = sensor.build_run_request(obj, bucket="marie")
-    assert rr.job_name == "rag_indexing"
-    assert rr.run_key == f"rag_indexing:22222222-2222-4222-8222-222222222222:{KEY}"
+    assert rr.job_name == "kb_indexing"
+    assert rr.run_key == f"kb_indexing:22222222-2222-4222-8222-222222222222:{KEY}"
     rc = rr.run_config
     assert rc["uri"] == f"s3://marie/{KEY}"
     assert rc["ref_id"] == KEY
-    assert rc["ref_type"] == "rag_document"
+    assert rc["ref_type"] == "kb_document"
     assert rc["project_id"] == rc["tenant_id"]
     assert rc["index_name"] == rc["index_id"]
     assert rc["run_params"] == binding["run_params"]
@@ -82,7 +82,7 @@ async def test_evaluate_holds_cursor_at_recoverable_skip_minimum():
     non_kb = FileObject(key=NON_KB_KEY, size=1, last_modified=t0, etag="x")
     unbound = FileObject(key=UNBOUND_KEY, size=1, last_modified=t1, etag="x")
     bound = FileObject(key=BOUND_KEY, size=1, last_modified=t2, etag="x")
-    binding = {"workflow_name": "rag_indexing", "run_params": {}}
+    binding = {"workflow_name": "kb_indexing", "run_params": {}}
 
     def _load_binding(index_id):
         return binding if index_id == INDEX_BOUND else None
@@ -105,7 +105,7 @@ async def test_evaluate_all_bound_advances_cursor_to_max():
 
     obj1 = FileObject(key=BOUND_KEY, size=1, last_modified=t1, etag="x")
     obj2 = FileObject(key=BOUND_KEY_2, size=1, last_modified=t2, etag="x")
-    binding = {"workflow_name": "rag_indexing", "run_params": {}}
+    binding = {"workflow_name": "kb_indexing", "run_params": {}}
 
     with patch.object(
         sensor, "list_objects", new=AsyncMock(return_value=[obj1, obj2])

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from marie.agent.tools.base import AgentTool, ToolMetadata, ToolOutput
-from marie.secrets import CredentialRequirement
+from marie.secret_store import CredentialRequirement
 
 if TYPE_CHECKING:
     from marie.agent.tools.plugin_daemon_client import PluginDaemonClient
