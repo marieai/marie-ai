@@ -154,6 +154,33 @@ uv pip check
 
 Do not install `vllm`, `flash-attn`, `torchaudio`, or `faiss-gpu-cu12` into this environment; they are excluded from the torch 2.12/cu130 lane.
 
+### Upgrading Individual Packages In A Lane Environment
+
+Torch must be installed first and must never be replaced as a side effect. PyPI's default `torch` is not the cu130 build, so a plain `uv pip install -U <package>` that resolves a torch requirement will silently swap `torch 2.12.1+cu130` for a generic PyPI torch and break the CUDA stack (this has happened — a `sentence-transformers` upgrade did exactly this).
+
+When upgrading or adding a single package in an existing lane environment, either skip its dependency resolution:
+
+```shell
+uv pip install --no-deps -U sentence-transformers
+```
+
+or re-pin torch in the same invocation so the resolver cannot move it:
+
+```shell
+uv pip install -U sentence-transformers \
+  torch==2.12.1 torchvision==0.27.1 \
+  --extra-index-url https://download.pytorch.org/whl/cu130 \
+  --index-strategy unsafe-best-match
+```
+
+After any ad-hoc install, verify the stack is intact:
+
+```shell
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+```
+
+Expected: `2.12.1+cu130 True`. If torch was replaced, restore it with `uv pip install torch==2.12.1 torchvision==0.27.1 --index-url https://download.pytorch.org/whl/cu130`.
+
 To also discard cached wheels and force fresh downloads on the next install:
 
 ```shell

@@ -209,7 +209,8 @@ run_cmd() {
   } | tee -a "${log_file}"
 
   set +e
-  bash -lc "${command}" 2>&1 | tee -a "${log_file}"
+  bash -lc "set -Eeo pipefail
+${command}" 2>&1 | tee -a "${log_file}"
   local status=${PIPESTATUS[0]}
   set -e
 
