@@ -19,6 +19,10 @@ from marie.utils.types import strtobool
 # Global reference to sensor worker for cleanup
 _sensor_worker: Optional[Any] = None
 _sensor_worker_thread: Optional[threading.Thread] = None
+_sensor_storage_pool: Optional[Any] = None
+# The event loop the SensorWorker runs on (its own thread, set in _run_sensor_worker).
+# Needed to bridge job submission back from the worker's loop to the gateway's loop.
+_sensor_worker_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 def setup_auth(auth_config: Dict[str, Any]) -> None:
@@ -214,12 +218,14 @@ def setup_sensor_worker(
 
 def _run_sensor_worker(db_config: Optional[Dict[str, Any]] = None) -> None:
     """Run the SensorWorker in its own event loop."""
+    global _sensor_storage_pool, _sensor_worker_loop
 
     if _sensor_worker is None:
         return
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    _sensor_worker_loop = loop
 
     try:
         loop.run_until_complete(_init_sensor_storage(db_config))
@@ -230,23 +236,93 @@ def _run_sensor_worker(db_config: Optional[Dict[str, Any]] = None) -> None:
     except Exception as e:
         logger.error(f"SensorWorker failed: {e}")
     finally:
+        if _sensor_storage_pool is not None:
+            try:
+                loop.run_until_complete(_sensor_storage_pool.close())
+            except Exception as e:
+                logger.warning(f"Error closing SensorWorker storage pool: {e}")
+            finally:
+                _sensor_storage_pool = None
+        _sensor_worker_loop = None
         loop.close()
 
 
 async def _init_sensor_storage(db_config: Optional[Dict[str, Any]] = None) -> None:
     """Initialize PostgreSQL storage for the sensor worker."""
+    global _sensor_storage_pool
+
     if _sensor_worker is None or db_config is None:
         return
 
     try:
+        import asyncpg
+
         from marie.sensors.state.psql_storage import PostgreSQLSensorStorage
 
-        storage = PostgreSQLSensorStorage(db_config)
-        await storage.initialize()
+        pool = await asyncpg.create_pool(
+            host=db_config["hostname"],
+            port=int(db_config["port"]),
+            user=db_config["username"],
+            password=db_config["password"],
+            database=db_config["database"],
+            min_size=db_config.get("min_connections", 1),
+            max_size=db_config.get("max_connections", 10),
+        )
+        schema = db_config.get("schema", "marie_scheduler")
+        storage = PostgreSQLSensorStorage.initialize(pool, schema)
+        _sensor_storage_pool = pool
         _sensor_worker.set_storage(storage)
-        logger.info("SensorWorker storage initialized")
+        logger.info(
+            f"SensorWorker storage initialized for database: {db_config.get('database')}"
+        )
     except Exception as e:
         logger.error(f"Failed to initialize SensorWorker storage: {e}")
+
+
+class _CrossLoopJobScheduler:
+    """
+    Adapter that lets the SensorWorker (its own thread/event loop) submit jobs
+    to a job scheduler that lives on the gateway's event loop (asyncpg pools
+    and friends are loop-bound, so the scheduler can't be called directly
+    from the worker's loop).
+
+    Only implements `submit_job` -- worker.py duck-types the scheduler and
+    only ever calls that method.
+    """
+
+    def __init__(self, job_scheduler: Any, gateway_loop: asyncio.AbstractEventLoop):
+        self._job_scheduler = job_scheduler
+        self._gateway_loop = gateway_loop
+
+    async def submit_job(self, work_info: Any) -> Any:
+        # Runs on the worker's loop. Hand the real coroutine to the gateway's
+        # loop, then wrap the resulting concurrent.futures.Future back into
+        # an awaitable bound to *this* (the worker's) running loop.
+        concurrent_future = asyncio.run_coroutine_threadsafe(
+            self._job_scheduler.submit_job(work_info), self._gateway_loop
+        )
+        return await asyncio.wrap_future(concurrent_future, loop=_sensor_worker_loop)
+
+
+def attach_sensor_worker_scheduler(job_scheduler: Any) -> bool:
+    """
+    Attach a job scheduler to the running SensorWorker via a cross-loop adapter.
+
+    Must be called from the gateway's event loop (after the scheduler has
+    started). No-ops if no SensorWorker is running.
+
+    :param job_scheduler: The gateway's job scheduler (e.g. PostgreSQLJobScheduler).
+    :return: True if attached, False if there was no SensorWorker to attach to.
+    """
+    if _sensor_worker is None:
+        logger.debug("No SensorWorker running; skipping job scheduler attachment")
+        return False
+
+    gateway_loop = asyncio.get_running_loop()
+    adapter = _CrossLoopJobScheduler(job_scheduler, gateway_loop)
+    _sensor_worker.set_job_scheduler(adapter)
+    logger.info("Attached job scheduler to SensorWorker via cross-loop adapter")
+    return True
 
 
 def _stop_sensor_worker() -> None:

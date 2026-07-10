@@ -5,7 +5,14 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Dict, Optional, Set
 
+import etcd3
+import grpc
+
 from .base import BaseStore, _now_iso
+
+
+class EtcdStoreUnavailable(RuntimeError):
+    """Raised when a semaphore-store scan cannot reach etcd (outage/reconnect)."""
 
 
 @dataclass
@@ -65,6 +72,22 @@ def _holder_key(slot_type: str, ticket_id: str) -> str:
     return f"{_holders_prefix(slot_type)}{ticket_id}"
 
 
+def _decode_count(raw) -> Optional[int]:
+    """Counter decode shared by every counter-reading path.
+
+    None/empty -> 0 (missing counter means zero holders).
+    Malformed  -> None (caller decides: repair via reconcile, or treat as 0
+    while CASing on the raw value so the write itself is the repair).
+    """
+    if not raw:
+        return 0
+    try:
+        s = raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
+        return int(s.strip())
+    except Exception:
+        return None
+
+
 class SemaphoreStore(BaseStore):
     """
     Lock-free semaphore backed by etcd, implemented with CAS transactions.
@@ -97,6 +120,19 @@ class SemaphoreStore(BaseStore):
         super().__init__(etcd_client)
         self.default_lease_ttl = max(1, int(default_lease_ttl))
 
+    def _scan_prefix(self, mangled_prefix):
+        """All prefix scans go through here so an etcd outage surfaces as one
+        typed error instead of raw grpc/channel exceptions in callers."""
+        try:
+            return self.etcd.client.get_prefix(mangled_prefix)
+        except (grpc.RpcError, etcd3.exceptions.Etcd3Exception) as e:
+            raise EtcdStoreUnavailable(f"etcd scan failed: {e}") from e
+        except ValueError as e:
+            msg = str(e).lower()
+            if "closed channel" in msg or "channel closed" in msg:
+                raise EtcdStoreUnavailable(f"etcd channel closed: {e}") from e
+            raise
+
     # ---------- Capacity (single) ----------
 
     def get_capacity(self, slot_type: str) -> Optional[int]:
@@ -128,51 +164,82 @@ class SemaphoreStore(BaseStore):
         owner: Optional[str] = "capacity-manager",
         source: Optional[str] = "auto",
     ) -> int:
+        """Set capacity, never writing a limit below the concurrent used count.
+
+        Invariant: every WRITE this method performs is committed in a txn that
+        proves the count key is unchanged since `target` was computed from it.
+        No-write paths (already-equal, and the raise on exhaustion) satisfied
+        the invariant at read time — "still true at return time" is not
+        promisable by any implementation.
+        """
         requested = max(0, int(requested_limit))
-        used = max(0, int(self.read_count(slot_type))) if never_below_used else 0
-        target = max(used, requested) if never_below_used else requested
+        cap_k = _cap_key(slot_type)
+        cnt_k = _count_key(slot_type)
 
-        val_bytes, meta = self._get_capacity_raw(slot_type)
-        now = _now_iso()
+        for _attempt in range(10):
+            cnt_raw = self._get_raw(cnt_k)
+            if cnt_raw is None:
+                used = 0
+            else:
+                try:
+                    used = max(0, int(cnt_raw.decode()))
+                except Exception as exc:
+                    if never_below_used:
+                        # computing from 0 could lower capacity below real
+                        # usage; refuse — reconcile/repair owns malformed keys
+                        raise RuntimeError(
+                            f"Refusing to set capacity for {slot_type}: "
+                            f"malformed count value {cnt_raw!r}"
+                        ) from exc
+                    used = 0
+            target = max(used, requested) if never_below_used else requested
 
-        if val_bytes is None:
-            doc = CapacityDoc(limit=target, owner=owner, source=source, updated_at=now)
-            payload = json.dumps(asdict(doc))
-            if self.etcd.put_if_absent(_cap_key(slot_type), payload):
-                return target
+            val_bytes, meta = self._get_capacity_raw(slot_type)
+            if val_bytes is not None:
+                cur = CapacityDoc.from_json(val_bytes)
+                if int(cur.limit) == int(target):
+                    # nothing to write; avoids one etcd revision per slot per
+                    # gateway capacity pass
+                    return cur.limit
 
-        val_bytes, meta = self._get_capacity_raw(slot_type)
-        if val_bytes is None:
-            self._write_capacity_doc(
-                slot_type,
-                CapacityDoc(limit=target, owner=owner, source=source, updated_at=now),
+            doc = CapacityDoc(
+                limit=target, owner=owner, source=source, updated_at=_now_iso()
             )
-            return target
+            t = self.etcd.txn()
+            if val_bytes is None:
+                # create path must ALSO prove the count didn't move — a bare
+                # put_if_absent would let `used` go stale between read & write
+                t.if_missing(cap_k)
+            else:
+                t.if_mod_revision(cap_k, "==", meta.mod_revision)
+            if never_below_used:
+                if cnt_raw is None:
+                    t.if_missing(cnt_k)
+                else:
+                    t.if_value(cnt_k, "==", cnt_raw)
+            t.put(cap_k, json.dumps(asdict(doc)))
+            ok, _resp = t.commit()
+            if ok:
+                return target
+            # capacity or count moved underneath us — recompute and retry
 
-        cur = CapacityDoc.from_json(val_bytes)
-        if int(cur.limit) == int(target):
-            return cur.limit
-
-        new_doc = CapacityDoc(limit=target, owner=owner, source=source, updated_at=now)
-        swapped = self.etcd.update_if_unchanged(
-            _cap_key(slot_type), json.dumps(asdict(new_doc)), meta.mod_revision
-        )
-        if swapped:
-            return target
-
+        # retries exhausted under contention: only report a value that still
+        # honors the invariant; otherwise fail loudly (caller
+        # slot_capacity_manager._safe_set_capacity catches and falls back)
+        latest_used = max(0, int(self.read_count(slot_type)))
         latest = self.get_capacity(slot_type)
-        return int(latest) if latest is not None else target
+        if latest is not None and int(latest) >= latest_used:
+            return int(latest)
+        raise RuntimeError(
+            f"Failed to safely set capacity for {slot_type}: "
+            f"requested={requested}, latest={latest}, used={latest_used}"
+        )
 
     # ---------- Counters & holders (single) ----------
 
     def read_count(self, slot_type: str) -> int:
-        raw = self._get_raw(_count_key(slot_type))
-        if not raw:
-            return 0
-        try:
-            return int(raw.decode() if isinstance(raw, (bytes, bytearray)) else raw)
-        except Exception:
-            return 0
+        val = _decode_count(self._get_raw(_count_key(slot_type)))
+        return val if val is not None else 0
 
     def available_slot_count(self, slot_type: str) -> int:
         cap = self.get_capacity(slot_type)
@@ -183,7 +250,7 @@ class SemaphoreStore(BaseStore):
 
     def list_holders(self, slot_type: str) -> Dict[str, SemaphoreHolder]:
         prefix = _holders_prefix(slot_type)
-        results = self.etcd.client.get_prefix(self.etcd._mangle_key(prefix))
+        results = self._scan_prefix(self.etcd._mangle_key(prefix))
         holders: Dict[str, SemaphoreHolder] = {}
         for value_bytes, meta in results:
             key = self.etcd._demangle_key(meta.key)
@@ -228,7 +295,13 @@ class SemaphoreStore(BaseStore):
             return False
 
         cnt_raw = self._get_raw(cnt_k)
-        old_count = int(cnt_raw.decode()) if cnt_raw else 0
+        old_count = _decode_count(cnt_raw)
+        if old_count is None:
+            self.reconcile(slot_type)
+            cnt_raw = self._get_raw(cnt_k)
+            old_count = _decode_count(cnt_raw)
+            if old_count is None:
+                return False
         if old_count >= limit:
             return False
 
@@ -319,7 +392,10 @@ class SemaphoreStore(BaseStore):
                 return set()
 
             cnt_raw = self._get_raw(cnt_k)
-            old_count = int(cnt_raw.decode()) if cnt_raw else 0
+            old_count = _decode_count(cnt_raw)
+            if old_count is None:
+                self.reconcile(slot_type)
+                continue
             available = max(0, int(limit) - max(0, old_count))
             if available <= 0:
                 return set()
@@ -469,7 +545,9 @@ class SemaphoreStore(BaseStore):
                 continue
 
             # Normal case: counter exists
-            old_count = int(cnt_raw.decode())
+            old_count = _decode_count(cnt_raw)
+            if old_count is None:
+                old_count = 0
             new_count = max(0, old_count - 1)
 
             t = self.etcd.txn()
@@ -545,7 +623,9 @@ class SemaphoreStore(BaseStore):
                 continue
 
             # Normal case: counter exists
-            old_count = int(cnt_raw.decode())
+            old_count = _decode_count(cnt_raw)
+            if old_count is None:
+                old_count = 0
             new_count = max(0, old_count - 1)
 
             # CAS on both: holder value and count value
@@ -570,14 +650,14 @@ class SemaphoreStore(BaseStore):
     def list_slot_types(self) -> Set[str]:
         slots: Set[str] = set()
 
-        cap_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("capacity/"))
+        cap_iter = self._scan_prefix(self.etcd._mangle_key("capacity/"))
         for _val, meta in cap_iter:
             key = self.etcd._demangle_key(meta.key)
             parts = key.split("/")
             if len(parts) == 2 and parts[0] == "capacity":
                 slots.add(parts[1])
 
-        sem_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("semaphores/"))
+        sem_iter = self._scan_prefix(self.etcd._mangle_key("semaphores/"))
         for _val, meta in sem_iter:
             key = self.etcd._demangle_key(meta.key)
             parts = key.split("/")
@@ -589,7 +669,7 @@ class SemaphoreStore(BaseStore):
     def read_count_all(self) -> Dict[str, int]:
         used: Dict[str, int] = {s: 0 for s in self.list_slot_types()}
 
-        sem_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("semaphores/"))
+        sem_iter = self._scan_prefix(self.etcd._mangle_key("semaphores/"))
         for val_bytes, meta in sem_iter:
             key = self.etcd._demangle_key(meta.key)
             if key.endswith("/count"):
@@ -608,7 +688,7 @@ class SemaphoreStore(BaseStore):
 
     def holder_counts_all(self) -> Dict[str, int]:
         counts: Dict[str, int] = {}
-        sem_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("semaphores/"))
+        sem_iter = self._scan_prefix(self.etcd._mangle_key("semaphores/"))
         for _val, meta in sem_iter:
             key = self.etcd._demangle_key(meta.key)
             parts = key.split("/")
@@ -622,7 +702,7 @@ class SemaphoreStore(BaseStore):
 
     def available_count_all(self) -> Dict[str, int]:
         caps: Dict[str, int] = {}
-        cap_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("capacity/"))
+        cap_iter = self._scan_prefix(self.etcd._mangle_key("capacity/"))
         for val_bytes, meta in cap_iter:
             key = self.etcd._demangle_key(meta.key)
             parts = key.split("/")
@@ -634,7 +714,7 @@ class SemaphoreStore(BaseStore):
                 caps[parts[1]] = max(0, int(limit))
 
         used: Dict[str, int] = {}
-        sem_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("semaphores/"))
+        sem_iter = self._scan_prefix(self.etcd._mangle_key("semaphores/"))
         for val_bytes, meta in sem_iter:
             key = self.etcd._demangle_key(meta.key)
             parts = key.split("/")
@@ -658,7 +738,7 @@ class SemaphoreStore(BaseStore):
 
     def list_holders_all(self) -> Dict[str, Dict[str, SemaphoreHolder]]:
         result: Dict[str, Dict[str, SemaphoreHolder]] = {}
-        sem_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("semaphores/"))
+        sem_iter = self._scan_prefix(self.etcd._mangle_key("semaphores/"))
         for val_bytes, meta in sem_iter:
             key = self.etcd._demangle_key(meta.key)
             parts = key.split("/")
@@ -677,7 +757,7 @@ class SemaphoreStore(BaseStore):
 
     def capacities_all(self) -> Dict[str, int]:
         caps: Dict[str, int] = {}
-        cap_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("capacity/"))
+        cap_iter = self._scan_prefix(self.etcd._mangle_key("capacity/"))
         for val_bytes, meta in cap_iter:
             key = self.etcd._demangle_key(meta.key)
             parts = key.split("/")
@@ -695,7 +775,7 @@ class SemaphoreStore(BaseStore):
         holders_map: Dict[str, Dict[str, SemaphoreHolder]] = {}
         holder_counts: Dict[str, int] = {}
 
-        sem_iter = self.etcd.client.get_prefix(self.etcd._mangle_key("semaphores/"))
+        sem_iter = self._scan_prefix(self.etcd._mangle_key("semaphores/"))
         for val_bytes, meta in sem_iter:
             key = self.etcd._demangle_key(meta.key)
             parts = key.split("/")
@@ -748,14 +828,18 @@ class SemaphoreStore(BaseStore):
         return out
 
     def reconcile(self, slot_type: str) -> int:
+        cnt_k = _count_key(slot_type)
+        # Read the counter BEFORE scanning holders: any reserve()/release()
+        # that commits after this read changes the counter atomically, so the
+        # CAS below fails instead of clobbering fresh state with a stale scan.
+        cnt_raw = self._get_raw(cnt_k)
+        cur = _decode_count(cnt_raw)
+
         prefix = _holders_prefix(slot_type)
-        results = self.etcd.client.get_prefix(self.etcd._mangle_key(prefix))
+        results = self._scan_prefix(self.etcd._mangle_key(prefix))
         live = sum(1 for _v, _m in results)
 
-        cnt_k = _count_key(slot_type)
-        cnt_raw = self._get_raw(cnt_k)
-        cur = int(cnt_raw.decode()) if cnt_raw else 0
-        if cur == live:
+        if cur is not None and cur == live:
             return cur
 
         t = self.etcd.txn()
@@ -765,7 +849,7 @@ class SemaphoreStore(BaseStore):
             t.if_value(cnt_k, "==", cnt_raw)
         t.put(cnt_k, str(live))
         ok, _resp = t.commit()
-        return live if ok else cur
+        return live if ok else (cur if cur is not None else 0)
 
     def get_holder(self, slot_type: str, ticket_id: str) -> Optional[SemaphoreHolder]:
         raw, _meta = self._get_holder_raw(slot_type, ticket_id)
@@ -811,7 +895,7 @@ class SemaphoreStore(BaseStore):
             live_keys: list[str] = []
             malformed = 0
 
-            scan_iter = self.etcd.client.get_prefix(mangled_prefix)
+            scan_iter = self._scan_prefix(mangled_prefix)
             for val_bytes, meta in scan_iter:
                 key = self.etcd._demangle_key(meta.key)
                 # Try to parse holder for sanity; count malformed but don't delete by default
@@ -840,20 +924,21 @@ class SemaphoreStore(BaseStore):
                         # ignore individual delete failures
                         pass
 
+            # Read current counter BEFORE the rescan (same CAS-ordering rationale
+            # as reconcile()): a concurrent reserve/release invalidates the CAS.
+            cnt_k = _count_key(st)
+            cnt_raw = self._get_raw(cnt_k)
+            before_count = _decode_count(cnt_raw)
+            after_count = before_count if before_count is not None else -1
+
             # 3) Recompute live holder count after orphan cleanup
             #    If we deleted orphans, we can avoid a second scan by using live_keys
             #    but live_keys might include keys that concurrently disappeared; a cheap
             #    re-scan ensures correctness.
             live_count = 0
-            rescan_iter = self.etcd.client.get_prefix(mangled_prefix)
+            rescan_iter = self._scan_prefix(mangled_prefix)
             for _v, _m in rescan_iter:
                 live_count += 1
-
-            # Read current counter
-            cnt_k = _count_key(st)
-            cnt_raw = self._get_raw(cnt_k)
-            before_count = int(cnt_raw.decode()) if cnt_raw else 0
-            after_count = before_count
 
             # 4) CAS-fix /count to the live holders
             if fix_counters and before_count != live_count:
@@ -864,10 +949,14 @@ class SemaphoreStore(BaseStore):
                     t.if_value(cnt_k, "==", cnt_raw)
                 t.put(cnt_k, str(live_count))
                 ok, _ = t.commit()
-                after_count = live_count if ok else before_count
+                after_count = (
+                    live_count
+                    if ok
+                    else (before_count if before_count is not None else -1)
+                )
 
             summary[st] = {
-                "before_count": before_count,
+                "before_count": before_count if before_count is not None else -1,
                 "after_count": after_count,
                 "deleted_orphans": deleted_orphans,
                 "malformed_holders": malformed,

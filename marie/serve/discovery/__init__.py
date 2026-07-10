@@ -9,6 +9,19 @@ from marie.serve.discovery.registry import EtcdServiceRegistry
 if TYPE_CHECKING:  # pragma: no cover
     pass
 
+DEFAULT_DISCOVERY_LEASE_SEC = 16
+DEFAULT_DISCOVERY_HEARTBEAT_SEC = 3.0
+
+
+def _discovery_lease_params(runtime_args) -> tuple[int, float]:
+    """Resolve discovery lease TTL and heartbeat interval from runtime args."""
+    ttl = getattr(runtime_args, "discovery_lease_sec", None)
+    beat = getattr(runtime_args, "discovery_heartbeat_sec", None)
+    return (
+        int(ttl) if ttl else DEFAULT_DISCOVERY_LEASE_SEC,
+        float(beat) if beat else DEFAULT_DISCOVERY_HEARTBEAT_SEC,
+    )
+
 
 class DiscoveryServiceMixin:
     """Instrumentation mixin for Service Discovery handling"""
@@ -76,9 +89,7 @@ class DiscoveryServiceMixin:
         self.logger.info(f"Deployments ctrl_address: {ctrl_address}")
         self.logger.info(f"Deployments runtime_args: {runtime_args}")
 
-        # TODO - this should be configurable
-        service_ttl = 6
-        heartbeat_time = 2
+        service_ttl, heartbeat_time = _discovery_lease_params(runtime_args)
 
         etcd_registry = EtcdServiceRegistry(
             self.discovery_host,

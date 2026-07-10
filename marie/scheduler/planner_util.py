@@ -110,7 +110,11 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
         "planner", work_info.name
     )
 
-    planner_info = PlannerInfo(name=query_planner_name, base_id=work_info.id)
+    planner_info = PlannerInfo(
+        name=query_planner_name,
+        base_id=work_info.id,
+        metadata=work_info.data.get("metadata", {}),
+    )
     plan = query_planner(planner_info)
     # pprint(plan.model_dump())
     # visualize_query_plan_graph(plan)

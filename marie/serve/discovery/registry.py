@@ -23,6 +23,8 @@ _KNOWN_CONNECTION_ERRORS = (
     "transport is closing",
     "no leader",
     "lease not found",
+    "channel closed",  # grpc integrated_call phrasing during our own reconnect
+    "closed channel",  # grpc segregated_call phrasing of the same condition
 )
 
 
@@ -101,7 +103,7 @@ class EtcdServiceRegistry(ServiceRegistry):
         # Store registration metadata (addr_cls, metadata) per service_addr for re-registration
         self._registration_info = {}
         self._heartbeat_time = heartbeat_time
-        self._default_service_ttl = 6  # Match container.py ETCD_LEASE_SEC default
+        self._default_service_ttl = 30  # Match container.py ETCD_LEASE_SEC default
         self.setup_heartbeat_async()
 
     def _on_etcd_connected(self, event):
@@ -371,33 +373,60 @@ class EtcdServiceRegistry(ServiceRegistry):
                     logger.warning(
                         f"Lease expired (TTL=0) for {svc_addr}, re-registering services"
                     )
-                    # Clear the invalid cached lease BEFORE re-registering
-                    # This ensures get_lease() creates a fresh lease
-                    with self._lock:
-                        self._leases.pop(svc_addr, None)
-                        # Get stored registration info to preserve addr_cls and metadata
-                        reg_info = self._registration_info.get(svc_addr, {})
-                    fallback_ttl = service_ttl or self._default_service_ttl
-                    self.register(
-                        list(registered),
-                        svc_addr,
-                        fallback_ttl,
-                        addr_cls=reg_info.get('addr_cls'),
-                        metadata=reg_info.get('metadata'),
-                        force=True,
-                    )
+                    self._reregister(svc_addr, registered, service_ttl)
+                else:
+                    # Lease is healthy — but a key can be deleted out from
+                    # under a live lease (external cleanup, keyspace wipe).
+                    # Verify every registered key still exists.
+                    missing = None
+                    for service_name in registered:
+                        key = form_service_key(service_name, svc_addr)
+                        if not self._etcd_client.get(key):
+                            missing = service_name
+                            break
+                    if missing is not None:
+                        logger.warning(
+                            f"Registration key missing for {missing}@{svc_addr} "
+                            f"(lease alive); re-registering services"
+                        )
+                        self._reregister(svc_addr, registered, service_ttl)
 
             except Exception as e:
-                # For known connection errors, log briefly without traceback
-                if _is_known_connection_error(e):
+                if "lease not found" in str(e).lower():
+                    logger.warning(
+                        f"Lease gone for {svc_addr} (refresh raised); re-registering services"
+                    )
+                    try:
+                        self._reregister(svc_addr, registered, service_ttl)
+                    except Exception as re_err:
+                        logger.error(f"Re-registration failed for {svc_addr}: {re_err}")
+                elif _is_known_connection_error(e):
                     logger.warning(
                         f"Heartbeat skipped for {svc_addr}: {type(e).__name__} - {e}"
                     )
                 else:
-                    # Unknown error - log with full traceback
                     logger.error(
                         f"Error during heartbeat for {svc_addr}: {e}", exc_info=True
                     )
+
+    def _reregister(self, svc_addr, registered, service_ttl):
+        """Force re-registration after the lease or key was lost.
+
+        Drops the cached lease so get_lease() mints a fresh one, then
+        re-puts every service key with the original addr_cls/metadata.
+        """
+        with self._lock:
+            self._leases.pop(svc_addr, None)
+            reg_info = self._registration_info.get(svc_addr, {})
+        fallback_ttl = service_ttl or self._default_service_ttl
+        self.register(
+            list(registered),
+            svc_addr,
+            fallback_ttl,
+            addr_cls=reg_info.get('addr_cls'),
+            metadata=reg_info.get('metadata'),
+            force=True,
+        )
 
     def unregister(self, service_names, service_addr, addr_cls=None):
         """Unregister services with the same address."""

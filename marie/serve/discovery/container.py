@@ -34,10 +34,10 @@ class EtcdConfig:
 
     # Service discovery-related fields
     lease_sec: int = field(
-        default_factory=lambda: int(os.getenv('ETCD_LEASE_SEC', '6'))
+        default_factory=lambda: int(os.getenv('ETCD_LEASE_SEC', '30'))
     )
     heartbeat_sec: float = field(
-        default_factory=lambda: float(os.getenv('ETCD_HEARTBEAT_SEC', '1.5'))
+        default_factory=lambda: float(os.getenv('ETCD_HEARTBEAT_SEC', '5.0'))
     )
     service_name: str = field(
         default_factory=lambda: os.getenv('ETCD_SERVICE_NAME', 'gateway/marie')
@@ -136,10 +136,10 @@ class EtcdConfig:
                 'grpc_options', cls._get_grpc_options_from_env()
             ),
             lease_sec=config_dict.get(
-                'lease_sec', int(os.getenv('ETCD_LEASE_SEC', '6'))
+                'lease_sec', int(os.getenv('ETCD_LEASE_SEC', '30'))
             ),
             heartbeat_sec=config_dict.get(
-                'heartbeat_sec', float(os.getenv('ETCD_HEARTBEAT_SEC', '1.5'))
+                'heartbeat_sec', float(os.getenv('ETCD_HEARTBEAT_SEC', '5.0'))
             ),
             service_name=config_dict.get(
                 'service_name', os.getenv('ETCD_SERVICE_NAME', 'gateway/marie')

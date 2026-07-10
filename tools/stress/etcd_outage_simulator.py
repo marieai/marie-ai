@@ -4,6 +4,7 @@ Simulate ETCD outages by pausing and unpausing a Docker container.
 
 Typical usage:
     python tools/stress/etcd_outage_simulator.py --cycles 3 --pause-seconds 10
+    python etcd_outage_simulator.py --cycles 3 --pause-seconds 3   --recover-seconds 6 --recover-jitter 3
 
 Run this alongside the gateway or worker stress tools to reproduce reconnect and
 re-registration behavior while ETCD disappears and comes back.

@@ -139,7 +139,7 @@ def send_health_check_sync(
 
 async def send_health_check_async(
     target: str,
-    timeout: float = 99.0,
+    timeout: float = 10.0,
     tls: bool = False,
     root_certificates: Optional[str] = None,
     max_retries: int = 3,
@@ -160,7 +160,19 @@ async def send_health_check_async(
     health_check_req = health_pb2.HealthCheckRequest()
     health_check_req.service = ""
 
-    for attempt in range(max_retries):
+    if max_retries < 1:
+        raise ValueError("max_retries must be >= 1")
+
+    health_check_req = health_pb2.HealthCheckRequest(service="")
+
+    retryable_codes = {
+        grpc.StatusCode.DEADLINE_EXCEEDED,
+        grpc.StatusCode.UNAVAILABLE,
+    }
+
+    last_error: Optional[BaseException] = None
+
+    for attempt in range(1, max_retries + 1):
         try:
             async with get_grpc_channel(
                 target,
@@ -171,18 +183,27 @@ async def send_health_check_async(
                 stub = health_pb2_grpc.HealthStub(channel)
                 return await stub.Check(health_check_req, timeout=timeout)
 
-        except grpc.RpcError as e:
-            if e.code() in (
-                grpc.StatusCode.DEADLINE_EXCEEDED,
-                grpc.StatusCode.UNAVAILABLE,
-            ):
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay)
-                    continue
-            raise
+        except grpc.aio.AioRpcError as e:
+            last_error = e
+            if e.code() not in retryable_codes:
+                raise
+            if attempt >= max_retries:
+                raise
 
-        except Exception as e:
-            raise e
+            await asyncio.sleep(retry_delay)
+
+        except grpc.RpcError as e:
+            # Defensive fallback if get_grpc_channel can return a sync channel
+            # or raise non-aio gRPC errors.
+            last_error = e
+            if e.code() not in retryable_codes:
+                raise
+            if attempt >= max_retries:
+                raise
+            await asyncio.sleep(retry_delay)
+    # Should not normally be reached, but keeps type-checkers happy.
+    assert last_error is not None
+    raise last_error
 
 
 def send_requests_sync(

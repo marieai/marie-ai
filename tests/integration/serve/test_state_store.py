@@ -11,10 +11,12 @@ from marie.state.state_store import DesiredDoc, DesiredStore, StatusDoc, StatusS
 
 @pytest.fixture(scope="function")
 def etcd_client():
-    c = EtcdClient("localhost", 2379)
+    # Unique namespace per test: the teardown range-deletes the client's whole
+    # namespace — on the default "marie" namespace this wiped the live
+    # keyspace (2026-07-09 outage). Never point this at "marie".
+    c = EtcdClient("localhost", 2379, namespace=f"marie-test-{uuid.uuid4().hex[:8]}")
     yield c
     try:
-        # clean everything under default namespace
         c.delete_prefix("")
     except Exception:
         pass

@@ -16,14 +16,12 @@ store).  The gateway only *invokes* installed plugins (plugin_daemon_executor).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from marie.logging_core.logger import MarieLogger
 from marie.sandbox.blueprints.registry import BlueprintRegistry
 from marie.sandbox.blueprints.service import BlueprintImportService
-
-if TYPE_CHECKING:
-    from fastapi import FastAPI
 
 _logger = MarieLogger('marie.sandbox.blueprints.gateway_routes')
 
@@ -32,7 +30,7 @@ _DEFAULT_SERVICE = BlueprintImportService()
 
 
 def register_blueprint_routes(
-    app: 'FastAPI',
+    app: FastAPI,
     registry: BlueprintRegistry | None = None,
     service: BlueprintImportService | None = None,
 ) -> None:
@@ -43,9 +41,6 @@ def register_blueprint_routes(
         registry: Optional :class:`BlueprintRegistry` override (useful in tests).
         service:  Optional :class:`BlueprintImportService` override (useful in tests).
     """
-    from fastapi import Depends, Request
-    from fastapi.responses import JSONResponse
-
     from marie.auth.auth_bearer import TokenBearer
 
     _registry = registry or _DEFAULT_REGISTRY
@@ -60,7 +55,7 @@ def register_blueprint_routes(
     async def import_blueprint(
         request: Request,
         _token: str = Depends(TokenBearer()),
-    ) -> JSONResponse:
+    ):
         """Install all artifacts from a blueprint into this gateway's registries.
 
         Request body::

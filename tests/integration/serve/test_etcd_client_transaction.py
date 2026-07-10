@@ -8,9 +8,11 @@ from marie.serve.discovery.etcd_client import EtcdClient, _prefix_end_key
 
 @pytest.fixture(scope="function")
 def client():
-    c = EtcdClient("localhost", 2379)
+    # Unique namespace per test: the teardown range-deletes the client's whole
+    # namespace — on the default "marie" namespace this wiped the live
+    # keyspace (2026-07-09 outage). Never point this at "marie".
+    c = EtcdClient("localhost", 2379, namespace=f"marie-test-{uuid.uuid4().hex[:8]}")
     yield c
-    # best-effort cleanup for the test namespace
     try:
         c.delete_prefix("")
     except Exception:

@@ -459,7 +459,7 @@ class EtcdClient(object):
                 ) > failure_threshold and not self._in_recovery:
                     if (
                         cur_state == ConnectionState.CONNECTED
-                        and consecutive_failures >= 1
+                        and consecutive_failures >= 2
                     ):
                         # Require at least 2 consecutive failures before declaring down
                         self._set_connection_state(ConnectionState.DISCONNECTED)
@@ -500,6 +500,13 @@ class EtcdClient(object):
                             and consecutive_failures >= 2
                         ):
                             self._set_connection_state(ConnectionState.DISCONNECTED)
+                        elif (
+                            cur == ConnectionState.FAILED and consecutive_failures >= 3
+                        ):
+                            # Escalate exactly like the generic-exception branch:
+                            # hung (not just erroring) health checks must also
+                            # be able to pull the client out of FAILED.
+                            self._schedule_recovery_attempt()
 
                 except Exception as e:
                     consecutive_failures += 1
@@ -921,6 +928,16 @@ class EtcdClient(object):
             try:
                 if isinstance(response, grpc.RpcError):
                     code = response.code()
+                    if code == grpc.StatusCode.CANCELLED:
+                        # Expected artifact of our own reconnect: the old
+                        # channel is torn down and the in-flight watch RPC is
+                        # cancelled. Reconnect logic re-establishes watches;
+                        # nothing is wrong and state must not flip here.
+                        logger.debug(
+                            f"Watch on {raw_key!r} interrupted by channel close; "
+                            f"it will be re-established after reconnect"
+                        )
+                        return
                     if (
                         code == grpc.StatusCode.UNAVAILABLE
                         or code == grpc.StatusCode.INTERNAL
@@ -937,15 +954,19 @@ class EtcdClient(object):
 
                 # Check if response has events attribute before accessing it
                 if not hasattr(response, 'events'):
-                    logger.error(
-                        f"Response object does not have 'events' attribute: {type(response)}"
-                    )
                     if isinstance(response, grpc.RpcError):
+                        logger.warning(
+                            f"Response object does not have 'events' attribute: {type(response)}"
+                        )
                         logger.error(
                             f"Unhandled gRPC error in watch callback: {response}"
                         )
                         self._set_connection_state(
                             ConnectionState.DISCONNECTED, response
+                        )
+                    else:
+                        logger.error(
+                            f"Response object does not have 'events' attribute: {type(response)}"
                         )
                     return
 

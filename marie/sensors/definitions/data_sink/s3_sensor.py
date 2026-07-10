@@ -19,7 +19,7 @@ from marie.sensors.registry import register_sensor
 from marie.sensors.types import SensorType
 
 
-@register_sensor(SensorType.DATA_SINK)
+@register_sensor(SensorType.DATA_SINK, subtype="s3")
 class S3DataSinkSensor(DataSinkSensor):
     """
     S3 Data Sink sensor for monitoring S3 buckets for new files.
@@ -37,9 +37,11 @@ class S3DataSinkSensor(DataSinkSensor):
         batch_mode: bool - Emit single RunRequest with all files
 
     Credentials:
-        Uses boto3's credential chain (environment, IAM role, profile, etc.)
-        For custom endpoints, ensure AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
-        are set appropriately.
+        aws_access_key_id: str - Optional; explicit access key (e.g. for MinIO)
+        aws_secret_access_key: str - Optional; explicit secret key
+        If both are set in config, they are passed to the S3 client directly.
+        Otherwise falls back to boto3's credential chain (environment, IAM
+        role, profile, etc.).
 
     Cursor:
         ISO timestamp of the last processed file's LastModified time.
@@ -86,6 +88,12 @@ class S3DataSinkSensor(DataSinkSensor):
             client_kwargs = {"region_name": self.region}
             if self.endpoint_url:
                 client_kwargs["endpoint_url"] = self.endpoint_url
+
+            access_key_id = self.get_config_value("aws_access_key_id")
+            secret_access_key = self.get_config_value("aws_secret_access_key")
+            if access_key_id and secret_access_key:
+                client_kwargs["aws_access_key_id"] = access_key_id
+                client_kwargs["aws_secret_access_key"] = secret_access_key
 
             self._client = boto3.client("s3", **client_kwargs)
 
@@ -134,7 +142,8 @@ class S3DataSinkSensor(DataSinkSensor):
                     # Ensure after_timestamp is also timezone-aware for comparison
                     if after_timestamp.tzinfo is None:
                         after_timestamp = after_timestamp.replace(tzinfo=timezone.utc)
-                    if last_modified <= after_timestamp:
+                    # strict '<': equal-timestamp objects are re-listed and deduped by sensor_run_key
+                    if last_modified < after_timestamp:
                         continue
 
                 # Skip directories (keys ending with /)

@@ -25,6 +25,7 @@ from docarray.documents import TextDoc
 
 from marie import Executor, requests
 from marie.executor.marie_executor import MarieExecutor
+from marie.executor.rag.search_result_doc import SearchResultDoc
 from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 from marie.rag.models import SourceCitation
@@ -307,7 +308,7 @@ class VectorStoreExecutor(MarieExecutor):
         docs: DocList[TextDoc],
         parameters: Dict[str, Any],
         **kwargs,
-    ) -> DocList[TextDoc]:
+    ) -> DocList[SearchResultDoc]:
         """Semantic search over stored documents.
 
         Args:
@@ -354,20 +355,19 @@ class VectorStoreExecutor(MarieExecutor):
         )
 
         # Convert to DocList
-        result_docs = DocList[TextDoc]()
+        result_docs = DocList[SearchResultDoc]()
         for r in results:
-            doc = TextDoc(
-                id=r["node_id"],
-                text=r["content"] or "",
+            result_docs.append(
+                SearchResultDoc(
+                    id=r["node_id"],
+                    text=r["content"] or "",
+                    similarity=r["similarity"],
+                    source_id=r["source_id"],
+                    node_type=r["node_type"],
+                    index_name=r.get("index_name", index_name),
+                    ref_doc_id=r.get("ref_doc_id"),
+                )
             )
-            # Store search metadata
-            doc.metadata = r.get("metadata") or {}
-            doc.metadata["_similarity"] = r["similarity"]
-            doc.metadata["_index_name"] = r.get("index_name", index_name)
-            doc.metadata["_source_id"] = r["source_id"]
-            doc.metadata["_node_type"] = r["node_type"]
-            doc.metadata["_ref_doc_id"] = r.get("ref_doc_id")
-            result_docs.append(doc)
 
         self.logger.info(f"Found {len(result_docs)} results")
         return result_docs
@@ -575,7 +575,7 @@ class VectorStoreExecutor(MarieExecutor):
         docs: DocList[TextDoc],
         parameters: Dict[str, Any],
         **kwargs,
-    ) -> DocList[TextDoc]:
+    ) -> DocList[SearchResultDoc]:
         """Hybrid search combining vector and full-text search.
 
         Uses RRF (Reciprocal Rank Fusion) to combine results.
@@ -626,20 +626,21 @@ class VectorStoreExecutor(MarieExecutor):
         )
 
         # Convert to DocList
-        result_docs = DocList[TextDoc]()
+        result_docs = DocList[SearchResultDoc]()
         for r in results:
-            doc = TextDoc(
-                id=r["node_id"],
-                text=r["content"] or "",
+            result_docs.append(
+                SearchResultDoc(
+                    id=r["node_id"],
+                    text=r["content"] or "",
+                    similarity=r["similarity"],
+                    text_score=r.get("text_score", 0),
+                    rrf_score=r.get("rrf_score", 0),
+                    source_id=r["source_id"],
+                    node_type=r["node_type"],
+                    index_name=r.get("index_name", index_name),
+                    ref_doc_id=r.get("ref_doc_id"),
+                )
             )
-            doc.metadata = r.get("metadata") or {}
-            doc.metadata["_similarity"] = r["similarity"]
-            doc.metadata["_text_score"] = r.get("text_score", 0)
-            doc.metadata["_rrf_score"] = r.get("rrf_score", 0)
-            doc.metadata["_index_name"] = r.get("index_name", index_name)
-            doc.metadata["_source_id"] = r["source_id"]
-            doc.metadata["_node_type"] = r["node_type"]
-            result_docs.append(doc)
 
         self.logger.info(f"Found {len(result_docs)} results via hybrid search")
         return result_docs

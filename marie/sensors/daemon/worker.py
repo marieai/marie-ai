@@ -37,9 +37,75 @@ from marie.sensors.types import (
 )
 
 if TYPE_CHECKING:
+    from marie.scheduler.models import WorkInfo
     from marie.scheduler.services import NotificationService
 
 logger = MarieLogger("SensorWorker")
+
+_ENVELOPE_KEYS = (
+    "project_id",
+    "ref_id",
+    "ref_type",
+    "uri",
+    "tenant_id",
+    "index_id",
+    "index_name",
+    "source_id",
+    "run_params",
+)
+
+
+def build_work_info(
+    run_request: RunRequest,
+    sensor_id: str,
+    sensor_name: str,
+    job_name: str,
+    dag_id: Optional[str],
+) -> "WorkInfo":
+    """Build a WorkInfo for a sensor-triggered job submission.
+
+    Mirrors the defaults used by marie_gateway.handle_job_submit_command
+    for start_after/expire_in_seconds/keep_until so sensor-submitted jobs
+    satisfy the same scheduler contract as gateway-submitted jobs.
+    """
+    from marie.scheduler.models import WorkInfo
+    from marie.scheduler.state import WorkState
+
+    now = datetime.now(timezone.utc)
+    return WorkInfo(
+        name=job_name,
+        dag_id=dag_id,
+        priority=run_request.priority,
+        data=build_job_data(run_request, sensor_id, sensor_name),
+        state=WorkState.CREATED,
+        retry_limit=3,
+        retry_delay=2,
+        retry_backoff=True,
+        start_after=now,
+        expire_in_seconds=0,
+        keep_until=now + timedelta(days=2),
+        soft_sla=now,
+        hard_sla=now + timedelta(hours=4),
+    )
+
+
+def build_job_data(
+    run_request: RunRequest, sensor_id: str, sensor_name: str
+) -> Dict[str, Any]:
+    """Job data payload: legacy run_config + canonical metadata envelope (spec A0.2)."""
+    rc = run_request.run_config or {}
+    metadata: Dict[str, Any] = {k: rc[k] for k in _ENVELOPE_KEYS if k in rc}
+    metadata["planner"] = rc.get("planner", run_request.job_name)
+    if "project_id" not in metadata and "tenant_id" in rc:
+        metadata["project_id"] = rc["tenant_id"]
+    return {
+        "run_config": rc,
+        "metadata": metadata,
+        "sensor_id": sensor_id,
+        "sensor_name": sensor_name,
+        "run_key": run_request.run_key,
+        **run_request.tags,
+    }
 
 
 class SensorWorker:
@@ -338,8 +404,9 @@ class SensorWorker:
             # Build evaluation context
             context = await self._build_context(sensor)
 
-            # Get evaluator for this sensor type
-            evaluator_class = self._registry.get_evaluator(sensor_type)
+            # Get evaluator for this sensor type (and subtype, if configured)
+            subtype = sensor.get("config", {}).get("subtype")
+            evaluator_class = self._registry.get_evaluator(sensor_type, subtype=subtype)
             evaluator = evaluator_class(sensor)
 
             # Create STARTED tick for crash recovery (if we'll submit jobs)
@@ -483,24 +550,8 @@ class SensorWorker:
         # Submit job via scheduler
         if self._job_scheduler:
             try:
-                from marie.scheduler.models import WorkInfo
-                from marie.scheduler.state import WorkState
-
-                work_info = WorkInfo(
-                    name=job_name,
-                    dag_id=dag_id,
-                    priority=run_request.priority,
-                    data={
-                        "run_config": run_request.run_config,
-                        "sensor_id": sensor_id,
-                        "sensor_name": sensor_name,
-                        "run_key": run_request.run_key,
-                        **run_request.tags,
-                    },
-                    state=WorkState.CREATED,
-                    retry_limit=3,
-                    retry_delay=2,
-                    retry_backoff=True,
+                work_info = build_work_info(
+                    run_request, sensor_id, sensor_name, job_name, dag_id
                 )
 
                 # Use scheduler's submit method

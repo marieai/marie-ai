@@ -26,7 +26,7 @@ class SubmissionSensorType:
     SUBMISSION_DOCUMENT = "submission_document"
 
 
-@register_sensor(SensorType.DATA_SINK)
+@register_sensor(SensorType.DATA_SINK, subtype="submission_document")
 class SubmissionDocumentSensor(S3DataSinkSensor):
     """
     Sensor for monitoring submission document uploads.
