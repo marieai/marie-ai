@@ -43,7 +43,8 @@ from the Marie AI checkout, not from marie-assistant/analysis.
 Steps:
   env                 Print resolved paths and versions.
   worktree            Verify the current checkout/worktree.
-  venv                Create the Python 3.12 venv and base build tools.
+  venv                Create the Python 3.12 venv and base build tools, and
+                      symlink .venv in the checkout to it.
   torch               Install torch 2.12.1 / torchvision 0.27.1 from cu130.
   app-deps            Install Marie editable dependencies and test/runtime helpers.
   cuda-toolkit         Install/activate CUDA 13 nvcc package and symlinks.
@@ -52,6 +53,9 @@ Steps:
   build-detectron2     Build detectron2 wheel from the configured ref.
   reject-faiss-cu12    Record why the current faiss-gpu-cu12 package path is rejected.
   build-faiss          Build CUDA-enabled FAISS from source with the CUDA 13 patch.
+  build-wheels         Build every wheel in order (cuda-toolkit, fastwer, fairseq,
+                       detectron2, faiss), then check-wheels and wheels-readme.
+                       Requires an existing venv with torch installed.
   check-wheels         Verify wheels/ contains only expected top-level artifacts.
   install-wheels       Install fastwer/etcd3 plus repo-local wheels into the venv.
   verify-native        Verify torch, fairseq, detectron2 ROIAlign CUDA, and FAISS GPU.
@@ -124,6 +128,17 @@ guard_new_environment() {
   if [[ -e "${MARIE_TORCH_VENV}" ]]; then
     printf 'Environment already present: %s\n' "${MARIE_TORCH_VENV}" >&2
     printf 'Choose another environment name or remove the existing directory before running `%s`.\n' "${step}" >&2
+    exit 1
+  fi
+}
+
+require_build_venv() {
+  if [[ ! -x "${MARIE_TORCH_VENV}/bin/python" ]]; then
+    printf 'No venv at %s. Run the `venv`, `torch`, and `app-deps` steps first.\n' "${MARIE_TORCH_VENV}" >&2
+    exit 1
+  fi
+  if ! "${MARIE_TORCH_VENV}/bin/python" -c 'import torch' >/dev/null 2>&1; then
+    printf 'torch is not installed in %s. Run the `torch` step first.\n' "${MARIE_TORCH_VENV}" >&2
     exit 1
   fi
 }
@@ -312,7 +327,14 @@ source \"${MARIE_TORCH_VENV}/bin/activate\"
 export VENV_PYTHON=\"${MARIE_TORCH_VENV}/bin/python\"
 \"\${VENV_PYTHON}\" --version
 uv pip install --python \"\${VENV_PYTHON}\" -U 'setuptools<81' wheel
-uv pip install --python \"\${VENV_PYTHON}\" -U packaging ninja cmake pybind11 swig \"numpy==${MARIE_NUMPY_VERSION}\""
+uv pip install --python \"\${VENV_PYTHON}\" -U packaging ninja cmake pybind11 swig \"numpy==${MARIE_NUMPY_VERSION}\"
+cd \"${MARIE_TORCH_WORKTREE}\"
+if [[ -L .venv || ! -e .venv ]]; then
+  ln -sfn \"${MARIE_TORCH_VENV}\" .venv
+  echo \"linked ${MARIE_TORCH_WORKTREE}/.venv -> ${MARIE_TORCH_VENV}\"
+else
+  echo \"skipping .venv symlink: ${MARIE_TORCH_WORKTREE}/.venv is a real directory\" >&2
+fi"
 }
 
 step_torch() {
@@ -711,6 +733,18 @@ run_all() {
   step_wheels_readme
 }
 
+run_build_wheels() {
+  require_build_venv
+  step_cuda_toolkit
+  step_build_fastwer
+  step_build_fairseq
+  step_build_detectron2
+  step_reject_faiss_cu12
+  step_build_faiss
+  step_check_wheels
+  step_wheels_readme
+}
+
 main() {
   local step="${1:-help}"
   case "${step}" in
@@ -739,6 +773,7 @@ main() {
     build-detectron2) step_build_detectron2 ;;
     reject-faiss-cu12) step_reject_faiss_cu12 ;;
     build-faiss) step_build_faiss ;;
+    build-wheels) run_build_wheels ;;
     check-wheels) step_check_wheels ;;
     install-wheels) step_install_wheels ;;
     verify-native) step_verify_native ;;

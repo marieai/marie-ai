@@ -281,6 +281,7 @@ dev = [
     "watchfiles>=0.18.0",
     "gradio",
     "python-dotenv",
+    "pre-commit>=4.6.0",
 ]
 
 legacy-gradio = [

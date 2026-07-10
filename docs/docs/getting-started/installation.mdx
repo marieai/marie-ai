@@ -56,19 +56,157 @@ uv sync --extra cu130 --group dev
 uv run python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 ```
 
-## Rebuild Local Native Wheels
+## Clean Virtual Environments
 
-The CUDA profile expects the repo-local wheels for `fastwer`, Marie's fairseq
-fork, detectron2, and FAISS CUDA 13 to exist under `wheels/`. To rebuild and
-verify the full Python 3.12 / PyTorch 2.12 / CUDA 13 path, run:
+Two uv interfaces exist, and they behave differently with this repository:
+
+- **Project interface** (`uv sync`, `uv run`) reads `[tool.uv.sources]` from `pyproject.toml`, so the repo-local wheels under `wheels/`, the `packages/marie-*` path packages, and the `pytorch-cu130` index are wired up automatically. Use this by default.
+- **pip interface** (`uv venv` + `uv pip install`, per the [uv docs](https://docs.astral.sh/uv/pip/environments/#using-a-virtual-environment)) does **not** apply `[tool.uv.sources]` — wheel locations and indexes must be passed explicitly. Use it when the environment must be fully under your control (side-by-side lanes, bisecting, CI shells).
+
+If Python 3.12 is not present, let uv manage it:
+
+```shell
+uv python install 3.12
+```
+
+### Central Environment Layout
+
+By default `uv sync` creates `.venv` inside the repository. We keep all environments in one place instead — `~/environments/` — and symlink `.venv` to the environment the checkout should use:
+
+```shell
+uv venv ~/environments/marie-ai-py312 --python 3.12
+ln -sfn ~/environments/marie-ai-py312 .venv
+```
+
+uv, `uv run`, and IDE tooling resolve the `.venv` symlink normally, so from here the standard project flow works unchanged:
+
+```shell
+uv sync --extra cu130 --group dev
+uv run marie --help
+```
+
+To rebuild the environment from a clean slate, clear the target and re-sync — the symlink stays in place (`--clear` wipes the environment at that path):
+
+```shell
+uv venv ~/environments/marie-ai-py312 --python 3.12 --clear
+uv sync --extra cu130 --group dev
+```
+
+Note that `rm -rf .venv` only removes the symlink, not the environment. Switching a checkout to another lane is just re-pointing the link:
+
+```shell
+ln -sfn ~/environments/marie-ai-pytorch-2-12 .venv
+```
+
+`UV_PROJECT_ENVIRONMENT=~/environments/<name>` is an alternative per-shell override, but the symlink keeps the mapping visible and persistent.
+
+### Standalone venv With The pip Interface
+
+Create the environment under `~/environments/` and activate it:
+
+```shell
+uv venv ~/environments/marie-ai-py312 --python 3.12 --clear
+source ~/environments/marie-ai-py312/bin/activate
+```
+
+With the environment activated, `uv pip` targets it automatically. Because the pip interface ignores `[tool.uv.sources]`, pass `--find-links wheels` for the repo-local wheels and install the local path packages in the same invocation.
+
+CPU gateway profile:
+
+```shell
+uv pip install \
+  -e . \
+  -e packages/marie-kernel \
+  -e packages/marie-wasm \
+  -e packages/marie-mem0 \
+  -e packages/marie-mcp \
+  --group dev \
+  --find-links wheels
+```
+
+CUDA profile (requires the native wheels under `wheels/`, see the next section):
+
+```shell
+# 1) torch/torchvision from the cu130 index
+uv pip install torch==2.12.1 torchvision==0.27.1 \
+  --index-url https://download.pytorch.org/whl/cu130
+
+# 2) everything else, including the local native wheels
+uv pip install \
+  -e ".[cu130]" \
+  -e packages/marie-kernel \
+  -e packages/marie-wasm \
+  -e packages/marie-mem0 \
+  -e packages/marie-mcp \
+  --group dev \
+  --find-links wheels \
+  --extra-index-url https://download.pytorch.org/whl/cu130 \
+  --index-strategy unsafe-best-match
+
+# 3) omegaconf Python 3.12 compatibility patch
+python patches/patch-omegaconf-py312.py --no-confirm
+
+# 4) confirm the resolution is consistent
+uv pip check
+```
+
+`--index-strategy unsafe-best-match` mirrors the `[tool.uv]` setting the project interface uses; without it the cu130-index packages and PyPI packages cannot be mixed in one resolution.
+
+Do not install `vllm`, `flash-attn`, `torchaudio`, or `faiss-gpu-cu12` into this environment; they are excluded from the torch 2.12/cu130 lane.
+
+To also discard cached wheels and force fresh downloads on the next install:
+
+```shell
+uv cache clean
+```
+
+## Provision The wheels/ Artifacts
+
+The CUDA profile expects the distributed wheels — `etcd3`, `fastwer`, Marie's fairseq fork, detectron2, and FAISS CUDA 13 — to exist under `wheels/`. They are published as a versioned GitHub release (`wheels-torch212-cu130`) rather than tracked in git, with the generated inventory in `wheels/README.md` as the SHA256 source of truth.
+
+Fetch and verify them:
+
+```shell
+tools/scripts/fetch-wheels.sh          # download missing artifacts and check SHA256s
+tools/scripts/fetch-wheels.sh verify   # check what is already present
+```
+
+The script prefers the `gh` CLI (required for private releases); `curl` with `GITHUB_TOKEN` is the fallback.
+
+### Rebuild From Source
+
+You do not have to configure the native build toolchain by hand — `tools/scripts/setup-py312-torch212-cu130.sh` automates the whole Python 3.12 / PyTorch 2.12 / CUDA 13 lane: venv creation, torch/torchvision from the cu130 index, the CUDA 13 `nvcc` toolkit and library symlinks, source checkouts at the pinned refs, patches, and the wheel builds themselves.
+
+For a brand-new environment, one command runs everything end to end, including the native/GPU verification gates:
 
 ```shell
 MARIE_TORCH_ENV_NAME=marie-ai-pytorch-2-12 \
   tools/scripts/setup-py312-torch212-cu130.sh all
 ```
 
-Each step writes full command output under `command-output/repro-*`, including
-the invocation script needed to reproduce the run.
+If you already have a build environment, prep it once and then build every wheel with a single step — no guessing at the order:
+
+```shell
+export MARIE_VENV_BASE=~/environments
+export MARIE_TORCH_ENV_NAME=marie-ai-pytorch-2-12
+
+# one-time environment prep
+tools/scripts/setup-py312-torch212-cu130.sh venv       # Python 3.12 venv + build tools, symlinks .venv to it
+tools/scripts/setup-py312-torch212-cu130.sh torch      # torch 2.12.1 / torchvision 0.27.1 (cu130)
+tools/scripts/setup-py312-torch212-cu130.sh app-deps   # Marie editable install + test/runtime helpers
+
+# builds cuda-toolkit, fastwer, fairseq, detectron2, and FAISS in order,
+# then validates wheels/ and refreshes the README inventory
+tools/scripts/setup-py312-torch212-cu130.sh build-wheels
+```
+
+`build-wheels` checks its prerequisites and tells you which step is missing instead of failing mid-build. Run `tools/scripts/setup-py312-torch212-cu130.sh help` for the full step list. Every step writes full command output under `command-output/repro-*`, including the invocation script needed to reproduce the run.
+
+Both paths finish with the `wheels/README.md` inventory already refreshed, so publishing the new artifacts for other checkouts is just:
+
+```shell
+tools/scripts/fetch-wheels.sh publish
+```
 
 ## Docker Images
 
