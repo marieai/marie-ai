@@ -231,7 +231,6 @@ def get_pipeline_pages(
         if all(isinstance(x, int) for x in config_pages):
             pages = {0: sorted({int(n) for n in config_pages})}
         else:
-            # todo there is probably a better way to do this
             ensure_exists("/tmp/marie")
             with tempfile.TemporaryDirectory(dir="/tmp/marie") as temp_asset_dir:
                 temp_meta_path = download_asset(
@@ -305,7 +304,6 @@ def filter_pages_by_classifier_results(
 
             matched_pages = []
             if method == "exclude":
-                # fixme
                 matched_pages = [
                     page_results["best"]["page"]
                     for page_results in classification_pages.values()
@@ -628,7 +626,7 @@ def split_assets(collation: dict[str, Any], root_asset_dir: str, ref_id: str):
         split_docs,
         root_asset_dir,
         split_output_dir,
-        filename_generator=lambda subpath, start_page, end_page: f"{start_page}-{end_page}/{str.replace(str(subpath), ref_id, '[CHILD_REFID]')}",
+        filename_generator=lambda subpath, start_page, end_page: f"{start_page}-{end_page}/{str.replace(str(subpath), ref_id, '__CHILD_REFID__')}",
         glob=f"*{ref_id}*.json",
     )
 
@@ -643,5 +641,5 @@ def split_assets(collation: dict[str, Any], root_asset_dir: str, ref_id: str):
             sort_key=lambda name: int(
                 os.path.splitext(os.path.basename(name))[0].rsplit("_", 1)[-1]
             ),
-            filename_generator=lambda _, start_page, end_page: f"{start_page}-{end_page}/[CHILD_REFID].tif",
+            filename_generator=lambda _, start_page, end_page: f"{start_page}-{end_page}/__CHILD_REFID__.tif",
         )
