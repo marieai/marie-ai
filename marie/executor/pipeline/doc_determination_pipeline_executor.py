@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 from collections import defaultdict
 from pathlib import Path
@@ -362,7 +363,6 @@ def doc_determination_collation(meta: Dict[str, Any]) -> Dict[str, Any]:
         rotation_pages = meta.get("rotation", {}).get("pages", {})
 
         _all_pages = [int(x) for x in rotation_pages.keys()]
-        first_page, last_page = min(_all_pages), max(_all_pages)
 
         classifications_by_group = defaultdict(list)
         for item in meta.get("classifications", []):
@@ -382,6 +382,7 @@ def doc_determination_collation(meta: Dict[str, Any]) -> Dict[str, Any]:
         doc_determinations.sort(
             key=lambda x: min({int(p) for p in x.get("pages", {}).keys()} or {0})
         )
+        start_doc_page, last_page = min(_all_pages), max(_all_pages)
         for idx, item in enumerate(doc_determinations):
             pages_map = item.get("pages", {}) or {}
             page_numbers = sorted({int(p) for p in pages_map.keys()})
@@ -403,13 +404,14 @@ def doc_determination_collation(meta: Dict[str, Any]) -> Dict[str, Any]:
 
             # Fill missing pages in range (e.g., [2,3,5] -> [2,3,4,5])
             # Make sure first and last pages are accounted for (e.g., if FIRST classification is [2,3,5] -> [1,2,3,4,5])
-            start_page = first_page if idx == 0 else page_numbers[0]
-            end_page = (
+            end_doc_page = (
                 last_page if idx == len(doc_determinations) - 1 else page_numbers[-1]
             )
 
             collated_pages = []
-            for page_num in range(start_page, end_page + 1):
+            for new_page, page_num in enumerate(
+                range(start_doc_page, end_doc_page + 1)
+            ):
                 rot = (
                     rotation_pages.get(str(page_num), rotation_pages.get(page_num, {}))
                     or {}
@@ -417,6 +419,7 @@ def doc_determination_collation(meta: Dict[str, Any]) -> Dict[str, Any]:
                 collated_pages.append(
                     {
                         "page": page_num,
+                        "new_page": new_page,
                         "rotation": rot if rot >= rotation_threshold else 0,
                         "medical-page-classification": medical_by_page.get(page_num),
                     }
@@ -429,6 +432,8 @@ def doc_determination_collation(meta: Dict[str, Any]) -> Dict[str, Any]:
                     "pages": collated_pages,
                 }
             )
+
+            start_doc_page = end_doc_page + 1
 
         logger.info(f"Final document count: {len(documents)}")
     except Exception as e:
@@ -538,6 +543,7 @@ def split_meta_json(
             _meta["job_id"] = meta.get("job_id", "")
             _meta["pipeline"] = meta.get("pipeline", "")
             _meta["parent_ref_id"] = meta.get("ref_id", "")
+            _meta["parent_pages"] = pages
             _meta["ref_type"] = meta.get("ref_type", "")
 
             # rotation
@@ -575,6 +581,7 @@ def split_all_meta_jsons(
     input_dir: str,
     output_dir: str,
     filename_generator: Optional[Callable[[int, int, int], str]] = None,
+    glob: str = "*.json",
 ):
     out_dir_path = Path(output_dir)
     out_dir_path.mkdir(exist_ok=True, parents=True)
@@ -584,7 +591,7 @@ def split_all_meta_jsons(
         lambda subpath, start_page, end_page: f"{start_page}-{end_page}/{subpath}"
     )
 
-    jsons = list(in_dir_path.rglob("*.json"))
+    jsons = list(in_dir_path.rglob(glob, case_sensitive=False))
     for file_path in jsons:
         sub_path = file_path.relative_to(in_dir_path)
         if sub_path.parts[0] == "splits":
@@ -613,12 +620,16 @@ def split_assets(collation: dict[str, Any], root_asset_dir: str, ref_id: str):
     split_output_dir = os.path.join(root_asset_dir, "splits")
     split_docs = collation.get("docs", [])
 
+    if os.path.exists(split_output_dir):
+        shutil.rmtree(split_output_dir)
+
     # Split all JSON files
     split_all_meta_jsons(
         split_docs,
         root_asset_dir,
         split_output_dir,
         filename_generator=lambda subpath, start_page, end_page: f"{start_page}-{end_page}/{str.replace(str(subpath), ref_id, '[CHILD_REFID]')}",
+        glob=f"*{ref_id}*.json",
     )
 
     # Split tiffs
