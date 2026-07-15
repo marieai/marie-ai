@@ -1,0 +1,167 @@
+from pathlib import Path
+
+import numpy as np
+import pytest
+from PIL import Image
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
+
+from marie.utils.docs import (
+    UnsupportedOcrInputError,
+    docs_from_file,
+    load_document,
+    supports_ocr_input,
+)
+
+
+def _solid_image(color: tuple[int, int, int], size: tuple[int, int] = (12, 8)):
+    return Image.new('RGB', size, color)
+
+
+def _load_frames(path: Path, pages=None, *, dpi: int = 200) -> list[np.ndarray]:
+    return load_document(
+        str(path),
+        pages=pages,
+        dpi=dpi,
+    )['frames']
+
+
+def _multipage_image(path: Path, *, fmt: str) -> None:
+    frames = [
+        _solid_image((255, 0, 0)),
+        _solid_image((0, 255, 0)),
+        _solid_image((0, 0, 255)),
+    ]
+    frames[0].save(path, format=fmt, save_all=True, append_images=frames[1:])
+
+
+def _pdf(path: Path, page_count: int, image_path: Path | None = None) -> None:
+    document = canvas.Canvas(str(path), pagesize=(120, 80))
+    for page in range(page_count):
+        document.setFillColorRGB(page / max(page_count, 1), 0.2, 0.5)
+        document.rect(0, 0, 120, 80, fill=1, stroke=0)
+        if image_path is not None:
+            image = ImageReader(str(image_path))
+            document.drawImage(image, 5, 5, width=20, height=20)
+            document.drawImage(image, 40, 5, width=20, height=20)
+        document.showPage()
+    document.save()
+
+
+@pytest.mark.parametrize(
+    ('name', 'expected'),
+    [
+        ('source.pdf', True),
+        ('source.png', True),
+        ('source.heic', True),
+        ('source.docx', False),
+        ('source.rst', False),
+    ],
+)
+def test_supports_only_raster_sources(tmp_path, name, expected):
+    path = tmp_path / name
+    path.touch()
+    assert supports_ocr_input(path) is expected
+
+
+def test_pdf_returns_one_frame_per_page_and_preserves_selection(tmp_path):
+    path = tmp_path / 'four-pages.pdf'
+    _pdf(path, 4)
+
+    frames = _load_frames(path, dpi=30)
+    selected = _load_frames(path, pages=[3, 1], dpi=30)
+
+    assert len(frames) == 4
+    assert len(selected) == 2
+    assert all(frame.ndim == 3 and frame.shape[2] == 3 for frame in frames)
+    assert np.array_equal(selected[0], frames[3])
+    assert np.array_equal(selected[1], frames[1])
+
+
+def test_pdf_embedded_images_do_not_become_extra_pages(tmp_path):
+    image_path = tmp_path / 'embedded.png'
+    _solid_image((120, 50, 200)).save(image_path)
+    path = tmp_path / 'xobjects.pdf'
+    _pdf(path, 2, image_path)
+
+    assert len(_load_frames(path, dpi=30)) == 2
+
+
+@pytest.mark.parametrize(('suffix', 'fmt'), [('tiff', 'TIFF'), ('gif', 'GIF')])
+def test_multipage_images_preserve_frame_order(tmp_path, suffix, fmt):
+    path = tmp_path / f'multipage.{suffix}'
+    _multipage_image(path, fmt=fmt)
+
+    frames = _load_frames(path)
+
+    assert len(frames) == 3
+    assert tuple(frames[0][0, 0]) == (255, 0, 0)
+    assert tuple(frames[1][0, 0]) == (0, 255, 0)
+    assert tuple(frames[2][0, 0]) == (0, 0, 255)
+
+
+@pytest.mark.parametrize(
+    ('suffix', 'fmt'),
+    [('png', 'PNG'), ('jpg', 'JPEG'), ('bmp', 'BMP'), ('webp', 'WEBP')],
+)
+def test_single_frame_raster_decoders_return_rgb(tmp_path, suffix, fmt):
+    path = tmp_path / f'source.{suffix}'
+    _solid_image((20, 40, 60)).save(path, format=fmt)
+
+    frames = _load_frames(path)
+
+    assert len(frames) == 1
+    assert frames[0].dtype == np.uint8
+    assert frames[0].shape == (8, 12, 3)
+
+
+def test_heif_decoder_is_ready(tmp_path):
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+    path = tmp_path / 'source.heic'
+    _solid_image((20, 40, 60)).save(path, format='HEIF')
+
+    frames = _load_frames(path)
+
+    assert len(frames) == 1
+    assert frames[0].shape == (8, 12, 3)
+
+
+def test_numeric_directory_uses_numeric_order(tmp_path):
+    _solid_image((0, 0, 30)).save(tmp_path / '10.png')
+    _solid_image((0, 0, 10)).save(tmp_path / '2.png')
+    _solid_image((0, 0, 20)).save(tmp_path / '3.png')
+    _solid_image((255, 255, 255)).save(tmp_path / 'ignored.png')
+
+    frames = _load_frames(tmp_path)
+
+    assert [int(frame[0, 0, 2]) for frame in frames] == [10, 20, 30]
+
+
+def test_docs_from_file_always_returns_tensor_backed_documents(tmp_path):
+    path = tmp_path / 'source.png'
+    _solid_image((1, 2, 3)).save(path)
+
+    docs = docs_from_file(path)
+
+    assert len(docs) == 1
+    assert docs[0].tensor is not None
+    assert docs[0].tags['page_number'] == 0
+
+
+def test_semantic_source_is_rejected_before_loading(tmp_path):
+    path = tmp_path / 'source.docx'
+    path.write_bytes(b'not needed for extension rejection')
+
+    with pytest.raises(UnsupportedOcrInputError):
+        _load_frames(path)
+
+
+@pytest.mark.parametrize('pages', [[-1], [True], [1.5]])
+def test_invalid_page_selection_is_rejected(tmp_path, pages):
+    path = tmp_path / 'source.png'
+    _solid_image((1, 2, 3)).save(path)
+
+    with pytest.raises(ValueError):
+        _load_frames(path, pages=pages)

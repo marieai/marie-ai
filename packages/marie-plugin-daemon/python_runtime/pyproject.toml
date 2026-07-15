@@ -1,0 +1,25 @@
+[project]
+name = "marie-plugin-runtime"
+description = "Stdio protocol runtime for daemon-managed Marie plugins"
+requires-python = ">=3.12"
+dependencies = []
+dynamic = ["version"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "marie_plugins/runtime/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["marie_plugins"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<10.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

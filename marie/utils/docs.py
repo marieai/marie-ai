@@ -1,22 +1,20 @@
 import os
 import tempfile
-from typing import Any, List, Optional, Tuple, Union
+from pathlib import Path
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import cv2
 import filetype
 import numpy as np
-import PyPDF4
-import skimage.io as skio
 from docarray import DocList
 from PIL import Image
-from PyPDF4 import PdfFileReader
 
 from marie.api.docs import DOC_KEY_PAGE_NUMBER, MarieDoc
 from marie.common.file_io import StrOrBytesPath
 from marie.logging_core.predefined import default_logger as logger
 from marie.storage import StorageManager
 from marie.utils.format_registry import (
-    ALL_SUPPORTED_FORMATS,
+    ALL_DETECTABLE_FORMATS,
     EXT_TO_FORMAT,
     MIME_TO_FORMAT,
 )
@@ -51,6 +49,19 @@ TYPES_TO_EXT = {
     "djvu": "djvu",
 }
 
+OCR_RASTER_FORMATS = frozenset(
+    {'pdf', 'png', 'jpeg', 'tiff', 'bmp', 'gif', 'webp', 'heif'}
+)
+_OCR_RASTER_EXTENSIONS = frozenset(
+    extension
+    for extension, canonical in EXT_TO_FORMAT.items()
+    if canonical in OCR_RASTER_FORMATS and canonical != 'pdf'
+)
+
+
+class UnsupportedOcrInputError(ValueError):
+    """Raised when a source cannot be rasterized by Marie OCR."""
+
 
 def get_document_type(file_path: str) -> str:
     """Detect document format using magic bytes, then extension fallback."""
@@ -71,137 +82,8 @@ def get_document_type(file_path: str) -> str:
         return EXT_TO_FORMAT[ext]
 
     raise ValueError(
-        f"Unsupported file type for '{file_path}'. Supported: {ALL_SUPPORTED_FORMATS}"
+        f"Unrecognized file type for '{file_path}'. Detectable: {ALL_DETECTABLE_FORMATS}"
     )
-
-
-def _handle_filter_real(x_object, obj, mode, size, data):
-    resource_id = obj[1:]
-
-    if "/Filter" in x_object[obj]:
-        x_filter = x_object[obj]["/Filter"]
-        if x_filter == "/FlateDecode":
-            pass
-        elif x_filter == "/DCTDecode":
-            with open(resource_id + ".jpg", "wb") as img:
-                img.write(data)
-            return
-        elif x_filter == "/JPXDecode":
-            with open(resource_id + ".jp2", "wb") as img:
-                img.write(data)
-            return
-        elif x_filter == "/CCITTFaxDecode":
-            with open(resource_id + ".tiff", "wb") as img:
-                img.write(data)
-            return
-
-    img = Image.frombytes(mode, size, data)
-    img.save(resource_id + ".png")
-
-
-def _handle_filter(x_object, obj, mode, size, data):
-    resource_id = obj[1:]
-
-    # we are writing the data to temp dir and then read it back in
-    fd, path = tempfile.mkstemp()
-    try:
-        with os.fdopen(fd, "wb") as tmp:
-            tmp.write(data)
-        image_type = get_document_type(path)
-        img = None
-        if image_type == "tiff":
-            loaded, frames = cv2.imreadmulti(path, [], cv2.IMREAD_ANYCOLOR)
-            if loaded:
-                img = frames[0]
-        else:
-            img = skio.imread(path)  # RGB order
-            if img.shape[0] == 2:
-                img = img[0]
-            if len(img.shape) == 2:
-                img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-            if img.shape[2] == 4:
-                img = img[:, :, :3]
-
-        return img
-    finally:
-        os.remove(path)
-
-
-def is_pdf_page_rotated(pdf_file_path):
-    """Determine if the pages in a PDF are rotated"""
-    with open(pdf_file_path, "rb") as f:
-        pdf = PdfFileReader(f)
-        number_of_pages = pdf.getNumPages()
-        rotations = []
-
-        for page_index in range(number_of_pages):
-            page = pdf.getPage(page_index)
-            rotation = page.get('/Rotate', 0)
-            rotations.append(rotation)
-
-        return rotations
-
-
-def load_pdf_frames(pdf_file_path):
-    """Load PDF as set of Numpy Images"""
-    with open(pdf_file_path, "rb") as f:
-        pdf = PdfFileReader(f)
-        information = pdf.getDocumentInfo()
-        number_of_pages = pdf.getNumPages()
-
-        txt = f"""
-        Information about {pdf_file_path}:
-        Producer: {information.producer}
-        Number of pages: {number_of_pages}
-        """
-        frames = []
-        for page_index in range(number_of_pages):
-            page = pdf.getPage(page_index)
-
-            # get text from page
-            text = page.extractText()
-
-            # rotation = page.get('/Rotate', 0)
-            # print(f"Rotation : {rotation}")
-            size = (int(page.mediaBox.getWidth()), int(page.mediaBox.getHeight()))
-            resources = page["/Resources"]
-            # determine if the page is rotated based on text orientation
-            # if the text is rotated we will rotate the image
-            if "/XObject" not in resources and "/ProcSet" not in resources:
-                print(f"No XObject or ProcSet found on page {page_index}")
-                continue
-
-            x_object = (
-                resources.get("/XObject", {}).getObject()
-                if "/XObject" in resources
-                else {}
-            )
-            proc_set = resources.get("/ProcSet", [])
-
-            if isinstance(proc_set, PyPDF4.generic.IndirectObject):
-                proc_set = proc_set.getObject()
-            # ['/PDF', '/Text', '/ImageB', '/ImageC', '/ImageI']
-            # for obj in proc_set:
-            #     print(f"ProcSet : {obj}")
-            #     if obj == "/ImageI":
-            #         print(f"Found ImageI : {obj}")
-
-            for obj in x_object:
-                if x_object[obj]["/Subtype"] == "/Image":
-                    size = (x_object[obj]["/Width"], x_object[obj]["/Height"])
-                    data = x_object[obj].getData()
-                    if x_object[obj]["/ColorSpace"] == "/DeviceRGB":
-                        mode = "RGB"
-                    else:
-                        mode = "P"
-
-                    img = _handle_filter(x_object, obj, mode, size, data)
-                    frames.append(img)
-                else:
-                    blank = np.ones((size[0], size[1], 3), dtype=np.uint8) * 255
-                    frames.append(blank)
-
-    return True, frames
 
 
 def convert_frames(frames, img_format):
@@ -222,21 +104,41 @@ def convert_frames(frames, img_format):
     return converted
 
 
-def load_document(file_path: str, img_format: str = "cv") -> dict:
-    """Unified entry point for all document formats.
+def supports_ocr_input(
+    source: StrOrBytesPath, *, format_hint: str | None = None
+) -> bool:
+    """Return whether the source can be rasterized for Marie OCR."""
+    if format_hint:
+        normalized = format_hint.lower().lstrip('.')
+        canonical = EXT_TO_FORMAT.get(normalized, normalized)
+        return canonical in OCR_RASTER_FORMATS
 
-    Returns dict with 'mode' key:
-      - mode='frames': {'mode': 'frames', 'frames': List[np.ndarray]}
-      - mode='parsed': {'mode': 'parsed', 'results': List[Dict], 'pages': int}
-    """
-    from marie.backend import get_backend
+    path = Path(os.path.expanduser(os.fspath(source)))
+    if path.is_dir():
+        return any(_numeric_image_files(path))
+    try:
+        canonical = get_document_type(str(path))
+    except (FileNotFoundError, ValueError):
+        return False
+    return canonical in OCR_RASTER_FORMATS
 
-    file_type = get_document_type(file_path)
-    backend = get_backend(file_type)
-    result = backend.convert(file_path)
-    if result["mode"] == "frames":
-        result["frames"] = convert_frames(result["frames"], img_format)
-    return result
+
+def load_document(
+    file_path: str,
+    img_format: str = "cv",
+    pages: Sequence[int] | None = None,
+    *,
+    dpi: int = 200,
+) -> dict[str, Any]:
+    """Load an OCR-compatible document into ordered raster frames."""
+    loaded_frames = _load_document_frames(file_path, pages, dpi=dpi)
+    if img_format == 'pil':
+        frames: list[Any] = [Image.fromarray(frame.copy()) for frame in loaded_frames]
+    elif img_format == 'cv':
+        frames = loaded_frames
+    else:
+        raise ValueError(f'Unsupported image format: {img_format!r}')
+    return {'mode': 'frames', 'frames': frames}
 
 
 def load_image(img_path, img_format: str = "cv") -> (bool, List[np.ndarray]):
@@ -245,12 +147,8 @@ def load_image(img_path, img_format: str = "cv") -> (bool, List[np.ndarray]):
         return False, None
 
     result = load_document(img_path, img_format)
-    if result["mode"] == "frames":
-        frames = result["frames"]
-        return (True, frames) if frames else (False, [])
-    # Parsed formats shouldn't reach here via existing callers,
-    # but handle gracefully
-    return (False, [])
+    frames = result['frames']
+    return (True, frames) if frames else (False, [])
 
 
 def frames_from_docs(
@@ -263,8 +161,14 @@ def frames_from_docs(
     if field is None:
         field = 'tensor'
 
-    for doc in docs:
-        frames.append(getattr(doc, field))
+    for index, doc in enumerate(docs):
+        frame = getattr(doc, field)
+        if frame is None:
+            raise ValueError(
+                f'Document at index {index} has no {field!r}; '
+                'semantic results cannot be used as OCR frames'
+            )
+        frames.append(frame)
 
     # each tensor can be of different size that is why we are using 'concatenate' instead of 'vstack'
     # concat = np.concatenate(frames, axis=None)
@@ -288,31 +192,8 @@ def docs_from_file(
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found : {path}")
 
-    result = load_document(path)
-    docs = DocList[MarieDoc]()
-
-    if result["mode"] == "parsed":
-        pages_results = result["results"]
-        if pages is None or len(pages) == 0:
-            pages = list(range(len(pages_results)))
-        for idx, page_result in enumerate(pages_results):
-            if idx not in pages:
-                continue
-            doc = MarieDoc()
-            doc.tags["parsed_content"] = page_result
-            doc.tags["mode"] = "parsed"
-            docs.append(doc)
-    else:
-        frames = result["frames"]
-        if pages is None or len(pages) == 0:
-            pages = list(range(len(frames)))
-        for idx, frame in enumerate(frames):
-            if idx not in pages:
-                continue
-            doc = MarieDoc(tensor=frame)
-            docs.append(doc)
-
-    return docs
+    result = load_document(path, pages=pages)
+    return _docs_from_frames(result['frames'], pages)
 
 
 def fetch_asset_to_temp(asset_key: str) -> Tuple[str, str]:
@@ -379,29 +260,8 @@ def docs_from_asset(
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found : {path}")
 
-    result = load_document(path)
-    docs = DocList[MarieDoc]()
-
-    if result["mode"] == "parsed":
-        pages_results = result["results"]
-        if pages is None or len(pages) == 0:
-            pages = list(range(len(pages_results)))
-        for idx, page_result in enumerate(pages_results):
-            if idx not in pages:
-                continue
-            doc = MarieDoc()
-            doc.tags["parsed_content"] = page_result
-            doc.tags["mode"] = "parsed"
-            docs.append(doc)
-    else:
-        frames = result["frames"]
-        if pages is None or len(pages) == 0:
-            pages = list(range(len(frames)))
-        for idx, frame in enumerate(frames):
-            if idx not in pages:
-                continue
-            doc = MarieDoc(tensor=frame)
-            docs.append(doc)
+    result = load_document(path, pages=pages)
+    docs = _docs_from_frames(result['frames'], pages)
 
     if return_file_path:
         return docs, path
@@ -410,52 +270,8 @@ def docs_from_asset(
 
 def frames_from_file(img_path: StrOrBytesPath) -> List[np.ndarray]:
     """Create Numpy frame array from image file or directory of image files."""
-    img_path = os.path.expanduser(img_path)
-    if not os.path.exists(img_path):
-        raise FileNotFoundError(f"File not found : {img_path}")
-
-    if os.path.isdir(img_path):
-        frames = []
-        image_files_to_sort = []
-        for file_name in os.listdir(img_path):
-            name, ext = os.path.splitext(file_name)
-            if (
-                ext.lower()
-                in [
-                    ".png",
-                    ".jpg",
-                    ".jpeg",
-                    ".tiff",
-                    ".tif",
-                    ".bmp",
-                    ".gif",
-                    ".webp",
-                    ".heif",
-                    ".heic",
-                ]
-                and name.isdigit()
-            ):
-                image_files_to_sort.append((int(name), file_name))
-
-        # Sort files based on the integer value of the name
-        image_files_to_sort.sort(key=lambda x: x[0])
-
-        if not image_files_to_sort:
-            raise Exception(
-                f"No valid images (e.g., 1.png, 2.tiff) found in directory: {img_path}"
-            )
-
-        for _, file_name in image_files_to_sort:
-            full_path = os.path.join(img_path, file_name)
-            loaded, image_frames = load_image(full_path)
-            if loaded:
-                frames.extend(image_frames)
-        return frames
-
-    loaded, frames = load_image(img_path)
-    if not loaded:
-        raise Exception(f"Unable to load image : {img_path}")
-    return frames
+    result = load_document(img_path)
+    return result['frames']
 
 
 def is_array_like(obj: Any) -> bool:
@@ -482,3 +298,134 @@ def docs_from_image(src: Union[Any, List]) -> DocList[MarieDoc]:
         docs.append(doc)
 
     return docs
+
+
+def _docs_from_frames(
+    frames: Sequence[np.ndarray], pages: Sequence[int] | None
+) -> DocList[MarieDoc]:
+    selected = _normalize_pages(pages)
+    page_numbers = selected if selected is not None else list(range(len(frames)))
+    docs = DocList[MarieDoc]()
+    for page_number, frame in zip(page_numbers, frames):
+        doc = MarieDoc(tensor=frame)
+        doc.tags[DOC_KEY_PAGE_NUMBER] = page_number
+        docs.append(doc)
+    return docs
+
+
+def _load_document_frames(
+    source: StrOrBytesPath,
+    pages: Sequence[int] | None,
+    *,
+    dpi: int,
+) -> list[np.ndarray]:
+    path = Path(os.path.expanduser(os.fspath(source)))
+    if not path.exists():
+        raise FileNotFoundError(f'File not found: {path}')
+    if path.is_dir():
+        frames = _load_directory_frames(path)
+        return _select_frames(frames, pages)
+
+    canonical = get_document_type(str(path))
+    if canonical not in OCR_RASTER_FORMATS:
+        raise UnsupportedOcrInputError(
+            f'OCR document loading does not support {canonical or path.suffix or path}'
+        )
+    if canonical == 'pdf':
+        return _load_pdf_frames(path, pages, dpi=dpi)
+
+    frames = _load_raster_image_frames(path)
+    return _select_frames(frames, pages)
+
+
+def _load_pdf_frames(
+    path: Path, pages: Sequence[int] | None, *, dpi: int
+) -> list[np.ndarray]:
+    from pdf2image import convert_from_path
+
+    selected = _normalize_pages(pages)
+    if selected is None:
+        images = convert_from_path(str(path), dpi=dpi)
+    else:
+        images = []
+        for page in selected:
+            rendered = convert_from_path(
+                str(path),
+                dpi=dpi,
+                first_page=page + 1,
+                last_page=page + 1,
+            )
+            if not rendered:
+                raise IndexError(f'PDF page index out of range: {page}')
+            images.append(rendered[0])
+    return [_rgb_array(image) for image in images]
+
+
+def _load_raster_image_frames(path: Path) -> list[np.ndarray]:
+    _register_heif()
+    with Image.open(path) as image:
+        frames = []
+        for index in range(getattr(image, 'n_frames', 1)):
+            image.seek(index)
+            frames.append(_rgb_array(image))
+        return frames
+
+
+def _load_directory_frames(path: Path) -> list[np.ndarray]:
+    files = _numeric_image_files(path)
+    if not files:
+        raise UnsupportedOcrInputError(
+            f'No numerically named OCR images found in directory: {path}'
+        )
+    frames = []
+    for file_path in files:
+        frames.extend(_load_raster_image_frames(file_path))
+    return frames
+
+
+def _numeric_image_files(path: Path) -> list[Path]:
+    candidates = []
+    for file_path in path.iterdir():
+        if not file_path.is_file() or not file_path.stem.isdigit():
+            continue
+        if file_path.suffix.lower().lstrip('.') not in _OCR_RASTER_EXTENSIONS:
+            continue
+        candidates.append(file_path)
+    return sorted(candidates, key=lambda item: int(item.stem))
+
+
+def _select_frames(
+    frames: list[np.ndarray], pages: Sequence[int] | None
+) -> list[np.ndarray]:
+    selected = _normalize_pages(pages)
+    if selected is None:
+        return frames
+    result = []
+    for page in selected:
+        if page >= len(frames):
+            raise IndexError(f'Page index out of range: {page}')
+        result.append(frames[page])
+    return result
+
+
+def _normalize_pages(pages: Sequence[int] | None) -> list[int] | None:
+    if pages is None or len(pages) == 0:
+        return None
+    normalized = []
+    for page in pages:
+        if isinstance(page, bool) or not isinstance(page, int) or page < 0:
+            raise ValueError(f'Page indices must be non-negative integers: {page!r}')
+        normalized.append(page)
+    return normalized
+
+
+def _rgb_array(image: Image.Image) -> np.ndarray:
+    return np.asarray(image.convert('RGB'), dtype=np.uint8).copy()
+
+
+def _register_heif() -> None:
+    try:
+        from pillow_heif import register_heif_opener
+    except ImportError:
+        return
+    register_heif_opener()

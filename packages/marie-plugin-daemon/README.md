@@ -1,8 +1,13 @@
 # Marie Plugin Daemon
 
-`marie-plugin-daemon` is the decode/stub runtime service for Marie extension packages. This first milestone accepts Marie extension directories or standard ZIP archives containing `marie-extension.yaml`, expands package metadata, and exposes health/version endpoints.
+`marie-plugin-daemon` installs and runs Marie extension packages in isolated
+Python environments. It accepts standard ZIP archives containing
+`marie-extension.yaml`, verifies signed invocation envelopes, and streams plugin
+results over SSE.
 
-Runtime execution is intentionally disabled. Tool, model, Webapp, MCP, and subprocess invocation routes must stay unsupported until signed envelopes, credential policy, and isolation work land.
+The shared, stdlib-only Python API for plugin entrypoints lives at
+[`python_runtime`](./python_runtime/README.md). The daemon embeds and injects
+this package at runtime; individual plugins do not package it as a dependency.
 
 ## Build
 
@@ -22,7 +27,10 @@ Endpoints:
 - `GET /health`
 - `GET /version`
 - `POST /v1/packages/decode` with JSON body `{"path": "/path/to/package-or.zip"}`
-- `POST /v1/runtime/stub-invocations` returns `501` until runtime execution is enabled
+- `POST /v1/plugins/install`
+- `GET /v1/plugins`
+- `DELETE /v1/plugins/{packageRef}`
+- `POST /v1/dispatch/invoke`
 
 ## Package Rules
 

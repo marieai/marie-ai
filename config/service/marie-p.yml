@@ -131,6 +131,15 @@ executors:
   - name: extract_t
     uses:
       jtype: TextExtractionExecutor
+      with:
+        plugins:
+          - package: marie/document-extraction
+            path: /mnt/data/marie-ai/plugins/marie-plugin-document-extraction_0.2.0.zip
+            actions: [capabilities, extract]
+            timeout_s: 120
+        document_extraction:
+          # Keep production off until the daemon enforces OS network and memory limits.
+          enabled: false
       metas:
         py_modules:
           - marie.executor.text
@@ -139,4 +148,3 @@ executors:
     replicas: ${{ CONTEXT.gpu_device_count }}
     env :
       CUDA_VISIBLE_DEVICES: RR
-

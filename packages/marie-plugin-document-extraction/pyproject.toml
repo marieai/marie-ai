@@ -1,0 +1,28 @@
+[project]
+name = "marie-plugin-document-extraction"
+version = "0.2.0"
+description = "Document extraction providers for Marie"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "docling-slim[convert-core,format-email,format-latex,format-office,format-opendocument,format-web]==2.111.0",
+    "markitdown[docx,pdf,pptx,xlsx]==0.1.6",
+    "pydantic>=2.10,<3.0",
+    "tree-sitter-language-pack==1.12.5",
+]
+
+[dependency-groups]
+dev = [
+    "jsonschema>=4.26.0",
+    "pytest>=8.3,<10.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "provider_cases.py", "packaged_protocol.py"]
+pythonpath = [
+    ".",
+    "../marie-plugin-daemon/python_runtime",
+]

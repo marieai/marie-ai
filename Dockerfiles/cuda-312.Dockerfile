@@ -129,7 +129,6 @@ RUN apt-get update -o APT::Update::Error-Mode=any && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
-        djvulibre-bin \
         git \
         graphviz \
         imagemagick \
@@ -139,14 +138,9 @@ RUN apt-get update -o APT::Update::Error-Mode=any && \
         libmagickwand-6.q16-7t64 \
         libopenblas0 \
         libpq5 \
-        libreoffice-calc \
-        libreoffice-core \
-        libreoffice-impress \
-        libreoffice-writer \
         openssh-client \
         poppler-utils \
         python3.12 \
-        texlive-latex-base \
         tzdata && \
     ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \

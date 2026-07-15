@@ -1,5 +1,7 @@
 import hashlib
+import io
 import os
+import zipfile
 from typing import Any, Optional
 
 import cv2
@@ -12,7 +14,8 @@ from marie.logging_core.predefined import default_logger
 from marie.storage import StorageManager
 from marie.utils.base64 import base64StringToBytes
 from marie.utils.format_registry import (
-    ALL_SUPPORTED_FORMATS,
+    ALL_DETECTABLE_FORMATS,
+    EXT_TO_FORMAT,
     IMAGE_FORMATS,
     MIME_TO_FORMAT,
 )
@@ -51,14 +54,54 @@ TYPES_TO_EXT = {
 }
 
 
-def _detect_type_from_bytes(data: bytes) -> str:
-    """Detect canonical format from raw bytes using filetype magic, then raise on unknown."""
+def _detect_type_from_bytes(
+    data: bytes,
+    *,
+    format_hint: str | None = None,
+    filename: str | None = None,
+) -> str:
+    """Detect a canonical format from explicit, magic, and container evidence."""
+    if format_hint:
+        normalized = format_hint.lower().lstrip(".")
+        canonical = EXT_TO_FORMAT.get(normalized, normalized)
+        if canonical not in ALL_DETECTABLE_FORMATS:
+            raise ValueError(f"Unrecognized format hint: {format_hint}")
+        return canonical
+
     guess = filetype.guess(data)
     if guess is not None and guess.mime in MIME_TO_FORMAT:
         return MIME_TO_FORMAT[guess.mime]
+    zip_format = _detect_zip_container(data)
+    if zip_format is not None:
+        return zip_format
+    if filename:
+        extension = os.path.splitext(filename)[1].lower().lstrip(".")
+        if extension in EXT_TO_FORMAT:
+            return EXT_TO_FORMAT[extension]
     raise ValueError(
-        f"Could not detect file type from bytes. Supported: {ALL_SUPPORTED_FORMATS}"
+        f"Could not detect file type from bytes. Detectable: {ALL_DETECTABLE_FORMATS}"
     )
+
+
+def _detect_zip_container(data: bytes) -> str | None:
+    if not zipfile.is_zipfile(io.BytesIO(data)):
+        return None
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        names = set(archive.namelist())
+        if any(name.startswith("word/") for name in names):
+            return "docx"
+        if any(name.startswith("xl/") for name in names):
+            return "xlsx"
+        if any(name.startswith("ppt/") for name in names):
+            return "pptx"
+        try:
+            member = archive.getinfo("mimetype")
+            if member.file_size > 256:
+                return None
+            mime = archive.read(member).decode("ascii").strip()
+        except (KeyError, UnicodeDecodeError):
+            return None
+    return MIME_TO_FORMAT.get(mime)
 
 
 def store_temp_file(message_bytes, queue_id, file_type, store_raw) -> tuple[str, str]:
@@ -152,7 +195,11 @@ def extract_payload(payload, queue_id) -> tuple[str, str, str]:
     if not data:
         raise Exception("No data read from payload")
 
-    file_type = _detect_type_from_bytes(data)
+    file_type = _detect_type_from_bytes(
+        data,
+        format_hint=payload.get("file_type") or payload.get("document_format"),
+        filename=payload.get("filename"),
+    )
 
     # tiff and non-image formats must be stored as raw bytes
     if file_type == "tiff" or file_type not in IMAGE_FORMATS:
@@ -214,7 +261,11 @@ def extract_payload_to_uri(payload, queue_id) -> str:
 
     # data was not a uri, so we need to store it locally and then return the URI
 
-    file_type = _detect_type_from_bytes(data)
+    file_type = _detect_type_from_bytes(
+        data,
+        format_hint=payload.get("file_type") or payload.get("document_format"),
+        filename=payload.get("filename"),
+    )
 
     # tiff and non-image formats must be stored as raw bytes
     if file_type == "tiff" or file_type not in IMAGE_FORMATS:

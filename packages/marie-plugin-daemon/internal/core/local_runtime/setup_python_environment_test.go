@@ -27,6 +27,44 @@ func TestEnsureEnvironmentCreatesVenv(t *testing.T) {
 	}
 }
 
+func TestEnsureEnvironmentSyncsUvProject(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed")
+	}
+	dir := t.TempDir()
+	writeUvProject(t, dir)
+
+	python, err := EnsureEnvironment(context.Background(), dir, "3.12", io.Discard)
+	if err != nil {
+		t.Fatalf("environment setup failed: %v", err)
+	}
+	if _, err := os.Stat(python); err != nil {
+		t.Fatalf("venv python missing: %v", err)
+	}
+}
+
+func TestEnsureEnvironmentRequiresLockForUvProject(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte(`[project]
+name = "test-plugin"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := EnsureEnvironment(context.Background(), dir, "3.12", io.Discard)
+	if !errors.Is(err, ErrEnvironmentSetup) {
+		t.Fatalf("expected ErrEnvironmentSetup, got %v", err)
+	}
+}
+
 func TestEnsureEnvironmentIdempotent(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed")
@@ -99,5 +137,24 @@ func TestPythonPathWithRelativeWorkingDirReturnsAbsolute(t *testing.T) {
 	}
 	if resolved != expected {
 		t.Fatalf("expected %s, got %s", expected, resolved)
+	}
+}
+
+func writeUvProject(t *testing.T, dir string) {
+	t.Helper()
+	project := `[project]
+name = "test-plugin"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+
+[tool.uv]
+package = false
+`
+	if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte(project), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("uv", "lock", "--project", dir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("uv lock failed: %v\n%s", err, output)
 	}
 }

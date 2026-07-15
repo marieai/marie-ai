@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marie.ai/schemas/document-extraction/capabilities-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "plugin_version", "ready", "formats"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "plugin_version": { "type": "string" },
+    "ready": { "type": "boolean" },
+    "formats": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["canonical_format", "aliases", "extensions", "mime_types", "intents", "result_kinds", "providers"],
+        "properties": {
+          "canonical_format": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "extensions": { "type": "array", "items": { "type": "string" } },
+          "mime_types": { "type": "array", "items": { "type": "string" } },
+          "intents": { "type": "array", "items": { "type": "string" } },
+          "result_kinds": { "type": "array", "items": { "enum": ["semantic_document", "structured_document"] } },
+          "providers": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	plugindaemon "github.com/marieai/marie-ai/packages/marie-plugin-daemon"
 	backwards_invocation "github.com/marieai/marie-ai/packages/marie-plugin-daemon/internal/core/io_tunnel/backwards_invocation"
 	"github.com/marieai/marie-ai/packages/marie-plugin-daemon/internal/core/local_runtime"
 	"github.com/marieai/marie-ai/packages/marie-plugin-daemon/internal/core/plugin_manager"
@@ -184,13 +185,18 @@ func (p *Pool) start(ctx context.Context, install plugin_manager.Install) (*loca
 	if err != nil {
 		return nil, err
 	}
+	pythonRuntimePath, err := plugindaemon.PreparePythonRuntime(install.WorkingDir)
+	if err != nil {
+		return nil, err
+	}
 
 	// The instance must outlive the deploy request, so detach from its context.
 	return local_runtime.StartInstance(context.WithoutCancel(ctx), local_runtime.InstanceConfig{
-		WorkingDir: install.WorkingDir,
-		PythonPath: pythonPath,
-		Entrypoint: entrypoint,
-		Logs:       p.logs,
+		WorkingDir:        install.WorkingDir,
+		PythonPath:        pythonPath,
+		PythonRuntimePath: pythonRuntimePath,
+		Entrypoint:        entrypoint,
+		Logs:              p.logs,
 	})
 }
 
@@ -303,8 +309,8 @@ func (p *Pool) consume(
 		default:
 		}
 	}
-	errorFrame := func(message string) Frame {
-		data, _ := json.Marshal(map[string]string{"message": message})
+	errorFrame := func(message string, retryable bool) Frame {
+		data, _ := json.Marshal(map[string]any{"message": message, "retryable": retryable})
 		return Frame{Type: FrameError, Data: data}
 	}
 	// emit delivers a frame, aborting on cancel, timeout, or instance death so
@@ -315,12 +321,14 @@ func (p *Pool) consume(
 		case frames <- frame:
 			return true
 		case <-ctx.Done():
+			instance.Stop()
 			return false
 		case <-timer.C:
-			tryEmit(errorFrame("invocation timeout after " + timeout.String()))
+			instance.Stop()
+			tryEmit(errorFrame("invocation timeout after "+timeout.String(), true))
 			return false
 		case <-instance.Done():
-			tryEmit(errorFrame("instance stopped"))
+			tryEmit(errorFrame("instance stopped", true))
 			return false
 		}
 	}
@@ -330,7 +338,7 @@ func (p *Pool) consume(
 		case event := <-events:
 			message, err := event.SessionMessage()
 			if err != nil {
-				emit(errorFrame(err.Error()))
+				emit(errorFrame(err.Error(), false))
 				return
 			}
 			switch message.Type {
@@ -349,19 +357,21 @@ func (p *Pool) consume(
 					return
 				}
 			default:
-				emit(errorFrame("unknown session message type: " + string(message.Type)))
+				emit(errorFrame("unknown session message type: "+string(message.Type), false))
 				return
 			}
 		case <-overflow:
-			emit(errorFrame("session buffer overflow: consumer too slow"))
+			emit(errorFrame("session buffer overflow: consumer too slow", false))
 			return
 		case <-timer.C:
-			tryEmit(errorFrame("invocation timeout after " + timeout.String()))
+			instance.Stop()
+			tryEmit(errorFrame("invocation timeout after "+timeout.String(), true))
 			return
 		case <-instance.Done():
-			tryEmit(errorFrame("instance stopped"))
+			tryEmit(errorFrame("instance stopped", true))
 			return
 		case <-ctx.Done():
+			instance.Stop()
 			return
 		}
 	}

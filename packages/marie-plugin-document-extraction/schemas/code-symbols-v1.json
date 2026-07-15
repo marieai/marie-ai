@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "marie:document-extraction:code-symbols:v1",
+  "title": "Source code symbol extraction artifact",
+  "type": "object",
+  "required": ["schema_version", "language", "file_name", "symbols", "imports"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "language": { "type": "string", "minLength": 1 },
+    "file_name": { "type": "string", "minLength": 1 },
+    "imports": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "name", "line", "col"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "line": { "type": "integer", "minimum": 1 },
+          "col": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "cst": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Full concrete syntax tree in tree-sitter parse --cst line format"
+    },
+    "markdown": { "type": "string", "minLength": 1 },
+    "symbols": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "name", "qualified_name", "signature", "span", "name_span", "docstring", "parent"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Definition kind from the language's tags query, e.g. function, method, class, interface, enum, type, constant, module, macro"
+          },
+          "name": { "type": "string", "minLength": 1 },
+          "qualified_name": { "type": "string", "minLength": 1 },
+          "signature": { "type": "string" },
+          "span": {
+            "type": "object",
+            "required": ["start_line", "start_col", "end_line", "end_col"],
+            "additionalProperties": false,
+            "properties": {
+              "start_line": { "type": "integer", "minimum": 1 },
+              "start_col": { "type": "integer", "minimum": 0 },
+              "end_line": { "type": "integer", "minimum": 1 },
+              "end_col": { "type": "integer", "minimum": 0 }
+            }
+          },
+          "name_span": {
+            "type": "object",
+            "required": ["line", "col"],
+            "additionalProperties": false,
+            "properties": {
+              "line": { "type": "integer", "minimum": 1 },
+              "col": { "type": "integer", "minimum": 0 }
+            }
+          },
+          "docstring": { "type": ["string", "null"] },
+          "parent": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

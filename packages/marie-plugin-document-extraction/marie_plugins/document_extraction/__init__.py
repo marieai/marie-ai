@@ -1,0 +1,1 @@
+"""Document extraction plugin runtime."""

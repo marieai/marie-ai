@@ -1,5 +1,6 @@
 import asyncio
 import os
+import tempfile
 import time
 import warnings
 from typing import Any, Optional, Union
@@ -20,10 +21,14 @@ from marie.executor.request_util import (
     get_payload_features,
     parse_parameters,
 )
-from marie.executor.text.format_router import FormatRouter, pdf_yield_ok
-from marie.executor.text.markitdown_artifact import (
-    build_markitdown_metadata,
-    write_markitdown_artifact,
+from marie.extraction import (
+    ExtractionSuccess,
+    FormatRouter,
+    NotExtractable,
+    build_extraction_metadata,
+    parse_extraction_result,
+    read_extraction_artifact,
+    write_extraction_metadata,
 )
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.mdc import MDC
@@ -37,7 +42,12 @@ from marie.ocr import CoordinateFormat
 from marie.pipe import ExtractPipeline
 from marie.plugins import EmbeddedPlugins
 from marie.storage import StorageManager
-from marie.utils.docs import docs_from_asset, fetch_asset_to_temp, frames_from_docs
+from marie.utils.docs import (
+    docs_from_asset,
+    fetch_asset_to_temp,
+    frames_from_docs,
+    supports_ocr_input,
+)
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.network import get_ip_address
 from marie.utils.types import strtobool
@@ -58,7 +68,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
         storage: dict[str, Any] = None,
         pipeline: dict[str, Any] = None,
         plugins: list[dict[str, Any]] = None,
-        markitdown: dict[str, Any] = None,
+        document_extraction: dict[str, Any] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
@@ -153,23 +163,21 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
 
         self.pipeline = ExtractPipeline(pipeline_config=pipeline, cuda=self.has_cuda)
 
-        # Born-digital extraction plugins run in an executor-owned daemon child.
-        # Lazily started on first use (Task 4 wires the routing); construction only
-        # parses config so importing the executor never spawns a daemon.
+        # Document extraction providers run in an executor-owned daemon child.
+        # Construction only parses config; the first capability request starts it.
         logger.info(f"Plugins config: {plugins}")
         self.embedded_plugins = EmbeddedPlugins(
             plugins, executor_identity=instance_name
         )
 
-        # Born-digital routing gate. Enabled by default; when disabled, or when
-        # the markitdown package is not configured, extract() routes everything
-        # to OCR (warned once). Floor is the per-page text-yield threshold below
-        # which a markitdown PDF result falls back to OCR.
-        markitdown = markitdown or {}
-        logger.info(f"Markitdown config: {markitdown}")
-        self._markitdown_enabled = bool(markitdown.get("enabled", True))
-        self._markitdown_floor = int(markitdown.get("floor_chars_per_page", 200))
-        self._markitdown_gate_warned = False
+        extraction_config = document_extraction or {}
+        logger.info(f"Document extraction config: {extraction_config}")
+        self._document_extraction_enabled = bool(extraction_config.get("enabled", True))
+        self._document_extraction_package = "marie/document-extraction"
+        self._capabilities_loaded = False
+        self._capability_generation: int | None = None
+        self._document_extraction_gate_warned = False
+        self.format_router = FormatRouter()
 
     def close(self) -> None:
         self.embedded_plugins.close()
@@ -190,7 +198,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
         ref_type = "extract" if ref_type is None else ref_type
         MDC.put("request_id", job_id)
 
-        self.logger.info("Starting OCR request")
+        self.logger.info("Starting document extraction request")
         for key, value in parameters.items():
             self.logger.info("The value of {} is {}".format(key, value))
 
@@ -202,26 +210,36 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
         partition_key = parameters.get("partition_key")
 
         try:
-            # Fetch the source once, then route by format before rasterizing so
-            # born-digital documents extract via markitdown and bypass OCR. The
-            # OCR branch reuses this same download (no second fetch).
+            # Fetch the source once, then route by format before rasterizing. A
+            # successful semantic extraction is terminal; only an explicit
+            # not-extractable result may continue to the OCR branch.
             #
             # Transport (asset fetch), routing, and OCR pre-processing (frame
             # parsing, region coercion, runtime-config resolution) run OUTSIDE the
             # inference try blocks below. A transient S3 read failure, a malformed
             # region, or an unresolvable runtime config must raise uncaught so the
             # executor lifecycle records the exception and the scheduler retries
-            # the job -- exactly as before the markitdown restructure -- rather
+            # the job -- exactly as before the plugin routing change -- rather
             # than being flattened into a {status: "error"} response that the job
             # layer treats as a completed call (letting the DAG proceed and fail
-            # confusingly downstream). Only the markitdown branch and the OCR
+            # confusingly downstream). Only the plugin branch and the OCR
             # pipeline execution convert their failures into {status: "error"}.
             local_path, file_type = fetch_asset_to_temp(doc.asset_key)
             parse_mode = self._parse_mode(parameters)
 
-            if self._route(file_type, parse_mode) == "markitdown":
+            route = self._route(local_path, file_type, parse_mode)
+            if route == "unsupported":
+                return {
+                    "status": "error",
+                    "runtime_info": self.runtime_info,
+                    "error": (
+                        f"No semantic extraction or OCR provider supports {file_type}",
+                    ),
+                }
+
+            if route == "plugin":
                 try:
-                    response = self._extract_markitdown(
+                    response = self._extract_document(
                         ref_id=ref_id,
                         ref_type=ref_type,
                         local_path=local_path,
@@ -244,7 +262,15 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
                     }
                 if response is not None:
                     return response
-                # markitdown fell through (low text yield) -> continue on OCR.
+                if not supports_ocr_input(local_path, format_hint=file_type):
+                    return {
+                        "status": "error",
+                        "runtime_info": self.runtime_info,
+                        "error": (
+                            f"The extraction plugin could not extract {file_type} "
+                            "and the source is not OCR-loadable",
+                        ),
+                    }
 
             frames = get_frames_from_file(local_path, doc.pages)
             ref_id = hash_frames_fast(frames) if ref_id is None else ref_id
@@ -363,33 +389,48 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
             return run_params["parse_mode"]
         return parameters.get("parse_mode")
 
-    def _route(self, file_type: str, parse_mode: Optional[str]) -> str:
-        """Route to ``"markitdown"`` or ``"ocr"``, applying the feature gate.
+    def _route(self, local_path: str, file_type: str, parse_mode: Optional[str]) -> str:
+        """Refresh plugin capabilities once and route the detected input."""
+        if parse_mode != "ocr" and self._document_extraction_available():
+            self._load_document_extraction_capabilities()
+        return self.format_router.route(
+            file_type,
+            parse_mode,
+            ocr_supported=supports_ocr_input(local_path, format_hint=file_type),
+        )
 
-        When markitdown is disabled or the plugin is not configured, everything
-        routes to OCR (warned once).
-        """
-        if not self._markitdown_available():
-            return "ocr"
-        return FormatRouter.route(file_type, parse_mode)
-
-    def _markitdown_available(self) -> bool:
-        if not self._markitdown_enabled:
-            self._warn_markitdown_off("disabled by config")
+    def _document_extraction_available(self) -> bool:
+        if not self._document_extraction_enabled:
+            self._warn_document_extraction_off("disabled by config")
             return False
-        if "marie/markitdown" not in self.embedded_plugins.configured_packages:
-            self._warn_markitdown_off("plugin not configured")
+        if (
+            self._document_extraction_package
+            not in self.embedded_plugins.configured_packages
+        ):
+            self._warn_document_extraction_off("plugin not configured")
             return False
         return True
 
-    def _warn_markitdown_off(self, reason: str) -> None:
-        if not self._markitdown_gate_warned:
-            self.logger.warning(
-                f"markitdown routing off ({reason}); routing all documents to OCR"
-            )
-            self._markitdown_gate_warned = True
+    def _load_document_extraction_capabilities(self) -> None:
+        generation = getattr(self.embedded_plugins, "runtime_generation", 0)
+        if self._capabilities_loaded and self._capability_generation == generation:
+            return
+        snapshot = self.embedded_plugins.capabilities(self._document_extraction_package)
+        self.format_router.ingest_capabilities(snapshot)
+        self._capabilities_loaded = True
+        self._capability_generation = getattr(
+            self.embedded_plugins, "runtime_generation", generation
+        )
 
-    def _extract_markitdown(
+    def _warn_document_extraction_off(self, reason: str) -> None:
+        if not self._document_extraction_gate_warned:
+            self.logger.warning(
+                f"document extraction routing off ({reason}); "
+                "only OCR-loadable documents can be processed"
+            )
+            self._document_extraction_gate_warned = True
+
+    def _extract_document(
         self,
         *,
         ref_id: str,
@@ -402,36 +443,33 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
         node_task_id: Optional[str],
         partition_key: Optional[str],
     ) -> Optional[dict]:
-        """Extract via the markitdown plugin and persist the EMBED artifact.
-
-        Returns the succeeded-response dict, or ``None`` when a PDF result falls
-        below the text-yield floor (caller then continues on OCR). A non-PDF that
-        converts to empty markdown raises (fail loud).
-        """
-        result = self.embedded_plugins.invoke(
-            "marie/markitdown", "convert", {"path": local_path, "format": file_type}
-        )
-        markdown = result.get("markdown") or ""
-        plugin_meta = result.get("metadata") or {}
-        page_count = plugin_meta.get("page_count") or 1
-
-        if file_type == "pdf":
-            if not pdf_yield_ok(markdown, page_count, self._markitdown_floor):
-                self.logger.warning(
-                    f"markitdown low text yield for {ref_id} "
-                    f"({len(markdown)} chars / {page_count} pages); "
-                    f"falling back to OCR (fallback_reason=low_text_yield)"
+        """Invoke the unified plugin and adapt one file-backed result."""
+        with tempfile.TemporaryDirectory(
+            prefix="marie_document_extraction_"
+        ) as output_dir:
+            payload = self.embedded_plugins.invoke(
+                self._document_extraction_package,
+                "extract",
+                {
+                    "path": local_path,
+                    "format": file_type,
+                    "intent": "semantic",
+                    "output_dir": output_dir,
+                },
+            )
+            result = parse_extraction_result(payload)
+            if isinstance(result, NotExtractable):
+                self.logger.info(
+                    f"document extraction plugin returned not_extractable for "
+                    f"{file_type}: {result.reason}"
                 )
                 return None
-        elif not markdown.strip():
-            raise ValueError(
-                f"markitdown produced empty markdown for {ref_id} "
-                f"(format={file_type})"
-            )
+            if not isinstance(result, ExtractionSuccess):
+                raise TypeError(f"Unexpected extraction result: {type(result)!r}")
+            content = read_extraction_artifact(result, output_dir)
 
-        write_markitdown_artifact(ref_id, ref_type, markdown, file_type, page_count)
-
-        metadata = build_markitdown_metadata(markdown, file_type, page_count)
+        metadata = build_extraction_metadata(content, result)
+        write_extraction_metadata(ref_id, ref_type, metadata)
         self.persist(
             ref_id=ref_id,
             ref_type=ref_type,

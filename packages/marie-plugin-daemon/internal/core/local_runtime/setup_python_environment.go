@@ -31,27 +31,70 @@ func EnsureEnvironment(ctx context.Context, workingDir string, pythonVersion str
 	}
 
 	pythonBin := filepath.Join(absDir, ".venv", "bin", "python")
+	pyprojectPath := filepath.Join(absDir, "pyproject.toml")
+	lockPath := filepath.Join(absDir, "uv.lock")
 
-	cmd := exec.CommandContext(ctx, "uv", "venv", "--python", pythonVersion, ".venv")
-	cmd.Dir = absDir
-	cmd.Stdout = logs
-	cmd.Stderr = logs
+	_, pyprojectErr := os.Stat(pyprojectPath)
+	_, lockErr := os.Stat(lockPath)
+	if pyprojectErr == nil {
+		if errors.Is(lockErr, os.ErrNotExist) {
+			return "", fmt.Errorf("%w: uv.lock is required with pyproject.toml", ErrEnvironmentSetup)
+		}
+		if lockErr != nil {
+			return "", fmt.Errorf("%w: inspect uv.lock: %v", ErrEnvironmentSetup, lockErr)
+		}
 
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("%w: uv venv: %v", ErrEnvironmentSetup, err)
-	}
-
-	requirementsPath := filepath.Join(absDir, "requirements.txt")
-	info, err := os.Stat(requirementsPath)
-	if err == nil && info.Size() > 0 {
-		cmd := exec.CommandContext(ctx, "uv", "pip", "install", "-r", "requirements.txt", "--python", pythonBin)
+		cmd := exec.CommandContext(ctx, "uv", "sync", "--locked", "--no-dev", "--python", pythonVersion)
 		cmd.Dir = absDir
 		cmd.Stdout = logs
 		cmd.Stderr = logs
-
 		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("%w: uv pip install: %v", ErrEnvironmentSetup, err)
+			return "", fmt.Errorf("%w: uv sync: %v", ErrEnvironmentSetup, err)
 		}
+	} else {
+		if !errors.Is(pyprojectErr, os.ErrNotExist) {
+			return "", fmt.Errorf("%w: inspect pyproject.toml: %v", ErrEnvironmentSetup, pyprojectErr)
+		}
+		if lockErr == nil {
+			return "", fmt.Errorf("%w: pyproject.toml is required with uv.lock", ErrEnvironmentSetup)
+		}
+		if !errors.Is(lockErr, os.ErrNotExist) {
+			return "", fmt.Errorf("%w: inspect uv.lock: %v", ErrEnvironmentSetup, lockErr)
+		}
+
+		if _, err := os.Stat(pythonBin); errors.Is(err, os.ErrNotExist) {
+			cmd := exec.CommandContext(ctx, "uv", "venv", "--python", pythonVersion, ".venv")
+			cmd.Dir = absDir
+			cmd.Stdout = logs
+			cmd.Stderr = logs
+
+			if err := cmd.Run(); err != nil {
+				return "", fmt.Errorf("%w: uv venv: %v", ErrEnvironmentSetup, err)
+			}
+		} else if err != nil {
+			return "", fmt.Errorf("%w: inspect venv: %v", ErrEnvironmentSetup, err)
+		}
+
+		requirementsPath := filepath.Join(absDir, "requirements.txt")
+		info, err := os.Stat(requirementsPath)
+		if err == nil && info.Size() > 0 {
+			cmd := exec.CommandContext(ctx, "uv", "pip", "install", "-r", "requirements.txt", "--python", pythonBin)
+			cmd.Dir = absDir
+			cmd.Stdout = logs
+			cmd.Stderr = logs
+
+			if err := cmd.Run(); err != nil {
+				return "", fmt.Errorf("%w: uv pip install: %v", ErrEnvironmentSetup, err)
+			}
+		}
+	}
+
+	cmd := exec.CommandContext(ctx, "uv", "pip", "check", "--python", pythonBin)
+	cmd.Dir = absDir
+	cmd.Stdout = logs
+	cmd.Stderr = logs
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("%w: uv pip check: %v", ErrEnvironmentSetup, err)
 	}
 
 	return pythonBin, nil

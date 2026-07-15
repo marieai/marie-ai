@@ -1,30 +1,9 @@
-"""Canonical format registry for document type detection and routing."""
+"""Canonical names used for document format detection.
 
-# Formats that can be parsed directly (structured text extraction)
-DIRECTLY_PARSEABLE_FORMATS = {
-    "docx",
-    "xlsx",
-    "pptx",
-    "html",
-    "xml",
-    "markdown",
-    "csv",
-    "tsv",
-    "eml",
-    "msg",
-    "epub",
-}
-
-# Formats converted via LibreOffice to PDF first
-LIBREOFFICE_FORMATS = {
-    "doc",
-    "xls",
-    "ppt",
-    "odt",
-    "ods",
-    "odp",
-    "rtf",
-}
+This module describes recognizable inputs, not extraction support. Runtime
+support comes from the document extraction plugin capability snapshot and the
+OCR input loader.
+"""
 
 # Raster image formats (fed directly to the vision pipeline)
 IMAGE_FORMATS = {
@@ -37,23 +16,8 @@ IMAGE_FORMATS = {
     "heif",
 }
 
-# Formats that need rendering to images (not directly parseable, not images)
-RENDER_FORMATS = {
-    "rst",
-    "latex",
-    "djvu",
-}
-
 PDF_FORMAT = "pdf"
 TIFF_FORMAT = "tiff"
-
-ALL_SUPPORTED_FORMATS = (
-    DIRECTLY_PARSEABLE_FORMATS
-    | LIBREOFFICE_FORMATS
-    | IMAGE_FORMATS
-    | RENDER_FORMATS
-    | {PDF_FORMAT}
-)
 
 # Extension (without dot) -> canonical format name
 EXT_TO_FORMAT: dict[str, str] = {
@@ -70,7 +34,7 @@ EXT_TO_FORMAT: dict[str, str] = {
     "heic": "heif",
     # PDF
     "pdf": "pdf",
-    # Directly parseable
+    # Semantic documents
     "docx": "docx",
     "xlsx": "xlsx",
     "pptx": "pptx",
@@ -85,7 +49,7 @@ EXT_TO_FORMAT: dict[str, str] = {
     "tsv": "tsv",
     "eml": "eml",
     "xml": "xml",
-    # LibreOffice
+    # Detectable legacy documents (runtime support is capability-driven)
     "doc": "doc",
     "xls": "xls",
     "ppt": "ppt",
@@ -93,7 +57,7 @@ EXT_TO_FORMAT: dict[str, str] = {
     "ods": "ods",
     "odp": "odp",
     "rtf": "rtf",
-    # Render
+    # Source formats
     "tex": "latex",
     "latex": "latex",
     "djvu": "djvu",
@@ -126,7 +90,7 @@ MIME_TO_FORMAT: dict[str, str] = {
     "message/rfc822": "eml",
     "application/xml": "xml",
     "text/xml": "xml",
-    # Legacy Office
+    # Detectable legacy documents (runtime support is capability-driven)
     "application/msword": "doc",
     "application/vnd.ms-excel": "xls",
     "application/vnd.ms-powerpoint": "ppt",
@@ -134,7 +98,11 @@ MIME_TO_FORMAT: dict[str, str] = {
     "application/vnd.oasis.opendocument.spreadsheet": "ods",
     "application/vnd.oasis.opendocument.presentation": "odp",
     "application/rtf": "rtf",
-    # Render
+    # Source formats
     "application/x-latex": "latex",
     "image/vnd.djvu": "djvu",
 }
+
+ALL_DETECTABLE_FORMATS = frozenset(
+    set(EXT_TO_FORMAT.values()) | set(MIME_TO_FORMAT.values())
+)

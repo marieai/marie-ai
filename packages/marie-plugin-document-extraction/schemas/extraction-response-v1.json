@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marie.ai/schemas/document-extraction/response-v1.json",
+  "oneOf": [
+    { "$ref": "#/$defs/success" },
+    { "$ref": "#/$defs/notExtractable" }
+  ],
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "media_type", "size_bytes", "sha256", "role"],
+      "properties": {
+        "path": { "type": "string" },
+        "media_type": { "type": "string" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "role": { "const": "document" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "provider_version", "canonical_format"],
+      "properties": {
+        "provider": { "type": "string" },
+        "provider_version": { "type": "string" },
+        "canonical_format": { "type": "string" },
+        "backend": { "type": ["string", "null"] }
+      }
+    },
+    "success": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "outcome", "result_kind", "artifact", "provenance", "metadata", "warnings"],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "outcome": { "const": "success" },
+        "result_kind": { "enum": ["semantic_document", "structured_document"] },
+        "artifact": { "$ref": "#/$defs/artifact" },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "metadata": { "type": "object" },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "notExtractable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "outcome", "canonical_format", "reason", "attempted_providers", "warnings"],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "outcome": { "const": "not_extractable" },
+        "canonical_format": { "type": "string" },
+        "reason": { "type": "string" },
+        "attempted_providers": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

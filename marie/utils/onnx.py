@@ -4,7 +4,6 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import psutil
 import torch
-from onnxruntime import ExecutionMode
 from torch import tensor
 
 logger = logging.getLogger(__name__)
@@ -86,7 +85,7 @@ class OnnxModule(object):
         # ONNX model
         sess_options = ort.SessionOptions()
         sess_options.add_session_config_entry("session.load_model_format", "ONNX")
-        sess_options.execution_mode = ExecutionMode.ORT_PARALLEL
+        sess_options.execution_mode = ort.ExecutionMode.ORT_PARALLEL
         sess_options.intra_op_num_threads = psutil.cpu_count(logical=True)
         sess_options.log_verbosity_level = 1
         sess_options.enable_profiling = False

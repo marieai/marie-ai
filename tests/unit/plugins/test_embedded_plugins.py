@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import zipfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -12,8 +13,8 @@ from marie.agent.tools.base import ToolOutput
 from marie.constants import DEFAULT_DAEMON_ADDR
 from marie.plugins.embedded import EmbeddedPlugins, inspect_archive
 
-_PACKAGE = "marie/markitdown"
-_PACKAGE_ID = "ext.marie.markitdown"
+_PACKAGE = "marie/document-extraction"
+_PACKAGE_ID = "ext.marie.document-extraction"
 
 
 def _build_plugin_zip(tmp_path: Path, package_id: str = _PACKAGE_ID) -> str:
@@ -23,7 +24,7 @@ def _build_plugin_zip(tmp_path: Path, package_id: str = _PACKAGE_ID) -> str:
         "metadata:\n"
         f"  id: {package_id}\n"
         "  author: marie\n"
-        "  name: markitdown\n"
+        "  name: document-extraction\n"
         "  version: 0.1.0\n"
         "runtime:\n"
         "  type: python_source\n"
@@ -31,7 +32,7 @@ def _build_plugin_zip(tmp_path: Path, package_id: str = _PACKAGE_ID) -> str:
         "  version: \"3.12\"\n"
         "  entrypoint: main\n"
     )
-    zip_path = tmp_path / "marie-markitdown_0.1.0.zip"
+    zip_path = tmp_path / "marie-plugin-document-extraction_0.1.0.zip"
     with zipfile.ZipFile(zip_path, "w") as archive:
         archive.writestr("marie-extension.yaml", manifest)
         archive.writestr("main.py", "def main():\n    pass\n")
@@ -44,7 +45,7 @@ def _config(zip_path: str) -> list[dict]:
         {
             "package": _PACKAGE,
             "path": zip_path,
-            "actions": ["convert"],
+            "actions": ["extract"],
             "timeout_s": 120,
         }
     ]
@@ -53,7 +54,7 @@ def _config(zip_path: str) -> list[dict]:
 def _tool_output(frames: list[dict]) -> ToolOutput:
     return ToolOutput(
         content=json.dumps(frames),
-        tool_name="markitdown",
+        tool_name="document-extraction",
         raw_input={},
         raw_output=frames,
     )
@@ -98,7 +99,9 @@ _CANNED_INSTALL = {
 def _started(zip_path, clients, *, install_response=None):
     """EmbeddedPlugins with the install HTTP stubbed out (no real daemon)."""
     factory = _factory(clients)
-    plugins = EmbeddedPlugins(_config(zip_path), "extract_executor", client_factory=factory)
+    plugins = EmbeddedPlugins(
+        _config(zip_path), "extract_executor", client_factory=factory
+    )
     plugins._post_install = lambda client, envelope, archive, timeout_s: (
         install_response or _CANNED_INSTALL
     )
@@ -112,7 +115,7 @@ def test_config_parsing(tmp_path):
     entry = plugins._entries[0]
     assert entry.package == _PACKAGE
     assert entry.path == zip_path
-    assert entry.actions == ["convert"]
+    assert entry.actions == ["extract"]
     assert entry.timeout_s == 120
 
 
@@ -134,6 +137,37 @@ def test_empty_config_is_lazy_and_ensure_started_raises():
     assert plugins.configured_packages == []
     with pytest.raises(RuntimeError, match="no plugins configured"):
         plugins.ensure_started()
+
+
+def test_daemon_client_discovery_inherits_process_environment(
+    monkeypatch, tmp_path
+):
+    from marie.agent.tools import plugin_daemon_client
+
+    binary = tmp_path / 'marie-plugin-daemon'
+    binary.write_text('#!/bin/sh\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv('MARIE_PLUGIN_DAEMON_BIN', str(binary))
+    captured = {}
+
+    def discover(daemon_url, daemon_bin, daemon_addr, env):
+        captured['env'] = env
+        values = os.environ if env is None else env
+        captured['binary'] = values.get('MARIE_PLUGIN_DAEMON_BIN')
+        return type(
+            'Discovery',
+            (),
+            {'mode': 'unavailable', 'message': 'stop', 'binary': None, 'url': None},
+        )()
+
+    monkeypatch.setattr(plugin_daemon_client, 'discover_daemon', discover)
+
+    with pytest.raises(RuntimeError, match='stop'):
+        plugin_daemon_client.PluginDaemonClient(
+            organization_id='org', workspace_id='workspace'
+        )
+    assert captured['env'] is None
+    assert captured['binary'] == str(binary)
 
 
 def test_lazy_start_no_client_until_ensure_started(tmp_path):
@@ -221,12 +255,12 @@ def test_invoke_delegates_and_extracts_stream(tmp_path):
     client = _FakeClient(invoke_result=_tool_output(frames))
     plugins, factory = _started(zip_path, [client])
 
-    result = plugins.invoke(_PACKAGE, "convert", {"path": "/x.pdf", "format": "pdf"})
+    result = plugins.invoke(_PACKAGE, "extract", {"path": "/x.pdf", "format": "pdf"})
 
     assert result == {"markdown": "# Hi", "metadata": {"page_count": 2}}
     assert factory.calls == [120]  # started once
     spec, payload = client.invocations[-1]
-    assert payload["action"] == "convert"
+    assert payload["action"] == "extract"
     assert payload["path"] == "/x.pdf"
     assert payload["format"] == "pdf"
     assert spec.package_ref == _PACKAGE_ID
@@ -236,10 +270,35 @@ def test_invoke_raises_on_error_frame(tmp_path):
     zip_path = _build_plugin_zip(tmp_path)
     frames = [{"type": "error", "data": {"message": "conversion failed"}}]
     client = _FakeClient(invoke_result=_tool_output(frames))
-    plugins, _ = _started(zip_path, [client])
+    plugins, factory = _started(zip_path, [client])
 
     with pytest.raises(RuntimeError, match="conversion failed"):
-        plugins.invoke(_PACKAGE, "convert", {"path": "/x.pdf"})
+        plugins.invoke(_PACKAGE, "extract", {"path": "/x.pdf"})
+    assert len(factory.calls) == 1
+
+
+def test_retryable_error_frame_respawns_once(tmp_path):
+    zip_path = _build_plugin_zip(tmp_path)
+    failed = _FakeClient(
+        invoke_result=_tool_output(
+            [
+                {
+                    "type": "error",
+                    "data": {"message": "runtime stopped", "retryable": True},
+                }
+            ]
+        )
+    )
+    healthy = _FakeClient(
+        invoke_result=_tool_output(
+            [{"type": "stream", "data": {"outcome": "success"}}, {"type": "end"}]
+        )
+    )
+    plugins, factory = _started(zip_path, [failed, healthy])
+
+    assert plugins.invoke(_PACKAGE, "extract", {}) == {"outcome": "success"}
+    assert len(factory.calls) == 2
+    assert failed.closed is True
 
 
 def test_invoke_raises_when_no_stream_result(tmp_path):
@@ -248,7 +307,7 @@ def test_invoke_raises_when_no_stream_result(tmp_path):
     plugins, _ = _started(zip_path, [client])
 
     with pytest.raises(RuntimeError, match="no stream result"):
-        plugins.invoke(_PACKAGE, "convert", {"path": "/x.pdf"})
+        plugins.invoke(_PACKAGE, "extract", {"path": "/x.pdf"})
 
 
 def test_close_terminates_child(tmp_path):
@@ -270,7 +329,7 @@ def test_crash_respawns_once_then_raises(tmp_path):
     plugins, factory = _started(zip_path, [dead_first, dead_second])
 
     with pytest.raises(RuntimeError, match="still dead"):
-        plugins.invoke(_PACKAGE, "convert", {"path": "/x.pdf"})
+        plugins.invoke(_PACKAGE, "extract", {"path": "/x.pdf"})
 
     assert len(factory.calls) == 2  # respawned exactly once
     assert dead_first.closed is True
@@ -278,12 +337,15 @@ def test_crash_respawns_once_then_raises(tmp_path):
 
 def test_crash_respawns_once_then_succeeds(tmp_path):
     zip_path = _build_plugin_zip(tmp_path)
-    frames = [{"type": "stream", "data": {"markdown": "ok", "metadata": {}}}, {"type": "end"}]
+    frames = [
+        {"type": "stream", "data": {"markdown": "ok", "metadata": {}}},
+        {"type": "end"},
+    ]
     dead = _FakeClient(invoke_error=RuntimeError("dead"))
     healthy = _FakeClient(invoke_result=_tool_output(frames))
     plugins, factory = _started(zip_path, [dead, healthy])
 
-    result = plugins.invoke(_PACKAGE, "convert", {"path": "/x.pdf"})
+    result = plugins.invoke(_PACKAGE, "extract", {"path": "/x.pdf"})
 
     assert result == {"markdown": "ok", "metadata": {}}
     assert len(factory.calls) == 2

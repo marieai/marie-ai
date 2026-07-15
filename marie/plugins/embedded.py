@@ -3,7 +3,7 @@
 An executor declares a list of plugin packages under its YAML ``with.plugins``;
 ``EmbeddedPlugins`` owns a single :class:`PluginDaemonClient` (which spawns and
 owns THE daemon child), installs each declared package into it, and dispatches
-convert-style invocations. The daemon is started lazily on the first invoke —
+provider-neutral invocations. The daemon is started lazily on the first invoke —
 construction only parses config, so importing an executor never spawns a daemon.
 
 The signing key is a hardcoded loopback pair (spec §8.2): the same key-id/secret
@@ -41,6 +41,14 @@ _SIGNING_SECRET = "marie-executor-embedded-loopback-secret"
 _DEFAULT_TIMEOUT_S = 120
 
 ClientFactory = Callable[[float], PluginDaemonClient]
+
+
+class PluginInvocationError(RuntimeError):
+    """A classified error frame returned by the plugin runtime."""
+
+    def __init__(self, message: str, *, retryable: bool) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class _PluginEntry:
@@ -103,11 +111,17 @@ class EmbeddedPlugins:
         self._client: PluginDaemonClient | None = None
         self._specs: dict[str, PluginToolSpec] = {}
         self._install_ids: dict[str, str] = {}
+        self._runtime_generation = 0
         self.logger = MarieLogger(self.__class__.__name__)
 
     @property
     def configured_packages(self) -> list[str]:
         return [entry.package for entry in self._entries]
+
+    @property
+    def runtime_generation(self) -> int:
+        """Monotonic generation incremented after each daemon bootstrap."""
+        return self._runtime_generation
 
     def ensure_started(self) -> None:
         """Spawn the daemon child (if needed) and install every declared package."""
@@ -125,6 +139,7 @@ class EmbeddedPlugins:
             client.close()
             raise
         self._client = client
+        self._runtime_generation += 1
 
     def invoke(
         self, package: str, action: str, payload: dict[str, Any]
@@ -140,15 +155,25 @@ class EmbeddedPlugins:
         spec, client = self._require_spec_client(package)
         try:
             output = client.invoke(spec, plugin_payload)
-        except Exception as first_error:
-            self.logger.warning(
-                f"plugin invoke failed for {package}/{action}; respawning daemon "
-                f"once: {first_error}"
-            )
-            self._respawn()
-            spec, client = self._require_spec_client(package)
-            output = client.invoke(spec, plugin_payload)
+            return _result_from_output(output)
+        except PluginInvocationError as error:
+            if not error.retryable:
+                raise
+            first_error = error
+        except Exception as error:
+            first_error = error
+        self.logger.warning(
+            f"plugin invoke failed for {package}/{action}; respawning daemon "
+            f"once: {first_error}"
+        )
+        self._respawn()
+        spec, client = self._require_spec_client(package)
+        output = client.invoke(spec, plugin_payload)
         return _result_from_output(output)
+
+    def capabilities(self, package: str) -> dict[str, Any]:
+        """Return the package's current input-aware capability snapshot."""
+        return self.invoke(package, "capabilities", {})
 
     def close(self) -> None:
         """Terminate the daemon child and forget installed specs."""
@@ -331,14 +356,16 @@ def _result_from_output(output: Any) -> dict[str, Any]:
             continue
         frame_type = frame.get("type")
         if frame_type == "error":
-            raise RuntimeError(_error_message(frame))
+            data = frame.get("data")
+            retryable = isinstance(data, dict) and data.get("retryable") is True
+            raise PluginInvocationError(_error_message(frame), retryable=retryable)
         if frame_type == "stream" and stream_data is None:
             data = frame.get("data")
             if isinstance(data, dict):
                 stream_data = data
 
     if stream_data is None:
-        raise RuntimeError("plugin returned no stream result")
+        raise PluginInvocationError("plugin returned no stream result", retryable=False)
     return stream_data
 
 

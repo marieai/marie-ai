@@ -28,7 +28,9 @@ def _patch_storage(
     """
 
     monkeypatch.setattr(
-        docs_module.StorageManager, "can_handle", staticmethod(lambda *a, **k: can_handle)
+        docs_module.StorageManager,
+        "can_handle",
+        staticmethod(lambda *a, **k: can_handle),
     )
     monkeypatch.setattr(
         docs_module.StorageManager,
@@ -115,7 +117,10 @@ def test_docs_from_asset_routes_through_helper(monkeypatch, tmp_path):
     monkeypatch.setattr(
         docs_module,
         "load_document",
-        lambda path, *a, **k: {"mode": "frames", "frames": [np.zeros((2, 2, 3), dtype=np.uint8)]},
+        lambda path, *a, **k: {
+            "mode": "frames",
+            "frames": [np.zeros((2, 2, 3), dtype=np.uint8)],
+        },
     )
 
     docs = docs_from_asset("s3://bucket/downloaded.png")

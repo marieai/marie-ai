@@ -1,0 +1,31 @@
+apiVersion: marie.ai/v1alpha1
+kind: ExtensionPackage
+metadata:
+  id: ext.marie.document-extraction
+  author: marie
+  name: document-extraction
+  version: 0.2.0
+runtime:
+  type: python_source
+  language: python
+  version: "3.12"
+  entrypoint: main
+runtimePolicy:
+  timeoutMs: 120000
+  networkPolicy: none
+tools:
+  - name: capabilities
+    description: Report installed and ready document extraction capabilities.
+    input: {}
+    output:
+      schemaRef: schemas/capabilities-v1.json
+  - name: extract
+    description: Extract a semantic document to a controlled result artifact.
+    input:
+      path: string
+      format: string
+      mime_type: string
+      intent: string
+      output_dir: string
+    output:
+      schemaRef: schemas/extraction-response-v1.json

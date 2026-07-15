@@ -32,11 +32,12 @@ const (
 )
 
 type InstanceConfig struct {
-	WorkingDir       string
-	PythonPath       string
-	Entrypoint       string
-	HeartbeatTimeout time.Duration
-	Logs             io.Writer
+	WorkingDir        string
+	PythonPath        string
+	PythonRuntimePath string
+	Entrypoint        string
+	HeartbeatTimeout  time.Duration
+	Logs              io.Writer
 }
 
 type SessionHandler func(event plugin_entities.PluginUniversalEvent)
@@ -90,7 +91,7 @@ func StartInstance(ctx context.Context, config InstanceConfig) (*Instance, error
 
 	cmd := exec.CommandContext(ctx, config.PythonPath, "-m", config.Entrypoint)
 	cmd.Dir = config.WorkingDir
-	cmd.Env = scrubbedEnv()
+	cmd.Env = scrubbedEnv(config.PythonRuntimePath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
@@ -302,11 +303,14 @@ func (i *Instance) kill() {
 	}
 }
 
-func scrubbedEnv() []string {
+func scrubbedEnv(pythonRuntimePath string) []string {
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
 		"INSTALL_METHOD=local",
+	}
+	if pythonRuntimePath != "" {
+		env = append(env, "PYTHONPATH="+pythonRuntimePath)
 	}
 	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"} {
 		if value := os.Getenv(key); value != "" {

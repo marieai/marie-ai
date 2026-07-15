@@ -38,7 +38,6 @@ from marie.utils.asset_util import (
     store_assets,
 )
 from marie.utils.docs import docs_from_image, frames_from_file
-from marie.utils.format_registry import DIRECTLY_PARSEABLE_FORMATS
 from marie.utils.json import store_json_object
 from marie.utils.tiff_ops import merge_tiff, save_frame_as_tiff_g4
 from marie.utils.utils import ensure_exists

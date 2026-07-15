@@ -79,7 +79,7 @@ class PluginDaemonClient:
             self._url = base_url.rstrip("/")
             return
 
-        discovery = discover_daemon(None, daemon_bin, daemon_addr, env or {})
+        discovery = discover_daemon(None, daemon_bin, daemon_addr, env)
         if discovery.mode == "sidecar_proxy" and discovery.url:
             self._url = discovery.url.rstrip("/")
         elif discovery.mode == "binary_child" and discovery.binary:

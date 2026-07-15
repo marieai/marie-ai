@@ -163,6 +163,13 @@ executors:
       jtype: TextExtractionExecutor
 #      jtype: TextExtractionExecutorMock
       with:
+        plugins:
+          - package: marie/document-extraction
+            path: /mnt/data/marie-ai/plugins/marie-plugin-document-extraction_0.2.0.zip
+            actions: [capabilities, extract]
+            timeout_s: 120
+        document_extraction:
+          enabled: true
         storage:
           # postgresql configuration. Will be used only if value of backend is "psql"
           psql:
