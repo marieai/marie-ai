@@ -445,8 +445,8 @@ async def test_on_job_skipped_sets_state_and_removes_from_ready(frontier: Memory
 
 
 @pytest.mark.asyncio
-async def test_on_job_skipped_does_not_unblock_children(frontier: MemoryFrontier):
-    """on_job_skipped() must NOT decrement dependency counts or unblock children."""
+async def test_on_job_skipped_satisfies_child_dependency(frontier: MemoryFrontier):
+    """A skipped parent should satisfy the dependency of a surviving child."""
     # Create parent and child with dependency
     parent = wi_factory("parent", priority=1)
     child = wi_factory("child", priority=1, deps=["parent"])
@@ -459,17 +459,82 @@ async def test_on_job_skipped_does_not_unblock_children(frontier: MemoryFrontier
     assert "parent" in ready_ids
     assert "child" not in ready_ids
 
-    # Skip the parent (should NOT unblock child)
+    # Skip the parent
     await frontier.on_job_skipped("parent")
 
-    # Child should STILL not be ready (skip doesn't unblock)
+    # Child should now be ready because PostgreSQL also treats skipped as satisfied
     ready = await frontier.peek_ready(10)
     ready_ids = [wi.id for wi in ready]
     assert "parent" not in ready_ids  # Parent removed from ready
-    assert "child" not in ready_ids   # Child still blocked
+    assert "child" in ready_ids
 
-    # Verify unmet_count was NOT decremented
-    assert frontier.unmet_count.get("child", 0) > 0
+    assert frontier.unmet_count.get("child", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_on_jobs_skipped_preserves_shared_merger(frontier: MemoryFrontier):
+    selected_leaf = wi_factory("selected-leaf")
+    skipped_root = wi_factory("skipped-root")
+    skipped_leaf = wi_factory("skipped-leaf", deps=["skipped-root"])
+    merger = wi_factory(
+        "merger",
+        deps=["selected-leaf", "skipped-leaf"],
+        executor="noop://noop",
+    )
+    end = wi_factory("end", deps=["merger"], executor="noop://noop")
+    await add_ready_jobs(
+        frontier,
+        selected_leaf,
+        skipped_root,
+        skipped_leaf,
+        merger,
+        end,
+    )
+
+    await frontier.on_jobs_skipped(["skipped-root", "skipped-leaf"])
+    await frontier.on_jobs_skipped(["skipped-root", "skipped-leaf"])
+
+    ready_ids = [wi.id for wi in await frontier.peek_ready(10)]
+    assert "skipped-root" not in ready_ids
+    assert "skipped-leaf" not in ready_ids
+    assert "merger" not in ready_ids
+    assert frontier.unmet_count["merger"] == 1
+
+    await frontier.on_job_completed("selected-leaf")
+
+    ready_ids = [wi.id for wi in await frontier.peek_ready(10)]
+    assert "merger" in ready_ids
+
+    await frontier.on_job_completed("merger")
+
+    ready_ids = [wi.id for wi in await frontier.peek_ready(10)]
+    assert "end" in ready_ids
+
+
+@pytest.mark.asyncio
+async def test_on_jobs_skipped_waits_for_all_selected_merger_parents(
+    frontier: MemoryFrontier,
+):
+    selected_a = wi_factory("selected-a")
+    selected_b = wi_factory("selected-b")
+    skipped = wi_factory("skipped")
+    merger = wi_factory(
+        "multi-merger",
+        deps=["selected-a", "selected-b", "skipped"],
+        executor="noop://noop",
+    )
+    await add_ready_jobs(frontier, selected_a, selected_b, skipped, merger)
+
+    await frontier.on_job_skipped("skipped")
+    assert frontier.unmet_count["multi-merger"] == 2
+
+    await frontier.on_job_completed("selected-a")
+    assert "multi-merger" not in [
+        wi.id for wi in await frontier.peek_ready(10)
+    ]
+
+    await frontier.on_job_completed("selected-b")
+    assert "multi-merger" in [wi.id for wi in await frontier.peek_ready(10)]
 
 
 @pytest.mark.asyncio

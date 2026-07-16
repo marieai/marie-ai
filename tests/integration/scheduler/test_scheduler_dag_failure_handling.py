@@ -9,6 +9,7 @@ import pytest
 
 import marie.scheduler.psql as scheduler_psql
 from marie.job.common import JobInfo, JobStatus
+from marie.query_planner.base import Query, QueryPlan
 from marie.query_planner.branching import SkipReason
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.memory_frontier import MemoryFrontier
@@ -1316,8 +1317,7 @@ def test_repository_record_to_work_info_normalizes_uuid_fields():
 async def test_mark_nodes_skipped_reconciles_from_committed_ids_only():
     skip_calls: list[dict[str, object]] = []
     metadata_calls: list[str] = []
-    frontier_skipped_ids: list[str] = []
-    cascade_calls: list[list[str]] = []
+    frontier_skip_calls: list[list[str]] = []
 
     async def mark_jobs_as_skipped(**kwargs: object) -> set[str]:
         skip_calls.append(kwargs)
@@ -1327,11 +1327,8 @@ async def test_mark_nodes_skipped_reconciles_from_committed_ids_only():
         metadata_calls.append(job_id)
         return True
 
-    async def on_job_skipped(job_id: str) -> None:
-        frontier_skipped_ids.append(job_id)
-
-    async def record_cascade(node_ids: list[str], *_args: object) -> None:
-        cascade_calls.append(node_ids)
+    async def on_jobs_skipped(job_ids: list[str]) -> None:
+        frontier_skip_calls.append(job_ids)
 
     scheduler = object.__new__(PostgreSQLJobScheduler)
     scheduler.logger = FakeLogger()
@@ -1339,15 +1336,32 @@ async def test_mark_nodes_skipped_reconciles_from_committed_ids_only():
         mark_jobs_as_skipped=mark_jobs_as_skipped,
         update_job_metadata=update_job_metadata,
     )
-    scheduler.frontier = SimpleNamespace(on_job_skipped=on_job_skipped)
-    scheduler._cascade_skip_to_descendants = record_cascade
+    scheduler.frontier = SimpleNamespace(on_jobs_skipped=on_jobs_skipped)
+
+    dag_plan = QueryPlan(
+        nodes=[
+            Query(task_id="active", query_str="active"),
+            Query(task_id="job-uncommitted", query_str="uncommitted"),
+            Query(task_id="job-committed", query_str="committed"),
+            Query(
+                task_id="committed-child",
+                query_str="committed child",
+                dependencies=["job-committed"],
+            ),
+            Query(
+                task_id="shared-merger",
+                query_str="shared merger",
+                dependencies=["active", "committed-child"],
+            ),
+        ]
+    )
 
     skip_reason = SkipReason(branch_node_id="branch", reason="not selected")
     await scheduler._mark_nodes_skipped(
         ["job-uncommitted", "job-committed"],
         "extract",
         skip_reason,
-        object(),
+        dag_plan,
     )
 
     skip_metadata = skip_calls[0]["output_metadata"]
@@ -1355,9 +1369,13 @@ async def test_mark_nodes_skipped_reconciles_from_committed_ids_only():
         skip_metadata["skip_reason"]["timestamp"]
         == skip_reason.model_dump(mode="json")["timestamp"]
     )
+    assert skip_calls[0]["job_ids"] == [
+        "job-uncommitted",
+        "job-committed",
+        "committed-child",
+    ]
     assert metadata_calls == ["job-committed"]
-    assert frontier_skipped_ids == ["job-committed"]
-    assert cascade_calls == [["job-committed"]]
+    assert frontier_skip_calls == [["job-committed"]]
 
 
 @pytest.mark.asyncio

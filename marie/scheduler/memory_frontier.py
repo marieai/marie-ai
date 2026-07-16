@@ -285,23 +285,56 @@ class MemoryFrontier:
 
             return []
 
-    async def on_job_skipped(self, job_id: str) -> None:
-        """
-        Handles a job being skipped (branch not taken).
-
-        Unlike on_job_completed(), this method does NOT decrement dependency
-        counts or unblock children. Skipped jobs have their descendants
-        cascade-skipped separately by the scheduler.
-        """
+    async def on_jobs_skipped(self, job_ids: Iterable[str]) -> list[WorkInfo]:
+        """Mark jobs skipped and satisfy their dependencies for surviving children."""
         async with self._lock:
-            if job_id in self.jobs_by_id:
-                self.jobs_by_id[job_id].state = WorkState.SKIPPED
+            newly_skipped: list[str] = []
+            newly_skipped_set: set[str] = set()
+            for job_id in job_ids:
+                wi = self.jobs_by_id.get(job_id)
+                if wi is None:
+                    logger.warning(
+                        f"Job with id {job_id} not found in memory frontier for skip."
+                    )
+                    continue
+
+                already_skipped = wi.state == WorkState.SKIPPED or (
+                    isinstance(wi.state, str)
+                    and wi.state.lower() == WorkState.SKIPPED.value
+                )
+                if not already_skipped and job_id not in newly_skipped_set:
+                    newly_skipped.append(job_id)
+                    newly_skipped_set.add(job_id)
+                wi.state = WorkState.SKIPPED
                 self._remove_from_ready_set(job_id)
                 self.leased_until.pop(job_id, None)
-            else:
-                logger.warning(
-                    f"Job with id {job_id} not found in memory frontier for skip."
-                )
+
+            now_ready: list[WorkInfo] = []
+            for job_id in newly_skipped:
+                for child_id in self.dependents.get(job_id, []):
+                    if child_id in newly_skipped_set:
+                        continue
+
+                    wi = self.jobs_by_id.get(child_id)
+                    if wi is None:
+                        continue
+
+                    unmet = self.unmet_count[child_id]
+                    if unmet == 0:
+                        continue
+
+                    self.unmet_count[child_id] = unmet - 1
+                    if self.unmet_count[child_id] == 0 and self._is_schedulable_state(
+                        wi.state
+                    ):
+                        self._push_ready(wi)
+                        now_ready.append(wi)
+
+            return now_ready
+
+    async def on_job_skipped(self, job_id: str) -> list[WorkInfo]:
+        """Mark one job skipped and satisfy it as a parent dependency."""
+        return await self.on_jobs_skipped([job_id])
 
     async def on_job_retry(
         self, job_id: str, work_item: WorkInfo, start_after: datetime | None = None

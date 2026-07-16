@@ -5,7 +5,7 @@ import traceback
 import uuid
 import uuid as _uuid
 from asyncio import Queue
-from collections import defaultdict
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from math import inf
@@ -154,6 +154,32 @@ def regular_candidates_cover_available_slots(
             remaining[executor] -= 1
 
     return all(count <= 0 for count in remaining.values())
+
+
+def exclusive_skip_closure(
+    dag_plan: QueryPlan, skipped_node_ids: list[str]
+) -> list[str]:
+    """Return skipped nodes whose every incoming path is also skipped."""
+    skipped = set(skipped_node_ids)
+    parents: dict[str, set[str]] = {}
+    dependents: dict[str, list[str]] = defaultdict(list)
+
+    for node in dag_plan.nodes:
+        parents[node.task_id] = set(node.dependencies)
+        for dependency_id in node.dependencies:
+            dependents[dependency_id].append(node.task_id)
+
+    pending = deque(skipped_node_ids)
+    while pending:
+        skipped_node_id = pending.popleft()
+        for child_id in dependents.get(skipped_node_id, []):
+            if child_id in skipped:
+                continue
+            if parents[child_id].issubset(skipped):
+                skipped.add(child_id)
+                pending.append(child_id)
+
+    return [node.task_id for node in dag_plan.nodes if node.task_id in skipped]
 
 
 # FIXME : Today we are tracking at the executor level, however that might not be the best
@@ -1440,18 +1466,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         dag_plan: QueryPlan,
     ) -> None:
         """
-        Mark nodes as SKIPPED and cascade to descendants.
+        Mark nodes and their exclusively dependent descendants as SKIPPED.
         Stores branch_metadata with skip_reason for tracking.
 
         :param node_ids: List of node IDs to mark as skipped
         :param queue_name: Queue name for the jobs
         :param skip_reason: Reason for skipping
-        :param dag_plan: DAG plan to find descendants
+        :param dag_plan: DAG plan used to find exclusively skipped descendants
         """
         if not node_ids:
             return
 
         try:
+            skipped_node_ids = exclusive_skip_closure(dag_plan, node_ids)
+
             # Mark nodes as SKIPPED in database
             skip_metadata = {
                 "skip_reason": skip_reason.model_dump(mode="json"),
@@ -1459,12 +1487,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             }
 
             skipped_ids = await self.repository.mark_jobs_as_skipped(
-                job_ids=node_ids,
+                job_ids=skipped_node_ids,
                 queue_name=queue_name,
                 output_metadata=skip_metadata,
             )
             committed_node_ids = [
-                node_id for node_id in node_ids if node_id in skipped_ids
+                node_id for node_id in skipped_node_ids if node_id in skipped_ids
             ]
 
             if not committed_node_ids:
@@ -1489,64 +1517,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     branch_metadata=skip_branch_metadata,
                 )
 
-            # Update frontier to mark these as skipped (without unblocking children)
-            for node_id in committed_node_ids:
-                await self.frontier.on_job_skipped(node_id)
-
-            # Cascade skip to all descendants
-            await self._cascade_skip_to_descendants(
-                committed_node_ids, queue_name, skip_reason, dag_plan
-            )
+            await self.frontier.on_jobs_skipped(committed_node_ids)
 
         except Exception as e:
             self.logger.error(f"Error marking nodes as skipped: {e}", exc_info=True)
-
-    async def _cascade_skip_to_descendants(
-        self,
-        skipped_node_ids: list[str],
-        queue_name: str,
-        skip_reason: SkipReason,
-        dag_plan: QueryPlan,
-    ) -> None:
-        """
-        Recursively mark all descendants of skipped nodes as SKIPPED.
-
-        :param skipped_node_ids: List of skipped node IDs
-        :param queue_name: Queue name
-        :param skip_reason: Original skip reason
-        :param dag_plan: DAG plan to traverse
-        """
-        if not skipped_node_ids:
-            return
-
-        descendants = set()
-
-        # Find all descendants using the DAG structure
-        for node_id in skipped_node_ids:
-            node = get_node_from_dag(node_id, dag_plan)
-            if not node:
-                continue
-
-            # Traverse the DAG to find all downstream nodes
-            # This is a simplified traversal - in production, use topology cache
-            for query in dag_plan.queries:
-                if node_id in query.depends_on:
-                    descendants.add(query.query)
-
-        if descendants:
-            # Create cascaded skip reason
-            cascaded_reason = SkipReason(
-                branch_node_id=skip_reason.branch_node_id,
-                reason=f"Ancestor node(s) skipped: {skipped_node_ids}",
-                evaluated_condition=skip_reason.evaluated_condition,
-                selected_paths=skip_reason.selected_paths,
-                timestamp=datetime.now(timezone.utc),
-            )
-
-            # Mark descendants as skipped
-            await self._mark_nodes_skipped(
-                list(descendants), queue_name, cascaded_reason, dag_plan
-            )
 
     async def _evaluate_and_mark_guardrail_paths(
         self, guardrail_node_id: str, work_item: WorkInfo, dag_plan: QueryPlan

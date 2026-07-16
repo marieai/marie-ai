@@ -29,7 +29,7 @@ FROM {schema}.job j
 LEFT JOIN LATERAL (
   SELECT json_agg(jd.depends_on_id) FILTER (
            WHERE p.id IS NOT NULL
-             AND p.state NOT IN ('completed','failed','cancelled')
+             AND p.state NOT IN ('completed','failed','cancelled','skipped')
          ) AS deps
   FROM {schema}.job_dependencies jd
   LEFT JOIN {schema}.job p
