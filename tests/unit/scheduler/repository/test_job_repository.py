@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 
+import psycopg
 import pytest
 
 from marie.scheduler.repository.job_repository import JobRepository
@@ -8,6 +9,9 @@ from marie.scheduler.repository.job_repository import JobRepository
 
 class FakeLogger:
     def error(self, *args, **kwargs):
+        pass
+
+    def warning(self, *args, **kwargs):
         pass
 
 
@@ -221,6 +225,48 @@ async def test_lease_jobs_preserves_input_order_for_sql_call():
 
     assert leased == {"job-a", "job-b"}
     assert execute_calls[0][1][0] == ["job-b", "job-a"]
+
+
+@pytest.mark.asyncio
+async def test_mark_jobs_as_skipped_returns_only_committed_ids():
+    requested_ids = [
+        "00000000-0000-0000-0000-000000000101",
+        "00000000-0000-0000-0000-000000000102",
+    ]
+    connection = SequencedConnection([[(requested_ids[1],)]])
+    repository = build_repository(connection)
+
+    skipped_ids = await repository.mark_jobs_as_skipped(
+        requested_ids,
+        "extract",
+        {"skip_reason": "branch not selected"},
+    )
+
+    query, params = connection.cursor_instance.execute_calls[0]
+    rendered_query = query.as_string()
+    assert 'UPDATE "marie_scheduler"."job"' in rendered_query
+    assert "WHERE name = %s" in rendered_query
+    assert "id = ANY(%s::uuid[])" in rendered_query
+    assert "state IN ('created', 'retry')" in rendered_query
+    assert "RETURNING id" in rendered_query
+    assert params[1:] == ("extract", requested_ids)
+    assert skipped_ids == {requested_ids[1]}
+    assert connection.commit_called is True
+    assert connection.rollback_called is False
+
+
+@pytest.mark.asyncio
+async def test_mark_jobs_as_skipped_rolls_back_database_errors():
+    connection = FailingConnection(psycopg.OperationalError("skip failure"))
+    repository = build_repository(connection)
+
+    with pytest.raises(psycopg.OperationalError, match="skip failure"):
+        await repository.mark_jobs_as_skipped(
+            ["00000000-0000-0000-0000-000000000101"],
+            "extract",
+        )
+
+    assert connection.rollback_called is True
 
 
 @pytest.mark.asyncio

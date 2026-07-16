@@ -9,6 +9,7 @@ import pytest
 
 import marie.scheduler.psql as scheduler_psql
 from marie.job.common import JobInfo, JobStatus
+from marie.query_planner.branching import SkipReason
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import RecoveredRunLease, WorkInfo
@@ -1309,6 +1310,54 @@ def test_repository_record_to_work_info_normalizes_uuid_fields():
 
     assert work_info.id == str(job_id)
     assert work_info.dag_id == str(dag_id)
+
+
+@pytest.mark.asyncio
+async def test_mark_nodes_skipped_reconciles_from_committed_ids_only():
+    skip_calls: list[dict[str, object]] = []
+    metadata_calls: list[str] = []
+    frontier_skipped_ids: list[str] = []
+    cascade_calls: list[list[str]] = []
+
+    async def mark_jobs_as_skipped(**kwargs: object) -> set[str]:
+        skip_calls.append(kwargs)
+        return {"job-committed"}
+
+    async def update_job_metadata(job_id: str, **_kwargs: object) -> bool:
+        metadata_calls.append(job_id)
+        return True
+
+    async def on_job_skipped(job_id: str) -> None:
+        frontier_skipped_ids.append(job_id)
+
+    async def record_cascade(node_ids: list[str], *_args: object) -> None:
+        cascade_calls.append(node_ids)
+
+    scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.logger = FakeLogger()
+    scheduler.repository = SimpleNamespace(
+        mark_jobs_as_skipped=mark_jobs_as_skipped,
+        update_job_metadata=update_job_metadata,
+    )
+    scheduler.frontier = SimpleNamespace(on_job_skipped=on_job_skipped)
+    scheduler._cascade_skip_to_descendants = record_cascade
+
+    skip_reason = SkipReason(branch_node_id="branch", reason="not selected")
+    await scheduler._mark_nodes_skipped(
+        ["job-uncommitted", "job-committed"],
+        "extract",
+        skip_reason,
+        object(),
+    )
+
+    skip_metadata = skip_calls[0]["output_metadata"]
+    assert (
+        skip_metadata["skip_reason"]["timestamp"]
+        == skip_reason.model_dump(mode="json")["timestamp"]
+    )
+    assert metadata_calls == ["job-committed"]
+    assert frontier_skipped_ids == ["job-committed"]
+    assert cascade_calls == [["job-committed"]]
 
 
 @pytest.mark.asyncio

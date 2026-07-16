@@ -1454,18 +1454,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         try:
             # Mark nodes as SKIPPED in database
             skip_metadata = {
-                "skip_reason": skip_reason.model_dump(),
+                "skip_reason": skip_reason.model_dump(mode="json"),
                 "skipped_at": skip_reason.timestamp.isoformat(),
             }
 
-            await self.repository.mark_jobs_as_skipped(
+            skipped_ids = await self.repository.mark_jobs_as_skipped(
                 job_ids=node_ids,
                 queue_name=queue_name,
                 output_metadata=skip_metadata,
             )
+            committed_node_ids = [
+                node_id for node_id in node_ids if node_id in skipped_ids
+            ]
+
+            if not committed_node_ids:
+                return
 
             # Store branch_metadata with skip_reason for each skipped node
-            for node_id in node_ids:
+            for node_id in committed_node_ids:
                 # Store comprehensive skip information as branch_metadata
                 skip_branch_metadata = {
                     "skip_reason": {
@@ -1484,12 +1490,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 )
 
             # Update frontier to mark these as skipped (without unblocking children)
-            for node_id in node_ids:
+            for node_id in committed_node_ids:
                 await self.frontier.on_job_skipped(node_id)
 
             # Cascade skip to all descendants
             await self._cascade_skip_to_descendants(
-                node_ids, queue_name, skip_reason, dag_plan
+                committed_node_ids, queue_name, skip_reason, dag_plan
             )
 
         except Exception as e:

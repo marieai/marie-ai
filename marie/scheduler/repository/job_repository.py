@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import psycopg
+from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from marie.constants import __default_psql_dir__, __default_schema_dir__
@@ -2411,9 +2412,9 @@ class JobRepository(PostgresqlMixin):
         self,
         job_ids: list[str],
         queue_name: str,
-        output_metadata: dict = None,
+        output_metadata: dict[str, Any] | None = None,
         schema: str = DEFAULT_SCHEMA,
-    ) -> int:
+    ) -> set[str]:
         """
         Mark jobs as SKIPPED. This is used for branch paths that were not selected.
 
@@ -2421,53 +2422,57 @@ class JobRepository(PostgresqlMixin):
         :param queue_name: The name of the queue
         :param output_metadata: Optional metadata to store (e.g., skip_reason)
         :param schema: The database schema (default: marie_scheduler)
-        :return: Number of jobs marked as skipped
+        :return: IDs of jobs committed as skipped
         """
         if not job_ids:
-            return 0
+            return set()
 
-        self.logger.info(f"Marking {len(job_ids)} jobs as SKIPPED: {job_ids}")
-
-        def db_call():
+        def db_call() -> set[str]:
             cursor = None
             conn = None
             try:
                 conn = self._get_connection()
                 cursor = conn.cursor()
-
-                # Update jobs to SKIPPED state
                 cursor.execute(
-                    f"""
-                    UPDATE {schema}.{queue_name}
+                    sql.SQL(
+                        """
+                    UPDATE {}.{}
                     SET state = 'skipped',
                         completed_on = NOW(),
-                        output = %s
-                    WHERE id = ANY(%s)
-                      AND state NOT IN ('completed', 'failed', 'cancelled', 'skipped')
-                    """,
+                        output = %s,
+                        lease_owner = NULL,
+                        lease_expires_at = NULL
+                    WHERE name = %s
+                      AND id = ANY(%s::uuid[])
+                      AND state IN ('created', 'retry')
+                    RETURNING id
+                    """
+                    ).format(
+                        sql.Identifier(schema),
+                        sql.Identifier(DEFAULT_JOB_TABLE),
+                    ),
                     (
                         Jsonb({"on_skip": "skipped", **(output_metadata or {})}),
+                        queue_name,
                         job_ids,
                     ),
                 )
 
-                count = cursor.rowcount
+                skipped_ids = {str(row[0]) for row in cursor.fetchall()}
                 conn.commit()
 
-                if count > 0:
-                    self.logger.info(f"Marked {count} jobs as SKIPPED")
-                else:
+                missing_ids = set(job_ids) - skipped_ids
+                if missing_ids:
                     self.logger.warning(
-                        "No jobs were marked as SKIPPED (may already be in terminal state)"
+                        f"Some jobs were not committed as skipped: {sorted(missing_ids)}"
                     )
 
-                return count
+                return skipped_ids
 
-            except (Exception, psycopg.Error) as error:
-                self.logger.error(f"Error marking jobs as skipped: {error}")
+            except psycopg.Error:
                 if conn:
                     conn.rollback()
-                return 0
+                raise
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)
