@@ -1,5 +1,5 @@
 """
-Branching Mock Query Plans
+Branching mock query plans.
 
 BRANCH and SWITCH node patterns for conditional routing.
 
@@ -180,7 +180,11 @@ def query_planner_mock_branch_simple(planner_info: PlannerInfo, **kwargs) -> Que
     merger = Query(
         task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
         query_str=f"{planner_info.current_id}: MERGE results",
-        dependencies=[invoice_process.task_id, contract_process.task_id, other_process.task_id],
+        dependencies=[
+            invoice_process.task_id,
+            contract_process.task_id,
+            other_process.task_id,
+        ],
         node_type=QueryType.MERGER,
         definition=EnhancedMergerQueryDefinition(
             method="MERGER_ENHANCED",
@@ -205,7 +209,9 @@ def query_planner_mock_branch_simple(planner_info: PlannerInfo, **kwargs) -> Que
 
 
 @register_query_plan("mock_switch_complexity")
-def query_planner_mock_switch_complexity(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+def query_planner_mock_switch_complexity(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
     """
     Mock query plan using SWITCH for value-based routing.
 
@@ -320,7 +326,11 @@ def query_planner_mock_switch_complexity(planner_info: PlannerInfo, **kwargs) ->
     merger = Query(
         task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
         query_str=f"{planner_info.current_id}: MERGE results",
-        dependencies=[fast_process.task_id, standard_process.task_id, advanced_process.task_id],
+        dependencies=[
+            fast_process.task_id,
+            standard_process.task_id,
+            advanced_process.task_id,
+        ],
         node_type=QueryType.MERGER,
         definition=EnhancedMergerQueryDefinition(
             method="MERGER_ENHANCED",
@@ -345,7 +355,9 @@ def query_planner_mock_switch_complexity(planner_info: PlannerInfo, **kwargs) ->
 
 
 @register_query_plan("mock_branch_multi_condition")
-def query_planner_mock_branch_multi_condition(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+def query_planner_mock_branch_multi_condition(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
     """
     Advanced branching with multi-condition groups (AND/OR logic).
 
@@ -549,7 +561,9 @@ def query_planner_mock_branch_multi_condition(planner_info: PlannerInfo, **kwarg
 
 
 @register_query_plan("mock_nested_branches")
-def query_planner_mock_nested_branches(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+def query_planner_mock_nested_branches(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
     """
     Complex mock with nested branching - branch within a branch.
 
@@ -735,7 +749,11 @@ def query_planner_mock_nested_branches(planner_info: PlannerInfo, **kwargs) -> Q
     merger = Query(
         task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
         query_str=f"{planner_info.current_id}: MERGE all validations",
-        dependencies=[small_validate.task_id, large_validate.task_id, contract_validate.task_id],
+        dependencies=[
+            small_validate.task_id,
+            large_validate.task_id,
+            contract_validate.task_id,
+        ],
         node_type=QueryType.MERGER,
         definition=EnhancedMergerQueryDefinition(
             method="MERGER_ENHANCED",
@@ -760,7 +778,9 @@ def query_planner_mock_nested_branches(planner_info: PlannerInfo, **kwargs) -> Q
 
 
 @register_query_plan("mock_branch_python_function")
-def query_planner_mock_branch_python_function(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+def query_planner_mock_branch_python_function(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
     """
     Branching mock using Python function evaluation for complex business logic.
 
@@ -896,7 +916,9 @@ def query_planner_mock_branch_python_function(planner_info: PlannerInfo, **kwarg
 
 
 @register_query_plan("mock_branch_jsonpath_advanced")
-def query_planner_mock_branch_jsonpath_advanced(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+def query_planner_mock_branch_jsonpath_advanced(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
     """
     Advanced JSONPath expressions with array filtering and complex queries.
 
@@ -1095,7 +1117,9 @@ def query_planner_mock_branch_jsonpath_advanced(planner_info: PlannerInfo, **kwa
 
 
 @register_query_plan("mock_branch_all_match")
-def query_planner_mock_branch_all_match(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+def query_planner_mock_branch_all_match(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
     """
     Branching with ALL_MATCH evaluation mode (activates multiple paths).
 
@@ -1286,7 +1310,9 @@ def query_planner_mock_branch_all_match(planner_info: PlannerInfo, **kwargs) -> 
 
 
 @register_query_plan("mock_branch_regex_matching")
-def query_planner_mock_branch_regex_matching(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+def query_planner_mock_branch_regex_matching(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
     """
     Branching using regex pattern matching in JSONPath conditions.
 

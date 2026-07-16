@@ -102,6 +102,36 @@ ln -sfn ~/environments/marie-ai-pytorch-2-12 .venv
 
 `UV_PROJECT_ENVIRONMENT=~/environments/<name>` is an alternative per-shell override, but the symlink keeps the mapping visible and persistent.
 
+### Repair a Stale Editable Install
+
+Editable installs record absolute source paths in the environment. If the same central environment was last synced from another checkout or worktree, commands may fail with errors such as:
+
+```text
+ModuleNotFoundError: No module named 'marie_cli'
+```
+
+From the checkout you want to run, repair the editable package paths with the command for that environment:
+
+```shell
+# CPU
+uv sync --locked --group dev --inexact
+
+# CUDA 13.0
+uv sync --locked --extra cu130 --group dev --inexact
+```
+
+`--inexact` preserves runtime or plugin packages that are installed in the environment but are not declared in `uv.lock`. Verify the repaired CLI through the project entry point:
+
+```shell
+# CPU
+uv run --locked marie --help
+
+# CUDA 13.0
+uv run --locked --extra cu130 marie --help
+```
+
+Do not share one central environment between active checkouts or worktrees. Each editable install rewrites package paths and command shebangs for the checkout that ran `uv sync` most recently. Give each checkout its own environment path and `.venv` symlink.
+
 ### Standalone venv With The pip Interface
 
 Create the environment under `~/environments/` and activate it:

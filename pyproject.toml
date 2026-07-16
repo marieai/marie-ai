@@ -83,6 +83,7 @@ dependencies = [
     "lmdb",
     "natsort",
     "celery",
+    "valkey",
     "opencv-python==5.0.0.93",
     "opencv-python-headless==5.0.0.93",
     "imagecodecs",

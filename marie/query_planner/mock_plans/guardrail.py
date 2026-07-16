@@ -1,5 +1,5 @@
 """
-Mock Query Plans for GUARDRAIL Node Testing
+Mock query plans for GUARDRAIL node testing.
 
 This module provides mock query plans for testing GUARDRAIL node functionality,
 including quality validation, metric evaluation, and pass/fail path routing.
@@ -30,7 +30,9 @@ from .base import (
 
 
 @register_query_plan("mock_guardrail_simple")
-def query_planner_mock_guardrail_simple(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+def query_planner_mock_guardrail_simple(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
     """
     Simple GUARDRAIL test: validate output before returning.
 
@@ -154,7 +156,9 @@ def query_planner_mock_guardrail_simple(planner_info: PlannerInfo, **kwargs) -> 
 
 
 @register_query_plan("mock_guardrail_retry_loop")
-def query_planner_mock_guardrail_retry_loop(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+def query_planner_mock_guardrail_retry_loop(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
     """
     GUARDRAIL with retry: if validation fails, retry with different parameters.
 
@@ -306,7 +310,9 @@ def query_planner_mock_guardrail_retry_loop(planner_info: PlannerInfo, **kwargs)
                 ),
                 GuardrailPath(
                     path_id="fail",
-                    target_node_ids=[end_retry_id],  # Same end node - accept best effort
+                    target_node_ids=[
+                        end_retry_id
+                    ],  # Same end node - accept best effort
                     description="Retry failed - return best effort",
                 ),
             ],
@@ -329,7 +335,9 @@ def query_planner_mock_guardrail_retry_loop(planner_info: PlannerInfo, **kwargs)
 
 
 @register_query_plan("mock_guardrail_executor_metric")
-def query_planner_mock_guardrail_executor_metric(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+def query_planner_mock_guardrail_executor_metric(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
     """
     GUARDRAIL using custom executor for Python evaluation.
 
@@ -480,7 +488,9 @@ def query_planner_mock_guardrail_executor_metric(planner_info: PlannerInfo, **kw
 
 
 @register_query_plan("mock_guardrail_multi_metric")
-def query_planner_mock_guardrail_multi_metric(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+def query_planner_mock_guardrail_multi_metric(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
     """
     GUARDRAIL with multiple metrics and aggregation modes.
 
@@ -570,7 +580,9 @@ def query_planner_mock_guardrail_multi_metric(planner_info: PlannerInfo, **kwarg
                     name="Proper Formatting",
                     threshold=0.8,
                     weight=0.5,  # Lower weight - nice to have
-                    params={"pattern": r"^[A-Z].*[.!?]$"},  # Starts with capital, ends with punctuation
+                    params={
+                        "pattern": r"^[A-Z].*[.!?]$"
+                    },  # Starts with capital, ends with punctuation
                 ),
             ],
             aggregation_mode="weighted_average",

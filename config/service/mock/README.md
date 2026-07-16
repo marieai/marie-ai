@@ -84,7 +84,7 @@ marie server --start --uses config/service/mock/marie-mock-scheduler-test.yml
 
 ### Testing with Mock Query Plans
 
-The mock executors work seamlessly with the mock query plans defined in `tests/integration/scheduler/mock_query_plans.py`:
+The mock executors work seamlessly with the mock query plans defined in `marie/query_planner/mock_query_plans.py`:
 
 ```python
 from marie.query_planner.base import PlannerInfo, QueryPlanRegistry

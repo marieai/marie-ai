@@ -1,5 +1,5 @@
 """
-Connector Mock Query Plans (W2)
+Connector mock query plans (W2).
 
 A CONNECTOR node serialized per the W2 wire contract: ``method ==
 "EXECUTOR_ENDPOINT"`` with the FIXED endpoint ``plugin_daemon_executor://execute``
@@ -97,9 +97,7 @@ def _connector_plan(
 
 
 @register_query_plan("mock_connector_tool")
-def query_planner_mock_connector_tool(
-    planner_info: PlannerInfo, **kwargs
-) -> QueryPlan:
+def query_planner_mock_connector_tool(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
     """CONNECTOR route: START -> CONNECTOR(EXECUTOR_ENDPOINT, plugin daemon) -> END."""
     return _connector_plan(
         planner_info,

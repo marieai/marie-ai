@@ -49,7 +49,7 @@ def test_mock_scheduler_config_registers_mock_query_planners() -> None:
 
     assert {
         "name": "mock_planners",
-        "py_module": "tests.integration.scheduler.mock_query_plans",
+        "py_module": "marie.query_planner.mock_query_plans",
     } in planners
 
 

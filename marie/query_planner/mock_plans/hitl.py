@@ -1,5 +1,5 @@
 """
-Human-in-the-Loop (HITL) Mock Query Plans
+Human-in-the-loop (HITL) mock query plans.
 
 HITL node patterns for human review, approval, and correction workflows.
 
@@ -67,7 +67,7 @@ def query_planner_mock_hitl_approval(planner_info: PlannerInfo, **kwargs) -> Que
             params={
                 "layout": layout,
                 "model": "invoice_classifier_v1",
-                "confidence_output": True
+                "confidence_output": True,
             },
         ),
     )
@@ -86,39 +86,33 @@ def query_planner_mock_hitl_approval(planner_info: PlannerInfo, **kwargs) -> Que
             description="Please review the AI classification of this invoice and approve or reject",
             approval_type="binary",
             priority="high",
-            auto_approve={
-                "enabled": True,
-                "confidence_threshold": 0.95
-            },
+            auto_approve={"enabled": True, "confidence_threshold": 0.95},
             timeout={
                 "enabled": True,
                 "duration_seconds": 86400,  # 24 hours
-                "strategy": "use_default"
+                "strategy": "use_default",
             },
-            assigned_to={
-                "user_ids": [],
-                "roles": ["finance_manager", "accountant"]
-            },
+            assigned_to={"user_ids": [], "roles": ["finance_manager", "accountant"]},
             notifications={
                 "channels": ["email", "in_app"],
                 "on_request": True,
                 "on_reminder": True,
                 "reminder_interval_seconds": 3600,
-                "max_reminders": 3
+                "max_reminders": 3,
             },
             ui={
                 "show_confidence_score": True,
                 "allow_feedback": True,
-                "required_feedback": False
+                "required_feedback": False,
             },
             params={
                 "layout": layout,
                 "context_data": {
                     "document_type": "invoice",
-                    "classification": "commercial_invoice"
+                    "classification": "commercial_invoice",
                 },
-                "confidence": 0.87  # Below auto-approve threshold
-            }
+                "confidence": 0.87,  # Below auto-approve threshold
+            },
         ),
     )
     planner_info.current_id += 1
@@ -152,7 +146,9 @@ def query_planner_mock_hitl_approval(planner_info: PlannerInfo, **kwargs) -> Que
 
 
 @register_query_plan("mock_hitl_correction")
-def query_planner_mock_hitl_correction(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+def query_planner_mock_hitl_correction(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
     """
     Mock query plan demonstrating HITL Data Correction workflow.
 
@@ -195,7 +191,13 @@ def query_planner_mock_hitl_correction(planner_info: PlannerInfo, **kwargs) -> Q
             params={
                 "layout": layout,
                 "model": "invoice_extractor_v2",
-                "fields": ["invoice_number", "date", "vendor", "total_amount", "line_items"]
+                "fields": [
+                    "invoice_number",
+                    "date",
+                    "vendor",
+                    "total_amount",
+                    "line_items",
+                ],
             },
         ),
     )
@@ -221,28 +223,28 @@ def query_planner_mock_hitl_correction(planner_info: PlannerInfo, **kwargs) -> Q
                     "type": "text",
                     "required": True,
                     "confidence_threshold": 0.9,
-                    "validation": r"^INV-\d{6}$"
+                    "validation": r"^INV-\d{6}$",
                 },
                 {
                     "key": "invoice_date",
                     "label": "Invoice Date",
                     "type": "date",
                     "required": True,
-                    "confidence_threshold": 0.85
+                    "confidence_threshold": 0.85,
                 },
                 {
                     "key": "vendor_name",
                     "label": "Vendor Name",
                     "type": "text",
                     "required": True,
-                    "confidence_threshold": 0.8
+                    "confidence_threshold": 0.8,
                 },
                 {
                     "key": "total_amount",
                     "label": "Total Amount",
                     "type": "number",
                     "required": True,
-                    "confidence_threshold": 0.95
+                    "confidence_threshold": 0.95,
                 },
                 {
                     "key": "currency",
@@ -250,31 +252,27 @@ def query_planner_mock_hitl_correction(planner_info: PlannerInfo, **kwargs) -> Q
                     "type": "enum",
                     "required": True,
                     "options": ["USD", "EUR", "GBP", "JPY"],
-                    "confidence_threshold": 0.9
-                }
+                    "confidence_threshold": 0.9,
+                },
             ],
             auto_validate={
                 "enabled": True,
                 "confidence_threshold": 0.9,
-                "exempt_fields": ["total_amount"]  # Always require human review for amount
+                "exempt_fields": [
+                    "total_amount"
+                ],  # Always require human review for amount
             },
             timeout={
                 "enabled": True,
                 "duration_seconds": 86400,
-                "strategy": "use_original"  # Use original extraction if timeout
+                "strategy": "use_original",  # Use original extraction if timeout
             },
-            assigned_to={
-                "user_ids": [],
-                "roles": ["data_entry_clerk", "finance_team"]
-            },
-            notifications={
-                "channels": ["email", "in_app"],
-                "on_request": True
-            },
+            assigned_to={"user_ids": [], "roles": ["data_entry_clerk", "finance_team"]},
+            notifications={"channels": ["email", "in_app"], "on_request": True},
             ui={
                 "highlight_low_confidence": True,
                 "show_original_value": True,
-                "side_by_side_comparison": True
+                "side_by_side_comparison": True,
             },
             params={
                 "layout": layout,
@@ -283,16 +281,16 @@ def query_planner_mock_hitl_correction(planner_info: PlannerInfo, **kwargs) -> Q
                     "invoice_date": "2025-01-15",
                     "vendor_name": "Acme Corporation",
                     "total_amount": 1234.56,
-                    "currency": "USD"
+                    "currency": "USD",
                 },
                 "field_confidences": {
                     "invoice_number": 0.92,
                     "invoice_date": 0.78,  # Below threshold, needs review
                     "vendor_name": 0.88,
                     "total_amount": 0.96,  # High but exempt, needs review
-                    "currency": 0.94
-                }
-            }
+                    "currency": 0.94,
+                },
+            },
         ),
     )
     planner_info.current_id += 1
@@ -367,10 +365,7 @@ def query_planner_mock_hitl_router(planner_info: PlannerInfo, **kwargs) -> Query
         definition=LlmQueryDefinition(
             model_name="document_classifier_v1",
             endpoint="mock_executor_a://classify/document",
-            params={
-                "layout": layout,
-                "confidence_output": True
-            },
+            params={"layout": layout, "confidence_output": True},
         ),
     )
     planner_info.current_id += 1
@@ -399,27 +394,27 @@ def query_planner_mock_hitl_router(planner_info: PlannerInfo, **kwargs) -> Query
                 {
                     "field": "total_amount",
                     "condition": "gt",
-                    "value": 10000  # Always review large invoices
+                    "value": 10000,  # Always review large invoices
                 },
                 {
                     "field": "vendor_type",
                     "condition": "equals",
-                    "value": "new"  # Always review new vendors
-                }
+                    "value": "new",  # Always review new vendors
+                },
             ],
             params={
                 "layout": layout,
                 "data": {
                     "document_type": "invoice",
                     "vendor_type": "existing",
-                    "total_amount": 5000
+                    "total_amount": 5000,
                 },
                 "confidence": 0.88,  # Medium confidence
                 "metadata": {
                     "classifier_model": "document_classifier_v1",
-                    "timestamp": "2025-01-18T10:30:00Z"
-                }
-            }
+                    "timestamp": "2025-01-18T10:30:00Z",
+                },
+            },
         ),
     )
     planner_info.current_id += 1
@@ -492,7 +487,9 @@ def query_planner_mock_hitl_router(planner_info: PlannerInfo, **kwargs) -> Query
 
 
 @register_query_plan("mock_hitl_complete_workflow")
-def query_planner_mock_hitl_complete_workflow(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+def query_planner_mock_hitl_complete_workflow(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
     """
     Complete HITL workflow demonstrating all three HITL node types.
 
@@ -564,7 +561,7 @@ def query_planner_mock_hitl_complete_workflow(planner_info: PlannerInfo, **kwarg
             auto_approve_threshold=0.95,
             human_review_threshold=0.7,
             below_threshold_action="reject",
-            params={"layout": layout, "confidence": 0.82}
+            params={"layout": layout, "confidence": 0.82},
         ),
     )
     planner_info.current_id += 1
@@ -597,10 +594,20 @@ def query_planner_mock_hitl_complete_workflow(planner_info: PlannerInfo, **kwarg
             correction_type="structured",
             priority="high",
             fields=[
-                {"key": "invoice_number", "label": "Invoice #", "type": "text", "required": True},
-                {"key": "total_amount", "label": "Total", "type": "number", "required": True}
+                {
+                    "key": "invoice_number",
+                    "label": "Invoice #",
+                    "type": "text",
+                    "required": True,
+                },
+                {
+                    "key": "total_amount",
+                    "label": "Total",
+                    "type": "number",
+                    "required": True,
+                },
             ],
-            params={"layout": layout}
+            params={"layout": layout},
         ),
     )
     planner_info.current_id += 1
@@ -617,7 +624,7 @@ def query_planner_mock_hitl_complete_workflow(planner_info: PlannerInfo, **kwarg
             description="Approve the corrected invoice for processing",
             approval_type="binary",
             priority="medium",
-            params={"layout": layout}
+            params={"layout": layout},
         ),
     )
     planner_info.current_id += 1

@@ -1,5 +1,5 @@
 """
-Traditional Mock Query Plans
+Traditional mock query plans.
 
 Linear and parallel execution patterns for basic performance testing.
 
@@ -155,7 +155,6 @@ def query_planner_mock_medium(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
     prepare = Query(
         task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
         query_str=f"{planner_info.current_id}: Prepare data",
-
         dependencies=[root.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
@@ -366,16 +365,16 @@ def query_planner_mock_complex(planner_info: PlannerInfo, **kwargs) -> QueryPlan
 
     return QueryPlan(
         nodes=[root, init_node]
-              + annotators
-              + [merge, table_parser, table_extractor, validator, end]
+        + annotators
+        + [merge, table_parser, table_extractor, validator, end]
     )
 
 
 def _build_subgraph_mock(
-        planner_info: PlannerInfo,
-        layout: str,
-        parent_task_id: str,
-        num_parallel_tasks: int = 3,
+    planner_info: PlannerInfo,
+    layout: str,
+    parent_task_id: str,
+    num_parallel_tasks: int = 3,
 ) -> dict:
     """
     Helper function to build a mock subgraph with parallel execution.
@@ -514,7 +513,7 @@ def query_planner_mock_with_subgraphs(planner_info: PlannerInfo, **kwargs) -> Qu
 
 @register_query_plan("mock_parallel_subgraphs")
 def query_planner_mock_parallel_subgraphs(
-        planner_info: PlannerInfo, **kwargs
+    planner_info: PlannerInfo, **kwargs
 ) -> QueryPlan:
     """
     Highly complex mock query plan with multiple parallel subgraphs.
@@ -731,7 +730,9 @@ def query_planner_mock_parallel_subgraphs(
             data_subgraph_end.task_id,
         ],
         node_type=QueryType.MERGER,
-        definition=NoopQueryDefinition(params={"layout": layout, "merge_type": "global"}),
+        definition=NoopQueryDefinition(
+            params={"layout": layout, "merge_type": "global"}
+        ),
     )
     planner_info.current_id += 1
 
@@ -772,17 +773,17 @@ def query_planner_mock_parallel_subgraphs(
 
     # Build complete node list
     all_nodes = (
-            [root, init_node]
-            + [text_subgraph_root]
-            + text_tasks
-            + [text_subgraph_end]
-            + [image_subgraph_root]
-            + image_tasks
-            + [image_subgraph_end]
-            + [data_subgraph_root]
-            + data_tasks
-            + [data_subgraph_end]
-            + [global_merge, post_process, validate, end]
+        [root, init_node]
+        + [text_subgraph_root]
+        + text_tasks
+        + [text_subgraph_end]
+        + [image_subgraph_root]
+        + image_tasks
+        + [image_subgraph_end]
+        + [data_subgraph_root]
+        + data_tasks
+        + [data_subgraph_end]
+        + [global_merge, post_process, validate, end]
     )
 
     return QueryPlan(nodes=all_nodes)

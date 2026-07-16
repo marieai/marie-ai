@@ -19,7 +19,7 @@ from marie.query_planner.guardrail import (
 )
 
 # Import mock plans to register them
-from tests.integration.scheduler.mock_plans.guardrail import (
+from marie.query_planner.mock_plans.guardrail import (
     query_planner_mock_guardrail_executor_metric,
     query_planner_mock_guardrail_multi_metric,
     query_planner_mock_guardrail_retry_loop,

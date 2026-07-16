@@ -9,9 +9,9 @@ tests/unit/executor/extensions/test_plugin_daemon_executor.py for the executor
 side and tests/unit/job/test_gateway_job_distributor.py for the routing).
 """
 
+from marie.query_planner import mock_query_plans
 from marie.query_planner.base import ExecutorEndpointQueryDefinition
-from tests.integration.scheduler import mock_query_plans
-from tests.integration.scheduler.mock_query_plans import (
+from marie.query_planner.mock_query_plans import (
     PlannerInfo,
     QueryPlanRegistry,
     generate_job_id,

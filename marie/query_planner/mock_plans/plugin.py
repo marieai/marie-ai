@@ -1,5 +1,5 @@
 """
-Plugin Mock Query Plans
+Plugin mock query plans.
 
 Minimal single-node plugin routes, one per plugin family. Each plan exercises a
 PLUGIN node that the scheduler dispatches to the plugin daemon executor

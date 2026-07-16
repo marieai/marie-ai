@@ -132,7 +132,7 @@ with:
       # Explicit planners (mock planners for testing)
       planners:
         - name: mock_planners
-          py_module: tests.integration.scheduler.mock_query_plans
+          py_module: marie.query_planner.mock_query_plans
 
   # Toast event tracking system
   # It can be backed by Message Queue or Database backed

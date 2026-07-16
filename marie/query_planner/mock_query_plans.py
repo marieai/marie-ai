@@ -51,7 +51,7 @@ Plugin Plans (one per plugin family, dispatched to the plugin daemon executor):
     - query_planner_mock_plugin_trigger: START -> PLUGIN(trigger) -> END
 
 Usage:
-    from tests.integration.scheduler.mock_query_plans import (
+    from marie.query_planner.mock_query_plans import (
         query_planner_mock_simple,
         query_planner_mock_medium,
 
@@ -84,7 +84,7 @@ from marie.query_planner.base import (
 )
 
 # Branching plans (BRANCH and SWITCH conditional routing)
-from tests.integration.scheduler.mock_plans.branching import (
+from marie.query_planner.mock_plans.branching import (
     query_planner_mock_branch_all_match,
     query_planner_mock_branch_jsonpath_advanced,
     query_planner_mock_branch_multi_condition,
@@ -96,12 +96,12 @@ from tests.integration.scheduler.mock_plans.branching import (
 )
 
 # Connector plan (W2: EXECUTOR_ENDPOINT -> plugin_daemon_executor://execute, identity in params.plugin)
-from tests.integration.scheduler.mock_plans.connector import (
+from marie.query_planner.mock_plans.connector import (
     query_planner_mock_connector_tool,
 )
 
 # Guardrail plans (quality validation nodes)
-from tests.integration.scheduler.mock_plans.guardrail import (
+from marie.query_planner.mock_plans.guardrail import (
     query_planner_mock_guardrail_executor_metric,
     query_planner_mock_guardrail_multi_metric,
     query_planner_mock_guardrail_retry_loop,
@@ -109,7 +109,7 @@ from tests.integration.scheduler.mock_plans.guardrail import (
 )
 
 # HITL plans (Human-in-the-Loop workflows)
-from tests.integration.scheduler.mock_plans.hitl import (
+from marie.query_planner.mock_plans.hitl import (
     query_planner_mock_hitl_approval,
     query_planner_mock_hitl_complete_workflow,
     query_planner_mock_hitl_correction,
@@ -117,7 +117,7 @@ from tests.integration.scheduler.mock_plans.hitl import (
 )
 
 # Plugin plans (one per plugin family, dispatched to the plugin daemon executor)
-from tests.integration.scheduler.mock_plans.plugin import (
+from marie.query_planner.mock_plans.plugin import (
     query_planner_mock_plugin_datasource,
     query_planner_mock_plugin_model,
     query_planner_mock_plugin_tool,
@@ -125,7 +125,7 @@ from tests.integration.scheduler.mock_plans.plugin import (
 )
 
 # Traditional plans (linear and parallel execution patterns)
-from tests.integration.scheduler.mock_plans.traditional import (
+from marie.query_planner.mock_plans.traditional import (
     query_planner_mock_annotator_llm,
     query_planner_mock_complex,
     query_planner_mock_medium,
@@ -136,9 +136,6 @@ from tests.integration.scheduler.mock_plans.traditional import (
 
 # Import all plans from modular structure
 # This registers them via @register_query_plan decorator and re-exports them
-
-
-
 
 
 __all__ = [
@@ -274,7 +271,9 @@ if __name__ == "__main__":
             restored_ids = {n.task_id for n in restored_plan.nodes}
             assert original_ids == restored_ids, "Task ID sets differ after restore"
 
-            print(f"Restore validation succeeded for {plan_name}: node_count={len(plan.nodes)}")
+            print(
+                f"Restore validation succeeded for {plan_name}: node_count={len(plan.nodes)}"
+            )
         except Exception:
             print(f"ERROR processing plan {plan_name}:")
             traceback.print_exc()

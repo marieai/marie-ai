@@ -677,7 +677,7 @@ CREATE TABLE marie_scheduler.hitl_responses (
 
 ### Mock Workflows
 
-See `tests/integration/scheduler/mock_query_plans.py` for example HITL workflows:
+See `marie/query_planner/mock_query_plans.py` for example HITL workflows:
 
 - `mock_hitl_approval`: Simple approval workflow
 - `mock_hitl_correction`: Data correction workflow

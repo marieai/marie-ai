@@ -12,7 +12,7 @@ Modules:
     - hitl: Human-in-the-Loop workflow plans
 
 Usage:
-    from tests.integration.scheduler.mock_plans import (
+    from marie.query_planner.mock_plans import (
         # Traditional plans
         query_planner_mock_simple,
         query_planner_mock_medium,
@@ -27,8 +27,8 @@ Usage:
     )
 
     # Or import by category
-    from tests.integration.scheduler.mock_plans.traditional import *
-    from tests.integration.scheduler.mock_plans.branching import *
+    from marie.query_planner.mock_plans.traditional import *
+    from marie.query_planner.mock_plans.branching import *
 """
 
 # Import base utilities

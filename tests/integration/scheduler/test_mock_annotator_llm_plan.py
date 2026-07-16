@@ -1,5 +1,5 @@
-from tests.integration.scheduler import mock_query_plans
-from tests.integration.scheduler.mock_query_plans import (
+from marie.query_planner import mock_query_plans
+from marie.query_planner.mock_query_plans import (
     LlmQueryDefinition,
     PlannerInfo,
     QueryPlanRegistry,

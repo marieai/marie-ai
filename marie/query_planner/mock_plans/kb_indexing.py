@@ -1,5 +1,5 @@
 """
-Mock plans for KB document indexing workflows.
+Mock query plans for KB document indexing workflows.
 
 Plans for testing the KB indexing pipeline with different document types
 and processing paths (parsed vs frames/OCR).

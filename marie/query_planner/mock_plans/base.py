@@ -1,7 +1,7 @@
 """
 Base module for mock query plans.
 
-Provides common imports, helper functions, and type definitions used across
+Provides shared imports, helper functions, and type definitions used across
 all mock query plan modules.
 """
 

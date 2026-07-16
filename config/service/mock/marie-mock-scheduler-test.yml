@@ -193,7 +193,7 @@ with:
         - ${{ ENV.MARIE_DEFAULT_MOUNT }}/config/wheels
       planners:
         - name: mock_planners
-          py_module: tests.integration.scheduler.mock_query_plans
+          py_module: marie.query_planner.mock_query_plans
 
 prefetch: 4
 
