@@ -3,8 +3,9 @@ Tests for InMemoryStateBackend.
 """
 
 import pytest
-from marie_kernel import TaskInstanceRef
-from marie_kernel.backends.memory import InMemoryStateBackend
+
+from marie.kernel import TaskInstanceRef
+from marie.kernel.backends.memory import InMemoryStateBackend
 
 
 class TestInMemoryBackendBasic:

@@ -25,7 +25,7 @@ asset_config:
 ```python
 from marie.executor.mixin import StorageMixin
 from marie.assets import AssetTracker
-from marie import Executor, requests, DocumentArray
+from marie.runtime import Executor, requests, DocumentArray
 import hashlib
 import json
 

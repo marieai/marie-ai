@@ -21,6 +21,7 @@ from opentelemetry.sdk.trace.export import (
 
 from marie.engine.completion_contract import RequestContext
 from marie.instrumentation import set_llm_io
+from marie.observability.media import resolve_media_reference
 from marie.utils.asset_util import s3_asset_path
 
 
@@ -119,6 +120,7 @@ def test_set_llm_io_does_not_mutate_multimodal_request_messages(otel_setup):
                 ref_type="stress",
                 page_number=1,
             ),
+            media_reference_resolver=resolve_media_reference,
         )
 
     assert messages == original
@@ -208,6 +210,7 @@ def test_set_llm_io_sets_source_asset_reference_from_context(otel_setup):
                 ref_type="stress",
                 page_number=2,
             ),
+            media_reference_resolver=resolve_media_reference,
         )
 
     attrs = otel_setup.get_finished_spans()[0].attributes
@@ -249,6 +252,7 @@ def test_set_llm_io_normalizes_multimodal_output_messages(otel_setup):
                 ref_type="stress",
                 page_number=3,
             ),
+            media_reference_resolver=resolve_media_reference,
         )
 
     attrs = otel_setup.get_finished_spans()[0].attributes

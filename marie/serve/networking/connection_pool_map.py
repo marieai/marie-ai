@@ -2,8 +2,8 @@ import os
 import threading
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
+from marie.engine.circuit_breaker import CircuitBreakerConfig
 from marie.logging_core.logger import MarieLogger
-from marie.serve.networking.balancer.circuit_breaker import CircuitBreakerConfig
 from marie.serve.networking.instrumentation import _NetworkingHistograms
 from marie.serve.networking.replica_list import _ReplicaList
 

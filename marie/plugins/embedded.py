@@ -26,11 +26,11 @@ from urllib.request import Request, urlopen
 
 import yaml
 
-from marie.agent.tools.plugin_daemon_client import PluginDaemonClient
-from marie.agent.tools.plugin_tool import PluginToolSpec
 from marie.constants import DEFAULT_DAEMON_ADDR, DEFAULT_TENANT_UUID
 from marie.logging_core.logger import MarieLogger
 from marie.plugin_daemon import build_invocation_envelope, sign_envelope
+from marie.plugins.agent_tool import PluginToolSpec
+from marie.plugins.daemon_client import PluginDaemonClient
 
 # Loopback integrity key (spec §8.2). Handed to the spawned daemon child via env
 # so it verifies the envelopes this process signs. NOT a secret; revisit before

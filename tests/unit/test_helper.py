@@ -5,7 +5,6 @@ import numpy as np
 import psutil
 import pytest
 
-from marie import Executor, Flow
 from marie.clients.helper import _safe_callback, pprint_routes
 from marie.constants import __default_endpoint__
 from marie.excepts import BadClientCallback, NotSupportedError
@@ -27,6 +26,7 @@ from marie.helper import (
 from marie.jaml.helper import complete_path
 from marie.logging_core.predefined import default_logger
 from marie.proto import jina_pb2
+from marie.runtime import Executor, Flow
 from marie.serve.executors.decorators import requests
 from marie.types_core.request.data import DataRequest
 from tests import random_docs
@@ -76,7 +76,7 @@ def test_dunder_get():
 
 
 def test_wrap_func():
-    from marie import Executor
+    from marie.runtime import Executor
 
     class DummyEncoder(Executor):
         def __init__(self, **kwargs):

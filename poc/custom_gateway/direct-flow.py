@@ -6,10 +6,10 @@ import time
 from docarray import DocList
 from docarray.documents import TextDoc
 
-from marie import Deployment, Executor, Flow, requests
 from marie.api import AssetKeyDoc
 from marie.conf.helper import load_yaml
 from marie.executor.marie_executor import MarieExecutor
+from marie.runtime import Deployment, Executor, Flow, requests
 
 
 class TestExecutor(MarieExecutor):

@@ -392,7 +392,7 @@ class Flow(
 
             .. code-block:: python
 
-                from marie import Flow
+                from marie.runtime import Flow
 
                 f = Flow().add(uses='jinahub+docker://SimpleIndexer')  # create Flow and add Executor
                 with f:
@@ -402,7 +402,7 @@ class Flow(
 
             .. code-block:: python
 
-                from marie import Flow
+                from marie.runtime import Flow
 
                 f = Flow().add(uses='jinahub+docker://SimpleIndexer')  # create Flow and add Executor
                 f.save_config('flow.yml')  # save YAML config file

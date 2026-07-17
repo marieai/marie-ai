@@ -47,13 +47,13 @@ Both tools:
 
 ```
 marie-mcp-server/
-├── src/marie_mcp/
+├── src/marie/mcp/server/
 │   ├── __init__.py
 │   ├── server.py                    # MCP server entry point
 │   ├── config.py                    # Configuration management
 │   ├── clients/
 │   │   ├── __init__.py
-│   │   └── marie_client.py          # HTTP client (no marie dependency)
+│   │   └── marie.client.py          # HTTP client (no marie dependency)
 │   ├── tools/
 │   │   ├── __init__.py
 │   │   ├── document_processing.py   # OCR & data extraction
@@ -262,7 +262,7 @@ marie_server = MCPServerStdio(command="uvx", args=["marie-mcp"], env={...})
 pytest tests/
 
 # With coverage
-pytest --cov=marie_mcp tests/
+pytest --cov=marie.mcp.server tests/
 ```
 
 ## Future Enhancements

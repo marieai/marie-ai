@@ -217,7 +217,7 @@ marie-mcp
 ENV_FILE=/path/to/.env marie-mcp
 
 # Check version
-python -c "import marie_mcp; print(marie_mcp.__version__)"
+python -c "import marie.mcp.server; print(marie.mcp.server.__version__)"
 
 # Run tests
 pytest tests/

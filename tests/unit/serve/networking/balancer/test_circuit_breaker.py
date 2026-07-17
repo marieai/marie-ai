@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from marie.serve.networking.balancer.circuit_breaker import (
+from marie.engine.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
     CircuitState,

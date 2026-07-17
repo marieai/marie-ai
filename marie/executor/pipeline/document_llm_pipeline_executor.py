@@ -2,7 +2,6 @@ from typing import Any, List, Optional
 
 from docarray import DocList
 
-from marie import requests, safely_encoded
 from marie.api import AssetKeyDoc, value_from_payload_or_args
 from marie.boxes import PSMode
 from marie.executor.pipeline.document_pipeline_executor import PipelineExecutor
@@ -12,6 +11,7 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import torch_gc
 from marie.ocr import CoordinateFormat
 from marie.pipe.llm_pipeline import LLMPipeline
+from marie.runtime import requests, safely_encoded
 from marie.utils.asset_util import create_working_dir
 
 

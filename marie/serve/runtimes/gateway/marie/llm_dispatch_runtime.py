@@ -11,7 +11,6 @@ from marie.engine.llm_queue.scheduler import DrrLaneConfig
 from marie.engine.llm_queue.scheduler_config import (
     DatabaseSchedulerConfigSource,
     LlmQueueSchedulerConfig,
-    PostgresSchedulerConfigRepository,
     SchedulerConfigSource,
     StaticSchedulerConfigSource,
     ensure_default_pool,
@@ -22,6 +21,9 @@ from marie.engine.openai_compat import (
 )
 from marie.excepts import RuntimeFailToStart
 from marie.logging_core.logger import MarieLogger
+from marie.serve.runtimes.gateway.marie.llm_scheduler_config import (
+    PostgresSchedulerConfigRepository,
+)
 
 
 class GatewayLlmDispatchRuntime:

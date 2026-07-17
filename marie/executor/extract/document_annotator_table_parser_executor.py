@@ -5,7 +5,6 @@ import torch
 from docarray import DocList
 from omegaconf import OmegaConf
 
-from marie import requests
 from marie.api.docs import AssetKeyDoc
 from marie.executor.extract.document_annotator_executor import (
     DocumentAnnotatorExecutor,
@@ -17,6 +16,7 @@ from marie.extract.results.result_parser import extract_tables, highlight_tables
 from marie.extract.structures import UnstructuredDocument
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
+from marie.runtime import requests
 from marie.utils.asset_util import (
     prepare_asset_directory,
 )

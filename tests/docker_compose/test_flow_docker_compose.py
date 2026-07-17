@@ -4,8 +4,8 @@ import os
 import pytest
 import requests as req
 
-from marie import Client, Document, Flow
 from marie.helper import random_port
+from marie.runtime import Client, Document, Flow
 from marie.serve.runtimes.servers import BaseServer
 from tests.docker_compose.conftest import DockerComposeServices
 from tests.helper import (

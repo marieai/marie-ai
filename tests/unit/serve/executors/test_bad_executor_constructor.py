@@ -1,7 +1,7 @@
 import pytest
 from docarray.documents.legacy import LegacyDocument
 
-from marie import Executor, Flow, requests
+from marie.runtime import Executor, Flow, requests
 from marie.utils.pydantic import patch_pydantic_schema_2x
 
 

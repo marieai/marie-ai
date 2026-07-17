@@ -6,7 +6,8 @@ Common functions used across multiple agent example files.
 import os
 from typing import Optional
 
-from marie.agent import MarieEngineLLMWrapper, OpenAICompatibleWrapper
+from marie.agent import OpenAICompatibleWrapper
+from marie.engine.agent_wrapper import MarieEngineLLMWrapper
 
 # Default models for each backend
 DEFAULT_MODELS = {

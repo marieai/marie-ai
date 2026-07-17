@@ -4,9 +4,9 @@ from typing import Optional
 import numpy as np
 import psycopg
 
-from marie import Document, DocumentArray
 from marie.logging_core.logger import MarieLogger
 from marie.numpyencoder import NumpyEncoder
+from marie.runtime import Document, DocumentArray
 from marie.storage.database.postgres import PostgresqlMixin
 from marie.storage.pgvector.utils import from_db, to_db
 from marie.utils.json import to_json

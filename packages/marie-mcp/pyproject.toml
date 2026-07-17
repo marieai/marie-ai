@@ -47,10 +47,10 @@ Repository = "https://github.com/marieai/marie-ai"
 Issues = "https://github.com/marieai/marie-ai/issues"
 
 [project.scripts]
-marie-mcp = "marie_mcp.server:main"
+marie-mcp = "marie.mcp.server.server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/marie_mcp"]
+packages = ["src/marie"]
 
 [tool.black]
 line-length = 88

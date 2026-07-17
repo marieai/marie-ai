@@ -7,7 +7,6 @@ from typing import Any, Dict, Optional
 
 from rich.traceback import install
 
-from marie import Deployment, Flow, __version__
 from marie.conf.helper import load_yaml
 from marie.constants import (
     __cache_path__,
@@ -21,6 +20,7 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import Toast
 from marie.messaging.events import EngineEventData, MarieEvent
 from marie.messaging.publisher import event_builder
+from marie.runtime import Deployment, Flow, __version__
 from marie.utils.device import gpu_device_count
 from marie.utils.server_runtime import (
     setup_auth,

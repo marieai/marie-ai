@@ -1,15 +1,16 @@
-"""Tests for marie_wasm.compiler module."""
+"""Tests for marie.wasm.compiler module."""
 
 import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
-from marie_wasm.compiler import (
+
+from marie.wasm.compiler import (
     CompilationError,
     WasmCompilerService,
 )
-from marie_wasm.types import Language
+from marie.wasm.types import Language
 
 
 class TestWasmCompilerService:

@@ -1,6 +1,6 @@
 import pytest
 
-from marie import Deployment, Flow
+from marie.runtime import Deployment, Flow
 
 
 @pytest.mark.parametrize('options', ['{"grpc.keepalive_time_ms": 9999}', None])

@@ -18,7 +18,7 @@ class WebSocketClient(WebSocketBaseClient, PostMixin, ProfileMixin, HealthCheckM
 
     .. code-block:: python
 
-        from marie import Client
+        from marie.runtime import Client
         from docarray import Document
 
         # select host address to connect to
@@ -53,7 +53,7 @@ class AsyncWebSocketClient(
 
     .. code-block:: python
 
-        from marie import Client
+        from marie.runtime import Client
         from docarray import Document
 
 

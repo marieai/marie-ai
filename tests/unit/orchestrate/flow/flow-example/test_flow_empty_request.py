@@ -1,4 +1,4 @@
-from marie import Executor, Flow, requests
+from marie.runtime import Executor, Flow, requests
 
 
 def test_empty_post_request(mocker):

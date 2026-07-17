@@ -9,9 +9,9 @@ import grpc
 import pytest
 import requests as req
 
-from marie import Document, DocumentArray, Executor, requests
 from marie.clients.request import request_generator
 from marie.proto import jina_pb2, jina_pb2_grpc
+from marie.runtime import Document, DocumentArray, Executor, requests
 from marie.serve.helper import get_default_grpc_options
 from marie.serve.networking.utils import get_available_services, send_request_async
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
@@ -304,7 +304,7 @@ def _create_test_data_message(counter=0):
 @pytest.mark.timeout(5)
 @pytest.mark.skip
 async def test_decorator_monitoring(port_generator):
-    from marie import monitor
+    from marie.runtime import monitor
 
     class DummyExecutor(Executor):
         @requests

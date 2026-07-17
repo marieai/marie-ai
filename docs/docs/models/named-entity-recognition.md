@@ -49,7 +49,7 @@ from marie.registry.model_registry import ModelRegistry
 from marie.utils.image_utils import hash_file, hash_bytes
 from marie.utils.json import store_json_object
 from marie.constants import __model_path__, __config_dir__
-from marie import (
+from marie.runtime import (
     Document,
     DocumentArray,
 )

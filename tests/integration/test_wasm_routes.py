@@ -12,9 +12,9 @@ from fastapi.testclient import TestClient
 
 from marie.serve.runtimes.servers.wasm_routes import register_wasm_routes
 
-# Check if marie_wasm is available
+# Check if marie.wasm is available
 try:
-    from marie_wasm import Language, WasmCompilerService
+    from marie.wasm import Language, WasmCompilerService
 
     MARIE_WASM_AVAILABLE = True
 except ImportError:

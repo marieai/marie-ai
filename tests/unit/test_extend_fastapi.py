@@ -3,7 +3,7 @@ import os
 import requests
 
 import marie.helper
-from marie import Flow
+from marie.runtime import Flow
 
 
 def test_extend_fastapi():

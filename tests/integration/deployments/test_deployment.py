@@ -5,18 +5,19 @@ import time
 import pytest
 from pytest import FixtureRequest
 
+from marie.enums import PollingType
+from marie.helper import random_port
+from marie.orchestrate.deployments import Deployment
+from marie.parsers import set_deployment_parser, set_gateway_parser
+
 # from docarray import Document, DocumentArray
-from marie import (  # compatible with docarray < 0.30
+from marie.runtime import (  # compatible with docarray < 0.30
     Client,
     Document,
     DocumentArray,
     Executor,
     requests,
 )
-from marie.enums import PollingType
-from marie.helper import random_port
-from marie.orchestrate.deployments import Deployment
-from marie.parsers import set_deployment_parser, set_gateway_parser
 
 
 @pytest.mark.asyncio

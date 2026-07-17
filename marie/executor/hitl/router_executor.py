@@ -9,9 +9,9 @@ from typing import Any, Dict, Optional
 from docarray import DocList
 from docarray.documents import TextDoc
 
-from marie import requests
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
+from marie.runtime import requests
 
 
 class HitlRouterExecutor(MarieExecutor):

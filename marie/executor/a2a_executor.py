@@ -13,13 +13,11 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from docarray import DocList
 from docarray.documents import TextDoc
 
-from marie import Executor, requests
-from marie.agent.a2a import (
-    A2AExecutor,
-    AgentCardBuilder,
-    MarieA2AExecutor,
-)
+from marie.agent.a2a import AgentCardBuilder
+from marie.executor.a2a.agent_executor import A2AExecutor
+from marie.executor.a2a.sdk_executor import MarieA2AExecutor
 from marie.logging_core.logger import MarieLogger
+from marie.runtime import Executor, requests
 from marie.serve.executors import __dry_run_endpoint__
 
 if TYPE_CHECKING:

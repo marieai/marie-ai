@@ -20,8 +20,8 @@ from docarray import DocList
 from docarray.documents import TextDoc
 from pydantic.tools import parse_obj_as
 
-from marie import Client
 from marie.logging_core.predefined import default_logger as logger
+from marie.runtime import Client
 from marie.storage import StorageManager
 from marie.utils.asset_util import s3_asset_path
 from marie.utils.docs import frames_from_file

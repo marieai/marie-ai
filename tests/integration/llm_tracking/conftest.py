@@ -13,7 +13,7 @@ from typing import Generator
 
 import pytest
 
-from marie.instrumentation.config import configure_from_yaml, reset_settings
+from marie.instrumentation.config import configure, reset_settings
 from marie.instrumentation.tracker import LLMTracker, get_tracker
 
 pytestmark = pytest.mark.skip(
@@ -29,7 +29,7 @@ def instrumentation_config() -> Generator:
     """Configure instrumentation for tests that migrate to the new stack."""
     reset_settings()
 
-    settings = configure_from_yaml(
+    settings = configure(
         {
             "enabled": True,
             "exporter": "otel",

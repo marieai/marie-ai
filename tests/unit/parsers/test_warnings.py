@@ -1,6 +1,6 @@
 import pytest
 
-from marie import Executor, Flow
+from marie.runtime import Executor, Flow
 
 
 class MyExecutor(Executor):

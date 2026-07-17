@@ -3,10 +3,10 @@ import os
 import pytest
 import yaml
 
-from marie import Deployment
 from marie.constants import __default_executor__
 from marie.helper import expand_dict, expand_env_var
 from marie.jaml import JAML
+from marie.runtime import Deployment
 from marie.serve.executors import BaseExecutor
 from marie.serve.runtimes.gateway.gateway import BaseGateway
 from marie.serve.runtimes.gateway.http import HTTPGateway

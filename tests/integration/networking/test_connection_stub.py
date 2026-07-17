@@ -1,6 +1,6 @@
 import pytest
 
-from marie import Document, DocumentArray, Flow
+from marie.runtime import Document, DocumentArray, Flow
 from marie.serve.networking import _NetworkingHistograms
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel

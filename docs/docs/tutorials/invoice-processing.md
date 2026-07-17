@@ -100,7 +100,7 @@ Create `executors/ocr_executor.py`:
 
 ```python
 import time
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 from marie.executor.marie_executor import MarieExecutor
 from docarray import DocList
 from . import InvoiceInput, InvoiceOutput
@@ -193,7 +193,7 @@ Create `executors/extraction_executor.py`:
 ```python
 import re
 import time
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 from docarray import DocList
 from . import InvoiceOutput, LineItem
 
@@ -363,7 +363,7 @@ Create `client.py`:
 
 ```python
 import json
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList
 from executors import InvoiceInput, InvoiceOutput
 
@@ -509,7 +509,7 @@ For processing multiple invoices, create `batch_client.py`:
 ```python
 import json
 import asyncio
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList
 from executors import InvoiceInput, InvoiceOutput
 
@@ -566,7 +566,7 @@ if __name__ == '__main__':
 Create a validation executor to verify extracted data:
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 from docarray import DocList
 from executors import InvoiceOutput
 

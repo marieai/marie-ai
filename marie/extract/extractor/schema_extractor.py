@@ -23,9 +23,8 @@ from marie.prompt import PromptTemplate
 from marie.utils.utils import ensure_exists
 
 if TYPE_CHECKING:
-    from marie_kernel.context import RunContext
-
     from marie.extract.structures.unstructured_document import UnstructuredDocument
+    from marie.kernel.context import RunContext
 
 
 class TrainingMode(str, Enum):

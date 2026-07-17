@@ -1,4 +1,4 @@
-from marie import DocumentArray, Executor, Flow, requests
+from marie.runtime import DocumentArray, Executor, Flow, requests
 
 
 def test_gateway_metric_labels(monkeypatch_metric_exporter):

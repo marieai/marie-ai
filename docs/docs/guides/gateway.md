@@ -31,7 +31,7 @@ Marie-AI supports three communication protocols:
 ### Configure protocol in Python
 
 ```python
-from marie import Flow, Executor, requests
+from marie.runtime import Flow, Executor, requests
 from docarray import DocList, BaseDoc
 
 class MyExecutor(Executor):
@@ -66,7 +66,7 @@ executors:
 You can serve a Flow over multiple protocols simultaneously:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow(
     protocol=['grpc', 'http', 'websocket'],
@@ -153,7 +153,7 @@ For WebSocket, test by establishing a connection to the root endpoint. A success
 Enable TLS encryption between the Gateway and clients:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow(
     port=54321,
@@ -171,7 +171,7 @@ TLS encrypts traffic between clients and the Gateway. Internal communication bet
 For HTTP endpoints accessed from web browsers, enable CORS:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow(protocol='http', port=54321, cors=True)
 ```
@@ -191,7 +191,7 @@ with:
 Control request flow with the `prefetch` parameter:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow(prefetch=100)  # Limit to 100 in-flight requests per client
 ```
@@ -208,7 +208,7 @@ Setting `prefetch=0` disables rate limiting.
 Customize gRPC server behavior:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow(
     grpc_server_options={
@@ -233,7 +233,7 @@ Default gRPC options:
 Enable compression for internal communication between Executors:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow(compression='gzip')  # Options: 'gzip', 'deflate', or None
 ```

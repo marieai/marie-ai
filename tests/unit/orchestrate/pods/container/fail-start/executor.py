@@ -1,4 +1,4 @@
-from marie import Executor
+from marie.runtime import Executor
 
 
 class RaisingExecutor(Executor):

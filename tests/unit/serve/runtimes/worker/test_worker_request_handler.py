@@ -1,10 +1,10 @@
 import pytest
 from docarray import Document, DocumentArray
 
-from marie import Executor, requests
 from marie.clients.request import request_generator
 from marie.logging_core.logger import MarieLogger
 from marie.parsers import set_pod_parser
+from marie.runtime import Executor, requests
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 
 

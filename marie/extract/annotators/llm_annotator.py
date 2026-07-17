@@ -39,7 +39,7 @@ from marie.utils.utils import ensure_exists
 _tracer = get_tracer("marie.extract.annotators.llm_annotator")
 
 if TYPE_CHECKING:
-    from marie_kernel.context import RunContext
+    from marie.kernel.context import RunContext
 
 SYSTEM_PROMPT = ""
 

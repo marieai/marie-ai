@@ -4,7 +4,8 @@ import time
 
 import pytest
 
-from marie import Document, Executor, Flow, helper, requests
+from marie import helper
+from marie.runtime import Document, Executor, Flow, requests
 
 
 @pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])

@@ -1,7 +1,7 @@
 import pytest
 
-from marie import Flow
 from marie.extract.adaptive_dfa import AdaptiveDFA, State
+from marie.runtime import Flow
 
 
 def test_basic_dfa():

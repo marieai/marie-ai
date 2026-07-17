@@ -22,7 +22,7 @@ class AsyncFlow(AsyncPostMixin, AsyncProfileMixin, AsyncHealthCheckMixin, Flow):
     .. highlight:: python
     .. code-block:: python
 
-        from marie import AsyncFlow
+        from marie.runtime import AsyncFlow
         from marie.types_core.document.generators import from_ndarray
         import numpy as np
 

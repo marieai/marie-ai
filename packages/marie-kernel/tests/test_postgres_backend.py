@@ -9,12 +9,13 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
-from marie_kernel import TaskInstanceRef
+
+from marie.kernel import TaskInstanceRef
 
 # Skip all tests if psycopg is not installed
 pytest.importorskip("psycopg_pool")
 
-from marie_kernel.backends.postgres import PostgresStateBackend
+from marie.kernel.backends.postgres import PostgresStateBackend
 
 
 @pytest.fixture

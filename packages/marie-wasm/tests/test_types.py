@@ -1,7 +1,8 @@
-"""Tests for marie_wasm.types module."""
+"""Tests for marie.wasm.types module."""
 
 import pytest
-from marie_wasm.types import (
+
+from marie.wasm.types import (
     BUILTIN_PERMISSIONS,
     COMPILER_CONFIGS,
     CompilerConfig,

@@ -3,17 +3,17 @@ import asyncio
 import pytest
 
 from marie.engine.batch_processor import BatchProcessor, BatchResult
+from marie.engine.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitState,
+)
 from marie.engine.completion_contract import (
     CompletionCallParams,
     RequestContext,
     build_completion_call,
 )
 from marie.excepts import BatchExecutionError, CircuitOpenError
-from marie.serve.networking.balancer.circuit_breaker import (
-    CircuitBreaker,
-    CircuitBreakerConfig,
-    CircuitState,
-)
 
 
 class _Logger:

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from marie.agent.tools.plugin_tool import PluginToolSpec
 from marie.plugin_daemon import build_invocation_envelope, sign_envelope
+from marie.plugins.agent_tool import PluginToolSpec
 
 # The marie daemon ships a signed fixture; signing it in Python must reproduce the
 # exact value the daemon verifies (proves our canonicalization matches Go + Studio).

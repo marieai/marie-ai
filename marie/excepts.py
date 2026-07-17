@@ -1,10 +1,13 @@
 """This modules defines all kinds of exceptions raised in Marie."""
 
-from typing import Any, List, Optional, Set, Union
+from typing import List, Optional, Set, Union
 
 import grpc.aio
 
-from marie.serve.helper import extract_trailing_metadata
+from marie.engine.exceptions import BatchExecutionError as BatchExecutionError
+from marie.engine.exceptions import CircuitOpenError as CircuitOpenError
+from marie.engine.exceptions import MaxTokensExceededError as MaxTokensExceededError
+from marie.engine.exceptions import RepetitionError as RepetitionError
 
 
 class BaseMarieException(BaseException):
@@ -139,6 +142,8 @@ class InternalNetworkError(grpc.aio.AioRpcError, BaseMarieException):
         :return: details of this exception
         """
         if self._details:
+            from marie.serve.helper import extract_trailing_metadata
+
             trailing_metadata = extract_trailing_metadata(self.og_exception)
             if trailing_metadata:
                 return f"{self._details}\n{trailing_metadata}"
@@ -199,67 +204,6 @@ class ExecutorError(RuntimeError, BaseMarieException):
 
     def __repr__(self):
         return self.__str__()
-
-
-class MaxTokensExceededError(Exception):
-    """
-    Raised when the LLM stops because it hit the max_tokens limit
-    (finish_reason == "length").
-    """
-
-    def __init__(self, message: str = "LLM hit max_tokens"):
-        super().__init__(message)
-
-
-class RepetitionError(Exception):
-    """
-    Raised when the LLM output is stuck repeating the same sentence
-    multiple times in a row.
-    """
-
-    def __init__(self, message: str = "LLM output is repetitive"):
-        super().__init__(message)
-
-
-class CircuitOpenError(Exception):
-    """
-    Raised when the circuit breaker is open for a backend address,
-    indicating intentional load shedding rather than a backend failure.
-    """
-
-    def __init__(self, address: str, message: str = ""):
-        self.address = address
-        super().__init__(message or f"Circuit breaker open for {address}")
-
-
-class BatchExecutionError(Exception):
-    """
-    Raised when one or more tasks in a batch failed after exhausting
-    per-task retries or being rejected by the circuit breaker.
-
-    Carries the request_id and the list of failed BatchResult objects
-    so callers can inspect individual failures without guessing from
-    a message string.
-    """
-
-    def __init__(
-        self,
-        request_id: str,
-        failed_results: list,
-        total: int,
-        message: str = "",
-    ):
-        self.request_id = request_id
-        self.failed_results = failed_results
-        self.total = total
-        failed_count = len(failed_results)
-        super().__init__(
-            message
-            or (
-                f"Batch inference failed: {failed_count}/{total} tasks failed "
-                f"(request_id={request_id})"
-            )
-        )
 
 
 class ProcessingError(Exception):

@@ -2,7 +2,7 @@ import asyncio
 
 from docarray import Document, DocumentArray
 
-from marie import Client, Document, DocumentArray, Executor, Flow, requests
+from marie.runtime import Client, Document, DocumentArray, Executor, Flow, requests
 
 
 class MyExec(Executor):

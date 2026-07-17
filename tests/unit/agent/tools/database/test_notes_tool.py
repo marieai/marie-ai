@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from marie.agent.tools import ToolOutput
-from marie.agent.tools.database.notes_tool import NotesAction, NotesTool
+from marie.storage.database.agent_tools.notes_tool import NotesAction, NotesTool
 
 from .conftest import MockRecord
 

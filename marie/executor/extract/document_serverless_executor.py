@@ -3,7 +3,6 @@ from typing import Any, Optional, Union
 import torch
 from docarray import DocList
 
-from marie import requests
 from marie.api.docs import AssetKeyDoc
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
@@ -15,6 +14,7 @@ from marie.models.utils import (
     setup_torch_optimizations,
     torch_gc,
 )
+from marie.runtime import requests
 from marie.utils.docs import docs_from_asset, frames_from_docs
 from marie.utils.image_utils import ensure_max_page_size
 from marie.utils.network import get_ip_address

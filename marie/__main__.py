@@ -1,4 +1,4 @@
-if __name__ == '__main__':
-    from marie_cli import main
+if __name__ == "__main__":
+    from marie.cli import main
 
     main()

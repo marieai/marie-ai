@@ -19,11 +19,13 @@ if TYPE_CHECKING:
 from docarray import DocList
 from docarray.documents import TextDoc
 
-from marie.agent.backends import (
+from marie.agent.backends.base import (
     AgentBackend,
     AgentResult,
     AgentStatus,
     BackendConfig,
+)
+from marie.agent.backends.openai_backend import (
     OpenAIAgentBackend,
     OpenAIBackendConfig,
 )
@@ -35,9 +37,9 @@ from marie.agent.coordination import (
 )
 from marie.agent.message import ContentItem, Message
 from marie.agent.state.conversation import ConversationStore
-from marie.agent.tools import resolve_tools
 from marie.agent.tools.base import AgentTool
 from marie.engine.output_parser import parse_json_markdown
+from marie.executor.agent.tools.registry import resolve_executor_tools
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
 
@@ -169,7 +171,7 @@ class AgentExecutor(MarieExecutor):
 
         # Initialize tools
         if self._tool_specs:
-            self._tools = resolve_tools(self._tool_specs)
+            self._tools = resolve_executor_tools(self._tool_specs)
             logger.info(
                 f"Initialized {len(self._tools)} tools: {list(self._tools.keys())}"
             )
@@ -1077,7 +1079,7 @@ class AgentExecutor(MarieExecutor):
         Args:
             tool: Tool name, config, or instance
         """
-        resolved = resolve_tools([tool])
+        resolved = resolve_executor_tools([tool])
 
         # Wrap with tool-call guardrails if active
         if self._tool_call_chain:

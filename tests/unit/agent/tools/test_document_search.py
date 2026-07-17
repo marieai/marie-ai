@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from marie.agent.tools import ToolOutput
-from marie.agent.tools.document_search import (
+from marie.rag.agent_document_search import (
     DocumentSearchInput,
     DocumentSearchTool,
     MultiDocumentSearchTool,

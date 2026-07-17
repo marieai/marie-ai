@@ -9,9 +9,11 @@ from docarray import DocList
 from docarray.documents import TextDoc
 from jsonschema import ValidationError
 
-from marie.agent.backends import (
+from marie.agent.backends.base import (
     AgentResult,
     AgentStatus,
+)
+from marie.agent.backends.openai_backend import (
     OpenAIAgentBackend,
     OpenAIBackendConfig,
 )

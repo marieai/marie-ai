@@ -4,13 +4,13 @@ import time
 import pytest
 import requests
 
-from marie import Flow
 from marie.constants import __cache_path__
 from marie.enums import ProtocolType
 from marie.excepts import RuntimeFailToStart
 from marie.helper import random_port
 from marie.orchestrate.pods.container import ContainerPod
 from marie.parsers import set_gateway_parser
+from marie.runtime import Flow
 from marie.serve.runtimes import servers
 from tests.helper import _generate_pod_args, _validate_dummy_custom_gateway_response
 

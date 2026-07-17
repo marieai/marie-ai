@@ -4,7 +4,7 @@ import time
 import pytest
 from docarray import Document
 
-from marie import Client, Flow
+from marie.runtime import Client, Flow
 from marie.serve.networking.utils import send_health_check_sync
 
 

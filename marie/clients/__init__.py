@@ -36,7 +36,7 @@ def Client(
     traces_exporter_host: Optional[str] = None,
     traces_exporter_port: Optional[int] = None,
     tracing: Optional[bool] = False,
-    **kwargs
+    **kwargs,
 ) -> Union[
     'AsyncWebSocketClient',
     'WebSocketClient',
@@ -91,7 +91,7 @@ def Client(args: Optional['argparse.Namespace'] = None, **kwargs) -> Union[
 
     .. code-block:: python
 
-        from marie import Client
+        from marie.runtime import Client
         from docarray import Document
 
         # select protocol from 'grpc', 'http', or 'websocket'; default is 'grpc'

@@ -27,13 +27,13 @@ from typing import Any, Callable, Optional
 from docarray import BaseDoc, DocList
 from docarray.documents import TextDoc
 
-from marie import Executor, requests
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
+from marie.runtime import Executor, requests
 
-# Optional marie_wasm import (main process only — for permission resolution)
+# Optional marie.wasm import (main process only — for permission resolution)
 try:
-    from marie_wasm import BUILTIN_PERMISSIONS, Permissions
+    from marie.wasm import BUILTIN_PERMISSIONS, Permissions
 
     MARIE_WASM_AVAILABLE = True
 except ImportError:
@@ -135,7 +135,7 @@ def _execute_in_worker(
 
     # ── Reconstruct permissions in worker ─────────────────────────
     try:
-        from marie_wasm import HostImplementations, Permissions
+        from marie.wasm import HostImplementations, Permissions
 
         permissions = Permissions(
             allow_http=permissions_dict.get("allow_http", False),
@@ -154,11 +154,11 @@ def _execute_in_worker(
             http_client=_worker_http_client,
             execution_id=context.get("execution_id", ""),
         )
-        marie_wasm_ok = True
+        wasm_ok = True
     except ImportError:
         permissions = None
         host = None
-        marie_wasm_ok = False
+        wasm_ok = False
 
     # ── Create store with resource limits ─────────────────────────
     max_fuel = permissions_dict.get("max_fuel", 1_000_000_000)
@@ -170,7 +170,7 @@ def _execute_in_worker(
 
     # ── Bind host functions ───────────────────────────────────────
     linker = Linker(_worker_engine)
-    if host and marie_wasm_ok:
+    if host and wasm_ok:
         bindings = host.get_bindings()
         for interface_name, functions in bindings.items():
             for func_name, func in functions.items():
@@ -298,7 +298,7 @@ class WasmNodeExecutor(MarieExecutor):
     Marie executor that runs pre-compiled Wasm components.
 
     DEPRECATED (2026-06-29): legacy/test-only. WASM execution now runs through
-    the plugin daemon as a daemon-managed plugin via `marie_wasm.daemon_runner`
+    the plugin daemon as a daemon-managed plugin via `marie.wasm.daemon_runner`
     (see analysis/marie-plugin-dify-parity-plan/plans W1; proven end-to-end). This
     Jina-executor path bypasses the daemon and is retained only until the
     daemon_runner path reaches full parity, then removed. Known-broken on current
@@ -338,7 +338,7 @@ class WasmNodeExecutor(MarieExecutor):
         Args:
             builtin_nodes_dir: Path to pre-compiled built-in nodes. Defaults to
                 the node library shipped with the marie-wasm package
-                (`marie_wasm.BUILTIN_NODES_DIR`), falling back to `nodes/compiled`.
+                (`marie.wasm.BUILTIN_NODES_DIR`), falling back to `nodes/compiled`.
             max_cached_components: LRU cache size (both main + per-worker).
             default_timeout_ms: Default execution timeout in milliseconds.
             default_max_fuel: Default CPU fuel limit.
@@ -352,7 +352,7 @@ class WasmNodeExecutor(MarieExecutor):
         self.logger = MarieLogger(self.__class__.__name__).logger
         if builtin_nodes_dir is None:
             try:
-                from marie_wasm import BUILTIN_NODES_DIR
+                from marie.wasm import BUILTIN_NODES_DIR
 
                 builtin_nodes_dir = BUILTIN_NODES_DIR
             except ImportError:
@@ -390,12 +390,12 @@ class WasmNodeExecutor(MarieExecutor):
 
         if not MARIE_WASM_AVAILABLE:
             self.logger.warning(
-                "marie_wasm not installed — host functions unavailable. "
+                "marie.wasm not installed — host functions unavailable. "
                 "Install with: uv add marie-wasm"
             )
 
         self.logger.info(
-            "WasmNodeExecutor initialised — " "wasmtime: %s, marie_wasm: %s",
+            "WasmNodeExecutor initialised — " "wasmtime: %s, marie.wasm: %s",
             WASMTIME_AVAILABLE,
             MARIE_WASM_AVAILABLE,
         )
@@ -631,7 +631,7 @@ class WasmNodeExecutor(MarieExecutor):
         info = {
             "executor": "WasmNodeExecutor",
             "wasmtime_available": WASMTIME_AVAILABLE,
-            "marie_wasm_available": MARIE_WASM_AVAILABLE,
+            "marie.wasm_available": MARIE_WASM_AVAILABLE,
             "cached_wasm_bytes": len(self._bytes_cache),
             "pool_alive": pool is not None and not getattr(pool, "_broken", False),
             "pool_workers": pool._max_workers if pool else 0,

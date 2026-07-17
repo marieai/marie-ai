@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from scipy import sparse
 
-from marie import Document, DocumentArray, Executor, Flow, requests
+from marie.runtime import Document, DocumentArray, Executor, Flow, requests
 from tests import validate_callback
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))

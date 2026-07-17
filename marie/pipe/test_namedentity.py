@@ -1,7 +1,7 @@
 import unittest
 
-from marie import DocumentArray
 from marie.pipe.namedentity import NamedEntityPipelineComponent
+from marie.runtime import DocumentArray
 
 
 def test_predict():

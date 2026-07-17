@@ -4,12 +4,12 @@ import subprocess
 import time
 from typing import Dict, List
 
-import docker
 import pytest
 import requests as req
 
-from marie import Client, Document, Flow
+import docker
 from marie.helper import random_port
+from marie.runtime import Client, Document, Flow
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from tests.helper import (
     _validate_custom_gateway_process,

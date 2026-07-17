@@ -326,7 +326,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
     .. code-block:: python
 
-        from marie import Executor, requests, Flow
+        from marie.runtime import Executor, requests, Flow
 
 
         class MyExecutor(Executor):
@@ -1027,7 +1027,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         .. highlight:: python
         .. code-block:: python
 
-            from marie import Executor
+            from marie.runtime import Executor
             from docarray import Document, DocumentArray
 
             executor = Executor.from_hub(

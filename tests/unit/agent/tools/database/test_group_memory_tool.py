@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from marie.agent.memory.group_memory import (
+from marie.storage.database.agent_tools.group_memory import (
     GroupMemoryEntry,
     GroupMemoryStats,
     MemoryType,
 )
-from marie.agent.tools.database.group_memory_tool import (
+from marie.storage.database.agent_tools.group_memory_tool import (
     GroupMemoryAction,
     GroupMemoryTool,
 )
@@ -30,7 +30,7 @@ def mock_embeddings():
 def group_memory_tool(mock_embeddings):
     """Create GroupMemoryTool with mocked dependencies."""
     with patch(
-        "marie.agent.tools.database.group_memory_tool.GroupMemory"
+        "marie.storage.database.agent_tools.group_memory_tool.GroupMemory"
     ) as mock_memory_cls:
         mock_memory = MagicMock()
         mock_memory.store = AsyncMock(return_value=1)
@@ -196,7 +196,7 @@ class TestGroupMemoryToolSearch:
     async def test_search_without_embeddings(self):
         """Test search fails without embeddings provider."""
         with patch(
-            "marie.agent.tools.database.group_memory_tool.GroupMemory"
+            "marie.storage.database.agent_tools.group_memory_tool.GroupMemory"
         ):
             tool = GroupMemoryTool(
                 group_id="test-group",

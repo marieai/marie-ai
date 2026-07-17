@@ -1,4 +1,4 @@
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList
 from docarray.documents import TextDoc
 

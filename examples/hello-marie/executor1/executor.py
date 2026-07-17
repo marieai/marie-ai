@@ -1,8 +1,8 @@
 import numpy as np
 import torch
 
-from marie import DocumentArray, Executor, requests
 from marie.logging_core.predefined import default_logger
+from marie.runtime import DocumentArray, Executor, requests
 
 
 class MyExecutorAA(Executor):

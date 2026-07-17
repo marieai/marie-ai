@@ -3,10 +3,10 @@ import time
 
 import pytest
 
-from marie import Client, Deployment, Executor, requests
 from marie._docarray import Document, DocumentArray
 from marie.excepts import BadServer
 from marie.helper import random_port
+from marie.runtime import Client, Deployment, Executor, requests
 
 
 class MyExecutor(Executor):
@@ -60,7 +60,7 @@ class WaitStreamExecutor(Executor):
 @pytest.mark.parametrize("protocol", ["http", "grpc"])
 @pytest.mark.parametrize("include_gateway", [False, True])
 async def test_streaming_delay(protocol, include_gateway):
-    from marie import Deployment
+    from marie.runtime import Deployment
 
     port = random_port()
 
@@ -87,7 +87,7 @@ async def test_streaming_delay(protocol, include_gateway):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["grpc"])
 async def test_streaming_client_non_gen_endpoint(protocol):
-    from marie import Deployment
+    from marie.runtime import Deployment
 
     port = random_port()
 

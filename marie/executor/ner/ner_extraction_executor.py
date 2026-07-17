@@ -13,8 +13,6 @@ from transformers import (
 )
 from transformers.utils import check_min_version
 
-# Calling this from here prevents : "AttributeError: module 'detectron2' has no attribute 'config'"
-from marie import Document, DocumentArray, Executor, requests, safely_encoded
 from marie.boxes import PSMode
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -25,6 +23,9 @@ from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.ocr import CoordinateFormat, DefaultOcrEngine
 from marie.registry.model_registry import ModelRegistry
+
+# Calling this from here prevents : "AttributeError: module 'detectron2' has no attribute 'config'"
+from marie.runtime import Document, DocumentArray, Executor, requests, safely_encoded
 from marie.utils.docs import convert_frames, frames_from_docs
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import load_json_file, store_json_object

@@ -5,12 +5,12 @@ import numpy as np
 import pytest
 from docarray.document.generators import from_ndarray
 
-from marie import Executor, Flow
 from marie.enums import ProtocolType
 from marie.excepts import BadYAMLVersion
 from marie.jaml import JAML
 from marie.jaml.parsers import get_supported_versions
 from marie.parsers.flow import set_flow_parser
+from marie.runtime import Executor, Flow
 
 cur_dir = Path(__file__).parent
 

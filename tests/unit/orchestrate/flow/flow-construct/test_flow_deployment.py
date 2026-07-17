@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from marie import Deployment, DocumentArray, Flow
+from marie.runtime import Deployment, DocumentArray, Flow
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))
 _deployment_yaml_path = os.path.join(cur_dir, "../../../yaml/test-deployment.yml")

@@ -22,7 +22,7 @@ Executors follow a microservice architecture pattern, allowing you to scale, dep
 To create an Executor, define a Python class that inherits from `Executor` and decorate methods with `@requests`:
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 from docarray import DocList, BaseDoc
 
 class MyExecutor(Executor):
@@ -51,7 +51,7 @@ MyExecutor/
 If your Executor needs initialization logic, implement `__init__` with `**kwargs` and call `super().__init__(**kwargs)`:
 
 ```python
-from marie import Executor
+from marie.runtime import Executor
 
 class MyExecutor(Executor):
     def __init__(self, model_path: str, device: str = "cuda", **kwargs):
@@ -70,7 +70,7 @@ The `kwargs` parameter is required because Marie-AI injects runtime configuratio
 Override the `close` method to clean up resources when the Executor shuts down:
 
 ```python
-from marie import Executor
+from marie.runtime import Executor
 
 class MyExecutor(Executor):
     def close(self):
@@ -89,7 +89,7 @@ Methods decorated with `@requests` are exposed as network endpoints.
 ### Basic endpoint binding
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 
 class MyExecutor(Executor):
     @requests(on='/process')
@@ -107,7 +107,7 @@ class MyExecutor(Executor):
 A method decorated with `@requests` without `on=` becomes the default handler for unmatched endpoints:
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 
 class MyExecutor(Executor):
     @requests
@@ -121,7 +121,7 @@ class MyExecutor(Executor):
 You can bind a single method to multiple endpoints:
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 
 class MyExecutor(Executor):
     @requests(on=['/extract', '/process'])
@@ -135,7 +135,7 @@ class MyExecutor(Executor):
 Both synchronous and asynchronous methods are supported:
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 import asyncio
 
 class MyExecutor(Executor):
@@ -150,7 +150,7 @@ class MyExecutor(Executor):
 Marie-AI uses DocArray for document handling. You can specify input and output types using type annotations:
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 from marie.api.docs import AssetKeyDoc
 from docarray import DocList, BaseDoc
 from docarray.typing import AnyTensor
@@ -190,7 +190,7 @@ Marie-AI provides specialized document types for document processing:
 Example using `AssetKeyDoc`:
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 from marie.api.docs import AssetKeyDoc
 from docarray import DocList
 
@@ -214,7 +214,7 @@ class DocumentProcessor(Executor):
 Executor methods can receive additional parameters beyond documents:
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 from pydantic import BaseModel, Field
 
 class ExtractionParams(BaseModel):
@@ -252,7 +252,7 @@ Marie-AI provides specialized base classes for document processing tasks.
 
 ```python
 from marie.executor.marie_executor import MarieExecutor
-from marie import requests
+from marie.runtime import requests
 from docarray import DocList
 from docarray.documents import TextDoc
 
@@ -279,7 +279,7 @@ For document extraction and annotation tasks:
 ```python
 from marie.executor.extract.document_annotator_executor import DocumentAnnotatorExecutor
 from marie.api.docs import AssetKeyDoc
-from marie import requests
+from marie.runtime import requests
 from docarray import DocList
 
 class MyAnnotator(DocumentAnnotatorExecutor):
@@ -368,7 +368,7 @@ metas:
 Load an Executor from YAML:
 
 ```python
-from marie import Deployment
+from marie.runtime import Deployment
 
 # Using YAML config
 dep = Deployment(uses='config.yml')
@@ -425,7 +425,7 @@ class MyExecutor(Executor):
 Exceptions in `@requests` methods propagate to the client:
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 
 class MyExecutor(Executor):
     @requests(on='/process')
@@ -443,7 +443,7 @@ Marie-AI executors support health check endpoints:
 
 ```python
 from marie.executor.marie_executor import MarieExecutor
-from marie import requests
+from marie.runtime import requests
 from docarray import DocList
 from docarray.documents import TextDoc
 

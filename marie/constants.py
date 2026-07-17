@@ -62,9 +62,7 @@ __args_executor_func__ = {
     "docs_matrix",
 }
 __args_executor_init__ = {"metas", "requests", "runtime_args"}
-__resources_path__ = _os.path.join(
-    _os.path.dirname(_sys.modules["marie"].__file__), "resources"
-)
+__resources_path__ = _os.path.join(_os.path.dirname(__file__), "resources")
 __cache_path__ = f'{_os.path.expanduser("~")}/.cache/{__package__}'
 if not _Path(__cache_path__).exists():
     _Path(__cache_path__).mkdir(parents=True, exist_ok=True)

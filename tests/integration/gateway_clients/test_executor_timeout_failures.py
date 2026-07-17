@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from marie import Executor, Flow, requests
+from marie.runtime import Executor, Flow, requests
 
 
 class SlowExecutor(Executor):

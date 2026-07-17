@@ -8,7 +8,7 @@ def mock_marie_client():
     """Mock Marie client for testing."""
     from unittest.mock import AsyncMock
 
-    from marie_mcp.clients.marie_client import MarieClient
+    from marie.mcp.server.clients.marie.client import MarieClient
 
     client = AsyncMock(spec=MarieClient)
     client.api_key = "test-api-key"

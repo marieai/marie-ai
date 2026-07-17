@@ -7,7 +7,8 @@ These tests use moto to mock S3 operations.
 from unittest.mock import MagicMock, patch
 
 import pytest
-from marie_kernel import TaskInstanceRef
+
+from marie.kernel import TaskInstanceRef
 
 # Skip all tests if boto3 is not installed
 boto3 = pytest.importorskip("boto3")
@@ -21,7 +22,7 @@ except ImportError:
     HAS_MOTO = False
     mock_aws = None
 
-from marie_kernel.backends.s3 import S3StateBackend
+from marie.kernel.backends.s3 import S3StateBackend
 
 
 @pytest.fixture

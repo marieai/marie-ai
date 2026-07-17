@@ -28,7 +28,7 @@ Each Flow also launches a Gateway service that exposes all Executors through a u
 The simplest Flow is an empty one that contains only a Gateway:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow()
 ```
@@ -46,7 +46,7 @@ For production, define Flows in YAML files. This separates configuration from co
 ## Minimum working example
 
 ```python
-from marie import Flow, Executor, requests
+from marie.runtime import Flow, Executor, requests
 from docarray import DocList, BaseDoc
 
 class ProcessDocument(Executor):
@@ -67,7 +67,7 @@ with f:
 **Server:**
 
 ```python
-from marie import Flow, Executor, requests
+from marie.runtime import Flow, Executor, requests
 from docarray import DocList, BaseDoc
 
 class ProcessDocument(Executor):
@@ -84,7 +84,7 @@ with f:
 **Client:**
 
 ```python
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList, BaseDoc
 
 c = Client(port=12345)
@@ -110,7 +110,7 @@ executors:
 `executor.py`:
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 from docarray import DocList
 from docarray.documents import TextDoc
 
@@ -125,7 +125,7 @@ class ProcessDocument(Executor):
 Load and run:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 from docarray import DocList
 from docarray.documents import TextDoc
 
@@ -144,7 +144,7 @@ The `with f:` statement starts the Flow. Exiting the block stops the Flow and al
 ### Using context manager
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow()
 
@@ -163,7 +163,7 @@ marie flow --uses flow.yml
 ### Manual start/stop
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow()
 f.start()
@@ -174,7 +174,7 @@ f.close()
 ### Serve forever
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow()
 
@@ -185,7 +185,7 @@ with f:
 ### Serve until an event
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 import threading
 
 def start_flow(stop_event):
@@ -206,7 +206,7 @@ e.set()
 Add Executors to a Flow using the `add()` method:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow().add(name='executor1').add(name='executor2')
 ```
@@ -225,7 +225,7 @@ executors:
 The `uses` parameter specifies the Executor type:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 # Use a Python class
 f = Flow().add(uses=MyExecutor)
@@ -242,7 +242,7 @@ f = Flow().add(uses='docker://marieai/my-executor')
 Override Executor configuration when adding to a Flow:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow().add(
     uses='MyExecutor',
@@ -275,7 +275,7 @@ Marie-AI Flows are optimized for document processing workflows. A typical pipeli
 Example pipeline:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = (
     Flow(protocol='grpc', port=54321)
@@ -310,7 +310,7 @@ executors:
 Flows support complex, non-sequential topologies using the `needs` parameter:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = (
     Flow()
@@ -346,7 +346,7 @@ For comprehensive Gateway documentation including MarieGateway features, REST AP
 ### Multi-protocol support
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow(
     protocol=['grpc', 'http', 'websocket'],
@@ -368,7 +368,7 @@ with:
 For HTTP endpoints that need cross-origin access:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow(protocol='http', port=54321, cors=True)
 ```
@@ -380,7 +380,7 @@ f = Flow(protocol='http', port=54321, cors=True)
 Scale an Executor by adding replicas:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow().add(name='processor', uses=MyExecutor, replicas=3)
 ```
@@ -400,7 +400,7 @@ executors:
 Partition data across multiple instances:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow().add(name='indexer', uses=MyIndexer, shards=2)
 ```
@@ -457,7 +457,7 @@ executors:
 ### Docker Compose
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow().add(uses='MyExecutor')
 f.to_docker_compose_yaml('docker-compose.yml')
@@ -472,7 +472,7 @@ marie export docker-compose flow.yml docker-compose.yml
 ### Kubernetes
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow().add(uses='MyExecutor')
 f.to_kubernetes_yaml('k8s-config/')
@@ -495,7 +495,7 @@ kubectl apply -R -f k8s-config/
 ### Check if flow is ready
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow()
 

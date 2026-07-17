@@ -12,9 +12,8 @@ from marie.extract.registry import register_context_provider
 from marie.storage import StorageManager
 
 if TYPE_CHECKING:
-    from marie_kernel.context import RunContext
-
     from marie.extract.structures.unstructured_document import UnstructuredDocument
+    from marie.kernel.context import RunContext
 
 _UNIT_ANNOTATOR = "longextract-unit-extract"
 _POLICY_ANNOTATOR = "longextract-aggregation-policy"

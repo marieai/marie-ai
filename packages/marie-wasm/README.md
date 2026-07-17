@@ -2,6 +2,8 @@
 
 Wasmtime-based runtime for executing Marie workflow nodes in WebAssembly.
 
+The distribution name is `marie-wasm`; its PEP 420 import is `marie.wasm`.
+
 ## Overview
 
 `marie-wasm` provides a secure, sandboxed execution environment for Marie workflow nodes using the WebAssembly Component Model. It supports compiling user code from multiple languages (Rust, Python, JavaScript) into Wasm components that can be executed with fine-grained permission controls.
@@ -31,7 +33,7 @@ uv add 'marie-wasm[dev]'
 ### Compiling User Code
 
 ```python
-from marie_wasm import WasmCompilerService, Language
+from marie.wasm import WasmCompilerService, Language
 
 compiler = WasmCompilerService(storage_client=my_storage)
 
@@ -125,7 +127,7 @@ world node {
 ### Permissions
 
 ```python
-from marie_wasm import Permissions
+from marie.wasm import Permissions
 
 perms = Permissions(
     allow_http=True,
@@ -150,7 +152,7 @@ uv sync --extra dev
 uv run pytest
 
 # Type checking
-uv run mypy src/marie_wasm
+uv run mypy src/marie/wasm
 
 # Formatting
 black src tests

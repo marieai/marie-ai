@@ -107,7 +107,7 @@ When reporting issues, please include:
 
 To add a new MCP tool:
 
-1. Add the tool function to the appropriate file in `src/marie_mcp/tools/`
+1. Add the tool function to the appropriate file in `src/marie/mcp/server/tools/`
 2. Use the `@mcp.tool()` decorator
 3. Add type hints and docstrings
 4. Register the tool in `server.py`

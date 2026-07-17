@@ -3,12 +3,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
-from marie import Executor, Flow, requests
 from marie.clients.base.grpc import client_grpc_options
 from marie.clients.base.helper import HTTPClientlet, WebsocketClientlet
 from marie.clients.request.helper import _new_data_request
 from marie.excepts import BadServer
 from marie.logging_core.logger import MarieLogger
+from marie.runtime import Executor, Flow, requests
 from marie.serve.helper import get_default_grpc_options
 from marie.types_core.request.data import DataRequest
 

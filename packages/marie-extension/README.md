@@ -2,6 +2,9 @@
 
 `marie-extension` defines the Marie extension package contract. It owns YAML schema models, safe package loading, validation, and authoring-time utilities.
 
+The distribution name is `marie-extension`; its PEP 420 import is
+`marie.extension`.
+
 V1 is metadata-only:
 
 - packages are directories or standard ZIP archives containing exactly one `marie-extension.yaml`

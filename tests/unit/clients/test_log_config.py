@@ -1,6 +1,6 @@
 import os
 
-from marie import Deployment, Flow
+from marie.runtime import Deployment, Flow
 
 cur_dir = os.path.abspath(os.path.dirname(__file__))
 

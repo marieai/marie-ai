@@ -1,7 +1,7 @@
 import os
 import socket
 
-from marie import DocumentArray, Executor, requests
+from marie.runtime import DocumentArray, Executor, requests
 
 
 class TestExecutor(Executor):

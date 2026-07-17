@@ -1,7 +1,7 @@
 import pytest
 from docarray import Document, DocumentArray
 
-from marie import Executor, Flow, requests
+from marie.runtime import Executor, Flow, requests
 
 
 class SimplExecutor(Executor):

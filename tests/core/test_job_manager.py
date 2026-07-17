@@ -11,7 +11,6 @@ import pytest
 from docarray import DocList
 from docarray.documents import TextDoc
 
-from marie import Deployment, Document, DocumentArray, Executor, requests
 from marie.enums import PollingType
 from marie.excepts import ExecutorError
 from marie.job.common import JobInfo, JobStatus
@@ -19,6 +18,7 @@ from marie.job.job_distributor import JobDistributor, SendCb
 from marie.job.job_manager import JobManager
 from marie.parsers import set_deployment_parser
 from marie.proto import jina_pb2
+from marie.runtime import Deployment, Document, DocumentArray, Executor, requests
 from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer

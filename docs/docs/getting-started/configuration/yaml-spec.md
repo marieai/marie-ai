@@ -75,7 +75,7 @@ executors:
 Load with context in Python:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 context = {
     'port': 54322,
@@ -546,7 +546,7 @@ python -c "import yaml; yaml.safe_load(open('config/marie.yml'))"
 ### Test variable substitution
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 # Load with dry_run to check configuration
 f = Flow.load_config('config/marie.yml')

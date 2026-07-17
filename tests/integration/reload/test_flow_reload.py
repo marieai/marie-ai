@@ -6,8 +6,8 @@ import time
 
 import pytest
 
-from marie import Client, DocumentArray, Executor, Flow, requests
 from marie.helper import random_port
+from marie.runtime import Client, DocumentArray, Executor, Flow, requests
 
 
 @contextlib.contextmanager

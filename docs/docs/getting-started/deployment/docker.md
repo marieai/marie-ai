@@ -459,7 +459,7 @@ docker compose -f ./Dockerfiles/docker-compose.clickhouse.yml down
 
 # Stop and remove volumes (full reset)
 docker compose -f ./Dockerfiles/docker-compose.clickhouse.yml down --volumes
-docker volume rm marie_clickhouse_data marie_clickhouse_logs --force
+docker volume rm marie.clickhouse_data marie.clickhouse_logs --force
 ```
 
 ---

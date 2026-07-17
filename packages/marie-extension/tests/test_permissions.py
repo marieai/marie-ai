@@ -1,4 +1,4 @@
-from marie_extension import NetworkPermissions, SecretPermissions
+from marie.extension import NetworkPermissions, SecretPermissions
 
 
 def test_network_denies_by_default() -> None:

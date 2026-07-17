@@ -1,6 +1,6 @@
 import pytest
 
-from marie import Client, Document, DocumentArray, Flow
+from marie.runtime import Client, Document, DocumentArray, Flow
 
 
 @pytest.mark.parametrize('shards', [1, 2])

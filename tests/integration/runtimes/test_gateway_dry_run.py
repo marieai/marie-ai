@@ -2,8 +2,8 @@ import multiprocessing
 
 import pytest
 
-from marie import Client
 from marie.parsers import set_gateway_parser
+from marie.runtime import Client
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.servers import BaseServer

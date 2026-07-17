@@ -1,6 +1,6 @@
 from typing import Dict
 
-from marie import Client, Document, DocumentArray, Executor, Flow, requests
+from marie.runtime import Client, Document, DocumentArray, Executor, Flow, requests
 
 ORIGINAL_PARAMS = {'param1': 50, 'param2': 60, 'exec_name': {'param1': 'changed'}}
 OVERRIDEN_EXECUTOR1_PARAMS = {

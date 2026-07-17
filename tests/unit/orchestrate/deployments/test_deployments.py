@@ -4,13 +4,13 @@ import os
 import pytest
 import yaml
 
-from marie import Document, DocumentArray, Executor, requests
 from marie.clients.request import request_generator
 from marie.constants import __default_executor__, __default_host__
 from marie.enums import PollingType
 from marie.excepts import RuntimeFailToStart
 from marie.orchestrate.deployments import Deployment
 from marie.parsers import set_deployment_parser, set_gateway_parser
+from marie.runtime import Document, DocumentArray, Executor, requests
 from marie.serve.networking.utils import send_request_sync
 from tests.unit.test_helper import MyDummyExecutor
 

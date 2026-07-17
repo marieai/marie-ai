@@ -1,7 +1,7 @@
 CLI - Command Line Interface
 ===================================
-.. automodule:: marie_cli
-.. currentmodule:: marie_cli
+.. automodule:: marie.cli
+.. currentmodule:: marie.cli
 
 .. autosummary::
     :toctree: generated

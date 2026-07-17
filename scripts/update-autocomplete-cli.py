@@ -1,4 +1,4 @@
-ac_file = '../marie_cli/autocomplete.py'
+ac_file = '../marie.cli/autocomplete.py'
 
 
 def _update_autocomplete():

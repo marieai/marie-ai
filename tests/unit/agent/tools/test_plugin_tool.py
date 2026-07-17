@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from marie.agent.tools.plugin_tool import (
+from marie.agent.tools.registry import resolve_tools
+from marie.plugins.agent_tool import (
     PluginTool,
     PluginToolSpec,
     is_plugin_tool_spec,
 )
-from marie.agent.tools.registry import resolve_tools
 
 # A Studio `extension_tool` dropped-tool record, as persisted on an AGENT node
 # (camelCase keys, exactly what reactFlowToQueryPlan serializes).

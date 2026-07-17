@@ -4,7 +4,7 @@ import struct
 
 import pytest
 
-from marie import Executor, Flow
+from marie.runtime import Executor, Flow
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))
 

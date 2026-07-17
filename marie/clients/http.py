@@ -24,7 +24,7 @@ class HTTPClient(
 
     .. code-block:: python
 
-        from marie import Client
+        from marie.runtime import Client
         from docarray import Document
 
         # select host address to connect to
@@ -63,7 +63,7 @@ class AsyncHTTPClient(
 
     .. code-block:: python
 
-        from marie import Client
+        from marie.runtime import Client
         from docarray import Document
 
 

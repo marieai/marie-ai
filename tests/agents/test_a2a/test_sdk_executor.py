@@ -10,15 +10,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from marie.agent.a2a import (
-    A2AExecutor,
     AgentCapabilities,
     AgentCard,
     AgentCardBuilder,
-    MarieA2AExecutor,
     Message,
     Role,
     TextPart,
 )
+from marie.executor.a2a.agent_executor import A2AExecutor
+from marie.executor.a2a.sdk_executor import MarieA2AExecutor
 
 
 class MockAgent:

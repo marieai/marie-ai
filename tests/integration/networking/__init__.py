@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 
 
 @dataclass

@@ -5,7 +5,6 @@ import numpy as np
 import torch
 from docarray import DocList
 
-from marie import Executor, requests, safely_encoded
 from marie.components.template_matching import VQNNFTemplateMatcher
 from marie.components.template_matching.document_matched import (
     convert_template_selectors,
@@ -19,6 +18,7 @@ from marie.components.template_matching.model import (
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import setup_torch_optimizations
+from marie.runtime import Executor, requests, safely_encoded
 from marie.utils.docs import docs_from_asset, docs_from_file, frames_from_docs
 from marie.utils.network import get_ip_address
 

@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marie-agent"
+version = "0.1.0"
+description = "Reusable agent runtime for the Marie PEP 420 namespace"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Marie AI", email = "support@marieai.co"},
+]
+keywords = ["marie", "agents", "llm", "tools", "orchestration"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "marie-instrumentation",
+    "marie-mem0",
+    "openinference-semantic-conventions>=0.1.30",
+    "opentelemetry-api>=1.20.0",
+    "pydantic>=2.11.0",
+    "pyyaml>=5.3.1",
+    "typing-extensions>=4.12.2",
+]
+
+[project.optional-dependencies]
+openai = [
+    "httpx>=0.25.0",
+    "openai>=1.0.0",
+]
+a2a = [
+    "a2a-sdk>=0.3.9",
+    "httpx>=0.25.0",
+]
+autogen = ["pyautogen>=0.2,<0.3"]
+haystack = ["haystack-ai>=2.0.0"]
+dev = [
+    "a2a-sdk>=0.3.9",
+    "httpx>=0.25.0",
+    "openai>=1.0.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.11.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/marieai/marie-ai"
+Documentation = "https://docs.marieai.co"
+Repository = "https://github.com/marieai/marie-ai"
+Issues = "https://github.com/marieai/marie-ai/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/marie"]
+
+[tool.uv.sources]
+marie-instrumentation = {path = "../marie-instrumentation", editable = true}
+marie-mem0 = {path = "../marie-mem0", editable = true}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E402", "E501"]

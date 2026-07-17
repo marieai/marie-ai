@@ -4,7 +4,7 @@ from zipfile import ZipFile, ZipInfo
 
 import pytest
 
-from marie_extension import PackageLoadError, load_package
+from marie.extension import PackageLoadError, load_package
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

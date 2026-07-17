@@ -21,7 +21,7 @@ def _get_compiler():
     global _wasm_compiler
     if _wasm_compiler is None:
         try:
-            from marie_wasm import WasmCompilerService
+            from marie.wasm import WasmCompilerService
 
             _wasm_compiler = WasmCompilerService()
         except ImportError:
@@ -67,7 +67,7 @@ def register_wasm_routes(app: FastAPI) -> None:
             Compiled module path or error
         """
         try:
-            from marie_wasm import Language
+            from marie.wasm import Language
 
             compiler = _get_compiler()
             if compiler is None:
@@ -125,7 +125,7 @@ def register_wasm_routes(app: FastAPI) -> None:
     async def list_wasm_languages():
         """List supported programming languages for Wasm compilation."""
         try:
-            from marie_wasm import Language
+            from marie.wasm import Language
 
             return {
                 "languages": [lang.value for lang in Language],

@@ -84,7 +84,7 @@ def get_base_executor_version():
     import requests
 
     try:
-        from marie import __version__
+        from marie._version import __version__
 
         url = 'https://registry.hub.docker.com/v2/repositories/marieai/marie/tags'
         result: Dict = requests.get(url, params={'name': __version__}).json()

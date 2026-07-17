@@ -14,7 +14,7 @@ marie-ai/
 │
 ├── packages/                       # Lightweight packages
 │   └── marie-mcp/                  # MCP server (~5MB)
-│       ├── src/marie_mcp/
+│       ├── src/marie/mcp/server/
 │       ├── tests/
 │       ├── examples/
 │       └── pyproject.toml
@@ -100,7 +100,7 @@ pytest tests/unit/scheduler/test_job_scheduler.py
 
 ```bash
 # Make changes in packages/marie-mcp/
-vim packages/marie-mcp/src/marie_mcp/tools/document_processing.py
+vim packages/marie-mcp/src/marie/mcp/server/tools/document_processing.py
 
 # Run tests
 cd packages/marie-mcp
@@ -119,7 +119,7 @@ When making API changes that affect both packages:
 vim marie/serve/runtimes/servers/marie_gateway.py
 
 # 2. Update MCP client to match
-vim packages/marie-mcp/src/marie_mcp/clients/marie_client.py
+vim packages/marie-mcp/src/marie/mcp/server/clients/marie.client.py
 
 # 3. Run integration tests
 pytest tests/integration/

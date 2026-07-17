@@ -54,7 +54,7 @@ try:
     import grpc
     import pika
 
-    from marie import Client, Document, DocumentArray
+    from marie.runtime import Client, Document, DocumentArray
     from marie.storage import S3StorageHandler, StorageManager
     from marie.utils.asset_util import s3_asset_path
 except ImportError as exc:

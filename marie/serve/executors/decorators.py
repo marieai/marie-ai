@@ -114,7 +114,7 @@ def write(
 
     .. code-block:: python
 
-        from marie import Deployment, Executor, requests
+        from marie.runtime import Deployment, Executor, requests
         from marie.serve.executors.decorators import write
         from docarray import DocList
         from docarray.documents import TextDoc
@@ -245,7 +245,7 @@ def requests(
 
     .. code-block:: python
 
-        from marie import Executor, requests, Flow
+        from marie.runtime import Executor, requests, Flow
         from docarray import Document
 
 
@@ -528,7 +528,7 @@ def monitor(
 
         .. code-block:: python
 
-            from marie import Executor, monitor
+            from marie.runtime import Executor, monitor
 
 
             class MyExecutor(Executor):
@@ -546,7 +546,7 @@ def monitor(
 
         .. code-block:: python
 
-            from marie import Executor, requests
+            from marie.runtime import Executor, requests
 
 
             class MyExecutor(Executor):
@@ -561,7 +561,7 @@ def monitor(
 
         .. code-block:: python
 
-            from marie import Flow
+            from marie.runtime import Flow
 
             f = Flow(monitoring=True, port_monitoring=9090).add(
                 uses=MyExecutor, port_monitoring=9091

@@ -14,8 +14,8 @@ import pytest
 # Skip all tests if Docker is not available
 docker = pytest.importorskip("docker")
 
-from marie_wasm.compiler import CompilationError, WasmCompilerService
-from marie_wasm.types import Language
+from marie.wasm.compiler import CompilationError, WasmCompilerService
+from marie.wasm.types import Language
 
 
 def is_docker_available() -> bool:

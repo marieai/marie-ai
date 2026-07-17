@@ -197,9 +197,12 @@ Metadata helps other users identify, search and reuse your Executor on Jina Clou
                 dest = src
                 if dest.endswith('.Dockerfile'):
                     dest = 'Dockerfile'
-                with open(
-                    os.path.join(__resources_path__, 'executor-template', src)
-                ) as fp, open(os.path.join(exec_path, dest), 'w') as fpw:
+                with (
+                    open(
+                        os.path.join(__resources_path__, 'executor-template', src)
+                    ) as fp,
+                    open(os.path.join(exec_path, dest), 'w') as fpw,
+                ):
                     f = (
                         fp.read()
                         .replace('{{exec_name}}', exec_name)
@@ -1072,7 +1075,7 @@ metas:
         """
 
         try:
-            from marie import __version__ as jina_version
+            from marie.runtime import __version__ as jina_version
         except ImportError:
             jina_version = __unset_msg__
 
@@ -1178,8 +1181,8 @@ metas:
     def _load_docker_client(self):
         # with ImportExtensions(required=True):
         import docker.errors
-        from docker import APIClient
 
+        from docker import APIClient
         from hubble import __windows__
 
         try:

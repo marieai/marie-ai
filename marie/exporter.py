@@ -4,8 +4,8 @@ from marie.jaml import JAML
 from marie.logging_core.predefined import default_logger
 from marie.orchestrate.deployments import Deployment
 from marie.orchestrate.flow.base import Flow
+from marie.parsers.export_api import api_to_dict
 from marie.schemas import get_full_schema
-from marie_cli.export import api_to_dict
 
 
 def export_kubernetes(args):
@@ -62,7 +62,7 @@ def export_schema(args):
 
     :param args: args from CLI
     """
-    from marie import __version__
+    from marie._version import __version__
 
     if args.yaml_path:
         dump_api = api_to_dict()

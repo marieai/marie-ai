@@ -4,6 +4,57 @@ This directory contains separately installable packages that are part of the Mar
 
 ## Available Packages
 
+### 📦 marie-agent
+**Reusable agent runtime**
+
+Provider-independent agents, messages, tools, skills, guardrails, coordination,
+and optional backend integrations. Marie server adapters depend on this package;
+the package does not depend on the Marie server.
+
+- **Purpose**: Share the agent runtime across Marie applications
+- **Install**: `uv add marie-agent`
+- **Import**: `marie.agent`
+- **Docs**: [packages/marie-agent/README.md](./marie-agent/README.md)
+
+### 📦 marie-instrumentation
+**Shared OpenTelemetry and OpenInference instrumentation**
+
+The reusable observability layer used by Marie runtimes and separately
+installable components. It includes the active tracker-to-OpenTelemetry adapter
+without depending on the `marie-ai` server package.
+
+- **Purpose**: Shared LLM tracing, OpenInference attributes, and OTel export
+- **Install**: `uv add marie-instrumentation`
+- **Import**: `marie.instrumentation`
+- **Docs**: [packages/marie-instrumentation/README.md](./marie-instrumentation/README.md)
+
+### 📦 marie-engine
+**Reusable model execution engine**
+
+Provider selection, completion contracts, OpenAI-compatible execution, LLM
+queue primitives, and the optional `marie-agent` bridge. Server persistence and
+Gateway lifecycle remain in Marie AI adapters.
+
+- **Purpose**: Share model execution across Marie AI and agent applications
+- **Install**: `uv add 'marie-engine[openai,agent]'`
+- **Import**: `marie.engine`
+- **Docs**: [packages/marie-engine/README.md](./marie-engine/README.md)
+
+### 📦 marie-cli
+**Marie AI command-line frontend**
+
+The separately installable CLI contributes `marie.cli` and the `marie`
+console script. It depends on `marie-ai`; the server package does not depend on
+the CLI at runtime. The server source retains a thin `marie/__main__.py`
+launcher so existing file-based run configurations and `python -m marie`
+continue to work when `marie-cli` is installed.
+
+- **Purpose**: Keep command parsing and console UX independently versioned
+- **Install**: `uv add marie-cli`
+- **Import**: `marie.cli`
+- **Commands**: `marie gateway --help` or `python -m marie gateway --help`
+- **Docs**: [packages/marie-cli/README.md](./marie-cli/README.md)
+
 ### 📦 marie-mcp
 **Lightweight MCP server for AI assistant integration**
 
@@ -12,6 +63,7 @@ A Model Context Protocol (MCP) server that enables AI assistants like Claude to 
 - **Size**: ~5MB (vs 2-5GB for main marie-ai package)
 - **Purpose**: Client-side integration for AI assistants
 - **Install**: `uv add marie-mcp`
+- **Import**: `marie.mcp.server`
 - **Docs**: [packages/marie-mcp/README.md](./marie-mcp/README.md)
 
 **Use cases**:
@@ -27,6 +79,7 @@ A state passing system that enables tasks within a DAG run to share state via si
 
 - **Purpose**: Cross-task state management for workflow orchestration
 - **Install**: `uv add marie-kernel` or `uv add 'marie-kernel[postgres]'`
+- **Import**: `marie.kernel`
 - **Docs**: [packages/marie-kernel/README.md](./marie-kernel/README.md)
 
 **Features**:
@@ -43,6 +96,7 @@ A metadata-first package contract for Marie extensions. It validates `marie-exte
 
 - **Purpose**: Extension authoring schema, safe package loading, and validation
 - **Install**: `uv add marie-extension`
+- **Import**: `marie.extension`
 - **Docs**: [packages/marie-extension/README.md](./marie-extension/README.md)
 
 **Features**:
@@ -50,6 +104,28 @@ A metadata-first package contract for Marie extensions. It validates `marie-exte
 - Standard ZIP discovery by `marie-extension.yaml`
 - Safe path validation for package files
 - Deny-by-default permission models
+
+### 📦 marie-mem0
+**Mem0-backed agent memory integration**
+
+The reusable memory adapter used by Marie agents without requiring the
+`marie-ai` server distribution.
+
+- **Purpose**: Persistent conversational and agent memory through Mem0
+- **Install**: `uv add marie-mem0`
+- **Import**: `marie.mem0`
+- **Docs**: [packages/marie-mem0/README.md](./marie-mem0/README.md)
+
+### 📦 marie-wasm
+**Wasmtime workflow-node runtime**
+
+A separately installable runtime for executing Marie workflow nodes compiled
+to WebAssembly.
+
+- **Purpose**: Isolated WebAssembly node execution and daemon integration
+- **Install**: `uv add marie-wasm`
+- **Import**: `marie.wasm`
+- **Docs**: [packages/marie-wasm/README.md](./marie-wasm/README.md)
 
 ### 📦 marie-plugin-daemon
 **Extension runtime daemon for local plugin execution**
@@ -87,40 +163,67 @@ Four similarly named pieces make up the plugin stack. They sit on opposite sides
 
 | Layer | Distribution | Import name | Runs in | Role |
 |---|---|---|---|---|
-| Manifest contract | `marie-extension` | `marie_extension` | Marie control plane, build/CI tooling | Validates `marie-extension.yaml` packages (schema, ZIP loading, permissions). Metadata only — never executes plugin code |
+| Manifest contract | `marie-extension` | `marie.extension` | Marie control plane, build/CI tooling | Validates `marie-extension.yaml` packages (schema, ZIP loading, permissions). Metadata only — never executes plugin code |
 | Plugin host | `marie-plugin-daemon` | n/a (Go) | Daemon process | Installs, starts, and invokes plugins; creates their uv environments; embeds and injects the Python runtime |
 | Plugin-side runtime | `marie-plugin-runtime` (source lives in `marie-plugin-daemon/python_runtime/`) | `marie_plugins.runtime` | Inside each plugin process | Stdio protocol shim: frames, sessions, heartbeat, test client. Stdlib-only. Daemon-provided in production; dev-only wheel for plugin authors |
 | Plugins | `marie-plugin-{name}` | `marie_plugins.{name}` | Inside their own plugin process | Actual plugin logic (e.g. `marie_plugins.document_extraction`) |
 
 Import rules that keep the boundary honest:
 
-- Plugin code imports only `marie_plugins.runtime` and its own locked dependencies — never `marie` or `marie_extension`.
-- Host code never imports plugin internals; it validates manifests with `marie_extension` and talks to plugins through the daemon.
+- Plugin protocol code imports `marie_plugins.runtime`. Application plugins may
+  install explicitly declared reusable namespace distributions such as
+  `marie-agent`, `marie-engine`, and `marie-instrumentation`, but never import
+  `marie.runtime` or modules supplied only by the `marie-ai` server.
+- Host code never imports plugin internals; it validates manifests with `marie.extension` and talks to plugins through the daemon.
 - `marie_plugins` is a PEP 420 implicit namespace shared by the runtime and every plugin. Never create `marie_plugins/__init__.py` — a regular package at that name shadows the other half of the namespace.
 
-Disambiguation: `marie_extension/runtime.py` (the manifest's runtime *envelope model* — network policy, resource limits) is unrelated to `marie_plugins.runtime` (the in-process protocol library).
+Disambiguation: `marie.extension/runtime.py` (the manifest's runtime *envelope model* — network policy, resource limits) is unrelated to `marie_plugins.runtime` (the in-process protocol library).
 
 ## Monorepo Structure
 
 ```
 marie-ai/
-├── marie/                      # Main Marie AI package (server-side)
+├── marie/                      # marie-ai namespace portion (server-side)
 │   ├── Core processing
 │   ├── ML models & executors
 │   └── Gateway & scheduler
 │
 └── packages/                   # Additional packages (client-side)
+    ├── marie-agent/            # Reusable agent runtime
+    │   ├── src/marie/agent/
+    │   ├── pyproject.toml
+    │   └── README.md
     ├── marie-mcp/              # MCP server for AI assistants
-    │   ├── src/marie_mcp/
+    │   ├── src/marie/mcp/server/
     │   ├── pyproject.toml      # Separate PyPI package
     │   └── README.md
+    ├── marie-instrumentation/  # Shared OTel/OpenInference instrumentation
+    │   ├── src/marie/instrumentation/
+    │   ├── pyproject.toml
+    │   └── README.md
+    ├── marie-engine/           # Reusable model execution engine
+    │   ├── src/marie/engine/
+    │   ├── pyproject.toml
+    │   └── README.md
+    ├── marie-cli/              # Marie AI command-line frontend
+    │   ├── src/marie/cli/
+    │   ├── pyproject.toml
+    │   └── README.md
     ├── marie-kernel/           # State management kernel
-    │   ├── src/marie_kernel/
+    │   ├── src/marie/kernel/
     │   ├── pyproject.toml      # Separate PyPI package
     │   └── README.md
     ├── marie-extension/        # Extension package schema and validator
-    │   ├── src/marie_extension/
+    │   ├── src/marie/extension/
     │   ├── pyproject.toml      # Separate PyPI package
+    │   └── README.md
+    ├── marie-mem0/             # Mem0 agent-memory integration
+    │   ├── src/marie/mem0/
+    │   ├── pyproject.toml
+    │   └── README.md
+    ├── marie-wasm/             # Wasmtime workflow-node runtime
+    │   ├── src/marie/wasm/
+    │   ├── pyproject.toml
     │   └── README.md
     ├── marie-plugin-daemon/    # Go plugin lifecycle and runtime daemon
     │   ├── cmd/server/
@@ -151,6 +254,26 @@ uv sync
 cd packages/marie-kernel
 uv sync --extra dev
 
+# Install and test instrumentation package
+cd packages/marie-instrumentation
+uv sync --extra dev
+uv run pytest
+
+# Install and test agent package
+cd packages/marie-agent
+uv sync --extra dev
+uv run pytest
+
+# Install and test engine package
+cd packages/marie-engine
+uv sync --extra dev
+uv run pytest
+
+# Install and test CLI package
+cd packages/marie-cli
+uv sync --extra dev
+uv run pytest
+
 # Install Extension package
 cd packages/marie-extension
 uv sync --extra dev
@@ -177,6 +300,16 @@ uv publish
 
 # Publish State Kernel package
 cd packages/marie-kernel
+uv build
+uv publish
+
+# Publish Engine package
+cd packages/marie-engine
+uv build
+uv publish
+
+# Publish CLI package
+cd packages/marie-cli
 uv build
 uv publish
 
@@ -214,7 +347,7 @@ To add a new package to the monorepo:
 
 1. Create directory: `packages/your-package/`
 2. Add `pyproject.toml` with package metadata
-3. Create `src/your_package/` structure
+3. Create `src/marie/your_package/` without `src/marie/__init__.py`
 4. Add README.md with documentation
 5. Update this README.md
 6. Add CI workflow in `.github/workflows/`
@@ -235,6 +368,24 @@ Each package should:
 - Main package: `marie-ai` (contains core platform)
 - Sub-packages: `marie-{name}` (e.g., `marie-mcp`, `marie-sdk`, `marie-cli`)
 - First-party executable plugins: `marie-plugin-{name}`
+
+Distributions that extend the public Marie Python API use the PEP 420 `marie`
+namespace. Place their code under `src/marie/{name}/`, import it as
+`marie.{name}`, and never add `src/marie/__init__.py`. Distribution names stay
+hyphenated (`marie-agent`, `marie-instrumentation`) while Python imports use the
+shared namespace (`marie.agent`, `marie.instrumentation`). Nested namespaces
+are valid when a direct name is already owned; `marie-mcp` uses
+`marie.mcp.server` and shares implicit `marie.mcp` with `marie-ai`. The `marie-ai`
+serving facade is imported from `marie.runtime`, not from the namespace root.
+`marie-cli` owns `marie.cli` and the console script; `marie-ai` owns the single
+`marie/__main__.py` module launcher so existing source-file entry points remain
+valid without placing a duplicate module in both wheels.
+
+The root `pyproject.toml` declares each reusable local distribution as a uv path
+source with `editable = true`. After `uv sync`, changes under any
+`packages/*/src` namespace portion are immediately visible to Marie AI without
+rebuilding a wheel. Release checks still build and install wheels in a clean
+environment so editable source paths cannot hide packaging errors.
 
 ## Version Compatibility
 
@@ -264,7 +415,6 @@ Maintain compatibility matrix in each package README:
 
 Potential packages to add:
 - `marie-sdk` - Python SDK for application developers
-- `marie-cli` - Enhanced CLI tools
 - `marie-storage` - Storage adapters (S3, GCS, Azure)
 - `marie-monitoring` - Observability tools
 

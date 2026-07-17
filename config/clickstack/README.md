@@ -232,7 +232,7 @@ docker exec -i marie-clickhouse clickhouse-client \
 ### Reset ClickHouse (WARNING: deletes all data)
 ```bash
 docker compose -f ./Dockerfiles/docker-compose.clickhouse.yml down --volumes
-docker volume rm marie_clickhouse_data marie_clickhouse_logs 2>/dev/null
+docker volume rm marie.clickhouse_data marie.clickhouse_logs 2>/dev/null
 docker compose --env-file ./config/.env.dev \
   -f ./Dockerfiles/docker-compose.clickhouse.yml \
   --project-directory . up -d

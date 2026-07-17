@@ -1,7 +1,7 @@
 import pytest
 
-from marie import Executor, Flow, requests
 from marie.constants import __default_executor__
+from marie.runtime import Executor, Flow, requests
 from tests import random_docs
 
 

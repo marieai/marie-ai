@@ -27,9 +27,9 @@ from marie.utils.network import get_ip_address
 
 # Import marie-kernel for execution context support
 try:
-    from marie_kernel import RunContext
-    from marie_kernel.backends import FileSystemStateBackend
-    from marie_kernel.ref import TaskInstanceRef
+    from marie.kernel import RunContext
+    from marie.kernel.backends import FileSystemStateBackend
+    from marie.kernel.ref import TaskInstanceRef
 
     MARIE_KERNEL_AVAILABLE = True
 except ImportError:

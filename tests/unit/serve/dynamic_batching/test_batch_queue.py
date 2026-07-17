@@ -3,7 +3,7 @@ import functools
 
 import pytest
 
-from marie import Document, DocumentArray, Executor, requests
+from marie.runtime import Document, DocumentArray, Executor, requests
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
 from marie.types_core.request.data import DataRequest
 

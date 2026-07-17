@@ -9,7 +9,7 @@ runtime:
   type: python_source
   language: python
   version: "3.12"
-  entrypoint: marie_wasm.daemon_runner
+  entrypoint: marie.wasm.daemon_runner
   engine: python-wasmtime
   module: node.wasm
   permissions: http-request

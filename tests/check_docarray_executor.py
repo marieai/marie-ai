@@ -3,7 +3,7 @@ import time
 from docarray import DocList
 from docarray.documents import TextDoc
 
-from marie import Executor, Flow, requests
+from marie.runtime import Executor, Flow, requests
 
 
 class FastChangingExecutor(Executor):

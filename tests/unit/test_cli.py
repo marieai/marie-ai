@@ -5,13 +5,13 @@ import subprocess
 import pytest
 
 from marie.checker import NetworkChecker
+from marie.cli.autocomplete import ac_table
+from marie.cli.export import api_to_dict
+from marie.cli.lookup import _build_lookup_table, lookup_and_print
 from marie.jaml import JAML
 from marie.orchestrate.pods.factory import PodFactory
 from marie.parsers import set_deployment_parser
 from marie.parsers.ping import set_ping_parser
-from marie_cli.autocomplete import ac_table
-from marie_cli.export import api_to_dict
-from marie_cli.lookup import _build_lookup_table, lookup_and_print
 from tests.helper import _generate_pod_args
 
 

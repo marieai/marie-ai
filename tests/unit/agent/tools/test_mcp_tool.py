@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 import pytest
 
 from marie.agent.config import AgentConfig
-from marie.agent.tools.mcp_tool import MCPRemoteTool
 from marie.agent.tools.registry import resolve_tools
+from marie.mcp.agent_tool import MCPRemoteTool
 from marie.mcp.models import (
     MCPAuthType,
     MCPServer,

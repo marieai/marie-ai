@@ -7,7 +7,7 @@ import pytest
 from pydantic import BaseModel
 
 from marie.agent.tools import ToolOutput
-from marie.agent.tools.wrappers.component_tool import ComponentTool
+from marie.executor.agent.tools.component import ComponentTool
 
 
 # Test components

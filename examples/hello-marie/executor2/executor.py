@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from marie import DocumentArray, Executor, requests
+from marie.runtime import DocumentArray, Executor, requests
 
 
 class MyExecutorXX(Executor):

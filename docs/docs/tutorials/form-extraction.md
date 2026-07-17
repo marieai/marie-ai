@@ -132,7 +132,7 @@ Create `executors/field_detector.py`:
 ```python
 import re
 import time
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 from docarray import DocList
 from . import FormInput, FormOutput, FormField, FieldType, BoundingBox
 
@@ -284,7 +284,7 @@ Create `executors/checkbox_detector.py`:
 
 ```python
 import re
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 from docarray import DocList
 from . import FormOutput, Checkbox
 
@@ -369,7 +369,7 @@ Create `executors/schema_mapper.py`:
 ```python
 import json
 from pathlib import Path
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 from docarray import DocList
 from . import FormOutput, FieldType
 
@@ -547,7 +547,7 @@ Create `client.py`:
 
 ```python
 import json
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList
 from executors import FormInput, FormOutput
 

@@ -4,7 +4,7 @@ import shutil
 import threading
 import time
 
-from marie import Client, Deployment, DocumentArray, Flow
+from marie.runtime import Client, Deployment, DocumentArray, Flow
 
 cur_dir = os.path.dirname(__file__)
 

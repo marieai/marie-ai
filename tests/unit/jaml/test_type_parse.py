@@ -4,10 +4,10 @@ import os
 import pytest
 import yaml
 
-from marie import Deployment, Flow, requests
 from marie.constants import __default_executor__
 from marie.excepts import BadConfigSource
 from marie.jaml import JAML, JAMLCompatible
+from marie.runtime import Deployment, Flow, requests
 from marie.serve.executors import BaseExecutor
 
 

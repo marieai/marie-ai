@@ -5,12 +5,12 @@ import pytest
 
 from hubble.executor import HubExecutor
 from hubble.executor.hubio import HubIO
-from marie import __version__
 from marie.orchestrate.deployments.config.helper import (
     get_base_executor_version,
     get_image_name,
     to_compatible_name,
 )
+from marie.runtime import __version__
 
 
 @pytest.mark.parametrize('is_master', (True, False))

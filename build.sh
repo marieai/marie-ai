@@ -213,7 +213,7 @@ stage_build_context() {
     # Directories
     cp -a marie/          "$context_dir/marie/"
     cp -a marie_server/   "$context_dir/marie_server/"   2>/dev/null || true
-    cp -a marie_cli/      "$context_dir/marie_cli/"      2>/dev/null || true
+    cp -a marie.cli/      "$context_dir/marie.cli/"      2>/dev/null || true
     cp -a hubble/         "$context_dir/hubble/"         2>/dev/null || true
     cp -a daemon/         "$context_dir/daemon/"         2>/dev/null || true
     cp -a docarray/       "$context_dir/docarray/"       2>/dev/null || true

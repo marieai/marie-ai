@@ -5,8 +5,8 @@ from multiprocessing import Event, Process
 import aiohttp
 import pytest
 
-from marie import DocumentArray, Executor, Flow, requests
 from marie.helper import random_port
+from marie.runtime import DocumentArray, Executor, Flow, requests
 from marie.types_core.request.data import DataRequest
 
 INPUT_DA_LEN = 2

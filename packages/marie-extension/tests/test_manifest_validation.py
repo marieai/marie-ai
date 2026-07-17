@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from marie_extension.manifest import ExtensionPackage
+from marie.extension.manifest import ExtensionPackage
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

@@ -5,7 +5,7 @@ from typing import List
 
 import pytest
 
-from marie import Document, DocumentArray
+from marie.runtime import Document, DocumentArray
 from marie.serve.runtimes.gateway.graph.topology_graph import TopologyGraph
 from marie.types_core.request import Request
 from marie.types_core.request.data import DataRequest

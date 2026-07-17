@@ -8,7 +8,7 @@ from marie.logging_core.logger import MarieLogger
 from marie.serve.networking.balancer.interceptor import LoadBalancerInterceptor
 
 if TYPE_CHECKING:
-    from marie.serve.networking.balancer.circuit_breaker import (
+    from marie.engine.circuit_breaker import (
         CircuitBreaker,
         CircuitBreakerConfig,
     )
@@ -63,7 +63,7 @@ class LoadBalancer(abc.ABC):
         # Initialize circuit breaker if config provided (opt-in)
         self._circuit_breaker: Optional["CircuitBreaker"] = None
         if circuit_breaker_config is not None:
-            from marie.serve.networking.balancer.circuit_breaker import CircuitBreaker
+            from marie.engine.circuit_breaker import CircuitBreaker
 
             self._circuit_breaker = CircuitBreaker(circuit_breaker_config, self._logger)
             self._logger.info(

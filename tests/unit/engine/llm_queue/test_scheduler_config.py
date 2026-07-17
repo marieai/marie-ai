@@ -4,10 +4,12 @@ import pytest
 
 from marie.engine.llm_queue.config import DEFAULT_LLM_QUEUE_POOL_ID
 from marie.engine.llm_queue.scheduler_config import (
+    scheduler_config_from_mapping,
+)
+from marie.serve.runtimes.gateway.marie.llm_scheduler_config import (
     DEFAULT_FABRIC_CONFIG_TABLE,
     DEFAULT_POOL_TABLE,
     PostgresSchedulerConfigRepository,
-    scheduler_config_from_mapping,
 )
 
 

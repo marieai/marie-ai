@@ -3,7 +3,7 @@ import os
 import pytest
 import requests
 
-from marie import Flow
+from marie.runtime import Flow
 from tests.helper import (
     ProcessExecutor,
     _validate_custom_gateway_process,

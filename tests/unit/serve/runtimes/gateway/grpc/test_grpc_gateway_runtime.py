@@ -8,10 +8,10 @@ from multiprocessing import Process
 import grpc
 import pytest
 
-from marie import Document, DocumentArray
 from marie.clients.request import request_generator
 from marie.helper import random_port
 from marie.parsers import set_gateway_parser
+from marie.runtime import Document, DocumentArray
 from marie.serve import networking
 from marie.serve.networking.utils import get_available_services
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime

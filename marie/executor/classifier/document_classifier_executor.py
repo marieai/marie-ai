@@ -3,7 +3,6 @@ from typing import Any, List, Optional, Union
 import torch
 from docarray import DocList
 
-from marie import requests, safely_encoded
 from marie.api import value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc, StorageDoc
 from marie.boxes import PSMode
@@ -18,6 +17,7 @@ from marie.models.utils import (
 )
 from marie.ocr import CoordinateFormat
 from marie.pipe.classification_pipeline import ClassificationPipeline
+from marie.runtime import requests, safely_encoded
 from marie.utils.docs import docs_from_asset, frames_from_docs
 from marie.utils.image_utils import ensure_max_page_size, hash_frames_fast
 from marie.utils.network import get_ip_address

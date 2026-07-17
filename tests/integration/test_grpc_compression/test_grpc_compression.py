@@ -1,7 +1,7 @@
 import pytest
 from docarray import Document, DocumentArray
 
-from marie import Flow
+from marie.runtime import Flow
 
 
 @pytest.mark.parametrize(

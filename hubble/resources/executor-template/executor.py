@@ -1,4 +1,4 @@
-from marie import DocumentArray, Executor, requests
+from marie.runtime import DocumentArray, Executor, requests
 
 
 class {{exec_name}}(Executor):

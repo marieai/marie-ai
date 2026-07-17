@@ -6,8 +6,8 @@ import uuid
 import pytest
 from docarray import DocumentArray
 
-from marie import Client, Executor, requests
 from marie.parsers import set_gateway_parser
+from marie.runtime import Client, Executor, requests
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.servers import BaseServer

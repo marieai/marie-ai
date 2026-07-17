@@ -68,7 +68,7 @@ MarieGateway extends the base Gateway with service discovery, job scheduling, re
 The Client sends requests to the Gateway:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 
 c = Client(host='localhost', port=54321)
 result = c.post(on='/extract', inputs=document)

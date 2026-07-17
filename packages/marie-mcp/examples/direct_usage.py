@@ -3,9 +3,9 @@
 import asyncio
 from pathlib import Path
 
-from marie_mcp.clients.marie_client import MarieClient
-from marie_mcp.config import Config
-from marie_mcp.utils.s3_utils import s3_asset_path, upload_to_s3
+from marie.mcp.server.clients.marie.client import MarieClient
+from marie.mcp.server.config import Config
+from marie.mcp.server.utils.s3_utils import s3_asset_path, upload_to_s3
 
 
 async def main():

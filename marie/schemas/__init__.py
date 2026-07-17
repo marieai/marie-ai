@@ -2,7 +2,7 @@ def get_full_schema() -> dict:
     """Get full schema
     :return: the full schema for Jina core as a dict.
     """
-    from marie import __version__
+    from marie._version import __version__
     from marie.importer import IMPORTED
     from marie.schemas.deployment import schema_deployment
     from marie.schemas.executor import schema_all_executors

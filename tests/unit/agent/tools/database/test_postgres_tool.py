@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from marie.agent.tools import ToolOutput
-from marie.agent.tools.database.postgres_tool import PostgresAction, PostgresTool
+from marie.storage.database.agent_tools.postgres_tool import PostgresAction, PostgresTool
 
 from .conftest import MockRecord
 

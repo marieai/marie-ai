@@ -771,7 +771,7 @@ def warn_unknown_args(unknown_args: List[str]):
     :param unknown_args: arguments that are possibly unknown to Jina
     """
 
-    from marie_cli.lookup import _build_lookup_table
+    from marie.parsers.lookup import _build_lookup_table
 
     all_args = _build_lookup_table()[0]
     has_migration_tip = False
@@ -952,7 +952,7 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
     except:
         __jcloud_version__ = "not-available"
 
-    from marie import __docarray_version__, __proto_version__, __version__
+    from marie._version import __docarray_version__, __proto_version__, __version__
     from marie.constants import __marie_env__, __unset_msg__, __uptime__
     from marie.logging_core.predefined import default_logger
 
@@ -1546,8 +1546,6 @@ def get_rich_console():
     )
 
 
-from marie.parsers import set_client_cli_parser
-
 __default_port_client__ = 80
 __default_port_tls_client__ = 443
 
@@ -1560,6 +1558,8 @@ def parse_client(kwargs) -> Namespace:
 
     :return: parsed argument.
     """
+    from marie.parsers import set_client_cli_parser
+
     kwargs = _parse_kwargs(kwargs)
     args = ArgNamespace.kwargs2namespace(
         kwargs, set_client_cli_parser(), warn_unknown=True

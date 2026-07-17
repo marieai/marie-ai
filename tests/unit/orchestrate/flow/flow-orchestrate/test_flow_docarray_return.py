@@ -1,8 +1,9 @@
 import pytest
 from docarray import DocumentArray
 
-from marie import Client, Document, Executor, Flow, requests, types
+from marie import types
 from marie.excepts import BadServer
+from marie.runtime import Client, Document, Executor, Flow, requests
 
 
 class SimplExecutor(Executor):

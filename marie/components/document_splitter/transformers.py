@@ -15,10 +15,10 @@ from transformers import (
     LayoutLMv3Processor,
 )
 
-from marie import DocumentArray
 from marie.constants import __model_path__
 from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
+from marie.runtime import DocumentArray
 
 from ...helper import batch_iterator
 from ...logging_core.profile import TimeContext

@@ -7,7 +7,7 @@ from marie.serve.networking.balancer.interceptor import LoadBalancerInterceptor
 from marie.serve.networking.balancer.load_balancer import LoadBalancer
 
 if TYPE_CHECKING:
-    from marie.serve.networking.balancer.circuit_breaker import CircuitBreakerConfig
+    from marie.engine.circuit_breaker import CircuitBreakerConfig
 
 
 class RoundRobinLoadBalancer(LoadBalancer):

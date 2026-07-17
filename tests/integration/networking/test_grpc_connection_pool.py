@@ -3,7 +3,7 @@ import asyncio
 import mock
 import pytest
 
-from marie import Document, DocumentArray, Flow
+from marie.runtime import Document, DocumentArray, Flow
 from marie.serve.networking import GrpcConnectionPool
 from marie.types_core.request.data import DataRequest
 from tests.integration.networking import DummyExecutor

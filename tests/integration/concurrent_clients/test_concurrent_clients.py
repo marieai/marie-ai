@@ -5,7 +5,7 @@ from functools import partial
 
 import pytest
 
-from marie import Client, Document, DocumentArray, Executor, Flow, requests
+from marie.runtime import Client, Document, DocumentArray, Executor, Flow, requests
 from marie.types_core.request.data import Response
 
 NUM_REQUESTS = 5

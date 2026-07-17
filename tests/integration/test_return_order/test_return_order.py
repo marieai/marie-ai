@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from marie import Client, Document, DocumentArray, Executor, Flow, requests
+from marie.runtime import Client, Document, DocumentArray, Executor, Flow, requests
 
 
 @pytest.mark.parametrize('stream', [True, False])

@@ -35,7 +35,7 @@ uv run marie --version
 An Executor is a microservice that processes documents. Create a file called `my_executor.py`:
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 from docarray import DocList, BaseDoc
 
 class TextDoc(BaseDoc):
@@ -64,7 +64,7 @@ class SimpleProcessor(Executor):
 A Flow orchestrates Executors into a pipeline. Create a file called `my_flow.py`:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 from my_executor import SimpleProcessor
 
 # Create a Flow with your Executor
@@ -102,7 +102,7 @@ You should see output indicating the Flow is ready:
 Open a new terminal and create a client script called `client.py`:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList, BaseDoc
 
 class TextDoc(BaseDoc):
@@ -169,7 +169,7 @@ Here's a more realistic example that simulates document processing:
 ### executor.py
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 from docarray import DocList, BaseDoc
 from typing import Optional
 import time
@@ -257,7 +257,7 @@ executors:
 ### client.py
 
 ```python
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList, BaseDoc
 from typing import Optional
 

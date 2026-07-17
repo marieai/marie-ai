@@ -7,7 +7,6 @@ from typing import Any, Optional, Union
 import torch
 from docarray import DocList
 
-from marie import requests
 from marie.api.docs import AssetKeyDoc
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
@@ -15,6 +14,7 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import (
     setup_torch_optimizations,
 )
+from marie.runtime import requests
 from marie.utils.network import get_ip_address
 
 

@@ -39,7 +39,7 @@ Marie-AI is built around these primary components:
 Here's a minimal example of a Marie-AI document processing pipeline:
 
 ```python
-from marie import Flow, Executor, requests
+from marie.runtime import Flow, Executor, requests
 from docarray import DocList, BaseDoc
 
 class TextExtractor(Executor):

@@ -4,9 +4,9 @@ from typing import Dict
 
 import pytest
 
-from marie import Client, Deployment, Executor, requests
 from marie._docarray import docarray_v2
 from marie.helper import random_port
+from marie.runtime import Client, Deployment, Executor, requests
 
 if docarray_v2:
     from docarray import BaseDoc, DocList

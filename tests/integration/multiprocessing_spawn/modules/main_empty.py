@@ -1,6 +1,6 @@
 from multiprocessing import get_start_method
 
-import marie
+import marie.runtime as marie
 
 
 def run():

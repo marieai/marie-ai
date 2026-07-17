@@ -5,8 +5,8 @@ import pytest
 import requests
 from docarray import Document
 
-from marie import Client, Flow
 from marie.helper import random_port
+from marie.runtime import Client, Flow
 from marie.serve.runtimes.servers import BaseServer
 from tests.integration.multiple_protocol_gateway.gateway.multiprotocol_gateway import (
     MultiProtocolGateway,

@@ -151,6 +151,10 @@ dependencies = [
     "httpx>=0.25.0",
     "mem0ai>=0.1.0",
     "marie-kernel",
+    "marie-extension",
+    "marie-instrumentation",
+    "marie-agent",
+    "marie-engine",
     "marie-wasm",
     "marie-mem0",
     "marie-mcp",
@@ -182,9 +186,6 @@ cu130 = [
     "torchvision==0.27.1",
 ]
 
-[project.scripts]
-marie = "marie_cli:main"
-
 [project.urls]
 Documentation = "https://docs.marieai.co"
 Source = "https://github.com/marieai/marie-ai.git"
@@ -195,13 +196,13 @@ include-package-data = true
 zip-safe = false
 
 [tool.setuptools.dynamic]
-version = { attr = "marie.__version__" }
+version = { attr = "marie._version.__version__" }
 
 [tool.setuptools.packages.find]
+namespaces = true
 include = [
     "hubble*",
     "marie*",
-    "marie_cli*",
     "marie_server*",
 ]
 exclude = [
@@ -217,10 +218,15 @@ fastwer = { path = "wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl" }
 fairseq = { path = "wheels/fairseq-0.12.2+marieai.torch212cu130-cp312-cp312-linux_x86_64.whl" }
 detectron2 = { path = "wheels/detectron2-0.6-cp312-cp312-linux_x86_64.whl" }
 faiss-gpu-cu13 = { path = "wheels/faiss_gpu_cu13-1.14.1+cu130-py3-none-any.whl" }
-marie-kernel = { path = "packages/marie-kernel" }
-marie-wasm = { path = "packages/marie-wasm" }
-marie-mem0 = { path = "packages/marie-mem0" }
-marie-mcp = { path = "packages/marie-mcp" }
+marie-kernel = { path = "packages/marie-kernel", editable = true }
+marie-extension = { path = "packages/marie-extension", editable = true }
+marie-instrumentation = { path = "packages/marie-instrumentation", editable = true }
+marie-agent = { path = "packages/marie-agent", editable = true }
+marie-engine = { path = "packages/marie-engine", editable = true }
+marie-wasm = { path = "packages/marie-wasm", editable = true }
+marie-mem0 = { path = "packages/marie-mem0", editable = true }
+marie-mcp = { path = "packages/marie-mcp", editable = true }
+marie-cli = { path = "packages/marie-cli", editable = true }
 torch = [
     { index = "pytorch-cu130", extra = "cu130" },
 ]
@@ -235,6 +241,7 @@ explicit = true
 
 [dependency-groups]
 dev = [
+    "marie-cli",
     "pytest<8.0.0",
     "pytest-timeout",
     "pytest-mock",

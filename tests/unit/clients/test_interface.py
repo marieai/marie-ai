@@ -1,7 +1,7 @@
 import pytest
 
-from marie import Client
 from marie.enums import ProtocolType
+from marie.runtime import Client
 
 
 @pytest.mark.parametrize(

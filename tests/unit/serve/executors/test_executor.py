@@ -10,11 +10,11 @@ import yaml
 from docarray import Document, DocumentArray
 from pytest import FixtureRequest
 
-from marie import Client, Executor, Flow, dynamic_batching, requests
 from marie.clients.request import request_generator
 from marie.constants import __cache_path__
 from marie.excepts import RuntimeFailToStart
 from marie.helper import random_port
+from marie.runtime import Client, Executor, Flow, dynamic_batching, requests
 from marie.serve.executors.decorators import write
 from marie.serve.executors.metas import get_default_metas
 from marie.serve.networking.utils import send_request_async

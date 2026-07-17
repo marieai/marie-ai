@@ -44,7 +44,7 @@ Repository = "https://github.com/marieai/marie-ai"
 Issues = "https://github.com/marieai/marie-ai/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/marie_kernel"]
+packages = ["src/marie"]
 
 [tool.black]
 line-length = 88

@@ -4,7 +4,7 @@ import pytest
 from docarray import DocList
 from docarray.documents import TextDoc
 
-from marie import DocumentArray, Executor, Flow, requests
+from marie.runtime import DocumentArray, Executor, Flow, requests
 
 
 @pytest.fixture()

@@ -1,4 +1,4 @@
-from marie import Client, DocumentArray
+from marie.runtime import Client, DocumentArray
 
 if __name__ == '__main__':
     # c = Client(host='grpc://0.0.0.0:60518')

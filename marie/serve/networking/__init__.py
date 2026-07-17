@@ -19,12 +19,12 @@ import grpc
 from grpc.aio import AioRpcError
 
 from marie.constants import __default_endpoint__
+from marie.engine.circuit_breaker import CircuitBreakerConfig
 from marie.enums import PollingType
 from marie.excepts import InternalNetworkError
 from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.helper import format_grpc_error
-from marie.serve.networking.balancer.circuit_breaker import CircuitBreakerConfig
 from marie.serve.networking.balancer.load_balancer import LoadBalancer
 from marie.serve.networking.connection_pool_map import _ConnectionPoolMap
 from marie.serve.networking.connection_stub import create_async_channel_stub

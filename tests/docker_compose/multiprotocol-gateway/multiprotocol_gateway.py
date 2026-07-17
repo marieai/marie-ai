@@ -4,9 +4,9 @@ from grpc_reflection.v1alpha import reflection
 from pydantic import BaseModel
 from uvicorn import Config, Server
 
-from marie import Gateway
 from marie.constants import __default_host__
 from marie.proto import jina_pb2, jina_pb2_grpc
+from marie.runtime import Gateway
 
 
 class DummyResponseModel(BaseModel):

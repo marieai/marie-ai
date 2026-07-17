@@ -1,6 +1,6 @@
 import pytest
 
-from marie import Flow
+from marie.runtime import Flow
 
 
 @pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])

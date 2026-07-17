@@ -3,8 +3,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from marie import Client, Document, Executor, Flow, requests
 from marie.helper import random_port
+from marie.runtime import Client, Document, Executor, Flow, requests
 
 
 class MyExecutor(Executor):

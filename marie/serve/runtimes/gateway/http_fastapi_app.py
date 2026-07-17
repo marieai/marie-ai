@@ -41,7 +41,7 @@ def get_fastapi_app(
     :return: fastapi app
     """
     if expose_graphql_endpoint:
-        logger.error(f" GraphQL endpoint is not enabled when using docarray >0.30")
+        logger.error(" GraphQL endpoint is not enabled when using docarray >0.30")
     with ImportExtensions(required=True):
         from fastapi import FastAPI, Response, HTTPException
         from fastapi.middleware.cors import CORSMiddleware
@@ -50,7 +50,7 @@ def get_fastapi_app(
     from docarray import BaseDoc, DocList
     from docarray.base_doc.docarray_response import DocArrayResponse
 
-    from marie import __version__
+    from marie._version import __version__
     from marie.api.routes import create_mcp_router
 
     app = FastAPI(

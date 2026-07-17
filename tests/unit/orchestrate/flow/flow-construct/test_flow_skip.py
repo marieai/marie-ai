@@ -1,7 +1,7 @@
 import pytest
 
-from marie import Document, Executor, Flow, requests
 from marie.proto import jina_pb2
+from marie.runtime import Document, Executor, Flow, requests
 from tests import validate_callback
 
 

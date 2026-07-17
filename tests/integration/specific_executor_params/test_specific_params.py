@@ -2,7 +2,7 @@ import numpy as np
 from docarray import Document, DocumentArray, dataclass
 from docarray.typing import Text
 
-from marie import Executor, Flow, requests
+from marie.runtime import Executor, Flow, requests
 
 
 def test_specific_params():

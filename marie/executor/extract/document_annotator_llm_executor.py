@@ -3,7 +3,6 @@ from typing import Any, Optional, Union
 import torch
 from docarray import DocList
 
-from marie import requests
 from marie.api.docs import AssetKeyDoc
 from marie.executor.extract.document_annotator_executor import (
     DocumentAnnotatorExecutor,
@@ -12,6 +11,7 @@ from marie.extract.annotators.llm_annotator import LLMAnnotator
 from marie.extract.registry.loader import initialize_components_from_config
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
+from marie.runtime import requests
 
 
 class DocumentAnnotatorLLMExecutor(DocumentAnnotatorExecutor):

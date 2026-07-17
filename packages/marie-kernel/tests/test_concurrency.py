@@ -8,8 +8,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
-from marie_kernel import RunContext, TaskInstanceRef
-from marie_kernel.backends.memory import InMemoryStateBackend
+
+from marie.kernel import RunContext, TaskInstanceRef
+from marie.kernel.backends.memory import InMemoryStateBackend
 
 
 @pytest.fixture

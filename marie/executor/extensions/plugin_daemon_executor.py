@@ -10,7 +10,6 @@ from urllib.request import Request, urlopen
 from docarray import DocList
 from docarray.documents import TextDoc
 
-from marie import requests
 from marie.constants import DEFAULT_DAEMON_ADDR, DEFAULT_TENANT_UUID
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
@@ -21,6 +20,7 @@ from marie.plugin_daemon import (
     runtime_error_frame,
 )
 from marie.plugin_daemon.frames import as_text, first_text, now_utc
+from marie.runtime import requests
 from marie.secret_store import CredentialRequirement, CredentialResolver
 
 
@@ -143,7 +143,7 @@ class MariePluginDaemonExecutor(MarieExecutor):
         """
         # Lazy import: marie.agent pulls in heavy dependencies (and itself
         # imports marie.executor); keep it out of this module's import path.
-        from marie.agent.tools.plugin_tool import PluginToolSpec
+        from marie.plugins.agent_tool import PluginToolSpec
 
         params = parameters or {}
         request_id = str(params.get("job_id") or "")

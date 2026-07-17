@@ -163,7 +163,7 @@ def test_custom_gateway_no_executors(uses, uses_with, expected):
 
 
 def test_stream_individual_executor_simple():
-    from marie import Document, DocumentArray, Executor, Flow, requests
+    from marie.runtime import Document, DocumentArray, Executor, Flow, requests
     from marie.serve.runtimes.gateway.http import FastAPIBaseGateway
 
     PARAMETERS = {"dog": "woof"}
@@ -228,7 +228,7 @@ def test_stream_individual_executor_multirequest(n_replicas: int, n_shards: int)
 
     from docarray import Document, DocumentArray
 
-    from marie import Executor, Flow, requests
+    from marie.runtime import Executor, Flow, requests
     from marie.serve.runtimes.gateway.http import FastAPIBaseGateway
 
     PARAMETERS = {"dog": "woof"}

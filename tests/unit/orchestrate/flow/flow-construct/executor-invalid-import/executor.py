@@ -1,6 +1,6 @@
 import some.missing.depdency
 
-from marie import DocumentArray, Executor, requests
+from marie.runtime import DocumentArray, Executor, requests
 
 
 class InvalidImportExec(Executor):

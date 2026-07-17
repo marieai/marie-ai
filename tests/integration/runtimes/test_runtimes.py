@@ -10,12 +10,12 @@ import grpc
 import pytest
 
 import marie
-from marie import Client, Document, DocumentArray, Executor, requests
 from marie.clients.request import request_generator
 from marie.enums import PollingType
 from marie.helper import random_port
 from marie.parsers import set_gateway_parser
 from marie.proto import jina_pb2_grpc
+from marie.runtime import Client, Document, DocumentArray, Executor, requests
 from marie.serve.helper import get_default_grpc_options
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler

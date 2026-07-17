@@ -3,9 +3,9 @@ import time
 
 import pytest
 
-from marie import Client, Deployment, DocumentArray, Executor, requests
 from marie._docarray import docarray_v2
 from marie.helper import random_port
+from marie.runtime import Client, Deployment, DocumentArray, Executor, requests
 
 
 class SingleExecutorDeployment(Executor):

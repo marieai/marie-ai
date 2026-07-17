@@ -5,9 +5,9 @@ import grpc
 import pytest
 import requests
 
-from marie import __version__
 from marie.constants import __marie_env__
 from marie.proto import jina_pb2, jina_pb2_grpc
+from marie.runtime import __version__
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.servers import BaseServer
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler

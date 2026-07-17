@@ -7,12 +7,12 @@ import numpy as np
 import pytest
 from docarray.document.generators import from_ndarray
 
-from marie import Document, DocumentArray, Executor, Flow, requests
 from marie.constants import __windows__
 from marie.enums import FlowBuildLevel, ProtocolType
 from marie.excepts import RuntimeFailToStart
 from marie.helper import random_identity
 from marie.orchestrate.deployments import Deployment
+from marie.runtime import Document, DocumentArray, Executor, Flow, requests
 from marie.serve.executors import BaseExecutor
 from marie.types_core.request.data import Response
 from tests import random_docs

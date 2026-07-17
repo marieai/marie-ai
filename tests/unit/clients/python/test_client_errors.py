@@ -3,9 +3,9 @@ import os
 
 import pytest
 
-from marie import Deployment, DocumentArray, Flow
 from marie.clients import Client
 from marie.clients.base.retry import sync_wait_or_raise_err, wait_or_raise_err
+from marie.runtime import Deployment, DocumentArray, Flow
 from tests import random_docs
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))

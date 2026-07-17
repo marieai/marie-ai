@@ -25,7 +25,6 @@ from urllib.parse import quote
 from docarray import DocList
 from docarray.documents import TextDoc
 
-from marie import Executor, requests
 from marie.executor.kb.chunking import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
@@ -36,6 +35,7 @@ from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 from marie.rag.models import SourceCitation
+from marie.runtime import Executor, requests
 from marie.storage import StorageManager
 from marie.utils.asset_util import s3_asset_path, split_filename
 

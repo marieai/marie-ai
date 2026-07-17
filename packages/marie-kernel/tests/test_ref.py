@@ -3,7 +3,8 @@ Tests for TaskInstanceRef dataclass.
 """
 
 import pytest
-from marie_kernel import TaskInstanceRef
+
+from marie.kernel import TaskInstanceRef
 
 
 class TestTaskInstanceRefCreation:

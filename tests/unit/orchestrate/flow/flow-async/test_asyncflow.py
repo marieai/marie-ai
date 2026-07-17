@@ -6,9 +6,9 @@ import pytest
 from docarray import Document, DocumentArray
 from docarray.document.generators import from_ndarray
 
-from marie import Executor, Flow, requests
 from marie.logging_core.profile import TimeContext
 from marie.orchestrate.flow.asyncio import AsyncFlow
+from marie.runtime import Executor, Flow, requests
 from marie.types_core.request.data import Request
 from tests import validate_callback
 

@@ -53,7 +53,7 @@ Documentation = "https://docs.marieai.co"
 Repository = "https://github.com/marieai/marie-ai"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/marie_wasm"]
+packages = ["src/marie"]
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -80,7 +80,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-v --cov=marie_wasm --cov-report=term-missing"
+addopts = "-v --cov=marie.wasm --cov-report=term-missing"
 
 [tool.ruff]
 line-length = 88

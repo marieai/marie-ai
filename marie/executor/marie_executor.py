@@ -9,10 +9,10 @@ from typing import Any, Dict, Literal, Optional, Tuple
 from docarray import DocList
 from docarray.documents import TextDoc
 
-from marie import Executor, requests
 from marie.excepts import CUDARuntimeTerminated
 from marie.executor.mixin import StorageMixin
 from marie.logging_core.logger import MarieLogger
+from marie.runtime import Executor, requests
 from marie.serve.executors import __dry_run_endpoint__
 from marie.utils.server_runtime import setup_storage, setup_toast_events
 
@@ -72,9 +72,8 @@ class MarieExecutor(Executor, StorageMixin):
 
         # ---- LLM tracking setup
         llm_tracking = kwargs.get("llm_tracking")
-        storage = kwargs.get("storage")
         if llm_tracking is not None and llm_tracking.get("enabled", False):
-            self._setup_llm_tracking(llm_tracking, storage)
+            self._setup_llm_tracking(llm_tracking)
 
         # ---- Health monitor config (default off; enable explicitly)
         health_cfg = kwargs.get("health", {}) or {}
@@ -147,21 +146,19 @@ class MarieExecutor(Executor, StorageMixin):
 
     # ---------------------- Setup ----------------------
 
-    def _setup_llm_tracking(
-        self, llm_tracking_config: dict, storage_config: dict = None
-    ) -> None:
+    def _setup_llm_tracking(self, llm_tracking_config: dict) -> None:
         """
         Configure LLM tracking for this executor process.
 
         Executors run in separate processes (via SPAWN) and don't inherit the
-        gateway's configuration. This method calls configure_from_yaml() to
-        initialize LLM tracking settings, then ensures a global TracerProvider
+        gateway's configuration. This method configures the shared package and
+        initializes LLM tracking settings, then ensures a global TracerProvider
         exists for OTel export.
         """
         try:
-            from marie.instrumentation.config import ExporterType, configure_from_yaml
+            from marie.instrumentation.config import ExporterType, configure
 
-            settings = configure_from_yaml(llm_tracking_config, storage_config)
+            settings = configure(llm_tracking_config)
 
             if settings.EXPORTER == ExporterType.OTEL:
                 from marie.utils.server_runtime import _ensure_tracer_provider

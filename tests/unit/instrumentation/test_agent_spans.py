@@ -34,6 +34,7 @@ from marie.agent.message import Message
 from marie.agent.tools.base import AgentTool, ToolMetadata, ToolOutput
 from marie.engine.completion_contract import RequestContext
 from marie.instrumentation import set_llm_io
+from marie.observability.media import resolve_media_reference
 from marie.utils.asset_util import s3_asset_path
 
 # ---------------------------------------------------------------------------
@@ -149,6 +150,7 @@ def test_set_llm_io_expands_multimodal_message_content(otel_setup):
                 ref_type="stress",
                 page_number=1,
             ),
+            media_reference_resolver=resolve_media_reference,
         )
 
     finished_span = otel_setup.get_finished_spans()[0]
@@ -396,7 +398,7 @@ def test_llm_wrapper_creates_generation_span(otel_setup):
         mock_engine.generate.return_value = "Hello from LLM"
         mock_get_engine.return_value = mock_engine
 
-        from marie.agent.llm_wrapper import MarieEngineLLMWrapper
+        from marie.engine.agent_wrapper import MarieEngineLLMWrapper
 
         wrapper = MarieEngineLLMWrapper(engine_name="gpt-4", provider="openai")
 
@@ -429,7 +431,7 @@ def test_streaming_span_on_generator_exit(otel_setup):
         mock_engine.generate.return_value = "Hello"
         mock_get_engine.return_value = mock_engine
 
-        from marie.agent.llm_wrapper import MarieEngineLLMWrapper
+        from marie.engine.agent_wrapper import MarieEngineLLMWrapper
 
         wrapper = MarieEngineLLMWrapper(engine_name="qwen-7b", provider="vllm")
 

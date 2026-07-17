@@ -3,9 +3,9 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from pydantic import ConfigDict
 
-from marie import Document, DocumentArray
 from marie._docarray import BaseDoc, DocList
 from marie.importer import ImportExtensions
+from marie.runtime import Document, DocumentArray
 from marie.serve.networking.sse import EventSourceResponse
 from marie.types_core.request.data import DataRequest
 

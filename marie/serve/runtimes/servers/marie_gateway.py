@@ -20,7 +20,6 @@ from fastapi import FastAPI, Request
 from grpc_health.v1.health_pb2 import HealthCheckResponse
 from rich.traceback import install
 
-import marie
 import marie.helper
 from marie._core.definitions.metadata import JsonMetadataValue
 from marie.auth.api_key_manager import APIKeyManager
@@ -1549,7 +1548,7 @@ class MarieServerGateway(CompositeServer):
         storage_config = self.args.get("storage", {})
         setup_storage(storage_config)
         setup_auth(self.args.get("auth", {}))
-        setup_llm_tracking(self.args.get("llm_tracking", {}), storage_config)
+        setup_llm_tracking(self.args.get("llm_tracking", {}))
         setup_sensor_worker(
             self.args.get("sensors", {}), self.args.get("kv_store_kwargs", {})
         )

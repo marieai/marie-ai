@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from marie_extension.cli import main
-from marie_extension.validator import validate_package
+from marie.extension.cli import main
+from marie.extension.validator import validate_package
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

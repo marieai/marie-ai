@@ -4,8 +4,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from marie import Document, DocumentArray, Executor, requests
 from marie.excepts import ExecutorError
+from marie.runtime import Document, DocumentArray, Executor, requests
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers import BaseServer

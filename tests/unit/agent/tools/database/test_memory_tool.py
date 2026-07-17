@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from marie.agent.tools import ToolOutput
-from marie.agent.tools.database.memory_tool import MemoryAction, MemoryTool
+from marie.storage.database.agent_tools.memory_tool import MemoryAction, MemoryTool
 
 from .conftest import MockRecord
 

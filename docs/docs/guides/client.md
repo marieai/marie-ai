@@ -11,7 +11,7 @@ The Client enables you to send documents to a running Flow for processing. It su
 To connect to a Flow, create a Client with matching protocol, host, and port:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 
 # Connect to a local Flow
 client = Client(host='localhost', port=54321, protocol='grpc')
@@ -34,7 +34,7 @@ client = Client(host='grpc://localhost:54321')
 You can specify connection details using URI schemes:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 
 # Without TLS
 Client(host='http://my-server:54321')
@@ -50,7 +50,7 @@ Client(host='wss://my-server:54321')
 Or use keyword arguments:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 
 # Without TLS
 Client(host='my-server', port=54321, protocol='http')
@@ -64,7 +64,7 @@ Client(host='my-server', port=54321, protocol='http', tls=True)
 Use the `post()` method to send documents to a Flow endpoint:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList, BaseDoc
 
 class TextDoc(BaseDoc):
@@ -89,7 +89,7 @@ results = client.post(on='/process', inputs=docs, return_type=DocList[TextDoc])
 The Client accepts various input formats:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList, BaseDoc
 
 class MyDoc(BaseDoc):
@@ -123,7 +123,7 @@ client.post('/status')
 Specify the expected return type using `return_type`:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList, BaseDoc
 
 class InputDoc(BaseDoc):
@@ -151,7 +151,7 @@ for doc in results:
 Pass additional parameters to the Executor:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList, BaseDoc
 
 class MyDoc(BaseDoc):
@@ -176,7 +176,7 @@ results = client.post(
 When processing large datasets, documents are internally batched into requests. Control batch size with `request_size`:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList, BaseDoc
 
 class MyDoc(BaseDoc):
@@ -200,7 +200,7 @@ For asynchronous applications, use the async Client:
 
 ```python
 import asyncio
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList, BaseDoc
 
 class MyDoc(BaseDoc):
@@ -228,7 +228,7 @@ asyncio.run(process_documents())
 Use async clients when calling external services from within an Executor:
 
 ```python
-from marie import Executor, requests, Client
+from marie.runtime import Executor, requests, Client
 from docarray import DocList, BaseDoc
 
 class MyDoc(BaseDoc):
@@ -251,7 +251,7 @@ class ForwardingExecutor(Executor):
 Use callbacks to process responses as they arrive:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList, BaseDoc
 
 class MyDoc(BaseDoc):
@@ -291,7 +291,7 @@ Callbacks are more memory-efficient for large datasets because responses are pro
 Send requests to specific Executors in a Flow using `target_executor`:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList, BaseDoc
 
 class MyDoc(BaseDoc):
@@ -321,7 +321,7 @@ results = client.post(
 Check if the Flow is ready to receive requests:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 
 client = Client(port=54321)
 
@@ -338,7 +338,7 @@ else:
 Measure network latency before sending data:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 
 client = Client(host='grpc://my-server:54321')
 client.profiling()
@@ -360,7 +360,7 @@ Output:
 By default, responses may arrive out of order due to parallel processing. To preserve order:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList, BaseDoc
 
 class MyDoc(BaseDoc):
@@ -388,7 +388,7 @@ for input_doc, output_doc in zip(docs, results):
 Enable compression for gRPC connections:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 
 client = Client(protocol='grpc', port=54321)
 
@@ -404,7 +404,7 @@ results = client.post('/process', inputs=docs, compression='deflate')
 Customize gRPC channel settings:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 
 client = Client(
     protocol='grpc',
@@ -462,7 +462,7 @@ curl http://localhost:54321/status
 Handle errors gracefully:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 from marie.excepts import BadClientInput, ConnectionError
 from docarray import DocList, BaseDoc
 
@@ -486,7 +486,7 @@ except Exception as e:
 Here's a complete example showing common Client patterns:
 
 ```python
-from marie import Client
+from marie.runtime import Client
 from docarray import DocList, BaseDoc
 from typing import Optional
 

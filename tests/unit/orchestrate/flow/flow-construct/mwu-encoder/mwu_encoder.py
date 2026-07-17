@@ -1,7 +1,7 @@
 import os
 from typing import Any
 
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 
 
 class MWUEncoder(Executor):

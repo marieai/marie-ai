@@ -10,10 +10,11 @@ from peft import LoraConfig, TaskType, get_peft_model
 from PIL import Image
 from ruamel.yaml import YAML
 
-from marie import DocumentArray, check
+from marie import check
 from marie.constants import __model_path__
 from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
+from marie.runtime import DocumentArray
 
 from ...api.docs import MarieDoc
 from ...boxes.dit.ulim_dit_box_processor import visualize_bboxes

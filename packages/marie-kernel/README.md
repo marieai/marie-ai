@@ -2,6 +2,8 @@
 
 State management kernel for Marie AI DAG task execution. Enables tasks within a DAG run to share state via simple key-value operations.
 
+The distribution name is `marie-kernel`; its PEP 420 import is `marie.kernel`.
+
 ## Installation
 
 ```bash
@@ -21,7 +23,7 @@ uv add 'marie-kernel[all]'
 ## Quick Start
 
 ```python
-from marie_kernel import TaskInstanceRef, RunContext, create_backend
+from marie.kernel import TaskInstanceRef, RunContext, create_backend
 
 # Create a backend (in-memory for testing)
 backend = create_backend("memory")
@@ -147,7 +149,7 @@ class RunContext:
 Thread-safe in-memory backend for testing:
 
 ```python
-from marie_kernel.backends import InMemoryStateBackend
+from marie.kernel.backends import InMemoryStateBackend
 
 backend = InMemoryStateBackend()
 ```
@@ -158,7 +160,7 @@ Production backend using PostgreSQL:
 
 ```python
 from psycopg_pool import ConnectionPool
-from marie_kernel.backends import PostgresStateBackend
+from marie.kernel.backends import PostgresStateBackend
 
 pool = ConnectionPool("postgresql://user:pass@localhost/marie")
 backend = PostgresStateBackend(pool)
@@ -170,7 +172,7 @@ Distributed backend using Amazon S3 (suitable for serverless/distributed environ
 
 ```python
 import boto3
-from marie_kernel.backends import S3StateBackend
+from marie.kernel.backends import S3StateBackend
 
 s3_client = boto3.client("s3")
 backend = S3StateBackend(s3_client, bucket="my-state-bucket", prefix="marie-state")
@@ -186,7 +188,7 @@ Object keys follow the pattern:
 ### Factory Functions
 
 ```python
-from marie_kernel import create_backend, create_backend_from_url
+from marie.kernel import create_backend, create_backend_from_url
 
 # By type
 backend = create_backend("memory")
@@ -267,7 +269,7 @@ uv sync --extra dev
 uv run pytest
 
 # Type checking
-uv run mypy src/marie_kernel
+uv run mypy src/marie/kernel
 
 # Formatting
 uv run black src tests

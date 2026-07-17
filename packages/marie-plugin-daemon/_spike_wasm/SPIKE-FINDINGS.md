@@ -2,7 +2,7 @@
 
 **Verdict: GATE FAIL for in-process `wasmtime-go`; GATE PASS for in-process Python `wasmtime`.**
 **LOCKED decision (user): run components as daemon-managed `python_source` plugins via Python wasmtime
-(`marie_wasm.daemon_runner`).** No wasmtime-go, no Rust sidecar, no daemon Go changes.
+(`marie.wasm.daemon_runner`).** No wasmtime-go, no Rust sidecar, no daemon Go changes.
 
 ## ✅ PROVEN END-TO-END (2026-06-29, `proof_e2e.py`)
 

@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from marie_kernel import RunContext, TaskInstanceRef
-from marie_kernel.backends import InMemoryStateBackend
 from marie_longextract.context_providers.longextract_context import (
     LongExtractContextProvider,
 )
 
+from marie.kernel import RunContext, TaskInstanceRef
+from marie.kernel.backends import InMemoryStateBackend
 from marie.storage import StorageManager
 
 

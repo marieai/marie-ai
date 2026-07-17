@@ -1896,6 +1896,44 @@ wheels = [
 ]
 
 [[package]]
+name = "marie-agent"
+version = "0.1.0"
+source = { editable = "packages/marie-agent" }
+dependencies = [
+    { name = "marie-instrumentation" },
+    { name = "marie-mem0" },
+    { name = "openinference-semantic-conventions" },
+    { name = "opentelemetry-api" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "typing-extensions" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "a2a-sdk", marker = "extra == 'a2a'", specifier = ">=0.3.9" },
+    { name = "a2a-sdk", marker = "extra == 'dev'", specifier = ">=0.3.9" },
+    { name = "haystack-ai", marker = "extra == 'haystack'", specifier = ">=2.0.0" },
+    { name = "httpx", marker = "extra == 'a2a'", specifier = ">=0.25.0" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.25.0" },
+    { name = "httpx", marker = "extra == 'openai'", specifier = ">=0.25.0" },
+    { name = "marie-instrumentation", editable = "packages/marie-instrumentation" },
+    { name = "marie-mem0", editable = "packages/marie-mem0" },
+    { name = "openai", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0.0" },
+    { name = "openinference-semantic-conventions", specifier = ">=0.1.30" },
+    { name = "opentelemetry-api", specifier = ">=1.20.0" },
+    { name = "pyautogen", marker = "extra == 'autogen'", specifier = ">=0.2,<0.3" },
+    { name = "pydantic", specifier = ">=2.11.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "pyyaml", specifier = ">=5.3.1" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
+    { name = "typing-extensions", specifier = ">=4.12.2" },
+]
+provides-extras = ["openai", "a2a", "autogen", "haystack", "dev"]
+
+[[package]]
 name = "marie-ai"
 source = { editable = "." }
 dependencies = [
@@ -1940,6 +1978,10 @@ dependencies = [
     { name = "jsons" },
     { name = "levenshtein" },
     { name = "lmdb" },
+    { name = "marie-agent" },
+    { name = "marie-engine" },
+    { name = "marie-extension" },
+    { name = "marie-instrumentation" },
     { name = "marie-kernel" },
     { name = "marie-mcp" },
     { name = "marie-mem0" },
@@ -2048,6 +2090,7 @@ dev = [
     { name = "filelock" },
     { name = "gradio" },
     { name = "kubernetes" },
+    { name = "marie-cli" },
     { name = "mock" },
     { name = "openinference-instrumentation" },
     { name = "opentelemetry-api" },
@@ -2137,10 +2180,14 @@ requires-dist = [
     { name = "jsons" },
     { name = "levenshtein" },
     { name = "lmdb" },
-    { name = "marie-kernel", directory = "packages/marie-kernel" },
-    { name = "marie-mcp", directory = "packages/marie-mcp" },
-    { name = "marie-mem0", directory = "packages/marie-mem0" },
-    { name = "marie-wasm", directory = "packages/marie-wasm" },
+    { name = "marie-agent", editable = "packages/marie-agent" },
+    { name = "marie-engine", editable = "packages/marie-engine" },
+    { name = "marie-extension", editable = "packages/marie-extension" },
+    { name = "marie-instrumentation", editable = "packages/marie-instrumentation" },
+    { name = "marie-kernel", editable = "packages/marie-kernel" },
+    { name = "marie-mcp", editable = "packages/marie-mcp" },
+    { name = "marie-mem0", editable = "packages/marie-mem0" },
+    { name = "marie-wasm", editable = "packages/marie-wasm" },
     { name = "matplotlib" },
     { name = "mcp", specifier = ">=1.6.0" },
     { name = "mem0ai", specifier = ">=0.1.0" },
@@ -2236,6 +2283,7 @@ dev = [
     { name = "filelock" },
     { name = "gradio" },
     { name = "kubernetes", specifier = ">=18.20.0,<31.0.0" },
+    { name = "marie-cli", editable = "packages/marie-cli" },
     { name = "mock" },
     { name = "openinference-instrumentation", specifier = ">=0.1.46" },
     { name = "opentelemetry-api", specifier = ">=1.20.0" },
@@ -2277,9 +2325,120 @@ legacy-gradio = [
 ]
 
 [[package]]
+name = "marie-cli"
+version = "0.1.0"
+source = { editable = "packages/marie-cli" }
+dependencies = [
+    { name = "marie-ai" },
+    { name = "rich" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "marie-ai", editable = "." },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "rich", specifier = ">=13.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
+]
+provides-extras = ["dev"]
+
+[[package]]
+name = "marie-engine"
+version = "0.1.0"
+source = { editable = "packages/marie-engine" }
+dependencies = [
+    { name = "diskcache" },
+    { name = "json-repair" },
+    { name = "marie-instrumentation" },
+    { name = "openinference-semantic-conventions" },
+    { name = "opentelemetry-api" },
+    { name = "pillow" },
+    { name = "platformdirs" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "diskcache", specifier = ">=5.6.0" },
+    { name = "json-repair", specifier = ">=0.30.0" },
+    { name = "marie-agent", marker = "extra == 'agent'", editable = "packages/marie-agent" },
+    { name = "marie-agent", marker = "extra == 'dev'", editable = "packages/marie-agent" },
+    { name = "marie-instrumentation", editable = "packages/marie-instrumentation" },
+    { name = "openai", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0.0" },
+    { name = "openinference-semantic-conventions", specifier = ">=0.1.30" },
+    { name = "opentelemetry-api", specifier = ">=1.20.0" },
+    { name = "pillow", specifier = ">=11.0,<13" },
+    { name = "platformdirs", specifier = ">=4.0.0" },
+    { name = "pydantic", specifier = ">=2.11.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
+    { name = "tenacity", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "tenacity", marker = "extra == 'openai'", specifier = ">=8.0.0" },
+    { name = "tiktoken", marker = "extra == 'openai'", specifier = ">=0.7.0" },
+    { name = "torch", marker = "extra == 'dev'", specifier = ">=2.1.0" },
+    { name = "torch", marker = "extra == 'openai'", specifier = ">=2.1.0" },
+    { name = "torch", marker = "extra == 'transformers'", specifier = ">=2.1.0" },
+    { name = "transformers", marker = "extra == 'transformers'", specifier = ">=4.49.0" },
+    { name = "valkey", marker = "extra == 'dev'", specifier = ">=6.0.0" },
+    { name = "valkey", marker = "extra == 'queue'", specifier = ">=6.0.0" },
+]
+provides-extras = ["openai", "agent", "transformers", "queue", "dev"]
+
+[[package]]
+name = "marie-extension"
+version = "0.1.0"
+source = { editable = "packages/marie-extension" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
+    { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pyyaml", specifier = ">=6.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+]
+provides-extras = ["dev"]
+
+[[package]]
+name = "marie-instrumentation"
+version = "0.1.0"
+source = { editable = "packages/marie-instrumentation" }
+dependencies = [
+    { name = "openinference-instrumentation" },
+    { name = "openinference-semantic-conventions" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp" },
+    { name = "opentelemetry-sdk" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "openinference-instrumentation", specifier = ">=0.1.46" },
+    { name = "openinference-semantic-conventions", specifier = ">=0.1.30" },
+    { name = "opentelemetry-api", specifier = ">=1.20.0" },
+    { name = "opentelemetry-exporter-otlp", specifier = ">=1.20.0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
+    { name = "tiktoken", marker = "extra == 'token-counting'", specifier = ">=0.7.0" },
+]
+provides-extras = ["token-counting", "dev"]
+
+[[package]]
 name = "marie-kernel"
 version = "0.1.0"
-source = { directory = "packages/marie-kernel" }
+source = { editable = "packages/marie-kernel" }
 dependencies = [
     { name = "pydantic" },
 ]
@@ -2304,7 +2463,7 @@ provides-extras = ["postgres", "s3", "all", "dev"]
 [[package]]
 name = "marie-mcp"
 version = "0.1.0"
-source = { directory = "packages/marie-mcp" }
+source = { editable = "packages/marie-mcp" }
 dependencies = [
     { name = "aiofiles" },
     { name = "boto3" },
@@ -2336,7 +2495,7 @@ provides-extras = ["dev"]
 [[package]]
 name = "marie-mem0"
 version = "0.1.0"
-source = { directory = "packages/marie-mem0" }
+source = { editable = "packages/marie-mem0" }
 dependencies = [
     { name = "mem0ai" },
     { name = "pydantic" },
@@ -2357,7 +2516,7 @@ provides-extras = ["dev"]
 [[package]]
 name = "marie-wasm"
 version = "0.1.0"
-source = { directory = "packages/marie-wasm" }
+source = { editable = "packages/marie-wasm" }
 dependencies = [
     { name = "aiofiles" },
     { name = "docker" },

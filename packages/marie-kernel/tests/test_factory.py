@@ -5,8 +5,9 @@ Tests for backend factory functions.
 from unittest.mock import MagicMock, patch
 
 import pytest
-from marie_kernel import create_backend, create_backend_from_url
-from marie_kernel.backends.memory import InMemoryStateBackend
+
+from marie.kernel import create_backend, create_backend_from_url
+from marie.kernel.backends.memory import InMemoryStateBackend
 
 
 class TestCreateBackend:
@@ -44,7 +45,7 @@ class TestCreateBackend:
         mock_pool = MagicMock()
         backend = create_backend("postgres", connection_pool=mock_pool)
 
-        from marie_kernel.backends.postgres import PostgresStateBackend
+        from marie.kernel.backends.postgres import PostgresStateBackend
 
         assert isinstance(backend, PostgresStateBackend)
 
@@ -80,7 +81,7 @@ class TestCreateBackend:
             "s3", s3_client=mock_client, bucket="my-bucket", prefix="custom-prefix"
         )
 
-        from marie_kernel.backends.s3 import S3StateBackend
+        from marie.kernel.backends.s3 import S3StateBackend
 
         assert isinstance(backend, S3StateBackend)
 
@@ -127,7 +128,7 @@ class TestCreateBackendFromUrl:
                 "postgresql://user:pass@localhost:5432/marie"
             )
 
-            from marie_kernel.backends.postgres import PostgresStateBackend
+            from marie.kernel.backends.postgres import PostgresStateBackend
 
             assert isinstance(backend, PostgresStateBackend)
 
@@ -162,7 +163,7 @@ class TestCreateBackendFromUrl:
 
             mock_client_func.assert_called_once_with("s3")
 
-            from marie_kernel.backends.s3 import S3StateBackend
+            from marie.kernel.backends.s3 import S3StateBackend
 
             assert isinstance(backend, S3StateBackend)
 
@@ -176,7 +177,7 @@ class TestCreateBackendFromUrl:
 
             backend = create_backend_from_url("s3://my-bucket")
 
-            from marie_kernel.backends.s3 import S3StateBackend
+            from marie.kernel.backends.s3 import S3StateBackend
 
             assert isinstance(backend, S3StateBackend)
             # Verify default prefix was used
@@ -188,7 +189,7 @@ class TestFactoryProtocolCompliance:
 
     def test_memory_backend_is_state_backend(self):
         """Test that memory backend satisfies StateBackend protocol."""
-        from marie_kernel import StateBackend
+        from marie.kernel import StateBackend
 
         backend = create_backend("memory")
         assert isinstance(backend, StateBackend)
@@ -196,7 +197,7 @@ class TestFactoryProtocolCompliance:
     def test_postgres_backend_is_state_backend(self):
         """Test that postgres backend satisfies StateBackend protocol."""
         psycopg_pool = pytest.importorskip("psycopg_pool")
-        from marie_kernel import StateBackend
+        from marie.kernel import StateBackend
 
         with patch.object(psycopg_pool, "ConnectionPool") as mock_pool_class:
             mock_pool = MagicMock()
@@ -208,7 +209,7 @@ class TestFactoryProtocolCompliance:
     def test_s3_backend_is_state_backend(self):
         """Test that S3 backend satisfies StateBackend protocol."""
         boto3 = pytest.importorskip("boto3")
-        from marie_kernel import StateBackend
+        from marie.kernel import StateBackend
 
         with patch.object(boto3, "client") as mock_client_func:
             mock_client = MagicMock()

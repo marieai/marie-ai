@@ -3,9 +3,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Type
 
 if TYPE_CHECKING:
-    from marie_kernel.context import RunContext
-
     from marie.extract.structures.unstructured_document import UnstructuredDocument
+    from marie.kernel.context import RunContext
 
 
 @dataclass

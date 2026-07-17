@@ -1,6 +1,6 @@
 import os
 
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 
 
 class DummyExec(Executor):

@@ -8,8 +8,9 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from marie_kernel.backends.filesystem import FileSystemStateBackend
-from marie_kernel.ref import TaskInstanceRef
+
+from marie.kernel.backends.filesystem import FileSystemStateBackend
+from marie.kernel.ref import TaskInstanceRef
 
 
 @pytest.fixture

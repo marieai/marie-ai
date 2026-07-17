@@ -5,8 +5,8 @@ from threading import Thread
 import numpy as np
 import pytest
 
-from marie import Client, Document, Flow
 from marie.helper import random_port
+from marie.runtime import Client, Document, Flow
 
 
 @pytest.mark.slow

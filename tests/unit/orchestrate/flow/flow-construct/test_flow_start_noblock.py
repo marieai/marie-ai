@@ -2,9 +2,9 @@ import time
 
 import pytest
 
-from marie import Flow
 from marie.excepts import RuntimeFailToStart
 from marie.logging_core.profile import TimeContext
+from marie.runtime import Flow
 from marie.serve.executors import BaseExecutor
 
 

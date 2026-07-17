@@ -13,7 +13,7 @@ import (
 )
 
 // wasmFixtureZip packages testdata/fixture-wasm-plugin (a python_source plugin
-// whose entrypoint is marie_wasm.daemon_runner + a compiled node.wasm).
+// whose entrypoint is marie.wasm.daemon_runner + a compiled node.wasm).
 func wasmFixtureZip(t *testing.T) []byte {
 	t.Helper()
 	root := filepath.Join("..", "..", "..", "testdata", "fixture-wasm-plugin")
@@ -44,7 +44,7 @@ func wasmFixtureZip(t *testing.T) []byte {
 
 // TestWasmNodeRunsThroughDaemon is the W1 acceptance: the built-in http-request
 // WASM node runs as a daemon-managed plugin. The daemon builds the venv
-// (installs marie-wasm), spawns `python -m marie_wasm.daemon_runner`, which
+// (installs marie-wasm), spawns `python -m marie.wasm.daemon_runner`, which
 // loads node.wasm, wires the host imports, and on invoke makes a real outbound
 // HTTP call through the Go-less Python host, streaming the result back.
 func TestWasmNodeRunsThroughDaemon(t *testing.T) {

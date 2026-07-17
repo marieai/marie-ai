@@ -7,9 +7,8 @@ from marie.extract.structures.concrete_annotations import TypedAnnotation
 from marie.logging_core.predefined import default_logger as logger
 
 if TYPE_CHECKING:
-    from marie_kernel.context import RunContext
-
     from marie.extract.structures.unstructured_document import UnstructuredDocument
+    from marie.kernel.context import RunContext
 
 
 class TableContextProvider(ContextProvider):

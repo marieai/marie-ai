@@ -3,10 +3,10 @@ import uuid
 import pytest
 
 import marie.excepts
-from marie import Document, DocumentArray, Executor, Flow, requests
 from marie.helper import random_port
 from marie.orchestrate.deployments import Deployment
 from marie.parsers import set_deployment_parser
+from marie.runtime import Document, DocumentArray, Executor, Flow, requests
 from marie.serve.helper import get_server_side_grpc_options
 
 

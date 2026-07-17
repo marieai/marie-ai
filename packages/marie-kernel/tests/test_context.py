@@ -7,8 +7,9 @@ import os
 import tempfile
 
 import pytest
-from marie_kernel import RunContext, TaskInstanceRef
-from marie_kernel.backends.memory import InMemoryStateBackend
+
+from marie.kernel import RunContext, TaskInstanceRef
+from marie.kernel.backends.memory import InMemoryStateBackend
 
 
 class TestRunContextBasic:

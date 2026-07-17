@@ -3,8 +3,8 @@ import pytest
 from docarray import DocumentArray
 from docarray.document.generators import from_ndarray
 
-from marie import Client, Flow
 from marie.excepts import BadClientCallback
+from marie.runtime import Client, Flow
 
 
 def validate(x):

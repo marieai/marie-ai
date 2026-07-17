@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from marie import Flow
+from marie.runtime import Flow
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))
 

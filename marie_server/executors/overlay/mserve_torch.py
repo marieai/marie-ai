@@ -2,8 +2,8 @@ from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException, Request
 
-from marie import Client
 from marie.logging_core.predefined import default_logger
+from marie.runtime import Client
 from marie_server.rest_extension import (
     handle_request,
     parse_payload_to_docs,

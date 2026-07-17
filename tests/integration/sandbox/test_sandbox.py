@@ -1,6 +1,6 @@
 import pytest
 
-from marie import Document, Flow
+from marie.runtime import Document, Flow
 
 
 @pytest.mark.parametrize('endpoint', ['foo', 'bar'])

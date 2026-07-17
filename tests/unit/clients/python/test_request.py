@@ -5,10 +5,10 @@ import numpy as np
 import pytest
 from docarray import Document
 
-from marie import Flow
 from marie.clients.request import request_generator
 from marie.clients.request.helper import _new_doc_from_data
 from marie.enums import DataInputType
+from marie.runtime import Flow
 
 
 @pytest.mark.skipif(

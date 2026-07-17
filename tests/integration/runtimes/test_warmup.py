@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from marie import Executor, Flow
+from marie.runtime import Executor, Flow
 
 SLOW_EXECUTOR_SLEEP_TIME = 3
 

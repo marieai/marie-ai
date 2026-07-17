@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 
 from grpc.aio import ClientInterceptor
 
-from marie.serve.networking.balancer.circuit_breaker import CircuitBreakerConfig
+from marie.engine.circuit_breaker import CircuitBreakerConfig
 from marie.serve.networking.balancer.load_balancer import LoadBalancer, LoadBalancerType
 from marie.serve.networking.connection_stub import create_async_channel_stub
 from marie.serve.networking.instrumentation import _NetworkingHistograms

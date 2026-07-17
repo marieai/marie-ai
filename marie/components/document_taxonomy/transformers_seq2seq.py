@@ -8,10 +8,11 @@ import torch
 from docarray import DocList
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-from marie import DocumentArray, check
+from marie import check
 from marie.constants import __model_path__
 from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
+from marie.runtime import DocumentArray
 
 from ...api.docs import MarieDoc
 from ...registry.model_registry import ModelRegistry

@@ -5,7 +5,6 @@ from typing import Any, Optional
 import torch
 from docarray import DocList
 
-from marie import requests
 from marie.api.docs import AssetKeyDoc
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
@@ -14,6 +13,7 @@ from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import initialize_device_settings, setup_torch_optimizations
 from marie.pipe.components import update_existing_meta
+from marie.runtime import requests
 from marie.storage import StorageManager
 from marie.utils.asset_util import create_working_dir, s3_asset_path, store_assets
 from marie.utils.json import load_json_file, store_json_object

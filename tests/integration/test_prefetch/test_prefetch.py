@@ -1,8 +1,8 @@
 import pytest
 import requests as req
 
-from marie import DocumentArray  # compatible with docarray < 0.30
-from marie import Executor, Flow, requests
+from marie.runtime import DocumentArray  # compatible with docarray < 0.30
+from marie.runtime import Executor, Flow, requests
 
 
 @pytest.mark.parametrize("protocol", ["http", "grpc", "websocket"])

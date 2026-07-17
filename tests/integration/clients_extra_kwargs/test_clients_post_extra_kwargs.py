@@ -1,8 +1,8 @@
 import grpc
 import pytest
 
-from marie import Flow
 from marie.clients import Client
+from marie.runtime import Flow
 from marie.serve.helper import get_server_side_grpc_options
 from marie.serve.runtimes.gateway.grpc import GRPCGateway
 from tests import random_docs

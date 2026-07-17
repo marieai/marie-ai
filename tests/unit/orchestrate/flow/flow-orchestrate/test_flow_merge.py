@@ -2,7 +2,7 @@ import random
 
 import pytest
 
-from marie import Document, Executor, Flow, requests
+from marie.runtime import Document, Executor, Flow, requests
 from tests import random_docs, validate_callback
 
 

@@ -55,7 +55,7 @@ try:
     import aiohttp
     import grpc
 
-    from marie import Client, Document, DocumentArray
+    from marie.runtime import Client, Document, DocumentArray
 except ImportError as e:
     print(f"Error importing dependencies: {e}")
     print("Make sure marie and aiohttp are installed:")

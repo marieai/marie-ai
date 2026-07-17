@@ -31,9 +31,9 @@ from __future__ import annotations
 
 import os
 
-from marie.agent.tools.plugin_daemon_client import PluginDaemonClient
-from marie.agent.tools.plugin_tool import PluginTool
 from marie.agent.tools.registry import resolve_tools
+from marie.plugins.agent_tool import PluginTool
+from marie.plugins.daemon_client import PluginDaemonClient
 
 # --- Tenant + signing (set to match the daemon you're talking to) ------------
 ORG_ID = os.getenv("MARIE_ORG_ID", "11111111-1111-1111-1111-111111111111")

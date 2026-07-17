@@ -2,12 +2,12 @@ from typing import Any, Optional, Union
 
 import torch
 
-from marie import requests
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import initialize_device_settings, setup_torch_optimizations
+from marie.runtime import requests
 from marie.utils.network import get_ip_address
 
 

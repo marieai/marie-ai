@@ -1,4 +1,4 @@
-from marie import DocumentArray, requests
+from marie.runtime import DocumentArray, requests
 from marie.serve.executors import BaseExecutor
 
 

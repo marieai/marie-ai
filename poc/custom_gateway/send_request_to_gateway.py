@@ -6,7 +6,7 @@ import time
 from docarray import DocList
 from docarray.documents import TextDoc
 
-from marie import Client
+from marie.runtime import Client
 from marie.utils.json import deserialize_value
 
 

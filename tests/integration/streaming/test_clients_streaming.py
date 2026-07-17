@@ -8,7 +8,7 @@ from typing import List
 
 import pytest
 
-from marie import Client, Document, DocumentArray, Executor, Flow, requests
+from marie.runtime import Client, Document, DocumentArray, Executor, Flow, requests
 
 INPUT_LEN = 4
 INPUT_GEN_SLEEP_TIME = 1

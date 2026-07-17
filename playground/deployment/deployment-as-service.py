@@ -1,6 +1,6 @@
 from docarray import BaseDoc, DocList
 
-from marie import Deployment, Executor, requests
+from marie.runtime import Deployment, Executor, requests
 
 
 class MyExecutor(Executor):

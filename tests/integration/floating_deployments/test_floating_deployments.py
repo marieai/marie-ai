@@ -3,8 +3,8 @@ import time
 
 import pytest
 
-from marie import DocumentArray, Executor, Flow, requests
 from marie.constants import __default_endpoint__
+from marie.runtime import DocumentArray, Executor, Flow, requests
 
 TIME_SLEEP_FLOATING = 1.0
 

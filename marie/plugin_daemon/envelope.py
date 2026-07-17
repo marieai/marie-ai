@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 if TYPE_CHECKING:
-    from marie.agent.tools.plugin_tool import PluginToolSpec
+    from marie.plugins.agent_tool import PluginToolSpec
 
 DEFAULT_RUNTIME_POLICY: dict[str, Any] = {
     "maxConcurrent": 1,

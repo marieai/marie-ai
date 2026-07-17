@@ -4,11 +4,12 @@ import time
 import pytest
 import requests
 
-from marie import Deployment, Executor, Flow, helper
-from marie import requests as req
+from marie import helper
 from marie.clients import Client
 from marie.orchestrate.pods.factory import PodFactory
 from marie.parsers import set_gateway_parser
+from marie.runtime import Deployment, Executor, Flow
+from marie.runtime import requests as req
 from tests import random_docs
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))

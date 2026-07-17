@@ -27,7 +27,6 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from docarray import DocList
 from docarray.documents import TextDoc
 
-from marie import requests
 from marie.api.docs import AssetKeyDoc
 from marie.assets import AssetTracker
 from marie.executor.guardrail.runtime import GuardrailRuntime
@@ -38,6 +37,7 @@ from marie.query_planner.guardrail import (
     GuardrailReportAsset,
 )
 from marie.query_planner.jsonpath_evaluator import JSONPathEvaluator
+from marie.runtime import requests
 from marie.storage import StorageManager
 from marie.utils.asset_util import s3_asset_path
 

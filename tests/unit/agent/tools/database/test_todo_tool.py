@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from marie.agent.tools import ToolOutput
-from marie.agent.tools.database.todo_tool import TodoAction, TodoTool
+from marie.storage.database.agent_tools.todo_tool import TodoAction, TodoTool
 
 from .conftest import MockRecord
 

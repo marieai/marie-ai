@@ -2,6 +2,8 @@
 
 Mem0 memory integration for Marie AI agents.
 
+The distribution name is `marie-mem0`; its PEP 420 import is `marie.mem0`.
+
 ## Overview
 
 This package provides Mem0 SDK integration for persistent agent memory, allowing agents to store and retrieve memories across conversations using pgvector storage.
@@ -24,7 +26,7 @@ uv sync
 ### Basic Usage
 
 ```python
-from marie_mem0 import Mem0Config, Mem0Memory
+from marie.mem0 import Mem0Config, Mem0Memory
 
 # Configure mem0
 config = Mem0Config(
@@ -59,7 +61,7 @@ results = memory.search(
 ### With Context Provider
 
 ```python
-from marie_mem0 import Mem0Provider
+from marie.mem0 import Mem0Provider
 
 # Create provider for agent integration
 provider = Mem0Provider(

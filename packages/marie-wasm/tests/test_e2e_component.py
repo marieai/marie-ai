@@ -26,12 +26,12 @@ import pytest
 wasmtime = pytest.importorskip("wasmtime")
 component = pytest.importorskip("wasmtime.component")
 
-from marie_wasm import Permissions  # noqa: E402
+from marie.wasm import Permissions  # noqa: E402
 
 # The built-in node library ships inside this package: tests/ -> marie-wasm,
 # so the nodes live at ../nodes/compiled/. Prefer the package constant.
 try:
-    from marie_wasm import BUILTIN_NODES_DIR as _BND
+    from marie.wasm import BUILTIN_NODES_DIR as _BND
 
     FIXTURE = _BND / "http-request.wasm"
 except ImportError:  # pragma: no cover
@@ -70,7 +70,7 @@ def test_http_request_node_runs_end_to_end():
 
     srv, url = _start_server()
     try:
-        # Trust boundary: the host imports enforce marie_wasm Permissions.
+        # Trust boundary: the host imports enforce marie.wasm Permissions.
         perms = Permissions(allow_http=True)
         calls = {"fetch": 0, "log": []}
 

@@ -6,7 +6,7 @@ Tests the LLM wrapper interface and implementations.
 import pytest
 
 from marie.agent import BaseLLMWrapper, Message
-from marie.agent.llm_wrapper import MarieEngineLLMWrapper, get_llm_wrapper
+from marie.engine.agent_wrapper import MarieEngineLLMWrapper, get_llm_wrapper
 
 
 class TestMockLLMWrapper:

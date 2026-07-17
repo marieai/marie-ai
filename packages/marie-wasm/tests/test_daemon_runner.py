@@ -1,4 +1,4 @@
-"""Tests for marie_wasm.daemon_runner — running the built-in http-request node
+"""Tests for marie.wasm.daemon_runner — running the built-in http-request node
 as a daemon-managed plugin (load_config, run_execute, and the stdio protocol).
 """
 
@@ -15,7 +15,7 @@ import pytest
 pytest.importorskip("wasmtime")
 pytest.importorskip("wasmtime.component")
 
-from marie_wasm import BUILTIN_NODES_DIR, daemon_runner  # noqa: E402
+from marie.wasm import BUILTIN_NODES_DIR, daemon_runner  # noqa: E402
 
 FIXTURE_WASM = BUILTIN_NODES_DIR / "http-request.wasm"
 
@@ -45,7 +45,7 @@ def _make_plugin_dir(tmp_path: Path) -> Path:
         "kind: ExtensionPackage\n"
         "metadata:\n  id: ext.test.http-wasm\n  name: http-wasm\n  version: 0.0.1\n"
         "runtime:\n  type: python_source\n  language: python\n  version: '3.12'\n"
-        "  entrypoint: marie_wasm.daemon_runner\n  engine: python-wasmtime\n"
+        "  entrypoint: marie.wasm.daemon_runner\n  engine: python-wasmtime\n"
         "  module: node.wasm\n  permissions: http-request\n"
     )
     return d

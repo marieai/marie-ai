@@ -32,9 +32,9 @@ from marie_longextract.parsers import parse_longextract_aggregated
 from omegaconf import OmegaConf
 from pydantic import BaseModel
 
-from marie.agent.agents.assistant import ReactAgent
-from marie.agent.llm_wrapper import OpenAICompatibleWrapper
-from marie.agent.message import ContentItem, Message
+from marie.agent.agents import ReactAgent
+from marie.agent.llm import OpenAICompatibleWrapper
+from marie.agent.messages import ContentItem, Message
 from marie.agent.tools.filesystem import FileReadTool
 from marie.engine.output_parser import parse_json_markdown
 

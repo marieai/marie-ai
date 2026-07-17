@@ -3,11 +3,11 @@ import os
 
 import pytest
 
-from marie import Document, Flow
 from marie.constants import __uptime__, __windows__
 from marie.enums import LogVerbosity
 from marie.helper import colored
 from marie.logging_core.logger import MarieLogger as JinaLogger
+from marie.runtime import Document, Flow
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))
 

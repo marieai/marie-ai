@@ -2,7 +2,7 @@ import asyncio
 import atexit
 import os
 import threading
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
 from marie.constants import __cache_path__
 from marie.logging_core.predefined import default_logger as logger
@@ -47,7 +47,6 @@ def setup_toast_events(toast_config: Dict[str, Any]) -> Optional[GrpcEventBroker
         logger.warning("No toast config provided")
         return None
 
-    native_config = toast_config.get("native", {})
     psql_cfg = toast_config.get("psql")
     rabbitmq_cfg = toast_config.get("rabbitmq")
     grpc_cfg = toast_config.get("grpc", {})
@@ -119,7 +118,6 @@ def setup_storage(storage_config: Dict[str, Any]) -> None:
 
 def setup_llm_tracking(
     llm_tracking_config: Dict[str, Any],
-    storage_config: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Setup LLM tracking instrumentation.
@@ -134,9 +132,12 @@ def setup_llm_tracking(
         logger.debug("LLM tracking is disabled or not configured")
         return
 
-    from marie.instrumentation.config import ExporterType, configure_from_yaml
+    from marie.instrumentation import configure_media_reference_resolver
+    from marie.instrumentation.config import ExporterType, configure
+    from marie.observability.media import resolve_media_reference
 
-    settings = configure_from_yaml(llm_tracking_config, storage_config)
+    settings = configure(llm_tracking_config)
+    configure_media_reference_resolver(resolve_media_reference)
 
     if settings.EXPORTER == ExporterType.OTEL:
         _ensure_tracer_provider(
@@ -162,7 +163,7 @@ def _ensure_tracer_provider(
     if is_proxy:
         from marie.instrumentation import register
 
-        register(console_export=console_export)
+        register(service_name="marie-ai", console_export=console_export)
         logger.info("Created global OI TracerProvider for LLM tracking")
         return
 

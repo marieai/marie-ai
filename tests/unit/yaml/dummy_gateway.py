@@ -4,7 +4,7 @@ from docarray import Document, DocumentArray
 from pydantic import BaseModel
 from uvicorn import Config, Server
 
-from marie import Gateway
+from marie.runtime import Gateway
 
 
 class DummyResponseModel(BaseModel):

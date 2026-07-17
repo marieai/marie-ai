@@ -2,6 +2,10 @@
 
 A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for the Marie AI document intelligence platform. This server enables AI assistants like Claude to interact with Marie AI's OCR, document classification, data extraction, and job management capabilities.
 
+The distribution name is `marie-mcp`; its PEP 420 import is
+`marie.mcp.server`. The intermediate `marie.mcp` namespace is shared with the
+Marie AI host's MCP client and persistence modules.
+
 ## Features
 
 - **Document Processing**: Submit OCR extraction and template-based data extraction jobs
@@ -267,11 +271,11 @@ All document processing goes through Marie AI's job submission system:
 
 ```
 marie-mcp-server/
-├── src/marie_mcp/
+├── src/marie/mcp/server/
 │   ├── server.py              # MCP server entry point
 │   ├── config.py              # Configuration management
 │   ├── clients/
-│   │   └── marie_client.py    # HTTP client for Marie gateway
+│   │   └── marie.client.py    # HTTP client for Marie gateway
 │   ├── tools/
 │   │   ├── document_processing.py   # OCR & data extraction tools
 │   │   ├── job_management.py        # Job control tools

@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 from docarray import DocList
 from fastapi import HTTPException, Request
 
-from marie import Client, Flow
 from marie._core.utils import run_background_task
 from marie.api import (
     extract_payload_to_uri,
@@ -21,6 +20,7 @@ from marie.logging_core.mdc import MDC
 from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import mark_as_complete, mark_as_failed, mark_as_started
 from marie.messaging.publisher import mark_as_scheduled
+from marie.runtime import Client, Flow
 from marie.types_core.request.data import DataRequest
 from marie.utils.types import strtobool
 

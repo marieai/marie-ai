@@ -5,12 +5,12 @@ import time
 
 import pytest
 
-from marie import Client, Document
 from marie.enums import PodRoleType, PollingType
 from marie.helper import random_port
 from marie.orchestrate.pods import Pod
 from marie.orchestrate.pods.container import ContainerPod
 from marie.parsers import set_gateway_parser
+from marie.runtime import Client, Document
 from marie.serve.runtimes.servers import BaseServer
 from tests.helper import _generate_pod_args
 

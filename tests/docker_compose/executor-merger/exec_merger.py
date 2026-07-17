@@ -1,7 +1,7 @@
 from itertools import chain
 from typing import Dict, List
 
-from marie import Document, DocumentArray, Executor, requests
+from marie.runtime import Document, DocumentArray, Executor, requests
 
 
 class ExecMerger(Executor):

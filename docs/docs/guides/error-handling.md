@@ -44,7 +44,7 @@ Errors in Marie-AI can occur at different levels:
 If an Executor's `__init__` method raises an exception, the Flow cannot start:
 
 ```python
-from marie import Executor
+from marie.runtime import Executor
 
 class MyExecutor(Executor):
     def __init__(self, model_path: str, **kwargs):
@@ -66,7 +66,7 @@ When initialization fails:
 Errors in `@requests` methods are captured and returned to the client:
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 from docarray import DocList, BaseDoc
 
 class ProcessingExecutor(Executor):
@@ -108,7 +108,7 @@ executors:
 Or in Python:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow().add(
     uses=MyExecutor,
@@ -137,7 +137,7 @@ with:
 Or in Python:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow(retries=3).add(uses=MyExecutor)
 ```
@@ -164,7 +164,7 @@ with:
 Or in Python:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow(timeout_send=60000).add(uses=MyExecutor)
 ```
@@ -203,7 +203,7 @@ with:
 Or in Python:
 
 ```python
-from marie import Flow
+from marie.runtime import Flow
 
 f = Flow().config_gateway(prefetch=10).add(uses=MyExecutor)
 ```
@@ -297,7 +297,7 @@ When a dependency fails:
 ### gRPC errors
 
 ```python
-from marie import Client
+from marie.runtime import Client
 
 try:
     client = Client(port=54322)
@@ -329,7 +329,7 @@ logging:
 Standard Python breakpoints don't work inside Executors running in a Flow context. Use `epdb` instead:
 
 ```python
-from marie import Executor, requests
+from marie.runtime import Executor, requests
 
 class DebugExecutor(Executor):
     @requests

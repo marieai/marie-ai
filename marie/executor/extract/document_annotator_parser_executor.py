@@ -5,7 +5,6 @@ from typing import Any, Optional, Union
 import torch
 from docarray import DocList
 
-from marie import requests
 from marie.api.docs import AssetKeyDoc
 from marie.executor.extract.document_annotator_executor import (
     DocumentAnnotatorExecutor,
@@ -16,6 +15,7 @@ from marie.extract.registry.loader import initialize_components_from_config
 from marie.extract.results.result_parser import parse_results
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
+from marie.runtime import requests
 from marie.utils.asset_util import prepare_asset_directory, store_assets
 from marie.utils.docs import docs_from_asset, frames_from_docs
 from marie.utils.json import load_json_file

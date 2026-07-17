@@ -1,7 +1,7 @@
 import pytest
 
-from marie import Executor, Flow, requests
 from marie.excepts import BadClient
+from marie.runtime import Executor, Flow, requests
 
 
 class MyExec(Executor):

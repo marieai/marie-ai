@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from marie import Document, DocumentArray, Executor, Flow, requests
+from marie.runtime import Document, DocumentArray, Executor, Flow, requests
 
 
 @pytest.mark.parametrize(

@@ -211,7 +211,7 @@ def test_plugin_imports_do_not_reference_marie_runtime():
                 imports.add(node.module)
 
     assert not any(name == 'marie' or name.startswith('marie.') for name in imports)
-    assert 'marie_extension' not in imports
+    assert 'marie.extension' not in imports
 
 
 def test_package_script_includes_plugin_tree_and_schemas(tmp_path):

@@ -9,7 +9,6 @@ import numpy as np
 import torch
 from docarray import DocList
 
-from marie import Executor, requests, safely_encoded
 from marie.api import value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc, StorageDoc
 from marie.boxes import PSMode
@@ -41,6 +40,7 @@ from marie.models.utils import (
 from marie.ocr import CoordinateFormat
 from marie.pipe import ExtractPipeline
 from marie.plugins import EmbeddedPlugins
+from marie.runtime import Executor, requests, safely_encoded
 from marie.storage import StorageManager
 from marie.utils.docs import (
     docs_from_asset,

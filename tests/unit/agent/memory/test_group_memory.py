@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from marie.agent.memory.group_memory import (
+from marie.storage.database.agent_tools.group_memory import (
     GroupMemory,
     GroupMemoryConfig,
     GroupMemoryEntry,

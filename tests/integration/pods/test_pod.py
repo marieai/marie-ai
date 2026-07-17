@@ -6,7 +6,6 @@ from collections import defaultdict
 
 import pytest
 
-from marie import Client, Document, Executor, requests
 from marie.enums import PodRoleType, PollingType
 from marie.orchestrate.pods import Pod
 from marie.parsers import set_gateway_parser
@@ -15,6 +14,7 @@ from marie.resources.health_check.gateway import (
     check_health_websocket,
 )
 from marie.resources.health_check.pod import check_health_pod
+from marie.runtime import Client, Document, Executor, requests
 from marie.serve.networking.utils import send_request_sync
 from tests.helper import _generate_pod_args
 
