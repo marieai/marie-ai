@@ -7,6 +7,7 @@ dependencies = [
     "docling-slim[convert-core,format-email,format-latex,format-office,format-opendocument,format-web]==2.111.0",
     "markitdown[docx,pdf,pptx,xlsx]==0.1.6",
     "pydantic>=2.10,<3.0",
+    "pypdfium2==5.11.0",
     "tree-sitter-language-pack==1.12.5",
 ]
 

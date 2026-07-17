@@ -1,9 +1,8 @@
-"""
-Guardrail Evaluation Executor for running custom Python evaluation functions.
+"""Execute guardrail metrics and materialize attempt-scoped evaluation reports.
 
-This executor receives evaluation requests from GUARDRAIL nodes and returns
-scores with pass/fail status. It supports a registry of custom evaluation
-functions that can be called by name.
+DAG guardrail requests return only an immutable report reference. This executor
+does not select DAG paths or produce scheduler-owned branch metadata. Legacy
+direct function evaluation remains available through the same endpoint.
 
 Example usage in GUARDRAIL metric configuration:
     GuardrailMetric(
@@ -20,24 +19,32 @@ Example usage in GUARDRAIL metric configuration:
 
 import asyncio
 import inspect
+import io
 import json
 import re
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from docarray import DocList
 from docarray.documents import TextDoc
 
 from marie import requests
+from marie.api.docs import AssetKeyDoc
+from marie.assets import AssetTracker
+from marie.executor.guardrail.runtime import GuardrailRuntime
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
+from marie.query_planner.guardrail import (
+    GuardrailExecutionSpec,
+    GuardrailReportAsset,
+)
+from marie.query_planner.jsonpath_evaluator import JSONPathEvaluator
+from marie.storage import StorageManager
+from marie.utils.asset_util import s3_asset_path
 
 
 class GuardrailEvaluationExecutor(MarieExecutor):
     """
-    Executor for running custom Python evaluation functions.
-
-    Receives evaluation requests from GUARDRAIL nodes and returns
-    scores with pass/fail status.
+    Executor for DAG guardrail reports and registered Python evaluation functions.
 
     The executor maintains a registry of evaluation functions that can
     be called by name. Functions can be registered either:
@@ -131,12 +138,12 @@ class GuardrailEvaluationExecutor(MarieExecutor):
     @requests(on="/evaluate")
     async def evaluate(
         self,
-        docs: DocList[TextDoc],
+        docs: DocList[AssetKeyDoc],
         parameters: Dict[str, Any],
         **kwargs,
     ) -> DocList[TextDoc]:
         """
-        Run evaluation function on input data.
+        Evaluate a DAG guardrail or a legacy registered function.
 
         Parameters:
             - function: Name of evaluation function to run
@@ -144,8 +151,21 @@ class GuardrailEvaluationExecutor(MarieExecutor):
             - context: Execution context
             - config: Function-specific configuration
 
-        Returns doc with JSON: {"passed": bool, "score": float, "feedback": str}
+        DAG requests return a report-asset reference. Legacy requests return
+        `passed`, `score`, and `feedback`.
         """
+        payload = parameters.get("payload", {})
+        op_params = payload.get("op_params", {}) if isinstance(payload, dict) else {}
+        guardrail_spec = op_params.get("guardrail")
+        if guardrail_spec is not None:
+            result = await self._evaluate_guardrail(docs, parameters, guardrail_spec)
+            return DocList[TextDoc]([TextDoc(text=json.dumps(result))])
+
+        return await self._evaluate_registered_function(docs, parameters)
+
+    async def _evaluate_registered_function(
+        self, docs: DocList, parameters: Dict[str, Any]
+    ) -> DocList[TextDoc]:
         function_name = parameters.get("function", "default")
         input_data = parameters.get("input_data")
         context = parameters.get("context", {})
@@ -199,6 +219,281 @@ class GuardrailEvaluationExecutor(MarieExecutor):
             docs = DocList[TextDoc]([doc])
 
         return docs
+
+    async def _evaluate_guardrail(
+        self,
+        docs: DocList,
+        parameters: Dict[str, Any],
+        guardrail_spec: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        spec = GuardrailExecutionSpec.model_validate(guardrail_spec)
+        context, upstream_assets = await self._build_guardrail_context(
+            docs, parameters, spec
+        )
+        input_data = self._resolve_guardrail_value(
+            spec.input_source, context, "input_source"
+        )
+        context_data = self._resolve_guardrail_value(
+            spec.context_source, context, "context_source"
+        )
+        query_data = self._resolve_guardrail_value(
+            spec.query_source, context, "query_source"
+        )
+
+        runtime = GuardrailRuntime(self.evaluation_registry)
+        report = await asyncio.wait_for(
+            runtime.evaluate(
+                spec,
+                input_data,
+                context_data=context_data,
+                query_data=query_data,
+                full_context=context,
+            ),
+            timeout=spec.evaluation_timeout,
+        )
+        report_asset = await self._materialize_report(
+            report.model_dump_json(exclude_none=True).encode("utf-8"),
+            parameters,
+            upstream_assets,
+        )
+        return {
+            "guardrail_report_asset": report_asset.model_dump(mode="json"),
+        }
+
+    async def _build_guardrail_context(
+        self,
+        docs: DocList,
+        parameters: Dict[str, Any],
+        spec: GuardrailExecutionSpec,
+    ) -> Tuple[Dict[str, Any], list[Tuple[str, str, str | None]]]:
+        payload = parameters.get("payload", {})
+        if not isinstance(payload, dict):
+            raise ValueError("Guardrail payload must be an object")
+        op_params = payload.get("op_params", {})
+        if not isinstance(op_params, dict):
+            raise ValueError("Guardrail op_params must be an object")
+
+        source_expressions = (
+            spec.input_source,
+            spec.context_source,
+            spec.query_source,
+        )
+        needs_upstream = any(
+            source
+            and (
+                source.startswith("$.nodes") or source.startswith("$.execution_results")
+            )
+            for source in source_expressions
+        )
+        needs_document_output = any(
+            source and source.startswith("$.document.output")
+            for source in source_expressions
+        )
+        nodes: Dict[str, Any] = {}
+        upstream_assets: list[Tuple[str, str, str | None]] = []
+        if needs_upstream:
+            nodes, upstream_assets = await self._load_upstream_outputs(
+                parameters.get("dag_id"), spec.upstream_node_ids
+            )
+
+        document = None
+        if docs:
+            doc = docs[0]
+            asset_key = getattr(doc, "asset_key", None)
+            document = {"asset_key": asset_key}
+            if asset_key and (
+                needs_document_output
+                or (not spec.input_source and "input_data" not in op_params)
+            ):
+                raw = await asyncio.to_thread(StorageManager.read, asset_key)
+                document["output"] = self._decode_asset(raw)
+
+        context = {
+            "job_id": parameters.get("job_id"),
+            "dag_id": parameters.get("dag_id"),
+            "payload": payload,
+            "metadata": payload,
+            "nodes": nodes,
+            "execution_results": nodes,
+            "document": document,
+        }
+        if "input_data" in op_params:
+            context["input"] = op_params["input_data"]
+        elif "input_data" in spec.params:
+            context["input"] = spec.params["input_data"]
+        elif document and "output" in document:
+            context["input"] = document["output"]
+        return context, upstream_assets
+
+    async def _load_upstream_outputs(
+        self, dag_id: Any, upstream_node_ids: list[str]
+    ) -> Tuple[Dict[str, Any], list[Tuple[str, str, str | None]]]:
+        if not dag_id or not upstream_node_ids:
+            raise ValueError("Guardrail input requires upstream DAG node IDs")
+        if not self.storage_enabled or self.storage_handler is None:
+            raise RuntimeError(
+                "Guardrail upstream output resolution requires PostgreSQL storage"
+            )
+
+        def load() -> Tuple[Dict[str, Any], list[Tuple[str, str, str | None]]]:
+            conn = None
+            cursor = None
+            try:
+                conn = self.storage_handler._get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT DISTINCT ON (node_task_id, asset_key)
+                        node_task_id, asset_key, asset_version, partition_key, uri
+                    FROM marie_scheduler.asset_materialization
+                    WHERE dag_id = %s
+                      AND node_task_id = ANY(%s::uuid[])
+                      AND uri IS NOT NULL
+                    ORDER BY node_task_id, asset_key, created_at DESC
+                    """,
+                    (dag_id, upstream_node_ids),
+                )
+                rows = cursor.fetchall()
+                conn.commit()
+            finally:
+                if cursor:
+                    cursor.close()
+                if conn:
+                    self.storage_handler._close_connection(conn)
+
+            grouped: Dict[str, list[Dict[str, Any]]] = {}
+            lineage: list[Tuple[str, str, str | None]] = []
+            for node_task_id, asset_key, version, partition_key, uri in rows:
+                if not version:
+                    raise ValueError(
+                        f"Upstream asset '{asset_key}' has no immutable version"
+                    )
+                raw = StorageManager.read(uri)
+                item = {
+                    "asset_key": asset_key,
+                    "asset_version": version,
+                    "partition_key": partition_key,
+                    "uri": uri,
+                    "output": self._decode_asset(raw),
+                }
+                grouped.setdefault(str(node_task_id), []).append(item)
+                lineage.append((asset_key, version, partition_key))
+
+            nodes: Dict[str, Any] = {}
+            for node_id, assets in grouped.items():
+                output = (
+                    assets[0]["output"]
+                    if len(assets) == 1
+                    else {asset["asset_key"]: asset["output"] for asset in assets}
+                )
+                nodes[node_id] = {"output": output, "assets": assets}
+            return nodes, lineage
+
+        nodes, lineage = await asyncio.to_thread(load)
+        missing_nodes = set(upstream_node_ids) - set(nodes)
+        if missing_nodes:
+            raise ValueError(
+                "No materialized output assets found for upstream nodes: "
+                + ", ".join(sorted(missing_nodes))
+            )
+        return nodes, lineage
+
+    @staticmethod
+    def _decode_asset(raw: bytes) -> Any:
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return raw
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text
+
+    @staticmethod
+    def _resolve_guardrail_value(
+        source: Optional[str], context: Dict[str, Any], field_name: str
+    ) -> Any:
+        if not source:
+            if field_name == "input_source":
+                if "input" not in context:
+                    raise ValueError("Guardrail input could not be resolved")
+                return context["input"]
+            return None
+
+        evaluator = JSONPathEvaluator(use_extended=True)
+        if not evaluator.exists(source, context):
+            raise ValueError(f"Guardrail {field_name} did not resolve: {source}")
+        return evaluator.evaluate(source, context)
+
+    async def _materialize_report(
+        self,
+        report_bytes: bytes,
+        parameters: Dict[str, Any],
+        upstream_assets: list[Tuple[str, str, str | None]],
+    ) -> GuardrailReportAsset:
+        if not self.asset_tracking_enabled or not hasattr(self, "asset_tracker"):
+            raise RuntimeError(
+                "Guardrail report materialization requires asset tracking"
+            )
+
+        job_id = parameters.get("job_id")
+        if not isinstance(job_id, str) or not job_id:
+            raise ValueError("Guardrail execution requires job_id")
+        run_attempt_id = parameters.get("run_attempt_id")
+        if not isinstance(run_attempt_id, str) or not run_attempt_id:
+            raise ValueError("Guardrail execution requires run_attempt_id")
+        node_task_id = parameters.get("node_task_id")
+        if node_task_id != job_id:
+            raise ValueError("Guardrail node_task_id must match job_id")
+
+        report_data = json.loads(report_bytes)
+        version = AssetTracker.compute_version(report_bytes)
+        digest = version.rsplit(":", 1)[-1]
+        report_uri = s3_asset_path(
+            ref_id=f"{job_id}-{digest}.json",
+            ref_type="guardrail-report",
+            include_filename=True,
+        )
+        written = await asyncio.to_thread(
+            StorageManager.write,
+            io.BytesIO(report_bytes),
+            report_uri,
+            True,
+        )
+        if written is not True:
+            raise RuntimeError(f"Failed to write guardrail report to {report_uri}")
+
+        asset_key = f"guardrail/report/{job_id}"
+        partition_key = parameters.get("partition_key")
+        await self.asset_tracker.record_materializations(
+            storage_event_id=None,
+            assets=[
+                {
+                    "asset_key": asset_key,
+                    "version": version,
+                    "size_bytes": len(report_bytes),
+                    "checksum": f"sha256:{digest}",
+                    "uri": report_uri,
+                    "kind": "json",
+                    "metadata": {
+                        "schema": "marie.guardrail-report/v1",
+                        "outcome": report_data["outcome"],
+                        "evaluated_at": report_data["evaluated_at"],
+                        "run_attempt_id": run_attempt_id,
+                    },
+                }
+            ],
+            job_id=job_id,
+            dag_id=parameters.get("dag_id"),
+            node_task_id=node_task_id,
+            partition_key=partition_key,
+            upstream_assets=upstream_assets,
+        )
+        return GuardrailReportAsset(
+            asset_key=asset_key,
+            asset_version=version,
+            partition_key=partition_key,
+        )
 
     @requests(on="/list")
     async def list_available_functions(

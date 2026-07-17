@@ -127,14 +127,17 @@ class GatewayJobDistributor(JobDistributor):
         if run_params:
             parameters["run_params"] = run_params
 
-        # Pass through DAG tracking parameters for asset materialization
+        # Pass through DAG and run-attempt identity for asset materialization
         # These are set by the scheduler when dispatching DAG jobs
-        if "dag_id" in job_info.metadata:
-            parameters["dag_id"] = job_info.metadata["dag_id"]
-        if "node_task_id" in job_info.metadata:
-            parameters["node_task_id"] = job_info.metadata["node_task_id"]
-        if "partition_key" in job_info.metadata:
-            parameters["partition_key"] = job_info.metadata["partition_key"]
+        for key in (
+            "dag_id",
+            "node_task_id",
+            "partition_key",
+            "run_owner",
+            "run_attempt_id",
+        ):
+            if key in job_info.metadata:
+                parameters[key] = job_info.metadata[key]
 
         return parameters, asset_doc
 

@@ -49,6 +49,30 @@ def test_resolve_endpoint_accepts_mock_annotator_llm_route() -> None:
     ) == ("annotator_llm", "/annotator/llm")
 
 
+async def test_build_payload_passes_run_attempt_identity() -> None:
+    distributor = GatewayJobDistributor()
+    job_info = JobInfo(
+        status=JobStatus.PENDING,
+        entrypoint="guardrail_executor://evaluate",
+        metadata={
+            "metadata": {
+                "uri": "s3://marie/extract/sample.json",
+                "ref_id": "sample",
+                "ref_type": "extract",
+            },
+            "dag_id": "00000000-0000-0000-0000-000000000201",
+            "node_task_id": "00000000-0000-0000-0000-000000000101",
+            "run_owner": "scheduler-1",
+            "run_attempt_id": "00000000-0000-0000-0000-000000000301",
+        },
+    )
+
+    parameters, _ = await distributor._build_payload("job-a", job_info)
+
+    assert parameters["run_owner"] == "scheduler-1"
+    assert parameters["run_attempt_id"] == job_info.metadata["run_attempt_id"]
+
+
 def test_resolve_endpoint_routes_connector_to_plugin_daemon_execute() -> None:
     # W2: a CONNECTOR node serializes to the FIXED endpoint
     # plugin_daemon_executor://execute (identity rides in params, not the path).

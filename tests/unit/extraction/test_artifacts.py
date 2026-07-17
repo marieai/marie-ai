@@ -1,8 +1,11 @@
 import hashlib
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from marie.components.document_taxonomy.verbalizers import verbalizers
+from marie.extract.readers.meta_reader.meta_reader import MetaReader
 from marie.extraction.artifacts import read_extraction_artifact
 from marie.extraction.models import ExtractionSuccess, parse_extraction_result
 from marie.extraction.result_adapter import build_extraction_metadata
@@ -83,6 +86,36 @@ def test_result_adapter_preserves_provider_provenance(tmp_path):
         "page_count": 2,
         "warnings": ["warning"],
     }
-    assert metadata["ocr"] == [{"lines": [{"text": "first"}, {"text": "second"}]}]
+    assert metadata["pages"] == "2"
+    assert len(metadata["ocr"]) == 2
+    assert [line["text"] for line in metadata["ocr"][0]["lines"]] == [
+        "first",
+        "second",
+    ]
+    assert metadata["ocr"][1]["lines"] == []
     assert metadata["extraction"]["route"] == "plugin"
     assert metadata["extraction"]["ocr_invoked"] is False
+
+
+def test_result_adapter_builds_page_aligned_annotator_metadata(tmp_path):
+    data = b"page one\nsecond line\fpage two\f"
+    path = tmp_path / "document.md"
+    path.write_bytes(data)
+    result = _result(path, data)
+    result.provenance.canonical_format = "pdf"
+    result.metadata = {"page_count": 2}
+
+    metadata = build_extraction_metadata(data.decode(), result)
+    frames = [np.zeros((32, 32, 3), dtype=np.uint8) for _ in range(2)]
+    document = MetaReader.from_data(
+        frames=frames,
+        ocr_meta=metadata["ocr"],
+        unstructured_meta={"source_metadata": metadata},
+    )
+
+    assert metadata["pages"] == "2"
+    assert document.page_count == 2
+    assert document.to_text(page_number=0) == "page one\nsecond line"
+    assert document.to_text(page_number=1) == "page two"
+    assert [page["meta"]["page"] for page in metadata["ocr"]] == [0, 1]
+    assert verbalizers("SPATIAL_FORMAT", metadata["ocr"][0])

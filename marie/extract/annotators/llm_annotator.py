@@ -122,6 +122,10 @@ class LLMAnnotator(DocumentAnnotator):
         self.min_pixels = self.model_config.get("min_pixels", 512 * 28 * 28)
         self.max_pixels = self.model_config.get("max_pixels", 2048 * 28 * 28)
         self.mini_batch_size = self.model_config.get("mini_batch_size", 16)
+        self.max_tokens: Optional[int] = self.model_config.get("max_tokens")
+
+        if self.max_tokens is not None and self.max_tokens <= 0:
+            raise ValueError("max_tokens must be > 0")
 
         # Build completion_params dict from config
         self.completion_params = {
@@ -130,6 +134,8 @@ class LLMAnnotator(DocumentAnnotator):
             "frequency_penalty": self.frequency_penalty,
             "presence_penalty": self.presence_penalty,
         }
+        if self.max_tokens is not None:
+            self.completion_params["max_tokens"] = self.max_tokens
         if self.extra_body is not None:
             self.completion_params["extra_body"] = self.extra_body
 
@@ -180,6 +186,7 @@ class LLMAnnotator(DocumentAnnotator):
         self.logger.info(f"Min Pixels: {self.min_pixels}")
         self.logger.info(f"Max Pixels: {self.max_pixels}")
         self.logger.info(f"Mini Batch Size: {self.mini_batch_size}")
+        self.logger.info(f"Max Tokens: {self.max_tokens or 'engine default'}")
         self.logger.info(f"Multimodal: {self.multimodal}")
         self.logger.info(f"Expected Output: {self.expect_output}")
         self.logger.info(f"Refine Passes: {self.refine_passes}")

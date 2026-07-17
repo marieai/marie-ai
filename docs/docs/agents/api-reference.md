@@ -548,9 +548,6 @@ Agent configuration model.
 from marie.agent.config import AgentConfig, LLMConfig
 
 class LLMConfig(BaseModel):
-    backend: str = "marie"  # "marie" or "openai"
-    engine_name: Optional[str] = None
-    provider: Optional[str] = None
     model: Optional[str] = None
     api_key: Optional[str] = None
     base_url: Optional[str] = None
@@ -560,7 +557,7 @@ class LLMConfig(BaseModel):
 class AgentConfig(BaseModel):
     name: str
     description: str = ""
-    backend: str = "qwen_agent"
+    backend: str = "openai"
     system_message: str = ""
     max_iterations: int = 10
     llm: LLMConfig

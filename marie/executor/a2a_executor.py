@@ -40,9 +40,9 @@ class A2AMarieExecutor(Executor):
         # In executor config YAML:
         jtype: A2AMarieExecutor
         with:
-          agent_class: marie.agent.backends.QwenAgentBackend
+          agent_class: marie.agent.backends.OpenAIAgentBackend
           agent_config:
-            name: "My Qwen Agent"
+            name: "My Agent"
             model: "qwen2.5-72b"
           a2a_config:
             url: "http://localhost:8000"

@@ -377,16 +377,19 @@ async def test_handle_state_change_treats_active_as_live_state():
         frontier=frontier,
         active_dags={},
     )
+    service.logger.debug = MagicMock()
     service.logger.warning = MagicMock()
 
     await service.handle_state_change(
         {"op": "UPDATE", "dag_id": "dag-active", "state": "active"}
     )
 
-    service.logger.warning.assert_called_once_with(
-        "DAG dag-active is in 'active' state but not in active_dags. "
-        "It will be hydrated on next scheduler cycle."
+    service.logger.debug.assert_called_once_with(
+        "DAG dag-active is 'active' in DB but is not local to this scheduler yet; "
+        "it may be admitted by the current cycle, owned by another scheduler, "
+        "or hydrated later."
     )
+    service.logger.warning.assert_not_called()
 
 
 @pytest.mark.asyncio

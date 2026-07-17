@@ -512,6 +512,30 @@ async def test_on_jobs_skipped_preserves_shared_merger(frontier: MemoryFrontier)
 
 
 @pytest.mark.asyncio
+async def test_completion_with_skips_never_queues_unselected_path(
+    frontier: MemoryFrontier,
+):
+    guardrail = wi_factory("guardrail")
+    selected = wi_factory("selected", deps=["guardrail"])
+    unselected = wi_factory("unselected", deps=["guardrail"])
+    merger = wi_factory("merger", deps=["selected", "unselected"])
+    await add_ready_jobs(frontier, guardrail, selected, unselected, merger)
+
+    await frontier.on_job_completed_with_skips("guardrail", ["unselected"])
+
+    ready_ids = [wi.id for wi in await frontier.peek_ready(10)]
+    assert "selected" in ready_ids
+    assert "unselected" not in ready_ids
+    assert "merger" not in ready_ids
+    assert frontier.unmet_count["merger"] == 1
+
+    await frontier.on_job_completed("selected")
+
+    ready_ids = [wi.id for wi in await frontier.peek_ready(10)]
+    assert "merger" in ready_ids
+
+
+@pytest.mark.asyncio
 async def test_on_jobs_skipped_waits_for_all_selected_merger_parents(
     frontier: MemoryFrontier,
 ):

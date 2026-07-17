@@ -1,0 +1,18 @@
+Compile one document-level aggregation policy from these array schema units:
+
+{{ SCHEMA_UNITS_JSON }}
+
+For each unit:
+- carry_fields contains only item fields whose schema explicitly says that a
+  preceding value carries into later blocks or pages when it is not repeated.
+- sequence_fields contains only integer item fields whose schema explicitly
+  defines one continuous document-wide sequence across blocks or pages.
+- Use exact unit and field names from the schema.
+- An ordinary required field, identifier, label, or value is not a carry or
+  sequence field unless its description explicitly defines that behavior.
+- Include every supplied unit, using empty arrays when neither behavior is
+  defined.
+
+Return strict JSON matching this contract exactly:
+
+{{ POLICY_OUTPUT_CONTRACT_JSON }}

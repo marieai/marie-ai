@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from marie.constants import __config_dir__, __default_extract_dir__
 from marie.query_planner.base import Query
+from marie.query_planner.guardrail import GuardrailQueryDefinition
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -246,9 +247,23 @@ class JobMetadata(BaseModel):
             # Enhanced merger that handles skipped branches
             executor_endpoint = endpoint if has_executor else "merger://control"
         elif method == "GUARDRAIL":
-            # GUARDRAIL nodes are quality validation nodes that evaluate outputs
-            # They don't execute on an executor, evaluation happens in scheduler
-            executor_endpoint = "guardrail://control"
+            if not isinstance(task_definition, GuardrailQueryDefinition):
+                raise ValueError("GUARDRAIL method requires GuardrailQueryDefinition")
+            if has_executor:
+                executor_name, endpoint_path = endpoint.split("://", 1)
+                if executor_name != "guardrail_executor":
+                    raise ValueError(
+                        "GUARDRAIL nodes must execute on guardrail_executor"
+                    )
+                executor_endpoint = f"guardrail_executor://{endpoint_path.lstrip('/')}"
+            else:
+                executor_endpoint = f"guardrail_executor://{endpoint.lstrip('/')}"
+            params = {
+                **params,
+                "guardrail": task_definition.execution_spec(
+                    task.dependencies
+                ).model_dump(mode="json"),
+            }
         else:
             raise ValueError(f"Unsupported method type: {method}")
 

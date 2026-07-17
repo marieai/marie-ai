@@ -24,50 +24,30 @@ logger = MarieLogger("marie.agent.config")
 
 
 class LLMConfig(BaseModel):
-    """Configuration for LLM backends.
+    """Configuration for an OpenAI-compatible LLM endpoint.
 
-    Supports marie.engine and OpenAI-compatible backends (including LiteLLM proxy).
+    The model may be served by OpenAI, Marie, vLLM, or a proxy as long as the
+    endpoint implements the OpenAI API.
 
     Example YAML configurations:
 
-        # Local VLLM model
-        llm:
-          backend: marie
-          engine_name: qwen2_5_vl_7b
-          provider: vllm
-
         # OpenAI direct
         llm:
-          backend: openai
           model: gpt-4o
 
         # Claude via LiteLLM proxy
         llm:
-          backend: openai
           model: claude/claude-sonnet-4-20250514
           base_url: http://localhost:4000
 
         # Any provider via LiteLLM
         llm:
-          backend: openai
           model: anthropic/claude-3-opus
           base_url: ${LITELLM_BASE_URL}
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
-    backend: Literal["marie", "openai"] = Field(
-        default="marie",
-        description="LLM backend to use. Use 'openai' for OpenAI, Claude via LiteLLM, etc.",
-    )
-    engine_name: str = Field(
-        default="qwen2_5_vl_7b",
-        description="Engine name for marie backend",
-    )
-    provider: str = Field(
-        default="vllm",
-        description="Provider for marie backend (vllm, openai)",
-    )
     model: Optional[str] = Field(
         default=None,
         description="Model name. For LiteLLM use format: provider/model (e.g., claude/claude-sonnet-4)",
@@ -91,25 +71,14 @@ class LLMConfig(BaseModel):
 
     def to_wrapper_kwargs(self) -> Dict[str, Any]:
         """Convert to kwargs for LLM wrapper initialization."""
-        if self.backend == "marie":
-            kwargs: Dict[str, Any] = {
-                "engine_name": self.engine_name,
-                "provider": self.provider,
-            }
-            # Pass through base_url for LiteLLM via marie engine
-            if self.base_url:
-                kwargs["base_url"] = self.base_url
-            return kwargs
-        elif self.backend == "openai":
-            kwargs = {}
-            if self.model:
-                kwargs["model"] = self.model
-            if self.api_key:
-                kwargs["api_key"] = self.api_key
-            if self.base_url:
-                kwargs["base_url"] = self.base_url
-            return kwargs
-        return {}
+        kwargs: Dict[str, Any] = {}
+        if self.model:
+            kwargs["model"] = self.model
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+        return kwargs
 
 
 class ToolConfig(BaseModel):
@@ -351,14 +320,13 @@ class AgentConfig(BaseModel):
         ```yaml
         agent:
           name: my_agent
-          backend: qwen_agent
+          backend: openai
           system_message: "You are a helpful assistant."
           max_iterations: 10
 
           llm:
-            backend: marie
-            engine_name: qwen2_5_vl_7b
-            provider: vllm
+            model: qwen2_5_vl_7b
+            base_url: http://localhost:8000/v1
 
           tools:
             - search
@@ -382,8 +350,11 @@ class AgentConfig(BaseModel):
         ```python
         config = AgentConfig(
             name="my_agent",
-            backend="qwen_agent",
-            llm=LLMConfig(engine_name="qwen2_5_vl_7b"),
+            backend="openai",
+            llm=LLMConfig(
+                model="qwen2_5_vl_7b",
+                base_url="http://localhost:8000/v1",
+            ),
             tools=["search", "calculator"],
             skills=SkillsConfig(enabled=True, default_skills=["document-extraction"]),
         )
@@ -394,8 +365,8 @@ class AgentConfig(BaseModel):
 
     name: str = Field(default="agent", description="Agent name")
     description: str = Field(default="", description="Agent description")
-    backend: Literal["qwen_agent", "haystack", "autogen"] = Field(
-        default="qwen_agent",
+    backend: Literal["openai", "haystack", "autogen"] = Field(
+        default="openai",
         description="Agent backend type",
     )
     system_message: str = Field(

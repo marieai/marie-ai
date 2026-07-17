@@ -31,16 +31,15 @@ from marie.query_planner.branching import (
     SwitchQueryDefinition,
 )
 from marie.query_planner.builtin import register_all_known_planners
-from marie.query_planner.guardrail import GuardrailQueryDefinition
+from marie.query_planner.guardrail import (
+    GuardrailQueryDefinition,
+    GuardrailRouteMetadata,
+)
 from marie.query_planner.model import QueryPlannersConf
 from marie.scheduler.branch_evaluator import BranchEvaluationContext, BranchEvaluator
 from marie.scheduler.dag_topology_cache import DagTopologyCache
 from marie.scheduler.fixtures import *
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
-from marie.scheduler.guardrail_evaluator import (
-    GuardrailEvaluationContext,
-    GuardrailEvaluator,
-)
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.job_scheduler import JobScheduler, JobSubmissionRequest
 from marie.scheduler.memory_frontier import MemoryFrontier
@@ -213,6 +212,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.known_queues = set(config.get("queue_names", []))
         self.running = False
         self._paused = False
+        self._lifecycle_lock = asyncio.Lock()
+        self._event_subscriptions_active = False
         self._poll_task = None
         self._producer_task = None
         self._consumer_task = None
@@ -223,6 +224,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._sync_dag_task = None
         self._cluster_state_monitor_task = None
         self._dag_state_listener_task = None
+        self._job_event_tasks: set[asyncio.Task[Any]] = set()
         self._listen_connection = None
         self._submission_count = 0
         self._pending_requests = {}  # Track pending requests by ID
@@ -314,14 +316,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         )
 
         # Initialize MaintenanceService for periodic cleanup tasks
-        maintenance_interval = config.get("maintenance_interval", 60)  # Default: 60s
+        self._maintenance_interval = config.get("maintenance_interval", 60)
         self.maintenance_service = MaintenanceService(
             repository=self.repository,
             loop=self._loop,
             executor=self._db_executor,
             notify_callback=self.notify_event,
             recovery_callback=self._reconcile_recovered_run_leases,
-            maintenance_interval=maintenance_interval,
+            maintenance_interval=self._maintenance_interval,
         )
 
         self.execution_planner = GlobalPriorityExecutionPlanner(
@@ -336,7 +338,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         )
 
         self.branch_evaluator = BranchEvaluator()
-        self.guardrail_evaluator = GuardrailEvaluator()
 
         dag_cache_size = int(
             dag_config.get("dag_cache_size", 5000)
@@ -349,6 +350,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.heartbeat = SchedulerHeartbeat(
             self, self.heartbeat_config, self._db, self.logger
         )
+        self._resources_closed = False
 
         self._start_time = datetime.now(timezone.utc)
         self.hard_sla_policy = str(config.get("hard_sla_policy", "track_only")).lower()
@@ -475,7 +477,116 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"Failed to record terminal audit for attempt {run_attempt_id}: {audit_error}"
             )
 
+    async def _cancel_stopped_attempt(
+        self,
+        job_id: str,
+        work_item: WorkInfo,
+        *,
+        run_owner: str | None,
+        run_attempt_id: str | None,
+        source: str,
+    ) -> bool:
+        if not run_owner or not run_attempt_id:
+            scheduler_trace(
+                "job_terminal_attempt_rejected",
+                job_id=job_id,
+                dag_id=work_item.dag_id,
+                status=JobStatus.STOPPED.value,
+                reason="missing_attempt",
+                source=source,
+                **self._ha_trace_fields(),
+            )
+            self.logger.warning(
+                f"Ignoring stopped job event without run attempt: job_id={job_id}"
+            )
+            return False
+
+        async with self._status_update_lock[job_id]:
+            cancelled_ids = await self.repository.cancel_job_attempt(
+                job_id=job_id,
+                queue_name=work_item.name,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                schema=DEFAULT_SCHEMA,
+            )
+
+        if job_id not in cancelled_ids:
+            scheduler_trace(
+                "job_terminal_attempt_rejected",
+                job_id=job_id,
+                dag_id=work_item.dag_id,
+                status=JobStatus.STOPPED.value,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                reason="db_update_zero_rows",
+                source=source,
+                **self._ha_trace_fields(),
+            )
+            await self._record_terminal_attempt_audit(
+                job_id=job_id,
+                work_item=work_item,
+                status=JobStatus.STOPPED,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                terminal_work_state=None,
+                source=source,
+                accepted=False,
+                reject_reason="db_update_zero_rows",
+            )
+            self._scheduler_counter(
+                TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
+                job_id=job_id,
+                dag_id=work_item.dag_id,
+                status=JobStatus.STOPPED.value,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                source=source,
+            )
+            return False
+
+        work_item.state = WorkState.CANCELLED
+        work_item.run_owner = None
+        work_item.run_attempt_id = None
+        self._job_cache[job_id] = work_item
+        await self._record_terminal_attempt_audit(
+            job_id=job_id,
+            work_item=work_item,
+            status=JobStatus.STOPPED,
+            run_owner=run_owner,
+            run_attempt_id=run_attempt_id,
+            terminal_work_state=WorkState.CANCELLED.value,
+            source=source,
+            accepted=True,
+        )
+        scheduler_trace(
+            "job_terminal_attempt_accepted",
+            job_id=job_id,
+            dag_id=work_item.dag_id,
+            status=JobStatus.STOPPED.value,
+            run_owner=run_owner,
+            run_attempt_id=run_attempt_id,
+            source=source,
+            **self._ha_trace_fields(),
+        )
+        await self.frontier.on_job_cancelled(job_id)
+        return True
+
     async def handle_job_event(self, event_type: str, message: Any):
+        """Process a job event while the scheduler is accepting work."""
+        if not getattr(self, "running", True):
+            return
+
+        task = asyncio.current_task()
+        job_event_tasks = getattr(self, "_job_event_tasks", None)
+        if task is not None and job_event_tasks is not None:
+            job_event_tasks.add(task)
+        try:
+            await self._handle_job_event(event_type, message)
+        finally:
+            if task is not None and job_event_tasks is not None:
+                job_event_tasks.discard(task)
+
+    async def _handle_job_event(self, event_type: str, message: Any):
         """
         Handles a job event.
 
@@ -523,12 +634,23 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
                     return
 
-                completed = await self.complete(
+                guardrail_commit = await self._commit_guardrail_route_if_needed(
                     job_id,
                     work_item,
                     run_owner=run_owner,
                     run_attempt_id=run_attempt_id,
                 )
+                if guardrail_commit is None:
+                    completed = await self.complete(
+                        job_id,
+                        work_item,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                    )
+                    reject_reason = "db_update_zero_rows"
+                else:
+                    committed, _, reject_reason = guardrail_commit
+                    completed = 1 if committed else 0
                 if completed <= 0:
                     scheduler_trace(
                         "job_terminal_attempt_rejected",
@@ -537,7 +659,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         status=status.value,
                         run_owner=run_owner,
                         run_attempt_id=run_attempt_id,
-                        reason="db_update_zero_rows",
+                        reason=reject_reason or "db_update_zero_rows",
                         **self._ha_trace_fields(),
                     )
                     await self._record_terminal_attempt_audit(
@@ -549,7 +671,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         terminal_work_state=None,
                         source="job_event",
                         accepted=False,
-                        reject_reason="db_update_zero_rows",
+                        reject_reason=reject_reason or "db_update_zero_rows",
                     )
                     self._scheduler_counter(
                         TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
@@ -582,7 +704,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     run_attempt_id=run_attempt_id,
                     **self._ha_trace_fields(),
                 )
-                await self._handle_successful_job_completion(job_id, work_item)
+                if guardrail_commit is None:
+                    await self._handle_successful_job_completion(job_id, work_item)
             elif status == JobStatus.FAILED:
                 if not run_owner or not run_attempt_id:
                     scheduler_trace(
@@ -663,10 +786,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 else:
                     await self.frontier.on_job_failed(job_id)
             elif status == JobStatus.STOPPED:
-                await self.cancel_job(job_id, work_item)
-                work_item.state = work_state
-                self._job_cache[job_id] = work_item
-                await self.frontier.on_job_cancelled(job_id)
+                if not await self._cancel_stopped_attempt(
+                    job_id,
+                    work_item,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    source="job_event",
+                ):
+                    return
             elif status == JobStatus.RUNNING:
                 if not run_owner or not run_attempt_id:
                     scheduler_trace(
@@ -782,6 +909,77 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         return isinstance(node.definition, GuardrailQueryDefinition)
 
+    async def _commit_guardrail_route_if_needed(
+        self,
+        job_id: str,
+        work_item: WorkInfo,
+        *,
+        run_owner: str,
+        run_attempt_id: str,
+    ) -> Optional[tuple[bool, set[str], Optional[str]]]:
+        dag_plan = await self.get_dag_by_id(work_item.dag_id)
+        if not dag_plan:
+            return None
+
+        node = get_node_from_dag(job_id, dag_plan)
+        if not self._is_guardrail_node(node):
+            return None
+
+        report_decision = await self.repository.get_guardrail_report_decision(
+            job_id=job_id,
+            run_attempt_id=run_attempt_id,
+        )
+        if report_decision is None:
+            raise ValueError(
+                f"Guardrail attempt {run_attempt_id} produced no report asset"
+            )
+        selected_path_id = "pass" if report_decision["outcome"] == "VALID" else "fail"
+        route = GuardrailRouteMetadata(
+            outcome=report_decision["outcome"],
+            selected_path_ids=[selected_path_id],
+            report_asset=report_decision["report_asset"],
+            evaluated_at=report_decision["evaluated_at"],
+        )
+        route_metadata = route.model_dump(mode="json", by_alias=True)
+        paths = {path.path_id: path for path in node.definition.paths}
+        if selected_path_id not in paths:
+            raise ValueError(
+                f"Guardrail selected unknown path '{selected_path_id}' for job {job_id}"
+            )
+
+        selected_targets = set(paths[selected_path_id].target_node_ids)
+        unselected_targets = {
+            target_id
+            for path_id, path in paths.items()
+            if path_id != selected_path_id
+            for target_id in path.target_node_ids
+        }
+        overlap = selected_targets & unselected_targets
+        if overlap:
+            raise ValueError(
+                f"Guardrail paths overlap for job {job_id}: {sorted(overlap)}"
+            )
+        skipped_job_ids = exclusive_skip_closure(dag_plan, list(unselected_targets))
+
+        async with self._status_update_lock[job_id]:
+            committed, skipped_ids, reject_reason = (
+                await self.repository.commit_guardrail_route(
+                    job_id=job_id,
+                    queue_name=work_item.name,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    branch_metadata=route_metadata,
+                    skipped_job_ids=skipped_job_ids,
+                )
+            )
+
+        if committed:
+            work_item.branch_metadata = route_metadata
+            work_item.state = WorkState.COMPLETED
+            self._job_cache[job_id] = work_item
+            await self.frontier.on_job_completed_with_skips(job_id, skipped_ids)
+        return committed, skipped_ids, reject_reason
+
     async def _handle_successful_job_completion(
         self, job_id: str, work_item: WorkInfo
     ) -> None:
@@ -797,11 +995,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"Completed branch node detected: {job_id}. Evaluating paths..."
             )
             await self._evaluate_and_mark_branch_paths(job_id, work_item, dag_plan)
-        elif node and self._is_guardrail_node(node):
-            self.logger.info(
-                f"Completed guardrail node detected: {job_id}. Evaluating metrics..."
-            )
-            await self._evaluate_and_mark_guardrail_paths(job_id, work_item, dag_plan)
 
     async def _activate_control_flow_job(self, wi: WorkInfo) -> bool:
         if (
@@ -1067,21 +1260,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                 # Evaluate and mark paths
                 await self._evaluate_and_mark_branch_paths(
-                    wi.id, wi, self.active_dags[dag_id]
-                )
-
-            elif node_type == "guardrail":
-                # GUARDRAIL nodes need quality validation evaluation
-                self.logger.info(
-                    f"[CONTROL_FLOW] Evaluating guardrail metrics for {wi.id}"
-                )
-
-                # Complete the guardrail node first
-                if not await self._complete_control_flow_attempt(wi):
-                    return
-
-                # Evaluate and mark paths based on pass/fail
-                await self._evaluate_and_mark_guardrail_paths(
                     wi.id, wi, self.active_dags[dag_id]
                 )
 
@@ -1522,144 +1700,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         except Exception as e:
             self.logger.error(f"Error marking nodes as skipped: {e}", exc_info=True)
 
-    async def _evaluate_and_mark_guardrail_paths(
-        self, guardrail_node_id: str, work_item: WorkInfo, dag_plan: QueryPlan
-    ) -> None:
-        """
-        Evaluate a guardrail node and mark its paths as READY or SKIPPED.
-        Stores guardrail_metadata for tracking and debugging.
-
-        :param guardrail_node_id: ID of the completed guardrail node
-        :param work_item: WorkInfo of the guardrail node
-        :param dag_plan: The DAG plan containing the guardrail
-        """
-        try:
-            self.logger.info(
-                f"Evaluating guardrail metrics for node: {guardrail_node_id}"
-            )
-
-            # Get the guardrail node from the DAG
-            guardrail_node = get_node_from_dag(guardrail_node_id, dag_plan)
-            if not guardrail_node or not self._is_guardrail_node(guardrail_node):
-                self.logger.warning(
-                    f"Node {guardrail_node_id} is not a guardrail node, skipping evaluation"
-                )
-                return
-
-            guardrail_def = guardrail_node.definition
-
-            # Build evaluation context
-            # TODO: Gather execution results from previous nodes if needed
-            execution_results = {}
-            context = GuardrailEvaluationContext(
-                work_info=work_item,
-                dag_plan=dag_plan,
-                guardrail_node=guardrail_node,
-                execution_results=execution_results,
-            )
-
-            # Evaluate guardrail metrics with timeout protection
-            try:
-                result = await asyncio.wait_for(
-                    self.guardrail_evaluator.evaluate(guardrail_def, context),
-                    timeout=guardrail_def.evaluation_timeout,
-                )
-            except asyncio.TimeoutError:
-                self.logger.error(
-                    f"Guardrail evaluation timed out for {guardrail_node_id} "
-                    f"after {guardrail_def.evaluation_timeout}s"
-                )
-                # Default to fail path on timeout
-                pass_path = guardrail_def.get_pass_path()
-                fail_path = guardrail_def.get_fail_path()
-
-                from marie.query_planner.guardrail import GuardrailEvaluationResult
-
-                result = GuardrailEvaluationResult(
-                    overall_passed=False,
-                    overall_score=0.0,
-                    individual_results=[],
-                    selected_path_id="fail",
-                    active_target_nodes=fail_path.target_node_ids if fail_path else [],
-                    skipped_target_nodes=pass_path.target_node_ids if pass_path else [],
-                    total_execution_time_ms=guardrail_def.evaluation_timeout * 1000,
-                    error=f"Evaluation timed out after {guardrail_def.evaluation_timeout}s",
-                )
-
-            # Store guardrail metadata for audit
-            guardrail_metadata = {
-                "node_type": "GUARDRAIL",
-                "overall_passed": result.overall_passed,
-                "overall_score": result.overall_score,
-                "selected_path_id": result.selected_path_id,
-                "individual_results": [
-                    r.model_dump() for r in result.individual_results
-                ],
-                "evaluated_at": datetime.now(timezone.utc).isoformat(),
-                "error": result.error,
-            }
-
-            await self._update_job_branch_metadata(
-                job_id=guardrail_node_id,
-                queue_name=work_item.name,
-                branch_metadata=guardrail_metadata,
-            )
-
-            self.logger.info(
-                f"Guardrail evaluation complete: passed={result.overall_passed}, "
-                f"score={result.overall_score:.2f}, path={result.selected_path_id}"
-            )
-
-            # Mark active paths' target nodes as READY
-            if result.active_target_nodes:
-                active_path_metadata = {
-                    "selected_by_guardrail": guardrail_node_id,
-                    "selected_path_id": result.selected_path_id,
-                    "guardrail_score": result.overall_score,
-                    "selected_at": datetime.now(timezone.utc).isoformat(),
-                }
-                for node_id in result.active_target_nodes:
-                    await self._update_job_branch_metadata(
-                        job_id=node_id,
-                        queue_name=work_item.name,
-                        branch_metadata=active_path_metadata,
-                    )
-
-                await self._mark_nodes_ready(result.active_target_nodes, work_item.name)
-                self.logger.info(
-                    f"Marked {len(result.active_target_nodes)} nodes as READY: "
-                    f"{result.active_target_nodes}"
-                )
-
-            # Mark skipped nodes as SKIPPED and cascade to descendants
-            if result.skipped_target_nodes:
-                skip_reason = SkipReason(
-                    branch_node_id=guardrail_node_id,
-                    reason=f"Guardrail {'passed' if result.overall_passed else 'failed'} "
-                    f"(score: {result.overall_score:.2f})",
-                    evaluated_condition={
-                        "metrics": [r.metric_name for r in result.individual_results]
-                    },
-                    selected_paths=[result.selected_path_id],
-                    timestamp=datetime.now(timezone.utc),
-                )
-                await self._mark_nodes_skipped(
-                    result.skipped_target_nodes,
-                    work_item.name,
-                    skip_reason,
-                    dag_plan,
-                )
-                self.logger.info(
-                    f"Marked {len(result.skipped_target_nodes)} nodes as SKIPPED: "
-                    f"{result.skipped_target_nodes}"
-                )
-
-        except Exception as e:
-            self.logger.error(
-                f"Error evaluating guardrail metrics for {guardrail_node_id}: {e}",
-                exc_info=True,
-            )
-
     async def _handle_dag_state_notification(self, payload: dict):
         """
         Handle a DAG state change notification from PostgreSQL.
@@ -1832,6 +1872,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         return await self.repository.get_defined_queues(DEFAULT_SCHEMA)
 
     async def start(self) -> None:
+        """Start the scheduler unless it is already running."""
+        async with self._lifecycle_lock:
+            if self.running:
+                self.logger.warning("Job scheduler is already running")
+                return
+            if self._resources_closed:
+                self._reopen_runtime_resources()
+            self._setup_event_subscriptions()
+            await self._start_locked()
+
+    async def _start_locked(self) -> None:
         """
         Starts the job scheduling agent.
 
@@ -1871,7 +1922,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         await self.hydrate_from_db()
 
         self.running = True
-        self.sync_task = asyncio.create_task(self._sync())
+        self.sync_task = asyncio.create_task(self._sync(), name="scheduler-sync")
         # self.monitoring_task = asyncio.create_task(self._monitor())
         self.monitoring_task = None
 
@@ -1883,13 +1934,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.logger.warning("Heartbeat is currently disabled")
         # await self.heartbeat.start()
 
-        self._poll_task = asyncio.create_task(self._poll())
+        self._poll_task = asyncio.create_task(self._poll(), name="scheduler-poll")
         self._cluster_state_monitor_task = asyncio.create_task(
-            self.__monitor_deployment_updates()
+            self.__monitor_deployment_updates(),
+            name="scheduler-deployment-monitor",
         )
 
         self._worker_tasks = [
-            asyncio.create_task(self._process_submission_queue(worker_id))
+            asyncio.create_task(
+                self._process_submission_queue(worker_id),
+                name=f"scheduler-submission-{worker_id}",
+            )
             for worker_id in range(self.max_workers)
         ]
 
@@ -1903,7 +1958,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.error(f"Error starting MaintenanceService: {e}")
             # Non-critical - continue without maintenance service
 
-        self._sync_dag_task = asyncio.create_task(self._sync_dag())
+        self._sync_dag_task = asyncio.create_task(
+            self._sync_dag(), name="scheduler-dag-sync"
+        )
         await self.notify_event()
 
     async def _poll(self):
@@ -2020,6 +2077,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         idle_streak,
                         scheduled=False,
                         min_poll_period=MIN_POLL_PERIOD,
+                        max_poll_period=MAX_POLL_PERIOD,
                     )
                     continue
 
@@ -2036,6 +2094,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         idle_streak,
                         scheduled=False,
                         min_poll_period=MIN_POLL_PERIOD,
+                        max_poll_period=MAX_POLL_PERIOD,
                     )
                     continue
 
@@ -2246,6 +2305,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             idle_streak,
                             scheduled=False,
                             min_poll_period=MIN_POLL_PERIOD,
+                            max_poll_period=MAX_POLL_PERIOD,
                         )
                     self.logger.debug(
                         f"[WORK_DIST] No regular jobs to plan (processed {control_flow_processed_total}/"
@@ -2635,6 +2695,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     idle_streak,
                     scheduled_any,
                     min_poll_period=MIN_POLL_PERIOD,
+                    max_poll_period=MAX_POLL_PERIOD,
                 )
                 failures = 0
 
@@ -2742,61 +2803,171 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         )
         return enqueued
 
+    def _owned_background_tasks(self) -> list[asyncio.Task[Any]]:
+        tasks = [
+            self._poll_task,
+            self.monitoring_task,
+            self._producer_task,
+            self._consumer_task,
+            self._heartbeat_task,
+            self._cluster_state_monitor_task,
+            self.sync_task,
+            self._sync_dag_task,
+            self._dag_state_listener_task,
+        ]
+        tasks.extend(self._worker_tasks or [])
+        tasks.extend(self._job_event_tasks)
+        return list(dict.fromkeys(task for task in tasks if task is not None))
+
     async def stop(self, timeout: float = 2.0) -> None:
+        """Stop scheduler-owned work and close its database resources."""
+        async with self._lifecycle_lock:
+            if not self.running and self._resources_closed:
+                return
+            await self._stop_locked(timeout)
+
+    async def _stop_locked(self, timeout: float) -> None:
         self.logger.info("Stopping job scheduling agent")
         self.running = False
+        self._fetch_event.set()
+        self._remove_event_subscriptions()
 
-        tasks = [self.monitoring_task]
-        tasks = tasks + [self._producer_task]
+        background_tasks = self._owned_background_tasks()
+        for task in background_tasks:
+            if not task.done():
+                task.cancel()
 
-        if self._heartbeat_task:
-            tasks.append(self._heartbeat_task)
-
-        if self._cluster_state_monitor_task:
-            tasks.append(self._cluster_state_monitor_task)
-
-        if self._worker_tasks:
-            for task in self._worker_tasks:
-                tasks.append(task)
-
-        if self.sync_task:
-            tasks.append(self.sync_task)
-
-        if self._sync_dag_task:
-            tasks.append(self._sync_dag_task)
-
-        # Stop NotificationService
-        try:
-            await self.notification_service.stop()
-            self.logger.info("Stopped NotificationService")
-        except Exception as e:
-            self.logger.error(f"Error stopping NotificationService: {e}")
-
-        # Stop MaintenanceService
-        try:
-            await self.maintenance_service.stop()
-            self.logger.info("Stopped MaintenanceService")
-        except Exception as e:
-            self.logger.error(f"Error stopping MaintenanceService: {e}")
-
-        for task in tasks:
-            if task and not task.done():
-                try:
-                    await asyncio.wait_for(task, timeout)
-                except asyncio.TimeoutError:
-                    task_name = getattr(task, '_name', task.__class__.__name__)
-                    self.logger.warning(
-                        f"Task did not complete in time, cancelling it : {task_name}"
-                    )
+        service_tasks = [
+            asyncio.create_task(
+                self.notification_service.stop(),
+                name="scheduler-notification-stop",
+            ),
+            asyncio.create_task(
+                self.maintenance_service.stop(),
+                name="scheduler-maintenance-stop",
+            ),
+            asyncio.create_task(
+                self.heartbeat.stop(),
+                name="scheduler-heartbeat-stop",
+            ),
+        ]
+        shutdown_tasks = background_tasks + service_tasks
+        if shutdown_tasks:
+            _done, pending = await asyncio.wait(
+                shutdown_tasks,
+                timeout=max(0.0, timeout),
+            )
+            if pending:
+                task_names = sorted(task.get_name() for task in pending)
+                self.logger.warning(
+                    "Scheduler shutdown timed out; cancelling tasks: %s",
+                    ", ".join(task_names),
+                )
+                for task in pending:
                     task.cancel()
-                    try:
-                        await task  # Wait for cancellation
-                    except asyncio.CancelledError:
-                        self.logger.debug("Task cancelled successfully")
-                except asyncio.CancelledError:
-                    pass
-                except Exception as e:
-                    self.logger.error(f"Unexpected error during task shutdown: {e}")
+            results = await asyncio.gather(*shutdown_tasks, return_exceptions=True)
+            for task, result in zip(shutdown_tasks, results):
+                if isinstance(result, Exception):
+                    self.logger.error(
+                        "Task %s failed during scheduler shutdown: %s",
+                        task.get_name(),
+                        result,
+                    )
+
+        while True:
+            try:
+                request = self._request_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            self._pending_requests.pop(request.request_id, None)
+            if request.wait_for_result and not request.result_future.done():
+                request.result_future.set_exception(
+                    RuntimeError("Scheduler stopped before submission was processed")
+                )
+            self._request_queue.task_done()
+
+        self._poll_task = None
+        self.monitoring_task = None
+        self._producer_task = None
+        self._consumer_task = None
+        self._heartbeat_task = None
+        self._cluster_state_monitor_task = None
+        self.sync_task = None
+        self._sync_dag_task = None
+        self._dag_state_listener_task = None
+        self._worker_tasks = []
+        self._job_event_tasks.clear()
+
+        await self._close_runtime_resources()
+
+    async def _close_runtime_resources(self) -> None:
+        if self._resources_closed:
+            return
+
+        try:
+            await asyncio.to_thread(
+                self._db_executor.shutdown,
+                wait=True,
+                cancel_futures=True,
+            )
+        except Exception as error:
+            self.logger.error(f"Error closing scheduler DB executor: {error}")
+
+        try:
+            await self.repository.close()
+        except Exception as error:
+            self.logger.error(f"Error closing job repository: {error}")
+
+        for resource_name, owner in (
+            ("scheduler repository", self._db),
+            ("scheduler", self),
+        ):
+            pool = getattr(owner, "postgreSQL_pool", None)
+            if pool is None or pool.closed:
+                continue
+            try:
+                await asyncio.to_thread(pool.close)
+            except Exception as error:
+                self.logger.error(
+                    f"Error closing {resource_name} PostgreSQL pool: {error}"
+                )
+
+        self._resources_closed = True
+
+    def _reopen_runtime_resources(self) -> None:
+        self._db_executor = ThreadPoolExecutor(
+            max_workers=self.max_workers, thread_name_prefix="db-executor"
+        )
+        self._setup_storage(self.config, connection_only=True)
+        self._db = SchedulerRepository(self.config)
+        self.repository = JobRepository(self.config, max_workers=self.max_workers)
+        self.notification_service = NotificationService(self.config)
+        self.dag_service = DAGManagementService(
+            repository=self.repository,
+            frontier=self.frontier,
+            active_dags=self.active_dags,
+            loop=self._loop,
+            executor=self._db_executor,
+            notify_callback=self.notify_event,
+            max_active_dags=self.max_concurrent_dags,
+            admission_lock=self._dag_admission_lock,
+            slot_snapshot_provider=self.get_available_slots,
+        )
+        self.notification_service.register_handler(
+            channel='dag_state_changed', handler=self.dag_service.handle_state_change
+        )
+        self.maintenance_service = MaintenanceService(
+            repository=self.repository,
+            loop=self._loop,
+            executor=self._db_executor,
+            notify_callback=self.notify_event,
+            recovery_callback=self._reconcile_recovered_run_leases,
+            maintenance_interval=self._maintenance_interval,
+        )
+        self.heartbeat = SchedulerHeartbeat(
+            self, self.heartbeat_config, self._db, self.logger
+        )
+        self._resources_closed = False
 
     def debug_info(self):
         """
@@ -3139,12 +3310,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def list_jobs(
         self, state: Optional[str | list[str]] = None, batch_size: int = 0
     ) -> Dict[str, WorkInfo]:
-        work_items = {}
-        schema = DEFAULT_SCHEMA
-        table = DEFAULT_JOB_TABLE
-        cursor = None
-        conn = None
-
         if state is not None:
             if isinstance(state, str):
                 state = [state]
@@ -3153,32 +3318,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             ]
             if invalid_states:
                 raise ValueError(f"Invalid state(s): {', '.join(invalid_states)}")
-            states = "','".join(s.lower() for s in state)
+            states = [s.lower() for s in state]
         else:
-            states = "','".join(s.lower() for s in WorkState.__members__.keys())
+            states = None
 
-        try:
-            conn = self._get_connection()
-            cursor = conn.cursor("doc_iterator")
-            cursor.itersize = 10000
-            cursor.execute(
-                f"""
-                SELECT id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until,dag_id,job_level
-                FROM {schema}.{table} 
-                WHERE state IN ('{states}')
-                {f"LIMIT {batch_size}" if batch_size > 0 else ""}
-                """
-            )
-            for record in cursor:
-                work_items[record[0]] = self.record_to_work_info(record)
-            conn.commit()
-        except (Exception, psycopg.Error) as error:
-            self.logger.error(f"Error listing jobs: {error}")
-            conn.rollback()
-        finally:
-            self._close_cursor(cursor)
-            self._close_connection(conn)
-        return work_items
+        work_items = await self.repository.list_jobs(state=states, limit=batch_size)
+        return {work_item.id: work_item for work_item in work_items}
 
     async def submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> str:
         """
@@ -3188,6 +3333,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return: The ID of the inserted work item.
         :raises ValueError: If the job submission fails or if the job already exists.
         """
+        if not self.running:
+            raise RuntimeError("Job scheduler is not running")
+
         self.logger.info(f"Submitting job : {work_info.id}")
 
         work_queue = work_info.name
@@ -3209,6 +3357,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             result_future=result_future,
             wait_for_result=sync_mode,
         )
+
+        if not self.running:
+            raise RuntimeError("Job scheduler stopped during submission")
 
         self._pending_requests[request_id] = submission_request
 
@@ -3751,7 +3902,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         raise NotImplementedError
 
-    async def cancel_job(self, job_id: str, work_item: WorkInfo) -> None:
+    async def cancel_job(self, job_id: str, work_item: WorkInfo) -> int:
         """
         Cancel a job by its ID.
         Delegates to JobRepository.
@@ -3760,7 +3911,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param work_item: The work item to cancel.
         """
         async with self._status_update_lock[job_id]:
-            await self.repository.cancel_job(
+            return await self.repository.cancel_job(
                 job_id=job_id,
                 queue_name=work_item.name,
                 schema=DEFAULT_SCHEMA,
@@ -3889,6 +4040,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         await self.maintenance_service.purge()
 
     def _setup_event_subscriptions(self):
+        if self._event_subscriptions_active:
+            return
         self.job_manager.event_publisher.subscribe(
             [
                 JobStatus.RUNNING,
@@ -3899,6 +4052,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             ],
             self.handle_job_event,
         )
+        self._event_subscriptions_active = True
+
+    def _remove_event_subscriptions(self) -> None:
+        if not self._event_subscriptions_active:
+            return
+        for status in (
+            JobStatus.RUNNING,
+            JobStatus.SUCCEEDED,
+            JobStatus.FAILED,
+            JobStatus.PENDING,
+            JobStatus.STOPPED,
+        ):
+            self.job_manager.event_publisher.unsubscribe(status, self.handle_job_event)
+        self._event_subscriptions_active = False
 
     def record_to_work_info(self, record: Any) -> WorkInfo:
         """
@@ -4140,13 +4307,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     **self._ha_trace_fields(),
                 )
                 return False
-            completed = await self.complete(
+            guardrail_commit = await self._commit_guardrail_route_if_needed(
                 job_id,
                 work_item,
-                meta,
                 run_owner=run_owner,
                 run_attempt_id=run_attempt_id,
             )
+            if guardrail_commit is None:
+                completed = await self.complete(
+                    job_id,
+                    work_item,
+                    meta,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                )
+                reject_reason = "sync_db_update_zero_rows"
+            else:
+                committed, _, reject_reason = guardrail_commit
+                completed = 1 if committed else 0
             if completed <= 0:
                 scheduler_trace(
                     "job_terminal_attempt_rejected",
@@ -4155,7 +4333,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     status=job_info.status.value,
                     run_owner=run_owner,
                     run_attempt_id=run_attempt_id,
-                    reason="sync_db_update_zero_rows",
+                    reason=reject_reason or "sync_db_update_zero_rows",
                     **self._ha_trace_fields(),
                 )
                 await self._record_terminal_attempt_audit(
@@ -4167,7 +4345,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     terminal_work_state=None,
                     source="storage_sync",
                     accepted=False,
-                    reject_reason="sync_db_update_zero_rows",
+                    reject_reason=reject_reason or "sync_db_update_zero_rows",
                 )
                 self._scheduler_counter(
                     TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
@@ -4199,7 +4377,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 source="storage_sync",
                 **self._ha_trace_fields(),
             )
-            await self._handle_successful_job_completion(job_id, work_item)
+            if guardrail_commit is None:
+                await self._handle_successful_job_completion(job_id, work_item)
         elif job_info.status == JobStatus.FAILED:
             if not run_owner or not run_attempt_id:
                 scheduler_trace(
@@ -4276,8 +4455,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             else:
                 await self.frontier.on_job_failed(job_id)
         elif job_info.status == JobStatus.STOPPED:
-            await self.cancel_job(job_id, work_item)
-            await self.frontier.on_job_cancelled(job_id)
+            if not await self._cancel_stopped_attempt(
+                job_id,
+                work_item,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                source="storage_sync",
+            ):
+                return False
         else:
             self.logger.error(
                 f"Unhandled job status: {job_info.status}. Marking as FAILED."

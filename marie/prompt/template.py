@@ -44,6 +44,7 @@ _BARE_VAR_IGNORE = frozenset(
         "TRUE",
         "FALSE",
         "NONE",
+        "OTHER",
         "NAN",
         "NA",
         "IF",

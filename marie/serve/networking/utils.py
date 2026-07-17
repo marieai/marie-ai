@@ -1,7 +1,17 @@
 import asyncio
 import ipaddress
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Union,
+    overload,
+)
 
 import grpc
 from grpc_health.v1 import health_pb2, health_pb2_grpc
@@ -23,6 +33,31 @@ if TYPE_CHECKING:  # pragma: no cover
     )
 
 
+@overload
+def get_grpc_channel(
+    address: str,
+    options: Optional[Union[list, Dict[str, Any]]] = None,
+    asyncio: Literal[False] = False,
+    tls: bool = False,
+    root_certificates: Optional[str] = None,
+    aio_tracing_client_interceptors: Optional[Sequence["ClientInterceptor"]] = None,
+    tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
+) -> grpc.Channel: ...
+
+
+@overload
+def get_grpc_channel(
+    address: str,
+    options: Optional[Union[list, Dict[str, Any]]] = None,
+    *,
+    asyncio: Literal[True],
+    tls: bool = False,
+    root_certificates: Optional[str] = None,
+    aio_tracing_client_interceptors: Optional[Sequence["ClientInterceptor"]] = None,
+    tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
+) -> grpc.aio.Channel: ...
+
+
 def get_grpc_channel(
     address: str,
     options: Optional[Union[list, Dict[str, Any]]] = None,
@@ -31,7 +66,7 @@ def get_grpc_channel(
     root_certificates: Optional[str] = None,
     aio_tracing_client_interceptors: Optional[Sequence["ClientInterceptor"]] = None,
     tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
-) -> grpc.Channel:
+) -> Union[grpc.Channel, grpc.aio.Channel]:
     """
     Creates a grpc channel to the given address
 

@@ -1,3 +1,4 @@
+import asyncio
 import multiprocessing
 import time
 import uuid
@@ -118,7 +119,7 @@ async def test_runtimes_headless_topology(
         gateway_port, graph_description, pod_addresses, protocol
     )
 
-    time.sleep(1.0)
+    await asyncio.sleep(1.0)
 
     BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
@@ -217,7 +218,7 @@ async def test_runtimes_resource_not_found(port_generator, protocol, monkeypatch
         gateway_port, graph_description, pod_addresses, protocol
     )
 
-    time.sleep(1.0)
+    await asyncio.sleep(1.0)
 
     BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
@@ -344,7 +345,7 @@ async def test_runtimes_reconnect_replicas(
     worker_processes = []
     for p in worker_ports:
         worker_processes.append(_create_worker(p))
-        time.sleep(0.1)
+        await asyncio.sleep(0.1)
         BaseServer.wait_for_ready_or_shutdown(
             timeout=5.0,
             ctrl_address=f'0.0.0.0:{p}',
@@ -397,7 +398,7 @@ async def test_runtimes_reconnect_replicas(
             ready_or_shutdown_event=multiprocessing.Event(),
         )
 
-        time.sleep(1)
+        await asyncio.sleep(1)
 
         p_second_check = multiprocessing.Process(
             target=_check_all_replicas_connected, args=(3, gateway_port, protocol)
@@ -435,7 +436,7 @@ async def test_runtimes_replicas(
     worker_processes = []
     for p in worker_ports:
         worker_processes.append(_create_worker(p))
-        time.sleep(0.1)
+        await asyncio.sleep(0.1)
         BaseServer.wait_for_ready_or_shutdown(
             timeout=5.0,
             ctrl_address=f'0.0.0.0:{p}',
@@ -510,7 +511,7 @@ async def test_runtimes_headful_topology(port_generator, protocol, terminate_hea
         gateway_port, graph_description, pod_addresses, protocol
     )
 
-    time.sleep(5.0)
+    await asyncio.sleep(5.0)
 
     BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
@@ -636,7 +637,7 @@ async def test_runtimes_graphql(port_generator):
     worker_process = _create_worker(worker_port)
     gateway_process = _create_gqlgateway(gateway_port, graph_description, pod_addresses)
 
-    time.sleep(5.0)
+    await asyncio.sleep(5.0)
 
     BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
@@ -696,7 +697,7 @@ async def test_replica_retry(port_generator):
     worker_processes = []
     for p in worker_ports:
         worker_processes.append(_create_worker(p))
-        time.sleep(3.0)
+        await asyncio.sleep(3.0)
         BaseServer.wait_for_ready_or_shutdown(
             timeout=5.0,
             ctrl_address=f'0.0.0.0:{p}',
@@ -706,7 +707,7 @@ async def test_replica_retry(port_generator):
     gateway_process = _create_gateway(
         gateway_port, graph_description, pod_addresses, 'grpc'
     )
-    time.sleep(3.0)
+    await asyncio.sleep(3.0)
     BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
         ctrl_address=f'0.0.0.0:{gateway_port}',
@@ -752,7 +753,7 @@ async def test_replica_retry_all_fail(port_generator):
     worker_processes = []
     for p in worker_ports:
         worker_processes.append(_create_worker(p))
-        time.sleep(3.0)
+        await asyncio.sleep(3.0)
         BaseServer.wait_for_ready_or_shutdown(
             timeout=5.0,
             ctrl_address=f'0.0.0.0:{p}',
@@ -762,7 +763,7 @@ async def test_replica_retry_all_fail(port_generator):
     gateway_process = _create_gateway(
         gateway_port, graph_description, pod_addresses, 'grpc'
     )
-    time.sleep(3.0)
+    await asyncio.sleep(3.0)
     BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
         ctrl_address=f'0.0.0.0:{gateway_port}',

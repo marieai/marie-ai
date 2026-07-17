@@ -7,6 +7,7 @@ with Marie's executor system, enabling agents to be deployed as services.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
@@ -17,29 +18,28 @@ if TYPE_CHECKING:
 
 from docarray import DocList
 from docarray.documents import TextDoc
-from pydantic import Field
 
 from marie.agent.backends import (
     AgentBackend,
     AgentResult,
     AgentStatus,
     BackendConfig,
-    QwenAgentBackend,
+    OpenAIAgentBackend,
+    OpenAIBackendConfig,
 )
-from marie.agent.config import AgentConfig, CoordinationConfig, load_config
+from marie.agent.config import AgentConfig, load_config
 from marie.agent.coordination import (
     AgentExecutionContext,
-    CoordinationResult,
     CoordinatorFactory,
     coordination_result_to_agent_result,
 )
-from marie.agent.message import Message
+from marie.agent.message import ContentItem, Message
 from marie.agent.state.conversation import ConversationStore
 from marie.agent.tools import resolve_tools
 from marie.agent.tools.base import AgentTool
+from marie.engine.output_parser import parse_json_markdown
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
-from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 
 try:
     from marie.serve.executors import requests
@@ -53,14 +53,14 @@ except ImportError:
         return decorator
 
 
-logger = MarieLogger("marie.agent.executor")
+logger = MarieLogger("marie.executor.agent.agent_executor")
 
 
 class AgentExecutor(MarieExecutor):
     """Marie Executor for running agents with pluggable backends.
 
     Provides HTTP/gRPC endpoints for agent interactions with support for:
-    - Multiple backend types (Qwen, Haystack, AutoGen)
+    - Multiple backend types (OpenAI, Haystack, AutoGen)
     - Tool registration and management
     - Conversation state persistence
     - Streaming responses
@@ -70,9 +70,10 @@ class AgentExecutor(MarieExecutor):
         ```yaml
         jtype: AgentExecutor
         with:
-          backend: qwen_agent
+          backend: openai
           backend_config:
-            engine_name: qwen2_5_vl_7b
+            model: qwen2_5_vl_7b
+            base_url: http://localhost:8000/v1
             max_iterations: 10
           tools:
             - search
@@ -83,8 +84,11 @@ class AgentExecutor(MarieExecutor):
     Example usage:
         ```python
         executor = AgentExecutor(
-            backend="qwen_agent",
-            backend_config={"engine_name": "qwen2_5_vl_7b"},
+            backend="openai",
+            backend_config={
+                "model": "qwen2_5_vl_7b",
+                "base_url": "http://localhost:8000/v1",
+            },
             tools=["search", "calculator"],
         )
 
@@ -98,12 +102,12 @@ class AgentExecutor(MarieExecutor):
 
     # Backend registry mapping names to backend classes
     BACKEND_REGISTRY: Dict[str, Type[AgentBackend]] = {
-        "qwen_agent": QwenAgentBackend,
+        "openai": OpenAIAgentBackend,
     }
 
     def __init__(
         self,
-        backend: str = "qwen_agent",
+        backend: str = "openai",
         backend_config: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Union[str, Dict, AgentTool]]] = None,
         system_message: Optional[str] = None,
@@ -114,7 +118,7 @@ class AgentExecutor(MarieExecutor):
         """Initialize the AgentExecutor.
 
         Args:
-            backend: Backend type ('qwen_agent', 'haystack', 'autogen')
+            backend: Backend type ('openai', 'haystack', 'autogen')
             backend_config: Backend-specific configuration
             tools: List of tool names, configs, or instances
             system_message: System message for the agent
@@ -292,7 +296,7 @@ class AgentExecutor(MarieExecutor):
             agent_name="coordinator",
             session_id=parameters.get("session_id"),
             user_id=parameters.get("user_id"),
-        ) as ctx:
+        ):
             # Get coordinator
             coord_config = self._config.coordination
             coordinator = CoordinatorFactory.create(coord_config)
@@ -411,6 +415,8 @@ class AgentExecutor(MarieExecutor):
         if self._system_message:
             config["system_message"] = self._system_message
 
+        if backend_cls is OpenAIAgentBackend:
+            return backend_cls(config=OpenAIBackendConfig(**config))
         return backend_cls(config=BackendConfig(**config))
 
     def _register_optional_backends(self) -> None:
@@ -432,6 +438,148 @@ class AgentExecutor(MarieExecutor):
                 self.BACKEND_REGISTRY["autogen"] = AutoGenAgentBackend
             except ImportError:
                 pass
+
+    @requests(on="/agent/execute")
+    async def execute_endpoint(
+        self,
+        docs: DocList[TextDoc],
+        parameters: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> DocList[TextDoc]:
+        """Execute one stateless agent task for a workflow node."""
+        self._ensure_initialized()
+        parameters = parameters or {}
+        execution_id = str(parameters.get("execution_id") or uuid.uuid4())
+
+        docs, before_results, early_return = await self._run_before_guardrails(
+            docs,
+            execution_id,
+            parameters,
+        )
+        if early_return is not None:
+            return early_return
+
+        messages = await self._build_messages(
+            docs,
+            execution_id,
+            parameters,
+            include_history=False,
+        )
+        output_schema = parameters.get("output_schema")
+        if output_schema is not None:
+            if not isinstance(output_schema, dict):
+                raise ValueError("output_schema must be an object")
+            messages.append(
+                Message.user(
+                    "Return the final answer as one JSON object matching this JSON "
+                    f"Schema. Do not include commentary.\n{json.dumps(output_schema)}"
+                )
+            )
+
+        backend_parameters = {
+            key: parameters[key]
+            for key in ("agent_id", "seed", "skill_name", "user_id")
+            if key in parameters
+        }
+        timeout_seconds = float(
+            parameters.get(
+                "timeout_seconds",
+                self._backend_config.get("timeout_seconds", 300.0),
+            )
+        )
+        structured_output_retries = int(parameters.get("structured_output_retries", 1))
+        if structured_output_retries < 0 or structured_output_retries > 3:
+            raise ValueError("structured_output_retries must be between 0 and 3")
+
+        start_time = time.time()
+        attempt_messages = list(messages)
+        total_iterations = 0
+        total_tool_calls = 0
+        structured_output_attempts = 0
+        with AgentExecutionContext(
+            workflow_id=execution_id,
+            session_id=parameters.get("session_id"),
+            user_id=parameters.get("user_id"),
+            agent_name=self._config.name if self._config else self._backend_name,
+        ):
+            for attempt in range(structured_output_retries + 1):
+                structured_output_attempts = attempt + 1
+                try:
+                    result = await asyncio.wait_for(
+                        self._backend.run(
+                            messages=attempt_messages,
+                            tools=self._tools,
+                            config=None,
+                            **backend_parameters,
+                        ),
+                        timeout=timeout_seconds,
+                    )
+                except asyncio.TimeoutError as error:
+                    raise TimeoutError(
+                        f"Agent execution timed out after {timeout_seconds}s"
+                    ) from error
+
+                if result.status != AgentStatus.COMPLETED:
+                    raise RuntimeError(result.error or "Agent execution failed")
+                total_iterations += result.iterations
+                total_tool_calls += len(result.tool_calls)
+
+                response_text, after_results = await self._run_after_guardrails(
+                    result.output_text,
+                    execution_id,
+                    parameters,
+                    extra_ctx={
+                        "iterations": result.iterations,
+                        "tool_calls_count": len(result.tool_calls),
+                    },
+                )
+                if output_schema is None:
+                    break
+
+                try:
+                    from jsonschema import Draft202012Validator
+
+                    payload = parse_json_markdown(response_text)
+                    if not isinstance(payload, dict):
+                        raise ValueError("Agent structured output must be an object")
+                    Draft202012Validator(output_schema).validate(payload)
+                except Exception as error:
+                    if attempt == structured_output_retries:
+                        raise
+                    attempt_messages.extend(
+                        [
+                            Message.assistant(response_text),
+                            Message.user(
+                                "The previous final answer did not satisfy the "
+                                f"required JSON object schema: {error}. Return a "
+                                "corrected JSON object only."
+                            ),
+                        ]
+                    )
+                    continue
+
+                response_text = json.dumps(payload, separators=(",", ":"))
+                break
+
+        return DocList[TextDoc](
+            [
+                TextDoc(
+                    text=response_text,
+                    tags={
+                        "execution_id": execution_id,
+                        "status": result.status.value,
+                        "iterations": total_iterations,
+                        "structured_output_attempts": structured_output_attempts,
+                        "duration_ms": (time.time() - start_time) * 1000,
+                        "tool_calls": total_tool_calls,
+                        "guardrails": {
+                            "before": before_results,
+                            "after": after_results,
+                        },
+                    },
+                )
+            ]
+        )
 
     @requests(on="/chat")
     async def chat_endpoint(
@@ -496,7 +644,7 @@ class AgentExecutor(MarieExecutor):
 
             result = AgentResult(
                 output=f"Request timed out after {timeout_seconds} seconds.",
-                status=AgentStatus.ERROR,
+                status=AgentStatus.FAILED,
                 error="Execution timeout",
             )
 
@@ -741,6 +889,8 @@ class AgentExecutor(MarieExecutor):
         docs: DocList[TextDoc],
         conversation_id: str,
         parameters: Dict[str, Any],
+        *,
+        include_history: bool = True,
     ) -> List[Message]:
         """Build message list from docs and conversation history.
 
@@ -755,15 +905,23 @@ class AgentExecutor(MarieExecutor):
         messages: List[Message] = []
 
         # Add conversation history
-        if self._conversation_store:
+        if include_history and self._conversation_store:
             history = await self._conversation_store.get_messages(conversation_id)
             messages.extend(history)
 
-        # Add new user message from docs
-        if docs:
-            user_content = "\n".join(doc.text for doc in docs if doc.text)
-            if user_content:
-                messages.append(Message.user(user_content))
+        content: List[ContentItem] = []
+        user_content = "\n".join(doc.text for doc in docs if doc.text)
+        if user_content:
+            content.append(ContentItem(text=user_content))
+
+        content_items = parameters.get("content_items")
+        if content_items is not None:
+            if not isinstance(content_items, list):
+                raise ValueError("content_items must be an array")
+            content.extend(ContentItem.model_validate(item) for item in content_items)
+
+        if content:
+            messages.append(Message.user(content))
 
         return messages
 

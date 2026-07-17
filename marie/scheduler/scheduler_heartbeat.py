@@ -29,7 +29,7 @@ class SchedulerHeartbeat:
     def __init__(
         self,
         scheduler: Any,
-        config: SchedulerRepository,
+        config: HeartbeatConfig,
         db_query: SchedulerRepository,
         logger: MarieLogger,
     ):
@@ -43,6 +43,7 @@ class SchedulerHeartbeat:
         self._db_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="hb-executor"
         )
+        self._closed = False
 
     async def start(self):
         """Starts the heartbeat loop."""
@@ -52,6 +53,8 @@ class SchedulerHeartbeat:
 
     async def stop(self):
         """Stops the heartbeat loop."""
+        if self._closed:
+            return
         if self.running:
             self.running = False
             if self._task:
@@ -60,6 +63,12 @@ class SchedulerHeartbeat:
                     await self._task
                 except asyncio.CancelledError:
                     self.logger.info("Heartbeat task cancelled.")
+        await asyncio.to_thread(
+            self._db_executor.shutdown,
+            wait=True,
+            cancel_futures=True,
+        )
+        self._closed = True
 
     async def _safe_count_states(
         self,

@@ -235,6 +235,13 @@ executors:
            s3:
              <<: *s3_conf_shared
              enabled: True
+         plugins:
+           - package: marie/document-extraction
+             path: /mnt/data/marie-ai/plugins/marie-plugin-document-extraction_0.2.0.zip
+             actions: [capabilities, extract]
+             timeout_s: 120
+         document_extraction:
+           enabled: true
 #         pipelines:
          pipeline:
            name: 'default'

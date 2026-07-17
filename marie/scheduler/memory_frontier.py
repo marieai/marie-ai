@@ -249,6 +249,62 @@ class MemoryFrontier:
                     now_ready.append(wi)
             return now_ready
 
+    async def on_job_completed_with_skips(
+        self, job_id: str, skipped_job_ids: Iterable[str]
+    ) -> list[WorkInfo]:
+        """Complete one job and skip its unselected descendants atomically."""
+        async with self._lock:
+            skipped = set(skipped_job_ids)
+            completed = self.jobs_by_id.get(job_id)
+            if completed is None:
+                logger.warning(
+                    f"Job with id {job_id} not found in memory frontier for completion."
+                )
+            else:
+                completed.state = WorkState.COMPLETED
+                self._remove_from_ready_set(job_id)
+                self.leased_until.pop(job_id, None)
+
+            newly_skipped: set[str] = set()
+            for skipped_id in sorted(skipped):
+                wi = self.jobs_by_id.get(skipped_id)
+                if wi is None:
+                    logger.warning(
+                        f"Job with id {skipped_id} not found in memory frontier for skip."
+                    )
+                    continue
+                already_skipped = wi.state == WorkState.SKIPPED or (
+                    isinstance(wi.state, str)
+                    and wi.state.lower() == WorkState.SKIPPED.value
+                )
+                if not already_skipped:
+                    newly_skipped.add(skipped_id)
+                wi.state = WorkState.SKIPPED
+                self._remove_from_ready_set(skipped_id)
+                self.leased_until.pop(skipped_id, None)
+
+            now_ready: list[WorkInfo] = []
+            for terminal_id in [job_id, *sorted(newly_skipped)]:
+                for child_id in self.dependents.get(terminal_id, []):
+                    if child_id in skipped:
+                        continue
+                    wi = self.jobs_by_id.get(child_id)
+                    if wi is None:
+                        continue
+                    unmet = self.unmet_count[child_id]
+                    if unmet == 0:
+                        continue
+                    self.unmet_count[child_id] = unmet - 1
+                    if self.unmet_count[child_id] == 0 and self._is_schedulable_state(
+                        wi.state
+                    ):
+                        if child_id not in self._added_at:
+                            self._added_at[child_id] = self._now()
+                        self._push_ready(wi)
+                        now_ready.append(wi)
+
+            return now_ready
+
     async def on_job_failed(self, job_id: str) -> list[WorkInfo]:
         """
         Handles permanent job failure. Updates state to FAILED and does not

@@ -249,6 +249,24 @@ executors:
     env:
       MARIE_PLUGIN_DAEMON_URL: ${{ ENV.MARIE_PLUGIN_DAEMON_URL }}
 
+  - name: guardrail_executor
+    uses:
+      jtype: GuardrailEvaluationExecutor
+      metas:
+        py_modules:
+          - marie.executor.guardrail
+      with:
+        storage:
+          psql:
+            <<: *psql_conf_shared
+            enabled: True
+            asset_tracking_enabled: True
+          s3:
+            <<: *s3_conf_shared
+            enabled: True
+    timeout_ready: 3000000
+    replicas: 1
+
   # Fast, reliable executor
   - name: mock_executor_a
     uses:

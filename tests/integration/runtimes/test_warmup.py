@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import pytest
@@ -19,7 +20,7 @@ async def test_gateway_warmup_fast_executor(protocol, capfd):
     flow = Flow(protocol=protocol).add()
 
     with flow:
-        time.sleep(1)
+        await asyncio.sleep(1)
         out, _ = capfd.readouterr()
     assert 'recv _status' in out
     assert out.count('recv _status') == 1
@@ -35,7 +36,7 @@ async def test_gateway_warmup_with_replicas_and_shards(protocol, capfd):
     )
 
     with flow:
-        time.sleep(1)
+        await asyncio.sleep(1)
         out, _ = capfd.readouterr()
     assert 'recv _status' in out
     # 2 calls from gateway runtime to deployments
@@ -51,7 +52,7 @@ async def test_gateway_warmup_slow_executor(protocol, capfd):
 
     with flow:
         # requires high sleep time to account for Flow readiness and properly capture the output logs
-        time.sleep(SLOW_EXECUTOR_SLEEP_TIME * 3)
+        await asyncio.sleep(SLOW_EXECUTOR_SLEEP_TIME * 3)
         out, _ = capfd.readouterr()
     assert 'recv _status' in out
     assert out.count('recv _status') == 1
@@ -72,7 +73,7 @@ async def test_multi_protocol_gateway_warmup_fast_executor(port_generator, capfd
     )
 
     with flow:
-        time.sleep(1)
+        await asyncio.sleep(1)
         out, _ = capfd.readouterr()
     assert 'recv _status' in out
     assert out.count('recv _status') == 1
@@ -94,7 +95,7 @@ async def test_multi_protocol_gateway_warmup_slow_executor(port_generator, capfd
 
     with flow:
         # requires high sleep time to account for Flow readiness and properly capture the output logs
-        time.sleep(SLOW_EXECUTOR_SLEEP_TIME * 3)
+        await asyncio.sleep(SLOW_EXECUTOR_SLEEP_TIME * 3)
         out, _ = capfd.readouterr()
     assert 'recv _status' in out
     assert out.count('recv _status') == 1

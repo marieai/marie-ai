@@ -94,7 +94,7 @@ def query_planner_mock_guardrail_simple(
         dependencies=[process.task_id],
         node_type=QueryType.GUARDRAIL,
         definition=GuardrailQueryDefinition(
-            input_source=f"$.nodes.{process.task_id}.output",
+            input_source=f"$.nodes['{process.task_id}'].output",
             metrics=[
                 GuardrailMetric(
                     type=GuardrailMetricType.LENGTH_CHECK,
@@ -224,7 +224,7 @@ def query_planner_mock_guardrail_retry_loop(
         dependencies=[llm_1.task_id],
         node_type=QueryType.GUARDRAIL,
         definition=GuardrailQueryDefinition(
-            input_source=f"$.nodes.{llm_1.task_id}.output",
+            input_source=f"$.nodes['{llm_1.task_id}'].output",
             metrics=[
                 GuardrailMetric(
                     type=GuardrailMetricType.LENGTH_CHECK,
@@ -290,7 +290,7 @@ def query_planner_mock_guardrail_retry_loop(
         dependencies=[llm_2_id],
         node_type=QueryType.GUARDRAIL,
         definition=GuardrailQueryDefinition(
-            input_source=f"$.nodes.{llm_2_id}.output",
+            input_source=f"$.nodes['{llm_2_id}'].output",
             metrics=[
                 GuardrailMetric(
                     type=GuardrailMetricType.LENGTH_CHECK,
@@ -399,7 +399,7 @@ def query_planner_mock_guardrail_executor_metric(
         dependencies=[extract.task_id],
         node_type=QueryType.GUARDRAIL,
         definition=GuardrailQueryDefinition(
-            input_source=f"$.nodes.{extract.task_id}.output.extracted_fields",
+            input_source=f"$.nodes['{extract.task_id}'].output.extracted_fields",
             metrics=[
                 # Built-in JSON schema validation
                 GuardrailMetric(
@@ -552,7 +552,7 @@ def query_planner_mock_guardrail_multi_metric(
         dependencies=[process.task_id],
         node_type=QueryType.GUARDRAIL,
         definition=GuardrailQueryDefinition(
-            input_source=f"$.nodes.{process.task_id}.output",
+            input_source=f"$.nodes['{process.task_id}'].output",
             metrics=[
                 GuardrailMetric(
                     type=GuardrailMetricType.LENGTH_CHECK,

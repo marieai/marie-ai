@@ -421,13 +421,15 @@ def mark_as_active_dags(schema: str, ids: list, include_metadata: bool = False):
         SELECT id
         FROM {schema}.dag
         WHERE id IN (SELECT UNNEST({ids_string}::uuid[]))
-        --FOR UPDATE SKIP LOCKED -- We don't need this because we are using a single worker
+          AND state IN ('{WorkState.CREATED.value}', '{WorkState.ACTIVE.value}')
+        FOR UPDATE
     )
     UPDATE {schema}.dag j SET
         started_on = COALESCE(j.started_on, now()),
         state = '{WorkState.ACTIVE.value}'
     FROM next
-    WHERE  j.id = next.id
+    WHERE j.id = next.id
+      AND j.state IN ('{WorkState.CREATED.value}', '{WorkState.ACTIVE.value}')
     RETURNING j.{'*' if include_metadata else 'id, name, state '}
     """
 

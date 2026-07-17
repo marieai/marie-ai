@@ -115,7 +115,7 @@ NODE_CATALOG: List[NodeTypeInfo] = [
         category="quality",
         node_type="GUARDRAIL",
         verticals=["all"],
-        default_endpoint="guardrail://control",
+        default_endpoint="guardrail_executor://evaluate",
     ),
     # HITL
     NodeTypeInfo(
@@ -579,7 +579,7 @@ def get_node_defaults(method: str) -> str:
         defaults["merge_strategy"] = "WAIT_ALL_ACTIVE"
 
     elif method_upper == "GUARDRAIL":
-        defaults["endpoint"] = "guardrail://control"
+        defaults["endpoint"] = "guardrail_executor://evaluate"
         defaults["metrics"] = []
         defaults["aggregation_mode"] = "all"
         defaults["pass_threshold"] = 0.8

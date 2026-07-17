@@ -57,7 +57,9 @@ class TestFileReadTool:
             result = tool.call(path=path)
             assert result.is_error is True
             data = json.loads(result.content)
-            assert "denied" in data["error"].lower() or "access" in data["error"].lower()
+            assert (
+                "denied" in data["error"].lower() or "access" in data["error"].lower()
+            )
 
     def test_max_lines_limit(self, temp_dir):
         """Test max_lines parameter limits output."""
@@ -110,3 +112,13 @@ class TestFileReadTool:
 
         assert result.raw_input["path"] == str(temp_file)
         assert result.raw_input["max_lines"] == 50
+
+    def test_root_dir_limits_reads_to_job_workspace(self, temp_dir, tmp_path):
+        inside = temp_dir / "result.json"
+        inside.write_text('{"status":"ok"}')
+        outside = tmp_path / "outside.json"
+        outside.write_text('{"status":"outside"}')
+        tool = FileReadTool(root_dir=temp_dir)
+
+        assert tool.call(path="result.json").is_error is False
+        assert tool.call(path=str(outside)).is_error is True

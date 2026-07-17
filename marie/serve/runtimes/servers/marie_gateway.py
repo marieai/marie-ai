@@ -2115,24 +2115,24 @@ class MarieServerGateway(CompositeServer):
                 tries = 0
                 while tries < max_tries:
                     try:
-                        with get_grpc_channel(
+                        async with get_grpc_channel(
                             address,
                             tls=use_tls,
                             root_certificates=None,
                             options=channel_options,
+                            asyncio=True,
                         ) as channel:
-                            metadata = ()
                             stub = jina_pb2_grpc.JinaDiscoverEndpointsRPCStub(channel)
-                            response, call = stub.endpoint_discovery.with_call(
+                            response = await stub.endpoint_discovery(
                                 jina_pb2.google_dot_protobuf_dot_empty__pb2.Empty(),
                                 timeout=timeout,
-                                metadata=metadata,
+                                metadata=(),
                             )
                             self.logger.info(f"response: {response.endpoints}")
                             endpoints = response.endpoints
                             break
                     except grpc.RpcError as e:
-                        time.sleep(1)
+                        await asyncio.sleep(1)
                         tries += 1
                         if (
                             e.code()

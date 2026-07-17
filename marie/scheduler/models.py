@@ -32,6 +32,7 @@ class WorkInfo(BaseModel):
     hard_sla: Optional[datetime] = None
     run_owner: Optional[str] = None
     run_attempt_id: Optional[str] = None
+    branch_metadata: Optional[Dict[str, Any]] = None
 
 
 class JobSubmissionModel(BaseModel):

@@ -445,6 +445,7 @@ dependencies = [
     { name = "docling-slim", extra = ["convert-core", "format-email", "format-latex", "format-office", "format-opendocument", "format-web"] },
     { name = "markitdown", extra = ["docx", "pdf", "pptx", "xlsx"] },
     { name = "pydantic" },
+    { name = "pypdfium2" },
     { name = "tree-sitter-language-pack" },
 ]
 
@@ -459,6 +460,7 @@ requires-dist = [
     { name = "docling-slim", extras = ["convert-core", "format-email", "format-latex", "format-office", "format-opendocument", "format-web"], specifier = "==2.111.0" },
     { name = "markitdown", extras = ["docx", "pdf", "pptx", "xlsx"], specifier = "==0.1.6" },
     { name = "pydantic", specifier = ">=2.10,<3.0" },
+    { name = "pypdfium2", specifier = "==5.11.0" },
     { name = "tree-sitter-language-pack", specifier = "==1.12.5" },
 ]
 

@@ -27,6 +27,9 @@ class FileListTool(AgentTool):
     Returns file information including name, size, and modification time.
     """
 
+    def __init__(self, root_dir: str | Path | None = None) -> None:
+        self._root_dir = Path(root_dir).expanduser().resolve() if root_dir else None
+
     @property
     def metadata(self) -> ToolMetadata:
         return ToolMetadata(
@@ -62,7 +65,15 @@ class FileListTool(AgentTool):
         }
 
         try:
-            dir_path = Path(path)
+            if any(part == ".." for part in Path(pattern).parts):
+                raise PermissionError(pattern)
+            dir_path = Path(path).expanduser()
+            if self._root_dir is not None:
+                if not dir_path.is_absolute():
+                    dir_path = self._root_dir / dir_path
+                dir_path = dir_path.resolve()
+                if not dir_path.is_relative_to(self._root_dir):
+                    raise PermissionError(path)
             if not dir_path.exists():
                 result = {"error": "Directory not found", "path": path}
                 return ToolOutput(
@@ -89,7 +100,11 @@ class FileListTool(AgentTool):
                 files = list(dir_path.glob(pattern))
 
             file_info = []
-            for f in files[:max_files]:
+            for f in files:
+                if self._root_dir is not None:
+                    resolved = f.resolve()
+                    if not resolved.is_relative_to(self._root_dir):
+                        continue
                 if f.is_file():
                     try:
                         stat = f.stat()
@@ -106,6 +121,8 @@ class FileListTool(AgentTool):
                     except (OSError, PermissionError):
                         # Skip files we can't stat
                         continue
+                if len(file_info) == max_files:
+                    break
 
             result = {
                 "directory": str(dir_path.absolute()),

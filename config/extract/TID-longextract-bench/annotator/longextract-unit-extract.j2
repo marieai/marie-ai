@@ -1,0 +1,86 @@
+Extract all LongExtractBench schema units from the supplied document page.
+
+Schema units:
+{{ SCHEMA_UNITS_JSON }}
+
+Document metadata:
+{{ DOCUMENT_METADATA_JSON }}
+
+Page number:
+{{ PAGE_NUMBER }}
+
+Page text:
+{{ PAGE_TEXT }}
+
+Page tables:
+{{ PAGE_TABLES_JSON }}
+
+Document aggregation policy:
+{{ AGGREGATION_POLICY_JSON }}
+
+Return one record for each logical table or source block on this page, in source
+order. Put top-level scalar values in document_fields.
+
+Evidence rules:
+- Follow every schema and field description literally. Use the page image to
+  align labels and value columns, and use the prepared page text above to
+  transcribe exact text.
+- For every value, transcribe the source first and then apply only the
+  transformations required by that field's description. Preserve every source
+  character or delimiter that the description does not explicitly remove or
+  reformat. Never borrow a transformation from another field.
+- Build rows before assigning headings. Enumerate every visual row with a value
+  in at least one data column named by the selected array schema, and emit that
+  row exactly once. A bold, indented, or subgroup label with data is still the
+  subject of a data row.
+- Reconcile that enumeration against the supplied page-table row inventory.
+  Every inventoried source line with a value in a schema data column must map to
+  one emitted row. Ignore inventoried headers, section-only rows, separators,
+  and blanks rather than treating every inventoried line as data.
+- For a field defined as the nearest preceding section-only or group heading, a
+  line qualifies only when its visual row has no values in any data column.
+  Assign headings only after all data rows have been enumerated. A data-bearing
+  label must retain the preceding qualifying heading and must not replace it.
+- Apply the active qualifying heading to every following data row until another
+  qualifying heading appears. When a field description names a heading category,
+  use only the printed line or block that satisfies that category. Do not append
+  an adjacent title, subtitle, description, or document label.
+- Before returning, audit every string-valued cell against its field
+  description. Removing whitespace inside a source delimiter never removes the
+  delimiter itself. Preserve all source delimiters unless that field description
+  explicitly says to remove them. Whitespace-only normalization inside a
+  delimiter pair changes `( value )` to `(value)`, never to `value`.
+- Before returning, audit every carried heading field. If its value is copied
+  from a row that has any data-column value, it is not a qualifying heading;
+  restore the nearest preceding value-less heading, or emit null on a
+  continuation page so the ordered parser can carry it.
+- For a category-qualified heading, stop before an adjacent line whose role is
+  a title, subtitle, content-type label, or description rather than part of that
+  category heading.
+
+Continuation rules:
+- Audit the table continuation evidence against any current-of-total marker in
+  the page text. For a marker belonging to the table, current 1 means a new
+  table page and current greater than 1 means a continuation. Use the marker
+  when a supplied continuation flag contradicts it.
+- A table marked as a continuation after that audit is not a new schema unit,
+  whether or not headers repeat.
+- For a new table or source block, set unit_name to the exact array unit name
+  from the schema units supplied above and set is_continuation to false.
+- For a continuation, set is_continuation to true. If the owning unit is not
+  explicitly identifiable on this page, set unit_name to null; the ordered
+  parser will attach it to the preceding record. Do not classify continuation
+  rows by their subject matter.
+- Leave an aggregation-policy carry field null when its value is not printed on
+  this continuation page. The ordered parser carries the preceding value.
+- For aggregation-policy sequence fields, emit a page-local 1-based ordinal.
+  The ordered parser assigns the document-wide sequence.
+- rows contains only values visible on this page and must match the selected
+  unit's item schema. Do not emit rows from another page.
+- source.page_index is the current zero-based page index. source.table_index is
+  the zero-based index in the supplied page-tables array, or null for a
+  non-table block.
+- Never invent a continuation, unit name, or value.
+
+Return JSON matching this intermediate contract exactly:
+{{ OUTPUT_CONTRACT_JSON }}

@@ -20,10 +20,9 @@ from marie.agent.backends.haystack_backend import (
     HaystackBackendConfig,
     SimpleHaystackBackend,
 )
-from marie.agent.backends.qwen_backend import (
-    QwenAgentBackend,
-    QwenBackendConfig,
-    SimpleQwenBackend,
+from marie.agent.backends.openai_backend import (
+    OpenAIAgentBackend,
+    OpenAIBackendConfig,
 )
 
 __all__ = [
@@ -34,10 +33,9 @@ __all__ = [
     "BackendConfig",
     "CompositeBackend",
     "ToolCallRecord",
-    # Qwen backend
-    "QwenAgentBackend",
-    "QwenBackendConfig",
-    "SimpleQwenBackend",
+    # OpenAI-compatible backend
+    "OpenAIAgentBackend",
+    "OpenAIBackendConfig",
     # Haystack backend
     "HaystackAgentBackend",
     "HaystackBackendConfig",

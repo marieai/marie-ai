@@ -1,0 +1,111 @@
+layout_id: longextract-bench
+
+processing:
+  convert_to_structure: false
+
+annotators:
+  tables:
+    annotator_type: llm
+    mode: per-page
+    model_config:
+      model_name: qwen_v3_30b_instruct
+      multimodal: true
+      prompt_path: ./tables.j2
+      system_prompt_text: >
+        You are a deterministic document table detector. Use the page image and
+        prepared page text to locate tables and return valid JSON. For a table's
+        current-of-total marker, current 1 is a new table page and current
+        greater than 1 is a continuation. That marker decision is authoritative;
+        repeated headers, titles, and in-table section labels do not override it.
+        Inventory every line with a value in a detected data column as a data
+        row regardless of typography, indentation, or subgroup role.
+      top_p: 1.0
+      frequency_penalty: 0
+      presence_penalty: 0
+      temperature: 0.0
+      expect_output: json
+      refine_passes: 1
+      refine_prompt_path: ./tables-refine.j2
+      pass_models: [qwen_v3_30b_instruct]
+      pass_temperatures: [0.0]
+      refinement_validation:
+        require_same_units: true
+        max_segment_drop_ratio: 0.1
+    parser: tables
+    validators: [tables]
+
+  longextract-aggregation-policy:
+    annotator_type: llm
+    mode: per-page
+    model_config:
+      model_name: qwen_v3_30b_instruct
+      multimodal: false
+      prompt_path: ./longextract-aggregation-policy.j2
+      system_prompt_text: >
+        You are a deterministic schema policy compiler. Return the aggregation
+        behavior explicitly defined by the supplied JSON schemas as valid JSON.
+      top_p: 1.0
+      frequency_penalty: 0
+      presence_penalty: 0
+      temperature: 0.0
+      expect_output: json
+      mini_batch_size: 1
+    parser: noop
+    validators: []
+
+  longextract-unit-extract:
+    annotator_type: llm
+    mode: per-page
+    model_config:
+      model_name: qwen_v3_30b_instruct
+      multimodal: true
+      prompt_path: ./longextract-unit-extract.j2
+      system_prompt_text: >
+        You are a deterministic document extraction annotator. Extract all
+        requested schema units from the supplied document page and return valid
+        JSON. Account for every data-bearing row in the supplied table inventory.
+        Preserve source delimiters unless a field description explicitly removes
+        them. A data-bearing row must be emitted and cannot be treated only as a
+        carried heading. A current-of-total marker in the page text overrides a
+        contradictory table continuation hint.
+      top_p: 1.0
+      frequency_penalty: 0
+      presence_penalty: 0
+      temperature: 0.0
+      expect_output: json
+      max_tokens: 8192
+      refine_passes: 1
+      refine_prompt_path: ./longextract-unit-extract-refine.j2
+      pass_models: [qwen_v3_30b_instruct]
+      pass_temperatures: [0.0]
+      refinement_validation:
+        require_same_units: true
+        max_segment_drop_ratio: 0.1
+    parser: noop
+    validators: []
+
+  longextract-aggregated:
+    parser: longextract-aggregated
+    validators: []
+
+  longextract-repair:
+    annotator_type: llm
+    mode: per-page
+    model_config:
+      model_name: qwen_v3_30b_instruct
+      multimodal: false
+      prompt_path: ./longextract-repair.j2
+      system_prompt_text: >
+        You are a deterministic JSON repair annotator. Apply only requested
+        evidence-backed repairs and return valid JSON.
+      top_p: 1.0
+      frequency_penalty: 0
+      presence_penalty: 0
+      temperature: 0.0
+      expect_output: json
+      mini_batch_size: 1
+    parser_name: default
+    validators: []
+
+grounding:
+  key-value: []

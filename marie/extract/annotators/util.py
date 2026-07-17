@@ -556,6 +556,23 @@ async def process_batch(
                 await asyncio.sleep(2)
 
 
+def _prompt_lines_by_page(
+    doc: UnstructuredDocument,
+) -> Dict[int, List[Dict[str, Any]]]:
+    from marie.components.document_taxonomy.verbalizers import verbalizers
+
+    extraction = doc.source_metadata.get("extraction", {})
+    semantic_text = (
+        extraction.get("result_kind") == "semantic_document"
+        and extraction.get("ocr_invoked") is False
+    )
+    method = "PLAIN_TEXT" if semantic_text else "SPATIAL_FORMAT"
+    return {
+        meta["meta"]["page"]: verbalizers(method, meta)
+        for meta in doc.source_metadata["ocr"]
+    }
+
+
 def prepare_batch_with_meta(
     batched_files: list,
     frames: list[ndarray],
@@ -582,16 +599,7 @@ def prepare_batch_with_meta(
     Yields:
         Batches of [image, prompt, image_path, output_suffix] tuples
     """
-    # adding spatial context
-    from marie.components.document_taxonomy.verbalizers import verbalizers
-
-    metadata_ocr = doc.source_metadata["ocr"]
-    decorated_lines_by_page = {}
-
-    for i, meta in enumerate(metadata_ocr):
-        page_number = meta["meta"]["page"]
-        lines = verbalizers("SPATIAL_FORMAT", meta)
-        decorated_lines_by_page[page_number] = lines
+    decorated_lines_by_page = _prompt_lines_by_page(doc)
 
     def decorator(text: str, line_id: int) -> str:
         """Add  line number to the text, Line ID are not necessarily row numbers"""
@@ -652,6 +660,7 @@ def prepare_batch_with_meta(
                     "INJECTED_TEXT": INJECTED_TEXT,
                     "OCR_DATA": content,
                     "OCR_TEXT": content,
+                    "PAGE_TEXT": content,
                     "FILTERED_OCR_DATA": content,
                 }
                 if context_manager:
@@ -712,16 +721,7 @@ def prepare_batch_with_meta_units(
     Yields:
         Batches of [image, prompt, image_path, output_suffix] tuples
     """
-    # adding spatial context
-    from marie.components.document_taxonomy.verbalizers import verbalizers
-
-    metadata_ocr = doc.source_metadata["ocr"]
-    decorated_lines_by_page = {}
-
-    for i, meta in enumerate(metadata_ocr):
-        page_number = meta["meta"]["page"]
-        lines = verbalizers("SPATIAL_FORMAT", meta)
-        decorated_lines_by_page[page_number] = lines
+    decorated_lines_by_page = _prompt_lines_by_page(doc)
 
     def decorator(text: str, line_id: int) -> str:
         """Add line number to the text, Line ID are not necessarily row numbers"""
@@ -800,6 +800,7 @@ def prepare_batch_with_meta_units(
                 "INJECTED_TEXT": INJECTED_TEXT,
                 "OCR_DATA": content,
                 "OCR_TEXT": content,
+                "PAGE_TEXT": content,
                 "FILTERED_OCR_DATA": filtered_content,
             }
             if context_manager:

@@ -5,9 +5,9 @@ Supports inline quality evaluation during workflow execution with configurable m
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from marie.query_planner.base import QueryDefinition, QueryTypeRegistry
 
@@ -121,6 +121,75 @@ class GuardrailResult(BaseModel):
     )
 
 
+class GuardrailAggregationMode(str, Enum):
+    """How to aggregate multiple metric results"""
+
+    ALL = "all"
+    ANY = "any"
+    WEIGHTED_AVERAGE = "weighted_average"
+
+
+class GuardrailExecutionSpec(BaseModel):
+    upstream_node_ids: List[str] = Field(default_factory=list)
+    input_source: str = ""
+    context_source: Optional[str] = None
+    query_source: Optional[str] = None
+    metrics: List[GuardrailMetric] = Field(default_factory=list)
+    aggregation_mode: GuardrailAggregationMode = GuardrailAggregationMode.ALL
+    pass_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
+    fail_fast: bool = False
+    include_feedback: bool = True
+    evaluation_timeout: int = Field(default=30, ge=1, le=300)
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class GuardrailReportAsset(BaseModel):
+    asset_key: str = Field(..., min_length=1, max_length=255)
+    asset_version: str = Field(..., min_length=1, max_length=100)
+    partition_key: Optional[str] = Field(default=None, max_length=255)
+
+
+class GuardrailRouteMetadata(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_version: Literal["marie.route-decision/v1"] = Field(
+        default="marie.route-decision/v1",
+        alias="schema",
+    )
+    node_type: Literal["GUARDRAIL"] = "GUARDRAIL"
+    outcome: Literal["VALID", "INVALID"]
+    selected_path_ids: List[Literal["pass", "fail"]]
+    report_asset: GuardrailReportAsset
+    evaluated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("selected_path_ids")
+    @classmethod
+    def validate_selected_path(
+        cls, value: List[Literal["pass", "fail"]]
+    ) -> List[Literal["pass", "fail"]]:
+        if len(value) != 1:
+            raise ValueError("GUARDRAIL must select exactly one path")
+        return value
+
+    @model_validator(mode="after")
+    def validate_outcome_path(self) -> "GuardrailRouteMetadata":
+        expected_path = "pass" if self.outcome == "VALID" else "fail"
+        if self.selected_path_ids != [expected_path]:
+            raise ValueError(
+                f"Guardrail outcome {self.outcome} must select '{expected_path}'"
+            )
+        return self
+
+
+class GuardrailEvaluationReport(BaseModel):
+    overall_passed: bool
+    overall_score: float = Field(..., ge=0.0, le=1.0)
+    individual_results: List[GuardrailResult] = Field(default_factory=list)
+    outcome: Literal["VALID", "INVALID"]
+    total_execution_time_ms: float = Field(default=0.0, ge=0.0)
+    evaluated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class GuardrailEvaluationResult(BaseModel):
     """Aggregate result from all guardrail metrics"""
 
@@ -179,24 +248,16 @@ class GuardrailPath(BaseModel):
     )
 
 
-class GuardrailAggregationMode(str, Enum):
-    """How to aggregate multiple metric results"""
-
-    ALL = "all"  # Pass only if ALL metrics pass their thresholds
-    ANY = "any"  # Pass if ANY metric passes its threshold
-    WEIGHTED_AVERAGE = "weighted_average"  # Weighted score vs pass_threshold
-
-
 @QueryTypeRegistry.register("GUARDRAIL")
 class GuardrailQueryDefinition(QueryDefinition):
     """
     GUARDRAIL node - inline quality validation during workflow execution.
 
     Execution flow:
-    1. GUARDRAIL node executes (may gather data from upstream)
-    2. After SUCCEEDED status, scheduler calls GuardrailEvaluator
-    3. Evaluator runs each configured metric against input data
-    4. Results are aggregated based on aggregation_mode
+    1. The scheduler dispatches the node to the guardrail executor
+    2. The executor resolves inputs and evaluates configured metrics
+    3. The executor writes a report asset with a VALID or INVALID outcome
+    4. The scheduler validates the asset and records branch metadata
     5. Based on pass/fail:
        - Selected path target nodes remain CREATED (ready to execute)
        - Non-selected path target nodes marked SKIPPED
@@ -237,7 +298,7 @@ class GuardrailQueryDefinition(QueryDefinition):
     """
 
     method: str = "GUARDRAIL"
-    endpoint: str = "guardrail://control"
+    endpoint: str = "guardrail_executor://evaluate"
 
     # What to evaluate
     input_source: str = Field(
@@ -333,3 +394,18 @@ class GuardrailQueryDefinition(QueryDefinition):
             if path.path_id == "fail":
                 return path
         return None
+
+    def execution_spec(self, upstream_node_ids: List[str]) -> GuardrailExecutionSpec:
+        return GuardrailExecutionSpec(
+            upstream_node_ids=upstream_node_ids,
+            input_source=self.input_source,
+            context_source=self.context_source,
+            query_source=self.query_source,
+            metrics=self.metrics,
+            aggregation_mode=self.aggregation_mode,
+            pass_threshold=self.pass_threshold,
+            fail_fast=self.fail_fast,
+            include_feedback=self.include_feedback,
+            evaluation_timeout=self.evaluation_timeout,
+            params=self.params,
+        )

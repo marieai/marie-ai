@@ -1,0 +1,77 @@
+Locate every table on this document page using the page image for layout and
+the prepared page text for exact line numbers.
+
+For each table:
+- Include all header and data-row prepared-text lines belonging to the table.
+- Classify rows from their cells, not typography or indentation. If a line has
+  a value in any detected data column, include it in rows as a data row even
+  when its first-column label is bold, names a subgroup, or also introduces the
+  rows that follow. Only a line with no data-column values may be described as
+  a section-only row.
+- Treat a structured index or list with aligned labels and a value or page
+  column as a table even when it has no drawn grid.
+- Set header_present from the current page only.
+- Set continuation.is_continuation independently of header_present. Repeated
+  column headers may appear on a continuation page.
+- Repeated column headers do not establish a new logical table. A later-page
+  indicator, table footer, or rows continuing without a new table title or
+  section is continuation evidence even when header_present is true.
+- Before returning, perform a mandatory continuation audit for every detected
+  table. When a current-of-total marker belongs to the table, it governs the
+  continuation decision:
+  1. Read and quote the exact marker in continuation_rationale.
+  2. If the current number is 1, set is_continuation to false. Do not confuse
+     the physical document page number with the marker's current number.
+  3. If the current number is greater than 1, set is_continuation to true even
+     when column headers repeat. This is direct transcription of the marker,
+     not an inference from the page contents.
+  4. This marker decision is authoritative for that table. A title, section, or
+     repeated header on the current page does not override it.
+  5. A section or subgroup label inside the table's first column is not a table
+     title. A different table title must name the whole table outside its column
+     headers and data rows.
+  6. When a physical page label and a separate current-of-total marker both
+     appear, use the separate marker for the table sequence.
+  7. After writing continuation_rationale, verify that is_continuation matches
+     the conclusion stated in the rationale.
+- Mark a table as a continuation when the page begins inside an existing
+  logical table and no new table title or section establishes a new table.
+- Do not mark a table as a continuation merely because its columns resemble
+  another table.
+- Use table_classification "OTHER"; downstream extraction uses the supplied
+  schema rather than a domain classification.
+- Use zero-based page_index. Keep from_table_name empty when the source table
+  cannot be identified from this page.
+- Never invent line numbers, columns, or tables.
+
+Return strict JSON only:
+{
+  "extractions": [
+    {
+      "name": "Table <n>",
+      "page_index": 0,
+      "table_classification": "OTHER",
+      "header_present": true,
+      "continuation": {
+        "is_continuation": false,
+        "from_table_name": "",
+        "continuation_rationale": "<brief evidence>"
+      },
+      "header_rows": [
+        {"line_number": 1, "found_at": "row 1", "reasoning": "<brief evidence>"}
+      ],
+      "rows": [
+        {"line_number": 2, "found_at": "row 2", "reasoning": "<brief evidence>"}
+      ],
+      "columns": ["<column label>"],
+      "columns_inferred": false
+    }
+  ],
+  "reasoning": {"steps": ["<brief check>"], "notes": ""}
+}
+
+If the page contains no table, return:
+{"extractions": [], "reasoning": {"steps": [], "notes": ""}}
+
+Prepared page text:
+PAGE_TEXT

@@ -95,7 +95,7 @@ with:
     max_workers: 2
     max_pool_size: 5
     max_connections: 5
-    queue_names: [extract,classify,transform,load, gen5_extract] # Queue names for the job scheduler to monitor
+    queue_names: [extract,classify,transform,load,gen5_extract,longextract_bench] # Queue names for the job scheduler to monitor
 
     # DAG Concurrency Management
     dag_manager:
@@ -133,6 +133,8 @@ with:
       planners:
         - name: mock_planners
           py_module: marie.query_planner.mock_query_plans
+        - name: longextract_bench
+          py_module: marie_longextract.planners.longextract_bench
 
   # Toast event tracking system
   # It can be backed by Message Queue or Database backed

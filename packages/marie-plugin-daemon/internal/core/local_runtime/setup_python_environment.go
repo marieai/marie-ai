@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 var (
@@ -44,7 +45,7 @@ func EnsureEnvironment(ctx context.Context, workingDir string, pythonVersion str
 			return "", fmt.Errorf("%w: inspect uv.lock: %v", ErrEnvironmentSetup, lockErr)
 		}
 
-		cmd := exec.CommandContext(ctx, "uv", "sync", "--locked", "--no-dev", "--python", pythonVersion)
+		cmd := uvCommand(ctx, "sync", "--locked", "--no-dev", "--python", pythonVersion)
 		cmd.Dir = absDir
 		cmd.Stdout = logs
 		cmd.Stderr = logs
@@ -63,7 +64,7 @@ func EnsureEnvironment(ctx context.Context, workingDir string, pythonVersion str
 		}
 
 		if _, err := os.Stat(pythonBin); errors.Is(err, os.ErrNotExist) {
-			cmd := exec.CommandContext(ctx, "uv", "venv", "--python", pythonVersion, ".venv")
+			cmd := uvCommand(ctx, "venv", "--python", pythonVersion, ".venv")
 			cmd.Dir = absDir
 			cmd.Stdout = logs
 			cmd.Stderr = logs
@@ -78,7 +79,7 @@ func EnsureEnvironment(ctx context.Context, workingDir string, pythonVersion str
 		requirementsPath := filepath.Join(absDir, "requirements.txt")
 		info, err := os.Stat(requirementsPath)
 		if err == nil && info.Size() > 0 {
-			cmd := exec.CommandContext(ctx, "uv", "pip", "install", "-r", "requirements.txt", "--python", pythonBin)
+			cmd := uvCommand(ctx, "pip", "install", "-r", "requirements.txt", "--python", pythonBin)
 			cmd.Dir = absDir
 			cmd.Stdout = logs
 			cmd.Stderr = logs
@@ -89,7 +90,7 @@ func EnsureEnvironment(ctx context.Context, workingDir string, pythonVersion str
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, "uv", "pip", "check", "--python", pythonBin)
+	cmd := uvCommand(ctx, "pip", "check", "--python", pythonBin)
 	cmd.Dir = absDir
 	cmd.Stdout = logs
 	cmd.Stderr = logs
@@ -98,6 +99,16 @@ func EnsureEnvironment(ctx context.Context, workingDir string, pythonVersion str
 	}
 
 	return pythonBin, nil
+}
+
+func uvCommand(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "uv", args...)
+	for _, value := range os.Environ() {
+		if !strings.HasPrefix(value, "VIRTUAL_ENV=") {
+			cmd.Env = append(cmd.Env, value)
+		}
+	}
+	return cmd
 }
 
 func PythonPath(workingDir string) string {

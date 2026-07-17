@@ -453,12 +453,11 @@ Agents can be configured via YAML:
 ```yaml
 name: DocumentAnalyzer
 description: Analyzes documents using OCR and classification
-backend: qwen_agent
+backend: openai
 
 llm:
-  backend: marie
-  engine_name: qwen2_5_vl_7b
-  provider: vllm
+  model: qwen2_5_vl_7b
+  base_url: http://localhost:8000/v1
   temperature: 0.7
   max_tokens: 2048
 

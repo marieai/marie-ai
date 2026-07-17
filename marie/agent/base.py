@@ -1070,17 +1070,7 @@ class BaseAgent(ABC):
                 },
                 source="llm",
             )
-            # Yield an error message so the agent can handle it gracefully
-            error_msg = Message.assistant(
-                f"I encountered an error while processing: {type(e).__name__}. "
-                "Please try again or rephrase your request."
-            )
-
-            # Return a generator that yields the error message
-            def error_generator():
-                yield [error_msg]
-
-            return error_generator()
+            raise
 
         def instrumented_generator() -> Iterator[List[Message]]:
             response_count = 0
@@ -1121,11 +1111,7 @@ class BaseAgent(ABC):
                     },
                     source="llm",
                 )
-                error_msg = Message.assistant(
-                    f"I encountered an error while processing: {type(e).__name__}. "
-                    "Please try again or rephrase your request."
-                )
-                yield [error_msg]
+                raise
             finally:
                 duration_ms = (time.perf_counter() - start_time) * 1000
                 emit_sync(

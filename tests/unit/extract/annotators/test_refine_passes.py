@@ -201,6 +201,7 @@ def _make_annotator(
     pass_temperatures: Optional[List[float]] = None,
     pass_models: Optional[List[str]] = None,
     refinement_validation: Optional[dict] = None,
+    max_tokens: Optional[int] = None,
     **annotator_kwargs: Any,
 ):
     """Create a minimal LLMAnnotator with mocked dependencies."""
@@ -228,6 +229,8 @@ def _make_annotator(
         model_config["pass_models"] = pass_models
     if refinement_validation is not None:
         model_config["refinement_validation"] = refinement_validation
+    if max_tokens is not None:
+        model_config["max_tokens"] = max_tokens
 
     annotator_conf = {
         "name": "test-ann",
@@ -841,6 +844,10 @@ class TestConfigValidation:
         with pytest.raises(ValueError, match="pass_models"):
             _make_annotator(tmp_path, refine_passes=2, pass_models=["m1"])
 
+    def test_non_positive_max_tokens_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="max_tokens must be > 0"):
+            _make_annotator(tmp_path, max_tokens=0)
+
 
 # ======================================================================
 # _completion_params_for_pass
@@ -852,6 +859,11 @@ class TestCompletionParamsForPass:
         ann = _make_annotator(tmp_path, refine_passes=1)
         params = ann._completion_params_for_pass(0)
         assert params["temperature"] == 0.0
+
+    def test_max_tokens_override(self, tmp_path):
+        ann = _make_annotator(tmp_path, refine_passes=1, max_tokens=8192)
+        assert ann._completion_params_for_pass(0)["max_tokens"] == 8192
+        assert ann._completion_params_for_pass(1)["max_tokens"] == 8192
 
     def test_per_pass_temperature_override(self, tmp_path):
         ann = _make_annotator(

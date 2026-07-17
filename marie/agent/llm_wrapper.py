@@ -748,6 +748,8 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
             base_url=base_url,
             **client_kwargs,
         )
+        self._request_timeout = self.client.timeout
+        self._max_retries = self.client.max_retries
         self.model = model
         self._tool_call_parser: Optional[ToolCallTextParser] = (
             ToolCallTextParser(format=tool_call_format)
@@ -816,17 +818,13 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
                     max_connections=40,
                     max_keepalive_connections=20,
                 ),
-                timeout=httpx.Timeout(
-                    connect=10.0,
-                    read=300.0,
-                    write=10.0,
-                    pool=30.0,
-                ),
+                timeout=self._request_timeout,
             )
             self._async_client = AsyncOpenAI(
                 api_key=self.client.api_key,
                 base_url=str(self.client.base_url) if self.client.base_url else None,
                 http_client=http_client,
+                max_retries=self._max_retries,
             )
         return self._async_client
 

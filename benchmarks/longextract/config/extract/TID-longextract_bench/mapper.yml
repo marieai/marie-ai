@@ -1,0 +1,2 @@
+model_executors:
+  qwen_3_instruct: annotator_llm

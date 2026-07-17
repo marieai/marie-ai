@@ -32,6 +32,7 @@ const (
 	StateUnresponsive = "unresponsive"
 	StateStopped      = "stopped"
 	StateFailed       = "failed"
+	pluginRuntimeDir  = "plugin-runtime"
 )
 
 var maxExtractedBytes int64 = 1 << 30
@@ -186,7 +187,7 @@ func (m *Manager) Count() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	entries, err := os.ReadDir(filepath.Join(m.root, "cwd"))
+	entries, err := os.ReadDir(filepath.Join(m.root, pluginRuntimeDir))
 	if err != nil {
 		return 0
 	}
@@ -240,7 +241,7 @@ func (m *Manager) get(tenant, packageRef string) (Install, bool) {
 }
 
 func (m *Manager) tenantDir(tenant string) string {
-	return filepath.Join(m.root, "cwd", tenant)
+	return filepath.Join(m.root, pluginRuntimeDir, tenant)
 }
 
 func (m *Manager) installDirs(tenant, packageRef string) []string {

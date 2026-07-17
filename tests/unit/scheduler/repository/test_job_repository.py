@@ -58,6 +58,10 @@ class SequencedCursor:
     def fetchall(self):
         return self.results[self.result_index]
 
+    def fetchone(self):
+        rows = self.results[self.result_index]
+        return rows[0] if rows else None
+
     def close(self):
         self.closed = True
 
@@ -267,6 +271,115 @@ async def test_mark_jobs_as_skipped_rolls_back_database_errors():
         )
 
     assert connection.rollback_called is True
+
+
+@pytest.mark.asyncio
+async def test_commit_guardrail_route_is_atomic() -> None:
+    guardrail_id = "00000000-0000-0000-0000-000000000101"
+    skipped_id = "00000000-0000-0000-0000-000000000102"
+    connection = SequencedConnection([[(1,)], [(guardrail_id,)], [(skipped_id,)]])
+    repository = build_repository(connection)
+    metadata = {
+        "schema": "marie.route-decision/v1",
+        "node_type": "GUARDRAIL",
+        "outcome": "VALID",
+        "evaluated_at": "2026-07-16T12:00:00Z",
+        "selected_path_ids": ["pass"],
+        "report_asset": {
+            "asset_key": f"guardrail/report/{guardrail_id}",
+            "asset_version": "v:sha256:abc",
+            "partition_key": None,
+        },
+    }
+
+    committed, skipped, reject_reason = await repository.commit_guardrail_route(
+        job_id=guardrail_id,
+        queue_name="extract",
+        run_owner="scheduler-1",
+        run_attempt_id="00000000-0000-0000-0000-000000000301",
+        branch_metadata=metadata,
+        skipped_job_ids=[skipped_id],
+    )
+
+    assert committed is True
+    assert skipped == {skipped_id}
+    assert reject_reason is None
+    assert len(connection.cursor_instance.execute_calls) == 3
+    assert connection.commit_called is True
+    assert connection.rollback_called is False
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_report_decision_is_attempt_scoped() -> None:
+    guardrail_id = "00000000-0000-0000-0000-000000000101"
+    attempt_id = "00000000-0000-0000-0000-000000000301"
+    connection = SequencedConnection(
+        [
+            [
+                (
+                    f"guardrail/report/{guardrail_id}",
+                    "v:sha256:abc",
+                    None,
+                    "VALID",
+                    "2026-07-16T12:00:00+00:00",
+                )
+            ]
+        ]
+    )
+    repository = build_repository(connection)
+
+    decision = await repository.get_guardrail_report_decision(
+        job_id=guardrail_id,
+        run_attempt_id=attempt_id,
+    )
+
+    assert decision == {
+        "outcome": "VALID",
+        "evaluated_at": "2026-07-16T12:00:00+00:00",
+        "report_asset": {
+            "asset_key": f"guardrail/report/{guardrail_id}",
+            "asset_version": "v:sha256:abc",
+            "partition_key": None,
+        },
+    }
+    _, params = connection.cursor_instance.execute_calls[0]
+    assert params == (
+        f"guardrail/report/{guardrail_id}",
+        guardrail_id,
+        guardrail_id,
+        attempt_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_commit_guardrail_route_rolls_back_partial_skip() -> None:
+    guardrail_id = "00000000-0000-0000-0000-000000000101"
+    skipped_id = "00000000-0000-0000-0000-000000000102"
+    connection = SequencedConnection([[(1,)], [(guardrail_id,)], []])
+    repository = build_repository(connection)
+
+    committed, skipped, reject_reason = await repository.commit_guardrail_route(
+        job_id=guardrail_id,
+        queue_name="extract",
+        run_owner="scheduler-1",
+        run_attempt_id="00000000-0000-0000-0000-000000000301",
+        branch_metadata={
+            "outcome": "VALID",
+            "evaluated_at": "2026-07-16T12:00:00Z",
+            "selected_path_ids": ["pass"],
+            "report_asset": {
+                "asset_key": f"guardrail/report/{guardrail_id}",
+                "asset_version": "v:sha256:abc",
+            },
+        },
+        skipped_job_ids=[skipped_id],
+    )
+
+    assert committed is False
+    assert skipped == set()
+    assert reject_reason == "skip_state_conflict"
+    assert connection.rollback_called is True
+    assert connection.commit_called is False
 
 
 @pytest.mark.asyncio

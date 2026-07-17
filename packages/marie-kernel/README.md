@@ -35,8 +35,10 @@ ti = TaskInstanceRef(
     try_number=1,
 )
 
-# Create context for the task
-ctx = RunContext(ti, backend)
+# Create context for the task. Invocation parameters are available to the task
+# without being written to its state backend.
+ctx = RunContext(ti, backend, parameters={"layout": "invoice"})
+layout = ctx.get_parameter("layout")
 
 # Store state
 ctx.set("EXTRACTED_TEXT", "Hello World")
@@ -118,6 +120,13 @@ Primary API for task state operations:
 
 ```text
 class RunContext:
+    def __init__(self, ti: TaskInstanceRef, backend: StateBackend, *, parameters: Mapping[str, Any] = None)
+
+    # Read-only task invocation parameters
+    @property
+    def parameters(self) -> Mapping[str, Any]
+    def get_parameter(self, key: str, default: Any = None) -> Any
+
     # Primary API (simple key-value)
     def set(self, key: str, value: Any) -> None
     def get(self, key: str, *, from_task: str = None, default: Any = None) -> Any

@@ -5,6 +5,7 @@ import "testing"
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("MARIE_PLUGIN_DAEMON_ADDR", "")
 	t.Setenv("MARIE_PLUGIN_STORAGE_ROOT", "")
+	t.Setenv("MARIE_DEFAULT_MOUNT", "")
 	t.Setenv("MARIE_PLUGIN_DAEMON_SIGNING_KEY_ID", "")
 	t.Setenv("MARIE_PLUGIN_DAEMON_SIGNING_SECRET", "")
 	t.Setenv("MARIE_PLUGIN_DAEMON_DEV_INSECURE", "")
@@ -27,9 +28,23 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadUsesMarieDefaultMountForStorage(t *testing.T) {
+	t.Setenv("MARIE_PLUGIN_STORAGE_ROOT", "")
+	t.Setenv("MARIE_DEFAULT_MOUNT", "/mnt/data/marie-ai")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.StorageRoot != "/mnt/data/marie-ai" {
+		t.Errorf("StorageRoot = %q", c.StorageRoot)
+	}
+}
+
 func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("MARIE_PLUGIN_DAEMON_ADDR", "0.0.0.0:9000")
 	t.Setenv("MARIE_PLUGIN_STORAGE_ROOT", "/tmp/storage")
+	t.Setenv("MARIE_DEFAULT_MOUNT", "/mnt/data/marie-ai")
 	t.Setenv("MARIE_PLUGIN_DAEMON_SIGNING_KEY_ID", "marie-local-key")
 	t.Setenv("MARIE_PLUGIN_DAEMON_SIGNING_SECRET", "secret")
 	t.Setenv("MARIE_PLUGIN_DAEMON_DEV_INSECURE", "1")

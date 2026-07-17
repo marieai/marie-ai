@@ -1,5 +1,4 @@
 import random
-from collections import defaultdict
 from typing import Callable, Sequence
 
 from marie.job.common import JobStatus
@@ -7,7 +6,7 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.scheduler.state import WorkState
 from marie.state.semaphore_store import EtcdStoreUnavailable, SemaphoreStore
 
-CONTROL_FLOW_EXECUTORS = frozenset({"noop", "branch", "switch", "merger", "guardrail"})
+CONTROL_FLOW_EXECUTORS = frozenset({"noop", "branch", "switch", "merger"})
 
 
 def convert_job_status_to_work_state(job_status: JobStatus) -> WorkState:
@@ -31,19 +30,18 @@ def convert_job_status_to_work_state(job_status: JobStatus) -> WorkState:
 
 
 def adjust_backoff(
-    wait_time: float, idle_streak: int, scheduled: bool, min_poll_period: float
+    wait_time: float,
+    idle_streak: int,
+    scheduled: bool,
+    min_poll_period: float,
+    max_poll_period: float,
 ) -> float:
-    """
-    Adjusts the backoff time for a polling mechanism based on the provided wait time,
-    the number of consecutive idle streaks, and whether the task is scheduled. The
-    resulting wait time ensures it stays within predefined minimum and maximum periods.
-    In cases where the task is scheduled, the wait time is reduced. For non-scheduled
-    tasks, it considers random jitter and adjusts based on idle streaks.
-    """
+    """Return the next polling delay within the configured bounds."""
     if scheduled:
-        return max(wait_time * 0.5, min_poll_period)
+        return min(max(wait_time * 0.5, min_poll_period), max_poll_period)
     jitter = random.uniform(0.9, 1.1)
-    return min(wait_time * (1.5 + 0.1 * idle_streak), min_poll_period) * jitter
+    wait_time *= (1.5 + 0.1 * idle_streak) * jitter
+    return min(max(wait_time, min_poll_period), max_poll_period)
 
 
 def has_available_slot(entrypoint: str, sem: SemaphoreStore) -> bool:

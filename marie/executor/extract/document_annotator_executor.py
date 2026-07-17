@@ -259,24 +259,18 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         # Create RunContext for execution context support
         run_context = None
         if MARIE_KERNEL_AVAILABLE:
-            try:
-                backend = FileSystemStateBackend(base_path=root_asset_dir)
-                ti = TaskInstanceRef(
-                    tenant_id="default",
-                    dag_name="annotation",
-                    dag_id=job_id,
-                    task_id=op_key,
-                    try_number=1,
-                )
-                run_context = RunContext(ti, backend)
-                self.logger.info(
-                    f"Created RunContext for task '{op_key}' with FileSystemStateBackend"
-                )
-            except Exception as e:
-                self.logger.warning(
-                    f"Failed to create RunContext: {e}. "
-                    "Execution context will not be available."
-                )
+            backend = FileSystemStateBackend(base_path=root_asset_dir)
+            ti = TaskInstanceRef(
+                tenant_id="default",
+                dag_name="annotation",
+                dag_id=job_id,
+                task_id=op_key,
+                try_number=1,
+            )
+            run_context = RunContext(ti, backend, parameters=op_params)
+            self.logger.info(
+                f"Created RunContext for task '{op_key}' with FileSystemStateBackend"
+            )
 
         annotator = annotator_class(
             working_dir=root_asset_dir,

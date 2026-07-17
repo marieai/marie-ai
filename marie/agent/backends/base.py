@@ -1,7 +1,7 @@
 """Base backend interface for Marie agent framework.
 
 This module provides the abstract base class for agent backends,
-enabling pluggable execution strategies (Qwen-style, Haystack, AutoGen, etc.).
+enabling pluggable execution strategies (OpenAI, Haystack, AutoGen, etc.).
 """
 
 from __future__ import annotations
@@ -101,6 +101,9 @@ class AgentResult(BaseModel):
 class BackendConfig(BaseModel):
     """Configuration for agent backends."""
 
+    model: Optional[str] = Field(
+        default=None, description="Model identifier used by the backend"
+    )
     max_iterations: int = Field(default=10, description="Maximum reasoning iterations")
     timeout_seconds: float = Field(default=300.0, description="Execution timeout")
     stream: bool = Field(default=True, description="Whether to stream responses")
@@ -118,7 +121,7 @@ class AgentBackend(ABC):
     """Abstract base class for agent backends.
 
     Backends provide different execution strategies for agents:
-    - QwenAgentBackend: Native Qwen-style ReAct execution
+    - OpenAIAgentBackend: ReAct execution through an OpenAI-compatible API
     - HaystackAgentBackend: Wraps Haystack pipelines
     - AutoGenAgentBackend: Wraps AutoGen multi-agent teams
 

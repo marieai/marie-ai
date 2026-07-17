@@ -10,7 +10,7 @@ from docarray.documents import TextDoc
 
 from marie.agent.backends.base import AgentResult, AgentStatus
 from marie.agent.config import AgentConfig, GuardrailEntry, GuardrailsConfig, LLMConfig
-from marie.agent.executor.agent_executor import AgentExecutor
+from marie.executor.agent import AgentExecutor
 
 
 class MockBackend:
@@ -240,6 +240,7 @@ class TestExecutorWithToolCallGuardrails:
         """Tool-call guardrails should wrap tools."""
         config = AgentConfig(
             name="test_agent",
+            llm=LLMConfig(model="test-model"),
             tools=["search"],
             guardrails=GuardrailsConfig(
                 tool_call=[
@@ -252,7 +253,9 @@ class TestExecutorWithToolCallGuardrails:
         )
 
         # Mock resolve_tools to return a mock tool
-        with patch("marie.agent.executor.agent_executor.resolve_tools") as mock_resolve:
+        with patch(
+            "marie.executor.agent.agent_executor.resolve_tools"
+        ) as mock_resolve:
             from marie.agent.tools.base import AgentTool, ToolMetadata, ToolOutput
 
             class MockTool(AgentTool):

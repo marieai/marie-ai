@@ -1,10 +1,14 @@
 """Required real-provider checks for the plugin uv environment."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from marie_plugins.document_extraction.providers.docling import DoclingProvider
-from marie_plugins.document_extraction.providers.markitdown import MarkItDownProvider
+from marie_plugins.document_extraction.providers.markitdown import (
+    MarkItDownProvider,
+    _convert_pdf,
+)
 
 FIXTURES = Path(__file__).parent / 'fixtures'
 
@@ -67,3 +71,34 @@ def test_markitdown_provider_edges(
     assert result.provider == 'markitdown'
     assert result.provider_version == '0.1.6'
     assert expected_token in result.content
+
+
+def test_markitdown_pdf_preserves_source_page_boundaries() -> None:
+    result = MarkItDownProvider().extract(str(FIXTURES / 'sample.pdf'), 'pdf')
+
+    assert result.metadata['page_count'] == 3
+    assert len(result.content.rstrip('\f').split('\f')) == 3
+
+
+def test_markitdown_pdf_repairs_collapsed_form_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import markitdown
+
+    class CollapsingConverter:
+        def __init__(self) -> None:
+            self.page_calls = 0
+
+        def convert(self, source: object, **_kwargs: object) -> SimpleNamespace:
+            if isinstance(source, str):
+                return SimpleNamespace(text_content='collapsed document')
+            self.page_calls += 1
+            return SimpleNamespace(text_content=f'page {self.page_calls}')
+
+    converter = CollapsingConverter()
+    monkeypatch.setattr(markitdown, 'MarkItDown', lambda: converter)
+
+    _, content, page_count = _convert_pdf(str(FIXTURES / 'sample.pdf'))
+
+    assert page_count == 3
+    assert content.split('\f') == ['page 1', 'page 2', 'page 3']

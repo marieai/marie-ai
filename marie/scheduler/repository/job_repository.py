@@ -6,7 +6,7 @@ import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import psycopg
 from psycopg import sql
@@ -81,6 +81,7 @@ class JobRepository(PostgresqlMixin):
             max_workers=max_workers, thread_name_prefix="db-executor"
         )
         self._loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
+        self._closed = False
 
     # ==================== Job CRUD Operations ====================
 
@@ -104,7 +105,7 @@ class JobRepository(PostgresqlMixin):
                         id, name, priority, state, retry_limit, start_after,
                         expire_in, data, retry_delay, retry_backoff, keep_until,
                         dag_id, job_level, soft_sla, hard_sla,
-                        run_owner, run_attempt_id
+                        run_owner, run_attempt_id, branch_metadata
                     FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
                     WHERE id = %s
                     """,
@@ -147,7 +148,7 @@ class JobRepository(PostgresqlMixin):
                         id, name, priority, state, retry_limit, start_after,
                         expire_in, data, retry_delay, retry_backoff, keep_until,
                         dag_id, job_level, soft_sla, hard_sla,
-                        run_owner, run_attempt_id
+                        run_owner, run_attempt_id, branch_metadata
                     FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
                     WHERE data->'metadata'->>'ref_type' = %s
                     AND data->'metadata'->>'ref_id' = %s
@@ -173,26 +174,32 @@ class JobRepository(PostgresqlMixin):
     async def list_jobs(
         self,
         queue: Optional[str] = None,
-        state: Optional[WorkState] = None,
+        state: Optional[WorkState | str | Sequence[WorkState | str]] = None,
         limit: int = 1000,
+        fetch_size: int = 1000,
     ) -> List[WorkInfo]:
-        """
-        List jobs with optional filters.
+        """List jobs using bounded server-side fetches."""
+        if fetch_size <= 0:
+            raise ValueError("fetch_size must be greater than zero")
 
-        :param queue: Filter by queue name
-        :param state: Filter by job state
-        :param limit: Maximum number of jobs to return
-        :return: List of WorkInfo objects
-        """
+        if state is None:
+            states: Sequence[WorkState | str] = []
+        elif isinstance(state, (WorkState, str)):
+            states = [state]
+        else:
+            states = state
+        state_values = [
+            item.value if isinstance(item, WorkState) else WorkState(item.lower()).value
+            for item in states
+        ]
 
         def db_call():
             cursor = None
             conn = None
             try:
                 conn = self._get_connection()
-                cursor = conn.cursor()
-
-                # Build WHERE clause
+                cursor = conn.cursor("job_list_iterator")
+                cursor.itersize = fetch_size
                 where_clauses = []
                 params = []
 
@@ -200,13 +207,18 @@ class JobRepository(PostgresqlMixin):
                     where_clauses.append("name = %s")
                     params.append(queue)
 
-                if state:
-                    where_clauses.append("state = %s")
-                    params.append(state.value)
+                if state_values:
+                    where_clauses.append(
+                        f"state = ANY(%s::{DEFAULT_SCHEMA}.job_state[])"
+                    )
+                    params.append(state_values)
 
                 where_sql = (
                     "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
                 )
+                limit_sql = "LIMIT %s" if limit > 0 else ""
+                if limit > 0:
+                    params.append(limit)
 
                 cursor.execute(
                     f"""
@@ -214,23 +226,29 @@ class JobRepository(PostgresqlMixin):
                         id, name, priority, state, retry_limit, start_after,
                         expire_in, data, retry_delay, retry_backoff, keep_until,
                         dag_id, job_level, soft_sla, hard_sla,
-                        run_owner, run_attempt_id
+                        run_owner, run_attempt_id, branch_metadata
                     FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
                     {where_sql}
                     ORDER BY created_on DESC
-                    LIMIT %s
+                    {limit_sql}
                     """,
-                    (*params, limit),
+                    params,
                 )
-                records = cursor.fetchall()
+                work_items = []
+                while records := cursor.fetchmany(fetch_size):
+                    work_items.extend(self._record_to_work_info(r) for r in records)
                 conn.commit()
-
-                return [self._record_to_work_info(r) for r in records]
-            except (Exception, psycopg.Error) as error:
+                return work_items
+            except Exception as error:
                 self.logger.error(f"Error listing jobs: {error}")
                 if conn:
-                    conn.rollback()
-                return []
+                    try:
+                        conn.rollback()
+                    except Exception as rollback_error:
+                        self.logger.warning(
+                            f"Error rolling back failed job listing: {rollback_error}"
+                        )
+                raise
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)
@@ -1960,6 +1978,7 @@ class JobRepository(PostgresqlMixin):
             hard_sla,
             run_owner,
             run_attempt_id,
+            branch_metadata,
         ) = record
 
         wi = WorkInfo(
@@ -1980,6 +1999,7 @@ class JobRepository(PostgresqlMixin):
             hard_sla=hard_sla,
             run_owner=run_owner,
             run_attempt_id=str(run_attempt_id) if run_attempt_id else None,
+            branch_metadata=branch_metadata,
         )
         return wi
 
@@ -2163,32 +2183,87 @@ class JobRepository(PostgresqlMixin):
 
     # ==================== Job State Transitions ====================
 
-    async def cancel_job(
-        self, job_id: str, queue_name: str, schema: str = DEFAULT_SCHEMA
-    ) -> None:
-        """
-        Cancel a job by its ID.
+    async def cancel_job_attempt(
+        self,
+        job_id: str,
+        queue_name: str,
+        run_owner: str,
+        run_attempt_id: str,
+        schema: str = DEFAULT_SCHEMA,
+    ) -> set[str]:
+        """Cancel an active job only when its durable attempt still matches."""
 
-        :param job_id: The ID of the job to cancel
-        :param queue_name: The name of the queue
-        :param schema: The database schema (default: marie_scheduler)
-        """
-        self.logger.info(f"Cancelling job: {job_id}")
-
-        def db_call():
+        def db_call() -> set[str]:
             conn = None
+            cursor = None
             try:
                 conn = self._get_connection()
-                self._execute_sql_gracefully(
-                    cancel_jobs(schema, queue_name, [job_id]),
-                    connection=conn,
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    UPDATE {schema}.{DEFAULT_JOB_TABLE}
+                    SET completed_on = NOW(),
+                        state = %s::{schema}.job_state,
+                        lease_owner = NULL,
+                        lease_expires_at = NULL,
+                        run_owner = NULL,
+                        run_attempt_id = NULL,
+                        run_lease_expires_at = NULL
+                    WHERE id = %s::uuid
+                      AND name = %s
+                      AND state = %s::{schema}.job_state
+                      AND run_owner = %s
+                      AND run_attempt_id = %s::uuid
+                    RETURNING id
+                    """,
+                    (
+                        WorkState.CANCELLED.value,
+                        job_id,
+                        queue_name,
+                        WorkState.ACTIVE.value,
+                        run_owner,
+                        run_attempt_id,
+                    ),
                 )
-            except (Exception, psycopg.Error) as error:
-                self.logger.error(f"Error cancelling job: {error}")
+                row = cursor.fetchone()
+                conn.commit()
+                return {str(row[0])} if row else set()
+            except Exception:
+                if conn:
+                    conn.rollback()
+                raise
             finally:
+                self._close_cursor(cursor)
                 self._close_connection(conn)
 
-        await self._loop.run_in_executor(self._db_executor, db_call)
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
+    async def cancel_job(
+        self, job_id: str, queue_name: str, schema: str = DEFAULT_SCHEMA
+    ) -> int:
+        """Cancel a job through the operator-requested cancellation path."""
+        self.logger.info(f"Cancelling job: {job_id}")
+
+        def db_call() -> int:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                cursor = self._execute_sql_gracefully(
+                    cancel_jobs(schema, queue_name, [job_id]),
+                    return_cursor=True,
+                    connection=conn,
+                )
+                row = cursor.fetchone()
+                return int(row[0]) if row else 0
+            except (Exception, psycopg.Error) as error:
+                self.logger.error(f"Error cancelling job: {error}")
+                return 0
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
 
     async def cancel_pending_jobs_for_dag(
         self,
@@ -2479,11 +2554,221 @@ class JobRepository(PostgresqlMixin):
 
         return await self._loop.run_in_executor(self._db_executor, db_call)
 
-    async def close(self):
-        """
-        Close the repository and cleanup resources.
-        """
-        if hasattr(self, '_db_executor'):
-            self._db_executor.shutdown(wait=True)
-        if hasattr(self, 'postgreSQL_pool'):
-            self.postgreSQL_pool.close()
+    async def get_guardrail_report_decision(
+        self, *, job_id: str, run_attempt_id: str, schema: str = DEFAULT_SCHEMA
+    ) -> Optional[Dict[str, Any]]:
+        """Read the immutable outcome produced by the current guardrail attempt."""
+
+        def db_call() -> Optional[Dict[str, Any]]:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    sql.SQL(
+                        """
+                        SELECT DISTINCT
+                            asset_key,
+                            asset_version,
+                            partition_key,
+                            metadata->>'outcome',
+                            metadata->>'evaluated_at'
+                        FROM {}.asset_materialization
+                        WHERE asset_key = %s
+                          AND job_id = %s
+                          AND node_task_id = %s
+                          AND metadata->>'schema' = 'marie.guardrail-report/v1'
+                          AND metadata->>'run_attempt_id' = %s
+                        """
+                    ).format(sql.Identifier(schema)),
+                    (f"guardrail/report/{job_id}", job_id, job_id, run_attempt_id),
+                )
+                rows = cursor.fetchall()
+                conn.commit()
+                if not rows:
+                    return None
+                if len(rows) != 1:
+                    raise RuntimeError(
+                        f"Guardrail attempt {run_attempt_id} produced conflicting reports"
+                    )
+                asset_key, version, partition_key, outcome, evaluated_at = rows[0]
+                if outcome not in {"VALID", "INVALID"}:
+                    raise ValueError(
+                        f"Guardrail report has invalid outcome: {outcome!r}"
+                    )
+                return {
+                    "outcome": outcome,
+                    "evaluated_at": evaluated_at,
+                    "report_asset": {
+                        "asset_key": asset_key,
+                        "asset_version": version,
+                        "partition_key": partition_key,
+                    },
+                }
+            except Exception:
+                if conn:
+                    conn.rollback()
+                raise
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
+    async def commit_guardrail_route(
+        self,
+        *,
+        job_id: str,
+        queue_name: str,
+        run_owner: str,
+        run_attempt_id: str,
+        branch_metadata: Dict[str, Any],
+        skipped_job_ids: list[str],
+        schema: str = DEFAULT_SCHEMA,
+    ) -> Tuple[bool, Set[str], Optional[str]]:
+        """Atomically complete a guardrail attempt and skip its unselected path."""
+
+        def db_call() -> Tuple[bool, Set[str], Optional[str]]:
+            conn = None
+            cursor = None
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                report_asset = branch_metadata["report_asset"]
+                cursor.execute(
+                    sql.SQL(
+                        """
+                        SELECT 1
+                        FROM {}.asset_materialization
+                        WHERE asset_key = %s
+                          AND asset_version = %s
+                          AND partition_key IS NOT DISTINCT FROM %s
+                          AND job_id = %s
+                          AND node_task_id = %s
+                          AND metadata->>'schema' = 'marie.guardrail-report/v1'
+                          AND metadata->>'outcome' = %s
+                          AND metadata->>'evaluated_at' = %s
+                          AND metadata->>'run_attempt_id' = %s
+                        LIMIT 1
+                        """
+                    ).format(sql.Identifier(schema)),
+                    (
+                        report_asset["asset_key"],
+                        report_asset["asset_version"],
+                        report_asset.get("partition_key"),
+                        job_id,
+                        job_id,
+                        branch_metadata["outcome"],
+                        branch_metadata["evaluated_at"],
+                        run_attempt_id,
+                    ),
+                )
+                if cursor.fetchone() is None:
+                    conn.rollback()
+                    return False, set(), "report_asset_not_materialized"
+
+                cursor.execute(
+                    sql.SQL(
+                        """
+                        UPDATE {}.{}
+                        SET completed_on = now(),
+                            state = 'completed',
+                            output = %s,
+                            branch_metadata = %s,
+                            lease_owner = NULL,
+                            lease_expires_at = NULL,
+                            run_owner = NULL,
+                            run_attempt_id = NULL,
+                            run_lease_expires_at = NULL
+                        WHERE name = %s
+                          AND id = %s
+                          AND state = 'active'
+                          AND run_owner = %s
+                          AND run_attempt_id = %s::uuid
+                        RETURNING id
+                        """
+                    ).format(
+                        sql.Identifier(schema),
+                        sql.Identifier(DEFAULT_JOB_TABLE),
+                    ),
+                    (
+                        Jsonb({"on_complete": "done"}),
+                        Jsonb(branch_metadata),
+                        queue_name,
+                        job_id,
+                        run_owner,
+                        run_attempt_id,
+                    ),
+                )
+                if cursor.fetchone() is None:
+                    conn.rollback()
+                    return False, set(), "stale_attempt"
+
+                skipped_ids: Set[str] = set()
+                if skipped_job_ids:
+                    cursor.execute(
+                        sql.SQL(
+                            """
+                            UPDATE {}.{}
+                            SET completed_on = now(),
+                                state = 'skipped',
+                                output = %s,
+                                lease_owner = NULL,
+                                lease_expires_at = NULL,
+                                run_owner = NULL,
+                                run_attempt_id = NULL,
+                                run_lease_expires_at = NULL
+                            WHERE name = %s
+                              AND id = ANY(%s::uuid[])
+                              AND state IN ('created', 'retry')
+                            RETURNING id
+                            """
+                        ).format(
+                            sql.Identifier(schema),
+                            sql.Identifier(DEFAULT_JOB_TABLE),
+                        ),
+                        (
+                            Jsonb(
+                                {
+                                    "on_skip": "skipped",
+                                    "skip_reason": {
+                                        "guardrail_node_id": job_id,
+                                        "selected_path_ids": branch_metadata[
+                                            "selected_path_ids"
+                                        ],
+                                    },
+                                }
+                            ),
+                            queue_name,
+                            skipped_job_ids,
+                        ),
+                    )
+                    skipped_ids = {str(row[0]) for row in cursor.fetchall()}
+                    if skipped_ids != set(skipped_job_ids):
+                        conn.rollback()
+                        return False, set(), "skip_state_conflict"
+
+                conn.commit()
+                return True, skipped_ids, None
+            except Exception:
+                if conn:
+                    conn.rollback()
+                raise
+            finally:
+                self._close_cursor(cursor)
+                self._close_connection(conn)
+
+        return await self._loop.run_in_executor(self._db_executor, db_call)
+
+    async def close(self) -> None:
+        """Close the repository's executor and connection pool."""
+        if self._closed:
+            return
+        self._closed = True
+        await asyncio.to_thread(
+            self._db_executor.shutdown,
+            wait=True,
+            cancel_futures=True,
+        )
+        await asyncio.to_thread(self.postgreSQL_pool.close)

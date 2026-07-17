@@ -37,6 +37,9 @@ class FileReadTool(AgentTool):
     ]
     MAX_SIZE = 1_000_000  # 1MB
 
+    def __init__(self, root_dir: str | Path | None = None) -> None:
+        self._root_dir = Path(root_dir).expanduser().resolve() if root_dir else None
+
     @property
     def metadata(self) -> ToolMetadata:
         return ToolMetadata(
@@ -75,7 +78,13 @@ class FileReadTool(AgentTool):
                 )
 
         try:
-            file_path = Path(path)
+            file_path = Path(path).expanduser()
+            if self._root_dir is not None:
+                if not file_path.is_absolute():
+                    file_path = self._root_dir / file_path
+                file_path = file_path.resolve()
+                if not file_path.is_relative_to(self._root_dir):
+                    raise PermissionError(path)
             if not file_path.exists():
                 result = {"error": "File not found", "path": path}
                 return ToolOutput(

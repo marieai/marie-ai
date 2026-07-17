@@ -6,6 +6,7 @@ state during DAG execution. It wraps a StateBackend and provides both
 simple (set/get) and advanced (push/pull) APIs.
 """
 
+from collections.abc import Mapping
 from typing import Any, Iterable, List, Optional
 
 from marie_kernel.backend import StateBackend
@@ -34,16 +35,24 @@ class RunContext:
         ti: The current task instance reference
     """
 
-    def __init__(self, ti: TaskInstanceRef, backend: StateBackend):
+    def __init__(
+        self,
+        ti: TaskInstanceRef,
+        backend: StateBackend,
+        *,
+        parameters: Optional[Mapping[str, Any]] = None,
+    ):
         """
         Initialize RunContext.
 
         Args:
             ti: Task instance reference (identifies current task)
             backend: State storage backend implementation
+            parameters: Read-only task invocation parameters.
         """
         self._ti = ti
         self._backend = backend
+        self._parameters = dict(parameters or {})
 
     @classmethod
     def from_asset_dir(cls, asset_dir: str) -> "RunContext":
@@ -83,6 +92,15 @@ class RunContext:
     def ti(self) -> TaskInstanceRef:
         """Current task instance reference."""
         return self._ti
+
+    @property
+    def parameters(self) -> Mapping[str, Any]:
+        """Return a snapshot of the task invocation parameters."""
+        return dict(self._parameters)
+
+    def get_parameter(self, key: str, default: Any = None) -> Any:
+        """Return one task invocation parameter without reading task state."""
+        return self._parameters.get(key, default)
 
     # ========================================================================
     # Primary Developer API (simple key-value)

@@ -48,6 +48,8 @@ def test_pdf_extraction_through_the_real_plugin_command(tmp_path):
         provenance = result['provenance']
         assert provenance['provider']
         assert provenance['canonical_format'] == 'pdf'
+        assert result['metadata']['page_count'] == 3
+        assert len(text.rstrip('\f').split('\f')) == 3
 
 
 def test_one_plugin_process_serves_many_sessions(tmp_path):

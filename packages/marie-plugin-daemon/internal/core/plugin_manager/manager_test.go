@@ -26,6 +26,10 @@ func TestInstallExtractsPackageAndPersistsState(t *testing.T) {
 	if install.State != "installed" {
 		t.Fatalf("unexpected initial state: %q", install.State)
 	}
+	expectedDir := filepath.Join(root, pluginRuntimeDir, "org1__ws1")
+	if filepath.Dir(install.WorkingDir) != expectedDir {
+		t.Fatalf("working dir = %q, want child of %q", install.WorkingDir, expectedDir)
+	}
 	if _, err := os.Stat(filepath.Join(install.WorkingDir, "main.py")); err != nil {
 		t.Fatalf("source not extracted into working dir: %v", err)
 	}

@@ -24,6 +24,15 @@ class TestRunContextBasic:
         assert run_context.ti == task_ref
         assert run_context.ti.task_id == "task_1"
 
+    def test_invocation_parameters_are_separate_from_state(self, task_ref, backend):
+        """Test reading task parameters without writing them to state."""
+        ctx = RunContext(task_ref, backend, parameters={"layout": "invoice"})
+
+        assert ctx.parameters == {"layout": "invoice"}
+        assert ctx.get_parameter("layout") == "invoice"
+        assert ctx.get_parameter("missing", "fallback") == "fallback"
+        assert ctx.get("layout") is None
+
     def test_repr(self, run_context):
         """Test __repr__ produces useful output."""
         repr_str = repr(run_context)

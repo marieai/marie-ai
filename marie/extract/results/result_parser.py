@@ -802,6 +802,12 @@ def parse_results(working_dir: str, metadata: dict, conf: OmegaConf) -> None:
         )
         SerializationManager.serialize(doc, os.path.join(output_dir, "document.pkl"))
 
+    if not conf.get("processing", {}).get("convert_to_structure", True):
+        logging.info("Skipping structured conversion by layout configuration")
+        if validation_enabled and all_validation_summaries:
+            generate_validation_report(all_validation_summaries, output_dir)
+        return
+
     logging.info("Converting document to structured output")
     results: SubzeroResult = convert_document_to_structure(doc, conf, output_dir)
 

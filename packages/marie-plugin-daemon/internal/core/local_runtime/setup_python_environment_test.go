@@ -1,12 +1,14 @@
 package local_runtime
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -40,6 +42,31 @@ func TestEnsureEnvironmentSyncsUvProject(t *testing.T) {
 	}
 	if _, err := os.Stat(python); err != nil {
 		t.Fatalf("venv python missing: %v", err)
+	}
+}
+
+func TestEnsureEnvironmentDoesNotInheritParentVirtualEnv(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed")
+	}
+	dir := t.TempDir()
+	writeUvProject(t, dir)
+	parentVenv := filepath.Join(t.TempDir(), "parent-venv")
+	t.Setenv("VIRTUAL_ENV", parentVenv)
+	var logs bytes.Buffer
+
+	python, err := EnsureEnvironment(context.Background(), dir, "3.12", &logs)
+	if err != nil {
+		t.Fatalf("environment setup failed: %v", err)
+	}
+	if strings.Contains(logs.String(), "VIRTUAL_ENV") {
+		t.Fatalf("uv inherited parent virtual environment:\n%s", logs.String())
+	}
+	if filepath.Dir(filepath.Dir(python)) != filepath.Join(dir, ".venv") {
+		t.Fatalf("expected plugin-local virtual environment, got %s", python)
+	}
+	if os.Getenv("VIRTUAL_ENV") != parentVenv {
+		t.Fatal("parent virtual environment was modified")
 	}
 }
 

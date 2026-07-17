@@ -126,3 +126,26 @@ class TestFileListTool:
         assert result.is_error is False
         data = json.loads(result.content)
         assert data["directory"] == str(temp_dir.absolute())
+
+    def test_root_dir_limits_listing_to_job_workspace(self, temp_dir, tmp_path):
+        tool = FileListTool(root_dir=temp_dir)
+
+        assert tool.call(path=".").is_error is False
+        assert tool.call(path=str(tmp_path.parent)).is_error is True
+
+    def test_root_dir_blocks_parent_glob(self, temp_dir):
+        tool = FileListTool(root_dir=temp_dir)
+
+        assert tool.call(path=".", pattern="../*").is_error is True
+
+    def test_root_dir_skips_symlinks_outside_workspace(self, temp_dir, tmp_path):
+        outside = tmp_path / "outside.txt"
+        outside.write_text("outside")
+        (temp_dir / "outside-link.txt").symlink_to(outside)
+        tool = FileListTool(root_dir=temp_dir)
+
+        result = tool.call(path=".", pattern="*.txt")
+
+        assert result.is_error is False
+        data = json.loads(result.content)
+        assert "outside-link.txt" not in [item["name"] for item in data["files"]]

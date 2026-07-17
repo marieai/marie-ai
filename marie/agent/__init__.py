@@ -1,12 +1,12 @@
 """Marie Agent Framework.
 
-A state-of-the-art agent framework for Marie-AI following the Qwen-Agent
-blueprint with Haystack Agent patterns, integrated with the existing
-Executor system.
+A state-of-the-art agent framework for Marie-AI with OpenAI-compatible model
+access and pluggable execution patterns, integrated with the existing Executor
+system.
 
 Architecture Overview:
-    Qwen-Agent serves as the meta-planner that can delegate to Haystack
-    and AutoGen as wrapped tools. The framework provides:
+    Agent backends can delegate to Haystack and AutoGen as wrapped tools. The
+    framework provides:
 
     - **BaseAgent**: Template method pattern for agent implementations
     - **AgentTool**: Unified tool interface with registry support
@@ -54,10 +54,10 @@ Configuration:
     # agent_config.yaml
     agent:
       name: my_agent
-      backend: qwen_agent
+      backend: openai
       llm:
-        engine_name: qwen2_5_vl_7b
-        provider: vllm
+        model: qwen2_5_vl_7b
+        base_url: http://localhost:8000/v1
       tools:
         - search
         - calculator
@@ -92,10 +92,9 @@ from marie.agent.backends import (
     CompositeBackend,
     HaystackAgentBackend,
     HaystackBackendConfig,
-    QwenAgentBackend,
-    QwenBackendConfig,
+    OpenAIAgentBackend,
+    OpenAIBackendConfig,
     SimpleHaystackBackend,
-    SimpleQwenBackend,
     SingleAgentBackend,
     ToolCallRecord,
     create_coding_backend,
@@ -112,7 +111,6 @@ from marie.agent.config import (
     ToolConfig,
     load_config,
 )
-from marie.agent.executor import AgentExecutor
 from marie.agent.llm_types import (
     ChatMessage,
     ChatResponse,
@@ -210,10 +208,9 @@ __all__ = [
     "BackendConfig",
     "CompositeBackend",
     "ToolCallRecord",
-    # Qwen backend
-    "QwenAgentBackend",
-    "QwenBackendConfig",
-    "SimpleQwenBackend",
+    # OpenAI-compatible backend
+    "OpenAIAgentBackend",
+    "OpenAIBackendConfig",
     # Haystack backend
     "HaystackAgentBackend",
     "HaystackBackendConfig",
@@ -224,8 +221,6 @@ __all__ = [
     "SingleAgentBackend",
     "create_research_backend",
     "create_coding_backend",
-    # Executor
-    "AgentExecutor",
     # State management
     "ConversationStore",
     "ConversationState",

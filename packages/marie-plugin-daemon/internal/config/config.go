@@ -20,6 +20,9 @@ type Config struct {
 	// StorageRoot is the plugin storage root. The -storage-root flag overrides this.
 	StorageRoot string `envconfig:"MARIE_PLUGIN_STORAGE_ROOT"`
 
+	// MarieDefaultMount is the shared Marie asset root used when StorageRoot is unset.
+	MarieDefaultMount string `envconfig:"MARIE_DEFAULT_MOUNT"`
+
 	// SigningKeyID / SigningSecret are the HMAC key the daemon verifies envelopes
 	// against. When unset (and DevInsecure is false), signed routes reject all
 	// requests.
@@ -76,7 +79,10 @@ func (c *Config) SetDefaults() {
 		c.Addr = "127.0.0.1:8099"
 	}
 	if strings.TrimSpace(c.StorageRoot) == "" {
-		c.StorageRoot = "./storage"
+		c.StorageRoot = strings.TrimSpace(c.MarieDefaultMount)
+		if c.StorageRoot == "" {
+			c.StorageRoot = "./storage"
+		}
 	}
 }
 
