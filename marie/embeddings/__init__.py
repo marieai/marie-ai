@@ -2,6 +2,7 @@
 
 from marie.embeddings.base import EmbeddingsBase
 from marie.embeddings.embeddings_object import EmbeddingsObject
+from marie.embeddings.factory import setup_embeddings
 from marie.embeddings.gemini import GeminiEmbeddings
 from marie.embeddings.jina import JinaEmbeddings
 from marie.embeddings.qwen import QwenVLEmbeddings
@@ -12,4 +13,5 @@ __all__ = [
     "GeminiEmbeddings",
     "JinaEmbeddings",
     "QwenVLEmbeddings",
+    "setup_embeddings",
 ]

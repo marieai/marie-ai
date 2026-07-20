@@ -1,3 +1,4 @@
+from marie.extension.agent import AgentDefinition, AgentOutput
 from marie.extension.errors import (
     ExtensionError,
     PackageLoadError,
@@ -14,11 +15,14 @@ from marie.extension.permissions import (
     SecretPermissions,
     StoragePermissions,
 )
+from marie.extension.runtime import RuntimePolicy
 from marie.extension.validator import ValidationResult, validate_package
 
 __version__ = "0.1.0"
 
 __all__ = [
+    "AgentDefinition",
+    "AgentOutput",
     "EndpointPermissions",
     "ExtensionError",
     "ExtensionPackage",
@@ -28,6 +32,7 @@ __all__ = [
     "NetworkPermissions",
     "PackageLoadError",
     "PackageValidationError",
+    "RuntimePolicy",
     "RuntimeResourceLimits",
     "SecretPermissions",
     "StoragePermissions",

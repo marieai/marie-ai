@@ -8,6 +8,7 @@ import pytest
 from docarray import DocList
 from docarray.documents import TextDoc
 from jsonschema import ValidationError
+from pydantic import ValidationError as PydanticValidationError
 
 from marie.agent.backends.base import (
     AgentResult,
@@ -18,7 +19,9 @@ from marie.agent.backends.openai_backend import (
     OpenAIBackendConfig,
 )
 from marie.agent.message import Message
+from marie.api import AssetKeyDoc
 from marie.executor.agent import AgentExecutor
+from marie.plugins.embedded import PluginInvocationResult
 
 
 def executor_with_result(result: AgentResult) -> tuple[AgentExecutor, AsyncMock]:
@@ -30,6 +33,59 @@ def executor_with_result(result: AgentResult) -> tuple[AgentExecutor, AsyncMock]
     return executor, backend
 
 
+def plugin_executor(
+    *,
+    route: dict | None = None,
+) -> tuple[AgentExecutor, AsyncMock]:
+    executor = AgentExecutor(
+        enable_conversation_store=False,
+        plugins=[
+            {
+                'package': 'marie/fixture-agent',
+                'path': '/not-read-during-routing.zip',
+                'actions': ['run'],
+            }
+        ],
+        agent_routes={
+            'fixture.echo': route
+            or {
+                'package': 'marie/fixture-agent',
+                'action': 'run',
+            }
+        },
+    )
+    invocation = AsyncMock(
+        return_value=PluginInvocationResult(
+            result={'proposal': {'decision': 'repair'}},
+            frames=(
+                {'type': 'stream', 'data': {'proposal': {'decision': 'repair'}}},
+                {'type': 'end', 'data': {}},
+            ),
+            request_id='task-1',
+            trace_id='trace-1',
+        )
+    )
+    executor.embedded_plugins.invoke_async = invocation
+    return executor, invocation
+
+
+def plugin_parameters(**request_overrides) -> dict:
+    request = {
+        'agent_ref': 'fixture.echo',
+        'input': {'finding': 'missing value'},
+        'artifacts': {'schema_uri': 's3://bucket/schema.json'},
+        'idempotency_key': 'effect-1',
+    }
+    request.update(request_overrides)
+    return {
+        'payload': {'op_params': request},
+        'job_id': 'task-1',
+        'dag_id': 'dag-1',
+        'node_task_id': 'task-1',
+        'run_attempt_id': 'attempt-2',
+    }
+
+
 def test_agent_executor_only_uses_executor_namespace() -> None:
     import marie.agent
 
@@ -37,6 +93,220 @@ def test_agent_executor_only_uses_executor_namespace() -> None:
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("marie.agent.executor")
     assert AgentExecutor.__module__ == "marie.executor.agent.agent_executor"
+    assert AgentExecutor.agent_run_endpoint.__requests__ == {'on': '/agent/run'}
+
+
+@pytest.mark.asyncio
+async def test_agent_run_routes_scheduler_request_to_embedded_plugin() -> None:
+    executor, invocation = plugin_executor()
+
+    docs = await executor.agent_run_endpoint(
+        DocList[TextDoc](),
+        parameters=plugin_parameters(),
+    )
+
+    response = json.loads(docs[0].text)
+    assert response == {
+        'agent_ref': 'fixture.echo',
+        'result': {'proposal': {'decision': 'repair'}},
+        'frames': [
+            {'type': 'stream', 'data': {'proposal': {'decision': 'repair'}}},
+            {'type': 'end', 'data': {}},
+        ],
+        'request_id': 'task-1',
+        'trace_id': 'trace-1',
+    }
+    assert executor._backend is None
+
+    package, action, payload = invocation.await_args.args
+    assert package == 'marie/fixture-agent'
+    assert action == 'run'
+    assert payload == {
+        'agent_ref': 'fixture.echo',
+        'input': {'finding': 'missing value'},
+        'artifacts': {'schema_uri': 's3://bucket/schema.json'},
+        'idempotency_key': 'effect-1',
+    }
+    assert invocation.await_args.kwargs == {
+        'execution_metadata': {
+            'dag_id': 'dag-1',
+            'task_id': 'task-1',
+            'attempt': 'attempt-2',
+            'job_id': 'task-1',
+        },
+        'request_id': 'task-1',
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_run_rejects_unknown_route_before_plugin_invocation() -> None:
+    executor, invocation = plugin_executor()
+
+    with pytest.raises(ValueError, match='Agent route is not configured'):
+        await executor.agent_run_endpoint(
+            DocList[TextDoc](),
+            parameters=plugin_parameters(agent_ref='fixture.unknown'),
+        )
+
+    invocation.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    'request_overrides, match',
+    [
+        ({'package_path': '/tmp/agent.zip'}, 'extra_forbidden'),
+        ({'input': {'credentials': {'api_key': 'request-secret'}}}, 'credentials'),
+        ({'artifacts': {'source': '/tmp/source.json'}}, 'host filesystem'),
+        ({'artifacts': {'source': '../source.json'}}, 'host filesystem'),
+        ({'input': {'packagePath': '/tmp/agent.zip'}}, 'packagepath'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_agent_run_rejects_request_owned_host_configuration(
+    request_overrides: dict,
+    match: str,
+) -> None:
+    executor, invocation = plugin_executor()
+
+    with pytest.raises(PydanticValidationError, match=match):
+        await executor.agent_run_endpoint(
+            DocList[TextDoc](),
+            parameters=plugin_parameters(**request_overrides),
+        )
+
+    invocation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_agent_run_enforces_route_model_profiles() -> None:
+    executor, invocation = plugin_executor(
+        route={
+            'package': 'marie/fixture-agent',
+            'action': 'run',
+            'model_profile': {
+                'name': 'repair-model',
+                'model': 'fixture-model',
+                'base_url': 'http://model.test/v1',
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match='Model profile is not allowed'):
+        await executor.agent_run_endpoint(
+            DocList[TextDoc](),
+            parameters=plugin_parameters(model_profile='request-model'),
+        )
+    invocation.assert_not_awaited()
+
+    await executor.agent_run_endpoint(
+        DocList[TextDoc](),
+        parameters=plugin_parameters(),
+    )
+    assert invocation.await_args.args[2]['model_profile'] == {
+        'name': 'repair-model',
+        'model': 'fixture-model',
+        'base_url': 'http://model.test/v1',
+        'request_timeout_seconds': 300.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_run_resolves_current_job_workspace(
+    tmp_path,
+) -> None:
+    executor, invocation = plugin_executor(
+        route={
+            'package': 'marie/fixture-agent',
+            'action': 'run',
+            'requires_workspace': True,
+        },
+    )
+    docs_from_asset = patch(
+        'marie.utils.docs.docs_from_asset',
+        return_value=(['asset-doc'], '/tmp/source.tif'),
+    )
+    frames_from_docs = patch(
+        'marie.utils.docs.frames_from_docs',
+        return_value=['frame'],
+    )
+    prepare_asset_directory = patch(
+        'marie.utils.asset_util.prepare_asset_directory',
+        return_value=(str(tmp_path), str(tmp_path / 'frames'), 'metadata.json'),
+    )
+    parameters = plugin_parameters()
+    parameters.update({'ref_id': 'document-1', 'ref_type': 'extract'})
+
+    with (
+        docs_from_asset as load,
+        frames_from_docs as frames,
+        prepare_asset_directory as prepare,
+    ):
+        await executor.agent_run_endpoint(
+            DocList[AssetKeyDoc](
+                [AssetKeyDoc(asset_key='s3://bucket/source.tif', pages=[0])]
+            ),
+            parameters=parameters,
+        )
+
+    assert invocation.await_args.args[2]['workspace'] == {
+        'root': str(tmp_path.resolve()),
+        'access': 'read_only',
+    }
+    load.assert_called_once_with(
+        's3://bucket/source.tif',
+        [0],
+        return_file_path=True,
+    )
+    frames.assert_called_once_with(['asset-doc'])
+    assert prepare.call_args.kwargs['ref_id'] == 'document-1'
+    assert prepare.call_args.kwargs['ref_type'] == 'extract'
+    assert prepare.call_args.kwargs['restore_dirs'] == [
+        'agent-output',
+        'parsed-result',
+        'work',
+    ]
+
+
+@pytest.mark.asyncio
+async def test_agent_run_requires_scheduler_task_identity_match() -> None:
+    executor, invocation = plugin_executor()
+    parameters = plugin_parameters()
+    parameters['node_task_id'] = 'different-task'
+
+    with pytest.raises(ValueError, match='node_task_id must match job_id'):
+        await executor.agent_run_endpoint(
+            DocList[AssetKeyDoc](),
+            parameters=parameters,
+        )
+
+    invocation.assert_not_awaited()
+
+
+def test_agent_route_must_reference_allowlisted_plugin_action() -> None:
+    with pytest.raises(ValueError, match='action is not configured'):
+        AgentExecutor(
+            enable_conversation_store=False,
+            plugins=[
+                {
+                    'package': 'marie/fixture-agent',
+                    'path': '/not-read-during-routing.zip',
+                    'actions': ['run'],
+                }
+            ],
+            agent_routes={
+                'fixture.echo': {
+                    'package': 'marie/fixture-agent',
+                    'action': 'request-selected-action',
+                }
+            },
+        )
+
+
+def test_agent_executor_closes_owned_embedded_plugins() -> None:
+    executor, _ = plugin_executor()
+    with patch.object(executor.embedded_plugins, 'close') as close:
+        executor.close()
+    close.assert_called_once_with()
 
 
 @pytest.mark.asyncio

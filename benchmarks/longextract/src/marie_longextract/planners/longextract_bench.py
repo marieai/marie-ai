@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from marie_longextract.ops.schema import build_extraction_units
+from marie_longextract.planners import PLAN_ID
 from marie_longextract.planners.query_subgraphs import (
     build_aggregation_policy_node,
     build_extraction_subgraph,
@@ -21,7 +22,6 @@ from marie.query_planner import (
     register_query_plan,
 )
 
-PLAN_ID = "longextract_bench"
 LAYOUT_ID = "longextract-bench"
 
 
@@ -99,3 +99,66 @@ def query_planner_longextract_bench(
             end,
         ]
     )
+
+
+def _main() -> None:
+    import argparse
+    from pathlib import Path
+    from pprint import pprint
+
+    from marie.job.job_manager import generate_job_id
+    from marie.query_planner import QueryPlanRegistry
+    from marie.query_planner.planner import (
+        print_query_plan,
+        print_sorted_nodes,
+        query_planner,
+        topological_sort,
+        visualize_query_plan_graph,
+    )
+
+    parser = argparse.ArgumentParser(description="Visualize the LongExtract query plan")
+    parser.add_argument(
+        "--schema",
+        required=True,
+        type=Path,
+        help="Path to a LongExtract JSON schema",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("query_plan_graph.png"),
+        help="PNG path for the rendered query plan graph",
+    )
+    args = parser.parse_args()
+
+    schema_path = args.schema.expanduser().resolve()
+    if not schema_path.is_file():
+        parser.error(f"schema does not exist: {schema_path}")
+
+    output_path = args.output.expanduser().resolve()
+    artifact_root = output_path.parent.resolve()
+    planner_info = PlannerInfo(
+        name=PLAN_ID,
+        base_id=generate_job_id(),
+        metadata={
+            "content_type": "application/pdf",
+            "benchmark": {
+                "schema_uri": str(schema_path),
+                "output_uri": (artifact_root / "result.json").as_uri(),
+                "work_uri": f"{(artifact_root / 'work').as_uri()}/",
+            },
+        },
+    )
+
+    print(QueryPlanRegistry.list_planners())
+    plan = query_planner(planner_info)
+    pprint(plan.model_dump())
+    visualize_query_plan_graph(plan, output_path=str(output_path))
+
+    sorted_nodes = topological_sort(plan)
+    print_sorted_nodes(sorted_nodes, plan)
+    print_query_plan(plan, PLAN_ID)
+
+
+if __name__ == "__main__":
+    _main()

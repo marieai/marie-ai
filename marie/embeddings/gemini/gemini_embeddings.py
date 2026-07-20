@@ -336,6 +336,10 @@ class GeminiEmbeddings(EmbeddingsBase):
         return result.embeddings
 
     @property
+    def supports_image_embeddings(self) -> bool:
+        return True
+
+    @property
     def embedding_dim(self) -> int:
         """Return the embedding dimension."""
         return self.output_dimensionality

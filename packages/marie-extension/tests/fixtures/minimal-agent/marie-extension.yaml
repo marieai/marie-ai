@@ -1,0 +1,48 @@
+apiVersion: marie.ai/v1alpha1
+kind: ExtensionPackage
+metadata:
+  id: ext.test.repair-agent
+  name: repair-agent
+  version: 0.1.0
+runtime:
+  type: python_source
+  language: python
+  version: "3.12"
+  entrypoint: repair_agent
+runtimePolicy:
+  timeoutMs: 600000
+  maxConcurrent: 2
+  maxMemoryBytes: 1073741824
+  networkPolicy: internal_only
+providers:
+  - ref: provider/repair
+    type: agent_strategy_provider
+    agents:
+      - ref: agents/repair
+        name: repair
+        description: Return an immutable repair proposal.
+        implementation:
+          language: python
+          source: repair_agent.py
+        invocationSchema:
+          required: [page_file]
+          parameters:
+            - key: page_file
+              type: string
+              required: true
+        output:
+          schema:
+            type: object
+            properties:
+              proposal:
+                type: object
+        credentials:
+          - key: llm_api_key
+            type: secret
+            required: true
+        modelCapabilities: [vision, tool_calling]
+        runtimePolicy:
+          timeoutMs: 600000
+          maxConcurrent: 1
+          maxMemoryBytes: 1073741824
+          networkPolicy: internal_only

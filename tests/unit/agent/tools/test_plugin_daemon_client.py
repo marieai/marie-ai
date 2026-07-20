@@ -115,3 +115,35 @@ def test_envelope_requires_org_and_workspace():
             organization_id="",
             workspace_id="ws-1",
         )
+
+
+def test_envelope_accepts_generic_action_identity_credentials_and_policy():
+    env = build_invocation_envelope(
+        _spec(),
+        payload={"action": "run_repair"},
+        organization_id="org-1",
+        workspace_id="ws-1",
+        action_type="stub",
+        action_id="actions/run_repair",
+        credential_binding_ids=["binding-1"],
+        request_id="request-1",
+        trace_id="trace-1",
+        timeout_ms=600_000,
+        runtime_policy={
+            "maxConcurrent": 2,
+            "maxMemoryBytes": 1_073_741_824,
+            "networkPolicy": "internal_only",
+        },
+    )
+
+    assert env["actionType"] == "stub"
+    assert env["actionId"] == "actions/run_repair"
+    assert env["credentialBindingIds"] == ["binding-1"]
+    assert env["requestId"] == "request-1"
+    assert env["traceId"] == "trace-1"
+    assert env["runtimePolicy"] == {
+        "maxConcurrent": 2,
+        "maxMemoryBytes": 1_073_741_824,
+        "networkPolicy": "internal_only",
+        "timeoutMs": 600_000,
+    }

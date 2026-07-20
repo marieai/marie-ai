@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pytest
 from marie_longextract.models import PartialExtraction
+from marie_longextract.ops.aggregation import aggregate_page_results
 from marie_longextract.ops.schema import build_extraction_units
-from marie_longextract.ops.stitch import aggregate_page_results, stitch_partials
+from marie_longextract.ops.stitch import stitch_partials
 from marie_longextract.ops.verify import verify_result
 
 

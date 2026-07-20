@@ -88,3 +88,18 @@ def test_resolve_endpoint_routes_connector_to_plugin_daemon_execute() -> None:
         "job-a",
         "plugin_daemon_executor://execute",
     ) == ("plugin_daemon_executor", "/execute")
+
+
+def test_resolve_endpoint_routes_agent_application() -> None:
+    distributor = GatewayJobDistributor(
+        deployment_nodes={
+            "agent_executor": [
+                {"endpoint": "/agent/run"},
+            ],
+        }
+    )
+
+    assert distributor._resolve_endpoint(
+        "job-a",
+        "agent_executor://agent/run",
+    ) == ("agent_executor", "/agent/run")

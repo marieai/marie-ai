@@ -7,14 +7,27 @@ name = "marie-longextract"
 version = "0.1.0"
 description = "Marie LongExtractBench planner and benchmark integration"
 requires-python = ">=3.12,<3.13"
-dependencies = ["marie-ai"]
+dependencies = [
+    "marie-agent[openai]",
+    "marie-engine",
+    "pydantic>=2.11,<3.0",
+]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+host = ["marie-ai", "omegaconf>=2.3"]
+dev = ["marie-ai", "omegaconf>=2.3", "pytest"]
+
+[tool.uv.sources]
+marie-agent = {path = "../../packages/marie-agent", editable = true}
+marie-engine = {path = "../../packages/marie-engine", editable = true}
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src", "../.."]
+pythonpath = [
+    "src",
+    "../..",
+    "../../packages/marie-plugin-daemon/python_runtime",
+]

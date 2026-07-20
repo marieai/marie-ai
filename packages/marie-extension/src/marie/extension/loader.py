@@ -143,6 +143,9 @@ def _declared_paths(manifest: ExtensionPackage) -> Iterable[str]:
         for tool in provider.tools:
             if tool.implementation:
                 yield from _implementation_paths(tool.implementation)
+        for agent in provider.agents:
+            if agent.implementation:
+                yield from _implementation_paths(agent.implementation)
     for tool in manifest.tools:
         if tool.implementation:
             yield from _implementation_paths(tool.implementation)
@@ -155,6 +158,9 @@ def _declared_paths(manifest: ExtensionPackage) -> Iterable[str]:
     for endpoint in manifest.endpoints:
         if endpoint.implementation:
             yield from _implementation_paths(endpoint.implementation)
+    for agent in manifest.agents:
+        if agent.implementation:
+            yield from _implementation_paths(agent.implementation)
 
 
 def _implementation_paths(ref) -> Iterable[str]:

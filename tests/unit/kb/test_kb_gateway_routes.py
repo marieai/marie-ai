@@ -67,7 +67,7 @@ def test_unconfigured_returns_503():
 def test_missing_auth_rejected():
     client = _client(streamer=_streamer_returning({"results": []}))
     r = client.post("/api/v1/kb/search", json={"query": "x"})
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 def test_search_requires_query():

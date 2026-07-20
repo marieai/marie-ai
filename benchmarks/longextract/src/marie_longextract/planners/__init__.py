@@ -1,5 +1,5 @@
 from __future__ import annotations
 
-from marie_longextract.planners.longextract_bench import PLAN_ID
+PLAN_ID = "longextract_bench"
 
 __all__ = ["PLAN_ID"]

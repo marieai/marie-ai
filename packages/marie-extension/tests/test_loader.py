@@ -26,6 +26,15 @@ def test_load_model_provider_metadata() -> None:
     assert provider.models[0].features == ["tool-call", "stream-tool-call"]
 
 
+def test_load_agent_provider_metadata_and_implementation() -> None:
+    package = load_package(FIXTURES / "minimal-agent")
+    agent = package.manifest.providers[0].agents[0]
+
+    assert agent.implementation is not None
+    assert agent.implementation.source == "repair_agent.py"
+    assert "repair_agent.py" in package.files
+
+
 def test_reject_declared_path_traversal() -> None:
     with pytest.raises(PackageLoadError, match="unsafe package path"):
         load_package(FIXTURES / "invalid-traversal")

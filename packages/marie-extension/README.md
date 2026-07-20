@@ -5,11 +5,12 @@
 The distribution name is `marie-extension`; its PEP 420 import is
 `marie.extension`.
 
-V1 is metadata-only:
+The package contract is metadata-only:
 
 - packages are directories or standard ZIP archives containing exactly one `marie-extension.yaml`
 - validation never executes package code
-- runtime execution remains disabled until registry, credentials, daemon envelope, and audit gates are implemented
+- tools, models, datasources, triggers, endpoints, and agent strategies are typed for discovery and validation
+- runtime execution remains owned by the Marie plugin daemon and host-side policy
 
 ## Development
 

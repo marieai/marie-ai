@@ -164,8 +164,8 @@ class RAGIndex(BaseModel):
         description="Embedding model to use for this index",
     )
     embedding_dim: int = Field(
-        default=2048,
-        description="Embedding dimension (128/256/512/1024/2048 for Matryoshka)",
+        default=1024,
+        description="Embedding dimension (64/128/256/512/1024/2048 for Matryoshka)",
     )
 
     # Transform configuration

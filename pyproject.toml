@@ -227,6 +227,7 @@ marie-wasm = { path = "packages/marie-wasm", editable = true }
 marie-mem0 = { path = "packages/marie-mem0", editable = true }
 marie-mcp = { path = "packages/marie-mcp", editable = true }
 marie-cli = { path = "packages/marie-cli", editable = true }
+marie-longextract = { path = "benchmarks/longextract", editable = true }
 torch = [
     { index = "pytorch-cu130", extra = "cu130" },
 ]
@@ -242,6 +243,7 @@ explicit = true
 [dependency-groups]
 dev = [
     "marie-cli",
+    "marie-longextract",
     "pytest<8.0.0",
     "pytest-timeout",
     "pytest-mock",

@@ -643,7 +643,7 @@ class PGVectorStore(BasePydanticVectorStore):
     ) -> List[Dict[str, Any]]:
         """Search the vector store (convenience method).
 
-        Text query can match images since jina-v4 uses the same embedding space.
+        Text queries can match images because Qwen3-VL uses the same embedding space.
 
         Args:
             query_embedding: Query vector.

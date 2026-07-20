@@ -10,6 +10,7 @@ import asyncio
 import json
 import time
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
 
 if TYPE_CHECKING:
@@ -38,10 +39,18 @@ from marie.agent.coordination import (
 from marie.agent.message import ContentItem, Message
 from marie.agent.state.conversation import ConversationStore
 from marie.agent.tools.base import AgentTool
+from marie.api import AssetKeyDoc
+from marie.constants import DEFAULT_DAEMON_ADDR
 from marie.engine.output_parser import parse_json_markdown
+from marie.executor.agent.plugin_models import (
+    AgentPluginRequest,
+    AgentPluginResponse,
+    AgentPluginRoute,
+)
 from marie.executor.agent.tools.registry import resolve_executor_tools
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
+from marie.plugins.embedded import EmbeddedPlugins
 
 try:
     from marie.serve.executors import requests
@@ -115,6 +124,9 @@ class AgentExecutor(MarieExecutor):
         system_message: Optional[str] = None,
         config_path: Optional[str] = None,
         enable_conversation_store: bool = True,
+        plugins: list[dict[str, Any]] | None = None,
+        agent_routes: dict[str, dict[str, Any] | AgentPluginRoute] | None = None,
+        plugin_daemon_addr: str = DEFAULT_DAEMON_ADDR,
         **kwargs: Any,
     ):
         """Initialize the AgentExecutor.
@@ -126,6 +138,9 @@ class AgentExecutor(MarieExecutor):
             system_message: System message for the agent
             config_path: Path to YAML configuration file
             enable_conversation_store: Enable conversation persistence
+            plugins: Embedded application packages owned by this executor
+            agent_routes: Allowlisted agent references mapped to package actions
+            plugin_daemon_addr: Host-selected address for the owned plugin daemon
             **kwargs: Additional MarieExecutor arguments
         """
         super().__init__(**kwargs)
@@ -147,6 +162,30 @@ class AgentExecutor(MarieExecutor):
         self._system_message = system_message
         self._tool_specs = tools or []
 
+        runtime_args = kwargs.get('runtime_args') or {}
+        executor_identity = (
+            runtime_args.get('name', 'agent_executor')
+            if isinstance(runtime_args, dict)
+            else getattr(runtime_args, 'name', 'agent_executor')
+        )
+        self.embedded_plugins = EmbeddedPlugins(
+            plugins,
+            executor_identity=executor_identity,
+            daemon_addr=plugin_daemon_addr,
+        )
+        if agent_routes is not None and not isinstance(agent_routes, dict):
+            raise ValueError('agent_routes must be a mapping')
+        self._agent_routes: dict[str, AgentPluginRoute] = {}
+        for configured_ref, configured_route in (agent_routes or {}).items():
+            agent_ref = str(configured_ref).strip()
+            if not agent_ref or agent_ref in self._agent_routes:
+                raise ValueError(
+                    f'Invalid or duplicate agent route: {configured_ref!r}'
+                )
+            route = AgentPluginRoute.model_validate(configured_route)
+            self.embedded_plugins.validate_action(route.package, route.action)
+            self._agent_routes[agent_ref] = route
+
         # Initialize components
         self._backend: Optional[AgentBackend] = None
         self._tools: Dict[str, AgentTool] = {}
@@ -163,6 +202,10 @@ class AgentExecutor(MarieExecutor):
         self._before_chain: Optional["GuardrailChain"] = None
         self._after_chain: Optional["GuardrailChain"] = None
         self._tool_call_chain: Optional["GuardrailChain"] = None
+
+    def close(self) -> None:
+        self.embedded_plugins.close()
+        super().close()
 
     def _ensure_initialized(self) -> None:
         """Ensure backend and tools are initialized."""
@@ -582,6 +625,153 @@ class AgentExecutor(MarieExecutor):
                 )
             ]
         )
+
+    @requests(on='/agent/run')
+    async def agent_run_endpoint(
+        self,
+        docs: DocList[AssetKeyDoc],
+        parameters: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> DocList[TextDoc]:
+        """Run one deployment-allowlisted agent application action."""
+        parameters = parameters or {}
+        request = self._agent_plugin_request(parameters)
+        route = self._agent_routes.get(request.agent_ref)
+        if route is None:
+            raise ValueError(f'Agent route is not configured: {request.agent_ref}')
+
+        if route.model_profile is not None:
+            if (
+                request.model_profile is not None
+                and request.model_profile != route.model_profile.name
+            ):
+                raise ValueError(
+                    f'Model profile is not allowed for {request.agent_ref}: '
+                    f'{request.model_profile!r}'
+                )
+        elif request.model_profile is not None:
+            raise ValueError(
+                f'Agent route does not accept a model profile: {request.agent_ref}'
+            )
+
+        job_id = self._required_execution_id(parameters, 'job_id')
+        dag_id = self._required_execution_id(parameters, 'dag_id')
+        task_id = self._required_execution_id(parameters, 'node_task_id')
+        run_attempt_id = self._required_execution_id(parameters, 'run_attempt_id')
+        if task_id != job_id:
+            raise ValueError('Agent node_task_id must match job_id')
+
+        payload: dict[str, Any] = {
+            'agent_ref': request.agent_ref,
+            'input': request.input,
+            'artifacts': request.artifacts,
+            'idempotency_key': request.idempotency_key,
+        }
+        if route.model_profile is not None:
+            payload['model_profile'] = route.model_profile.model_dump(mode='json')
+        if route.requires_workspace:
+            workspace_root = await asyncio.to_thread(
+                self._resolve_agent_workspace,
+                docs,
+                parameters,
+            )
+            payload['workspace'] = {
+                'root': workspace_root,
+                'access': 'read_only',
+            }
+
+        invocation = await self.embedded_plugins.invoke_async(
+            route.package,
+            route.action,
+            payload,
+            execution_metadata={
+                'dag_id': dag_id,
+                'task_id': task_id,
+                'attempt': run_attempt_id,
+                'job_id': job_id,
+            },
+            request_id=job_id,
+        )
+        response = AgentPluginResponse(
+            agent_ref=request.agent_ref,
+            result=invocation.result,
+            frames=list(invocation.frames),
+            request_id=invocation.request_id,
+            trace_id=invocation.trace_id,
+        )
+        return DocList[TextDoc](
+            [
+                TextDoc(
+                    text=response.model_dump_json(),
+                )
+            ]
+        )
+
+    @staticmethod
+    def _agent_plugin_request(parameters: Dict[str, Any]) -> AgentPluginRequest:
+        payload = parameters.get('payload')
+        op_params = payload.get('op_params') if isinstance(payload, dict) else None
+        if isinstance(op_params, dict):
+            return AgentPluginRequest.model_validate(op_params)
+
+        infrastructure_fields = {
+            'dag_id',
+            'job_id',
+            'node_task_id',
+            'partition_key',
+            'payload',
+            'queue_id',
+            'ref_id',
+            'ref_type',
+            'run_attempt_id',
+            'run_owner',
+        }
+        request_data = {
+            key: value
+            for key, value in parameters.items()
+            if key not in infrastructure_fields
+        }
+        return AgentPluginRequest.model_validate(request_data)
+
+    @staticmethod
+    def _required_execution_id(parameters: Dict[str, Any], key: str) -> str:
+        value = parameters.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f'Agent execution requires {key}')
+        return value.strip()
+
+    def _resolve_agent_workspace(
+        self,
+        docs: DocList[AssetKeyDoc],
+        parameters: Dict[str, Any],
+    ) -> str:
+        if len(docs) != 1:
+            raise ValueError('Workspace-backed agent execution requires one document')
+        asset_key = getattr(docs[0], 'asset_key', None)
+        if not asset_key:
+            raise ValueError('Workspace-backed agent execution requires an asset key')
+
+        ref_id = self._required_execution_id(parameters, 'ref_id')
+        ref_type = self._required_execution_id(parameters, 'ref_type')
+
+        from marie.utils.asset_util import prepare_asset_directory
+        from marie.utils.docs import docs_from_asset, frames_from_docs
+
+        asset_docs, local_path = docs_from_asset(
+            asset_key,
+            getattr(docs[0], 'pages', None),
+            return_file_path=True,
+        )
+        frames = frames_from_docs(asset_docs)
+        workspace_root, _, _ = prepare_asset_directory(
+            frames=frames,
+            local_path=local_path,
+            ref_id=ref_id,
+            ref_type=ref_type,
+            logger=self.logger,
+            restore_dirs=['agent-output', 'parsed-result', 'work'],
+        )
+        return str(Path(workspace_root).resolve())
 
     @requests(on="/chat")
     async def chat_endpoint(

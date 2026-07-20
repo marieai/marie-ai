@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import threading
 import time
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -74,6 +75,9 @@ class PluginDaemonClient:
         self.credential_resolver = credential_resolver or CredentialResolver()
         self.timeout_s = timeout_s
         self._child: subprocess.Popen[bytes] | None = None
+        self._active_responses: dict[str, Any] = {}
+        self._cancelled_requests: set[str] = set()
+        self._response_lock = threading.Lock()
 
         if base_url:
             self._url = base_url.rstrip("/")
@@ -119,7 +123,17 @@ class PluginDaemonClient:
             time.sleep(interval_s)
         raise RuntimeError("marie-plugin-daemon did not become ready before timeout")
 
-    def invoke(self, spec: PluginToolSpec, payload: dict[str, Any]) -> ToolOutput:
+    def invoke(
+        self,
+        spec: PluginToolSpec,
+        payload: dict[str, Any],
+        *,
+        action_id: str | None = None,
+        action_type: str = "tool",
+        request_id: str | None = None,
+        trace_id: str | None = None,
+        runtime_policy: dict[str, Any] | None = None,
+    ) -> ToolOutput:
         # The dify_plugin ToolInvokeRequest requires user_id; inject it from the
         # execution context (the daemon forwards `payload` opaquely to the plugin).
         # Credentials are resolved in marie-ai from the spec's requirements.
@@ -144,19 +158,31 @@ class PluginDaemonClient:
         )
         started = time.perf_counter()
         try:
+            timeout_ms = int(
+                (runtime_policy or {}).get("timeoutMs", self.timeout_s * 1000)
+            )
             envelope = build_invocation_envelope(
                 spec,
                 payload=payload,
                 organization_id=self.organization_id,
                 workspace_id=self.workspace_id,
                 user_id=self.user_id,
-                timeout_ms=int(self.timeout_s * 1000),
+                action_id=action_id,
+                action_type=action_type,
+                credential_binding_ids=spec.credential_binding_ids,
+                request_id=request_id,
+                trace_id=trace_id,
+                timeout_ms=timeout_ms,
+                runtime_policy=runtime_policy,
             )
             if self.signing_key_id and self.signing_secret:
                 envelope = sign_envelope(
                     envelope, key_id=self.signing_key_id, secret=self.signing_secret
                 )
             request_id = envelope["requestId"]
+            with self._response_lock:
+                if request_id in self._cancelled_requests:
+                    raise RuntimeError("plugin invocation cancelled")
             span.set_attribute("plugin.request_id", request_id)
             logger.info(
                 f"plugin invoke start tool={spec.tool_ref} provider={spec.provider_ref} "
@@ -173,8 +199,19 @@ class PluginDaemonClient:
                 method="POST",
             )
             try:
-                with urlopen(request, timeout=self.timeout_s) as response:
+                response = urlopen(request, timeout=timeout_ms / 1000)
+                with self._response_lock:
+                    self._active_responses[request_id] = response
+                    cancelled = request_id in self._cancelled_requests
+                try:
+                    if cancelled:
+                        raise RuntimeError("plugin invocation cancelled")
                     raw = response.read().decode("utf-8")
+                finally:
+                    with self._response_lock:
+                        self._active_responses.pop(request_id, None)
+                        self._cancelled_requests.discard(request_id)
+                    response.close()
             except HTTPError as error:
                 detail = ""
                 try:
@@ -210,7 +247,27 @@ class PluginDaemonClient:
         finally:
             span.end()
 
+    def cancel(self, request_id: str) -> None:
+        """Close an active daemon response so its HTTP context is cancelled."""
+        with self._response_lock:
+            self._cancelled_requests.add(request_id)
+            response = self._active_responses.get(request_id)
+        if response is not None:
+            try:
+                response.close()
+            except Exception as error:
+                logger.warning(f"failed to close plugin request {request_id}: {error}")
+
     def close(self) -> None:
+        with self._response_lock:
+            responses = list(self._active_responses.values())
+            self._active_responses.clear()
+            self._cancelled_requests.clear()
+        for response in responses:
+            try:
+                response.close()
+            except Exception as error:
+                logger.warning(f"failed to close plugin response: {error}")
         if self._child is not None and self._child.poll() is None:
             self._child.terminate()
             try:

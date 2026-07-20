@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from marie_longextract import repair_eval
+from marie_longextract.agents import application
 from marie_longextract.agents.repair import (
     PageLeafRepairDecision,
     RepairDecision,
@@ -101,17 +102,27 @@ def _leaf_decision(replacement: str) -> PageLeafRepairDecision:
     return PageLeafRepairDecision.model_validate(
         {
             'page_file': '00001.json',
-            'patches': [
+            'reviews': [
                 {
                     'record_index': 0,
                     'row_index': 0,
                     'field_name': 'label',
-                    'expected_value': 'Al pha',
-                    'replacement_value': replacement,
+                    'action': 'use_source_candidate',
                     'evidence_source': 'current_page_text',
+                    'evidence_line': 1,
                     'evidence_quote': replacement,
                     'rationale': 'The prepared page shows the unbroken label.',
-                }
+                },
+                {
+                    'record_index': 1,
+                    'row_index': 0,
+                    'field_name': 'label',
+                    'action': 'use_source_candidate',
+                    'evidence_source': 'current_page_text',
+                    'evidence_line': 3,
+                    'evidence_quote': 'Beta',
+                    'rationale': 'The prepared page supports the current label.',
+                },
             ],
             'rationale': 'Repair the exact string leaf.',
         }
@@ -137,9 +148,9 @@ async def test_boundary_repair_contract_validates_proposes_applies_and_aggregate
         feedback.append(kwargs['validation_feedback'])
         return next(decisions)
 
-    original_proposal = repair_eval.record_patch_from_decision
+    original_proposal = application.record_patch_from_decision
     original_apply = repair_eval.apply_record_patch
-    original_aggregate = repair_eval.parse_longextract_aggregated
+    original_aggregate = repair_eval._aggregate
 
     def propose(
         decision: RepairDecision,
@@ -152,14 +163,14 @@ async def test_boundary_repair_contract_validates_proposes_applies_and_aggregate
         events.append('apply')
         return original_apply(page_result, **kwargs)
 
-    def aggregate(doc: Any, working_dir: str, src_dir: str, conf: Any) -> None:
+    def aggregate(output_dir: Path) -> None:
         events.append('aggregate')
-        original_aggregate(doc, working_dir, src_dir, conf)
+        original_aggregate(output_dir)
 
-    monkeypatch.setattr(repair_eval, '_run_agent', run_agent)
-    monkeypatch.setattr(repair_eval, 'record_patch_from_decision', propose)
+    monkeypatch.setattr(application, '_run_agent', run_agent)
+    monkeypatch.setattr(application, 'record_patch_from_decision', propose)
     monkeypatch.setattr(repair_eval, 'apply_record_patch', apply)
-    monkeypatch.setattr(repair_eval, 'parse_longextract_aggregated', aggregate)
+    monkeypatch.setattr(repair_eval, '_aggregate', aggregate)
 
     report = await repair_eval.run_repair(
         asset_dir=asset_dir,
@@ -214,9 +225,9 @@ async def test_leaf_repair_contract_retries_validates_votes_applies_and_aggregat
         feedback.append(kwargs['validation_feedback'])
         return next(decisions)
 
-    original_consensus = repair_eval.select_leaf_repair_consensus
+    original_consensus = application.select_leaf_repair_consensus
     original_apply = repair_eval.apply_row_leaf_patches
-    original_aggregate = repair_eval.parse_longextract_aggregated
+    original_aggregate = repair_eval._aggregate
 
     def select_consensus(**kwargs: Any) -> PageLeafRepairDecision:
         events.append('proposal')
@@ -229,14 +240,14 @@ async def test_leaf_repair_contract_retries_validates_votes_applies_and_aggregat
         events.append('apply')
         return original_apply(page_result, patches)
 
-    def aggregate(doc: Any, working_dir: str, src_dir: str, conf: Any) -> None:
+    def aggregate(output_dir: Path) -> None:
         events.append('aggregate')
-        original_aggregate(doc, working_dir, src_dir, conf)
+        original_aggregate(output_dir)
 
-    monkeypatch.setattr(repair_eval, '_run_leaf_agent', run_leaf_agent)
-    monkeypatch.setattr(repair_eval, 'select_leaf_repair_consensus', select_consensus)
+    monkeypatch.setattr(application, '_run_leaf_agent', run_leaf_agent)
+    monkeypatch.setattr(application, 'select_leaf_repair_consensus', select_consensus)
     monkeypatch.setattr(repair_eval, 'apply_row_leaf_patches', apply)
-    monkeypatch.setattr(repair_eval, 'parse_longextract_aggregated', aggregate)
+    monkeypatch.setattr(repair_eval, '_aggregate', aggregate)
 
     report = await repair_eval.run_leaf_repair(
         asset_dir=asset_dir,
@@ -259,7 +270,10 @@ async def test_leaf_repair_contract_retries_validates_votes_applies_and_aggregat
         'aggregate',
     ]
     assert feedback[0] is None
-    assert feedback[1] == "Replacement for 'label' is not grounded in current_page_text"
+    assert feedback[1] == (
+        "Evidence quote for 'label' is not an exact line candidate at "
+        'current_page_text L0001'
+    )
     assert feedback[2:] == [None, None]
     assert report['patch_count'] == 1
     assert report['decisions'][0]['patches'][0]['replacement_value'] == 'Alpha'
@@ -274,13 +288,17 @@ async def test_leaf_repair_contract_retries_validates_votes_applies_and_aggregat
 
 def test_runtime_uses_public_agent_api_and_benchmark_wrappers_own_grading() -> None:
     root = Path(__file__).resolve().parents[1]
-    runtime_source = (root / 'src' / 'marie_longextract' / 'repair_eval.py').read_text(
-        encoding='utf-8'
+    runtime_source = (
+        root / 'src' / 'marie_longextract' / 'agents' / 'application.py'
+    ).read_text(encoding='utf-8')
+    host_source = (root / 'src' / 'marie_longextract' / 'repair_eval.py').read_text(
+        encoding='utf-8',
     )
     assert 'from marie.agent.agents import ReactAgent' in runtime_source
     assert 'from marie.agent.llm import OpenAICompatibleWrapper' in runtime_source
     assert 'from marie.agent.messages import ContentItem, Message' in runtime_source
     assert 'longextract_bench.grading' not in runtime_source
+    assert 'ReactAgent' not in host_source
 
     for name in ('evaluate-agent-leaves.py', 'evaluate-agent-repair.py'):
         wrapper_source = (root / 'tools' / name).read_text(encoding='utf-8')

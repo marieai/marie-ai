@@ -61,6 +61,7 @@ class PluginToolSpec(BaseModel):
     # Credential requirements (name + bound secret_ref); resolved in marie-ai by
     # the CredentialResolver at call time. Empty/absent -> no credentials.
     credential_requirements: list[CredentialRequirement] = Field(default_factory=list)
+    credential_binding_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def normalize(self) -> "PluginToolSpec":

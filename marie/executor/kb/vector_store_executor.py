@@ -1,8 +1,8 @@
 """Vector Store Executor for DAG workflows.
 
 This executor provides embed and store operations as nodes in Marie's
-DAG workflow system. It integrates QwenVLEmbeddings for unified text+image
-embeddings with PGVectorStore for persistence.
+DAG workflow system. It selects a configured embedding implementation and
+integrates it with PGVectorStore for persistence.
 
 Usage in workflow:
     EXTRACT_DOCUMENTS (existing)
@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -82,7 +83,7 @@ def _connection_string_from_storage(storage: Optional[Dict[str, Any]]) -> Option
 class VectorStoreExecutor(MarieExecutor):
     """Executor for vector store operations in DAG workflows.
 
-    Uses jina-embeddings-v4 for unified text+image embeddings and
+    Uses a configuration-selected embedding implementation and
     PGVectorStore for persistence. This executor can be added to
     existing document processing workflows to enable RAG capabilities.
 
@@ -102,8 +103,10 @@ class VectorStoreExecutor(MarieExecutor):
               s3:
                 <<: *s3_conf_shared
                 enabled: True
-            embedding_model: Qwen/Qwen3-VL-Embedding-2B
-            embedding_dim: 1024
+            embedding:
+              type: qwen
+              model_name_or_path: Qwen/Qwen3-VL-Embedding-2B
+              dimension: 1024
         ```
     """
 
@@ -113,6 +116,7 @@ class VectorStoreExecutor(MarieExecutor):
         embedding_model: str = "Qwen/Qwen3-VL-Embedding-2B",
         embedding_dim: int = 1024,
         embedding_task: str = "retrieval",
+        embedding: Optional[Dict[str, Any]] = None,
         table_name: str = "kb_vectors",
         use_gpu: bool = True,
         batch_size: int = 4,
@@ -126,6 +130,10 @@ class VectorStoreExecutor(MarieExecutor):
             embedding_model: Model name for embeddings.
             embedding_dim: Embedding dimension (Matryoshka: 128/256/512/1024/2048).
             embedding_task: Task adapter (retrieval/text-matching/code).
+            embedding: Pipeline-style embedding config. When provided, its
+                type selects QwenVLEmbeddings, JinaEmbeddings, or
+                GeminiEmbeddings at runtime. Flat embedding arguments remain
+                supported for existing service configs.
             table_name: Name of the vector store table.
             use_gpu: Whether to use GPU for embeddings.
             batch_size: Batch size for embedding operations.
@@ -147,11 +155,24 @@ class VectorStoreExecutor(MarieExecutor):
                 "PGVECTOR_CONNECTION_STRING environment variable."
             )
 
-        self._embedding_model = embedding_model
-        self._embedding_dim = embedding_dim
-        self._embedding_task = embedding_task
+        self._embedding_config = {
+            "model_name_or_path": embedding_model,
+            "embedding_dim": embedding_dim,
+            "task": embedding_task,
+            "use_gpu": use_gpu,
+            "batch_size": batch_size,
+            **(embedding or {}),
+        }
+        self._embedding_model = str(
+            self._embedding_config.get("model_name_or_path")
+            or self._embedding_config.get("model_name")
+        )
+        self._embedding_dim = int(
+            self._embedding_config.get(
+                "dimension", self._embedding_config.get("embedding_dim", embedding_dim)
+            )
+        )
         self._table_name = table_name
-        self._use_gpu = use_gpu
         self._batch_size = batch_size
 
         # Lazy initialization
@@ -167,15 +188,9 @@ class VectorStoreExecutor(MarieExecutor):
         self.logger.info("Initializing vector store and embeddings...")
 
         # Initialize embeddings
-        from marie.embeddings.qwen import QwenVLEmbeddings
+        from marie.embeddings import setup_embeddings
 
-        self._embeddings = QwenVLEmbeddings(
-            model_name_or_path=self._embedding_model,
-            task=self._embedding_task,
-            truncate_dim=self._embedding_dim,
-            use_gpu=self._use_gpu,
-            batch_size=self._batch_size,
-        )
+        self._embeddings = setup_embeddings(self._embedding_config)
 
         # Initialize vector store
         from marie.vector_stores.pgvector import PGVectorStore
@@ -189,7 +204,8 @@ class VectorStoreExecutor(MarieExecutor):
 
         self._initialized = True
         self.logger.info(
-            f"VectorStoreExecutor initialized: model={self._embedding_model}, "
+            f"VectorStoreExecutor initialized: embeddings={self._embeddings.__class__.__name__}, "
+            f"model={self._embedding_model}, "
             f"dim={self._embedding_dim}, table={self._table_name}"
         )
 
@@ -225,6 +241,7 @@ class VectorStoreExecutor(MarieExecutor):
                 - chunk_size / chunk_overlap: character chunk window,
                   looked up in parameters["run_params"] first, then
                   top-level parameters. Defaults 1024/200.
+                - multimodal: Also embed and store each extracted page image.
 
         Returns:
             Input docs (passthrough for pipeline chaining).
@@ -272,6 +289,18 @@ class VectorStoreExecutor(MarieExecutor):
                     "chunkable text"
                 )
 
+            multimodal = bool(_run_param(parameters, "multimodal", False))
+            image_uris: List[str] = []
+            if multimodal:
+                if not self._embeddings.supports_image_embeddings:
+                    raise ValueError(
+                        "Multimodal indexing requires image embeddings, but "
+                        f"{self._embeddings.__class__.__name__} is text-only"
+                    )
+                image_uris = await asyncio.to_thread(
+                    self._resolve_page_image_uris, ref_id, ref_type
+                )
+
             stored_count = await self._embed_and_store_chunks(
                 chunks=chunks,
                 page_ranges=page_ranges,
@@ -279,10 +308,24 @@ class VectorStoreExecutor(MarieExecutor):
                 source_id=source_id,
                 index_name=index_name,
             )
+
+            total_count = len(chunks)
+            if multimodal:
+                image_count = await self._embed_and_store_images(
+                    image_uris=image_uris,
+                    full_text=full_text,
+                    page_ranges=page_ranges,
+                    ref_id=ref_id,
+                    source_id=source_id,
+                    index_name=index_name,
+                )
+                stored_count += image_count
+                total_count += len(image_uris)
+
             self.logger.info(
-                f"Stored {stored_count}/{len(chunks)} chunks for ref_id={ref_id}"
+                f"Stored {stored_count}/{total_count} nodes for ref_id={ref_id}"
             )
-            await self._update_submission_status(parameters, stored_count, len(chunks))
+            await self._update_submission_status(parameters, stored_count, total_count)
             return docs
 
         self.logger.info(f"Processing {len(docs)} documents for source_id={source_id}")
@@ -368,13 +411,28 @@ class VectorStoreExecutor(MarieExecutor):
         f"{ref_id}.meta.json", which mis-resolves when ref_id is a
         slash-containing S3 key, as it is for KB documents).
         """
+        metadata, uri = self._read_extraction_metadata(ref_id, ref_type)
+
+        ocr_results = metadata.get("ocr")
+        if not ocr_results:
+            raise ValueError(
+                f"Extraction output at {uri} has no OCR results to embed for "
+                f"ref_id={ref_id}"
+            )
+
+        return self._flatten_ocr_pages(ocr_results)
+
+    @staticmethod
+    def _read_extraction_metadata(
+        ref_id: str, ref_type: str
+    ) -> Tuple[Dict[str, Any], str]:
         filename, _, _ = split_filename(ref_id)
         uri = f"{s3_asset_path(ref_id, ref_type)}/{filename}.meta.json"
 
         connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
         if not connected:
             raise RuntimeError(
-                f"Unable to connect to S3 to resolve extraction output for "
+                "Unable to connect to S3 to resolve extraction output for "
                 f"ref_id={ref_id}"
             )
         if not StorageManager.exists(uri):
@@ -386,20 +444,35 @@ class VectorStoreExecutor(MarieExecutor):
 
         raw = StorageManager.read(uri)
         try:
-            metadata = json.loads(raw)
+            return json.loads(raw), uri
         except json.JSONDecodeError as e:
             raise ValueError(
                 f"Extraction output at {uri} is not valid JSON: {e}"
             ) from e
 
-        ocr_results = metadata.get("ocr")
-        if not ocr_results:
-            raise ValueError(
-                f"Extraction output at {uri} has no OCR results to embed for "
-                f"ref_id={ref_id}"
+    def _resolve_page_image_uris(self, ref_id: str, ref_type: str) -> List[str]:
+        metadata, uri = self._read_extraction_metadata(ref_id, ref_type)
+        asset_root = f"{s3_asset_path(ref_id, ref_type).rstrip('/')}/"
+        assets = metadata.get("assets") or []
+
+        def image_assets(directory: str) -> List[str]:
+            prefix = f"{asset_root}{directory}/"
+            extensions = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp")
+            return sorted(
+                asset
+                for asset in assets
+                if isinstance(asset, str)
+                and asset.startswith(prefix)
+                and asset.lower().endswith(extensions)
             )
 
-        return self._flatten_ocr_pages(ocr_results)
+        page_images = image_assets("frames") or image_assets("burst")
+        if not page_images:
+            raise ValueError(
+                "Multimodal indexing was requested, but extraction output at "
+                f"{uri} has no page image assets"
+            )
+        return page_images
 
     @staticmethod
     def _flatten_ocr_pages(
@@ -446,6 +519,11 @@ class VectorStoreExecutor(MarieExecutor):
         the source document (ref_doc_id = ref_id)."""
         texts = [c.text for c in chunks]
         embeddings = self._embeddings.embed_text(texts, is_query=False)
+        if len(embeddings) != len(texts):
+            raise RuntimeError(
+                f"{self._embeddings.__class__.__name__} returned "
+                f"{len(embeddings)} text embeddings for {len(texts)} chunks"
+            )
 
         nodes = []
         for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
@@ -470,6 +548,73 @@ class VectorStoreExecutor(MarieExecutor):
             source_id=source_id,
             index_name=index_name,
         )
+
+    async def _embed_and_store_images(
+        self,
+        image_uris: List[str],
+        full_text: str,
+        page_ranges: List[Tuple[int, int, int]],
+        ref_id: str,
+        source_id: str,
+        index_name: str,
+    ) -> int:
+        page_text = {
+            page: full_text[start:end].strip() for page, start, end in page_ranges
+        }
+        stored_count = 0
+
+        for batch_start in range(0, len(image_uris), self._batch_size):
+            batch_uris = image_uris[batch_start : batch_start + self._batch_size]
+            with tempfile.TemporaryDirectory(prefix="marie-kb-pages-") as temp_dir:
+                local_paths = []
+                for offset, image_uri in enumerate(batch_uris):
+                    page = batch_start + offset
+                    extension = os.path.splitext(image_uri)[1] or ".png"
+                    local_path = os.path.join(temp_dir, f"{page:05d}{extension}")
+                    copied = StorageManager.read_to_file(
+                        image_uri, local_path, overwrite=True
+                    )
+                    if copied is False or not os.path.isfile(local_path):
+                        raise RuntimeError(
+                            f"Unable to restore page image {image_uri} for embedding"
+                        )
+                    local_paths.append(local_path)
+
+                embeddings = self._embeddings.embed_images(local_paths)
+                if len(embeddings) != len(batch_uris):
+                    raise RuntimeError(
+                        f"{self._embeddings.__class__.__name__} returned "
+                        f"{len(embeddings)} image embeddings for "
+                        f"{len(batch_uris)} page images"
+                    )
+
+                nodes = []
+                for offset, (image_uri, embedding) in enumerate(
+                    zip(batch_uris, embeddings)
+                ):
+                    page = batch_start + offset
+                    nodes.append(
+                        {
+                            "node_id": f"{ref_id}_image_{page}",
+                            "embedding": embedding.tolist(),
+                            "content": page_text.get(page)
+                            or f"[Page image {page + 1}]",
+                            "node_type": "image",
+                            "metadata": {
+                                "page": page,
+                                "image_url": image_uri,
+                            },
+                            "ref_doc_id": ref_id,
+                        }
+                    )
+
+                stored_count += await self._vector_store.add_nodes_batch(
+                    nodes=nodes,
+                    source_id=source_id,
+                    index_name=index_name,
+                )
+
+        return stored_count
 
     async def _update_submission_status(
         self,

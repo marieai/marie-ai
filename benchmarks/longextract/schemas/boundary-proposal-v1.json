@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LongExtract boundary repair proposal",
+  "type": "object",
+  "required": ["kind", "idempotency_key", "source_sha256", "decision", "patch"],
+  "properties": {
+    "kind": {"const": "boundary_repair"},
+    "idempotency_key": {"type": "string", "minLength": 1},
+    "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "active_unit": {"type": ["string", "null"]},
+    "decision": {"type": "object"},
+    "patch": {"type": ["object", "null"]}
+  },
+  "additionalProperties": false
+}

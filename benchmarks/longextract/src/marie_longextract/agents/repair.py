@@ -1,3 +1,5 @@
+"""Evidence contracts and prompts for LongExtract repair agents."""
+
 from __future__ import annotations
 
 import json
@@ -63,12 +65,84 @@ class StringLeafPatch(BaseModel):
     rationale: str = Field(min_length=1, max_length=500)
 
 
+class SourceLineEvidence(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    line: int = Field(ge=1)
+    quote: str = Field(min_length=1)
+
+
+class StringLeafReview(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    record_index: int = Field(ge=0)
+    row_index: int = Field(ge=0)
+    field_name: str = Field(min_length=1)
+    action: Literal['use_source_candidate', 'clear_for_parser_carry']
+    evidence_source: Literal['current_page_text', 'previous_page_text']
+    evidence_line: int = Field(ge=1)
+    evidence_quote: str = Field(min_length=1)
+    additional_evidence: list[SourceLineEvidence] = Field(default_factory=list)
+    join_with: Literal[' ', ''] = ' '
+    rationale: str = Field(min_length=1, max_length=500)
+
+
 class PageLeafRepairDecision(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     page_file: str
-    patches: list[StringLeafPatch]
+    reviews: list[StringLeafReview]
     rationale: str = Field(default='', max_length=1000)
+
+
+def leaf_patches_from_decision(
+    decision: PageLeafRepairDecision,
+    *,
+    page_result: dict[str, Any],
+) -> list[StringLeafPatch]:
+    records = page_result.get('records')
+    if not isinstance(records, list):
+        raise ValueError('Page records are required to derive leaf patches')
+
+    patches: list[StringLeafPatch] = []
+    for review in decision.reviews:
+        try:
+            record = records[review.record_index]
+            rows = record['rows']
+            row = rows[review.row_index]
+            expected_value = row[review.field_name]
+        except (IndexError, KeyError, TypeError) as error:
+            raise ValueError(
+                'Leaf review target is absent from the page result'
+            ) from error
+        if not isinstance(expected_value, str):
+            raise ValueError('Leaf review target must contain a string value')
+
+        replacement = _review_replacement(review)
+        if replacement == expected_value:
+            continue
+        values = review.model_dump(
+            exclude={'action', 'additional_evidence', 'evidence_line', 'join_with'}
+        )
+        values['expected_value'] = expected_value
+        values['replacement_value'] = replacement
+        values['evidence_quote'] = _review_quote(review)
+        patches.append(StringLeafPatch.model_validate(values))
+    return patches
+
+
+def _review_replacement(review: StringLeafReview) -> str | None:
+    if review.action == 'clear_for_parser_carry':
+        return None
+    return _review_quote(review)
+
+
+def _review_quote(review: StringLeafReview) -> str:
+    quotes = [
+        review.evidence_quote,
+        *(item.quote for item in review.additional_evidence),
+    ]
+    return review.join_with.join(quote.strip() for quote in quotes)
 
 
 def select_leaf_repair_consensus(
@@ -81,43 +155,46 @@ def select_leaf_repair_consensus(
         raise ValueError('Leaf repair consensus requires an odd number of audits')
 
     threshold = len(decisions) // 2 + 1
-    selected: list[StringLeafPatch] = []
-    unresolved: list[tuple[int, int, str, str]] = []
-    for target in sorted(allowed_targets):
-        outcomes: dict[tuple[str, str | None], int] = {}
-        representatives: dict[tuple[str, str | None], StringLeafPatch] = {}
-        for decision in decisions:
-            if decision.page_file != page_file:
-                raise ValueError('Leaf repair audit targets a different page')
-            patch = next(
-                (
-                    candidate
-                    for candidate in decision.patches
-                    if (
-                        candidate.record_index,
-                        candidate.row_index,
-                        candidate.field_name,
-                        candidate.expected_value,
-                    )
-                    == target
-                ),
-                None,
-            )
-            outcome = (
-                ('keep', None)
-                if patch is None
-                else ('replace', patch.replacement_value)
-            )
+    selected: list[StringLeafReview] = []
+    allowed_coordinates = {
+        (record_index, row_index, field_name)
+        for record_index, row_index, field_name, _expected_value in allowed_targets
+    }
+    if len(allowed_coordinates) != len(allowed_targets):
+        raise ValueError('Leaf repair targets contain duplicate coordinates')
+    unresolved: list[tuple[int, int, str]] = []
+    decision_reviews: list[dict[tuple[int, int, str], StringLeafReview]] = []
+    for decision in decisions:
+        if decision.page_file != page_file:
+            raise ValueError('Leaf repair audit targets a different page')
+        reviews = {
+            (
+                review.record_index,
+                review.row_index,
+                review.field_name,
+            ): review
+            for review in decision.reviews
+        }
+        if len(reviews) != len(decision.reviews):
+            raise ValueError('Leaf repair audit contains duplicate targets')
+        if set(reviews) != allowed_coordinates:
+            raise ValueError('Leaf repair audit must review every requested target')
+        decision_reviews.append(reviews)
+
+    for target in sorted(allowed_coordinates):
+        outcomes: dict[str | None, int] = {}
+        representatives: dict[str | None, StringLeafReview] = {}
+        for reviews in decision_reviews:
+            review = reviews[target]
+            outcome = _review_replacement(review)
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
-            if patch is not None:
-                representatives.setdefault(outcome, patch)
+            representatives.setdefault(outcome, review)
 
         outcome, votes = max(outcomes.items(), key=lambda item: item[1])
         if votes < threshold:
             unresolved.append(target)
             continue
-        if outcome[0] == 'replace':
-            selected.append(representatives[outcome])
+        selected.append(representatives[outcome])
 
     if unresolved:
         raise ValueError(
@@ -125,7 +202,7 @@ def select_leaf_repair_consensus(
         )
     return PageLeafRepairDecision(
         page_file=page_file,
-        patches=selected,
+        reviews=selected,
         rationale=(
             f'Selected target-level majority outcomes from {len(decisions)} '
             'independent validated audits.'
@@ -236,6 +313,38 @@ def _schema_allows(field_schema: dict[str, Any], value: str | None) -> bool:
     return ('null' if value is None else 'string') in allowed
 
 
+def _numbered_page_text(value: str) -> str:
+    return '\n'.join(
+        f'L{line_number:04d}: {line}'
+        for line_number, line in enumerate(value.splitlines(), start=1)
+    )
+
+
+def _line_supports_quote(line: str, quote: str) -> bool:
+    quote = quote.strip()
+    if not quote:
+        return False
+
+    stripped = line.strip()
+    regions = [stripped]
+    if '|' in stripped:
+        regions.extend(cell.strip() for cell in stripped.split('|') if cell.strip())
+    for region in regions:
+        if quote == region:
+            return True
+        source_tokens = region.split()
+        quote_tokens = quote.split()
+        if quote != ' '.join(quote_tokens) or len(quote_tokens) > len(source_tokens):
+            continue
+        width = len(quote_tokens)
+        if any(
+            source_tokens[offset : offset + width] == quote_tokens
+            for offset in range(len(source_tokens) - width + 1)
+        ):
+            return True
+    return False
+
+
 def validate_leaf_repair_decision(
     decision: PageLeafRepairDecision,
     *,
@@ -254,57 +363,60 @@ def validate_leaf_repair_decision(
     if len(resolved_units) != len(records):
         raise ValueError('Resolved record units do not match page records')
 
-    evidence = {
-        'current_page_text': current_page_text,
-        'previous_page_text': previous_page_text,
+    evidence_lines = {
+        'current_page_text': current_page_text.splitlines(),
+        'previous_page_text': previous_page_text.splitlines(),
     }
-    targets: set[tuple[int, int, str]] = set()
-    for patch in decision.patches:
-        if allowed_fields is not None and patch.field_name not in allowed_fields:
+    reviewed_targets: set[tuple[int, int, str]] = set()
+    allowed_values = {
+        (record_index, row_index, field_name): expected_value
+        for record_index, row_index, field_name, expected_value in allowed_targets
+        or set()
+    }
+    if allowed_targets is not None and len(allowed_values) != len(allowed_targets):
+        raise ValueError('Leaf repair targets contain duplicate coordinates')
+    for review in decision.reviews:
+        if allowed_fields is not None and review.field_name not in allowed_fields:
             raise ValueError(
-                f'Patch targets {patch.field_name!r}, outside the requested field audit'
+                f'Review targets {review.field_name!r}, outside the requested field audit'
+            )
+        target = (
+            review.record_index,
+            review.row_index,
+            review.field_name,
+        )
+        if allowed_targets is not None and target not in allowed_values:
+            raise ValueError('Review target is outside the requested occurrence audit')
+        if target in reviewed_targets:
+            raise ValueError(f'Duplicate leaf review target: {target}')
+        reviewed_targets.add(target)
+
+        if review.record_index >= len(records):
+            raise ValueError(f'record_index {review.record_index} is out of range')
+        record = records[review.record_index]
+        if not isinstance(record, dict):
+            raise ValueError(f'records[{review.record_index}] must be an object')
+        rows = record.get('rows')
+        if not isinstance(rows, list) or review.row_index >= len(rows):
+            raise ValueError(f'row_index {review.row_index} is out of range')
+        row = rows[review.row_index]
+        if not isinstance(row, dict):
+            raise ValueError('Repair target row must be an object')
+        if review.field_name not in row:
+            raise ValueError(
+                f'Field {review.field_name!r} is absent from the target row'
             )
         if (
             allowed_targets is not None
-            and (
-                patch.record_index,
-                patch.row_index,
-                patch.field_name,
-                patch.expected_value,
-            )
-            not in allowed_targets
+            and row[review.field_name] != allowed_values[target]
         ):
-            raise ValueError('Patch target is outside the requested occurrence audit')
-        target = (patch.record_index, patch.row_index, patch.field_name)
-        if target in targets:
-            raise ValueError(f'Duplicate leaf patch target: {target}')
-        targets.add(target)
-
-        if patch.record_index >= len(records):
-            raise ValueError(f'record_index {patch.record_index} is out of range')
-        record = records[patch.record_index]
-        if not isinstance(record, dict):
-            raise ValueError(f'records[{patch.record_index}] must be an object')
-        rows = record.get('rows')
-        if not isinstance(rows, list) or patch.row_index >= len(rows):
-            raise ValueError(f'row_index {patch.row_index} is out of range')
-        row = rows[patch.row_index]
-        if not isinstance(row, dict):
-            raise ValueError('Repair target row must be an object')
-        if patch.field_name not in row:
             raise ValueError(
-                f'Field {patch.field_name!r} is absent from the target row'
+                f'Runtime target value {allowed_values[target]!r} does not match '
+                f'actual value {row[review.field_name]!r} at record_index '
+                f'{review.record_index}, row_index {review.row_index}'
             )
-        if row[patch.field_name] != patch.expected_value:
-            raise ValueError(
-                f'Expected value {patch.expected_value!r} does not match actual '
-                f'value {row[patch.field_name]!r} at record_index '
-                f'{patch.record_index}, row_index {patch.row_index}'
-            )
-        if patch.replacement_value == patch.expected_value:
-            raise ValueError(f'Patch does not change {patch.field_name!r}')
 
-        unit_schema = properties.get(resolved_units[patch.record_index])
+        unit_schema = properties.get(resolved_units[review.record_index])
         item_schema = (
             unit_schema.get('items') if isinstance(unit_schema, dict) else None
         )
@@ -312,41 +424,56 @@ def validate_leaf_repair_decision(
             item_schema.get('properties') if isinstance(item_schema, dict) else None
         )
         field_schema = (
-            fields.get(patch.field_name) if isinstance(fields, dict) else None
+            fields.get(review.field_name) if isinstance(fields, dict) else None
         )
+        replacement = _review_replacement(review)
         if not isinstance(field_schema, dict) or not _schema_allows(
-            field_schema, patch.replacement_value
+            field_schema, replacement
         ):
             raise ValueError(
-                f'{patch.field_name!r} is not a compatible string leaf in the schema'
+                f'{review.field_name!r} is not a compatible string leaf in the schema'
             )
 
-        source_text = evidence[patch.evidence_source]
-        normalized_source = _normalized_text(source_text)
-        if patch.replacement_value is not None:
-            replacement = _normalized_text(patch.replacement_value)
-            if replacement not in normalized_source:
+        source_lines = evidence_lines[review.evidence_source]
+        fragments = [
+            SourceLineEvidence(line=review.evidence_line, quote=review.evidence_quote),
+            *review.additional_evidence,
+        ]
+        line_numbers = [fragment.line for fragment in fragments]
+        if line_numbers != sorted(set(line_numbers)):
+            raise ValueError('Source evidence lines must be unique and ordered')
+        for fragment in fragments:
+            if fragment.line > len(source_lines):
                 raise ValueError(
-                    f'Replacement for {patch.field_name!r} is not grounded in '
-                    f'{patch.evidence_source}'
+                    f'Evidence line L{fragment.line:04d} is outside '
+                    f'{review.evidence_source}'
                 )
-        else:
-            quote = _normalized_text(patch.evidence_quote)
-            if not quote or quote not in normalized_source:
+            source_line = source_lines[fragment.line - 1]
+            if not _line_supports_quote(source_line, fragment.quote):
                 raise ValueError(
-                    f'Evidence quote for {patch.field_name!r} is not grounded in '
-                    f'{patch.evidence_source}'
+                    f'Evidence quote for {review.field_name!r} is not an exact '
+                    f'line candidate at {review.evidence_source} '
+                    f'L{fragment.line:04d}'
                 )
+        if replacement is None:
             continuation = record.get('continuation')
             if (
                 not isinstance(continuation, dict)
                 or continuation.get('is_continuation') is not True
-                or patch.evidence_source != 'previous_page_text'
+                or review.evidence_source != 'previous_page_text'
             ):
                 raise ValueError(
                     'A null replacement requires a continuation record and '
                     'previous-page evidence'
                 )
+        elif review.evidence_source != 'current_page_text':
+            raise ValueError(
+                'A source-candidate replacement requires current-page evidence'
+            )
+
+    if allowed_targets is not None and reviewed_targets != set(allowed_values):
+        missing = sorted(set(allowed_values) - reviewed_targets)
+        raise ValueError(f'Leaf repair audit omitted requested targets: {missing}')
 
 
 def build_leaf_repair_prompt(
@@ -381,7 +508,6 @@ def build_leaf_repair_prompt(
         and isinstance(properties[unit_name]['items'].get('properties'), dict)
         and field_name in properties[unit_name]['items']['properties']
     }
-    current_path = f'agent-output/longextract-unit-extract/{page_file}'
     prompt_path = (
         'agent-output/longextract-unit-extract/' f'{page_number:05d}.png_prompt.txt'
     )
@@ -389,7 +515,7 @@ def build_leaf_repair_prompt(
         'agent-output/longextract-unit-extract/' f'{page_number - 1:05d}.png_prompt.txt'
     )
     table_path = f'agent-output/tables/{page_file}'
-    evidence_paths = [current_path, prompt_path]
+    evidence_paths = [prompt_path]
     if (asset_dir / previous_path).exists():
         evidence_paths.append(previous_path)
     table_annotation: dict[str, Any] = {}
@@ -438,7 +564,6 @@ def build_leaf_repair_prompt(
                         {
                             'record_index': record_index,
                             'row_index': row_index,
-                            'expected_value': target_value,
                         }
                     )
                     row_views.append(
@@ -447,7 +572,9 @@ def build_leaf_repair_prompt(
                             **{
                                 name: value
                                 for name, value in row.items()
-                                if name in string_fields and isinstance(value, str)
+                                if name in string_fields
+                                and name != field_name
+                                and isinstance(value, str)
                             },
                         }
                     )
@@ -461,76 +588,57 @@ def build_leaf_repair_prompt(
                     }
                 )
     return (
-        'Schema-first contract: use the field description to select the semantic '
-        'value before transcribing it. Do not combine adjacent standalone headings '
-        'or labels unless the description defines them as one value. Apply explicit '
-        'whitespace rules only inside the selected value; whitespace normalization '
-        'never expands field scope or merges separate candidates. Classify each '
-        'candidate against the semantic category named by the field description. '
-        'Treat complete standalone physical lines as separate candidates even when '
-        'their typography matches. Join lines only when the first is grammatically '
-        'incomplete and visibly wraps into the next. Every included standalone line '
-        'must independently belong to the semantic category named by the field; '
-        'shared typography or proximity is not sufficient. '
-        'Within the selected value, printed '
-        'punctuation is data: a delimited token and its undelimited interior are '
-        'different strings, and interior-whitespace removal does not remove the '
-        'delimiters.\n\n'
-        f'Audit the {field_name!r} string field in this page extraction against the '
-        'page evidence and its field schema. Return only corrections to that row '
-        'field; do not add, remove, reorder, or reclassify rows and records. All '
-        'required text and extraction evidence is included below.\n\n'
+        f'Audit the {field_name!r} string field against the field schema and page '
+        'evidence. Determine the smallest complete source span that satisfies the '
+        'field description from its semantic meaning, row context, and printed '
+        'source. Do not add, remove, reorder, or reclassify rows or records.\n\n'
         f'Source artifacts:\n- ' + '\n- '.join(evidence_paths) + '\n'
         f'Current page file: {page_file}\n'
         f'Resolved unit for each record: {json.dumps(resolved_units)}\n\n'
         f'Target field: {field_name}\n'
-        f'Target current values: {json.dumps(expected_values)}\n'
-        f'Target field schemas by unit:\n{json.dumps(target_schemas, separators=(",", ":"))}\n\n'
+        'Target field schemas by unit:\n'
+        f'{json.dumps(target_schemas, separators=(",", ":"))}\n\n'
         'Legal target occurrences:\n'
         f'{json.dumps(target_occurrences, separators=(",", ":"))}\n\n'
         'String leaf extraction view:\n'
         f'{json.dumps({"records": string_leaf_records}, separators=(",", ":"))}\n\n'
-        f'Previous page text:\n{previous_page_text}\n\n'
-        f'Current page text:\n{current_page_text}\n\n'
+        'Previous page text (physical line IDs):\n'
+        f'{_numbered_page_text(previous_page_text)}\n\n'
+        'Current page text (physical line IDs):\n'
+        f'{_numbered_page_text(current_page_text)}\n\n'
         'Page table annotation:\n'
         f'{json.dumps(table_annotation, separators=(",", ":"))}\n\n'
-        'Patch coordinates must copy record_index and row_index exactly from the '
-        'Legal target occurrences list, and expected_value must copy the value in '
-        'that same entry. Those are the only legal patch targets. Both indices are '
-        'zero-based array indices. Never use the document row_order or a visible row '
-        'number as row_index. '
-        'The extraction view intentionally contains only legal target rows and their '
-        'non-null string leaves. '
-        f'Audit every included occurrence of {field_name!r}, not a sample; all other '
-        'fields are row context only and must not be patched. Do not patch omitted '
-        'null or non-string fields. When the target value repeats, verify every '
-        'occurrence and emit a separate patch for every mismatch. Apply the target '
-        'field description to determine its semantic scope; do not concatenate '
-        'adjacent headings or labels unless that description requires it. Printed '
-        'punctuation and delimiters are part of the evidence, not optional formatting. '
-        'When a field description refers to a section-only heading, a standalone '
-        'text row with no data values is a heading regardless of capitalization or '
-        'indentation, and the nearest such row supersedes the preceding heading. '
-        'A current value is not correct merely because the same text appears somewhere '
-        'on the page. Verify that it applies at the target row position using the '
-        'ordered page text and the field description. '
-        'For each patch, expected_value must exactly match the current JSON value. '
-        'replacement_value must be the exact printed string required by the field '
-        'description, including capitalization, punctuation, and delimiters. '
-        'Instruction to remove whitespace inside printed delimiters does not remove '
-        'the delimiters themselves. Preserve punctuation unless the field description '
-        'explicitly says to remove it. Cite an exact quote from the current or '
-        'previous saved prompt. Use the shortest exact contiguous excerpt that '
-        'proves the replacement; do not reconstruct or reformat a table row. Use '
-        'current_page_text or previous_page_text as evidence_source according to '
-        'which saved prompt contains the quote. Do not infer or '
-        'normalize symbols. A data-bearing label is not a section-only heading. When '
-        'a continuation page omits a carried heading and the current extraction '
-        'incorrectly copied a data-row label into that heading field, replace it with '
-        'null and cite the active heading from previous_page_text; the ordered parser '
-        'will carry it. Return an empty patches array when every string leaf is '
-        'supported. Do not patch numeric values, booleans, row ordinals, unit_name, '
-        'continuation, source metadata, or fields that are absent from a row.'
+        'Return exactly one review for every Legal target occurrence. Copy '
+        'record_index and row_index exactly from that occurrence and use only the '
+        'requested field_name. Both indices are zero-based extraction array indices; '
+        'a printed row number is not row_index. The current extracted target value is '
+        'deliberately withheld. Determine the source value independently from the '
+        'schema, neighboring row context, numbered page text, table evidence, and '
+        'page image.\n\n'
+        'Every review must cite at least one numbered physical line. evidence_quote '
+        'and every additional_evidence quote must be either that complete line, one '
+        'complete pipe-delimited table cell, or a contiguous sequence of '
+        'whitespace-delimited tokens from that line. Tokens retain their printed '
+        'punctuation. Do not cite a substring inside a token or construct text absent '
+        'from a cited line. Use ordered additional_evidence only when every added '
+        'fragment is necessary to complete the same scalar under the field schema and '
+        'page structure. The primary fragment must not already be a complete value '
+        'for that schema. An adjacent subtitle, category, caption, or other nested '
+        'label is not part of the scalar merely because it shares style or alignment. '
+        'Set join_with to the exact separator between fragments. Adjacency alone does '
+        'not establish a shared value, but a value is not restricted to one physical '
+        'line. Choose use_source_candidate to make the resulting smallest complete '
+        'source span the value. The runtime will compare that independently selected '
+        'span with the current extraction and create a patch only when they differ.\n\n'
+        'Use current_page_text for values printed on this page. A null replacement '
+        'requires clear_for_parser_carry and is allowed only for a continuation '
+        'record whose carried value is proven by a cited previous_page_text line; '
+        'the ordered parser owns that carry. Printed '
+        'punctuation and delimiters are data, so a delimited token is not equivalent '
+        'to its interior. The parser owns transitions between structural headings; '
+        'do not turn adjacent headings into one scalar span. Do not infer or normalize '
+        'symbols. Do not review numeric values, booleans, row ordinals, '
+        'unit_name, continuation, source metadata, omitted fields, or other fields.'
     )
 
 

@@ -1,0 +1,77 @@
+apiVersion: marie.ai/v1alpha1
+kind: ExtensionPackage
+metadata:
+  id: ext.marie.longextract-agent
+  author: marie
+  name: longextract-agent
+  version: 0.1.0
+runtime:
+  type: python_source
+  language: python
+  version: "3.12"
+  entrypoint: marie_longextract.plugin_main
+runtimePolicy:
+  timeoutMs: 900000
+  maxConcurrent: 1
+  maxMemoryBytes: 1073741824
+  networkPolicy: internal_only
+tools:
+  - name: capabilities
+    description: Report LongExtract agent application capabilities.
+    input: {}
+    output:
+      schemaRef: schemas/capabilities-v1.json
+providers:
+  - ref: provider/longextract-repair
+    type: agent_strategy_provider
+    agents:
+      - ref: agents/leaf-repair
+        name: leaf-repair
+        description: Produce immutable evidence-grounded string-leaf proposals.
+        implementation:
+          language: python
+          source: src/marie_longextract/agents/application.py
+        invocationSchema:
+          required: [workspace, input, model_profile]
+          parameters:
+            - key: workspace
+              type: object
+              required: true
+            - key: input
+              type: object
+              required: true
+            - key: model_profile
+              type: object
+              required: true
+        output:
+          schemaRef: schemas/leaf-proposal-v1.json
+        credentials:
+          - key: llm_api_key
+            type: secret
+            required: true
+        modelCapabilities: [vision, tool_calling]
+      - ref: agents/boundary-repair
+        name: boundary-repair
+        description: Produce an immutable evidence-grounded boundary proposal.
+        implementation:
+          language: python
+          source: src/marie_longextract/agents/application.py
+        invocationSchema:
+          required: [workspace, input, model_profile]
+          parameters:
+            - key: workspace
+              type: object
+              required: true
+            - key: input
+              type: object
+              required: true
+            - key: model_profile
+              type: object
+              required: true
+        output:
+          schemaRef: schemas/boundary-proposal-v1.json
+        credentials:
+          - key: llm_api_key
+            type: secret
+            required: true
+        modelCapabilities: [vision, tool_calling]

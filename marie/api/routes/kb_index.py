@@ -43,8 +43,8 @@ class CreateIndexRequest(BaseModel):
         description="Embedding model to use",
     )
     embedding_dim: int = Field(
-        default=2048,
-        description="Embedding dimension (128/256/512/1024/2048)",
+        default=1024,
+        description="Embedding dimension (64/128/256/512/1024/2048)",
     )
 
     # Transform configuration

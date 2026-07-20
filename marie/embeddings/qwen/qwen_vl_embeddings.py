@@ -15,11 +15,6 @@ from marie.registry.model_registry import ModelRegistry
 class QwenVLEmbeddings(EmbeddingsBase):
     """Qwen3-VL-Embedding for unified text + image embeddings.
 
-    Replaces JinaEmbeddingsV4 as the multimodal embedder: same unified
-    text/image embedding space, Apache-2.0 licensed, natively supported by
-    transformers v5 through sentence-transformers (the remote code is
-    maintained by the Qwen team).
-
     - Single-vector embeddings with Matryoshka truncation (64..2048 for the
       2B model, up to 4096 for the 8B model).
     - Query vs. document prompts for retrieval asymmetry.
@@ -222,6 +217,10 @@ class QwenVLEmbeddings(EmbeddingsBase):
         """Embed images and return the raw numpy array."""
         result = self.get_image_embeddings(images)
         return result.embeddings
+
+    @property
+    def supports_image_embeddings(self) -> bool:
+        return True
 
     @property
     def embedding_dim(self) -> int:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import threading
@@ -11,7 +12,11 @@ import pytest
 
 from marie.agent.tools.base import ToolOutput
 from marie.constants import DEFAULT_DAEMON_ADDR
-from marie.plugins.embedded import EmbeddedPlugins, inspect_archive
+from marie.plugins.embedded import (
+    EmbeddedPlugins,
+    PluginInvocationResult,
+    inspect_archive,
+)
 
 _PACKAGE = "marie/document-extraction"
 _PACKAGE_ID = "ext.marie.document-extraction"
@@ -67,15 +72,38 @@ class _FakeClient:
         self._invoke_error = invoke_error
         self.closed = False
         self.invocations: list[tuple] = []
+        self.cancelled_requests: list[str] = []
 
-    def invoke(self, spec, payload):
-        self.invocations.append((spec, payload))
+    def invoke(self, spec, payload, **kwargs):
+        self.invocations.append((spec, payload, kwargs))
         if self._invoke_error is not None:
             raise self._invoke_error
         return self._invoke_result
 
+    def cancel(self, request_id):
+        self.cancelled_requests.append(request_id)
+
     def close(self):
         self.closed = True
+
+
+class _BlockingClient(_FakeClient):
+    def __init__(self, invoke_result):
+        super().__init__(invoke_result=invoke_result)
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def invoke(self, spec, payload, **kwargs):
+        self.invocations.append((spec, payload, kwargs))
+        self.started.set()
+        self.release.wait(timeout=5)
+        if self.cancelled_requests:
+            raise RuntimeError("cancelled")
+        return self._invoke_result
+
+    def cancel(self, request_id):
+        super().cancel(request_id)
+        self.release.set()
 
 
 def _factory(clients):
@@ -125,6 +153,84 @@ def test_config_parsing_defaults_timeout(tmp_path):
     entry = plugins._entries[0]
     assert entry.timeout_s == 120
     assert entry.actions == []
+    assert entry.runtime_policy["timeoutMs"] == 120_000
+
+
+def test_config_parses_credentials_bindings_and_runtime_policy(tmp_path):
+    zip_path = _build_plugin_zip(tmp_path)
+    config = _config(zip_path)
+    config[0].update(
+        {
+            "provider_id": "provider/repair",
+            "credentials": [
+                {
+                    "name": "llm_api_key",
+                    "secret_ref": "env:REPAIR_API_KEY",
+                    "required": True,
+                    "binding_id": "binding/api-key",
+                }
+            ],
+            "credential_binding_ids": ["binding/model-profile"],
+            "runtime_policy": {
+                "maxConcurrent": 2,
+                "maxMemoryBytes": 1_073_741_824,
+                "networkPolicy": "internal_only",
+            },
+        }
+    )
+    plugins = EmbeddedPlugins(config, "agent_executor")
+    entry = plugins._entries[0]
+
+    assert entry.provider_id == "provider/repair"
+    assert entry.credential_requirements[0].name == "llm_api_key"
+    assert entry.credential_requirements[0].secret_ref == "env:REPAIR_API_KEY"
+    assert entry.credential_binding_ids == [
+        "binding/api-key",
+        "binding/model-profile",
+    ]
+    assert entry.runtime_policy == {
+        "timeoutMs": 120_000,
+        "maxConcurrent": 2,
+        "maxMemoryBytes": 1_073_741_824,
+        "networkPolicy": "internal_only",
+    }
+
+
+def test_config_rejects_invalid_runtime_policy(tmp_path):
+    zip_path = _build_plugin_zip(tmp_path)
+    config = _config(zip_path)
+    config[0]["runtime_policy"] = {"networkPolicy": "unrestricted"}
+
+    with pytest.raises(ValueError, match="networkPolicy"):
+        EmbeddedPlugins(config, "x")
+
+
+def test_install_hydrates_credentials_and_provider_identity(tmp_path):
+    zip_path = _build_plugin_zip(tmp_path)
+    config = _config(zip_path)
+    config[0].update(
+        {
+            "provider_id": "provider/repair",
+            "credentials": [
+                {
+                    "name": "llm_api_key",
+                    "secret_ref": None,
+                    "required": False,
+                }
+            ],
+            "credential_binding_ids": ["binding/api-key"],
+        }
+    )
+    client = _FakeClient()
+    plugins = EmbeddedPlugins(config, "agent_executor", client_factory=_factory([client]))
+    plugins._post_install = lambda client, envelope, archive, timeout_s: _CANNED_INSTALL
+
+    plugins.ensure_started()
+
+    spec = plugins._specs[_PACKAGE]
+    assert spec.provider_id == "provider/repair"
+    assert spec.credential_requirements[0].name == "llm_api_key"
+    assert spec.credential_binding_ids == ["binding/api-key"]
 
 
 def test_config_entry_requires_package_and_path():
@@ -142,7 +248,7 @@ def test_empty_config_is_lazy_and_ensure_started_raises():
 def test_daemon_client_discovery_inherits_process_environment(
     monkeypatch, tmp_path
 ):
-    from marie.agent.tools import plugin_daemon_client
+    from marie.plugins import daemon_client
 
     binary = tmp_path / 'marie-plugin-daemon'
     binary.write_text('#!/bin/sh\n')
@@ -160,10 +266,10 @@ def test_daemon_client_discovery_inherits_process_environment(
             {'mode': 'unavailable', 'message': 'stop', 'binary': None, 'url': None},
         )()
 
-    monkeypatch.setattr(plugin_daemon_client, 'discover_daemon', discover)
+    monkeypatch.setattr(daemon_client, 'discover_daemon', discover)
 
     with pytest.raises(RuntimeError, match='stop'):
-        plugin_daemon_client.PluginDaemonClient(
+        daemon_client.PluginDaemonClient(
             organization_id='org', workspace_id='workspace'
         )
     assert captured['env'] is None
@@ -176,6 +282,19 @@ def test_lazy_start_no_client_until_ensure_started(tmp_path):
     plugins = EmbeddedPlugins(_config(zip_path), "x", client_factory=factory)
     assert factory.calls == []
     assert plugins._client is None
+
+
+def test_unknown_package_and_action_are_rejected_before_daemon_start(tmp_path):
+    zip_path = _build_plugin_zip(tmp_path)
+    factory = _factory([_FakeClient()])
+    plugins = EmbeddedPlugins(_config(zip_path), "x", client_factory=factory)
+
+    with pytest.raises(ValueError, match="package is not configured"):
+        plugins.invoke("marie/unknown", "extract", {})
+    with pytest.raises(ValueError, match="action is not configured"):
+        plugins.invoke(_PACKAGE, "repair", {})
+
+    assert factory.calls == []
 
 
 def test_install_flow_posts_raw_bytes_and_envelope_claims(tmp_path):
@@ -259,11 +378,52 @@ def test_invoke_delegates_and_extracts_stream(tmp_path):
 
     assert result == {"markdown": "# Hi", "metadata": {"page_count": 2}}
     assert factory.calls == [120]  # started once
-    spec, payload = client.invocations[-1]
+    spec, payload, invocation = client.invocations[-1]
     assert payload["action"] == "extract"
     assert payload["path"] == "/x.pdf"
     assert payload["format"] == "pdf"
+    assert payload["execution"]["request_id"] == invocation["request_id"]
+    assert payload["execution"]["trace_id"] == invocation["trace_id"]
+    assert invocation["action_id"] == "actions/extract"
+    assert invocation["action_type"] == "stub"
+    assert invocation["runtime_policy"]["timeoutMs"] == 120_000
     assert spec.package_ref == _PACKAGE_ID
+
+
+def test_invoke_result_preserves_all_frames_and_execution_metadata(tmp_path):
+    zip_path = _build_plugin_zip(tmp_path)
+    frames = [
+        {"type": "stream", "data": {"progress": 0.5}},
+        {"type": "stream", "data": {"outcome": "success"}},
+        {"type": "end", "data": {"usage": {"tokens": 12}}},
+    ]
+    client = _FakeClient(invoke_result=_tool_output(frames))
+    plugins, _ = _started(zip_path, [client])
+
+    result = plugins.invoke_result(
+        _PACKAGE,
+        "extract",
+        {"path": "/x.pdf"},
+        execution_metadata={"dag_id": "dag-1", "task_id": "task-2", "attempt": 3},
+        request_id="request-4",
+        trace_id="trace-5",
+    )
+
+    assert isinstance(result, PluginInvocationResult)
+    assert result.result == {"outcome": "success"}
+    assert result.frames == tuple(frames)
+    assert result.request_id == "request-4"
+    assert result.trace_id == "trace-5"
+    _, payload, invocation = client.invocations[-1]
+    assert payload["execution"] == {
+        "dag_id": "dag-1",
+        "task_id": "task-2",
+        "attempt": 3,
+        "request_id": "request-4",
+        "trace_id": "trace-5",
+    }
+    assert invocation["request_id"] == "request-4"
+    assert invocation["trace_id"] == "trace-5"
 
 
 def test_invoke_raises_on_error_frame(tmp_path):
@@ -299,6 +459,93 @@ def test_retryable_error_frame_respawns_once(tmp_path):
     assert plugins.invoke(_PACKAGE, "extract", {}) == {"outcome": "success"}
     assert len(factory.calls) == 2
     assert failed.closed is True
+
+
+def test_respawn_retry_reuses_request_identity_and_payload(tmp_path):
+    zip_path = _build_plugin_zip(tmp_path)
+    committed_effects: list[str] = []
+
+    class CommitThenCrash(_FakeClient):
+        def invoke(self, spec, payload, **kwargs):
+            self.invocations.append((spec, payload, kwargs))
+            operation_id = payload["operation_id"]
+            if operation_id not in committed_effects:
+                committed_effects.append(operation_id)
+            raise RuntimeError("runtime stopped after commit")
+
+    class IdempotentRetry(_FakeClient):
+        def invoke(self, spec, payload, **kwargs):
+            self.invocations.append((spec, payload, kwargs))
+            operation_id = payload["operation_id"]
+            if operation_id not in committed_effects:
+                committed_effects.append(operation_id)
+            return _tool_output(
+                [{"type": "stream", "data": {"outcome": "success"}}]
+            )
+
+    failed = CommitThenCrash()
+    healthy = IdempotentRetry()
+    plugins, _ = _started(zip_path, [failed, healthy])
+
+    plugins.invoke_result(
+        _PACKAGE,
+        "extract",
+        {"operation_id": "effect-1"},
+        request_id="request-1",
+        trace_id="trace-1",
+    )
+
+    _, first_payload, first_invocation = failed.invocations[0]
+    _, second_payload, second_invocation = healthy.invocations[0]
+    assert first_payload == second_payload
+    assert first_invocation["request_id"] == second_invocation["request_id"]
+    assert first_invocation["trace_id"] == second_invocation["trace_id"]
+    assert first_invocation["action_id"] == second_invocation["action_id"]
+    assert committed_effects == ["effect-1"]
+
+
+@pytest.mark.asyncio
+async def test_invoke_async_does_not_block_event_loop(tmp_path):
+    zip_path = _build_plugin_zip(tmp_path)
+    client = _BlockingClient(
+        _tool_output([{"type": "stream", "data": {"outcome": "success"}}])
+    )
+    plugins, _ = _started(zip_path, [client])
+
+    invocation = asyncio.create_task(plugins.invoke_async(_PACKAGE, "extract", {}))
+    assert await asyncio.to_thread(client.started.wait, 1)
+    await asyncio.sleep(0)
+    assert invocation.done() is False
+
+    client.release.set()
+    result = await invocation
+    assert result.result == {"outcome": "success"}
+
+
+@pytest.mark.asyncio
+async def test_invoke_async_cancellation_does_not_respawn(tmp_path):
+    zip_path = _build_plugin_zip(tmp_path)
+    client = _BlockingClient(
+        _tool_output([{"type": "stream", "data": {"outcome": "success"}}])
+    )
+    plugins, factory = _started(zip_path, [client])
+
+    invocation = asyncio.create_task(
+        plugins.invoke_async(
+            _PACKAGE,
+            "extract",
+            {},
+            request_id="request-cancel",
+        )
+    )
+    assert await asyncio.to_thread(client.started.wait, 1)
+    invocation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await invocation
+    await asyncio.to_thread(client.release.wait, 1)
+
+    assert client.cancelled_requests == ["request-cancel"]
+    assert factory.calls == [120]
 
 
 def test_invoke_raises_when_no_stream_result(tmp_path):

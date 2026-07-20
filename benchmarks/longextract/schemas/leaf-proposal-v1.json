@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LongExtract leaf repair proposal",
+  "type": "object",
+  "required": ["kind", "idempotency_key", "pages", "patch_count"],
+  "properties": {
+    "kind": {"const": "leaf_repair"},
+    "idempotency_key": {"type": "string", "minLength": 1},
+    "pages": {"type": "array", "items": {"type": "object"}},
+    "fields": {
+      "type": ["array", "null"],
+      "items": {"type": "string"}
+    },
+    "model": {"type": "string", "minLength": 1},
+    "patch_count": {"type": "integer", "minimum": 0}
+  },
+  "additionalProperties": false
+}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from marie.storage import StorageManager
@@ -45,7 +46,8 @@ def require_benchmark_metadata(metadata: dict[str, Any]) -> tuple[str, str, str]
 
 
 def read_json(uri: str, storage: Any = StorageManager) -> dict[str, Any]:
-    raw = storage.read(uri)
+    local_path = Path(uri).expanduser()
+    raw = local_path.read_bytes() if local_path.is_file() else storage.read(uri)
     data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
     if not isinstance(data, dict):
         raise ValueError(f"{uri} did not contain a JSON object")

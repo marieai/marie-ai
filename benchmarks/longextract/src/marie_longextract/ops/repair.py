@@ -1,3 +1,5 @@
+"""Deterministic reducers for applying validated LongExtract repair proposals."""
+
 from __future__ import annotations
 
 import copy

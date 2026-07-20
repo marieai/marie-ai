@@ -14,23 +14,32 @@ revisit before promoting to a shared daemon.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
 import posixpath
+import threading
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 import yaml
 
 from marie.constants import DEFAULT_DAEMON_ADDR, DEFAULT_TENANT_UUID
 from marie.logging_core.logger import MarieLogger
-from marie.plugin_daemon import build_invocation_envelope, sign_envelope
+from marie.plugin_daemon import (
+    DEFAULT_RUNTIME_POLICY,
+    build_invocation_envelope,
+    sign_envelope,
+)
 from marie.plugins.agent_tool import PluginToolSpec
 from marie.plugins.daemon_client import PluginDaemonClient
+from marie.secret_store import CredentialRequirement
 
 # Loopback integrity key (spec §8.2). Handed to the spawned daemon child via env
 # so it verifies the envelopes this process signs. NOT a secret; revisit before
@@ -39,6 +48,7 @@ _SIGNING_KEY_ID = "marie-executor-embedded"
 _SIGNING_SECRET = "marie-executor-embedded-loopback-secret"
 
 _DEFAULT_TIMEOUT_S = 120
+_CANCEL_GRACE_S = 1.0
 
 ClientFactory = Callable[[float], PluginDaemonClient]
 
@@ -51,10 +61,29 @@ class PluginInvocationError(RuntimeError):
         self.retryable = retryable
 
 
+@dataclass(frozen=True)
+class PluginInvocationResult:
+    """Final plugin result with the complete structured response stream."""
+
+    result: dict[str, Any]
+    frames: tuple[dict[str, Any], ...]
+    request_id: str
+    trace_id: str
+
+
 class _PluginEntry:
     """One parsed ``with.plugins`` list entry."""
 
-    __slots__ = ("package", "path", "actions", "timeout_s")
+    __slots__ = (
+        "package",
+        "path",
+        "actions",
+        "timeout_s",
+        "credential_requirements",
+        "credential_binding_ids",
+        "provider_id",
+        "runtime_policy",
+    )
 
     def __init__(
         self,
@@ -62,11 +91,19 @@ class _PluginEntry:
         path: str,
         actions: list[str],
         timeout_s: float,
+        credential_requirements: list[CredentialRequirement],
+        credential_binding_ids: list[str],
+        provider_id: str,
+        runtime_policy: dict[str, Any],
     ) -> None:
         self.package = package
         self.path = path
         self.actions = actions
         self.timeout_s = timeout_s
+        self.credential_requirements = credential_requirements
+        self.credential_binding_ids = credential_binding_ids
+        self.provider_id = provider_id
+        self.runtime_policy = runtime_policy
 
     @classmethod
     def from_config(cls, entry: dict[str, Any]) -> "_PluginEntry":
@@ -77,9 +114,65 @@ class _PluginEntry:
                 "plugin config entry requires both 'package' and 'path' "
                 f"(got {entry!r})"
             )
-        actions = list(entry.get("actions") or [])
-        timeout_s = entry.get("timeout_s") or _DEFAULT_TIMEOUT_S
-        return cls(package=package, path=path, actions=actions, timeout_s=timeout_s)
+
+        actions = _string_list(entry.get("actions", []), "actions")
+        if len(actions) != len(set(actions)):
+            raise ValueError(f"plugin {package!r} contains duplicate actions")
+
+        raw_policy = entry.get("runtime_policy", entry.get("runtimePolicy", {}))
+        if not isinstance(raw_policy, dict):
+            raise ValueError(f"plugin {package!r} runtime_policy must be a mapping")
+        runtime_policy, timeout_s = _runtime_policy(entry, raw_policy, package)
+
+        raw_credentials = entry.get("credentials", [])
+        if not isinstance(raw_credentials, list):
+            raise ValueError(f"plugin {package!r} credentials must be a list")
+        requirements: list[CredentialRequirement] = []
+        embedded_binding_ids: list[str] = []
+        for raw_requirement in raw_credentials:
+            if not isinstance(raw_requirement, dict):
+                raise ValueError(
+                    f"plugin {package!r} credential requirements must be mappings"
+                )
+            requirement = dict(raw_requirement)
+            binding_id = requirement.pop(
+                "binding_id", requirement.pop("bindingId", None)
+            )
+            if binding_id is not None:
+                embedded_binding_ids.extend(
+                    _string_list([binding_id], "credential binding IDs")
+                )
+            requirements.append(CredentialRequirement.model_validate(requirement))
+
+        configured_binding_ids = entry.get(
+            "credential_binding_ids", entry.get("credentialBindingIds", [])
+        )
+        binding_ids = embedded_binding_ids + _string_list(
+            configured_binding_ids, "credential binding IDs"
+        )
+        if len(binding_ids) != len(set(binding_ids)):
+            raise ValueError(
+                f"plugin {package!r} contains duplicate credential binding IDs"
+            )
+
+        provider_id = str(
+            entry.get("provider_id", entry.get("providerId", package)) or ""
+        ).strip()
+        if binding_ids and not provider_id:
+            raise ValueError(
+                f"plugin {package!r} requires provider_id when credentials are bound"
+            )
+
+        return cls(
+            package=package,
+            path=path,
+            actions=actions,
+            timeout_s=timeout_s,
+            credential_requirements=requirements,
+            credential_binding_ids=binding_ids,
+            provider_id=provider_id,
+            runtime_policy=runtime_policy,
+        )
 
 
 class EmbeddedPlugins:
@@ -101,6 +194,9 @@ class EmbeddedPlugins:
         client_factory: ClientFactory | None = None,
     ) -> None:
         self._entries = [_PluginEntry.from_config(e) for e in (plugins_config or [])]
+        self._entries_by_package = {entry.package: entry for entry in self._entries}
+        if len(self._entries_by_package) != len(self._entries):
+            raise ValueError("plugin configuration contains duplicate packages")
         self._executor_identity = (
             executor_identity or "executor"
         ).strip() or "executor"
@@ -123,6 +219,10 @@ class EmbeddedPlugins:
         """Monotonic generation incremented after each daemon bootstrap."""
         return self._runtime_generation
 
+    def validate_action(self, package: str, action: str) -> None:
+        """Raise when a package/action pair is not deployment-allowlisted."""
+        self._require_action(package, action)
+
     def ensure_started(self) -> None:
         """Spawn the daemon child (if needed) and install every declared package."""
         if self._client is not None:
@@ -142,7 +242,14 @@ class EmbeddedPlugins:
         self._runtime_generation += 1
 
     def invoke(
-        self, package: str, action: str, payload: dict[str, Any]
+        self,
+        package: str,
+        action: str,
+        payload: dict[str, Any],
+        *,
+        execution_metadata: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
     ) -> dict[str, Any]:
         """Invoke ``action`` on ``package`` with ``payload``; return its stream data.
 
@@ -150,26 +257,131 @@ class EmbeddedPlugins:
         invocation failure the daemon child is respawned exactly once and the call
         retried; a second failure propagates.
         """
+        return self.invoke_result(
+            package,
+            action,
+            payload,
+            execution_metadata=execution_metadata,
+            request_id=request_id,
+            trace_id=trace_id,
+        ).result
+
+    def invoke_result(
+        self,
+        package: str,
+        action: str,
+        payload: dict[str, Any],
+        *,
+        execution_metadata: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+        _cancelled: threading.Event | None = None,
+    ) -> PluginInvocationResult:
+        """Invoke a configured action and retain every structured result frame."""
+        entry = self._require_action(package, action)
+        resolved_request_id = request_id or str(uuid4())
+        resolved_trace_id = trace_id or str(uuid4())
+        execution = dict(execution_metadata or {})
+        execution["request_id"] = resolved_request_id
+        execution["trace_id"] = resolved_trace_id
+        plugin_payload = {**payload, "action": action, "execution": execution}
+
+        self._raise_if_cancelled(_cancelled)
         self.ensure_started()
-        plugin_payload = {**payload, "action": action}
+        self._raise_if_cancelled(_cancelled)
         spec, client = self._require_spec_client(package)
         try:
-            output = client.invoke(spec, plugin_payload)
-            return _result_from_output(output)
+            output = self._invoke_client(
+                client,
+                spec,
+                entry,
+                action,
+                plugin_payload,
+                resolved_request_id,
+                resolved_trace_id,
+            )
+            return _result_from_output(
+                output,
+                request_id=resolved_request_id,
+                trace_id=resolved_trace_id,
+            )
         except PluginInvocationError as error:
             if not error.retryable:
                 raise
             first_error = error
         except Exception as error:
+            if _cancelled is not None and _cancelled.is_set():
+                raise PluginInvocationError(
+                    "plugin invocation cancelled", retryable=False
+                ) from error
             first_error = error
+
+        self._raise_if_cancelled(_cancelled)
         self.logger.warning(
             f"plugin invoke failed for {package}/{action}; respawning daemon "
             f"once: {first_error}"
         )
         self._respawn()
+        self._raise_if_cancelled(_cancelled)
         spec, client = self._require_spec_client(package)
-        output = client.invoke(spec, plugin_payload)
-        return _result_from_output(output)
+        output = self._invoke_client(
+            client,
+            spec,
+            entry,
+            action,
+            plugin_payload,
+            resolved_request_id,
+            resolved_trace_id,
+        )
+        return _result_from_output(
+            output,
+            request_id=resolved_request_id,
+            trace_id=resolved_trace_id,
+        )
+
+    async def invoke_async(
+        self,
+        package: str,
+        action: str,
+        payload: dict[str, Any],
+        *,
+        execution_metadata: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> PluginInvocationResult:
+        """Invoke without blocking the event loop and propagate caller cancellation."""
+        resolved_request_id = request_id or str(uuid4())
+        cancelled = threading.Event()
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                self.invoke_result,
+                package,
+                action,
+                payload,
+                execution_metadata=execution_metadata,
+                request_id=resolved_request_id,
+                trace_id=trace_id,
+                _cancelled=cancelled,
+            )
+        )
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled.set()
+            client = self._client
+            if client is not None:
+                client.cancel(resolved_request_id)
+            try:
+                await asyncio.wait_for(asyncio.shield(worker), timeout=_CANCEL_GRACE_S)
+            except TimeoutError:
+                worker.cancel()
+                try:
+                    await worker
+                except asyncio.CancelledError:
+                    pass
+            except (asyncio.CancelledError, Exception):
+                pass
+            raise
 
     def capabilities(self, package: str) -> dict[str, Any]:
         """Return the package's current input-aware capability snapshot."""
@@ -200,6 +412,39 @@ class EmbeddedPlugins:
         if spec is None or self._client is None:
             raise ValueError(f"plugin package is not installed: {package}")
         return spec, self._client
+
+    def _require_action(self, package: str, action: str) -> _PluginEntry:
+        entry = self._entries_by_package.get(package)
+        if entry is None:
+            raise ValueError(f"plugin package is not configured: {package}")
+        if action not in entry.actions:
+            raise ValueError(f"plugin action is not configured for {package}: {action}")
+        return entry
+
+    @staticmethod
+    def _raise_if_cancelled(cancelled: threading.Event | None) -> None:
+        if cancelled is not None and cancelled.is_set():
+            raise PluginInvocationError("plugin invocation cancelled", retryable=False)
+
+    @staticmethod
+    def _invoke_client(
+        client: PluginDaemonClient,
+        spec: PluginToolSpec,
+        entry: _PluginEntry,
+        action: str,
+        payload: dict[str, Any],
+        request_id: str,
+        trace_id: str,
+    ) -> Any:
+        return client.invoke(
+            spec,
+            payload,
+            action_id=f"actions/{action}",
+            action_type="stub",
+            request_id=request_id,
+            trace_id=trace_id,
+            runtime_policy=entry.runtime_policy,
+        )
 
     def _respawn(self) -> None:
         self.close()
@@ -233,8 +478,11 @@ class EmbeddedPlugins:
             package_id=install_id,
             package_ref=package_ref,
             package_digest=digest,
+            provider_id=entry.provider_id,
             provider_ref=entry.package,
             package_trust_level="builtin",
+            credential_requirements=entry.credential_requirements,
+            credential_binding_ids=entry.credential_binding_ids,
         )
         envelope = build_invocation_envelope(
             spec,
@@ -341,7 +589,9 @@ def _tool_name(package: str) -> str:
     return package.rsplit("/", 1)[-1] or package
 
 
-def _result_from_output(output: Any) -> dict[str, Any]:
+def _result_from_output(
+    output: Any, *, request_id: str, trace_id: str
+) -> PluginInvocationResult:
     frames = getattr(output, "raw_output", None)
     if not isinstance(frames, list):
         content = getattr(output, "content", None)
@@ -350,23 +600,27 @@ def _result_from_output(output: Any) -> dict[str, Any]:
         except (TypeError, ValueError):
             frames = []
 
+    structured_frames = tuple(frame for frame in frames if isinstance(frame, dict))
     stream_data: dict[str, Any] | None = None
-    for frame in frames:
-        if not isinstance(frame, dict):
-            continue
+    for frame in structured_frames:
         frame_type = frame.get("type")
         if frame_type == "error":
             data = frame.get("data")
             retryable = isinstance(data, dict) and data.get("retryable") is True
             raise PluginInvocationError(_error_message(frame), retryable=retryable)
-        if frame_type == "stream" and stream_data is None:
+        if frame_type == "stream":
             data = frame.get("data")
             if isinstance(data, dict):
                 stream_data = data
 
     if stream_data is None:
         raise PluginInvocationError("plugin returned no stream result", retryable=False)
-    return stream_data
+    return PluginInvocationResult(
+        result=stream_data,
+        frames=structured_frames,
+        request_id=request_id,
+        trace_id=trace_id,
+    )
 
 
 def _error_message(frame: dict[str, Any]) -> str:
@@ -377,3 +631,78 @@ def _error_message(frame: dict[str, Any]) -> str:
     if isinstance(error, dict) and error.get("message"):
         return str(error["message"])
     return "plugin invocation error"
+
+
+def _string_list(value: Any, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"plugin {field_name} must be a list")
+    values: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"plugin {field_name} must contain non-empty strings")
+        values.append(item.strip())
+    return values
+
+
+def _runtime_policy(
+    entry: dict[str, Any], raw_policy: dict[str, Any], package: str
+) -> tuple[dict[str, Any], float]:
+    policy = dict(DEFAULT_RUNTIME_POLICY)
+    aliases = {
+        "timeout_ms": "timeoutMs",
+        "max_concurrent": "maxConcurrent",
+        "max_memory_bytes": "maxMemoryBytes",
+        "network_policy": "networkPolicy",
+    }
+    normalized_policy = {
+        aliases.get(key, key): value for key, value in raw_policy.items()
+    }
+    allowed_fields = {
+        "timeoutMs",
+        "maxConcurrent",
+        "maxMemoryBytes",
+        "networkPolicy",
+    }
+    unknown_fields = sorted(set(normalized_policy) - allowed_fields)
+    if unknown_fields:
+        raise ValueError(
+            f"plugin {package!r} runtime_policy contains unsupported fields: "
+            f"{', '.join(unknown_fields)}"
+        )
+    policy.update(normalized_policy)
+
+    timeout_value = entry.get("timeout_s", entry.get("timeoutS"))
+    if timeout_value is None:
+        timeout_ms = normalized_policy.get("timeoutMs", _DEFAULT_TIMEOUT_S * 1000)
+        if (
+            isinstance(timeout_ms, bool)
+            or not isinstance(timeout_ms, int)
+            or timeout_ms <= 0
+        ):
+            raise ValueError(f"plugin {package!r} timeoutMs must be a positive integer")
+        timeout_s = timeout_ms / 1000
+        policy["timeoutMs"] = timeout_ms
+    else:
+        timeout_s = _positive_number(timeout_value, "timeout_s", package)
+        policy["timeoutMs"] = int(timeout_s * 1000)
+
+    for name in ("timeoutMs", "maxConcurrent", "maxMemoryBytes"):
+        value = policy.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"plugin {package!r} {name} must be a positive integer")
+
+    network_policy = policy.get("networkPolicy")
+    if network_policy not in {"none", "manifest_declared", "internal_only"}:
+        raise ValueError(
+            f"plugin {package!r} networkPolicy must be none, "
+            "manifest_declared, or internal_only"
+        )
+    return policy, timeout_s
+
+
+def _positive_number(value: Any, field_name: str, package: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise ValueError(f"plugin {package!r} {field_name} must be a positive number")
+    return float(value)

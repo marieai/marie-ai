@@ -8,17 +8,18 @@ from marie_longextract.agents.repair import (
     RepairDecision,
     build_leaf_repair_prompt,
     build_repair_prompt,
+    leaf_patches_from_decision,
     record_patch_from_decision,
     select_leaf_repair_consensus,
     validate_decision_evidence,
     validate_leaf_repair_decision,
 )
+from marie_longextract.ops.aggregation import aggregate_page_results
 from marie_longextract.ops.repair import (
     apply_record_patch,
     apply_row_leaf_patches,
     infer_section_heading_patches,
 )
-from marie_longextract.ops.stitch import aggregate_page_results
 from pydantic import ValidationError
 
 
@@ -257,15 +258,15 @@ def test_string_leaf_repair_is_grounded_and_applied() -> None:
     decision = PageLeafRepairDecision.model_validate(
         {
             'page_file': '00001.json',
-            'patches': [
+            'reviews': [
                 {
                     'record_index': 0,
                     'row_index': 0,
                     'field_name': 'display_value',
-                    'expected_value': 'X',
-                    'replacement_value': '(X)',
+                    'action': 'use_source_candidate',
                     'evidence_source': 'current_page_text',
-                    'evidence_quote': 'Total | (X)',
+                    'evidence_line': 1,
+                    'evidence_quote': '(X)',
                     'rationale': 'The printed delimiter is part of the value.',
                 }
             ],
@@ -280,10 +281,12 @@ def test_string_leaf_repair_is_grounded_and_applied() -> None:
         resolved_units=['rows'],
         current_page_text='Total (X)',
         previous_page_text='',
+        allowed_targets={(0, 0, 'display_value', 'X')},
     )
+    patches = leaf_patches_from_decision(decision, page_result=page_result)
     repaired = apply_row_leaf_patches(
         page_result,
-        [patch.model_dump(mode='python') for patch in decision.patches],
+        [patch.model_dump(mode='python') for patch in patches],
     )
 
     assert repaired['records'][0]['rows'][0]['display_value'] == '(X)'
@@ -295,26 +298,28 @@ def test_leaf_repair_consensus_selects_target_level_majorities() -> None:
         'record_index': 0,
         'row_index': 0,
         'field_name': 'display_value',
-        'expected_value': 'X',
-        'replacement_value': '(X)',
+        'action': 'use_source_candidate',
         'evidence_source': 'current_page_text',
-        'evidence_quote': 'Total (X)',
+        'evidence_line': 1,
+        'evidence_quote': '(X)',
         'rationale': 'The delimiters are printed.',
     }
     minority = {
         'record_index': 0,
         'row_index': 1,
         'field_name': 'display_value',
-        'expected_value': 'Y',
-        'replacement_value': '(Y)',
+        'action': 'use_source_candidate',
         'evidence_source': 'current_page_text',
-        'evidence_quote': 'Other (Y)',
+        'evidence_line': 2,
+        'evidence_quote': '(Y)',
         'rationale': 'The delimiters are printed.',
     }
+    keep_x = {**replacement, 'evidence_quote': 'X'}
+    keep_y = {**minority, 'evidence_quote': 'Y'}
     decisions = [
-        PageLeafRepairDecision(page_file='00001.json', patches=[replacement, minority]),
-        PageLeafRepairDecision(page_file='00001.json', patches=[replacement]),
-        PageLeafRepairDecision(page_file='00001.json', patches=[]),
+        PageLeafRepairDecision(page_file='00001.json', reviews=[replacement, minority]),
+        PageLeafRepairDecision(page_file='00001.json', reviews=[replacement, keep_y]),
+        PageLeafRepairDecision(page_file='00001.json', reviews=[keep_x, keep_y]),
     ]
 
     consensus = select_leaf_repair_consensus(
@@ -326,7 +331,34 @@ def test_leaf_repair_consensus_selects_target_level_majorities() -> None:
         },
     )
 
-    assert [patch.model_dump() for patch in consensus.patches] == [replacement]
+    assert len(consensus.reviews) == 2
+    page_result = {
+        'records': [
+            {
+                'rows': [
+                    {'display_value': 'X'},
+                    {'display_value': 'Y'},
+                ]
+            }
+        ]
+    }
+    assert [
+        patch.model_dump()
+        for patch in leaf_patches_from_decision(
+            consensus,
+            page_result=page_result,
+        )
+    ] == [
+        {
+            **{
+                key: value
+                for key, value in replacement.items()
+                if key not in {'action', 'evidence_line'}
+            },
+            'expected_value': 'X',
+            'replacement_value': '(X)',
+        }
+    ]
 
 
 def test_leaf_repair_consensus_rejects_split_decisions() -> None:
@@ -334,15 +366,19 @@ def test_leaf_repair_consensus_rejects_split_decisions() -> None:
         return PageLeafRepairDecision.model_validate(
             {
                 'page_file': '00001.json',
-                'patches': [
+                'reviews': [
                     {
                         'record_index': 0,
                         'row_index': 0,
                         'field_name': 'display_value',
-                        'expected_value': 'X',
-                        'replacement_value': replacement_value,
+                        'action': (
+                            'clear_for_parser_carry'
+                            if replacement_value is None
+                            else 'use_source_candidate'
+                        ),
                         'evidence_source': 'current_page_text',
-                        'evidence_quote': 'Total value',
+                        'evidence_line': 1,
+                        'evidence_quote': replacement_value or 'Total value',
                         'rationale': 'The source supports this value.',
                     }
                 ],
@@ -361,15 +397,15 @@ def test_string_leaf_repair_rejects_ungrounded_replacement() -> None:
     decision = PageLeafRepairDecision.model_validate(
         {
             'page_file': '00001.json',
-            'patches': [
+            'reviews': [
                 {
                     'record_index': 0,
                     'row_index': 0,
                     'field_name': 'heading',
-                    'expected_value': 'Old heading',
-                    'replacement_value': 'Invented heading',
+                    'action': 'use_source_candidate',
                     'evidence_source': 'current_page_text',
-                    'evidence_quote': 'Visible heading',
+                    'evidence_line': 1,
+                    'evidence_quote': 'Invented heading',
                     'rationale': 'A heading should be corrected.',
                 }
             ],
@@ -377,7 +413,7 @@ def test_string_leaf_repair_rejects_ungrounded_replacement() -> None:
         }
     )
 
-    with pytest.raises(ValueError, match='Replacement'):
+    with pytest.raises(ValueError, match='line candidate'):
         validate_leaf_repair_decision(
             decision,
             page_result={
@@ -404,18 +440,187 @@ def test_string_leaf_repair_rejects_ungrounded_replacement() -> None:
         )
 
 
+def test_leaf_review_cannot_keep_text_inside_a_delimited_token() -> None:
+    decision = PageLeafRepairDecision.model_validate(
+        {
+            'page_file': '00001.json',
+            'reviews': [
+                {
+                    'record_index': 0,
+                    'row_index': 0,
+                    'field_name': 'display_value',
+                    'action': 'use_source_candidate',
+                    'evidence_source': 'current_page_text',
+                    'evidence_line': 1,
+                    'evidence_quote': 'X',
+                    'rationale': 'Keep the current value.',
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match='line candidate'):
+        validate_leaf_repair_decision(
+            decision,
+            page_result={
+                'records': [
+                    {
+                        'continuation': {'is_continuation': False},
+                        'rows': [{'display_value': 'X'}],
+                    }
+                ]
+            },
+            schema={
+                'properties': {
+                    'rows': {
+                        'items': {'properties': {'display_value': {'type': 'string'}}}
+                    }
+                }
+            },
+            resolved_units=['rows'],
+            current_page_text='Total (X)',
+            previous_page_text='',
+            allowed_targets={(0, 0, 'display_value', 'X')},
+        )
+
+
+def test_leaf_review_rejects_multiline_quote_without_fragment_evidence() -> None:
+    joined = 'Program title Data Profiles'
+    decision = PageLeafRepairDecision.model_validate(
+        {
+            'page_file': '00001.json',
+            'reviews': [
+                {
+                    'record_index': 0,
+                    'row_index': 0,
+                    'field_name': 'program_group',
+                    'action': 'use_source_candidate',
+                    'evidence_source': 'current_page_text',
+                    'evidence_line': 1,
+                    'evidence_quote': joined,
+                    'rationale': 'Keep the current value.',
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match='line candidate'):
+        validate_leaf_repair_decision(
+            decision,
+            page_result={
+                'records': [
+                    {
+                        'continuation': {'is_continuation': False},
+                        'rows': [{'program_group': joined}],
+                    }
+                ]
+            },
+            schema={
+                'properties': {
+                    'rows': {
+                        'items': {'properties': {'program_group': {'type': 'string'}}}
+                    }
+                }
+            },
+            resolved_units=['rows'],
+            current_page_text='Program title\nData Profiles',
+            previous_page_text='',
+            allowed_targets={(0, 0, 'program_group', joined)},
+        )
+
+
+def test_leaf_review_accepts_an_ordered_multiline_source_span() -> None:
+    joined = 'Wrapped value continues here'
+    decision = PageLeafRepairDecision.model_validate(
+        {
+            'page_file': '00001.json',
+            'reviews': [
+                {
+                    'record_index': 0,
+                    'row_index': 0,
+                    'field_name': 'description',
+                    'action': 'use_source_candidate',
+                    'evidence_source': 'current_page_text',
+                    'evidence_line': 1,
+                    'evidence_quote': 'Wrapped value',
+                    'additional_evidence': [{'line': 2, 'quote': 'continues here'}],
+                    'join_with': ' ',
+                    'rationale': 'The value visibly wraps onto the next line.',
+                }
+            ],
+        }
+    )
+
+    validate_leaf_repair_decision(
+        decision,
+        page_result={
+            'records': [
+                {
+                    'continuation': {'is_continuation': False},
+                    'rows': [{'description': joined}],
+                }
+            ]
+        },
+        schema={
+            'properties': {
+                'rows': {'items': {'properties': {'description': {'type': 'string'}}}}
+            }
+        },
+        resolved_units=['rows'],
+        current_page_text='Wrapped value\ncontinues here',
+        previous_page_text='',
+        allowed_targets={(0, 0, 'description', joined)},
+    )
+
+    assert (
+        leaf_patches_from_decision(
+            decision,
+            page_result={
+                'records': [{'rows': [{'description': joined}]}],
+            },
+        )
+        == []
+    )
+
+
+def test_leaf_review_requires_evidence_for_every_target() -> None:
+    decision = PageLeafRepairDecision(page_file='00001.json', reviews=[])
+
+    with pytest.raises(ValueError, match='omitted requested targets'):
+        validate_leaf_repair_decision(
+            decision,
+            page_result={
+                'records': [
+                    {
+                        'continuation': {'is_continuation': False},
+                        'rows': [{'label': 'Alpha'}],
+                    }
+                ]
+            },
+            schema={
+                'properties': {
+                    'rows': {'items': {'properties': {'label': {'type': 'string'}}}}
+                }
+            },
+            resolved_units=['rows'],
+            current_page_text='Alpha',
+            previous_page_text='',
+            allowed_targets={(0, 0, 'label', 'Alpha')},
+        )
+
+
 def test_continuation_heading_can_be_cleared_for_parser_carry() -> None:
     decision = PageLeafRepairDecision.model_validate(
         {
             'page_file': '00017.json',
-            'patches': [
+            'reviews': [
                 {
                     'record_index': 0,
                     'row_index': 0,
                     'field_name': 'heading',
-                    'expected_value': 'Data row label',
-                    'replacement_value': None,
+                    'action': 'clear_for_parser_carry',
                     'evidence_source': 'previous_page_text',
+                    'evidence_line': 1,
                     'evidence_quote': 'ACTIVE SECTION',
                     'rationale': 'The continuation page omits the active heading.',
                 }
@@ -453,14 +658,15 @@ def test_field_audit_rejects_patch_to_omitted_null_leaf() -> None:
         PageLeafRepairDecision.model_validate(
             {
                 'page_file': '00001.json',
-                'patches': [
+                'reviews': [
                     {
                         'record_index': 0,
                         'row_index': 0,
                         'field_name': 'heading',
                         'expected_value': None,
-                        'replacement_value': 'VISIBLE HEADING',
+                        'action': 'use_source_candidate',
                         'evidence_source': 'current_page_text',
+                        'evidence_line': 1,
                         'evidence_quote': 'VISIBLE HEADING',
                         'rationale': 'Fill the heading.',
                     }
@@ -535,20 +741,25 @@ def test_leaf_repair_prompt_contains_only_job_evidence(tmp_path) -> None:
     assert 'CURRENT PAGE' in prompt
     assert 'PREVIOUS PAGE' in prompt
     assert 'Standalone subheader' in prompt
-    assert 'Extracted label' in prompt
+    assert 'Extracted label' not in prompt
     assert 'Untargeted label' not in prompt
     assert 'Untargeted optional value' not in prompt
     assert 'Target field: label' in prompt
-    assert 'Target current values: ["Extracted label"]' in prompt
-    assert (
-        'Legal target occurrences:\n'
-        '[{"record_index":0,"row_index":0,"expected_value":"Extracted label"}]'
-        in prompt
-    )
+    assert 'Target current values:' not in prompt
+    assert 'Legal target occurrences:\n' '[{"record_index":0,"row_index":0}]' in prompt
+    assert 'expected_value' not in prompt
+    assert 'agent-output/longextract-unit-extract/00002.json' not in prompt
+    assert 'deliberately withheld' in prompt
+    assert 'smallest complete source span' in prompt
+    assert 'every added fragment is necessary' in prompt
     assert 'optional_label' not in prompt
     assert '"optional_label":null' not in prompt
     assert '"count":12' not in prompt
     assert 'Source artifacts:' in prompt
+    assert 'L0001: CURRENT PAGE' in prompt
+    assert 'L0001: PREVIOUS PAGE' in prompt
+    assert 'Return exactly one review for every Legal target occurrence' in prompt
+    assert 'Choose use_source_candidate' in prompt
     assert 'Do not infer or normalize symbols' in prompt
 
 

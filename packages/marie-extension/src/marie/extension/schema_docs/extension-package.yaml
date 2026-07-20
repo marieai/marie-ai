@@ -7,6 +7,11 @@ metadata:
   displayName: Example Tool
 runtime:
   type: metadata_only
+runtimePolicy:
+  timeoutMs: 30000
+  maxConcurrent: 1
+  maxMemoryBytes: 536870912
+  networkPolicy: none
 permissions:
   network:
     enabled: false
@@ -22,3 +27,17 @@ providers:
             - key: query
               type: string
               x-marie-form: llm
+  - ref: provider/repair
+    type: agent_strategy_provider
+    agents:
+      - ref: agents/repair
+        name: repair
+        invocationSchema:
+          required: [page_file]
+          parameters:
+            - key: page_file
+              type: string
+        output:
+          schema:
+            type: object
+        modelCapabilities: [vision, tool_calling]

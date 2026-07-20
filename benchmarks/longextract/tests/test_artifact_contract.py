@@ -65,6 +65,13 @@ def test_json_artifacts_use_requested_uri() -> None:
     assert read_json('s3://bucket/result.json', storage=FakeStorage) == {'answer': 42}
 
 
+def test_read_json_accepts_local_path(tmp_path: Path) -> None:
+    schema_path = tmp_path / 'schema.json'
+    schema_path.write_text('{"type": "object"}', encoding='utf-8')
+
+    assert read_json(str(schema_path)) == {'type': 'object'}
+
+
 def test_runtime_source_never_references_benchmark_answers() -> None:
     source_root = Path(__file__).resolve().parents[1] / 'src'
     forbidden_name = 'ground' + '_truth'

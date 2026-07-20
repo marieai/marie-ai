@@ -83,6 +83,8 @@ def build_invocation_envelope(
     workspace_id: str,
     user_id: str | None = None,
     action_type: str = "tool",
+    action_id: str | None = None,
+    credential_binding_ids: list[str] | None = None,
     request_id: str | None = None,
     trace_id: str | None = None,
     timeout_ms: int = 30000,
@@ -106,9 +108,14 @@ def build_invocation_envelope(
     if not organization_id or not workspace_id:
         raise ValueError("plugin invocation requires organization_id and workspace_id")
 
-    rp = dict(runtime_policy or DEFAULT_RUNTIME_POLICY)
+    rp = dict(DEFAULT_RUNTIME_POLICY)
+    rp.update(runtime_policy or {})
     rp.setdefault("networkPolicy", "none")
     rp["timeoutMs"] = timeout_ms
+
+    resolved_action_id = (action_id or f"tools/{spec.tool_name}").strip()
+    if not resolved_action_id:
+        raise ValueError("plugin invocation requires an action_id")
 
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
@@ -126,9 +133,9 @@ def build_invocation_envelope(
         "packageDigest": spec.package_digest,
         "packageTrustLevel": spec.package_trust_level or "community",
         "providerId": spec.provider_id or "",
-        "actionId": f"tools/{spec.tool_name}",
+        "actionId": resolved_action_id,
         "actionType": action_type,
-        "credentialBindingIds": [],
+        "credentialBindingIds": list(credential_binding_ids or []),
         "input": payload,
         # Opaque to the daemon; forwarded to the plugin subprocess as the request.
         "payload": payload,

@@ -63,6 +63,21 @@ python -m longextract_bench.providers.marie \
   --out runs/marie-smoke/output.json
 ```
 
+## Inspect the query plan
+
+Build the LongExtract DAG through the registered planner and render it as a
+PNG without starting Gateway or an executor:
+
+```bash
+cd ~/dev/marieai/marie-ai
+python -m marie_longextract.planners.longextract_bench \
+  --schema ~/path/to/test/schema.json \
+  --output query_plan_graph.png
+```
+
+The command prints the registered planners, serialized plan, Mermaid graph,
+and executor routes. It writes the visual graph to `query_plan_graph.png`.
+
 ## Evaluate the production Marie pipeline
 
 Run the actual Marie table, page-extraction, parser, and LongExtractBench grader
@@ -104,11 +119,13 @@ prompt for page 3 is `agent-output/tables/00003.png_prompt.txt`.
 ## Evaluate agentic boundary repair
 
 Run the repair agent independently against a saved generator workspace before
-adding it to a deployed query plan. The agent receives the previous, current,
-and next page images, reads job-local extraction artifacts through scoped
-filesystem tools, and returns a typed schema-boundary decision. The harness
-applies only `unit_name` and `continuation.is_continuation` to a copied page
-record, then reruns the existing `longextract-aggregated` parser and grader.
+adding its node to the deployed query plan. This runs the same agent application
+that the existing `AgentExecutor` hosts in production; it does not start another
+Marie executor. The agent receives the previous, current, and next page images,
+reads job-local extraction artifacts through scoped filesystem tools, and
+returns a typed schema-boundary decision. The harness applies only `unit_name`
+and `continuation.is_continuation` to a copied page record, then reruns the
+existing `longextract-aggregated` parser and grader.
 
 ```bash
 cd ~/dev/marieai/marie-ai
@@ -154,13 +171,20 @@ python -m marie_longextract.repair_eval \
 
 Run the string-leaf repair against a saved production-pipeline run. This path
 constructs `ReactAgent` directly; it does not route through the deployable agent
-executor. The agent has a read-only tool rooted at the copied job workspace.
-Each audit also receives the prepared MarkItDown page text plus the previous,
-current, and next page images inline. Three fresh, independently validated
-audits vote on every legal target, and only a target-level majority is applied.
+executor. It executes the same application code packaged for the existing
+`AgentExecutor`. Each audit receives the prepared MarkItDown page text, table
+evidence, schema, neighboring row context, and previous/current/next page images
+inline. The current extracted target value is withheld so the agent selects its
+source evidence independently. Three fresh, independently validated audits vote
+on every legal target, and only a target-level majority is applied. Every audit
+must return one review per target and cite an exact candidate from numbered
+physical source lines. A review may cite an ordered multi-line span when the
+schema and page structure establish one wrapped value. The validator preserves
+token punctuation and verifies every fragment before the review can vote.
 
-The following command reproduces the focused ACS residual evaluation. The page
-and field lists only scope the audit; they do not define expected replacements.
+Use the same command for any downloaded LongExtract document by changing the
+source run, dataset directory, pages, and optional field scope. The page and
+field lists only scope the audit; they do not define expected replacements.
 
 ```bash
 cd ~/dev/marieai/marie-ai
@@ -185,8 +209,10 @@ python benchmarks/longextract/tools/evaluate-agent-leaves.py \
 Always use a new `OUT_DIR`; the source run is copied and never modified. The
 ordered parser owns section-heading transitions. The agent handles existing
 string leaves and cannot add rows, rewrite numeric values, or patch omitted
-null fields. Ground truth is loaded only after repair to run the benchmark
-grader and is never included in an agent prompt.
+null fields. Each accepted non-null value must equal its cited source candidate;
+the repair layer does not contain field-specific symbol or value normalizers.
+Ground truth is loaded only after repair to run the benchmark grader and is
+never included in an agent prompt.
 
 Inspect:
 
@@ -202,12 +228,17 @@ planner configuration. The annotator executor must load
 `marie_longextract.context_providers`; the provider reads the branch contract
 from generic `RunContext` invocation parameters and controls one extraction per
 page. The parser executor must load `marie_longextract.parsers`. The executor
-fragment in `config/executors.yml` shows both required module registrations.
+fragment in `config/executors.yml` shows only those required module
+registrations. It does not deploy another `AgentExecutor`. Production query-plan
+agent nodes will route to the existing `AgentExecutor`, which hosts the packaged
+LongExtract agent application through its deployment-owned plugin and route
+allowlists.
 
 Continuation aggregation is wired through Marie's existing parser executor.
-The agentic repair can currently run independently against the same stable job
-workspace. Gateway query-plan routing for that repair remains separate from the
-evaluation harness; this package does not install a serverless dispatcher.
+The agentic repair can run independently against the same stable job workspace
+for testing. Gateway execution will remain DAG-owned: each repair agent will be
+an explicit query-plan node dispatched through the existing `AgentExecutor`;
+the standalone harness does not own workflow order or install an executor.
 
 The active annotator assets and planner mapper must be copied or mounted at:
 

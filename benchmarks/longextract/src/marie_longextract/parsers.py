@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from marie_longextract.ops.stitch import aggregate_page_results
+from marie_longextract.ops.aggregation import aggregate_page_results
 from omegaconf import OmegaConf
 
 from marie.extract.registry import register_parser

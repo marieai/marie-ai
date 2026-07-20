@@ -1,8 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List
 
-import torch
-
 from marie.embeddings.embeddings_object import EmbeddingsObject
 from marie.logging_core.logger import MarieLogger
 
@@ -41,3 +39,8 @@ class EmbeddingsBase(ABC):
         embed = self.get_embeddings(texts, truncation, max_length).embeddings
         # convert from ndarray to numpy array
         return embed
+
+    @property
+    def supports_image_embeddings(self) -> bool:
+        """Return whether this implementation embeds images and text together."""
+        return False

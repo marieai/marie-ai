@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LongExtract agent capabilities",
+  "type": "object",
+  "required": ["ready", "actions"],
+  "properties": {
+    "ready": {"const": true},
+    "actions": {
+      "type": "array",
+      "items": {
+        "enum": ["run_leaf_repair", "run_boundary_repair"]
+      }
+    }
+  },
+  "additionalProperties": false
+}

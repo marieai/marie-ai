@@ -2,6 +2,7 @@ from typing import Literal
 
 from pydantic import Field
 
+from marie.extension.agent import AgentDefinition
 from marie.extension.model import ModelDefinition
 from marie.extension.settings import (
     CredentialDefinition,
@@ -39,3 +40,4 @@ class ProviderDefinition(ExtensionModel):
     )
     tools: list[ToolDefinition] = Field(default_factory=list)
     models: list[ModelDefinition] = Field(default_factory=list)
+    agents: list[AgentDefinition] = Field(default_factory=list)

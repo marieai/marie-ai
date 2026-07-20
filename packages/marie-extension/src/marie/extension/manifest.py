@@ -1,10 +1,11 @@
 from pydantic import Field, model_validator
 
+from marie.extension.agent import AgentDefinition
 from marie.extension.datasource import DatasourceDefinition
 from marie.extension.endpoint import EndpointDefinition
 from marie.extension.permissions import ExtensionPermissions
 from marie.extension.provider import ProviderDefinition
-from marie.extension.runtime import RuntimeSpec
+from marie.extension.runtime import RuntimePolicy, RuntimeSpec
 from marie.extension.settings import ExtensionModel
 from marie.extension.tool import ToolDefinition
 from marie.extension.trigger import TriggerDefinition
@@ -51,12 +52,16 @@ class ExtensionPackage(ExtensionModel):
     trust: TrustSpec = Field(default_factory=TrustSpec)
     scope: ScopeSpec = Field(default_factory=ScopeSpec)
     runtime: RuntimeSpec = Field(default_factory=RuntimeSpec)
+    runtime_policy: RuntimePolicy = Field(
+        default_factory=RuntimePolicy, alias="runtimePolicy"
+    )
     permissions: ExtensionPermissions = Field(default_factory=ExtensionPermissions)
     providers: list[ProviderDefinition] = Field(default_factory=list)
     tools: list[ToolDefinition] = Field(default_factory=list)
     datasources: list[DatasourceDefinition] = Field(default_factory=list)
     triggers: list[TriggerDefinition] = Field(default_factory=list)
     endpoints: list[EndpointDefinition] = Field(default_factory=list)
+    agents: list[AgentDefinition] = Field(default_factory=list)
     ui: dict[str, object] = Field(default_factory=dict)
 
     @model_validator(mode="after")

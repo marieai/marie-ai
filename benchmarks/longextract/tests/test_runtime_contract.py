@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
+import yaml
 from marie_longextract.context_providers.longextract_context import (
     LongExtractContextProvider,
 )
@@ -10,6 +12,16 @@ from marie_longextract.context_providers.longextract_context import (
 from marie.kernel import RunContext, TaskInstanceRef
 from marie.kernel.backends import InMemoryStateBackend
 from marie.storage import StorageManager
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_executor_fragment_reuses_deployed_runtime_executors() -> None:
+    config = yaml.safe_load((ROOT / 'config' / 'executors.yml').read_text())
+    executors = {entry['name']: entry['uses'] for entry in config['executors']}
+
+    assert set(executors) == {'annotator_llm', 'annotator_parser'}
+    assert all(uses['jtype'] != 'AgentExecutor' for uses in executors.values())
 
 
 def test_context_provider_resolves_repair_artifacts(monkeypatch) -> None:
