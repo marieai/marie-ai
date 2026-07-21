@@ -11,6 +11,8 @@ def test_hydration_discovers_only_recoverable_dag_states() -> None:
 
     assert "d.state IN ('created', 'active')" in sql
     assert "j.state IN ('created', 'retry')" in sql
+    assert "blocker.dag_id = d.id" in sql
+    assert "blocker.state::text IN ('failed', 'expired', 'cancelled')" in sql
 
 
 def test_dag_activation_rechecks_recoverable_state_under_lock() -> None:

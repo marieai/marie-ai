@@ -519,7 +519,7 @@ class MarieServerGateway(CompositeServer):
                     f"Debug info requested at {datetime.now(timezone.utc)}"
                 )
                 try:
-                    debug_data = self.job_scheduler.debug_info()
+                    debug_data = await self.job_scheduler.debug_info()
                     debug_data["llm_dispatch"] = dispatch_runtime_live_state(
                         limit_per_pool=50
                     )
@@ -1549,9 +1549,6 @@ class MarieServerGateway(CompositeServer):
         setup_storage(storage_config)
         setup_auth(self.args.get("auth", {}))
         setup_llm_tracking(self.args.get("llm_tracking", {}))
-        setup_sensor_worker(
-            self.args.get("sensors", {}), self.args.get("kv_store_kwargs", {})
-        )
 
         await self.setup_service_discovery(
             etcd_host=self.args["discovery_host"],
@@ -1591,7 +1588,6 @@ class MarieServerGateway(CompositeServer):
 
     async def run_server(self):
         """Run servers inside CompositeServer forever"""
-        await self._start_gateway_background_runtimes()
         run_server_tasks = []
         for server in self.servers:
             run_server_tasks.append(asyncio.create_task(server.run_server()))
@@ -1747,6 +1743,11 @@ class MarieServerGateway(CompositeServer):
                 )
 
         await self.job_scheduler.start()
+
+        await self._start_gateway_background_runtimes()
+        setup_sensor_worker(
+            self.args.get("sensors", {}), self.args.get("kv_store_kwargs", {})
+        )
 
         attached = attach_sensor_worker_scheduler(self.job_scheduler)
         self.logger.info(

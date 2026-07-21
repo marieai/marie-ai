@@ -50,7 +50,7 @@ class JobScheduler(abc.ABC):
         return getattr(self, '_paused', False)
 
     @abc.abstractmethod
-    def debug_info(self) -> str:
+    async def debug_info(self) -> Dict[str, Any]:
         """Returns debug information about the scheduler."""
         ...
 

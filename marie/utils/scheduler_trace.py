@@ -32,8 +32,10 @@ _COMPACT_EVENTS = {
     "slot_unavailable",
     "slot_reserve_failed",
     "job_db_activate_failed",
+    "hydrated_dag_activation_failed",
     "postgres_pool_acquire_wait_done",
     "postgres_pool_acquire_timeout",
+    "postgres_operation",
     "scheduler_dag_sync_cycle_done",
     "scheduler_dag_sync_cycle_failed",
     "scheduler_dag_sync_cycle_skipped",
@@ -57,11 +59,6 @@ _COMPACT_DROP_FIELDS = {
     "ref_type",
 }
 
-_COMPACT_EVENT_DROP_FIELDS = {
-    "dispatch_batch_start": {"job_ids"},
-    "semaphore_reserve_batch_done": {"job_ids"},
-}
-
 
 def _profile() -> str:
     return os.getenv("MARIE_SCHEDULER_TRACE_PROFILE", _DEFAULT_PROFILE).strip().lower()
@@ -70,8 +67,9 @@ def _profile() -> str:
 def _compact_fields(event: str, fields: dict[str, Any]) -> dict[str, Any] | None:
     if event not in _COMPACT_EVENTS:
         return None
-    dropped_fields = _COMPACT_DROP_FIELDS | _COMPACT_EVENT_DROP_FIELDS.get(event, set())
-    return {key: value for key, value in fields.items() if key not in dropped_fields}
+    return {
+        key: value for key, value in fields.items() if key not in _COMPACT_DROP_FIELDS
+    }
 
 
 def scheduler_trace(event: str, **fields: Any) -> None:

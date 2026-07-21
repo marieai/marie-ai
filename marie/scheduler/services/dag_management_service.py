@@ -2,11 +2,12 @@ import asyncio
 import time
 import traceback
 from collections import defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Awaitable
+from typing import Any, Callable, Dict, List, Optional
 
 from marie.logging_core.logger import MarieLogger
 from marie.query_planner.base import QueryPlan
+from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.repository import JobRepository
@@ -27,33 +28,43 @@ class DAGManagementService:
         repository: JobRepository,
         frontier: MemoryFrontier,
         active_dags: Dict[str, QueryPlan],
-        loop: Optional[asyncio.AbstractEventLoop] = None,
-        executor: Optional[ThreadPoolExecutor] = None,
-        notify_callback: Optional[callable] = None,
+        notify_callback: Optional[Callable] = None,
         max_active_dags: int = 0,
         admission_lock: Optional[asyncio.Lock] = None,
         slot_snapshot_provider: Optional[Callable[[], Dict[str, int]]] = None,
+        job_cache: Optional[dict[str, WorkInfo]] = None,
+        terminal_event_callback: Optional[
+            Callable[[str, WorkInfo], Awaitable[None]]
+        ] = None,
+        resolution_retry_limit: int = 3,
+        resolution_retry_delay: float = 1.0,
+        resolution_retry_backoff: bool = True,
+        resolution_retry_max_delay: float = 30.0,
     ):
         """
         Initialize the DAG management service.
 
         :param repository: JobRepository for database operations
         :param frontier: MemoryFrontier for in-memory DAG tracking (owned by scheduler)
-        :param active_dags: Active DAGs dictionary (owned by scheduler)
-        :param loop: Event loop for async operations
-        :param executor: Thread pool executor for blocking operations
+        :param active_dags: Shared active-DAG read model; this service owns mutations
         :param notify_callback: Callback function to trigger scheduler events
         """
         self.logger = MarieLogger(DAGManagementService.__name__)
         self.repository = repository
         self.frontier = frontier
-        self.active_dags = active_dags  # Reference to scheduler's active_dags
-        self._loop = loop or asyncio.get_event_loop()
-        self._executor = executor
+        self.active_dags = active_dags
         self._notify_callback = notify_callback
         self.max_active_dags = max_active_dags
         self._admission_lock = admission_lock or asyncio.Lock()
         self._slot_snapshot_provider = slot_snapshot_provider or (lambda: {})
+        self._job_cache = job_cache if job_cache is not None else {}
+        self._terminal_event_callback = terminal_event_callback
+        self._dag_resolution_lock = AsyncJobLock()
+        self._terminal_dag_states: dict[str, str] = {}
+        self._resolution_retry_limit = max(0, resolution_retry_limit)
+        self._resolution_retry_delay = max(0.0, resolution_retry_delay)
+        self._resolution_retry_backoff = resolution_retry_backoff
+        self._resolution_retry_max_delay = max(0.0, resolution_retry_max_delay)
 
         # Sync task
         self._sync_task: Optional[asyncio.Task] = None
@@ -133,8 +144,22 @@ class DAGManagementService:
 
         return False, blocked_executors
 
+    async def admit_dag(self, dag_id: str, dag: QueryPlan, *, source: str) -> bool:
+        admitted, _ = await self._admit_dag(dag_id, dag, source=source)
+        return admitted
+
     async def _admit_hydrated_dag(
         self, dag_id: str, dag: QueryPlan, nodes: List[WorkInfo], *, source: str
+    ) -> tuple[bool, str]:
+        return await self._admit_dag(dag_id, dag, nodes=nodes, source=source)
+
+    async def _admit_dag(
+        self,
+        dag_id: str,
+        dag: QueryPlan,
+        *,
+        source: str,
+        nodes: Optional[List[WorkInfo]] = None,
     ) -> tuple[bool, str]:
         async with self._admission_lock:
             if dag_id in self.active_dags:
@@ -150,23 +175,60 @@ class DAGManagementService:
                 )
                 return False, "active_limit"
 
-            admissible, blocked_executors = self._admission_gate(nodes)
-            if not admissible:
-                blocked_summary = ", ".join(sorted(blocked_executors)) or "none"
-                self.logger.debug(
-                    f"Skipping DAG {dag_id} from {source}; no runnable executor path "
-                    f"(blocked={blocked_summary})"
-                )
-                return False, "executor_capacity"
+            if nodes is not None:
+                admissible, blocked_executors = self._admission_gate(nodes)
+                if not admissible:
+                    blocked_summary = ", ".join(sorted(blocked_executors)) or "none"
+                    self.logger.debug(
+                        f"Skipping DAG {dag_id} from {source}; "
+                        f"no runnable executor path (blocked={blocked_summary})"
+                    )
+                    return False, "executor_capacity"
 
             if not await self.repository.mark_dag_as_active(dag_id):
+                try:
+                    diagnostic = await self.repository.diagnose_dag_activation_failure(
+                        dag_id
+                    )
+                except Exception as diagnostic_error:
+                    diagnostic = {
+                        "dag_id": dag_id,
+                        "reason": "diagnostic_query_failed",
+                        "error": repr(diagnostic_error),
+                    }
+                scheduler_trace(
+                    "hydrated_dag_activation_failed",
+                    source=source,
+                    **diagnostic,
+                )
+                if diagnostic.get("dag_state") in {
+                    "cancelled",
+                    "completed",
+                    "expired",
+                    "failed",
+                }:
+                    candidate_type = "hydration" if nodes is not None else "admission"
+                    self.logger.info(
+                        f"Discarded stale {candidate_type} candidate {dag_id} "
+                        f"from {source}; "
+                        f"dag_state={diagnostic.get('dag_state')} "
+                        f"job_states={diagnostic.get('job_states')} "
+                        f"blocking_jobs={diagnostic.get('blocking_jobs')} "
+                        f"historical_blocking_jobs="
+                        f"{diagnostic.get('historical_blocking_jobs')} "
+                        f"dag_state_history={diagnostic.get('dag_state_history')}"
+                    )
+                    return False, "stale_terminal_state"
+
                 self.logger.warning(
-                    f"Failed to mark hydrated DAG {dag_id} active in database "
-                    f"from {source}; leaving it out of active_dags"
+                    f"Failed to mark DAG {dag_id} active in database "
+                    f"from {source}; leaving it out of active_dags. "
+                    f"diagnostic={diagnostic}"
                 )
                 return False, "db_activation_failed"
 
-            await self.frontier.add_dag(dag, nodes)
+            if nodes is not None:
+                await self.frontier.add_dag(dag, nodes)
             self.active_dags[dag_id] = dag
             return True, "admitted"
 
@@ -267,38 +329,10 @@ class DAGManagementService:
         :param log_every_seconds: How often to log progress
         """
 
-        def _stream_dags():
-            conn = self.repository._get_connection()
-            cur = None
-            try:
-                cur = conn.cursor(name="hydrate_frontier_dags")
-                cur.itersize = itersize
-                cur.execute(
-                    "SELECT dag_id, serialized_dag FROM marie_scheduler.hydrate_frontier_dags()"
-                )
-                for dag_id, serialized_dag in cur:
-                    yield dag_id, serialized_dag
-                if cur and not cur.closed:
-                    self.repository._close_cursor(cur)
-                cur = None  # so we don't try to close again in finally
-                conn.commit()
-            except Exception:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                raise
-            finally:
-                if cur and not cur.closed:
-                    self.repository._close_cursor(cur)
-                self.repository._close_connection(conn)
-
         t0 = time.monotonic()
-        self.logger.info("Hydrate: phase 1 (DAG discovery) started…")
+        self.logger.info("Hydrate: phase 1 (DAG discovery) started...")
 
-        dag_rows = await self._loop.run_in_executor(
-            self._executor, lambda: list(_stream_dags())
-        )
+        dag_rows = await self.repository.discover_hydratable_dags()
         discover_elapsed = time.monotonic() - t0
         self.logger.info(
             f"Hydrate: phase 1 complete — discovered {len(dag_rows)} DAG(s) in {discover_elapsed:.2f}s "
@@ -337,34 +371,6 @@ class DAGManagementService:
             f"(skipped {parse_skipped}, total discovered {len(dag_rows)})."
         )
 
-        def _stream_jobs_for_batch(dag_ids_batch):
-            conn = self.repository._get_connection()
-            cur = None
-            try:
-                dag_ids_text = [str(x) for x in dag_ids_batch]
-                cur = conn.cursor(name="hydrate_frontier_jobs")
-                cur.itersize = itersize
-                cur.execute(
-                    "SELECT dag_id, job FROM marie_scheduler.hydrate_frontier_jobs((%s)::uuid[])",
-                    (dag_ids_text,),
-                )
-                for row in cur:
-                    yield row
-                if cur and not cur.closed:
-                    self.repository._close_cursor(cur)
-                cur = None
-                conn.commit()
-            except Exception:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                raise
-            finally:
-                if cur and not cur.closed:
-                    self.repository._close_cursor(cur)
-                self.repository._close_connection(conn)
-
         def _chunks(seq, n):
             for i in range(0, len(seq), n):
                 yield seq[i : i + n]
@@ -389,9 +395,7 @@ class DAGManagementService:
             batch_idx += 1
             b_start = time.monotonic()
 
-            rows = await self._loop.run_in_executor(
-                self._executor, lambda: list(_stream_jobs_for_batch(batch))
-            )
+            rows = await self.repository.load_hydratable_jobs(batch)
 
             for dag_id, j in rows:
                 dag_id = str(dag_id)
@@ -451,6 +455,7 @@ class DAGManagementService:
         skipped = 0
         deferred_limit = 0
         deferred_capacity = 0
+        stale_candidates = 0
         for dag_id in dag_ids_ordered:
             if dag_id not in buckets:
                 skipped += 1
@@ -467,8 +472,12 @@ class DAGManagementService:
                     added += 1
                 elif reason == "active_limit":
                     deferred_limit += 1
-                else:
+                elif reason == "executor_capacity":
                     deferred_capacity += 1
+                elif reason == "stale_terminal_state":
+                    stale_candidates += 1
+                else:
+                    skipped += 1
             except Exception as e:
                 self.logger.error(f"Hydrate: frontier.add_dag failed for {dag_id}: {e}")
                 skipped += 1
@@ -477,7 +486,8 @@ class DAGManagementService:
         self.logger.info(
             f"Hydrate: complete — {added} DAG(s) added to frontier, "
             f"{deferred_limit} deferred by active DAG limit, "
-            f"{deferred_capacity} deferred by executor capacity, {skipped} skipped, "
+            f"{deferred_capacity} deferred by executor capacity, "
+            f"{stale_candidates} stale candidate(s), {skipped} skipped, "
             f"{processed_jobs} job(s) total. "
             f"Total time: {total_elapsed:.2f}s."
         )
@@ -508,21 +518,27 @@ class DAGManagementService:
 
         return dag
 
-    def remove_dag(self, dag_id: str, reason: str) -> bool:
-        """
-        Remove a DAG from memory tracking.
+    async def evict_dag(
+        self,
+        dag_id: str,
+        reason: str,
+        *,
+        clear_terminal_state: bool = True,
+    ) -> bool:
+        if clear_terminal_state:
+            self._terminal_dag_states.pop(dag_id, None)
 
-        :param dag_id: DAG ID to remove
-        :param reason: Reason for removal (for logging)
-        :return: True if removed, False if not found
-        """
-        if dag_id in self.active_dags:
-            del self.active_dags[dag_id]
-            self.logger.warning(f"Removed DAG {dag_id} from active_dags ({reason})")
-            return True
-        else:
-            self.logger.debug(f"DAG {dag_id} not in active_dags ({reason})")
-            return False
+        dag_jobs = await self.frontier.get_jobs_by_dag_id(dag_id)
+        stats = await self.frontier.finalize_dag(dag_id)
+        for dag_job in dag_jobs:
+            self._job_cache.pop(dag_job.id, None)
+
+        removed = self.active_dags.pop(dag_id, None) is not None
+        self.logger.info(
+            f"Evicted DAG {dag_id} from memory ({reason}); "
+            f"removed={removed}, finalize_stats={stats}"
+        )
+        return removed
 
     async def reset_all_dags(self) -> Dict[str, Any]:
         """
@@ -536,9 +552,9 @@ class DAGManagementService:
             cleared_dags = list(self.active_dags.keys()) if self.active_dags else []
 
             for dag_id in cleared_dags:
-                await self.frontier.finalize_dag(dag_id)
+                await self.evict_dag(dag_id, "active DAG reset")
 
-            self.active_dags = {}
+            self.active_dags.clear()
 
             self.logger.info(f"Reset active DAGs: cleared {cleared_count} DAGs")
             if cleared_dags:
@@ -570,146 +586,157 @@ class DAGManagementService:
         try:
             op = payload.get("op")
             dag_id = payload.get("dag_id")
-
             if not dag_id:
                 self.logger.warning(f"Received notification without dag_id: {payload}")
                 return
 
-            self.logger.info(
-                f"Received DAG state notification: op={op}, dag_id={dag_id}"
-            )
-
             if op == "DELETE":
-                # DAG was deleted from database, remove from MemoryFrontier
-                self.logger.info(
-                    f"DAG {dag_id} was deleted, removing from memory frontier"
-                )
-                stats = await self.frontier.finalize_dag(dag_id)
-                self.logger.info(f"Finalized DAG {dag_id} from memory: {stats}")
-
-                # Remove from active_dags tracking
-                if dag_id in self.active_dags:
-                    del self.active_dags[dag_id]
-                    self.logger.info(f"Removed DAG {dag_id} from active_dags")
-
+                await self.evict_dag(dag_id, "deleted from database")
             elif op == "UPDATE":
                 new_state = payload.get("state")
-                self.logger.info(f"DAG {dag_id} state changed to: {new_state}")
-
-                # Handle different states appropriately
                 if new_state == "created":
-                    # DAG was reset (via reset_all or similar)
-                    # Remove from memory and re-hydrate from DB
-                    self.logger.info(
-                        f"DAG {dag_id} reset to 'created' - removing from memory and re-hydrating from DB"
-                    )
-                    stats = await self.frontier.finalize_dag(dag_id)
-                    self.logger.info(
-                        f"Removed DAG {dag_id} from memory frontier: {stats}"
-                    )
-
-                    if dag_id in self.active_dags:
-                        del self.active_dags[dag_id]
-                        self.logger.info(f"Removed DAG {dag_id} from active_dags")
-
-                    # Re-hydrate the DAG from DB with fresh state
-                    hydrated = await self.hydrate_single_dag(dag_id)
-                    if hydrated:
-                        self.logger.info(
-                            f"Successfully re-hydrated DAG {dag_id} from database"
-                        )
-                    else:
+                    await self.evict_dag(dag_id, "reset to created")
+                    if not await self.hydrate_single_dag(dag_id):
                         self.logger.warning(
-                            f"Could not re-hydrate DAG {dag_id} - may not have eligible jobs"
+                            f"Could not re-hydrate DAG {dag_id}; "
+                            "it may not have eligible jobs"
                         )
-
-                elif new_state == "cancelled":
-                    # DAG was cancelled - remove from active processing
-                    self.logger.info(
-                        f"DAG {dag_id} cancelled - removing from memory and active processing"
+                elif new_state in {"cancelled", "suspended"}:
+                    await self.evict_dag(dag_id, f"state changed to {new_state}")
+                elif new_state in {"completed", "failed"}:
+                    await self.evict_dag(
+                        dag_id,
+                        f"state changed to {new_state}",
+                        clear_terminal_state=False,
                     )
-                    stats = await self.frontier.finalize_dag(dag_id)
-                    self.logger.info(
-                        f"Removed cancelled DAG {dag_id} from memory: {stats}"
-                    )
-
-                    if dag_id in self.active_dags:
-                        del self.active_dags[dag_id]
-                        self.logger.info(
-                            f"Removed cancelled DAG {dag_id} from active_dags"
-                        )
-
-                elif new_state == "suspended":
-                    # DAG was suspended - remove from active execution but keep tracked
-                    self.logger.info(
-                        f"DAG {dag_id} suspended - removing from active execution"
-                    )
-                    stats = await self.frontier.finalize_dag(dag_id)
-                    self.logger.info(
-                        f"Removed suspended DAG {dag_id} from memory: {stats}"
-                    )
-
-                    # Keep in active_dags for tracking but it won't be scheduled
-                    # When resumed, it will be re-hydrated from DB
-
-                elif new_state in ["completed", "failed"]:
-                    # DAG finished - clean up memory
-                    self.logger.info(
-                        f"DAG {dag_id} finished with state '{new_state}' - cleaning up memory"
-                    )
-                    stats = await self.frontier.finalize_dag(dag_id)
-                    self.logger.info(
-                        f"Cleaned up finished DAG {dag_id} from memory: {stats}"
-                    )
-
-                    if dag_id in self.active_dags:
-                        del self.active_dags[dag_id]
-                        self.logger.info(
-                            f"Removed finished DAG {dag_id} from active_dags"
-                        )
-
-                elif new_state in ["active", "running", "pending"]:
+                elif new_state in {"active", "running", "pending"}:
                     if dag_id not in self.active_dags:
                         self.logger.debug(
                             f"DAG {dag_id} is '{new_state}' in DB but is not local "
                             "to this scheduler yet; it may be admitted by the current "
                             "cycle, owned by another scheduler, or hydrated later."
                         )
-
                 else:
                     self.logger.warning(
                         f"Unknown DAG state '{new_state}' for DAG {dag_id}"
                     )
-
             else:
                 self.logger.warning(f"Unknown operation '{op}' in DAG notification")
 
-            # Notify scheduler of state change
             if self._notify_callback:
                 await self._notify_callback()
+        except Exception as error:
+            self.logger.error(
+                f"Error handling DAG state notification: {error}", exc_info=True
+            )
 
-        except Exception as e:
-            self.logger.error(f"Error handling DAG state notification: {e}")
-            traceback.print_exc()
+    def _get_resolution_retry_delay(self, retry_number: int) -> float:
+        if not self._resolution_retry_backoff or retry_number <= 1:
+            return self._resolution_retry_delay
+        return min(
+            self._resolution_retry_max_delay,
+            self._resolution_retry_delay * (2 ** (retry_number - 1)),
+        )
+
+    async def resolve_dag_status_with_retry(
+        self,
+        job_id: str,
+        work_info: WorkInfo,
+        *,
+        source: str,
+    ) -> bool:
+        retry_number = 0
+        while True:
+            try:
+                return await self.resolve_dag_status(job_id, work_info)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                retry_number += 1
+                if retry_number > self._resolution_retry_limit:
+                    self.logger.error(
+                        f"Exhausted {self._resolution_retry_limit} DAG resolution "
+                        f"retries for dag={work_info.dag_id}, job={job_id}, "
+                        f"source={source}: {error}"
+                    )
+                    return False
+
+                delay = self._get_resolution_retry_delay(retry_number)
+                self.logger.warning(
+                    f"Retrying DAG resolution {retry_number}/"
+                    f"{self._resolution_retry_limit} for dag={work_info.dag_id}, "
+                    f"job={job_id}, source={source} after error: {error}; "
+                    f"waiting {delay:.2f}s"
+                )
+                if delay > 0:
+                    await asyncio.sleep(delay)
+
+    async def resolve_dag_status(
+        self,
+        job_id: str,
+        work_info: WorkInfo,
+    ) -> bool:
+        dag_id = work_info.dag_id
+        if not dag_id:
+            self.logger.warning(
+                f"Skipping DAG status resolution for job without dag_id: {job_id}"
+            )
+            return False
+
+        async with self._dag_resolution_lock[dag_id]:
+            dag_state = await self.repository.resolve_dag_state(dag_id)
+            if dag_state not in {"completed", "failed"}:
+                return False
+
+            previous_state = self._terminal_dag_states.get(dag_id)
+            if previous_state is not None:
+                self.logger.debug(
+                    f"DAG {dag_id} was already handled as {previous_state}"
+                )
+                return False
+
+            self._terminal_dag_states[dag_id] = dag_state
+            try:
+                if dag_state == "failed":
+                    cancelled = await self.repository.cancel_pending_jobs_for_dag(
+                        dag_id=dag_id,
+                        output_metadata={
+                            "on_complete": "failed",
+                            "cancel_reason": "dag_failed",
+                            "terminal_dag_state": dag_state,
+                            "resolved_by_job_id": job_id,
+                        },
+                    )
+                    self.logger.info(
+                        f"Cancelled {cancelled} pending jobs for failed DAG {dag_id}"
+                    )
+
+                await self.evict_dag(
+                    dag_id,
+                    f"resolved as {dag_state}",
+                    clear_terminal_state=False,
+                )
+                if self._terminal_event_callback:
+                    await self._terminal_event_callback(dag_state, work_info)
+                return True
+            except Exception:
+                self._terminal_dag_states.pop(dag_id, None)
+                raise
 
     # ==================== DAG Synchronization ====================
 
-    async def start_sync(self, sync_interval: int = 30):
-        """
-        Start periodic DAG synchronization task.
-
-        :param sync_interval: How often to sync DAGs (in seconds)
-        """
-        if self._sync_task:
+    async def start_sync(self, sync_interval: int = 30) -> None:
+        if self._sync_task and not self._sync_task.done():
             self.logger.warning("DAG sync task already running")
             return
 
         self._running = True
-        self._sync_task = asyncio.create_task(self._sync_loop(sync_interval))
+        self._sync_task = asyncio.create_task(
+            self._sync_loop(sync_interval), name="scheduler-dag-sync"
+        )
         self.logger.info(f"Started DAG sync task (interval: {sync_interval}s)")
 
-    async def stop_sync(self):
-        """Stop the periodic DAG synchronization task."""
+    async def stop_sync(self) -> None:
         self._running = False
         if self._sync_task:
             self._sync_task.cancel()
@@ -720,70 +747,68 @@ class DAGManagementService:
             self._sync_task = None
             self.logger.info("Stopped DAG sync task")
 
-    async def _sync_loop(self, interval: int):
-        """
-        Periodic sync loop that validates DAGs in memory against database.
-
-        :param interval: Sync interval in seconds
-        """
-        self.logger.info(f"Starting DAG sync loop (interval: {interval}s)")
+    async def _sync_loop(self, interval: int) -> None:
+        scheduler_trace("scheduler_dag_sync_loop_start", interval=interval)
 
         while self._running:
             try:
-                await self._sync_once()
-            except Exception as e:
-                self.logger.error(f"Error in DAG sync loop: {e}")
+                await self.sync_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                scheduler_trace("scheduler_dag_sync_cycle_failed", error=repr(error))
+                self.logger.error(f"Error validating DAGs: {error}")
 
             await asyncio.sleep(interval)
 
-        self.logger.info("DAG sync loop stopped")
+        scheduler_trace("scheduler_dag_sync_loop_stopped")
 
-    async def _sync_once(self):
-        """
-        Perform a single synchronization: validate that DAGs in memory
-        still exist and are active in the database.
-        """
+    async def sync_once(self) -> None:
         if not self.active_dags:
+            scheduler_trace("scheduler_dag_sync_cycle_skipped", reason="no_active_dags")
             self.logger.debug("No active DAGs in memory to validate")
             return
 
         memory_dag_ids = list(self.active_dags.keys())
+        scheduler_trace(
+            "scheduler_dag_sync_cycle_start", active_dags=len(memory_dag_ids)
+        )
         self.logger.debug(f"Validating {len(memory_dag_ids)} DAGs in memory")
 
-        def _db_check():
-            """Synchronous database check."""
-            cursor = None
-            conn = None
+        terminal_dags: set[str] = set()
+        for dag_id in memory_dag_ids:
             try:
-                placeholders = ",".join(["%s"] * len(memory_dag_ids))
-                query = f"""
-                    SELECT id FROM marie_scheduler.dag
-                    WHERE id IN ({placeholders}) AND state = 'active'
-                """
-
-                conn = self.repository._get_connection()
-                cursor = self.repository._execute_sql_gracefully(
-                    query, memory_dag_ids, return_cursor=True, connection=conn
+                dag_state = await self.repository.resolve_dag_state(dag_id)
+                if dag_state in {"completed", "failed"}:
+                    terminal_dags.add(dag_id)
+            except Exception as error:
+                self.logger.warning(
+                    f"Failed to resolve DAG state for {dag_id} during sync: {error}"
                 )
-                if not cursor:
-                    return set()
 
-                valid_dag_records = cursor.fetchall()
-                return {record[0] for record in valid_dag_records}
-            finally:
-                self.repository._close_cursor(cursor)
-                self.repository._close_connection(conn)
-
-        # Run DB check in executor
-        valid_db_dags = await self._loop.run_in_executor(self._executor, _db_check)
-        invalid_dags = set(memory_dag_ids) - valid_db_dags
+        valid_db_dags = await self.repository.get_active_dag_ids(memory_dag_ids)
+        invalid_dags = (set(memory_dag_ids) - valid_db_dags).union(terminal_dags)
 
         if invalid_dags:
             self.logger.info(f"Found {len(invalid_dags)} invalid DAGs in memory")
-            for dag_id in invalid_dags:
-                self.remove_dag(dag_id, "no longer active or deleted in database")
+            for dag_id in sorted(invalid_dags):
+                await self.evict_dag(
+                    dag_id,
+                    "no longer active or deleted in database",
+                    clear_terminal_state=dag_id not in terminal_dags,
+                )
+            if self._notify_callback:
+                await self._notify_callback()
         else:
             self.logger.debug("All DAGs in memory are still valid")
+
+        scheduler_trace(
+            "scheduler_dag_sync_cycle_done",
+            active_dags=len(memory_dag_ids),
+            valid_dags=len(valid_db_dags),
+            terminal_dags=len(terminal_dags),
+            invalid_dags=len(invalid_dags),
+        )
 
     async def refresh_frontier_priorities(
         self,
@@ -835,94 +860,6 @@ class DAGManagementService:
         else:
             priorities = {}
 
-        def _discover_hydratable_dags() -> List[Tuple[str, Dict]]:
-            conn = None
-            cur = None
-            try:
-                phase_started = time.perf_counter()
-                scheduler_trace(
-                    "scheduler_priority_refresh_frontier_discover_connection_start",
-                    source=source,
-                    refresh_id=refresh_id,
-                )
-                conn = self.repository._get_connection()
-                scheduler_trace(
-                    "scheduler_priority_refresh_frontier_discover_connection_done",
-                    source=source,
-                    refresh_id=refresh_id,
-                    elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
-                )
-
-                cur = conn.cursor()
-                query = (
-                    "SELECT dag_id, serialized_dag "
-                    "FROM marie_scheduler.hydrate_frontier_dags()"
-                )
-                if hydrate_missing_limit > 0:
-                    query += f" LIMIT {int(hydrate_missing_limit)}"
-                phase_started = time.perf_counter()
-                scheduler_trace(
-                    "scheduler_priority_refresh_frontier_discover_query_start",
-                    source=source,
-                    refresh_id=refresh_id,
-                    hydrate_missing_limit=hydrate_missing_limit,
-                )
-                cur.execute(query)
-                scheduler_trace(
-                    "scheduler_priority_refresh_frontier_discover_query_done",
-                    source=source,
-                    refresh_id=refresh_id,
-                    elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
-                )
-                phase_started = time.perf_counter()
-                scheduler_trace(
-                    "scheduler_priority_refresh_frontier_discover_fetch_start",
-                    source=source,
-                    refresh_id=refresh_id,
-                )
-                rows = cur.fetchall()
-                scheduler_trace(
-                    "scheduler_priority_refresh_frontier_discover_fetch_done",
-                    source=source,
-                    refresh_id=refresh_id,
-                    row_count=len(rows),
-                    elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
-                )
-                phase_started = time.perf_counter()
-                scheduler_trace(
-                    "scheduler_priority_refresh_frontier_discover_commit_start",
-                    source=source,
-                    refresh_id=refresh_id,
-                )
-                conn.commit()
-                scheduler_trace(
-                    "scheduler_priority_refresh_frontier_discover_commit_done",
-                    source=source,
-                    refresh_id=refresh_id,
-                    elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
-                )
-                return [
-                    (str(dag_id), serialized_dag) for dag_id, serialized_dag in rows
-                ]
-            except Exception as exc:
-                scheduler_trace(
-                    "scheduler_priority_refresh_frontier_discover_failed",
-                    source=source,
-                    refresh_id=refresh_id,
-                    error=repr(exc),
-                )
-                try:
-                    if conn is not None:
-                        conn.rollback()
-                except Exception:
-                    pass
-                raise
-            finally:
-                if cur and not cur.closed:
-                    self.repository._close_cursor(cur)
-                if conn is not None:
-                    self.repository._close_connection(conn)
-
         phase_started = time.perf_counter()
         scheduler_trace(
             "scheduler_priority_refresh_frontier_discover_start",
@@ -932,8 +869,8 @@ class DAGManagementService:
             active_dags=len(self.active_dags),
             max_active_dags=self.max_active_dags,
         )
-        hydratable_dags = await self._loop.run_in_executor(
-            self._executor, _discover_hydratable_dags
+        hydratable_dags = await self.repository.discover_hydratable_dags(
+            hydrate_missing_limit
         )
         scheduler_trace(
             "scheduler_priority_refresh_frontier_discover_done",

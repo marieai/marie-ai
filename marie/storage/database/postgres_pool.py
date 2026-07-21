@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 
 import psycopg
-from psycopg.rows import DictRow, dict_row
-from psycopg_pool import AsyncConnectionPool, ConnectionPool
+from psycopg.rows import AsyncRowFactory, DictRow, dict_row
+from psycopg_pool import AsyncConnectionPool, ConnectionPool, PoolTimeout
+
+from marie.utils.scheduler_trace import scheduler_trace
 
 _PARAMETER = re.compile(r"\$(\d+)")
 
@@ -34,7 +37,10 @@ def _sizes(config: Mapping[str, Any]) -> tuple[int, int]:
     )
 
 
-def _normalize(query: str, args: Sequence[Any]) -> tuple[str, tuple[Any, ...]]:
+def _normalize(query: str, args: Sequence[Any]) -> tuple[str, tuple[Any, ...] | None]:
+    if not args:
+        return query, None
+
     indexes: list[int] = []
 
     def replace(match: re.Match[str]) -> str:
@@ -48,6 +54,14 @@ def _normalize(query: str, args: Sequence[Any]) -> tuple[str, tuple[Any, ...]]:
         return normalized, tuple(args[index] for index in indexes)
     except IndexError as error:
         raise ValueError("SQL placeholder references a missing argument") from error
+
+
+def _first_value(row: Any) -> Any:
+    if row is None:
+        return None
+    if isinstance(row, Mapping):
+        return next(iter(row.values()))
+    return row[0]
 
 
 class PostgresPool:
@@ -68,7 +82,9 @@ class PostgresPool:
             open=False,
             timeout=float(config.get("pool_acquire_timeout_seconds", 30.0)),
         )
-        pool.open(wait=True, timeout=float(config.get("pool_open_timeout_seconds", 10.0)))
+        pool.open(
+            wait=True, timeout=float(config.get("pool_open_timeout_seconds", 10.0))
+        )
         self._pool = pool
 
     @contextmanager
@@ -94,8 +110,7 @@ class PostgresPool:
             return connection.execute(query, params).fetchone()
 
     def fetchval(self, query: str, *args: Any) -> Any:
-        row = self.fetchrow(query, *args)
-        return next(iter(row.values())) if row else None
+        return _first_value(self.fetchrow(query, *args))
 
     def executemany(self, query: str, args: Sequence[Sequence[Any]]) -> None:
         rows = [tuple(row) for row in args]
@@ -139,7 +154,9 @@ class AsyncPostgresPool:
             open=False,
             timeout=float(config.get("pool_acquire_timeout_seconds", 30.0)),
         )
-        await pool.open(wait=True, timeout=float(config.get("pool_open_timeout_seconds", 10.0)))
+        await pool.open(
+            wait=True, timeout=float(config.get("pool_open_timeout_seconds", 10.0))
+        )
         self._pool = pool
 
     @property
@@ -169,12 +186,9 @@ class AsyncPostgresPool:
             return await (await connection.execute(query, params)).fetchone()
 
     async def fetchval(self, query: str, *args: Any) -> Any:
-        row = await self.fetchrow(query, *args)
-        return next(iter(row.values())) if row else None
+        return _first_value(await self.fetchrow(query, *args))
 
-    async def executemany(
-        self, query: str, args: Sequence[Sequence[Any]]
-    ) -> None:
+    async def executemany(self, query: str, args: Sequence[Sequence[Any]]) -> None:
         rows = [tuple(row) for row in args]
         if not rows:
             return
@@ -201,30 +215,66 @@ class AsyncPostgresConnection:
         self._connection = connection
 
     async def execute(self, query: str, *args: Any) -> str:
+        started = time.perf_counter()
         query, params = _normalize(query, args)
-        return (await self._connection.execute(query, params)).statusmessage or ""
+        cursor = await self._connection.execute(query, params)
+        scheduler_trace(
+            "postgres_operation",
+            operation="execute",
+            statement_count=1,
+            rows_read=0,
+            rows_written=max(0, cursor.rowcount),
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        )
+        return cursor.statusmessage or ""
 
     async def fetch(self, query: str, *args: Any) -> list[DictRow]:
+        started = time.perf_counter()
         query, params = _normalize(query, args)
-        return await (await self._connection.execute(query, params)).fetchall()
+        rows = await (await self._connection.execute(query, params)).fetchall()
+        scheduler_trace(
+            "postgres_operation",
+            operation="fetch",
+            statement_count=1,
+            rows_read=len(rows),
+            rows_written=0,
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        )
+        return rows
 
     async def fetchrow(self, query: str, *args: Any) -> DictRow | None:
+        started = time.perf_counter()
         query, params = _normalize(query, args)
-        return await (await self._connection.execute(query, params)).fetchone()
+        row = await (await self._connection.execute(query, params)).fetchone()
+        scheduler_trace(
+            "postgres_operation",
+            operation="fetchrow",
+            statement_count=1,
+            rows_read=1 if row is not None else 0,
+            rows_written=0,
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        )
+        return row
 
     async def fetchval(self, query: str, *args: Any) -> Any:
-        row = await self.fetchrow(query, *args)
-        return next(iter(row.values())) if row else None
+        return _first_value(await self.fetchrow(query, *args))
 
-    async def executemany(
-        self, query: str, args: Sequence[Sequence[Any]]
-    ) -> None:
+    async def executemany(self, query: str, args: Sequence[Sequence[Any]]) -> None:
+        started = time.perf_counter()
         rows = [tuple(row) for row in args]
         if rows:
             legacy_query = query
             query, _ = _normalize(legacy_query, rows[0])
             rows = [_normalize(legacy_query, row)[1] for row in rows]
         await self._connection.executemany(query, rows)
+        scheduler_trace(
+            "postgres_operation",
+            operation="executemany",
+            statement_count=len(rows),
+            rows_read=0,
+            rows_written=len(rows),
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        )
 
     def transaction(self):
         return self._connection.transaction()
@@ -238,12 +288,71 @@ class AsyncPostgresConnectionPool(AsyncPostgresPool):
         instance._pool = None
         return instance
 
+    async def initialize(
+        self,
+        config: Mapping[str, Any],
+        *,
+        row_factory: AsyncRowFactory[Any] = dict_row,
+    ) -> None:
+        if self._pool is not None:
+            return
+        minimum, maximum = _sizes(config)
+        kwargs = _connection_kwargs(config)
+        kwargs["row_factory"] = row_factory
+        pool = AsyncConnectionPool(
+            "",
+            min_size=minimum,
+            max_size=maximum,
+            kwargs=kwargs,
+            open=False,
+            timeout=float(config.get("pool_acquire_timeout_seconds", 30.0)),
+        )
+        await pool.open(
+            wait=True,
+            timeout=float(config.get("pool_open_timeout_seconds", 10.0)),
+        )
+        self._pool = pool
+
     @asynccontextmanager
     async def acquire(self) -> AsyncIterator[AsyncPostgresConnection]:
         if self._pool is None:
             raise RuntimeError("Pool not initialized. Call initialize() first.")
-        async with self._pool.connection() as connection:
-            yield AsyncPostgresConnection(connection)
+        started = time.perf_counter()
+        try:
+            async with self._pool.connection() as connection:
+                scheduler_trace(
+                    "postgres_pool_acquire_wait_done",
+                    pool="async_scheduler",
+                    elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                )
+                yield AsyncPostgresConnection(connection)
+        except PoolTimeout:
+            scheduler_trace(
+                "postgres_pool_acquire_timeout",
+                pool="async_scheduler",
+                elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            )
+            raise
+
+    async def execute(self, query: str, *args: Any) -> str:
+        async with self.acquire() as connection:
+            return await connection.execute(query, *args)
+
+    async def fetch(self, query: str, *args: Any) -> list[Any]:
+        async with self.acquire() as connection:
+            return await connection.fetch(query, *args)
+
+    async def fetchrow(self, query: str, *args: Any) -> Any:
+        async with self.acquire() as connection:
+            return await connection.fetchrow(query, *args)
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        async with self.acquire() as connection:
+            return await connection.fetchval(query, *args)
+
+    async def executemany(self, query: str, args: Sequence[Sequence[Any]]) -> None:
+        async with self.acquire() as connection:
+            await connection.executemany(query, args)
 
     async def close(self) -> None:
         if self._pool is not None:
@@ -266,4 +375,9 @@ class AsyncPostgresConnectionPool(AsyncPostgresPool):
         self._pool = pool
 
 
-__all__ = ["AsyncPostgresConnectionPool", "AsyncPostgresPool", "PostgresPool"]
+__all__ = [
+    "AsyncPostgresConnection",
+    "AsyncPostgresConnectionPool",
+    "AsyncPostgresPool",
+    "PostgresPool",
+]

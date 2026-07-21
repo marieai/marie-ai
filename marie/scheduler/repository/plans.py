@@ -4,8 +4,6 @@ from typing import Any, Dict
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from marie.scheduler.models import WorkInfo
-from marie.scheduler.search_documents import JobSearchDocument
 from marie.scheduler.state import WorkState
 
 
@@ -60,90 +58,82 @@ def _jsonb_literal(value: Any) -> str:
     return sql.Literal(Jsonb(value)).as_string()
 
 
-def insert_job(schema: str, work_info: WorkInfo) -> str:
-    dependencies_json = _jsonb_literal(work_info.dependencies or [])
-
+def insert_jobs(schema: str) -> str:
     return f"""
+        WITH jobs AS (
+            SELECT *
+            FROM jsonb_to_recordset(%s::jsonb) AS job (
+                id uuid,
+                dag_id uuid,
+                name text,
+                priority integer,
+                data jsonb,
+                retry_limit integer,
+                retry_delay integer,
+                retry_backoff boolean,
+                start_after timestamptz,
+                expire_in_seconds integer,
+                keep_until timestamptz,
+                dependencies jsonb,
+                job_level integer,
+                soft_sla timestamptz,
+                hard_sla timestamptz
+            )
+        )
         INSERT INTO {schema}.job (
-          id,
-          dag_id,
-          name,
-          priority,
-          state,    
-          data,      
-          start_after,
-          expire_in,          
-          keep_until,
-          retry_limit,
-          retry_delay,
-          retry_backoff,
-          policy,
-          dependencies,
-          job_level,
-          soft_sla,
-          hard_sla
+            id,
+            dag_id,
+            name,
+            priority,
+            state,
+            data,
+            start_after,
+            expire_in,
+            keep_until,
+            retry_limit,
+            retry_delay,
+            retry_backoff,
+            policy,
+            dependencies,
+            job_level,
+            soft_sla,
+            hard_sla
         )
         SELECT
-          id,
-          j.dag_id,
-          j.name,
-          priority,
-          state,         
-          data,
-          start_after,
-          CASE
-            WHEN expire_in IS NOT NULL THEN CAST(expire_in as interval)
-            WHEN q.expire_seconds IS NOT NULL THEN q.expire_seconds * interval '1s'
-            WHEN expire_in_default IS NOT NULL THEN CAST(expire_in_default as interval)
-            ELSE interval '15 minutes'
-          END as expire_in,
-          CASE
-            WHEN right(keep_until, 1) = 'Z' THEN CAST(keep_until as timestamptz)
-          END as keep_until,
-
-          COALESCE(j.retry_limit, q.retry_limit, retry_limit_default, 2) as retry_limit,
-          CASE
-            WHEN COALESCE(j.retry_backoff, q.retry_backoff, retry_backoff_default, false)
-            THEN GREATEST(COALESCE(j.retry_delay, q.retry_delay, retry_delay_default), 1)
-            ELSE COALESCE(j.retry_delay, q.retry_delay, retry_delay_default, 0)
-          END as retry_delay,
-
-          COALESCE(j.retry_backoff, q.retry_backoff, retry_backoff_default, false) as retry_backoff,
-          q.policy,          
-          {dependencies_json} as dependencies,
-          j.job_level,
-          j.soft_sla,
-          j.hard_sla
-        FROM
-        ( SELECT
-                '{work_info.id}'::uuid as id,
-                '{work_info.dag_id}'::uuid as dag_id,
-                '{work_info.name}'::text as name,
-                {work_info.priority}::int as priority,
-                {work_info.job_level}::int as job_level,
-                CAST('{to_timestamp_with_tz(work_info.soft_sla)}' as timestamptz) as soft_sla,
-                CAST('{to_timestamp_with_tz(work_info.hard_sla)}' as timestamptz) as hard_sla,
-                '{WorkState.CREATED.value}'::{schema}.job_state as state,
-                {work_info.retry_limit}::int as retry_limit,
-                CASE
-                  WHEN right('{to_timestamp_with_tz(work_info.start_after)}', 1) = 'Z' THEN CAST('{to_timestamp_with_tz(work_info.start_after)}' as timestamptz)
-                  ELSE now() + CAST(COALESCE('{to_timestamp_with_tz(work_info.start_after)}','0') as interval)
-                END as start_after,
-
-                CAST('{work_info.expire_in_seconds}' as interval) as expire_in,
-                {_jsonb_literal(work_info.data)} as data,
-                {work_info.retry_delay}::int as retry_delay,
-                {work_info.retry_backoff}::bool as retry_backoff,
-                '{to_timestamp_with_tz(work_info.keep_until)}'::text as keep_until,
-
-                2::int as retry_limit_default,
-                2::int as retry_delay_default,
-                False::boolean as retry_backoff_default,
-                interval '60s'::interval as expire_in_default,
-                now() + interval '14 days'::interval as keep_until_default
-        )  j JOIN {schema}.queue q ON j.name = q.name
-    ON CONFLICT DO NOTHING
-    RETURNING id
+            job.id,
+            job.dag_id,
+            job.name,
+            job.priority,
+            '{WorkState.CREATED.value}'::{schema}.job_state,
+            job.data,
+            job.start_after,
+            CASE
+                WHEN job.expire_in_seconds IS NOT NULL
+                    THEN make_interval(secs => job.expire_in_seconds)
+                WHEN queue.expire_seconds IS NOT NULL
+                    THEN queue.expire_seconds * interval '1 second'
+                ELSE interval '60 seconds'
+            END,
+            job.keep_until,
+            COALESCE(job.retry_limit, queue.retry_limit, 2),
+            CASE
+                WHEN COALESCE(job.retry_backoff, queue.retry_backoff, false)
+                    THEN GREATEST(
+                        COALESCE(job.retry_delay, queue.retry_delay, 2),
+                        1
+                    )
+                ELSE COALESCE(job.retry_delay, queue.retry_delay, 2)
+            END,
+            COALESCE(job.retry_backoff, queue.retry_backoff, false),
+            queue.policy,
+            COALESCE(job.dependencies, '[]'::jsonb),
+            job.job_level,
+            job.soft_sla,
+            job.hard_sla
+        FROM jobs job
+        JOIN {schema}.queue queue ON job.name = queue.name
+        ON CONFLICT DO NOTHING
+        RETURNING id
     """
 
 
@@ -192,8 +182,31 @@ def insert_dag(
     """
 
 
-def insert_job_search_document(schema: str, document: JobSearchDocument) -> str:
+def insert_job_search_documents(schema: str) -> str:
     return f"""
+        WITH documents AS (
+            SELECT *
+            FROM jsonb_to_recordset(%s::jsonb) AS document (
+                job_id uuid,
+                queue_name text,
+                dag_id uuid,
+                planner text,
+                job_name text,
+                node_label text,
+                ref_id text,
+                ref_type text,
+                asset_uri text,
+                metadata_queue_id text,
+                layout text,
+                mode text,
+                policy text,
+                method text,
+                endpoint text,
+                executor text,
+                model_name text,
+                search_text text
+            )
+        )
         INSERT INTO {schema}.job_search_document (
             job_id,
             queue_name,
@@ -214,26 +227,26 @@ def insert_job_search_document(schema: str, document: JobSearchDocument) -> str:
             model_name,
             search_text
         )
-        VALUES (
-            {_literal(document.job_id)}::uuid,
-            {_literal(document.queue_name)}::text,
-            {_literal(document.dag_id)}::uuid,
-            {_literal(document.planner)}::text,
-            {_literal(document.job_name)}::text,
-            {_literal(document.node_label)}::text,
-            {_literal(document.ref_id)}::text,
-            {_literal(document.ref_type)}::text,
-            {_literal(document.asset_uri)}::text,
-            {_literal(document.metadata_queue_id)}::text,
-            {_literal(document.layout)}::text,
-            {_literal(document.mode)}::text,
-            {_literal(document.policy)}::text,
-            {_literal(document.method)}::text,
-            {_literal(document.endpoint)}::text,
-            {_literal(document.executor)}::text,
-            {_literal(document.model_name)}::text,
-            {_literal(document.search_text)}::text
-        )
+        SELECT
+            document.job_id,
+            document.queue_name,
+            document.dag_id,
+            document.planner,
+            document.job_name,
+            document.node_label,
+            document.ref_id,
+            document.ref_type,
+            document.asset_uri,
+            document.metadata_queue_id,
+            document.layout,
+            document.mode,
+            document.policy,
+            document.method,
+            document.endpoint,
+            document.executor,
+            document.model_name,
+            document.search_text
+        FROM documents document
         ON CONFLICT (queue_name, job_id) DO UPDATE
         SET
             dag_id = EXCLUDED.dag_id,

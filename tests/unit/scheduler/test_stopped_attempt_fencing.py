@@ -1,5 +1,5 @@
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -44,7 +44,7 @@ def build_scheduler(
     scheduler._record_terminal_attempt_audit = AsyncMock()
     scheduler._scheduler_counter = MagicMock()
     scheduler._ha_trace_fields = MagicMock(return_value={})
-    scheduler._resolve_dag_status_with_retry = AsyncMock()
+    scheduler.dag_service = SimpleNamespace(resolve_dag_status_with_retry=AsyncMock())
     scheduler.notify_event = AsyncMock()
     return scheduler
 
@@ -60,7 +60,7 @@ async def test_stopped_event_requires_attempt_identity() -> None:
     assert work_item.state == WorkState.ACTIVE
     assert scheduler._job_cache == {}
     scheduler.frontier.on_job_cancelled.assert_not_awaited()
-    scheduler._resolve_dag_status_with_retry.assert_not_awaited()
+    scheduler.dag_service.resolve_dag_status_with_retry.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -89,7 +89,7 @@ async def test_stale_stopped_event_does_not_cancel_current_attempt() -> None:
     assert work_item.run_attempt_id == ATTEMPT_B
     assert scheduler._job_cache == {}
     scheduler.frontier.on_job_cancelled.assert_not_awaited()
-    scheduler._resolve_dag_status_with_retry.assert_not_awaited()
+    scheduler.dag_service.resolve_dag_status_with_retry.assert_not_awaited()
     assert (
         scheduler._record_terminal_attempt_audit.await_args.kwargs["accepted"] is False
     )
@@ -118,7 +118,7 @@ async def test_current_stopped_event_cancels_after_committed_match() -> None:
     assert (
         scheduler._record_terminal_attempt_audit.await_args.kwargs["accepted"] is True
     )
-    scheduler._resolve_dag_status_with_retry.assert_awaited_once()
+    scheduler.dag_service.resolve_dag_status_with_retry.assert_awaited_once()
     scheduler.notify_event.assert_awaited_once_with()
 
 
@@ -140,7 +140,7 @@ async def test_stopped_event_database_failure_leaves_memory_unchanged() -> None:
     assert work_item.state == WorkState.ACTIVE
     assert scheduler._job_cache == {}
     scheduler.frontier.on_job_cancelled.assert_not_awaited()
-    scheduler._resolve_dag_status_with_retry.assert_not_awaited()
+    scheduler.dag_service.resolve_dag_status_with_retry.assert_not_awaited()
     scheduler.logger.error.assert_called_once()
 
 
@@ -168,7 +168,7 @@ async def test_storage_sync_rejects_stale_stopped_attempt() -> None:
     assert synchronized is False
     assert work_item.state == WorkState.ACTIVE
     scheduler.frontier.on_job_cancelled.assert_not_awaited()
-    scheduler._resolve_dag_status_with_retry.assert_not_awaited()
+    scheduler.dag_service.resolve_dag_status_with_retry.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -189,27 +189,32 @@ async def test_operator_cancellation_uses_separate_job_scoped_path() -> None:
 
 @pytest.mark.asyncio
 async def test_repository_cancels_only_matching_active_attempt() -> None:
-    cursor = MagicMock()
-    cursor.fetchone.return_value = (JOB_ID,)
-    connection = MagicMock()
-    connection.cursor.return_value = cursor
+    class Connection:
+        async def fetchrow(self, query, *params):
+            self.query = query
+            self.params = params
+            return (JOB_ID,)
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        repository = object.__new__(JobRepository)
-        repository._loop = asyncio.get_running_loop()
-        repository._db_executor = executor
-        repository._get_connection = MagicMock(return_value=connection)
-        repository._close_cursor = MagicMock()
-        repository._close_connection = MagicMock()
+    class Pool:
+        def __init__(self):
+            self.connection = Connection()
 
-        cancelled_ids = await repository.cancel_job_attempt(
-            job_id=JOB_ID,
-            queue_name="extract",
-            run_owner="owner-b",
-            run_attempt_id=ATTEMPT_B,
-        )
+        @asynccontextmanager
+        async def acquire(self):
+            yield self.connection
 
-    query, params = cursor.execute.call_args.args
+    pool = Pool()
+    repository = JobRepository({}, pool=pool)
+
+    cancelled_ids = await repository.cancel_job_attempt(
+        job_id=JOB_ID,
+        queue_name="extract",
+        run_owner="owner-b",
+        run_attempt_id=ATTEMPT_B,
+    )
+
+    query = pool.connection.query
+    params = pool.connection.params
     assert "AND state = %s::marie_scheduler.job_state" in query
     assert "AND run_owner = %s" in query
     assert "AND run_attempt_id = %s::uuid" in query
@@ -222,4 +227,3 @@ async def test_repository_cancels_only_matching_active_attempt() -> None:
         ATTEMPT_B,
     )
     assert cancelled_ids == {JOB_ID}
-    connection.commit.assert_called_once_with()

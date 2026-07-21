@@ -16,6 +16,7 @@ from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import RecoveredRunLease, WorkInfo
 from marie.scheduler.psql import PostgreSQLJobScheduler
 from marie.scheduler.repository.job_repository import JobRepository
+from marie.scheduler.services.dag_management_service import DAGManagementService
 from marie.scheduler.state import WorkState
 
 
@@ -34,10 +35,16 @@ class FakeLogger:
 
 
 class RecordingRepository:
-    def __init__(self, dag_state: str):
+    def __init__(self, dag_state: str, *, mark_active_result: bool = True):
         self.dag_state = dag_state
+        self.mark_active_result = mark_active_result
         self.resolve_calls: list[str] = []
         self.cancel_calls: list[dict] = []
+        self.mark_active_calls: list[str] = []
+
+    async def mark_dag_as_active(self, dag_id: str) -> bool:
+        self.mark_active_calls.append(dag_id)
+        return self.mark_active_result
 
     async def resolve_dag_state(self, dag_id: str) -> str:
         self.resolve_calls.append(dag_id)
@@ -57,6 +64,12 @@ class RecordingRepository:
             }
         )
         return 2
+
+    async def record_job_attempt_terminal(self, **_kwargs) -> None:
+        return None
+
+    async def get_dag_by_id(self, _dag_id: str):
+        return None
 
 
 class FlakyResolveRepository(RecordingRepository):
@@ -125,8 +138,6 @@ def build_scheduler(
     scheduler.active_dags = {}
     scheduler.max_concurrent_dags = 16
     scheduler._dag_admission_lock = asyncio.Lock()
-    scheduler._dag_resolution_lock = AsyncJobLock()
-    scheduler._terminal_dag_states = {}
     scheduler._job_cache = {}
     scheduler._scheduler_counters = defaultdict(int)
     scheduler.notify_calls: list[bool] = []
@@ -137,9 +148,11 @@ def build_scheduler(
     scheduler._dag_resolution_retry_backoff = False
     scheduler._dag_resolution_retry_max_delay = 0.0
     scheduler.lease_owner = "test-scheduler"
-
-    def remove_dag(dag_id: str, _reason: str) -> bool:
-        return scheduler.active_dags.pop(dag_id, None) is not None
+    scheduler.gateway_instance_id = "test-gateway"
+    scheduler._priority_refresh_event = asyncio.Event()
+    scheduler._priority_refresh_source = "test"
+    scheduler._priority_refresh_running = False
+    scheduler.priority_refresh_interval_seconds = 5.0
 
     async def notify_event() -> bool:
         scheduler.notify_calls.append(True)
@@ -151,7 +164,21 @@ def build_scheduler(
 
     scheduler.notify_event = notify_event
     scheduler.hydrate_single_dag_from_db = hydrate_single_dag_from_db
-    scheduler.dag_service = SimpleNamespace(remove_dag=remove_dag)
+    scheduler.dag_service = DAGManagementService(
+        repository=repository,
+        frontier=frontier,
+        active_dags=scheduler.active_dags,
+        notify_callback=notify_event,
+        max_active_dags=scheduler.max_concurrent_dags,
+        admission_lock=scheduler._dag_admission_lock,
+        job_cache=scheduler._job_cache,
+        terminal_event_callback=scheduler._emit_dag_terminal_event,
+        resolution_retry_limit=scheduler._dag_resolution_retry_limit,
+        resolution_retry_delay=scheduler._dag_resolution_retry_delay,
+        resolution_retry_backoff=scheduler._dag_resolution_retry_backoff,
+        resolution_retry_max_delay=scheduler._dag_resolution_retry_max_delay,
+    )
+    scheduler.dag_service.hydrate_single_dag = hydrate_single_dag_from_db
     return scheduler
 
 
@@ -168,7 +195,9 @@ async def test_resolve_dag_status_failed_finalizes_frontier_and_cancels_pending_
     repository = RecordingRepository(dag_state="failed")
     scheduler = build_scheduler(repository, frontier)
     scheduler.active_dags[dag_id] = object()
-    scheduler._job_cache = {failed_job.id: failed_job, sibling_job.id: sibling_job}
+    scheduler._job_cache.update(
+        {failed_job.id: failed_job, sibling_job.id: sibling_job}
+    )
 
     failed_toasts: list[dict] = []
     complete_toasts: list[dict] = []
@@ -182,11 +211,9 @@ async def test_resolve_dag_status_failed_finalizes_frontier_and_cancels_pending_
         return True
 
     monkeypatch.setattr(scheduler_psql, "mark_as_failed_toast", record_failed_toast)
-    monkeypatch.setattr(
-        scheduler_psql, "mark_as_complete_toast", record_complete_toast
-    )
+    monkeypatch.setattr(scheduler_psql, "mark_as_complete_toast", record_complete_toast)
 
-    handled = await scheduler.resolve_dag_status(failed_job.id, failed_job)
+    handled = await scheduler.dag_service.resolve_dag_status(failed_job.id, failed_job)
 
     assert handled is True
     assert repository.resolve_calls == [dag_id]
@@ -198,7 +225,7 @@ async def test_resolve_dag_status_failed_finalizes_frontier_and_cancels_pending_
     )
     assert frontier.finalize_calls == [dag_id]
     assert dag_id not in scheduler.active_dags
-    assert scheduler._terminal_dag_states == {dag_id: "failed"}
+    assert scheduler.dag_service._terminal_dag_states == {dag_id: "failed"}
     assert failed_job.id not in scheduler._job_cache
     assert sibling_job.id not in scheduler._job_cache
     assert await frontier.get_jobs_by_dag_id(dag_id) == []
@@ -219,7 +246,9 @@ async def test_resolve_dag_status_failed_is_idempotent(monkeypatch):
     repository = RecordingRepository(dag_state="failed")
     scheduler = build_scheduler(repository, frontier)
     scheduler.active_dags[dag_id] = object()
-    scheduler._job_cache = {failed_job.id: failed_job, sibling_job.id: sibling_job}
+    scheduler._job_cache.update(
+        {failed_job.id: failed_job, sibling_job.id: sibling_job}
+    )
 
     failed_toasts: list[dict] = []
 
@@ -234,8 +263,8 @@ async def test_resolve_dag_status_failed_is_idempotent(monkeypatch):
         lambda **kwargs: pytest.fail("unexpected completion toast"),
     )
 
-    first = await scheduler.resolve_dag_status(failed_job.id, failed_job)
-    second = await scheduler.resolve_dag_status(sibling_job.id, sibling_job)
+    first = await scheduler.dag_service.resolve_dag_status(failed_job.id, failed_job)
+    second = await scheduler.dag_service.resolve_dag_status(sibling_job.id, sibling_job)
 
     assert first is True
     assert second is False
@@ -258,7 +287,9 @@ async def test_resolve_dag_status_retries_after_transient_error_and_succeeds(
     repository = FlakyResolveRepository([RuntimeError("db busy"), "failed"])
     scheduler = build_scheduler(repository, frontier)
     scheduler.active_dags[dag_id] = object()
-    scheduler._job_cache = {failed_job.id: failed_job, sibling_job.id: sibling_job}
+    scheduler._job_cache.update(
+        {failed_job.id: failed_job, sibling_job.id: sibling_job}
+    )
 
     failed_toasts: list[dict] = []
 
@@ -273,7 +304,7 @@ async def test_resolve_dag_status_retries_after_transient_error_and_succeeds(
         lambda **kwargs: pytest.fail("unexpected completion toast"),
     )
 
-    handled = await scheduler._resolve_dag_status_with_retry(
+    handled = await scheduler.dag_service.resolve_dag_status_with_retry(
         failed_job.id,
         failed_job,
         source="test",
@@ -284,7 +315,7 @@ async def test_resolve_dag_status_retries_after_transient_error_and_succeeds(
     assert len(repository.cancel_calls) == 1
     assert frontier.finalize_calls == [dag_id]
     assert dag_id not in scheduler.active_dags
-    assert scheduler._terminal_dag_states == {dag_id: "failed"}
+    assert scheduler.dag_service._terminal_dag_states == {dag_id: "failed"}
     assert failed_job.id not in scheduler._job_cache
     assert sibling_job.id not in scheduler._job_cache
     assert len(failed_toasts) == 1
@@ -303,9 +334,11 @@ async def test_resolve_dag_status_retry_exhaustion_returns_false():
     )
     scheduler = build_scheduler(repository, frontier)
     scheduler.active_dags[dag_id] = object()
-    scheduler._job_cache = {failed_job.id: failed_job, sibling_job.id: sibling_job}
+    scheduler._job_cache.update(
+        {failed_job.id: failed_job, sibling_job.id: sibling_job}
+    )
 
-    handled = await scheduler._resolve_dag_status_with_retry(
+    handled = await scheduler.dag_service.resolve_dag_status_with_retry(
         failed_job.id,
         failed_job,
         source="test",
@@ -316,7 +349,7 @@ async def test_resolve_dag_status_retry_exhaustion_returns_false():
     assert repository.cancel_calls == []
     assert frontier.finalize_calls == []
     assert dag_id in scheduler.active_dags
-    assert scheduler._terminal_dag_states == {}
+    assert scheduler.dag_service._terminal_dag_states == {}
 
 
 @pytest.mark.asyncio
@@ -326,13 +359,13 @@ async def test_dag_state_notification_created_clears_terminal_guard():
     repository = RecordingRepository(dag_state="failed")
     scheduler = build_scheduler(repository, frontier)
     scheduler.active_dags[dag_id] = object()
-    scheduler._terminal_dag_states[dag_id] = "failed"
+    scheduler.dag_service._terminal_dag_states[dag_id] = "failed"
 
-    await scheduler._handle_dag_state_notification(
+    await scheduler.dag_service.handle_state_change(
         {"op": "UPDATE", "dag_id": dag_id, "state": "created"}
     )
 
-    assert dag_id not in scheduler._terminal_dag_states
+    assert dag_id not in scheduler.dag_service._terminal_dag_states
     assert scheduler.hydrated_dag_ids == [dag_id]
     assert dag_id not in scheduler.active_dags
     assert frontier.finalize_calls == [dag_id]
@@ -345,6 +378,7 @@ async def test_control_flow_node_requeues_when_active_dag_limit_is_full():
     repository = RecordingRepository(dag_state="active")
     scheduler = build_scheduler(repository, frontier)
     scheduler.max_concurrent_dags = 1
+    scheduler.dag_service.max_active_dags = 1
     scheduler.active_dags["existing-dag"] = object()
 
     work_item = build_work_item("job-control", "new-dag")
@@ -352,14 +386,9 @@ async def test_control_flow_node_requeues_when_active_dag_limit_is_full():
 
     released_db: list[list[str]] = []
     released_local: list[str] = []
-    activated: list[str] = []
 
     async def get_dag_by_id(dag_id: str):
         return object()
-
-    async def mark_as_active_dag(wi: WorkInfo) -> bool:
-        activated.append(wi.dag_id)
-        return True
 
     async def release_lease_db(job_ids: list[str]) -> None:
         released_db.append(job_ids)
@@ -368,13 +397,12 @@ async def test_control_flow_node_requeues_when_active_dag_limit_is_full():
         released_local.append(job_id)
 
     scheduler.get_dag_by_id = get_dag_by_id
-    scheduler.mark_as_active_dag = mark_as_active_dag
     scheduler._release_lease_db = release_lease_db
     frontier.release_lease_local = release_lease_local
 
     await scheduler._process_control_flow_node(work_item)
 
-    assert activated == []
+    assert repository.mark_active_calls == []
     assert released_db == [[work_item.id]]
     assert released_local == [work_item.id]
     assert work_item.dag_id not in scheduler.active_dags
@@ -407,7 +435,7 @@ async def test_control_flow_activation_marks_job_active_before_local_completion(
 
 
 @pytest.mark.asyncio
-async def test_dag_state_notification_terminal_marks_dag_as_terminal():
+async def test_dag_state_notification_terminal_evicts_dag():
     dag_id = "dag-4"
     work_item = build_work_item("job-5", dag_id)
     frontier = RecordingFrontier()
@@ -417,15 +445,46 @@ async def test_dag_state_notification_terminal_marks_dag_as_terminal():
     scheduler = build_scheduler(repository, frontier)
     scheduler.active_dags[dag_id] = object()
 
-    await scheduler._handle_dag_state_notification(
+    await scheduler.dag_service.handle_state_change(
         {"op": "UPDATE", "dag_id": dag_id, "state": "failed"}
     )
 
-    assert scheduler._terminal_dag_states == {dag_id: "failed"}
+    assert scheduler.dag_service._terminal_dag_states == {}
     assert dag_id not in scheduler.active_dags
     assert frontier.finalize_calls == [dag_id]
     assert await frontier.get_jobs_by_dag_id(dag_id) == []
     assert scheduler.notify_calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_terminal_notification_does_not_suppress_resolution_side_effects(
+    monkeypatch,
+):
+    dag_id = "dag-notify-resolve"
+    work_item = build_work_item("job-notify-resolve", dag_id)
+    frontier = RecordingFrontier()
+    await frontier.add_dag(None, [work_item])
+    repository = RecordingRepository(dag_state="failed")
+    scheduler = build_scheduler(repository, frontier)
+    scheduler.active_dags[dag_id] = object()
+
+    failed_toasts: list[dict] = []
+
+    async def record_failed_toast(**kwargs):
+        failed_toasts.append(kwargs)
+        return True
+
+    monkeypatch.setattr(scheduler_psql, "mark_as_failed_toast", record_failed_toast)
+
+    await scheduler.dag_service.handle_state_change(
+        {"op": "UPDATE", "dag_id": dag_id, "state": "failed"}
+    )
+    handled = await scheduler.dag_service.resolve_dag_status(work_item.id, work_item)
+
+    assert handled is True
+    assert repository.cancel_calls[0]["dag_id"] == dag_id
+    assert scheduler.dag_service._terminal_dag_states == {dag_id: "failed"}
+    assert failed_toasts[0]["job_id"] == dag_id
 
 
 @pytest.mark.asyncio
@@ -458,7 +517,7 @@ async def test_handle_dispatch_failure_marks_job_for_retry_and_releases_semaphor
         pytest.fail("retry path should not resolve DAG status")
 
     scheduler.fail = fake_fail
-    scheduler.resolve_dag_status = fake_resolve_dag_status
+    scheduler.dag_service.resolve_dag_status_with_retry = fake_resolve_dag_status
 
     await scheduler._handle_dispatch_failure(
         work_item,
@@ -516,7 +575,7 @@ async def test_handle_dispatch_failure_marks_job_failed_and_resolves_dag():
         return True
 
     scheduler.fail = fake_fail
-    scheduler.resolve_dag_status = fake_resolve_dag_status
+    scheduler.dag_service.resolve_dag_status_with_retry = fake_resolve_dag_status
 
     await scheduler._handle_dispatch_failure(
         work_item,
@@ -585,7 +644,7 @@ async def test_sync_terminal_job_state_succeeded_unblocks_children_and_notifies(
         return None
 
     scheduler.complete = fake_complete
-    scheduler.resolve_dag_status = fake_resolve_dag_status
+    scheduler.dag_service.resolve_dag_status_with_retry = fake_resolve_dag_status
     scheduler.get_dag_by_id = fake_get_dag_by_id
 
     old_end = int(
@@ -633,7 +692,9 @@ async def test_recovered_failure_updates_frontier_and_dag_failure_path(monkeypat
     repository = RecordingRepository(dag_state="failed")
     scheduler = build_scheduler(repository, frontier)
     scheduler.active_dags[dag_id] = object()
-    scheduler._job_cache = {failed_job.id: failed_job, sibling_job.id: sibling_job}
+    scheduler._job_cache.update(
+        {failed_job.id: failed_job, sibling_job.id: sibling_job}
+    )
 
     db_failed_job = failed_job.model_copy(update={"state": WorkState.FAILED})
 
@@ -682,9 +743,10 @@ async def test_recovered_failure_updates_frontier_and_dag_failure_path(monkeypat
     assert sibling_job.id not in scheduler._job_cache
     assert await frontier.get_jobs_by_dag_id(dag_id) == []
     assert len(failed_toasts) == 1
-    assert scheduler._scheduler_counters[
-        scheduler_psql.RUN_LEASE_RECOVERED_FAILED_TOTAL
-    ] == 1
+    assert (
+        scheduler._scheduler_counters[scheduler_psql.RUN_LEASE_RECOVERED_FAILED_TOTAL]
+        == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -697,7 +759,7 @@ async def test_late_success_for_old_run_attempt_updates_zero_rows(monkeypatch):
     frontier = RecordingFrontier()
     repository = RecordingRepository(dag_state="active")
     scheduler = build_scheduler(repository, frontier)
-    scheduler._job_cache = {work_item.id: work_item}
+    scheduler._job_cache[work_item.id] = work_item
 
     complete_calls: list[dict] = []
     completed_calls: list[str] = []
@@ -744,9 +806,10 @@ async def test_late_success_for_old_run_attempt_updates_zero_rows(monkeypatch):
     ]
     assert completed_calls == []
     assert scheduler.notify_calls == []
-    assert scheduler._scheduler_counters[
-        scheduler_psql.TERMINAL_EVENT_STALE_ATTEMPT_TOTAL
-    ] == 1
+    assert (
+        scheduler._scheduler_counters[scheduler_psql.TERMINAL_EVENT_STALE_ATTEMPT_TOTAL]
+        == 1
+    )
     assert [event for event, _fields in trace_events].count(
         scheduler_psql.TERMINAL_EVENT_STALE_ATTEMPT_TOTAL
     ) == 1
@@ -762,7 +825,7 @@ async def test_late_failure_for_old_run_attempt_updates_zero_rows(monkeypatch):
     frontier = RecordingFrontier()
     repository = RecordingRepository(dag_state="active")
     scheduler = build_scheduler(repository, frontier)
-    scheduler._job_cache = {work_item.id: work_item}
+    scheduler._job_cache[work_item.id] = work_item
 
     fail_calls: list[dict] = []
     failed_calls: list[str] = []
@@ -773,6 +836,7 @@ async def test_late_failure_for_old_run_attempt_updates_zero_rows(monkeypatch):
             {
                 "job_id": job_id,
                 "work_item": wi.id,
+                "output_metadata": _args[0],
                 "run_owner": kwargs.get("run_owner"),
                 "run_attempt_id": kwargs.get("run_attempt_id"),
             }
@@ -796,6 +860,19 @@ async def test_late_failure_for_old_run_attempt_updates_zero_rows(monkeypatch):
             "job_id": work_item.id,
             "run_owner": "old-owner",
             "run_attempt_id": "06a0ac88-5326-7f90-8000-222222222222",
+            "message": "processor crashed",
+            "jobinfo_replace_kwargs": {
+                "runtime_env": {
+                    "attributes": {"document_id": "not-persisted"},
+                    "error": {
+                        "type": "RuntimeError",
+                        "message": "processor crashed",
+                        "filename": "executor.py",
+                        "name": "process",
+                        "line_no": 42,
+                    },
+                }
+            },
         },
     )
 
@@ -803,15 +880,27 @@ async def test_late_failure_for_old_run_attempt_updates_zero_rows(monkeypatch):
         {
             "job_id": work_item.id,
             "work_item": work_item.id,
+            "output_metadata": {
+                "failure_source": "job_event",
+                "error_message": "processor crashed",
+                "error": {
+                    "type": "RuntimeError",
+                    "message": "processor crashed",
+                    "filename": "executor.py",
+                    "name": "process",
+                    "line_no": 42,
+                },
+            },
             "run_owner": "old-owner",
             "run_attempt_id": "06a0ac88-5326-7f90-8000-222222222222",
         }
     ]
     assert failed_calls == []
     assert scheduler.notify_calls == []
-    assert scheduler._scheduler_counters[
-        scheduler_psql.TERMINAL_EVENT_STALE_ATTEMPT_TOTAL
-    ] == 1
+    assert (
+        scheduler._scheduler_counters[scheduler_psql.TERMINAL_EVENT_STALE_ATTEMPT_TOTAL]
+        == 1
+    )
     assert [event for event, _fields in trace_events].count(
         scheduler_psql.TERMINAL_EVENT_STALE_ATTEMPT_TOTAL
     ) == 1
@@ -825,7 +914,7 @@ async def test_stale_running_heartbeat_exposes_run_lease_counter(monkeypatch):
     frontier = RecordingFrontier()
     repository = RecordingRepository(dag_state="active")
     scheduler = build_scheduler(repository, frontier)
-    scheduler._job_cache = {work_item.id: work_item}
+    scheduler._job_cache[work_item.id] = work_item
 
     extend_calls: list[dict] = []
     trace_events: list[tuple[str, dict]] = []
@@ -863,9 +952,12 @@ async def test_stale_running_heartbeat_exposes_run_lease_counter(monkeypatch):
             "run_attempt_id": "06a0ac88-5326-7f90-8000-333333333333",
         }
     ]
-    assert scheduler._scheduler_counters[
-        scheduler_psql.RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL
-    ] == 1
+    assert (
+        scheduler._scheduler_counters[
+            scheduler_psql.RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL
+        ]
+        == 1
+    )
     assert [event for event, _fields in trace_events].count(
         scheduler_psql.RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL
     ) == 1
@@ -874,19 +966,14 @@ async def test_stale_running_heartbeat_exposes_run_lease_counter(monkeypatch):
 @pytest.mark.asyncio
 async def test_admit_dag_requires_db_activation_success():
     dag_id = "dag-admit"
-    work_item = build_work_item("job-admit", dag_id)
     frontier = RecordingFrontier()
-    repository = RecordingRepository(dag_state="active")
+    repository = RecordingRepository(dag_state="active", mark_active_result=False)
     scheduler = build_scheduler(repository, frontier)
 
-    async def mark_as_active_dag(_work_info: WorkInfo) -> bool:
-        return False
-
-    scheduler.mark_as_active_dag = mark_as_active_dag
-
-    admitted = await scheduler._admit_dag(work_item, object(), source="test")
+    admitted = await scheduler.dag_service.admit_dag(dag_id, object(), source="test")
 
     assert admitted is False
+    assert repository.mark_active_calls == [dag_id]
     assert dag_id not in scheduler.active_dags
 
 
@@ -897,6 +984,9 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
     order: list[str] = []
 
     class Repo:
+        async def initialize(self):
+            order.append("initialize")
+
         async def is_installed(self, _schema):
             order.append("is_installed")
             return True
@@ -905,7 +995,7 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
             order.append("get_defined_queues")
             return set()
 
-        def create_tables(self, _schema):
+        async def create_tables(self, _schema):
             order.append("create_tables")
 
         async def validate_durable_scheduler_schema(self, _schema):
@@ -924,6 +1014,10 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
         async def start(self):
             order.append("maintenance_start")
 
+    class DagService:
+        async def start_sync(self):
+            order.append("dag_sync_start")
+
     class DummyTask:
         def __init__(self, coro):
             self._coro = coro
@@ -934,7 +1028,7 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
         def cancel(self):
             self._coro.close()
 
-    def fake_create_task(coro):
+    def fake_create_task(coro, *, name=None):
         coro.close()
         return DummyTask(coro)
 
@@ -944,7 +1038,13 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
     scheduler.known_queues = set()
     scheduler.notification_service = NotificationService()
     scheduler.maintenance_service = MaintenanceService()
+    scheduler.dag_service = DagService()
     scheduler.max_workers = 0
+    scheduler._lifecycle_lock = asyncio.Lock()
+    scheduler.running = False
+    scheduler._resources_closed = False
+    scheduler._priority_refresh_event = asyncio.Event()
+    scheduler._setup_event_subscriptions = lambda: None
 
     async def hydrate_from_db():
         order.append("hydrate_from_db")
@@ -960,7 +1060,6 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
     scheduler.notify_event = notify_event
     scheduler._sync = noop
     scheduler._poll = noop
-    scheduler._sync_dag = noop
     scheduler._process_submission_queue = lambda _worker_id: noop()
     scheduler._PostgreSQLJobScheduler__monitor_deployment_updates = noop
 
@@ -979,24 +1078,20 @@ async def test_evict_dag_from_memory_finalizes_frontier_and_clears_terminal_stat
     repository = RecordingRepository(dag_state="active")
     scheduler = build_scheduler(repository, frontier)
     scheduler.active_dags[dag_id] = object()
-    scheduler._terminal_dag_states[dag_id] = "completed"
-    scheduler.dag_service = SimpleNamespace(
-        remove_dag=lambda dag_id, _reason: scheduler.active_dags.pop(dag_id, None)
-        is not None
-    )
+    scheduler.dag_service._terminal_dag_states[dag_id] = "completed"
 
     work_item = build_work_item("job-evict", dag_id)
     await frontier.add_dag(None, [work_item])
     scheduler._job_cache[work_item.id] = work_item
 
-    removed = await scheduler._evict_dag_from_memory(
+    removed = await scheduler.dag_service.evict_dag(
         dag_id, "no longer active or deleted in database"
     )
 
     assert removed is True
     assert frontier.finalize_calls == [dag_id]
     assert dag_id not in scheduler.active_dags
-    assert dag_id not in scheduler._terminal_dag_states
+    assert dag_id not in scheduler.dag_service._terminal_dag_states
     assert await frontier.get_jobs_by_dag_id(dag_id) == []
     assert work_item.id not in scheduler._job_cache
 
@@ -1088,21 +1183,9 @@ async def test_sync_dag_once_reaps_stale_memory_dags_and_notifies():
     repository = RecordingRepository(dag_state="active")
     frontier = RecordingFrontier()
     scheduler = build_scheduler(repository, frontier)
-    scheduler.active_dags = {
-        "dag-valid": object(),
-        "dag-stale": object(),
-    }
-    scheduler._terminal_dag_states = {"dag-stale": "completed"}
-
-    removed: list[tuple[str, str]] = []
+    scheduler.active_dags.update({"dag-valid": object(), "dag-stale": object()})
+    scheduler.dag_service._terminal_dag_states = {"dag-stale": "completed"}
     resolved: list[str] = []
-
-    def remove_dag(dag_id: str, reason: str) -> bool:
-        removed.append((dag_id, reason))
-        scheduler.active_dags.pop(dag_id, None)
-        return True
-
-    scheduler.dag_service = SimpleNamespace(remove_dag=remove_dag)
 
     async def get_active_dag_ids(_dag_ids: list[str]) -> set[str]:
         return {"dag-valid"}
@@ -1118,14 +1201,12 @@ async def test_sync_dag_once_reaps_stale_memory_dags_and_notifies():
 
     scheduler.repository.resolve_dag_state = resolve_dag_state
 
-    await scheduler._sync_dag_once()
+    await scheduler.dag_service.sync_once()
 
-    assert removed == [
-        ("dag-stale", "no longer active or deleted in database")
-    ]
     assert resolved == ["dag-valid", "dag-stale"]
     assert "dag-stale" not in scheduler.active_dags
-    assert "dag-stale" not in scheduler._terminal_dag_states
+    assert scheduler.dag_service._terminal_dag_states == {"dag-stale": "completed"}
+    assert frontier.finalize_calls == ["dag-stale"]
     assert scheduler.notify_calls == [True]
 
 
@@ -1177,7 +1258,8 @@ async def test_submission_priority_refresh_request_wakes_when_due():
     await scheduler._handle_priority_refresh()
 
     assert refresh_calls == []
-    assert scheduler.notify_calls == [True]
+    assert scheduler._priority_refresh_event.is_set()
+    assert scheduler.notify_calls == []
 
 
 def test_limit_planned_jobs_to_available_slots_keeps_order_and_caps_per_executor():
@@ -1379,13 +1461,18 @@ async def test_mark_nodes_skipped_reconciles_from_committed_ids_only():
 
 
 @pytest.mark.asyncio
-async def test_process_control_flow_node_notifies_after_unblocking_children(monkeypatch):
+async def test_process_control_flow_node_notifies_after_unblocking_children(
+    monkeypatch,
+):
     scheduler = object.__new__(PostgreSQLJobScheduler)
     scheduler.logger = FakeLogger()
     scheduler.distributed_scheduler = False
     scheduler.active_dags = {"dag-cf": object()}
     scheduler._topology_cache = SimpleNamespace(
-        get_sorted_nodes_and_levels=lambda _dag, _dag_id: ([], {"noop-root": 2, "child": 1})
+        get_sorted_nodes_and_levels=lambda _dag, _dag_id: (
+            [],
+            {"noop-root": 2, "child": 1},
+        )
     )
     scheduler.frontier = SimpleNamespace(
         leased_until={},
@@ -1411,9 +1498,11 @@ async def test_process_control_flow_node_notifies_after_unblocking_children(monk
 
     scheduler.complete = complete
     scheduler.notify_event = notify_event
-    scheduler._resolve_dag_status_with_retry = resolve_dag_status_with_retry
+    scheduler.dag_service = SimpleNamespace(
+        resolve_dag_status_with_retry=resolve_dag_status_with_retry
+    )
     scheduler.frontier.on_job_completed = on_job_completed
-    
+
     async def activate_control_flow_job(_wi: WorkInfo) -> bool:
         _wi.run_owner = "test-scheduler"
         _wi.run_attempt_id = "06a0ac88-5326-7f90-8000-0274669de089"
@@ -1421,7 +1510,9 @@ async def test_process_control_flow_node_notifies_after_unblocking_children(monk
 
     scheduler._activate_control_flow_job = activate_control_flow_job
 
-    monkeypatch.setattr(scheduler_psql, "get_node_from_dag", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        scheduler_psql, "get_node_from_dag", lambda *_args, **_kwargs: object()
+    )
 
     started_calls: list[dict] = []
 

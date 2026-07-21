@@ -738,7 +738,7 @@ class MemoryFrontier:
             if not node_ids:
                 return {"removed_jobs": 0, "removed_edges": 0, "heap_compacted": 0}
 
-            # for each job in DAG, remove graph edges and per-job state
+            # remove graph edges and per-job state
             for jid in list(node_ids):
                 # (a) remove as PARENT -> children
                 children = self.dependents.pop(jid, [])
@@ -757,7 +757,7 @@ class MemoryFrontier:
                         except ValueError:
                             pass
 
-                # (b) remove as CHILD -> parents
+                # remove as CHILD -> parents
                 plist = self.parents.pop(jid, [])
                 for p in plist:
                     cl = self.dependents.get(p)
@@ -767,12 +767,11 @@ class MemoryFrontier:
                             cl.pop(idx)
                             removed_edges += 1
                             if not cl:
-                                # optional: keep empty list or prune
                                 self.dependents.pop(p, None)
                         except ValueError:
                             pass
 
-                # (c) purge per-job state
+                # purge per-job state
                 self.jobs_by_id.pop(jid, None)
                 self._ready_set.discard(jid)
                 self._added_at.pop(jid, None)
@@ -781,7 +780,6 @@ class MemoryFrontier:
                 self._ver.pop(jid, None)
                 removed_jobs += 1
 
-            # heap rebuild
             compacted = await self.compact_ready_heap(full=True)
 
             return {

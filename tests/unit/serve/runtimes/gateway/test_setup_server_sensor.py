@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import pytest
@@ -51,7 +52,7 @@ def _gateway_for_setup_server(args):
 
 
 @pytest.mark.asyncio
-async def test_setup_server_starts_sensor_worker_when_configured(monkeypatch):
+async def test_setup_server_defers_sensor_worker_until_scheduler_start(monkeypatch):
     sensor_calls = []
     _patch_setup_server_collaborators(monkeypatch, sensor_calls)
 
@@ -69,7 +70,7 @@ async def test_setup_server_starts_sensor_worker_when_configured(monkeypatch):
 
     await gateway.setup_server()
 
-    assert sensor_calls == [(sensor_config, kv_store_kwargs)]
+    assert sensor_calls == []
 
 
 @pytest.mark.asyncio
@@ -79,8 +80,6 @@ async def test_setup_server_sensor_worker_noop_when_sensors_config_absent(
     sensor_calls = []
     _patch_setup_server_collaborators(monkeypatch, sensor_calls)
 
-    # No "sensors" key at all -- must not raise, and setup_sensor_worker
-    # itself no-ops on an empty config.
     gateway = _gateway_for_setup_server(
         {
             "kv_store_kwargs": {"provider": "postgresql", "hostname": "localhost"},
@@ -92,4 +91,48 @@ async def test_setup_server_sensor_worker_noop_when_sensors_config_absent(
 
     await gateway.setup_server()
 
-    assert sensor_calls == [({}, {"provider": "postgresql", "hostname": "localhost"})]
+    assert sensor_calls == []
+
+
+@pytest.mark.asyncio
+async def test_scheduler_schema_precedes_dependent_runtimes(monkeypatch):
+    order = []
+
+    class Scheduler:
+        async def start(self):
+            order.append("scheduler")
+
+    class LlmRuntime:
+        async def start(self):
+            order.append("llm")
+
+    def fake_setup_sensor_worker(_sensor_config, _db_config):
+        order.append("sensor")
+
+    def fake_attach_sensor_worker_scheduler(_scheduler):
+        order.append("attach")
+        return True
+
+    monkeypatch.setattr(
+        marie_gateway_module, "setup_sensor_worker", fake_setup_sensor_worker
+    )
+    monkeypatch.setattr(
+        marie_gateway_module,
+        "attach_sensor_worker_scheduler",
+        fake_attach_sensor_worker_scheduler,
+    )
+
+    gateway = object.__new__(MarieServerGateway)
+    gateway.logger = logging.getLogger("test-runtime-start-order")
+    gateway.ready_event = asyncio.Event()
+    gateway.ready_event.set()
+    gateway.job_scheduler = Scheduler()
+    gateway.llm_dispatch_runtime = LlmRuntime()
+    gateway.args = {
+        "sensors": {"enabled": True},
+        "kv_store_kwargs": {"provider": "postgresql"},
+    }
+
+    await gateway.wait_and_start_scheduler(timeout=1)
+
+    assert order == ["scheduler", "llm", "sensor", "attach"]

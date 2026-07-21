@@ -4,6 +4,7 @@ import time
 from typing import Any, Callable, Dict, Optional
 
 import psycopg
+from psycopg import sql
 
 from marie.excepts import RuntimeFailToStart
 from marie.logging_core.logger import MarieLogger
@@ -29,7 +30,7 @@ class NotificationService:
         self.running = False
 
         # Dedicated connection for LISTEN operations (cannot use pool)
-        self._listen_connection: Optional[psycopg.Connection] = None
+        self._listen_connection: Optional[psycopg.AsyncConnection] = None
         self._listener_task: Optional[asyncio.Task] = None
 
         # Map of channel names to handler callbacks
@@ -68,16 +69,13 @@ class NotificationService:
             self._channels.discard(channel)
             self.logger.info(f"Unregistered handler for channel: {channel}")
 
-    def _setup_connection(self) -> None:
-        """
-        Set up dedicated PostgreSQL connection for LISTEN operations.
-        This runs in a thread pool executor to avoid blocking the event loop.
-        """
+    async def _setup_connection(self) -> None:
+        """Set up the dedicated asynchronous LISTEN connection."""
         try:
             self.logger.info("Setting up PostgreSQL LISTEN connection")
 
             config = self.config
-            self._listen_connection = psycopg.connect(
+            self._listen_connection = await psycopg.AsyncConnection.connect(
                 user=config["username"],
                 password=config["password"],
                 dbname=config["database"],
@@ -89,16 +87,14 @@ class NotificationService:
                 keepalives_idle=60,
                 keepalives_interval=10,
                 keepalives_count=5,
+                autocommit=True,
             )
 
-            self._listen_connection.autocommit = True
-
-            # Register LISTEN for all configured channels
-            cursor = self._listen_connection.cursor()
             for channel in self._channels:
-                cursor.execute(f"LISTEN {channel};")
+                await self._listen_connection.execute(
+                    sql.SQL("LISTEN {}").format(sql.Identifier(channel))
+                )
                 self.logger.info(f"Listening on channel: {channel}")
-            cursor.close()
 
             self.logger.info("PostgreSQL LISTEN connection established successfully")
 
@@ -108,14 +104,12 @@ class NotificationService:
                 f"Failed to set up PostgreSQL LISTEN connection: {e}"
             )
 
-    def _close_connection(self) -> None:
-        """
-        Close the PostgreSQL LISTEN connection.
-        """
+    async def _close_connection(self) -> None:
+        """Close the PostgreSQL LISTEN connection."""
         if self._listen_connection and not self._listen_connection.closed:
             try:
                 self.logger.info("Closing PostgreSQL LISTEN connection")
-                self._listen_connection.close()
+                await self._listen_connection.close()
             except Exception as e:
                 self.logger.warning(f"Error closing LISTEN connection: {e}")
             finally:
@@ -175,9 +169,7 @@ class NotificationService:
             except asyncio.CancelledError:
                 pass
 
-        # Close the connection (run in executor to avoid blocking)
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self._close_connection)
+        await self._close_connection()
 
         self.logger.info("NotificationService stopped")
 
@@ -194,16 +186,14 @@ class NotificationService:
         Main listening loop for PostgreSQL notifications.
 
         This method runs in the background and continuously checks for
-        notifications from the database. It uses select() in a thread pool
-        to avoid blocking the event loop.
+        notifications from the database.
         """
-        loop = asyncio.get_event_loop()
         reconnect_delay = self._reconnect_base_delay
 
         try:
             while self.running:
                 try:
-                    await loop.run_in_executor(None, self._setup_connection)
+                    await self._setup_connection()
                     self._connected = True
                     self._ever_connected = True
                     reconnect_delay = self._reconnect_base_delay
@@ -217,9 +207,7 @@ class NotificationService:
                         ):
                             raise RuntimeError("LISTEN connection is closed")
 
-                        notify = await loop.run_in_executor(
-                            None, self._next_notification
-                        )
+                        notify = await self._next_notification()
                         if notify is None:
                             continue
                         self._last_notification_at = time.monotonic()
@@ -257,7 +245,7 @@ class NotificationService:
                     raise
                 except Exception as e:
                     self._connected = False
-                    await loop.run_in_executor(None, self._close_connection)
+                    await self._close_connection()
                     if not self._ever_connected:
                         self.logger.error(
                             f"Fatal error in notification listener: {e}",
@@ -280,18 +268,17 @@ class NotificationService:
                     )
         finally:
             self._connected = False
-            await asyncio.get_event_loop().run_in_executor(None, self._close_connection)
+            await self._close_connection()
 
-    def _next_notification(self) -> Optional[psycopg.Notify]:
+    async def _next_notification(self) -> Optional[psycopg.Notify]:
         if self._listen_connection is None or self._listen_connection.closed:
             raise RuntimeError("LISTEN connection is closed")
-        return next(
-            self._listen_connection.notifies(
-                timeout=self._select_timeout,
-                stop_after=1,
-            ),
-            None,
-        )
+        async for notify in self._listen_connection.notifies(
+            timeout=self._select_timeout,
+            stop_after=1,
+        ):
+            return notify
+        return None
 
     async def send_notification(self, channel: str, payload: Dict[str, Any]) -> bool:
         """
@@ -305,18 +292,22 @@ class NotificationService:
         :return: True if successful, False otherwise
         """
         try:
-            # Create temporary connection for sending
             config = self.config
-            with psycopg.connect(
+            connection = await psycopg.AsyncConnection.connect(
                 user=config["username"],
                 password=config["password"],
                 dbname=config["database"],
                 host=config["hostname"],
                 port=int(config["port"]),
                 autocommit=True,
-            ) as conn:
+            )
+            try:
                 payload_json = json.dumps(payload)
-                conn.execute("SELECT pg_notify(%s, %s)", (channel, payload_json))
+                await connection.execute(
+                    "SELECT pg_notify(%s, %s)", (channel, payload_json)
+                )
+            finally:
+                await connection.close()
 
             self.logger.debug(f"Sent notification to channel '{channel}': {payload}")
             return True

@@ -1,8 +1,5 @@
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Callable, Dict, Optional
-
-import psycopg
 
 from marie.logging_core.logger import MarieLogger
 from marie.scheduler.models import RecoveredRunLease
@@ -18,8 +15,6 @@ class MaintenanceService:
     def __init__(
         self,
         repository: JobRepository,
-        loop: Optional[asyncio.AbstractEventLoop] = None,
-        executor: Optional[ThreadPoolExecutor] = None,
         notify_callback: Optional[callable] = None,
         recovery_callback: Optional[
             Callable[[list[RecoveredRunLease]], Awaitable[None]]
@@ -30,15 +25,11 @@ class MaintenanceService:
         Initialize the maintenance service.
 
         :param repository: JobRepository for database operations
-        :param loop: Event loop for async operations
-        :param executor: Thread pool executor for blocking operations
         :param notify_callback: Callback function to trigger scheduler events
         :param maintenance_interval: How often to run maintenance (in seconds)
         """
         self.logger = MarieLogger(MaintenanceService.__name__)
         self.repository = repository
-        self._loop = loop or asyncio.get_event_loop()
-        self._executor = executor
         self._notify_callback = notify_callback
         self._recovery_callback = recovery_callback
         self.maintenance_interval = maintenance_interval
@@ -69,26 +60,7 @@ class MaintenanceService:
         """
         self.logger.debug("Checking for expired job leases")
 
-        def db_call():
-            """Sync DB call to release expired leases."""
-            conn = None
-            released_count = 0
-            try:
-                conn = self.repository._get_connection()
-                query = "SELECT marie_scheduler.release_expired_leases()"
-                result = self.repository._execute_sql_gracefully(query, connection=conn)
-
-                if result and isinstance(result, list) and len(result) > 0:
-                    count = result[0][0]
-                    if count:
-                        released_count = count
-            except (Exception, psycopg.Error) as error:
-                self.logger.error(f"Failed to expire jobs: {error}", exc_info=True)
-            finally:
-                self.repository._close_connection(conn)
-            return released_count
-
-        released_count = await self._loop.run_in_executor(self._executor, db_call)
+        released_count = await self.repository.release_expired_leases()
         recovered = await self.repository.recover_expired_run_leases()
         recovered_retry_count = sum(
             1 for row in recovered if row.recovered_state == "retry"

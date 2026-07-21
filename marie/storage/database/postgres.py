@@ -1,5 +1,6 @@
 import time
 import traceback
+from contextlib import contextmanager
 from typing import Any, Callable, Dict, Optional
 
 import psycopg
@@ -16,11 +17,12 @@ class PostgresqlMixin:
     provider = "postgres"
 
     def _setup_storage(
-            self,
-            config: Dict[str, Any],
-            create_table_callback: Optional[Callable] = None,
-            reset_table_callback: Optional[Callable] = None,
-            connection_only=False,
+        self,
+        config: Dict[str, Any],
+        create_table_callback: Optional[Callable] = None,
+        reset_table_callback: Optional[Callable] = None,
+        connection_only=False,
+        pool: Optional[ConnectionPool] = None,
     ) -> None:
         """
         Setup PostgreSQL connection pool.
@@ -37,8 +39,12 @@ class PostgresqlMixin:
             username = config["username"]
             password = config["password"]
             database = config["database"]
-            max_connections = int(config.get("max_connections", config.get("max_pool_size", 10)))
-            min_connections = int(config.get("min_connections", config.get("min_pool_size", 1)))
+            max_connections = int(
+                config.get("max_connections", config.get("max_pool_size", 10))
+            )
+            min_connections = int(
+                config.get("min_connections", config.get("min_pool_size", 1))
+            )
             application_name = config.get("application_name", "marie_scheduler")
             self._pg_pool_acquire_timeout_seconds = float(
                 config.get("pool_acquire_timeout_seconds", 30.0)
@@ -50,7 +56,7 @@ class PostgresqlMixin:
                 config.get("pool_acquire_trace_after_seconds", 0.001)
             )
 
-            self.postgreSQL_pool = ConnectionPool(
+            self.postgreSQL_pool = pool or ConnectionPool(
                 "",
                 min_size=min_connections,
                 max_size=max_connections,
@@ -72,7 +78,10 @@ class PostgresqlMixin:
                     'keepalives_count': 3,
                 },
             )
-            self.postgreSQL_pool.wait(timeout=float(config.get("pool_open_timeout_seconds", 10.0)))
+            if pool is None:
+                self.postgreSQL_pool.wait(
+                    timeout=float(config.get("pool_open_timeout_seconds", 10.0))
+                )
 
             if connection_only:
                 self.logger.info(f"Connected to postgresql database: {config}")
@@ -81,7 +90,9 @@ class PostgresqlMixin:
             self.schema = config.get("schema")  # Optional schema name
             self.table = config["default_table"]
             self.logger.info(f"[DEBUG] PostgresqlMixin config: {config}")
-            self.logger.info(f"[DEBUG] PostgresqlMixin schema={self.schema}, table={self.table}, qualified_table={self.schema}.{self.table if self.schema else self.table}")
+            self.logger.info(
+                f"[DEBUG] PostgresqlMixin schema={self.schema}, table={self.table}, qualified_table={self.schema}.{self.table if self.schema else self.table}"
+            )
             if self.table is None or self.table == "":
                 raise ValueError("default_table cannot be empty")
 
@@ -208,7 +219,9 @@ class PostgresqlMixin:
 
         try:
             if connection.closed:
-                raise psycopg.OperationalError("PostgreSQL pool returned a closed connection")
+                raise psycopg.OperationalError(
+                    "PostgreSQL pool returned a closed connection"
+                )
 
             tx_status = connection.pgconn.transaction_status
             if tx_status != pq.TransactionStatus.IDLE:
@@ -229,6 +242,16 @@ class PostgresqlMixin:
                 self.postgreSQL_pool.putconn(connection)
             raise
 
+    @contextmanager
+    def _read_connection(self):
+        """Borrow a pool connection for a read-only, autocommit operation."""
+        connection = self._get_connection()
+        try:
+            connection.autocommit = True
+            yield connection
+        finally:
+            self._close_connection(connection)
+
     @property
     def qualified_table(self) -> str:
         """Return the fully qualified table name (schema.table or just table)."""
@@ -240,15 +263,13 @@ class PostgresqlMixin:
         """Create the schema if it doesn't exist."""
         if not hasattr(self, 'schema') or not self.schema:
             return
-        self._execute_sql_gracefully(
-            f"CREATE SCHEMA IF NOT EXISTS {self.schema}"
-        )
+        self._execute_sql_gracefully(f"CREATE SCHEMA IF NOT EXISTS {self.schema}")
         self.logger.info(f"Ensured schema exists: {self.schema}")
 
     def _init_table(
-            self,
-            create_table_callback: Optional[Callable] = None,
-            reset_table_callback: Optional[Callable] = None,
+        self,
+        create_table_callback: Optional[Callable] = None,
+        reset_table_callback: Optional[Callable] = None,
     ) -> None:
         """
         Use table if exists or create one if it doesn't.
@@ -262,7 +283,9 @@ class PostgresqlMixin:
         else:
             self._create_table_with_callback(create_table_callback)
 
-    def _create_table_with_callback(self, create_table_callback: Optional[Callable] = None) -> None:
+    def _create_table_with_callback(
+        self, create_table_callback: Optional[Callable] = None
+    ) -> None:
         """
         Create table if it doesn't exist.
         @param create_table_callback:
@@ -305,14 +328,14 @@ class PostgresqlMixin:
                     "SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_schema=%s AND table_name=%s)",
                     (self.schema, self.table),
                     return_cursor=True,
-                    connection=conn
+                    connection=conn,
                 )
             else:
                 cursor = self._execute_sql_gracefully(
                     "SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name=%s)",
                     (self.table,),
                     return_cursor=True,
-                    connection=conn
+                    connection=conn,
                 )
             return cursor.fetchall()[0][0]
         finally:
@@ -320,16 +343,16 @@ class PostgresqlMixin:
             self._close_connection(conn)
 
     def _execute_sql_gracefully(
-            self,
-            statement: object,
-            data: object = tuple(),
-            *,
-            named_cursor_name: Optional[str] = None,
-            itersize: Optional[int] = 10000,
-            connection: Optional[psycopg.Connection] = None,
-            max_retries: int = 3,
-            return_cursor: bool = False,
-            commit: bool = True,
+        self,
+        statement: object,
+        data: object = tuple(),
+        *,
+        named_cursor_name: Optional[str] = None,
+        itersize: Optional[int] = 10000,
+        connection: Optional[psycopg.Connection] = None,
+        max_retries: int = 3,
+        return_cursor: bool = False,
+        commit: bool = True,
     ) -> Any:
         # A cursor cannot be returned if this function is responsible for the connection,
         # as the connection would be closed in the 'finally' block, rendering the cursor useless.
@@ -340,11 +363,16 @@ class PostgresqlMixin:
 
         owns_connection = connection is None
         conn = connection or self._get_connection()
+        operation_started = time.perf_counter()
         try:
             for attempt in range(max_retries):
                 cursor = None
                 try:
-                    cursor = conn.cursor(named_cursor_name) if named_cursor_name else conn.cursor()
+                    cursor = (
+                        conn.cursor(named_cursor_name)
+                        if named_cursor_name
+                        else conn.cursor()
+                    )
                     if named_cursor_name:
                         cursor.itersize = itersize
 
@@ -356,6 +384,15 @@ class PostgresqlMixin:
                         conn.commit()
 
                     if return_cursor:
+                        scheduler_trace(
+                            "postgres_operation",
+                            operation="execute_sql_gracefully",
+                            statement_count=1,
+                            rows_read=None,
+                            rows_written=None,
+                            elapsed_ms=(time.perf_counter() - operation_started)
+                            * 1000.0,
+                        )
                         return cursor
                     else:
                         # Get results and close cursor
@@ -364,6 +401,19 @@ class PostgresqlMixin:
                                 results = cursor.fetchall()
                             else:
                                 results = cursor.rowcount
+                            scheduler_trace(
+                                "postgres_operation",
+                                operation="execute_sql_gracefully",
+                                statement_count=1,
+                                rows_read=(
+                                    len(results) if isinstance(results, list) else 0
+                                ),
+                                rows_written=(
+                                    0 if cursor.description else max(0, cursor.rowcount)
+                                ),
+                                elapsed_ms=(time.perf_counter() - operation_started)
+                                * 1000.0,
+                            )
                             return results
                         finally:
                             cursor.close()
@@ -379,7 +429,9 @@ class PostgresqlMixin:
                     if not owns_connection or attempt >= max_retries - 1:
                         raise  # Can't retry external connections or on the last attempt.
 
-                    self.logger.warning(f"Connection closed, retrying ({attempt + 1}/{max_retries})")
+                    self.logger.warning(
+                        f"Connection closed, retrying ({attempt + 1}/{max_retries})"
+                    )
                     # discard the broken connection before acquiring a new one.
                     self._close_connection(conn)
                     conn = self._get_connection()

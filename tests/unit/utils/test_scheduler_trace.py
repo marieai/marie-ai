@@ -75,7 +75,7 @@ def test_scheduler_trace_compact_drops_noisy_events(monkeypatch, tmp_path):
     assert not trace_path.exists()
 
 
-def test_scheduler_trace_compact_drops_batch_job_ids(monkeypatch, tmp_path):
+def test_scheduler_trace_compact_keeps_full_batch_job_ids(monkeypatch, tmp_path):
     trace_path = tmp_path / "scheduler-trace.jsonl"
     monkeypatch.setenv("MARIE_SCHEDULER_TRACE_ENABLED", "true")
     monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PATH", str(trace_path))
@@ -90,7 +90,7 @@ def test_scheduler_trace_compact_drops_batch_job_ids(monkeypatch, tmp_path):
     row = json.loads(trace_path.read_text().strip())
     assert row["event"] == "dispatch_batch_start"
     assert row["count"] == 2
-    assert "job_ids" not in row
+    assert row["job_ids"] == ["job-1", "job-2"]
 
 
 def test_scheduler_trace_compact_writes_scheduler_counters(monkeypatch, tmp_path):

@@ -2,11 +2,9 @@ import asyncio
 import random
 import time
 from collections import defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor
 from pprint import pprint
-from typing import Any, Awaitable, Callable, Dict, Union
+from typing import Any, Callable, Dict
 
-from marie.helper import get_or_reuse_loop
 from marie.logging_core.logger import MarieLogger
 from marie.scheduler.models import HeartbeatConfig
 from marie.scheduler.printers import (
@@ -14,7 +12,6 @@ from marie.scheduler.printers import (
     print_job_state_summary,
     print_slots_table,
 )
-from marie.scheduler.scheduler_repository import SchedulerRepository
 
 # ANSI colors
 GREEN = "\033[92m"
@@ -30,19 +27,15 @@ class SchedulerHeartbeat:
         self,
         scheduler: Any,
         config: HeartbeatConfig,
-        db_query: SchedulerRepository,
+        db_query: Any,
         logger: MarieLogger,
     ):
         self.scheduler = scheduler
         self.config = config
         self.logger = logger
-        self._loop = get_or_reuse_loop()
         self.running = False
         self._task = None
         self._db_query = db_query
-        self._db_executor = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="hb-executor"
-        )
         self._closed = False
 
     async def start(self):
@@ -63,25 +56,15 @@ class SchedulerHeartbeat:
                     await self._task
                 except asyncio.CancelledError:
                     self.logger.info("Heartbeat task cancelled.")
-        await asyncio.to_thread(
-            self._db_executor.shutdown,
-            wait=True,
-            cancel_futures=True,
-        )
         self._closed = True
 
     async def _safe_count_states(
         self,
-        count_method: Union[
-            Callable[[], Dict[str, Any]], Callable[[], Awaitable[Dict[str, Any]]]
-        ],
+        count_method: Callable[[], Any],
     ) -> Dict[str, Any]:
-        """Safely call count methods with proper async handling."""
+        """Call a repository count method without blocking the event loop."""
         try:
-            if asyncio.iscoroutinefunction(count_method):
-                return await count_method()
-            else:
-                return await self._loop.run_in_executor(self._db_executor, count_method)
+            return await count_method()
         except Exception as e:
             self.logger.error(f"Error in count method: {e}")
             return {}
@@ -162,6 +145,8 @@ class SchedulerHeartbeat:
                 job_states = await self._safe_count_states(
                     self._db_query.count_job_states
                 )
+                self.scheduler._dag_state_counts = dag_states
+                self.scheduler._job_state_counts = job_states
 
                 current_completed_jobs = _get_completed_per_queue(
                     job_states, "completed"

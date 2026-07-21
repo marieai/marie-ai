@@ -229,9 +229,9 @@ psql -h localhost -U your_user -d your_database
 
 ### Method 2: Python Integration
 ```python
-import psycopg2
+import psycopg
 
-conn = psycopg2.connect(
+conn = psycopg.connect(
     host="localhost",
     database="your_database",
     user="your_user",

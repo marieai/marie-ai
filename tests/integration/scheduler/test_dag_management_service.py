@@ -1,5 +1,6 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -27,7 +28,9 @@ class FakeRepository:
         self._rows = []
 
     async def get_job_priorities(self, job_ids):
-        return {jid: self._priorities[jid] for jid in job_ids if jid in self._priorities}
+        return {
+            jid: self._priorities[jid] for jid in job_ids if jid in self._priorities
+        }
 
     async def mark_dag_as_active(self, dag_id):
         self.marked_active_dags.append(dag_id)
@@ -37,54 +40,23 @@ class FakeRepository:
         for candidate_dag_id, serialized_dag in self._hydratable_dags:
             if str(candidate_dag_id) == str(dag_id):
                 rows = [
-                    (dag_id, job)
-                    for job in self._hydratable_jobs.get(str(dag_id), [])
+                    (dag_id, job) for job in self._hydratable_jobs.get(str(dag_id), [])
                 ]
                 return serialized_dag, rows
         return None, []
 
-    def _get_connection(self):
-        return self
+    async def discover_hydratable_dags(self, limit=0):
+        rows = list(self._hydratable_dags)
+        return rows[:limit] if limit > 0 else rows
 
-    def cursor(self, *args, **kwargs):
-        return self
+    async def load_hydratable_jobs(self, dag_ids):
+        rows = []
+        for dag_id in map(str, dag_ids):
+            rows.extend((dag_id, job) for job in self._hydratable_jobs.get(dag_id, []))
+        return rows
 
-    def execute(self, query, params=None):
-        self._query = query
-        if "hydrate_frontier_dags" in query:
-            self._rows = list(self._hydratable_dags)
-            return
-        if "hydrate_frontier_jobs" in query:
-            dag_ids = [str(dag_id) for dag_id in (params[0] if params else [])]
-            rows = []
-            for dag_id in dag_ids:
-                for job in self._hydratable_jobs.get(dag_id, []):
-                    rows.append((dag_id, job))
-            self._rows = rows
-            return
-        self._rows = []
-
-    def fetchall(self):
-        return self._hydratable_dags
-
-    def __iter__(self):
-        return iter(self._rows)
-
-    def commit(self):
-        return None
-
-    def rollback(self):
-        return None
-
-    @property
-    def closed(self):
-        return False
-
-    def _close_cursor(self, cursor):
-        self._closed.append(("cursor", cursor is not None))
-
-    def _close_connection(self, conn):
-        self._closed.append(("conn", conn is not None))
+    async def get_active_dag_ids(self, dag_ids):
+        return set(map(str, dag_ids))
 
 
 def make_wi(
@@ -209,7 +181,9 @@ async def test_hydrate_bulk_preserves_sla_fields():
 
 
 @pytest.mark.asyncio
-async def test_refresh_frontier_priorities_updates_memory_and_hydrates_missing(monkeypatch):
+async def test_refresh_frontier_priorities_updates_memory_and_hydrates_missing(
+    monkeypatch,
+):
     now = datetime.now(timezone.utc)
     frontier = MemoryFrontier(higher_priority_wins=True, default_lease_ttl=0.25)
     existing = WorkInfo(
@@ -393,6 +367,81 @@ async def test_handle_state_change_treats_active_as_live_state():
 
 
 @pytest.mark.asyncio
+async def test_handle_failed_state_evicts_without_rehydrating() -> None:
+    dag_id = "dag-failed"
+    frontier = MemoryFrontier(higher_priority_wins=True, default_lease_ttl=0.25)
+    await frontier.add_dag(
+        None,
+        [make_wi("job-failed", dag_id, "exe://default")],
+    )
+    service = DAGManagementService(
+        repository=FakeRepository(priorities={}, hydratable_dags=[]),
+        frontier=frontier,
+        active_dags={dag_id: object()},
+    )
+    service.hydrate_single_dag = AsyncMock()
+
+    await service.handle_state_change(
+        {"op": "UPDATE", "dag_id": dag_id, "state": "failed"}
+    )
+
+    service.hydrate_single_dag.assert_not_awaited()
+    assert dag_id not in service.active_dags
+    assert dag_id not in frontier.dag_nodes
+
+
+@pytest.mark.asyncio
+async def test_reset_all_dags_preserves_shared_active_dag_mapping() -> None:
+    service, frontier, active_dags = make_service({"exe": 1})
+    dag_id = "dag-reset"
+    active_dags[dag_id] = QueryPlan(nodes=[])
+    await frontier.add_dag(
+        active_dags[dag_id],
+        [make_wi("job-reset", dag_id, "exe://default")],
+    )
+
+    result = await service.reset_all_dags()
+
+    assert result["success"] is True
+    assert result["cleared_dags"] == [dag_id]
+    assert service.active_dags is active_dags
+    assert active_dags == {}
+    assert dag_id not in frontier.dag_nodes
+
+
+@pytest.mark.asyncio
+async def test_suspended_state_releases_active_dag_capacity() -> None:
+    service, frontier, active_dags = make_service({"exe": 1})
+    dag_id = "dag-suspended"
+    active_dags[dag_id] = QueryPlan(nodes=[])
+    await frontier.add_dag(
+        active_dags[dag_id],
+        [make_wi("job-suspended", dag_id, "exe://default")],
+    )
+
+    await service.handle_state_change(
+        {"op": "UPDATE", "dag_id": dag_id, "state": "suspended"}
+    )
+
+    assert dag_id not in active_dags
+    assert dag_id not in frontier.dag_nodes
+
+
+@pytest.mark.asyncio
+async def test_sync_task_is_owned_and_stopped_by_service() -> None:
+    service, _, _ = make_service({})
+
+    await service.start_sync(sync_interval=60)
+    sync_task = service._sync_task
+    await asyncio.sleep(0)
+    await service.stop_sync()
+
+    assert sync_task is not None
+    assert sync_task.cancelled()
+    assert service._sync_task is None
+
+
+@pytest.mark.asyncio
 async def test_hydrated_dag_with_only_unavailable_mock_ready_work_is_not_admitted():
     repo = FakeRepository(priorities={}, hydratable_dags=[])
     service, frontier, active_dags = make_service(
@@ -521,9 +570,7 @@ async def test_hydrate_bulk_skips_incompatible_dags_and_admits_later_compatible_
     ]
     hydratable_jobs = {
         "dag-mock-1": [
-            serialize_wi(
-                make_wi("mock-root-1", "dag-mock-1", "noop://noop", deps=[])
-            ),
+            serialize_wi(make_wi("mock-root-1", "dag-mock-1", "noop://noop", deps=[])),
             serialize_wi(
                 make_wi(
                     "mock-real-1",
@@ -534,9 +581,7 @@ async def test_hydrate_bulk_skips_incompatible_dags_and_admits_later_compatible_
             ),
         ],
         "dag-mock-2": [
-            serialize_wi(
-                make_wi("mock-root-2", "dag-mock-2", "noop://noop", deps=[])
-            ),
+            serialize_wi(make_wi("mock-root-2", "dag-mock-2", "noop://noop", deps=[])),
             serialize_wi(
                 make_wi(
                     "mock-real-2",
@@ -547,11 +592,15 @@ async def test_hydrate_bulk_skips_incompatible_dags_and_admits_later_compatible_
             ),
         ],
         "dag-llm-1": [
-            serialize_wi(make_wi("llm-job", "dag-llm-1", "annotator_llm://default", deps=[]))
+            serialize_wi(
+                make_wi("llm-job", "dag-llm-1", "annotator_llm://default", deps=[])
+            )
         ],
         "dag-parser-1": [
             serialize_wi(
-                make_wi("parser-job", "dag-parser-1", "annotator_parser://default", deps=[])
+                make_wi(
+                    "parser-job", "dag-parser-1", "annotator_parser://default", deps=[]
+                )
             )
         ],
     }

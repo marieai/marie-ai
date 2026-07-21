@@ -6,7 +6,6 @@ import uuid
 import uuid as _uuid
 from asyncio import Queue
 from collections import defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from math import inf
 from typing import Any, Dict, List
@@ -56,7 +55,6 @@ from marie.scheduler.planner_util import (
 )
 from marie.scheduler.repository import JobRepository
 from marie.scheduler.scheduler_heartbeat import SchedulerHeartbeat
-from marie.scheduler.scheduler_repository import SchedulerRepository
 from marie.scheduler.services import (
     DAGManagementService,
     MaintenanceService,
@@ -76,7 +74,7 @@ from marie.serve.discovery.registry import _is_known_connection_error
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.state.semaphore_store import SemaphoreStore
 from marie.state.slot_capacity_manager import SlotCapacityManager
-from marie.storage.database.postgres import PostgresqlMixin
+from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
 from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.utils import current_milli_time
 
@@ -186,7 +184,7 @@ def exclusive_skip_closure(
 # this will allow us to track the status of the deployment and not just the executor.
 
 
-class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
+class PostgreSQLJobScheduler(JobScheduler):
     _mapper_warnings_shown = set()
     """A PostgreSQL-based job scheduler."""
 
@@ -218,10 +216,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._producer_task = None
         self._consumer_task = None
         self._heartbeat_task = None
+        self._priority_refresh_task = None
         self.sync_task = None
         self.monitoring_task = None
         self._worker_tasks = None
-        self._sync_dag_task = None
         self._cluster_state_monitor_task = None
         self._dag_state_listener_task = None
         self._job_event_tasks: set[asyncio.Task[Any]] = set()
@@ -230,7 +228,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._pending_requests = {}  # Track pending requests by ID
         self._request_queue = Queue()  # Buffer up to 1000 requests
         self._scheduler_counters = defaultdict(int)
-
+        self._job_state_counts: Dict[str, Any] = {"queues": {}}
+        self._dag_state_counts: Dict[str, Any] = {"queues": {}}
         self.scheduler_mode = config.get(
             "scheduler_mode", "parallel"
         )  # "serial" or "parallel"
@@ -243,16 +242,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self._event_queue = Queue()
         self._status_update_lock = AsyncJobLock()
-        self._dag_resolution_lock = AsyncJobLock()
-        self._terminal_dag_states: dict[str, str] = {}
 
         self.max_workers = config.get("max_workers", 5)
-        self._db_executor = ThreadPoolExecutor(
-            max_workers=self.max_workers, thread_name_prefix="db-executor"
-        )
-        self.logger.info(
-            f"Using ThreadPoolExecutor for database operations with : {self.max_workers} workers."
-        )
         if self.known_queues is None or len(self.known_queues) == 0:
             raise BadConfigSource("Queue names are required for JobScheduler")
         self.logger.info(f"Queue names to monitor: {self.known_queues}")
@@ -260,21 +251,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.job_manager = job_manager
         self._loop = get_or_reuse_loop()
         self._setup_event_subscriptions()
-        self._setup_storage(config, connection_only=True)
-        self._db = SchedulerRepository(config)
-
-        self.repository = JobRepository(config, max_workers=self.max_workers)
+        self._db_pool = AsyncPostgresConnectionPool()
+        self.repository = JobRepository(
+            config,
+            pool=self._db_pool,
+        )
         self.notification_service = NotificationService(config)
 
         self.sla_priority_interval_seconds = max(
             1, int(config.get("sla_priority_interval_seconds", 15 * 60))
         )
 
-        # Initialize scheduler state (frontier and active_dags)
+        # The scheduler reads active_dags for planning; DAGManagementService mutates it.
         self.frontier = MemoryFrontier(
             sla_priority_interval_seconds=self.sla_priority_interval_seconds
         )
         self.active_dags = {}
+        self._job_cache: dict[str, WorkInfo] = {}
+        self._job_cache_max_size = 5000
         self._dag_admission_lock = asyncio.Lock()
 
         dag_config = config.get("dag_manager", {})
@@ -296,18 +290,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             dag_config.get("dag_resolution_retry_max_delay", 30.0)
         )
 
-        # Initialize DAGManagementService for DAG lifecycle management
-        # Service operates on scheduler's frontier and active_dags
         self.dag_service = DAGManagementService(
             repository=self.repository,
             frontier=self.frontier,
             active_dags=self.active_dags,
-            loop=self._loop,
-            executor=self._db_executor,
             notify_callback=self.notify_event,
             max_active_dags=self.max_concurrent_dags,
             admission_lock=self._dag_admission_lock,
             slot_snapshot_provider=self.get_available_slots,
+            job_cache=self._job_cache,
+            terminal_event_callback=self._emit_dag_terminal_event,
+            resolution_retry_limit=self._dag_resolution_retry_limit,
+            resolution_retry_delay=self._dag_resolution_retry_delay,
+            resolution_retry_backoff=self._dag_resolution_retry_backoff,
+            resolution_retry_max_delay=self._dag_resolution_retry_max_delay,
         )
 
         # Register handler for DAG state changes (delegate to DAGManagementService)
@@ -319,8 +315,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._maintenance_interval = config.get("maintenance_interval", 60)
         self.maintenance_service = MaintenanceService(
             repository=self.repository,
-            loop=self._loop,
-            executor=self._db_executor,
             notify_callback=self.notify_event,
             recovery_callback=self._reconcile_recovered_run_leases,
             maintenance_interval=self._maintenance_interval,
@@ -348,7 +342,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.heartbeat_config = HeartbeatConfig.from_dict(heartbeat_config_dict)
         self.logger.info(f"Heartbeat configuration: {self.heartbeat_config}")
         self.heartbeat = SchedulerHeartbeat(
-            self, self.heartbeat_config, self._db, self.logger
+            self, self.heartbeat_config, self.repository, self.logger
         )
         self._resources_closed = False
 
@@ -370,10 +364,16 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.priority_refresh_interval_seconds = float(
             config.get("priority_refresh_interval_seconds", 5.0)
         )
+        self.priority_refresh_timeout_seconds = max(
+            0.1, float(config.get("priority_refresh_timeout_seconds", 30.0))
+        )
         self.priority_refresh_hydrate_limit = int(
             config.get("priority_refresh_hydrate_limit", 100)
         )
         self._priority_refresh_seq = 0
+        self._priority_refresh_event = asyncio.Event()
+        self._priority_refresh_source = "startup"
+        self._priority_refresh_running = False
         self._next_priority_refresh_at = (
             time.monotonic() + self.priority_refresh_interval_seconds
         )
@@ -391,9 +391,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             f"run_ttl_seconds={self.run_ttl_seconds}, owner='{self.lease_owner}', "
             f"gateway_instance_id='{self.gateway_instance_id}'"
         )
-
-        self._job_cache = {}
-        self._job_cache_max_size = 5000
 
         # Semaphore-based capacity control, we hijaced the _etcd_client client here from job manager
         self._semaphore_store = SemaphoreStore(
@@ -586,6 +583,27 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             if task is not None and job_event_tasks is not None:
                 job_event_tasks.discard(task)
 
+    @staticmethod
+    def _job_failure_metadata(
+        *, message: Any, runtime_env: Any, source: str
+    ) -> Dict[str, Any]:
+        metadata: Dict[str, Any] = {"failure_source": source}
+        if message:
+            metadata["error_message"] = str(message)
+        if not isinstance(runtime_env, dict):
+            return metadata
+
+        error = runtime_env.get("error")
+        if isinstance(error, dict):
+            metadata["error"] = {
+                key: error[key]
+                for key in ("type", "message", "filename", "name", "line_no")
+                if key in error
+            }
+        elif error:
+            metadata["error"] = str(error)
+        return metadata
+
     async def _handle_job_event(self, event_type: str, message: Any):
         """
         Handles a job event.
@@ -721,9 +739,25 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
                     return
 
+                replace_kwargs = message.get("jobinfo_replace_kwargs")
+                runtime_env = (
+                    replace_kwargs.get("runtime_env")
+                    if isinstance(replace_kwargs, dict)
+                    else None
+                )
+                failure_metadata = self._job_failure_metadata(
+                    message=message.get("message"),
+                    runtime_env=runtime_env,
+                    source="job_event",
+                )
+                self.logger.error(
+                    f"Job failure received: job_id={job_id} "
+                    f"dag_id={work_item.dag_id} details={failure_metadata}"
+                )
                 actual_work_state = await self.fail(
                     job_id,
                     work_item,
+                    failure_metadata,
                     run_owner=run_owner,
                     run_attempt_id=run_attempt_id,
                 )
@@ -874,11 +908,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 )
 
                 self._status_update_lock.release(job_id)
-                await self._resolve_dag_status_with_retry(
+                await self.dag_service.resolve_dag_status_with_retry(
                     job_id,
                     work_item,
-                    now,
-                    now,
                     source="job_event",
                 )
                 await self.notify_event()
@@ -1122,7 +1154,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         )
 
         if wi.dag_id:
-            removed = await self._evict_dag_from_memory(wi.dag_id, reason)
+            removed = await self.dag_service.evict_dag(wi.dag_id, reason)
         else:
             await self.frontier.on_job_cancelled(wi.id)
             removed = True
@@ -1211,8 +1243,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     await self.frontier.release_lease_local(wi.id)
                     return
 
-                admitted = await self._admit_dag(
-                    wi, dag, source=f"control_flow:{node_type}"
+                admitted = await self.dag_service.admit_dag(
+                    dag_id, dag, source=f"control_flow:{node_type}"
                 )
                 if not admitted:
                     await self._release_lease_db([wi.id])
@@ -1295,7 +1327,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
             # Check if DAG is complete (leaf node check)
             if job_levels.get(wi.id, -1) == min(job_levels.values()):
-                await self._resolve_dag_status_with_retry(
+                await self.dag_service.resolve_dag_status_with_retry(
                     wi.id,
                     wi,
                     source="control_flow",
@@ -1700,131 +1732,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         except Exception as e:
             self.logger.error(f"Error marking nodes as skipped: {e}", exc_info=True)
 
-    async def _handle_dag_state_notification(self, payload: dict):
-        """
-        Handle a DAG state change notification from PostgreSQL.
-
-        Optimized payload structure:
-        - UPDATE: {'dag_id': '<id>', 'state': '<new_state>', 'op': 'UPDATE'}
-        - DELETE: {'dag_id': '<id>', 'op': 'DELETE'}
-
-        :param payload: The notification payload with minimal fields (dag_id, state, op)
-        """
-        try:
-            op = payload.get("op")
-            dag_id: str = payload.get("dag_id", "00000000-0000-0000-0000-000000000000")
-
-            if not dag_id or dag_id == "00000000-0000-0000-0000-000000000000":
-                self.logger.warning(f"Received notification without dag_id: {payload}")
-                return
-
-            self.logger.info(
-                f"Received DAG state notification: op={op}, dag_id={dag_id}"
-            )
-
-            if op == "DELETE":
-                self.logger.info(
-                    f"DAG {dag_id} was deleted, removing from memory frontier"
-                )
-                self._terminal_dag_states.pop(dag_id, None)
-                stats = await self.frontier.finalize_dag(dag_id)
-                self.logger.info(f"Finalized DAG {dag_id} from memory: {stats}")
-
-                if dag_id in self.active_dags:
-                    del self.active_dags[dag_id]
-                    self.logger.info(f"Removed DAG {dag_id} from active_dags")
-
-            elif op == "UPDATE":
-                new_state = payload.get("state")
-                self.logger.info(f"DAG {dag_id} state changed to: {new_state}")
-
-                if new_state == "created":
-                    # DAG was reset (via reset_all or similar)
-                    # Remove from memory and re-hydrate from DB
-                    self.logger.warning(
-                        f"DAG {dag_id} reset to 'created' - removing from memory and re-hydrating from DB"
-                    )
-                    self._terminal_dag_states.pop(dag_id, None)
-                    stats = await self.frontier.finalize_dag(dag_id)
-                    self.logger.info(
-                        f"Removed DAG {dag_id} from memory frontier: {stats}"
-                    )
-
-                    if dag_id in self.active_dags:
-                        del self.active_dags[dag_id]
-                        self.logger.info(f"Removed DAG {dag_id} from active_dags")
-
-                    hydrated = await self.hydrate_single_dag_from_db(dag_id)
-                    if hydrated:
-                        self.logger.info(
-                            f"Successfully re-hydrated DAG {dag_id} from database"
-                        )
-                    else:
-                        self.logger.warning(
-                            f"Could not re-hydrate DAG {dag_id} - may not have eligible jobs"
-                        )
-
-                elif new_state == "cancelled":
-                    self.logger.info(
-                        f"DAG {dag_id} cancelled - removing from memory and active processing"
-                    )
-                    stats = await self.frontier.finalize_dag(dag_id)
-                    self.logger.info(
-                        f"Removed cancelled DAG {dag_id} from memory: {stats}"
-                    )
-
-                    if dag_id in self.active_dags:
-                        del self.active_dags[dag_id]
-                        self.logger.info(
-                            f"Removed cancelled DAG {dag_id} from active_dags"
-                        )
-
-                elif new_state == "suspended":
-                    self.logger.info(
-                        f"DAG {dag_id} suspended - removing from active execution"
-                    )
-                    stats = await self.frontier.finalize_dag(dag_id)
-                    self.logger.info(
-                        f"Removed suspended DAG {dag_id} from memory: {stats}"
-                    )
-                elif new_state in ["completed", "failed"]:
-                    self.logger.info(
-                        f"DAG {dag_id} finished with state '{new_state}' - cleaning up memory"
-                    )
-                    self._terminal_dag_states.setdefault(dag_id, new_state)
-                    stats = await self.frontier.finalize_dag(dag_id)
-                    self.logger.info(
-                        f"Cleaned up finished DAG {dag_id} from memory: {stats}"
-                    )
-
-                    if dag_id in self.active_dags:
-                        del self.active_dags[dag_id]
-                        self.logger.info(
-                            f"Removed finished DAG {dag_id} from active_dags"
-                        )
-
-                elif new_state in ["active", "running", "pending"]:
-                    if dag_id not in self.active_dags:
-                        self.logger.debug(
-                            f"DAG {dag_id} is '{new_state}' in DB but is not local "
-                            "to this scheduler yet; it may be admitted by the current "
-                            "cycle, owned by another scheduler, or hydrated later."
-                        )
-
-                else:
-                    self.logger.warning(
-                        f"DAG {dag_id} changed to unknown state '{new_state}' - no action taken"
-                    )
-
-            await self.notify_event()
-
-        except Exception as e:
-            self.logger.error(f"Error handling DAG state notification: {e}")
-            traceback.print_exc()
-
     # ==================== Schema Management (Delegated to Repository) ====================
 
-    def create_tables(self, schema: str):
+    async def create_tables(self, schema: str) -> None:
         """
         Create all database tables, functions, and triggers.
         Delegates to JobRepository.
@@ -1832,7 +1742,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param schema: The name of the schema where the tables will be created
         :return: None
         """
-        self.repository.create_tables(schema)
+        await self.repository.create_tables(schema)
 
     async def wipe(self) -> None:
         """
@@ -1878,7 +1788,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.logger.warning("Job scheduler is already running")
                 return
             if self._resources_closed:
-                self._reopen_runtime_resources()
+                await self._reopen_runtime_resources()
             self._setup_event_subscriptions()
             await self._start_locked()
 
@@ -1889,11 +1799,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return: None
         """
         logger.info("Starting job scheduling agent")
+        await self.repository.initialize()
         # Check if tables are installed and create if needed (delegate to repository)
         installed = await self.repository.is_installed(DEFAULT_SCHEMA)
         logger.info(f"Tables installed: {installed}")
         if not installed:
-            self.repository.create_tables(DEFAULT_SCHEMA)
+            await self.repository.create_tables(DEFAULT_SCHEMA)
 
         await self.repository.validate_durable_scheduler_schema(DEFAULT_SCHEMA)
 
@@ -1922,6 +1833,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         await self.hydrate_from_db()
 
         self.running = True
+        self._priority_refresh_event.clear()
+        self._priority_refresh_task = asyncio.create_task(
+            self._priority_refresh_loop(), name="scheduler-priority-refresh"
+        )
         self.sync_task = asyncio.create_task(self._sync(), name="scheduler-sync")
         # self.monitoring_task = asyncio.create_task(self._monitor())
         self.monitoring_task = None
@@ -1958,9 +1873,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.error(f"Error starting MaintenanceService: {e}")
             # Non-critical - continue without maintenance service
 
-        self._sync_dag_task = asyncio.create_task(
-            self._sync_dag(), name="scheduler-dag-sync"
-        )
+        await self.dag_service.start_sync()
         await self.notify_event()
 
     async def _poll(self):
@@ -2032,7 +1945,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     wait_time = MIN_POLL_PERIOD
 
                 if time.monotonic() >= self._next_priority_refresh_at:
-                    refresh_started = time.perf_counter()
                     scheduler_trace(
                         "scheduler_priority_refresh_due",
                         source="scheduler_loop",
@@ -2041,19 +1953,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         request_queue_size=self._request_queue.qsize(),
                         pending_requests=len(self._pending_requests),
                     )
-                    refresh_id = await self._refresh_job_priorities(
-                        source="scheduler_loop"
-                    )
-                    scheduler_trace(
-                        "scheduler_priority_refresh_returned",
-                        source="scheduler_loop",
-                        refresh_id=refresh_id,
-                        submission_count=self._submission_count,
-                        refresh_interval_seconds=self.priority_refresh_interval_seconds,
-                        request_queue_size=self._request_queue.qsize(),
-                        pending_requests=len(self._pending_requests),
-                        elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
-                    )
+                    self._request_priority_refresh(source="scheduler_loop")
 
                 reaped_soft_leases = await self.frontier.reap_expired_soft_leases()
                 if reaped_soft_leases:
@@ -2499,7 +2399,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             await self.frontier.release_lease_local(wi.id)
                             continue
 
-                        admitted = await self._admit_dag(wi, dag, source="dispatch")
+                        admitted = await self.dag_service.admit_dag(
+                            dag_id, dag, source="dispatch"
+                        )
                         if not admitted:
                             await self._release_lease_db([wi.id])
                             await self.frontier.release_lease_local(wi.id)
@@ -2810,9 +2712,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self._producer_task,
             self._consumer_task,
             self._heartbeat_task,
+            self._priority_refresh_task,
             self._cluster_state_monitor_task,
             self.sync_task,
-            self._sync_dag_task,
             self._dag_state_listener_task,
         ]
         tasks.extend(self._worker_tasks or [])
@@ -2849,6 +2751,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             asyncio.create_task(
                 self.heartbeat.stop(),
                 name="scheduler-heartbeat-stop",
+            ),
+            asyncio.create_task(
+                self.dag_service.stop_sync(),
+                name="scheduler-dag-sync-stop",
             ),
         ]
         shutdown_tasks = background_tasks + service_tasks
@@ -2891,9 +2797,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._producer_task = None
         self._consumer_task = None
         self._heartbeat_task = None
+        self._priority_refresh_task = None
         self._cluster_state_monitor_task = None
         self.sync_task = None
-        self._sync_dag_task = None
         self._dag_state_listener_task = None
         self._worker_tasks = []
         self._job_event_tasks.clear()
@@ -2905,71 +2811,55 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             return
 
         try:
-            await asyncio.to_thread(
-                self._db_executor.shutdown,
-                wait=True,
-                cancel_futures=True,
-            )
-        except Exception as error:
-            self.logger.error(f"Error closing scheduler DB executor: {error}")
-
-        try:
             await self.repository.close()
         except Exception as error:
             self.logger.error(f"Error closing job repository: {error}")
 
-        for resource_name, owner in (
-            ("scheduler repository", self._db),
-            ("scheduler", self),
-        ):
-            pool = getattr(owner, "postgreSQL_pool", None)
-            if pool is None or pool.closed:
-                continue
-            try:
-                await asyncio.to_thread(pool.close)
-            except Exception as error:
-                self.logger.error(
-                    f"Error closing {resource_name} PostgreSQL pool: {error}"
-                )
+        try:
+            await self._db_pool.close()
+        except Exception as error:
+            self.logger.error(f"Error closing scheduler PostgreSQL pool: {error}")
 
         self._resources_closed = True
 
-    def _reopen_runtime_resources(self) -> None:
-        self._db_executor = ThreadPoolExecutor(
-            max_workers=self.max_workers, thread_name_prefix="db-executor"
+    async def _reopen_runtime_resources(self) -> None:
+        self._db_pool = AsyncPostgresConnectionPool()
+        self.repository = JobRepository(
+            self.config,
+            pool=self._db_pool,
         )
-        self._setup_storage(self.config, connection_only=True)
-        self._db = SchedulerRepository(self.config)
-        self.repository = JobRepository(self.config, max_workers=self.max_workers)
+        await self.repository.initialize()
         self.notification_service = NotificationService(self.config)
         self.dag_service = DAGManagementService(
             repository=self.repository,
             frontier=self.frontier,
             active_dags=self.active_dags,
-            loop=self._loop,
-            executor=self._db_executor,
             notify_callback=self.notify_event,
             max_active_dags=self.max_concurrent_dags,
             admission_lock=self._dag_admission_lock,
             slot_snapshot_provider=self.get_available_slots,
+            job_cache=self._job_cache,
+            terminal_event_callback=self._emit_dag_terminal_event,
+            resolution_retry_limit=self._dag_resolution_retry_limit,
+            resolution_retry_delay=self._dag_resolution_retry_delay,
+            resolution_retry_backoff=self._dag_resolution_retry_backoff,
+            resolution_retry_max_delay=self._dag_resolution_retry_max_delay,
         )
         self.notification_service.register_handler(
             channel='dag_state_changed', handler=self.dag_service.handle_state_change
         )
         self.maintenance_service = MaintenanceService(
             repository=self.repository,
-            loop=self._loop,
-            executor=self._db_executor,
             notify_callback=self.notify_event,
             recovery_callback=self._reconcile_recovered_run_leases,
             maintenance_interval=self._maintenance_interval,
         )
         self.heartbeat = SchedulerHeartbeat(
-            self, self.heartbeat_config, self._db, self.logger
+            self, self.heartbeat_config, self.repository, self.logger
         )
         self._resources_closed = False
 
-    def debug_info(self):
+    async def debug_info(self) -> Dict[str, Any]:
         """
         Return comprehensive debugging information about the scheduler's current state.
 
@@ -2983,6 +2873,21 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
 
         current_time = datetime.now(timezone.utc)
+        job_counts, dag_counts = await asyncio.gather(
+            self.repository.count_job_states(),
+            self.repository.count_dag_states(),
+            return_exceptions=True,
+        )
+        if isinstance(job_counts, Exception):
+            job_state_counts_error = str(job_counts)
+        else:
+            self._job_state_counts = job_counts
+            job_state_counts_error = None
+        if isinstance(dag_counts, Exception):
+            dag_state_counts_error = str(dag_counts)
+        else:
+            self._dag_state_counts = dag_counts
+            dag_state_counts_error = None
 
         debug_data = {
             "scheduler_info": {
@@ -3048,15 +2953,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         except Exception as e:
             debug_data["frontier_summary_error"] = str(e)
 
-        try:
-            debug_data["job_state_counts"] = self._db.count_job_states()
-        except Exception as e:
-            debug_data["job_state_counts_error"] = str(e)
-
-        try:
-            debug_data["dag_state_counts"] = self._db.count_dag_states()
-        except Exception as e:
-            debug_data["dag_state_counts_error"] = str(e)
+        debug_data["job_state_counts"] = self._job_state_counts
+        debug_data["dag_state_counts"] = self._dag_state_counts
+        if job_state_counts_error:
+            debug_data["job_state_counts_error"] = job_state_counts_error
+        if dag_state_counts_error:
+            debug_data["dag_state_counts_error"] = dag_state_counts_error
 
         # Include detailed frontier summary without using getattr
         frontier_info = {"available": self.frontier is not None}
@@ -3398,18 +3300,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             now = time.monotonic()
             due_in = self._next_priority_refresh_at - now
             should_wake = due_in <= 0
-            scheduler_trace(
-                "scheduler_priority_refresh_requested",
-                source="submission_worker",
-                submission_count=self._submission_count,
-                refresh_interval=refresh_interval,
-                request_queue_size=self._request_queue.qsize(),
-                pending_requests=len(self._pending_requests),
-                due_in_ms=max(0.0, due_in * 1000.0),
-                wake_scheduler=should_wake,
-            )
             if should_wake:
-                await self.notify_event()
+                self._request_priority_refresh(source="submission_worker")
             self.logger.info(
                 f"Requested job priority refresh after {self._submission_count} submissions "
                 f"(interval: {refresh_interval}, due_in={max(0.0, due_in):.3f}s)"
@@ -3605,6 +3497,66 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         )
         await self.notify_event()
         return submission_id
+
+    def _request_priority_refresh(self, source: str) -> None:
+        """Queue at most one additional priority refresh."""
+        already_pending = self._priority_refresh_event.is_set()
+        self._priority_refresh_source = source
+        self._priority_refresh_event.set()
+        self._next_priority_refresh_at = (
+            time.monotonic() + self.priority_refresh_interval_seconds
+        )
+        scheduler_trace(
+            "scheduler_priority_refresh_requested",
+            source=source,
+            coalesced=already_pending,
+            refresh_running=self._priority_refresh_running,
+            submission_count=self._submission_count,
+            request_queue_size=self._request_queue.qsize(),
+            pending_requests=len(self._pending_requests),
+        )
+
+    async def _priority_refresh_loop(self) -> None:
+        """Run bounded priority refreshes outside the dispatch loop."""
+        while self.running:
+            try:
+                await self._priority_refresh_event.wait()
+                self._priority_refresh_event.clear()
+                source = self._priority_refresh_source
+                refresh_started = time.perf_counter()
+                self._priority_refresh_running = True
+                try:
+                    refresh_id = await asyncio.wait_for(
+                        self._refresh_job_priorities(source=source),
+                        timeout=self.priority_refresh_timeout_seconds,
+                    )
+                    scheduler_trace(
+                        "scheduler_priority_refresh_returned",
+                        source=source,
+                        refresh_id=refresh_id,
+                        submission_count=self._submission_count,
+                        refresh_interval_seconds=self.priority_refresh_interval_seconds,
+                        request_queue_size=self._request_queue.qsize(),
+                        pending_requests=len(self._pending_requests),
+                        elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
+                    )
+                except asyncio.TimeoutError:
+                    scheduler_trace(
+                        "scheduler_priority_refresh_failed",
+                        source=source,
+                        submission_count=self._submission_count,
+                        elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
+                        error="timeout",
+                        timeout_seconds=self.priority_refresh_timeout_seconds,
+                    )
+                    self.logger.warning(
+                        "Priority refresh timed out after %.1fs",
+                        self.priority_refresh_timeout_seconds,
+                    )
+                finally:
+                    self._priority_refresh_running = False
+            except asyncio.CancelledError:
+                break
 
     async def _refresh_job_priorities(self, source: str = "unknown") -> int:
         """Sync DB priority edits into memory and log current SLA pressure."""
@@ -3814,42 +3766,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         )
         return count > 0
 
-    async def mark_as_active_dag(self, work_info: WorkInfo) -> bool:
-        """
-        Mark a DAG as active.
-        Delegates to JobRepository.
-
-        :param work_info: WorkInfo containing DAG ID
-        :return: True if successful, False otherwise
-        """
-        return await self.repository.mark_dag_as_active(work_info.dag_id)
-
-    async def _admit_dag(
-        self, work_info: WorkInfo, dag: QueryPlan, *, source: str
-    ) -> bool:
-        dag_id = work_info.dag_id
-
-        async with self._dag_admission_lock:
-            if dag_id in self.active_dags:
-                return True
-
-            if len(self.active_dags) >= self.max_concurrent_dags:
-                self.logger.debug(
-                    f"[DAG_ADMISSION] Skipping DAG {dag_id} from {source}; "
-                    f"active_dags={len(self.active_dags)}/{self.max_concurrent_dags}"
-                )
-                return False
-
-            marked_active = await self.mark_as_active_dag(work_info)
-            if not marked_active:
-                self.logger.warning(
-                    f"[DAG_ADMISSION] Failed to mark DAG {dag_id} as active in DB "
-                    f"from {source}; leaving it out of active_dags"
-                )
-                return False
-            self.active_dags[dag_id] = dag
-            return True
-
     async def is_valid_submission(
         self, work_info: WorkInfo, policy: ExistingWorkPolicy
     ) -> bool:
@@ -4003,7 +3919,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 reason_code=recovery.reason_code,
             )
             await self.frontier.on_job_failed(recovery.id)
-            await self._resolve_dag_status_with_retry(
+            await self.dag_service.resolve_dag_status_with_retry(
                 recovery.id,
                 work_item,
                 source="run_lease_recovery",
@@ -4191,20 +4107,22 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if not active_jobs:
                     continue
 
+                sync_missing = 0
+                sync_without_status = 0
+                sync_running = 0
+                sync_terminal = 0
                 for job_id, work_item in active_jobs.items():
-                    self.logger.info(f"Syncing job: {job_id}")
                     job_info = await job_info_client.get_info(job_id)
                     if job_info is None:
-                        self.logger.error(f"Job to synchronize not found: {job_id}")
+                        sync_missing += 1
                         continue
 
                     if not job_info.status:
-                        self.logger.warning(
-                            f"Missing status for job: {job_id}, skipping."
-                        )
+                        sync_without_status += 1
                         continue
 
                     if job_info.status == JobStatus.RUNNING:
+                        sync_running += 1
                         run_owner = job_info.run_owner
                         run_attempt_id = job_info.run_attempt_id
                         if not run_owner or not run_attempt_id:
@@ -4243,12 +4161,23 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             )
                         continue
 
+                    sync_terminal += 1
                     await self._sync_terminal_job_state(
                         job_id,
                         work_item,
                         job_info,
                         min_sync_interval_seconds=min_sync_interval_seconds,
                     )
+
+                self.logger.info(
+                    "Synchronized active jobs: total=%d running=%d terminal=%d "
+                    "missing=%d without_status=%d",
+                    len(active_jobs),
+                    sync_running,
+                    sync_terminal,
+                    sync_missing,
+                    sync_without_status,
+                )
 
             except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error syncing jobs: {error}")
@@ -4390,6 +4319,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     **self._ha_trace_fields(),
                 )
                 return False
+            meta.update(
+                self._job_failure_metadata(
+                    message=job_info.message,
+                    runtime_env=job_info.runtime_env,
+                    source="storage_sync",
+                )
+            )
             actual_work_state = await self.fail(
                 job_id,
                 work_item,
@@ -4487,11 +4423,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"Synchronized job {job_id} is in terminal state {job_info.status}"
             )
             self._status_update_lock.release(job_id)
-            await self._resolve_dag_status_with_retry(
+            await self.dag_service.resolve_dag_status_with_retry(
                 job_id,
                 work_item,
-                now,
-                now,
                 source="storage_sync",
             )
             await self.notify_event()
@@ -4505,93 +4439,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             await self.notify_event()
 
         return True
-
-    async def _sync_dag(self):
-        self.logger.info("Starting DAG synchronization")
-        # https://github.com/marieai/marie-ai/issues/134
-        await self._sync_dag_loop()
-
-    async def _sync_dag_loop(self, interval: int = 30) -> None:
-        """
-        Validate in-memory DAGs without monopolizing the scheduler DB executor.
-        """
-        self.logger.info(f"Starting DAG sync polling (interval: {interval}s)")
-        scheduler_trace("scheduler_dag_sync_loop_start", interval=interval)
-
-        while self.running:
-            try:
-                await self._sync_dag_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                scheduler_trace("scheduler_dag_sync_cycle_failed", error=repr(error))
-                self.logger.error(f"Error validating DAGs: {error}")
-
-            await asyncio.sleep(interval)
-
-        scheduler_trace("scheduler_dag_sync_loop_stopped")
-        self.logger.debug("DAG sync polling stopped")
-
-    async def _sync_dag_once(self) -> None:
-        if not self.active_dags:
-            scheduler_trace("scheduler_dag_sync_cycle_skipped", reason="no_active_dags")
-            self.logger.debug("No active DAGs in memory to validate")
-            return
-
-        memory_dag_ids = list(self.active_dags.keys())
-        scheduler_trace(
-            "scheduler_dag_sync_cycle_start",
-            active_dags=len(memory_dag_ids),
-        )
-        self.logger.debug(f"Validating {len(memory_dag_ids)} DAGs in memory")
-
-        resolved_terminal_dags: set[str] = set()
-        for dag_id in memory_dag_ids:
-            try:
-                dag_state = await self.repository.resolve_dag_state(dag_id)
-                if dag_state in ("completed", "failed"):
-                    resolved_terminal_dags.add(dag_id)
-            except Exception as resolve_error:
-                self.logger.warning(
-                    f"[DAG_SYNC] Failed to resolve DAG state for {dag_id}: "
-                    f"{resolve_error}"
-                )
-
-        valid_db_dags = await self.repository.get_active_dag_ids(memory_dag_ids)
-        invalid_dags = (set(memory_dag_ids) - valid_db_dags).union(
-            resolved_terminal_dags
-        )
-
-        if invalid_dags:
-            self.logger.info(f"Found {len(invalid_dags)} invalid DAGs in memory")
-            for dag_id in invalid_dags:
-                await self._evict_dag_from_memory(
-                    dag_id, "no longer active or deleted in database"
-                )
-            await self.notify_event()
-        else:
-            self.logger.debug("All DAGs in memory are still valid")
-
-        scheduler_trace(
-            "scheduler_dag_sync_cycle_done",
-            active_dags=len(memory_dag_ids),
-            valid_dags=len(valid_db_dags),
-            terminal_dags=len(resolved_terminal_dags),
-            invalid_dags=len(invalid_dags),
-        )
-
-    async def _evict_dag_from_memory(self, dag_id: str, reason: str) -> bool:
-        self._terminal_dag_states.pop(dag_id, None)
-        dag_jobs = await self.frontier.get_jobs_by_dag_id(dag_id)
-        stats = await self.frontier.finalize_dag(dag_id)
-        for dag_job in dag_jobs:
-            self._job_cache.pop(dag_job.id, None)
-        removed = self.dag_service.remove_dag(dag_id, reason)
-        self.logger.info(
-            f"[DAG_SYNC] Evicted DAG {dag_id} from memory ({reason}), "
-            f"removed={removed}, finalize_stats={stats}"
-        )
-        return removed
 
     async def notify_event(self) -> bool:
         if self._debounced_notify:
@@ -4710,7 +4557,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             await self.frontier.on_job_retry(wi.id, wi)
         elif actual_work_state == WorkState.FAILED.value:
             await self.frontier.on_job_failed(wi.id)
-            await self._resolve_dag_status_with_retry(
+            await self.dag_service.resolve_dag_status_with_retry(
                 wi.id,
                 wi,
                 source="dispatch_failure",
@@ -4739,142 +4586,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             )
 
         await self.notify_event()
-
-    def _get_dag_resolution_retry_delay(self, retry_number: int) -> float:
-        delay = max(0.0, self._dag_resolution_retry_delay)
-        if not self._dag_resolution_retry_backoff or retry_number <= 1:
-            return delay
-
-        return min(
-            self._dag_resolution_retry_max_delay,
-            delay * (2 ** (retry_number - 1)),
-        )
-
-    async def _resolve_dag_status_with_retry(
-        self,
-        job_id: str,
-        work_info: WorkInfo,
-        started_on: Optional[datetime] = None,
-        completed_on: Optional[datetime] = None,
-        *,
-        source: str,
-    ) -> bool:
-        """
-        Retry DAG terminal resolution a small number of times for transient
-        database or cleanup errors without introducing a separate queue.
-        """
-        retry_number = 0
-        while True:
-            try:
-                return await self.resolve_dag_status(
-                    job_id, work_info, started_on, completed_on
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                retry_number += 1
-                if retry_number > self._dag_resolution_retry_limit:
-                    self.logger.error(
-                        f"[DAG_RESOLVE] Exhausted {self._dag_resolution_retry_limit} "
-                        f"retries for dag={work_info.dag_id}, job={job_id}, "
-                        f"source={source}: {error}"
-                    )
-                    return False
-
-                delay = self._get_dag_resolution_retry_delay(retry_number)
-                self.logger.warning(
-                    f"[DAG_RESOLVE] Retry {retry_number}/"
-                    f"{self._dag_resolution_retry_limit} for dag={work_info.dag_id}, "
-                    f"job={job_id}, source={source} after error: {error}. "
-                    f"Waiting {delay:.2f}s"
-                )
-                if delay > 0:
-                    await asyncio.sleep(delay)
-
-    async def resolve_dag_status(
-        self,
-        job_id: str,
-        work_info: WorkInfo,
-        started_on: Optional[datetime] = None,
-        completed_on: Optional[datetime] = None,
-    ) -> bool:
-        """
-        Resolves the status of a directed acyclic graph (DAG). This method checks
-        if the DAG has completed execution by querying its current state and handles
-        the corresponding logic for the DAG lifecycle, including sending notification
-        about the completion or failure of the DAG.
-        """
-        dag_id = work_info.dag_id
-        self.logger.info(f"Resolving DAG status: {dag_id}")
-
-        if not dag_id:
-            self.logger.warning(
-                f"Skipping DAG status resolution for job without dag_id: {job_id}"
-            )
-            return False
-
-        dag_lock = self._dag_resolution_lock[dag_id]
-        try:
-            async with dag_lock:
-                claimed_terminal_state = False
-                try:
-                    dag_state = await self.repository.resolve_dag_state(dag_id)
-
-                    self.logger.info(f"Resolved DAG state: {dag_state}")
-                    if dag_state not in ("completed", "failed"):
-                        self.logger.debug(f"DAG is still in progress: {dag_id}")
-                        return False
-
-                    previous_state = self._terminal_dag_states.get(dag_id)
-                    if previous_state is not None:
-                        self.logger.debug(
-                            f"DAG {dag_id} already handled as terminal state "
-                            f"'{previous_state}', skipping duplicate resolution"
-                        )
-                        return False
-
-                    self._terminal_dag_states[dag_id] = dag_state
-                    claimed_terminal_state = True
-
-                    if dag_id in self.active_dags:
-                        del self.active_dags[dag_id]
-                        self.logger.debug(
-                            f"Removed DAG from cache: {dag_id}, size = {len(self.active_dags)}"
-                        )
-
-                    if dag_state == "failed":
-                        cancelled = await self.repository.cancel_pending_jobs_for_dag(
-                            dag_id=dag_id,
-                            output_metadata={
-                                "on_complete": "failed",
-                                "cancel_reason": "dag_failed",
-                                "terminal_dag_state": dag_state,
-                                "resolved_by_job_id": job_id,
-                            },
-                        )
-                        self.logger.info(
-                            f"Cancelled {cancelled} pending jobs for failed DAG {dag_id}"
-                        )
-
-                    dag_jobs = await self.frontier.get_jobs_by_dag_id(dag_id)
-                    stats = await self.frontier.finalize_dag(dag_id)
-                    for dag_job in dag_jobs:
-                        self._job_cache.pop(dag_job.id, None)
-
-                    self.logger.info(
-                        f"Resolved DAG status: {dag_id}, status={dag_state}, "
-                        f"active_dag = {len(self.active_dags)}, finalize_stats={stats}"
-                    )
-
-                    await self._emit_dag_terminal_event(dag_state, work_info)
-                    return True
-                except (Exception, psycopg.Error):
-                    if claimed_terminal_state:
-                        self._terminal_dag_states.pop(dag_id, None)
-                    raise
-        except (Exception, psycopg.Error) as error:
-            self.logger.error(f"Error resolving DAG status: {error}")
-            raise error
 
     async def get_dag_by_id(self, dag_id: str) -> QueryPlan | None:
         """

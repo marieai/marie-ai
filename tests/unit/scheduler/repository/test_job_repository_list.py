@@ -1,9 +1,10 @@
+from __future__ import annotations
+
 import asyncio
-import threading
-from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Callable
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -12,139 +13,128 @@ from marie.scheduler.repository import JobRepository
 from marie.scheduler.state import WorkState
 
 
-class Cursor:
-    def __init__(self, batches: list[list[tuple]]) -> None:
-        self.batches = list(batches)
-        self.closed = False
-        self.itersize = 0
-        self.fetch_sizes: list[int] = []
-        self.query = ""
-        self.params: list[object] = []
+def job_row(job_id: str, state: str) -> tuple:
+    now = datetime.now(timezone.utc)
+    return (
+        job_id,
+        "extract",
+        1,
+        state,
+        2,
+        now,
+        timedelta(seconds=60),
+        {},
+        0,
+        False,
+        now + timedelta(days=1),
+        "00000000-0000-0000-0000-000000000010",
+        0,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
 
-    def execute(self, query: str, params: list[object]) -> None:
+
+class ListConnection:
+    def __init__(self, rows=None, error: BaseException | None = None) -> None:
+        self.rows = rows or []
+        self.error = error
+        self.query = ""
+        self.params = ()
+
+    async def fetch(self, query, *params):
         self.query = query
         self.params = params
-
-    def fetchmany(self, size: int) -> list[tuple]:
-        self.fetch_sizes.append(size)
-        return self.batches.pop(0)
-
-    def close(self) -> None:
-        self.closed = True
+        await asyncio.sleep(0)
+        if self.error is not None:
+            raise self.error
+        return self.rows
 
 
-class Connection:
-    def __init__(self, cursor: Cursor) -> None:
-        self._cursor = cursor
-        self.cursor_name = None
-        self.committed = False
-        self.rollback_calls = 0
+class ListPool:
+    def __init__(
+        self,
+        connection: ListConnection,
+        acquire_error: BaseException | None = None,
+    ) -> None:
+        self.connection = connection
+        self.acquire_error = acquire_error
 
-    def cursor(self, name: str) -> Cursor:
-        self.cursor_name = name
-        return self._cursor
-
-    def commit(self) -> None:
-        self.committed = True
-
-    def rollback(self) -> None:
-        self.rollback_calls += 1
+    @asynccontextmanager
+    async def acquire(self):
+        if self.acquire_error is not None:
+            raise self.acquire_error
+        yield self.connection
 
 
 def build_repository(
-    executor: ThreadPoolExecutor, get_connection: Callable[[], Connection]
+    connection: ListConnection, *, acquire_error=None
 ) -> JobRepository:
-    repository = object.__new__(JobRepository)
-    repository._loop = asyncio.get_running_loop()
-    repository._db_executor = executor
-    repository.logger = MagicMock()
-    repository._get_connection = get_connection
-    repository._close_cursor = MagicMock(
-        side_effect=lambda cursor: cursor.close() if cursor else None
-    )
-    repository._close_connection = MagicMock()
-    repository._record_to_work_info = lambda record: SimpleNamespace(id=str(record[0]))
-    return repository
+    return JobRepository({}, pool=ListPool(connection, acquire_error))
 
 
 @pytest.mark.asyncio
-async def test_list_jobs_fetches_multiple_states_in_bounded_batches() -> None:
-    cursor = Cursor([[("job-1",), ("job-2",)], [("job-3",)], []])
-    connection = Connection(cursor)
+async def test_list_jobs_filters_multiple_states_and_limit() -> None:
+    connection = ListConnection(
+        [
+            job_row("00000000-0000-0000-0000-000000000001", "active"),
+            job_row("00000000-0000-0000-0000-000000000002", "retry"),
+        ]
+    )
+    repository = build_repository(connection)
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        repository = build_repository(executor, lambda: connection)
-        jobs = await repository.list_jobs(
-            state=[WorkState.ACTIVE, "RETRY"],
-            limit=3,
-            fetch_size=2,
-        )
+    jobs = await repository.list_jobs(
+        state=[WorkState.ACTIVE, "RETRY"],
+        limit=3,
+        fetch_size=2,
+    )
 
-    assert [job.id for job in jobs] == ["job-1", "job-2", "job-3"]
-    assert connection.cursor_name == "job_list_iterator"
-    assert cursor.itersize == 2
-    assert cursor.fetch_sizes == [2, 2, 2]
-    assert "state = ANY(%s::marie_scheduler.job_state[])" in cursor.query
-    assert "LIMIT %s" in cursor.query
-    assert cursor.params == [["active", "retry"], 3]
-    assert connection.committed
+    assert [job.state for job in jobs] == [WorkState.ACTIVE, WorkState.RETRY]
+    assert "state = ANY(%s::marie_scheduler.job_state[])" in connection.query
+    assert connection.params == (["active", "retry"], 3)
 
 
 @pytest.mark.asyncio
 async def test_list_jobs_does_not_block_the_event_loop() -> None:
-    cursor = Cursor([[]])
-    connection = Connection(cursor)
-    entered = threading.Event()
-    release = threading.Event()
+    repository = build_repository(ListConnection([]))
+    other_task_ran = False
 
-    def get_connection() -> Connection:
-        entered.set()
-        release.wait(timeout=1.0)
-        return connection
+    async def mark_progress() -> None:
+        nonlocal other_task_ran
+        await asyncio.sleep(0)
+        other_task_ran = True
 
-    timer = threading.Timer(0.2, release.set)
-    timer.start()
-    try:
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            repository = build_repository(executor, get_connection)
-            list_task = asyncio.create_task(repository.list_jobs())
-            while not entered.is_set():
-                await asyncio.sleep(0)
-            await asyncio.sleep(0.01)
-            assert not release.is_set()
-            release.set()
-            await list_task
-    finally:
-        timer.cancel()
+    await asyncio.gather(repository.list_jobs(), mark_progress())
+
+    assert other_task_ran
 
 
 @pytest.mark.asyncio
 async def test_list_jobs_preserves_connection_acquisition_error() -> None:
-    def fail_to_connect() -> Connection:
-        raise RuntimeError("pool unavailable")
+    repository = build_repository(
+        ListConnection([]), acquire_error=RuntimeError("pool exhausted")
+    )
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        repository = build_repository(executor, fail_to_connect)
-        with pytest.raises(RuntimeError, match="pool unavailable"):
-            await repository.list_jobs()
-
-    repository._close_connection.assert_called_once_with(None)
+    with pytest.raises(RuntimeError, match="pool exhausted"):
+        await repository.list_jobs()
 
 
 @pytest.mark.asyncio
-async def test_list_jobs_preserves_query_error_when_rollback_fails() -> None:
-    cursor = Cursor([])
-    cursor.execute = MagicMock(side_effect=ValueError("query failed"))
-    connection = Connection(cursor)
-    connection.rollback = MagicMock(side_effect=RuntimeError("rollback failed"))
+async def test_list_jobs_preserves_query_error() -> None:
+    repository = build_repository(ListConnection(error=ValueError("query failed")))
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        repository = build_repository(executor, lambda: connection)
-        with pytest.raises(ValueError, match="query failed"):
-            await repository.list_jobs()
+    with pytest.raises(ValueError, match="query failed"):
+        await repository.list_jobs()
 
-    connection.rollback.assert_called_once_with()
-    repository.logger.warning.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_list_jobs_rejects_nonpositive_fetch_size() -> None:
+    repository = build_repository(ListConnection([]))
+
+    with pytest.raises(ValueError, match="fetch_size"):
+        await repository.list_jobs(fetch_size=0)
 
 
 @pytest.mark.asyncio
