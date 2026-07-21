@@ -76,7 +76,11 @@ class AsyncJobRepository:
         self._closed = False
 
     async def initialize(self) -> None:
-        await self._pool.initialize(self._config, row_factory=tuple_row)
+        await self._pool.initialize(
+            self._config,
+            row_factory=tuple_row,
+            autocommit=True,
+        )
 
     async def get_job_by_id(self, job_id: str) -> Optional[WorkInfo]:
         query = f"""

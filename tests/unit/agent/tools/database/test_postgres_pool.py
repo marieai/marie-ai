@@ -134,6 +134,21 @@ async def test_non_singleton_pool_forwards_query_arguments(db_config):
     assert rows == [{"id": 1}]
 
 
+@pytest.mark.asyncio
+async def test_non_singleton_pool_configures_autocommit(db_config):
+    driver_pool = MagicMock()
+    driver_pool.open = AsyncMock()
+
+    with patch(
+        "marie.storage.database.postgres_pool.AsyncConnectionPool",
+        return_value=driver_pool,
+    ) as factory:
+        pool = AsyncPostgresConnectionPool()
+        await pool.initialize(db_config, autocommit=True)
+
+    assert factory.call_args.kwargs["kwargs"]["autocommit"] is True
+
+
 def test_sync_pool_is_available_without_event_loop(db_config):
     cursor = MagicMock(statusmessage="SELECT 1")
     connection = MagicMock()

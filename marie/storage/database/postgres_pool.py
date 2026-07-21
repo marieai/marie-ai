@@ -293,12 +293,14 @@ class AsyncPostgresConnectionPool(AsyncPostgresPool):
         config: Mapping[str, Any],
         *,
         row_factory: AsyncRowFactory[Any] = dict_row,
+        autocommit: bool = False,
     ) -> None:
         if self._pool is not None:
             return
         minimum, maximum = _sizes(config)
         kwargs = _connection_kwargs(config)
         kwargs["row_factory"] = row_factory
+        kwargs["autocommit"] = autocommit
         pool = AsyncConnectionPool(
             "",
             min_size=minimum,

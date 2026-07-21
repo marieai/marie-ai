@@ -88,6 +88,7 @@ class FakePool:
         self.connection = connection
         self.acquire_error: BaseException | None = None
         self.closed = False
+        self.autocommit: bool | None = None
 
     @asynccontextmanager
     async def acquire(self):
@@ -95,8 +96,8 @@ class FakePool:
             raise self.acquire_error
         yield self.connection
 
-    async def initialize(self, config, *, row_factory) -> None:
-        return None
+    async def initialize(self, config, *, row_factory, autocommit=False) -> None:
+        self.autocommit = autocommit
 
     async def close(self) -> None:
         self.closed = True
@@ -130,6 +131,16 @@ def build_dag_job(dag_id: str, index: int) -> WorkInfo:
         dependencies=[] if index == 1 else [f"node-{index - 1}"],
         job_level=index - 1,
     )
+
+
+@pytest.mark.asyncio
+async def test_repository_initializes_pool_in_autocommit_mode() -> None:
+    pool = FakePool(FakeConnection())
+    repository = JobRepository({}, pool=pool)
+
+    await repository.initialize()
+
+    assert pool.autocommit is True
 
 
 @pytest.mark.asyncio
