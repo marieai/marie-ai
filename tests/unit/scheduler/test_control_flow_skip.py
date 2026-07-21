@@ -3,7 +3,9 @@ from pathlib import Path
 import pytest
 
 from marie.query_planner.base import Query, QueryPlan
-from marie.scheduler.psql import exclusive_skip_closure
+from marie.scheduler.services.control_flow_execution_service import (
+    exclusive_skip_closure,
+)
 
 
 def branch_plan() -> QueryPlan:

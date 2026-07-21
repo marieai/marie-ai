@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from marie.job.common import JobStatus
+from marie.scheduler.dag_topology_cache import DagTopologyCache
+from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.psql import PostgreSQLJobScheduler
 from marie.scheduler.repository import JobRepository
 
@@ -182,3 +184,29 @@ async def test_close_runtime_resources_closes_async_pool() -> None:
     scheduler.repository.close.assert_awaited_once_with()
     assert scheduler._db_pool.close_count == 1
     assert scheduler._resources_closed
+
+
+def test_control_flow_service_rebuild_uses_current_runtime_resources() -> None:
+    scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.repository = MagicMock()
+    scheduler.frontier = MagicMock()
+    scheduler.dag_service = MagicMock()
+    scheduler._status_update_lock = AsyncJobLock()
+    scheduler._topology_cache = DagTopologyCache()
+    scheduler._job_cache = {}
+    scheduler.lease_owner = 'scheduler-1'
+    scheduler.run_ttl_seconds = 60
+    scheduler.gateway_instance_id = 'gateway-1'
+    scheduler.notify_event = AsyncMock(return_value=True)
+
+    original_service = scheduler._build_control_flow_service()
+    scheduler.repository = MagicMock()
+    scheduler.dag_service = MagicMock()
+
+    service = scheduler._build_control_flow_service()
+
+    assert service.repository is scheduler.repository
+    assert service.dag_service is scheduler.dag_service
+    assert service.frontier is scheduler.frontier
+    assert service.repository is not original_service.repository
+    assert service.dag_service is not original_service.dag_service

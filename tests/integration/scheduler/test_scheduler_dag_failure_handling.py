@@ -8,14 +8,19 @@ from types import SimpleNamespace
 import pytest
 
 import marie.scheduler.psql as scheduler_psql
+import marie.scheduler.services.control_flow_execution_service as control_flow_module
 from marie.job.common import JobInfo, JobStatus
 from marie.query_planner.base import Query, QueryPlan
 from marie.query_planner.branching import SkipReason
+from marie.scheduler.dag_topology_cache import DagTopologyCache
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import RecoveredRunLease, WorkInfo
 from marie.scheduler.psql import PostgreSQLJobScheduler
 from marie.scheduler.repository.job_repository import JobRepository
+from marie.scheduler.services.control_flow_execution_service import (
+    ControlFlowExecutionService,
+)
 from marie.scheduler.services.dag_management_service import DAGManagementService
 from marie.scheduler.state import WorkState
 
@@ -41,6 +46,7 @@ class RecordingRepository:
         self.resolve_calls: list[str] = []
         self.cancel_calls: list[dict] = []
         self.mark_active_calls: list[str] = []
+        self.released_lease_calls: list[list[str]] = []
 
     async def mark_dag_as_active(self, dag_id: str) -> bool:
         self.mark_active_calls.append(dag_id)
@@ -70,6 +76,10 @@ class RecordingRepository:
 
     async def get_dag_by_id(self, _dag_id: str):
         return None
+
+    async def release_lease(self, job_ids: list[str]) -> set[str]:
+        self.released_lease_calls.append(job_ids)
+        return set(job_ids)
 
 
 class FlakyResolveRepository(RecordingRepository):
@@ -149,6 +159,7 @@ def build_scheduler(
     scheduler._dag_resolution_retry_max_delay = 0.0
     scheduler.lease_owner = "test-scheduler"
     scheduler.gateway_instance_id = "test-gateway"
+    scheduler.run_ttl_seconds = 60
     scheduler._priority_refresh_event = asyncio.Event()
     scheduler._priority_refresh_source = "test"
     scheduler._priority_refresh_running = False
@@ -179,6 +190,18 @@ def build_scheduler(
         resolution_retry_max_delay=scheduler._dag_resolution_retry_max_delay,
     )
     scheduler.dag_service.hydrate_single_dag = hydrate_single_dag_from_db
+    scheduler.control_flow_service = ControlFlowExecutionService(
+        repository=repository,
+        frontier=frontier,
+        dag_service=scheduler.dag_service,
+        status_update_lock=AsyncJobLock(),
+        topology_cache=DagTopologyCache(),
+        job_cache=scheduler._job_cache,
+        lease_owner=scheduler.lease_owner,
+        run_ttl_seconds=scheduler.run_ttl_seconds,
+        gateway_instance_id=scheduler.gateway_instance_id,
+        notify_callback=notify_event,
+    )
     return scheduler
 
 
@@ -384,26 +407,21 @@ async def test_control_flow_node_requeues_when_active_dag_limit_is_full():
     work_item = build_work_item("job-control", "new-dag")
     work_item.data["metadata"]["on"] = "noop://control"
 
-    released_db: list[list[str]] = []
     released_local: list[str] = []
 
     async def get_dag_by_id(dag_id: str):
         return object()
 
-    async def release_lease_db(job_ids: list[str]) -> None:
-        released_db.append(job_ids)
-
     async def release_lease_local(job_id: str) -> None:
         released_local.append(job_id)
 
-    scheduler.get_dag_by_id = get_dag_by_id
-    scheduler._release_lease_db = release_lease_db
+    scheduler.dag_service.get_dag = get_dag_by_id
     frontier.release_lease_local = release_lease_local
 
-    await scheduler._process_control_flow_node(work_item)
+    await scheduler.control_flow_service.process_node(work_item)
 
     assert repository.mark_active_calls == []
-    assert released_db == [[work_item.id]]
+    assert repository.released_lease_calls == [[work_item.id]]
     assert released_local == [work_item.id]
     assert work_item.dag_id not in scheduler.active_dags
 
@@ -419,13 +437,22 @@ async def test_control_flow_activation_marks_job_active_before_local_completion(
 
     activated_ids: list[list[str]] = []
 
-    async def activate_from_lease(ids: list[str]) -> dict[str, str]:
-        activated_ids.append(ids)
+    async def activate_from_lease(
+        *,
+        job_ids: list[str],
+        owner: str,
+        run_ttl_seconds: int,
+        gateway_instance_id: str,
+    ) -> dict[str, str]:
+        activated_ids.append(job_ids)
+        assert owner == "test-scheduler"
+        assert run_ttl_seconds == 60
+        assert gateway_instance_id == "test-gateway"
         return {work_item.id: "06a0ac88-5326-7f90-8000-0274669de089"}
 
-    scheduler._activate_from_lease_db = activate_from_lease
+    repository.activate_from_lease = activate_from_lease
 
-    activated = await scheduler._activate_control_flow_job(work_item)
+    activated = await scheduler.control_flow_service._activate(work_item)
 
     assert activated is True
     assert activated_ids == [[work_item.id]]
@@ -1412,13 +1439,13 @@ async def test_mark_nodes_skipped_reconciles_from_committed_ids_only():
     async def on_jobs_skipped(job_ids: list[str]) -> None:
         frontier_skip_calls.append(job_ids)
 
-    scheduler = object.__new__(PostgreSQLJobScheduler)
-    scheduler.logger = FakeLogger()
-    scheduler.repository = SimpleNamespace(
+    service = object.__new__(ControlFlowExecutionService)
+    service.logger = FakeLogger()
+    service.repository = SimpleNamespace(
         mark_jobs_as_skipped=mark_jobs_as_skipped,
         update_job_metadata=update_job_metadata,
     )
-    scheduler.frontier = SimpleNamespace(on_jobs_skipped=on_jobs_skipped)
+    service.frontier = SimpleNamespace(on_jobs_skipped=on_jobs_skipped)
 
     dag_plan = QueryPlan(
         nodes=[
@@ -1439,7 +1466,7 @@ async def test_mark_nodes_skipped_reconciles_from_committed_ids_only():
     )
 
     skip_reason = SkipReason(branch_node_id="branch", reason="not selected")
-    await scheduler._mark_nodes_skipped(
+    await service._mark_nodes_skipped(
         ["job-uncommitted", "job-committed"],
         "extract",
         skip_reason,
@@ -1464,25 +1491,27 @@ async def test_mark_nodes_skipped_reconciles_from_committed_ids_only():
 async def test_process_control_flow_node_notifies_after_unblocking_children(
     monkeypatch,
 ):
-    scheduler = object.__new__(PostgreSQLJobScheduler)
-    scheduler.logger = FakeLogger()
-    scheduler.distributed_scheduler = False
-    scheduler.active_dags = {"dag-cf": object()}
-    scheduler._topology_cache = SimpleNamespace(
+    service = object.__new__(ControlFlowExecutionService)
+    service.logger = FakeLogger()
+    service.dag_service = SimpleNamespace(
+        active_dags={"dag-cf": object()},
+        resolve_dag_status_with_retry=None,
+    )
+    service._topology_cache = SimpleNamespace(
         get_sorted_nodes_and_levels=lambda _dag, _dag_id: (
             [],
             {"noop-root": 2, "child": 1},
         )
     )
-    scheduler.frontier = SimpleNamespace(
+    service.frontier = SimpleNamespace(
         leased_until={},
         on_job_completed=None,
     )
 
     order: list[str] = []
 
-    async def complete(job_id: str, _wi: WorkInfo, *_args, **_kwargs):
-        order.append(f"complete:{job_id}")
+    async def complete_attempt(work_item: WorkInfo) -> bool:
+        order.append(f"complete:{work_item.id}")
         return 1
 
     async def on_job_completed(job_id: str):
@@ -1496,22 +1525,20 @@ async def test_process_control_flow_node_notifies_after_unblocking_children(
         order.append("resolve_dag_status")
         return True
 
-    scheduler.complete = complete
-    scheduler.notify_event = notify_event
-    scheduler.dag_service = SimpleNamespace(
-        resolve_dag_status_with_retry=resolve_dag_status_with_retry
-    )
-    scheduler.frontier.on_job_completed = on_job_completed
+    service._complete_attempt = complete_attempt
+    service._notify_callback = notify_event
+    service.dag_service.resolve_dag_status_with_retry = resolve_dag_status_with_retry
+    service.frontier.on_job_completed = on_job_completed
 
     async def activate_control_flow_job(_wi: WorkInfo) -> bool:
         _wi.run_owner = "test-scheduler"
         _wi.run_attempt_id = "06a0ac88-5326-7f90-8000-0274669de089"
         return True
 
-    scheduler._activate_control_flow_job = activate_control_flow_job
+    service._activate = activate_control_flow_job
 
     monkeypatch.setattr(
-        scheduler_psql, "get_node_from_dag", lambda *_args, **_kwargs: object()
+        control_flow_module, "get_node_from_dag", lambda *_args, **_kwargs: object()
     )
 
     started_calls: list[dict] = []
@@ -1520,7 +1547,9 @@ async def test_process_control_flow_node_notifies_after_unblocking_children(
         started_calls.append(kwargs)
         return True
 
-    monkeypatch.setattr(scheduler_psql, "mark_as_started_toast", mark_started_toast)
+    monkeypatch.setattr(
+        control_flow_module, "mark_as_started_toast", mark_started_toast
+    )
 
     work_item = WorkInfo(
         id="noop-root",
@@ -1543,7 +1572,7 @@ async def test_process_control_flow_node_notifies_after_unblocking_children(
         job_level=2,
     )
 
-    await scheduler._process_control_flow_node(work_item)
+    await service.process_node(work_item)
 
     assert order == [
         "complete:noop-root",
