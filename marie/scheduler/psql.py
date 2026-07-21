@@ -6,6 +6,7 @@ import uuid
 import uuid as _uuid
 from asyncio import Queue
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from math import inf
 from typing import Any, Dict, List
@@ -86,6 +87,14 @@ DEFAULT_JOB_TABLE = "job"
 RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL = "run_lease_extend_stale_attempt_total"
 RUN_LEASE_RECOVERED_RETRY_TOTAL = "run_lease_recovered_retry_total"
 RUN_LEASE_RECOVERED_FAILED_TOTAL = "run_lease_recovered_failed_total"
+
+
+@dataclass(frozen=True, slots=True)
+class DispatchCycleResult:
+    """Outcome used by the poll loop to choose its next wait."""
+
+    scheduled: bool
+    wait_interval: float | None = None
 
 
 def limit_planned_jobs_to_available_slots(
@@ -865,74 +874,16 @@ class PostgreSQLJobScheduler(JobScheduler):
         await self.dag_service.start_sync()
         await self.notify_event()
 
-    async def _poll(self):
-        """
-        Handles the polling, scheduling, and execution of jobs in an asynchronous job scheduler
-        until the scheduler is stopped. Coordinates job management by interacting with a frontier
-        (queue system), execution planner, and database for job leasing and dispatch.
-
-        The method:
-        * Periodically polls for ready work from the frontier.
-        * Filters and plans the dispatching of work based on available slots
-          for executors, active DAGs, and job dependencies.
-        * Manages job soft-leases (local and database-level) to ensure claim
-          consistency.
-        * Executes or schedules ready jobs, including handling NOOP jobs that
-          require local processing.
-
-        The method dynamically adjusts its sleep intervals in case of failed
-        or delayed operations, to achieve a backoff mechanism during low activity.
-
-        Planner-first loop:
-          1) wait (debounced) for wake/event
-          2) read cluster slots
-          3) peek ready candidates from frontier (executor-agnostic)
-          4) let planner choose a plan
-          5) take the chosen ids from frontier, soft-lease, DB-lease
-          6) NOOPs -> complete locally; normal jobs -> dispatch and activate_from_lease
-
-        :raises asyncio.TimeoutError: When the operation times out.
-        :raises Exception: If any unexpected error occurs during job scheduling or execution processing.
-        """
-
-        self.logger.info("Starting job scheduler")
-        wait_time = INIT_POLL_PERIOD
+    async def run_dispatch_cycle(self, cycle_index: int) -> DispatchCycleResult:
+        """Run one candidate, lease, activation, and dispatch attempt."""
         batch_size = self.frontier_batch_size
         max_concurrent_dags = self.max_concurrent_dags
         lease_ttl = self.lease_ttl_seconds
+        scheduled_any = False
+        compact_ready_heap = False
 
-        failures = 0
-        idle_streak = 0
-        _cycle_idx = 0
-
-        cycle_log_every = self.cycle_log_every
-        cycle_stats = {
-            "count": 0,
-            "sum_total": 0.0,
-            "sum_active": 0.0,
-            "min_total": inf,
-            "max_total": 0.0,
-            "min_active": inf,
-            "max_active": 0.0,
-        }
-
-        while self.running:
-            scheduled_any = False
-            t_cycle_start = time.perf_counter()
-            t_active_start = None
-
+        if self.running:
             try:
-                priority_due_in = max(
-                    0.0, self._next_priority_refresh_at - time.monotonic()
-                )
-                effective_wait_time = min(wait_time, priority_due_in)
-                self.logger.debug(
-                    f"Polling : {effective_wait_time:.2f}s — Queue size: {self._event_queue.qsize()} — Idle streak: {idle_streak}"
-                )
-                woke = await self._wait_for_dispatch_wake(effective_wait_time)
-                if woke:
-                    wait_time = MIN_POLL_PERIOD
-
                 if time.monotonic() >= self._next_priority_refresh_at:
                     scheduler_trace(
                         "scheduler_priority_refresh_due",
@@ -955,39 +906,22 @@ class PostgreSQLJobScheduler(JobScheduler):
                     self._gateway_ready_event is not None
                     and not self._gateway_ready_event.is_set()
                 ):
-                    if _cycle_idx % 10 == 0:  # Log every 10 cycles to avoid spam
+                    if cycle_index % 10 == 0:
                         self.logger.warning(
                             f"[WORK_DIST] Gateway not ready yet. Scheduler will wait. "
                             f"Queue size: {self._event_queue.qsize()}"
                         )
-                    idle_streak += 1
-                    wait_time = adjust_backoff(
-                        wait_time,
-                        idle_streak,
-                        scheduled=False,
-                        min_poll_period=MIN_POLL_PERIOD,
-                        max_poll_period=MAX_POLL_PERIOD,
-                    )
-                    continue
+                    return DispatchCycleResult(scheduled=False)
 
                 # Check if scheduler is paused before dispatching work
                 if self._paused:
-                    if _cycle_idx % 10 == 0:
+                    if cycle_index % 10 == 0:
                         self.logger.info(
                             f"[WORK_DIST] Scheduler is paused. Skipping dispatch. "
                             f"Queue size: {self._event_queue.qsize()}"
                         )
-                    idle_streak += 1
-                    wait_time = adjust_backoff(
-                        wait_time,
-                        idle_streak,
-                        scheduled=False,
-                        min_poll_period=MIN_POLL_PERIOD,
-                        max_poll_period=MAX_POLL_PERIOD,
-                    )
-                    continue
+                    return DispatchCycleResult(scheduled=False)
 
-                t_active_start = time.perf_counter()
                 slots_by_executor = available_slots_by_executor(
                     self._semaphore_store
                 ).copy()
@@ -1127,9 +1061,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                     if no_executor_slots:
                         self.logger.debug(
                             f"[WORK_DIST] No available executor slots and no control flow nodes. Backing off. "
-                            f"Slots by executor: {slots_by_executor} | "
-                            f"Idle streak: {idle_streak} | "
-                            f"Wait time: {wait_time:.2f}s"
+                            f"Slots by executor: {slots_by_executor}"
                         )
                     else:
                         frontier_summary = self.frontier.summary(detail=False)
@@ -1137,17 +1069,15 @@ class PostgreSQLJobScheduler(JobScheduler):
                             f"[WORK_DIST] No ready work in frontier. Short sleep. "
                             f"Batch size: {batch_size} | "
                             f"Candidate window: {candidate_window} | "
-                            f"Frontier summary: {frontier_summary} | "
-                            f"Idle streak: {idle_streak} | "
-                            f"Wait time: {wait_time:.2f}s"
+                            f"Frontier summary: {frontier_summary}"
                         )
                     poll_interval = (
                         SLOT_POLL_INTERVAL if no_executor_slots else SHORT_POLL_INTERVAL
                     )
-                    woke = await self._wait_for_dispatch_wake(poll_interval)
-                    idle_streak = 0 if woke else idle_streak + 1
-                    wait_time = 0.0
-                    continue
+                    return DispatchCycleResult(
+                        scheduled=False,
+                        wait_interval=poll_interval,
+                    )
 
                 self.logger.debug(
                     f"[WORK_DIST] Fetched {len(candidates_wi)} candidates from frontier. "
@@ -1184,23 +1114,14 @@ class PostgreSQLJobScheduler(JobScheduler):
                 # If no regular jobs to plan (either all were control flow or
                 # no executor slots were available), skip the planner.
                 if not planner_candidates:
-                    if scheduled_any:
-                        idle_streak = 0
-                        wait_time = 0.0
-                    elif no_executor_slots:
-                        idle_streak += 1
-                        wait_time = adjust_backoff(
-                            wait_time,
-                            idle_streak,
-                            scheduled=False,
-                            min_poll_period=MIN_POLL_PERIOD,
-                            max_poll_period=MAX_POLL_PERIOD,
-                        )
                     self.logger.debug(
                         f"[WORK_DIST] No regular jobs to plan (processed {control_flow_processed_total}/"
                         f"{control_flow_seen_total} control flow nodes over {control_flow_drain_passes} drain pass(es))"
                     )
-                    continue
+                    return DispatchCycleResult(
+                        scheduled=scheduled_any,
+                        wait_interval=0.0 if scheduled_any else None,
+                    )
 
                 # Give the planner: candidates + a COPY of slots + active_dags
                 pick_slots = slots_by_executor.copy()
@@ -1246,13 +1167,12 @@ class PostgreSQLJobScheduler(JobScheduler):
                         f"Candidates count: {len(planner_candidates)} | "
                         f"Candidates by executor: {dict(candidates_by_executor)} | "
                         f"Available slots: {pick_slots} | "
-                        f"Active DAGs: {active_dag_count}/{max_concurrent_dags} | "
-                        f"Idle streak: {idle_streak}"
+                        f"Active DAGs: {active_dag_count}/{max_concurrent_dags}"
                     )
-                    woke = await self._wait_for_dispatch_wake(SHORT_POLL_INTERVAL)
-                    idle_streak = 0 if woke else idle_streak + 1
-                    wait_time = 0.0
-                    continue
+                    return DispatchCycleResult(
+                        scheduled=False,
+                        wait_interval=SHORT_POLL_INTERVAL,
+                    )
 
                 self.logger.debug(
                     f"[WORK_DIST] Planner selected {len(planned)} jobs to schedule. "
@@ -1334,10 +1254,10 @@ class PostgreSQLJobScheduler(JobScheduler):
                         f"Attempted {len(selected_wis)} jobs across {len(ids_by_job_name)} job names. "
                         f"Job names: {list(ids_by_job_name.keys())}"
                     )
-                    woke = await self._wait_for_dispatch_wake(SHORT_POLL_INTERVAL)
-                    idle_streak = 0 if woke else idle_streak + 1
-                    wait_time = 0.0
-                    continue
+                    return DispatchCycleResult(
+                        scheduled=False,
+                        wait_interval=SHORT_POLL_INTERVAL,
+                    )
 
                 self.logger.info(
                     f"[WORK_DIST] Successfully leased {len(leased_ids)} jobs in DB. "
@@ -1574,55 +1494,100 @@ class PostgreSQLJobScheduler(JobScheduler):
                 if scheduled_any:
                     await self.notify_event()
 
-                # maintain frontier heap
-                if (_cycle_idx % 20) == 0:
+                compact_ready_heap = cycle_index % 20 == 0
+                return DispatchCycleResult(scheduled=scheduled_any)
+            finally:
+                if compact_ready_heap:
                     removed = await self.frontier.compact_ready_heap(max_scan=10000)
                     if removed:
                         self.logger.debug(f"Frontier heap compacted: removed={removed}")
 
-                idle_streak = 0 if scheduled_any else idle_streak + 1
-                wait_time = adjust_backoff(
-                    wait_time,
-                    idle_streak,
-                    scheduled_any,
-                    min_poll_period=MIN_POLL_PERIOD,
-                    max_poll_period=MAX_POLL_PERIOD,
-                )
-                failures = 0
+        return DispatchCycleResult(scheduled=False)
 
-            except Exception as e:
-                if _is_known_connection_error(e):
+    async def _poll(self) -> None:
+        """Wait for scheduler wakes and run dispatch cycles until stopped."""
+        self.logger.info("Starting job scheduler")
+        wait_time = INIT_POLL_PERIOD
+        failures = 0
+        idle_streak = 0
+        cycle_index = 0
+        cycle_stats = {
+            "count": 0,
+            "sum_total": 0.0,
+            "sum_active": 0.0,
+            "min_total": inf,
+            "max_total": 0.0,
+            "min_active": inf,
+            "max_active": 0.0,
+        }
+
+        while self.running:
+            cycle_started_at = time.perf_counter()
+            active_started_at: float | None = None
+            try:
+                priority_due_in = max(
+                    0.0, self._next_priority_refresh_at - time.monotonic()
+                )
+                effective_wait_time = min(wait_time, priority_due_in)
+                self.logger.debug(
+                    f"Polling : {effective_wait_time:.2f}s — "
+                    f"Queue size: {self._event_queue.qsize()} — "
+                    f"Idle streak: {idle_streak}"
+                )
+                woke = await self._wait_for_dispatch_wake(effective_wait_time)
+                if woke:
+                    idle_streak = 0
+                    wait_time = MIN_POLL_PERIOD
+
+                active_started_at = time.perf_counter()
+                result = await self.run_dispatch_cycle(cycle_index)
+                idle_streak = 0 if result.scheduled else idle_streak + 1
+                if result.wait_interval is not None:
+                    wait_time = result.wait_interval
+                else:
+                    wait_time = adjust_backoff(
+                        wait_time,
+                        idle_streak,
+                        result.scheduled,
+                        min_poll_period=MIN_POLL_PERIOD,
+                        max_poll_period=MAX_POLL_PERIOD,
+                    )
+                failures = 0
+            except Exception as error:
+                if _is_known_connection_error(error):
                     self.logger.warning(
                         "Poll loop: ETCD connection unavailable, waiting for reconnect"
                     )
-                    await asyncio.sleep(3)
-                    continue
-
-                self.logger.error("Poll loop exception", exc_info=True)
-                failures += 1
-                if failures >= 5:
-                    self.logger.warning("Too many failures — entering cooldown")
-                    await asyncio.sleep(60)
-                    failures = 0
+                    wait_time = 3.0
+                else:
+                    self.logger.error("Poll loop exception", exc_info=True)
+                    failures += 1
+                    if failures >= 5:
+                        self.logger.warning("Too many failures — entering cooldown")
+                        wait_time = 60.0
+                        failures = 0
             finally:
-                # ---- timing ----
-                t_end = time.perf_counter()
-                dt_total = t_end - t_cycle_start
-                dt_active = (t_end - t_active_start) if t_active_start else 0.0
-
+                cycle_ended_at = time.perf_counter()
+                total_seconds = cycle_ended_at - cycle_started_at
+                active_seconds = (
+                    cycle_ended_at - active_started_at if active_started_at else 0.0
+                )
                 cycle_stats["count"] += 1
-                cycle_stats["sum_total"] += dt_total
-                cycle_stats["sum_active"] += dt_active
-                cycle_stats["min_total"] = min(cycle_stats["min_total"], dt_total)
-                cycle_stats["max_total"] = max(cycle_stats["max_total"], dt_total)
-                cycle_stats["min_active"] = min(cycle_stats["min_active"], dt_active)
-                cycle_stats["max_active"] = max(cycle_stats["max_active"], dt_active)
+                cycle_stats["sum_total"] += total_seconds
+                cycle_stats["sum_active"] += active_seconds
+                cycle_stats["min_total"] = min(cycle_stats["min_total"], total_seconds)
+                cycle_stats["max_total"] = max(cycle_stats["max_total"], total_seconds)
+                cycle_stats["min_active"] = min(
+                    cycle_stats["min_active"], active_seconds
+                )
+                cycle_stats["max_active"] = max(
+                    cycle_stats["max_active"], active_seconds
+                )
 
-                _cycle_idx += 1
-                if (_cycle_idx % cycle_log_every) == 0:
+                cycle_index += 1
+                if cycle_index % self.cycle_log_every == 0:
                     avg_total = cycle_stats["sum_total"] / cycle_stats["count"]
                     avg_active = cycle_stats["sum_active"] / cycle_stats["count"]
-
                     self.logger.info(
                         "[poll] Cycle stats (last %d): total=%.1f ms (avg %.1f–%.1f) | "
                         "active=%.1f ms (avg %.1f–%.1f) | wait=%.1fs | idle_streak=%d",
@@ -1636,8 +1601,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                         wait_time,
                         idle_streak,
                     )
-
-                    # reset rolling window
                     cycle_stats = {
                         "count": 0,
                         "sum_total": 0.0,
