@@ -11,6 +11,7 @@ from marie.scheduler.dag_topology_cache import DagTopologyCache
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.services.control_flow_execution_service import (
+    ControlFlowExecutionOutcome,
     ControlFlowExecutionService,
 )
 
@@ -35,8 +36,106 @@ def work_item(job_id: str) -> WorkInfo:
         id=job_id,
         dag_id='dag-1',
         name='extract',
-        data={'metadata': {}},
+        data={'metadata': {'on': 'noop://default'}},
     )
+
+
+async def test_process_node_returns_completed_after_durable_completion() -> None:
+    service = build_service()
+    item = work_item('noop')
+    service.dag_service.active_dags = {'dag-1': object()}
+    service._topology_cache = Mock(
+        get_sorted_nodes_and_levels=Mock(
+            return_value=([], {'noop': 0, 'downstream': 1})
+        )
+    )
+    service._activate = AsyncMock(return_value=True)
+    service._complete_attempt = AsyncMock(return_value=True)
+
+    outcome = await service.process_node(item)
+
+    assert outcome is ControlFlowExecutionOutcome.COMPLETED
+    service.frontier.on_job_completed.assert_awaited_once_with('noop')
+    service._notify_callback.assert_awaited_once_with()
+
+
+async def test_process_node_returns_cleaned_up_when_dag_is_missing() -> None:
+    service = build_service()
+    service.dag_service.active_dags = {}
+    service.dag_service.get_dag.return_value = None
+
+    outcome = await service.process_node(work_item('noop'))
+
+    assert outcome is ControlFlowExecutionOutcome.CLEANED_UP
+    service.repository.release_lease.assert_awaited_once_with(job_ids=['noop'])
+    service.frontier.release_lease_local.assert_awaited_once_with('noop')
+
+
+async def test_process_node_returns_admission_refused() -> None:
+    service = build_service()
+    service.dag_service.active_dags = {}
+    service.dag_service.get_dag.return_value = object()
+    service.dag_service.admit_dag.return_value = False
+
+    outcome = await service.process_node(work_item('noop'))
+
+    assert outcome is ControlFlowExecutionOutcome.ADMISSION_REFUSED
+    service.repository.release_lease.assert_awaited_once_with(job_ids=['noop'])
+
+
+async def test_process_node_returns_activation_refused() -> None:
+    service = build_service()
+    service.dag_service.active_dags = {'dag-1': object()}
+    service._activate = AsyncMock(return_value=False)
+
+    outcome = await service.process_node(work_item('noop'))
+
+    assert outcome is ControlFlowExecutionOutcome.ACTIVATION_REFUSED
+    service.repository.release_lease.assert_awaited_once_with(job_ids=['noop'])
+
+
+async def test_process_node_returns_completion_rejected() -> None:
+    service = build_service()
+    service.dag_service.active_dags = {'dag-1': object()}
+    service._topology_cache = Mock(
+        get_sorted_nodes_and_levels=Mock(return_value=([], {'noop': 0}))
+    )
+    service._activate = AsyncMock(return_value=True)
+    service._complete_attempt = AsyncMock(return_value=False)
+
+    outcome = await service.process_node(work_item('noop'))
+
+    assert outcome is ControlFlowExecutionOutcome.COMPLETION_REJECTED
+
+
+async def test_process_node_returns_failed_after_handled_error() -> None:
+    service = build_service()
+    service.dag_service.active_dags = {'dag-1': object()}
+    service._activate = AsyncMock(side_effect=RuntimeError('activation failed'))
+
+    outcome = await service.process_node(work_item('noop'))
+
+    assert outcome is ControlFlowExecutionOutcome.FAILED
+    service.repository.release_lease.assert_awaited_once_with(job_ids=['noop'])
+
+
+async def test_process_node_preserves_progress_when_followup_fails() -> None:
+    service = build_service()
+    service.dag_service.active_dags = {'dag-1': object()}
+    service._topology_cache = Mock(
+        get_sorted_nodes_and_levels=Mock(
+            return_value=([], {'noop': 0, 'downstream': 1})
+        )
+    )
+    service._activate = AsyncMock(return_value=True)
+    service._complete_attempt = AsyncMock(return_value=True)
+    service.frontier.on_job_completed.side_effect = RuntimeError('frontier failed')
+
+    outcome = await service.process_node(work_item('noop'))
+
+    assert outcome is ControlFlowExecutionOutcome.COMPLETED_WITH_ERROR
+    assert outcome.made_progress is True
+    service.repository.release_lease.assert_awaited_once_with(job_ids=['noop'])
 
 
 async def test_branch_marks_selected_target_and_skips_only_inactive_closure() -> None:

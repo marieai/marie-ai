@@ -7,9 +7,11 @@ import pytest
 import marie.scheduler.psql as scheduler_psql
 from marie.scheduler.psql import (
     SLOT_POLL_INTERVAL,
+    ControlFlowBatchResult,
     DispatchCycleResult,
     PostgreSQLJobScheduler,
 )
+from marie.scheduler.services import ControlFlowExecutionOutcome
 from marie.scheduler.state import WorkState
 
 
@@ -122,6 +124,200 @@ async def test_dispatch_cycle_plans_leases_activates_and_dispatches_once(
     )
     scheduler.notify_event.assert_awaited_once_with()
     scheduler._wait_for_dispatch_wake.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_cycle_preserves_control_flow_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = build_scheduler()
+    regular = SimpleNamespace(
+        id="job-1",
+        dag_id="dag-1",
+        name="extract",
+        data={"metadata": {"on": "extract://default"}},
+        state=WorkState.CREATED,
+    )
+    control_flow = SimpleNamespace(
+        id="noop-1",
+        dag_id="dag-1",
+        name="extract",
+        data={"metadata": {"on": "noop://default"}},
+        state=WorkState.CREATED,
+    )
+    scheduler.active_dags[regular.dag_id] = object()
+    scheduler.frontier.peek_ready.side_effect = [
+        [regular],
+        [control_flow, regular],
+        [regular],
+    ]
+    scheduler.frontier.take.return_value = [regular]
+    scheduler.execution_planner.plan.return_value = [("extract://default", regular)]
+    scheduler._process_control_flow_candidates = AsyncMock(
+        return_value=ControlFlowBatchResult(
+            outcomes=(ControlFlowExecutionOutcome.COMPLETED,)
+        )
+    )
+    scheduler._lease_jobs_db.return_value = {regular.id}
+    scheduler._reserve_semaphore_slots.return_value = set()
+    monkeypatch.setattr(
+        scheduler_psql,
+        "available_slots_by_executor",
+        lambda _sem: {"extract": 2},
+    )
+    monkeypatch.setattr(scheduler_psql, "debug_candidates_and_plan", AsyncMock())
+
+    result = await scheduler.run_dispatch_cycle(cycle_index=1)
+
+    assert result == DispatchCycleResult(scheduled=True)
+    scheduler._process_control_flow_candidates.assert_awaited_once_with(
+        [control_flow], 5
+    )
+    scheduler._activate_and_enqueue_job.assert_not_awaited()
+    scheduler.notify_event.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_cycle_does_not_count_control_flow_failure_as_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = build_scheduler()
+    control_flow = SimpleNamespace(
+        id="noop-1",
+        dag_id="dag-1",
+        name="extract",
+        data={"metadata": {"on": "noop://default"}},
+        state=WorkState.CREATED,
+    )
+    scheduler.active_dags[control_flow.dag_id] = object()
+    scheduler.frontier.peek_ready.side_effect = [
+        [],
+        [control_flow],
+        [],
+        [],
+    ]
+    scheduler._process_control_flow_candidates = AsyncMock(
+        return_value=ControlFlowBatchResult(
+            outcomes=(ControlFlowExecutionOutcome.FAILED,)
+        )
+    )
+    monkeypatch.setattr(
+        scheduler_psql,
+        "available_slots_by_executor",
+        lambda _sem: {"extract": 1},
+    )
+
+    result = await scheduler.run_dispatch_cycle(cycle_index=1)
+
+    assert result == DispatchCycleResult(
+        scheduled=False,
+        wait_interval=scheduler_psql.SHORT_POLL_INTERVAL,
+    )
+    scheduler.notify_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_control_flow_batch_separates_outcomes_from_reconciliation() -> None:
+    scheduler = build_scheduler()
+    jobs = [
+        SimpleNamespace(
+            id=job_id,
+            dag_id="dag-1",
+            name="extract",
+            state=WorkState.CREATED,
+        )
+        for job_id in ("completed", "refused", "failed", "reconciled")
+    ]
+    scheduler.frontier.take.return_value = [object()]
+    scheduler._lease_jobs_db.side_effect = [
+        {"completed"},
+        {"refused"},
+        {"failed"},
+        set(),
+    ]
+    scheduler.control_flow_service = SimpleNamespace(
+        process_node=AsyncMock(
+            side_effect=[
+                ControlFlowExecutionOutcome.COMPLETED,
+                ControlFlowExecutionOutcome.ACTIVATION_REFUSED,
+                ControlFlowExecutionOutcome.FAILED,
+            ]
+        )
+    )
+    scheduler.repository = SimpleNamespace(
+        get_job_by_id=AsyncMock(return_value=SimpleNamespace(state=WorkState.COMPLETED))
+    )
+    scheduler._reconcile_control_flow_lease_miss = AsyncMock(return_value=True)
+
+    result = await scheduler._process_control_flow_candidates(jobs, lease_ttl=5)
+
+    assert result == ControlFlowBatchResult(
+        outcomes=(
+            ControlFlowExecutionOutcome.COMPLETED,
+            ControlFlowExecutionOutcome.ACTIVATION_REFUSED,
+            ControlFlowExecutionOutcome.FAILED,
+        ),
+        reconciled=1,
+    )
+    assert result.completed == 1
+    assert result.made_progress is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exit_path",
+    [
+        "gateway_not_ready",
+        "paused",
+        "no_candidates",
+        "no_planner_picks",
+        "no_database_leases",
+    ],
+)
+async def test_dispatch_cycle_compacts_on_cadence_before_early_return(
+    exit_path: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = build_scheduler()
+    work_item = SimpleNamespace(
+        id="job-1",
+        dag_id="dag-1",
+        name="extract",
+        data={"metadata": {"on": "extract://default"}},
+        state=WorkState.CREATED,
+    )
+    monkeypatch.setattr(
+        scheduler_psql,
+        "available_slots_by_executor",
+        lambda _sem: {"extract": 1},
+    )
+    monkeypatch.setattr(scheduler_psql, "debug_candidates_and_plan", AsyncMock())
+
+    if exit_path == "gateway_not_ready":
+        scheduler._gateway_ready_event = asyncio.Event()
+    elif exit_path == "paused":
+        scheduler._paused = True
+    elif exit_path in {"no_planner_picks", "no_database_leases"}:
+        scheduler.frontier.peek_ready.return_value = [work_item]
+        if exit_path == "no_database_leases":
+            scheduler.execution_planner.plan.return_value = [
+                ("extract://default", work_item)
+            ]
+            scheduler.frontier.take.return_value = [work_item]
+
+    await scheduler.run_dispatch_cycle(cycle_index=20)
+
+    scheduler.frontier.compact_ready_heap.assert_awaited_once_with(max_scan=10000)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_cycle_skips_compaction_off_cadence() -> None:
+    scheduler = build_scheduler()
+    scheduler._gateway_ready_event = asyncio.Event()
+
+    await scheduler.run_dispatch_cycle(cycle_index=19)
+
+    scheduler.frontier.compact_ready_heap.assert_not_awaited()
 
 
 @pytest.mark.asyncio

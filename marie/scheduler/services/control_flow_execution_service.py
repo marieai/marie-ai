@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 from marie.logging_core.logger import MarieLogger
@@ -54,6 +55,20 @@ def exclusive_skip_closure(
                 pending.append(child_id)
 
     return [node.task_id for node in dag_plan.nodes if node.task_id in skipped]
+
+
+class ControlFlowExecutionOutcome(Enum):
+    COMPLETED = 'completed'
+    COMPLETED_WITH_ERROR = 'completed_with_error'
+    ADMISSION_REFUSED = 'admission_refused'
+    ACTIVATION_REFUSED = 'activation_refused'
+    COMPLETION_REJECTED = 'completion_rejected'
+    CLEANED_UP = 'cleaned_up'
+    FAILED = 'failed'
+
+    @property
+    def made_progress(self) -> bool:
+        return self in {self.COMPLETED, self.COMPLETED_WITH_ERROR}
 
 
 class ControlFlowExecutionService:
@@ -193,8 +208,9 @@ class ControlFlowExecutionService:
             )
             await self._evaluate_and_mark_branch_paths(job_id, work_item, dag_plan)
 
-    async def process_node(self, work_item: WorkInfo) -> None:
+    async def process_node(self, work_item: WorkInfo) -> ControlFlowExecutionOutcome:
         """Execute a scheduler-local control-flow node."""
+        durably_completed = False
         try:
             dag_id = work_item.dag_id
             entrypoint = work_item.data.get('metadata', {}).get('on', '')
@@ -221,18 +237,18 @@ class ControlFlowExecutionService:
                         f"{node_type} node {work_item.id}"
                     )
                     await self._release_lease(work_item.id)
-                    return
+                    return ControlFlowExecutionOutcome.CLEANED_UP
 
                 admitted = await self.dag_service.admit_dag(
                     dag_id, dag, source=f"control_flow:{node_type}"
                 )
                 if not admitted:
                     await self._release_lease(work_item.id)
-                    return
+                    return ControlFlowExecutionOutcome.ADMISSION_REFUSED
 
             if not await self._activate(work_item):
                 await self._release_lease(work_item.id)
-                return
+                return ControlFlowExecutionOutcome.ACTIVATION_REFUSED
 
             _, job_levels = self._topology_cache.get_sorted_nodes_and_levels(
                 self.dag_service.active_dags[dag_id], dag_id
@@ -251,7 +267,8 @@ class ControlFlowExecutionService:
                 )
 
             if not await self._complete_attempt(work_item):
-                return
+                return ControlFlowExecutionOutcome.COMPLETION_REJECTED
+            durably_completed = True
 
             if node_type in ('branch', 'switch'):
                 await self._evaluate_and_mark_branch_paths(
@@ -284,6 +301,7 @@ class ControlFlowExecutionService:
                 job_name=work_item.name,
                 job_level=work_item.job_level,
             )
+            return ControlFlowExecutionOutcome.COMPLETED
         except Exception as error:
             scheduler_trace(
                 'control_flow_failed',
@@ -304,6 +322,9 @@ class ControlFlowExecutionService:
                     f"[CONTROL_FLOW] Error during cleanup for "
                     f"{work_item.id}: {cleanup_error}"
                 )
+            if durably_completed:
+                return ControlFlowExecutionOutcome.COMPLETED_WITH_ERROR
+            return ControlFlowExecutionOutcome.FAILED
 
     async def _activate(self, work_item: WorkInfo) -> bool:
         if (

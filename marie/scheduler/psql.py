@@ -4,7 +4,7 @@ import time
 import traceback
 import uuid as _uuid
 from asyncio import Queue
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from math import inf
@@ -44,6 +44,7 @@ from marie.scheduler.scheduler_heartbeat import SchedulerHeartbeat
 from marie.scheduler.services import (
     TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
     AttemptLifecycleService,
+    ControlFlowExecutionOutcome,
     ControlFlowExecutionService,
     DAGManagementService,
     DagSubmissionService,
@@ -94,6 +95,20 @@ class DispatchCycleResult:
 
     scheduled: bool
     wait_interval: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ControlFlowBatchResult:
+    outcomes: tuple[ControlFlowExecutionOutcome, ...] = ()
+    reconciled: int = 0
+
+    @property
+    def completed(self) -> int:
+        return sum(outcome.made_progress for outcome in self.outcomes)
+
+    @property
+    def made_progress(self) -> bool:
+        return self.completed > 0 or self.reconciled > 0
 
 
 def limit_planned_jobs_to_available_slots(
@@ -656,11 +671,11 @@ class PostgreSQLJobScheduler(JobScheduler):
 
     async def _process_control_flow_candidates(
         self, control_flow_jobs: list[WorkInfo], lease_ttl: float
-    ) -> int:
+    ) -> ControlFlowBatchResult:
         if not control_flow_jobs:
-            return 0
+            return ControlFlowBatchResult()
 
-        tasks: list[asyncio.Task[None]] = []
+        tasks: list[asyncio.Task[ControlFlowExecutionOutcome]] = []
         reconciled_count = 0
 
         for wi in control_flow_jobs:
@@ -710,17 +725,24 @@ class PostgreSQLJobScheduler(JobScheduler):
             )
 
         if not tasks:
-            return reconciled_count
+            return ControlFlowBatchResult(reconciled=reconciled_count)
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        outcomes: list[ControlFlowExecutionOutcome] = []
         for result in results:
             if isinstance(result, Exception):
                 self.logger.error(
                     f"[WORK_DIST] Control flow drain task failed: {result}",
                     exc_info=(type(result), result, result.__traceback__),
                 )
+                outcomes.append(ControlFlowExecutionOutcome.FAILED)
+            else:
+                outcomes.append(result)
 
-        return len(tasks) + reconciled_count
+        return ControlFlowBatchResult(
+            outcomes=tuple(outcomes),
+            reconciled=reconciled_count,
+        )
 
     # ==================== Schema Management (Delegated to Repository) ====================
 
@@ -867,7 +889,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         max_concurrent_dags = self.max_concurrent_dags
         lease_ttl = self.lease_ttl_seconds
         scheduled_any = False
-        compact_ready_heap = False
+        compact_ready_heap = cycle_index % 20 == 0
 
         if self.running:
             try:
@@ -929,7 +951,8 @@ class PostgreSQLJobScheduler(JobScheduler):
                 candidates_wi: list[WorkInfo] = []
                 regular_candidates: list[WorkInfo] = []
                 control_flow_seen_total = 0
-                control_flow_processed_total = 0
+                control_flow_outcomes: Counter[ControlFlowExecutionOutcome] = Counter()
+                control_flow_reconciled_total = 0
                 control_flow_drain_passes = 0
                 no_ready_candidates = False
 
@@ -1019,11 +1042,12 @@ class PostgreSQLJobScheduler(JobScheduler):
                             f"[WORK_DIST] Draining {len(control_flow_jobs)} control flow nodes "
                             f"(pass {control_flow_drain_passes}/{CONTROL_FLOW_DRAIN_MAX_PASSES})"
                         )
-                        processed = await self._process_control_flow_candidates(
+                        batch_result = await self._process_control_flow_candidates(
                             control_flow_jobs, lease_ttl
                         )
-                        control_flow_processed_total += processed
-                        scheduled_any = scheduled_any or processed > 0
+                        control_flow_outcomes.update(batch_result.outcomes)
+                        control_flow_reconciled_total += batch_result.reconciled
+                        scheduled_any = scheduled_any or batch_result.made_progress
 
                     if not no_executor_slots and not regular_candidates:
                         regular_candidates = await self.frontier.peek_ready(
@@ -1040,10 +1064,25 @@ class PostgreSQLJobScheduler(JobScheduler):
                     if not control_flow_jobs:
                         break
 
+                control_flow_completed_total = sum(
+                    count
+                    for outcome, count in control_flow_outcomes.items()
+                    if outcome.made_progress
+                )
+                control_flow_progress_total = (
+                    control_flow_completed_total + control_flow_reconciled_total
+                )
+                control_flow_outcome_counts = {
+                    outcome.value: count
+                    for outcome, count in sorted(
+                        control_flow_outcomes.items(), key=lambda item: item[0].value
+                    )
+                }
+
                 if (
                     no_ready_candidates
                     and not regular_candidates
-                    and control_flow_processed_total == 0
+                    and control_flow_progress_total == 0
                 ):
                     if no_executor_slots:
                         self.logger.debug(
@@ -1078,7 +1117,8 @@ class PostgreSQLJobScheduler(JobScheduler):
 
                 self.logger.info(
                     f"[WORK_DIST] Built {len(planner_candidates)} planner candidates from {len(regular_candidates)} regular jobs "
-                    f"(+{control_flow_processed_total}/{control_flow_seen_total} control flow nodes processed "
+                    f"(+{control_flow_completed_total} completed, {control_flow_reconciled_total} reconciled "
+                    f"of {control_flow_seen_total} control flow nodes; outcomes={control_flow_outcome_counts} "
                     f"over {control_flow_drain_passes} drain pass(es)). "
                     f"Executors needed: {set(ep for ep, _ in planner_candidates)}"
                 )
@@ -1086,7 +1126,10 @@ class PostgreSQLJobScheduler(JobScheduler):
                     "candidate_built",
                     candidates=len(planner_candidates),
                     regular_jobs=len(regular_candidates),
-                    control_flow_jobs=control_flow_processed_total,
+                    control_flow_jobs=control_flow_completed_total,
+                    control_flow_completed=control_flow_completed_total,
+                    control_flow_reconciled=control_flow_reconciled_total,
+                    control_flow_outcomes=control_flow_outcome_counts,
                     control_flow_seen=control_flow_seen_total,
                     control_flow_drain_passes=control_flow_drain_passes,
                     executors=sorted(
@@ -1102,8 +1145,10 @@ class PostgreSQLJobScheduler(JobScheduler):
                 # no executor slots were available), skip the planner.
                 if not planner_candidates:
                     self.logger.debug(
-                        f"[WORK_DIST] No regular jobs to plan (processed {control_flow_processed_total}/"
-                        f"{control_flow_seen_total} control flow nodes over {control_flow_drain_passes} drain pass(es))"
+                        f"[WORK_DIST] No regular jobs to plan ({control_flow_completed_total} completed, "
+                        f"{control_flow_reconciled_total} reconciled of {control_flow_seen_total} "
+                        f"control flow nodes; outcomes={control_flow_outcome_counts} over "
+                        f"{control_flow_drain_passes} drain pass(es))"
                     )
                     return DispatchCycleResult(
                         scheduled=scheduled_any,
@@ -1257,7 +1302,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                 )
 
                 #  PROCESS LEASED JOBS
-                scheduled_any = False
                 jobs_scheduled_this_cycle = defaultdict(int)
                 enqueue_tasks = []
                 reservable_jobs_by_executor: dict[str, list[WorkInfo]] = defaultdict(
@@ -1481,7 +1525,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                 if scheduled_any:
                     await self.notify_event()
 
-                compact_ready_heap = cycle_index % 20 == 0
                 return DispatchCycleResult(scheduled=scheduled_any)
             finally:
                 if compact_ready_heap:

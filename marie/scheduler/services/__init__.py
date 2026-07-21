@@ -3,6 +3,7 @@ from marie.scheduler.services.attempt_lifecycle_service import (
     AttemptLifecycleService,
 )
 from marie.scheduler.services.control_flow_execution_service import (
+    ControlFlowExecutionOutcome,
     ControlFlowExecutionService,
 )
 from marie.scheduler.services.dag_management_service import DAGManagementService
@@ -14,6 +15,7 @@ from marie.scheduler.services.scheduler_runtime import SchedulerRuntime
 
 __all__ = [
     "AttemptLifecycleService",
+    "ControlFlowExecutionOutcome",
     "ControlFlowExecutionService",
     "DAGManagementService",
     "DagSubmissionService",
