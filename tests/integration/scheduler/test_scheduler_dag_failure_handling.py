@@ -1076,6 +1076,9 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
             order.append("maintenance_start")
 
     class DagService:
+        async def hydrate_bulk(self, **_kwargs):
+            order.append("hydrate_bulk")
+
         async def start_sync(self):
             order.append("dag_sync_start")
 
@@ -1108,9 +1111,6 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
     scheduler._setup_event_subscriptions = lambda: None
     scheduler.runtime = SchedulerRuntime(scheduler.logger)
 
-    async def hydrate_from_db():
-        order.append("hydrate_from_db")
-
     async def notify_event():
         order.append("notify_event")
         return True
@@ -1118,7 +1118,6 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
     async def noop():
         return None
 
-    scheduler.hydrate_from_db = hydrate_from_db
     scheduler.notify_event = notify_event
     scheduler._sync = noop
     scheduler._poll = noop
@@ -1128,7 +1127,7 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
 
     await scheduler.start()
 
-    assert order.index("notification_start") < order.index("hydrate_from_db")
+    assert order.index("notification_start") < order.index("hydrate_bulk")
     assert order[-1] == "notify_event"
 
 

@@ -802,7 +802,17 @@ class PostgreSQLJobScheduler(JobScheduler):
             if self._resources_closed:
                 await self._reopen_runtime_resources()
             self._setup_event_subscriptions()
-            await self._start_locked()
+            try:
+                await self._start_locked()
+            except BaseException:
+                try:
+                    await self._stop_locked(timeout=2.0)
+                except Exception as rollback_error:
+                    self.logger.error(
+                        f"Scheduler startup rollback failed: {rollback_error}",
+                        exc_info=True,
+                    )
+                raise
 
     async def _start_locked(self) -> None:
         """
@@ -847,7 +857,14 @@ class PostgreSQLJobScheduler(JobScheduler):
             log_every_seconds=2.0,
         )
 
+        await self.maintenance_service.start()
+        self.logger.info(
+            f"Started MaintenanceService (interval: {self.maintenance_service.maintenance_interval}s)"
+        )
+        await self.dag_service.start_sync()
+
         self._priority_refresh_event.clear()
+        self.running = True
         self.runtime.create_task(
             self._priority_refresh_loop(),
             name="scheduler-priority-refresh",
@@ -874,13 +891,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                 name=f"scheduler-submission-{worker_id}",
             )
 
-        await self.maintenance_service.start()
-        self.logger.info(
-            f"Started MaintenanceService (interval: {self.maintenance_service.maintenance_interval}s)"
-        )
-
-        self.running = True
-        await self.dag_service.start_sync()
         await self.notify_event()
 
     async def run_dispatch_cycle(self, cycle_index: int) -> DispatchCycleResult:

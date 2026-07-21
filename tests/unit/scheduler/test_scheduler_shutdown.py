@@ -36,6 +36,125 @@ def _scheduler_for_stop() -> PostgreSQLJobScheduler:
     return scheduler
 
 
+def _scheduler_for_start() -> PostgreSQLJobScheduler:
+    scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.logger = MagicMock()
+    scheduler.running = False
+    scheduler._resources_closed = False
+    scheduler._lifecycle_lock = asyncio.Lock()
+    scheduler._fetch_event = asyncio.Event()
+    scheduler._priority_refresh_event = asyncio.Event()
+    scheduler.known_queues = set()
+    scheduler.max_workers = 1
+    scheduler.repository = SimpleNamespace(
+        initialize=AsyncMock(),
+        is_installed=AsyncMock(return_value=True),
+        validate_durable_scheduler_schema=AsyncMock(),
+        get_defined_queues=AsyncMock(return_value=set()),
+    )
+    scheduler.notification_service = SimpleNamespace(
+        start=AsyncMock(),
+        stop=AsyncMock(),
+    )
+    scheduler.maintenance_service = SimpleNamespace(
+        maintenance_interval=30,
+        start=AsyncMock(),
+        stop=AsyncMock(),
+    )
+    scheduler.heartbeat = SimpleNamespace(stop=AsyncMock())
+    scheduler.dag_service = SimpleNamespace(
+        hydrate_bulk=AsyncMock(),
+        start_sync=AsyncMock(),
+        stop_sync=AsyncMock(),
+    )
+    scheduler.submission_service = SimpleNamespace(
+        run_worker=AsyncMock(),
+        abort_pending=MagicMock(),
+    )
+    scheduler.runtime = SchedulerRuntime(scheduler.logger)
+    scheduler._setup_event_subscriptions = MagicMock()
+    scheduler._remove_event_subscriptions = MagicMock()
+    scheduler.notify_event = AsyncMock(return_value=True)
+
+    async def close_resources() -> None:
+        scheduler._resources_closed = True
+
+    scheduler._close_runtime_resources = AsyncMock(side_effect=close_resources)
+    return scheduler
+
+
+@pytest.mark.asyncio
+async def test_start_tasks_observe_running_after_suspending_dependency_start() -> None:
+    scheduler = _scheduler_for_start()
+    observed_running: list[bool] = []
+
+    async def suspending_maintenance_start() -> None:
+        await asyncio.sleep(0)
+
+    async def observe_running() -> None:
+        observed_running.append(scheduler.running)
+
+    async def observe_worker(_worker_id: int) -> None:
+        observed_running.append(scheduler.running)
+
+    scheduler.maintenance_service.start = AsyncMock(
+        side_effect=suspending_maintenance_start
+    )
+    scheduler._priority_refresh_loop = observe_running
+    scheduler._sync = observe_running
+    scheduler._poll = observe_running
+    scheduler._PostgreSQLJobScheduler__monitor_deployment_updates = observe_running
+    scheduler.submission_service.run_worker = observe_worker
+
+    await scheduler._start_locked()
+    await asyncio.sleep(0)
+
+    assert observed_running == [True] * 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["hydrate", "initial_wake"])
+async def test_start_rolls_back_partial_startup(failure_stage: str) -> None:
+    scheduler = _scheduler_for_start()
+
+    async def wait_forever() -> None:
+        await asyncio.Event().wait()
+
+    async def wait_forever_worker(_worker_id: int) -> None:
+        await asyncio.Event().wait()
+
+    scheduler._priority_refresh_loop = wait_forever
+    scheduler._sync = wait_forever
+    scheduler._poll = wait_forever
+    scheduler._PostgreSQLJobScheduler__monitor_deployment_updates = wait_forever
+    scheduler.submission_service.run_worker = wait_forever_worker
+
+    if failure_stage == "hydrate":
+        scheduler.dag_service.hydrate_bulk.side_effect = RuntimeError(
+            "hydration failed"
+        )
+    else:
+        scheduler.notify_event.side_effect = RuntimeError("initial wake failed")
+
+    try:
+        with pytest.raises(RuntimeError, match="failed"):
+            await scheduler.start()
+
+        assert scheduler.running is False
+        assert scheduler._resources_closed is True
+        scheduler.notification_service.stop.assert_awaited_once_with()
+        scheduler.maintenance_service.stop.assert_awaited_once_with()
+        scheduler.heartbeat.stop.assert_awaited_once_with()
+        scheduler.dag_service.stop_sync.assert_awaited_once_with()
+        scheduler.submission_service.abort_pending.assert_called_once_with()
+        scheduler._remove_event_subscriptions.assert_called_once_with()
+        scheduler._close_runtime_resources.assert_awaited_once_with()
+        assert scheduler.runtime.tasks() == []
+    finally:
+        scheduler.running = False
+        await scheduler.runtime.stop({}, timeout=0.05)
+
+
 @pytest.mark.asyncio
 async def test_stop_cancels_poll_and_workers_before_returning() -> None:
     scheduler = _scheduler_for_stop()
