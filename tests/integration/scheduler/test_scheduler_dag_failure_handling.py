@@ -25,6 +25,7 @@ from marie.scheduler.services.control_flow_execution_service import (
     ControlFlowExecutionService,
 )
 from marie.scheduler.services.dag_management_service import DAGManagementService
+from marie.scheduler.services.scheduler_runtime import SchedulerRuntime
 from marie.scheduler.state import WorkState
 
 
@@ -168,6 +169,11 @@ def build_scheduler(
     scheduler._priority_refresh_source = "test"
     scheduler._priority_refresh_running = False
     scheduler.priority_refresh_interval_seconds = 5.0
+    scheduler.submission_service = SimpleNamespace(
+        submission_count=0,
+        queue_size=0,
+        pending_count=0,
+    )
 
     async def notify_event() -> bool:
         scheduler.notify_calls.append(True)
@@ -1100,6 +1106,7 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
     scheduler._resources_closed = False
     scheduler._priority_refresh_event = asyncio.Event()
     scheduler._setup_event_subscriptions = lambda: None
+    scheduler.runtime = SchedulerRuntime(scheduler.logger)
 
     async def hydrate_from_db():
         order.append("hydrate_from_db")
@@ -1115,7 +1122,6 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
     scheduler.notify_event = notify_event
     scheduler._sync = noop
     scheduler._poll = noop
-    scheduler._process_submission_queue = lambda _worker_id: noop()
     scheduler._PostgreSQLJobScheduler__monitor_deployment_updates = noop
 
     monkeypatch.setattr(scheduler_psql.asyncio, "create_task", fake_create_task)
@@ -1271,9 +1277,6 @@ async def test_submission_priority_refresh_request_does_not_refresh_inline():
     frontier = RecordingFrontier()
     scheduler = build_scheduler(repository, frontier)
     scheduler.priority_refresh_interval = 10
-    scheduler._submission_count = 10
-    scheduler._request_queue = asyncio.Queue()
-    scheduler._pending_requests = {}
     scheduler._next_priority_refresh_at = time.monotonic() + 60.0
 
     refresh_calls: list[str] = []
@@ -1284,7 +1287,7 @@ async def test_submission_priority_refresh_request_does_not_refresh_inline():
 
     scheduler._refresh_job_priorities = refresh_job_priorities
 
-    await scheduler._handle_priority_refresh()
+    await scheduler._handle_priority_refresh(10)
 
     assert refresh_calls == []
     assert scheduler._next_priority_refresh_at > time.monotonic()
@@ -1297,9 +1300,6 @@ async def test_submission_priority_refresh_request_wakes_when_due():
     frontier = RecordingFrontier()
     scheduler = build_scheduler(repository, frontier)
     scheduler.priority_refresh_interval = 10
-    scheduler._submission_count = 10
-    scheduler._request_queue = asyncio.Queue()
-    scheduler._pending_requests = {}
     scheduler._next_priority_refresh_at = time.monotonic() - 1.0
 
     refresh_calls: list[str] = []
@@ -1310,7 +1310,7 @@ async def test_submission_priority_refresh_request_wakes_when_due():
 
     scheduler._refresh_job_priorities = refresh_job_priorities
 
-    await scheduler._handle_priority_refresh()
+    await scheduler._handle_priority_refresh(10)
 
     assert refresh_calls == []
     assert scheduler._priority_refresh_event.is_set()

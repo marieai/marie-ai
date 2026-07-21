@@ -22,10 +22,12 @@ def build_scheduler() -> PostgreSQLJobScheduler:
     scheduler.lease_ttl_seconds = 5
     scheduler.active_dags = {}
     scheduler._next_priority_refresh_at = float("inf")
-    scheduler._submission_count = 0
+    scheduler.submission_service = SimpleNamespace(
+        submission_count=0,
+        queue_size=0,
+        pending_count=0,
+    )
     scheduler.priority_refresh_interval_seconds = 5.0
-    scheduler._request_queue = asyncio.Queue()
-    scheduler._pending_requests = {}
     scheduler._event_queue = asyncio.Queue()
     scheduler._gateway_ready_event = None
     scheduler._paused = False

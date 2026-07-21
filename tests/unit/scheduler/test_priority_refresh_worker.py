@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,9 +16,11 @@ def build_scheduler() -> PostgreSQLJobScheduler:
     scheduler.priority_refresh_interval_seconds = 5.0
     scheduler.priority_refresh_timeout_seconds = 1.0
     scheduler._next_priority_refresh_at = 0.0
-    scheduler._submission_count = 0
-    scheduler._request_queue = asyncio.Queue()
-    scheduler._pending_requests = {}
+    scheduler.submission_service = SimpleNamespace(
+        submission_count=0,
+        queue_size=0,
+        pending_count=0,
+    )
     scheduler.logger = MagicMock()
     return scheduler
 

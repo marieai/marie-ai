@@ -2,7 +2,6 @@ import asyncio
 import socket
 import time
 import traceback
-import uuid
 import uuid as _uuid
 from asyncio import Queue
 from collections import defaultdict
@@ -14,7 +13,6 @@ from typing import Any, Dict, List
 import psycopg
 
 from marie.excepts import BadConfigSource, RuntimeFailToStart
-from marie.helper import get_or_reuse_loop
 from marie.job.common import JobInfo, JobStatus
 from marie.job.job_manager import JobManager
 from marie.logging_core.logger import MarieLogger
@@ -26,23 +24,21 @@ from marie.query_planner.base import (
     QueryPlan,
 )
 from marie.query_planner.builtin import register_all_known_planners
-from marie.query_planner.model import QueryPlannersConf
 from marie.scheduler.dag_topology_cache import DagTopologyCache
 from marie.scheduler.fixtures import *
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
 from marie.scheduler.job_lock import AsyncJobLock
-from marie.scheduler.job_scheduler import JobScheduler, JobSubmissionRequest
+from marie.scheduler.job_scheduler import JobScheduler
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import (
     ExistingWorkPolicy,
-    HeartbeatConfig,
     RecoveredRunLease,
     WorkInfo,
 )
 from marie.scheduler.planner_util import (
     debug_candidates_and_plan,
-    query_plan_work_items,
 )
+from marie.scheduler.postgres_scheduler_config import PostgreSQLSchedulerConfig
 from marie.scheduler.repository import JobRepository
 from marie.scheduler.scheduler_heartbeat import SchedulerHeartbeat
 from marie.scheduler.services import (
@@ -50,8 +46,11 @@ from marie.scheduler.services import (
     AttemptLifecycleService,
     ControlFlowExecutionService,
     DAGManagementService,
+    DagSubmissionService,
     MaintenanceService,
     NotificationService,
+    SchedulerDiagnostics,
+    SchedulerRuntime,
 )
 from marie.scheduler.state import WorkState
 from marie.scheduler.util import (
@@ -174,56 +173,30 @@ class PostgreSQLJobScheduler(JobScheduler):
             raise BadConfigSource("job_manager argument is required for JobScheduler")
 
         self._gateway_ready_event = gateway_ready_event
-
-        self.validate_config(config)
+        scheduler_config = self.validate_config(config)
+        self.scheduler_config = scheduler_config
         self.config = config  # Store config for listener setup
         self._fetch_event = asyncio.Event()
         self._fetch_counter = 0
         self._debounced_notify = False
 
-        self.known_queues = set(config.get("queue_names", []))
+        self.known_queues = set(scheduler_config.queue_names)
         self.running = False
         self._paused = False
         self._lifecycle_lock = asyncio.Lock()
         self._event_subscriptions_active = False
-        self._poll_task = None
-        self._producer_task = None
-        self._consumer_task = None
-        self._heartbeat_task = None
-        self._priority_refresh_task = None
-        self.sync_task = None
-        self.monitoring_task = None
-        self._worker_tasks = None
-        self._cluster_state_monitor_task = None
-        self._dag_state_listener_task = None
-        self._job_event_tasks: set[asyncio.Task[Any]] = set()
+        self.runtime = SchedulerRuntime(self.logger)
         self._listen_connection = None
-        self._submission_count = 0
-        self._pending_requests = {}  # Track pending requests by ID
-        self._request_queue = Queue()  # Buffer up to 1000 requests
         self._scheduler_counters = defaultdict(int)
-        self._job_state_counts: Dict[str, Any] = {"queues": {}}
-        self._dag_state_counts: Dict[str, Any] = {"queues": {}}
-        self.scheduler_mode = config.get(
-            "scheduler_mode", "parallel"
-        )  # "serial" or "parallel"
-        self.distributed_scheduler = config.get("distributed_scheduler", True)
-        if self.distributed_scheduler is False:
-            raise BadConfigSource(
-                "distributed_scheduler=false is no longer supported; "
-                "durable DB leasing is required."
-            )
+        self.scheduler_mode = scheduler_config.scheduler_mode
 
         self._event_queue = Queue()
         self._status_update_lock = AsyncJobLock()
 
-        self.max_workers = config.get("max_workers", 5)
-        if self.known_queues is None or len(self.known_queues) == 0:
-            raise BadConfigSource("Queue names are required for JobScheduler")
+        self.max_workers = scheduler_config.max_workers
         self.logger.info(f"Queue names to monitor: {self.known_queues}")
 
         self.job_manager = job_manager
-        self._loop = get_or_reuse_loop()
         self._setup_event_subscriptions()
         self._db_pool = AsyncPostgresConnectionPool()
         self.repository = JobRepository(
@@ -232,8 +205,8 @@ class PostgreSQLJobScheduler(JobScheduler):
         )
         self.notification_service = NotificationService(config)
 
-        self.sla_priority_interval_seconds = max(
-            1, int(config.get("sla_priority_interval_seconds", 15 * 60))
+        self.sla_priority_interval_seconds = (
+            scheduler_config.sla_priority_interval_seconds
         )
 
         # The scheduler reads active_dags for planning; DAGManagementService mutates it.
@@ -245,23 +218,14 @@ class PostgreSQLJobScheduler(JobScheduler):
         self._job_cache_max_size = 5000
         self._dag_admission_lock = asyncio.Lock()
 
-        dag_config = config.get("dag_manager", {})
-        self.max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
-        if self.max_concurrent_dags <= 0:
-            raise BadConfigSource(
-                "dag_manager.max_concurrent_dags must be greater than zero"
-            )
-        self._dag_resolution_retry_limit = int(
-            dag_config.get("dag_resolution_retry_limit", 3)
+        self.max_concurrent_dags = scheduler_config.max_concurrent_dags
+        self._dag_resolution_retry_limit = scheduler_config.dag_resolution_retry_limit
+        self._dag_resolution_retry_delay = scheduler_config.dag_resolution_retry_delay
+        self._dag_resolution_retry_backoff = (
+            scheduler_config.dag_resolution_retry_backoff
         )
-        self._dag_resolution_retry_delay = float(
-            dag_config.get("dag_resolution_retry_delay", 1.0)
-        )
-        self._dag_resolution_retry_backoff = bool(
-            dag_config.get("dag_resolution_retry_backoff", True)
-        )
-        self._dag_resolution_retry_max_delay = float(
-            dag_config.get("dag_resolution_retry_max_delay", 30.0)
+        self._dag_resolution_retry_max_delay = (
+            scheduler_config.dag_resolution_retry_max_delay
         )
 
         self.dag_service = DAGManagementService(
@@ -286,7 +250,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         )
 
         # Initialize MaintenanceService for periodic cleanup tasks
-        self._maintenance_interval = config.get("maintenance_interval", 60)
+        self._maintenance_interval = scheduler_config.maintenance_interval
         self.maintenance_service = MaintenanceService(
             repository=self.repository,
             notify_callback=self.notify_event,
@@ -301,17 +265,11 @@ class PostgreSQLJobScheduler(JobScheduler):
             "SLA priority interval configured to %ss",
             self.sla_priority_interval_seconds,
         )
-        register_all_known_planners(
-            QueryPlannersConf.from_dict(config.get("query_planners", {}))
-        )
+        register_all_known_planners(scheduler_config.query_planners)
 
-        dag_cache_size = int(
-            dag_config.get("dag_cache_size", 5000)
-        )  # 5000 entries as this is what our fetch_next_job uses
-        self._topology_cache = DagTopologyCache(maxsize=dag_cache_size)
+        self._topology_cache = DagTopologyCache(maxsize=scheduler_config.dag_cache_size)
 
-        heartbeat_config_dict = config.get("heartbeat", {})
-        self.heartbeat_config = HeartbeatConfig.from_dict(heartbeat_config_dict)
+        self.heartbeat_config = scheduler_config.heartbeat
         self.logger.info(f"Heartbeat configuration: {self.heartbeat_config}")
         self.heartbeat = SchedulerHeartbeat(
             self, self.heartbeat_config, self.repository, self.logger
@@ -319,28 +277,23 @@ class PostgreSQLJobScheduler(JobScheduler):
         self._resources_closed = False
 
         self._start_time = datetime.now(timezone.utc)
-        self.hard_sla_policy = str(config.get("hard_sla_policy", "track_only")).lower()
-        if self.hard_sla_policy not in {
-            "track_only",
-            "escalate_only",
-            "expire_unfinished",
-        }:
+        self.hard_sla_policy = scheduler_config.hard_sla_policy
+        if scheduler_config.invalid_hard_sla_policy:
             self.logger.warning(
-                f"Unknown hard_sla_policy='{self.hard_sla_policy}', falling back to 'track_only'"
+                "Unknown hard_sla_policy="
+                f"'{scheduler_config.invalid_hard_sla_policy}', "
+                "falling back to 'track_only'"
             )
-            self.hard_sla_policy = "track_only"
-        self.sla_warning_top_n = int(config.get("sla_warning_top_n", 5))
-        self.priority_refresh_interval = int(
-            config.get("priority_refresh_interval", 10)
+        self.sla_warning_top_n = scheduler_config.sla_warning_top_n
+        self.priority_refresh_interval = scheduler_config.priority_refresh_interval
+        self.priority_refresh_interval_seconds = (
+            scheduler_config.priority_refresh_interval_seconds
         )
-        self.priority_refresh_interval_seconds = float(
-            config.get("priority_refresh_interval_seconds", 5.0)
+        self.priority_refresh_timeout_seconds = (
+            scheduler_config.priority_refresh_timeout_seconds
         )
-        self.priority_refresh_timeout_seconds = max(
-            0.1, float(config.get("priority_refresh_timeout_seconds", 30.0))
-        )
-        self.priority_refresh_hydrate_limit = int(
-            config.get("priority_refresh_hydrate_limit", 100)
+        self.priority_refresh_hydrate_limit = (
+            scheduler_config.priority_refresh_hydrate_limit
         )
         self._priority_refresh_seq = 0
         self._priority_refresh_event = asyncio.Event()
@@ -350,13 +303,13 @@ class PostgreSQLJobScheduler(JobScheduler):
             time.monotonic() + self.priority_refresh_interval_seconds
         )
 
-        self.frontier_batch_size = int(dag_config.get("frontier_batch_size", 1000))
-        self.lease_ttl_seconds: int = int(config.get("lease_ttl_seconds", 5))
-        self.run_ttl_seconds: int = int(config.get("run_ttl_seconds", 60))
+        self.frontier_batch_size = scheduler_config.frontier_batch_size
+        self.lease_ttl_seconds = scheduler_config.lease_ttl_seconds
+        self.run_ttl_seconds = scheduler_config.run_ttl_seconds
         # unique, stable lease owner for this scheduler instance
         self.lease_owner: str = f"{socket.gethostname()}:{_uuid.uuid4()}"
-        self.gateway_instance_id: str = str(
-            config.get("gateway_instance_id") or self.lease_owner
+        self.gateway_instance_id = (
+            scheduler_config.gateway_instance_id or self.lease_owner
         )
         self.control_flow_service = self._build_control_flow_service()
         self.attempt_lifecycle_service = self._build_attempt_lifecycle_service()
@@ -381,6 +334,46 @@ class PostgreSQLJobScheduler(JobScheduler):
             # slot_type_resolver=lambda executor: {"extract_executor": "ocr.gpu"}.get(executor, executor),
         )
         self.cycle_log_every = 10
+        self.submission_service = self._build_submission_service()
+        self.diagnostics = self._build_diagnostics()
+
+    def _build_submission_service(
+        self,
+        *,
+        initial_submission_count: int = 0,
+    ) -> DagSubmissionService:
+        return DagSubmissionService(
+            repository=self.repository,
+            frontier=self.frontier,
+            known_queues=self.known_queues,
+            notify_callback=self.notify_event,
+            is_running=lambda: self.running,
+            submission_processed_callback=self._handle_priority_refresh,
+            logger=self.logger,
+            queue_size=self.scheduler_config.submission_queue_size,
+            initial_submission_count=initial_submission_count,
+        )
+
+    def _build_diagnostics(self) -> SchedulerDiagnostics:
+        return SchedulerDiagnostics(
+            repository=self.repository,
+            frontier=self.frontier,
+            submission_service=self.submission_service,
+            runtime=self.runtime,
+            event_queue=self._event_queue,
+            active_dags=self.active_dags,
+            known_queues=self.known_queues,
+            execution_planner=self.execution_planner,
+            scheduler_mode=self.scheduler_mode,
+            gateway_instance_id=self.gateway_instance_id,
+            lease_owner=self.lease_owner,
+            max_concurrent_dags=self.max_concurrent_dags,
+            start_time=self._start_time,
+            hard_sla_policy=self.hard_sla_policy,
+            sla_warning_top_n=self.sla_warning_top_n,
+            frontier_batch_size=self.frontier_batch_size,
+            lease_ttl_seconds=self.lease_ttl_seconds,
+        )
 
     def _build_control_flow_service(self) -> ControlFlowExecutionService:
         return ControlFlowExecutionService(
@@ -416,12 +409,11 @@ class PostgreSQLJobScheduler(JobScheduler):
             "scheduler_lease_owner": self.lease_owner,
         }
 
-    def validate_config(self, config: Dict[str, Any]):
-        # TODO :Implement full validation of required fields
-        required_keys = ["queue_names"]
-        for key in required_keys:
-            if key not in config:
-                raise BadConfigSource(f"Missing required config: {key}")
+    def validate_config(
+        self,
+        config: Dict[str, Any],
+    ) -> PostgreSQLSchedulerConfig:
+        return PostgreSQLSchedulerConfig.from_dict(config)
 
     def _scheduler_counter(self, name: str, **fields: Any) -> None:
         counters = getattr(self, "_scheduler_counters", None)
@@ -438,14 +430,14 @@ class PostgreSQLJobScheduler(JobScheduler):
             return
 
         task = asyncio.current_task()
-        job_event_tasks = getattr(self, "_job_event_tasks", None)
-        if task is not None and job_event_tasks is not None:
-            job_event_tasks.add(task)
+        runtime = getattr(self, 'runtime', None)
+        if task is not None and runtime is not None:
+            runtime.track_event_task(task)
         try:
             await self._handle_job_event(event_type, message)
         finally:
-            if task is not None and job_event_tasks is not None:
-                job_event_tasks.discard(task)
+            if task is not None and runtime is not None:
+                runtime.discard_event_task(task)
 
     async def _handle_job_event(self, event_type: str, message: Any):
         """
@@ -827,17 +819,18 @@ class PostgreSQLJobScheduler(JobScheduler):
             self.logger.error(f"Unexpected error starting NotificationService: {e}")
             raise RuntimeFailToStart(f"NotificationService failed to start: {e}") from e
 
-        # We need to display the status
-        await self.hydrate_from_db()
-
-        self.running = True
-        self._priority_refresh_event.clear()
-        self._priority_refresh_task = asyncio.create_task(
-            self._priority_refresh_loop(), name="scheduler-priority-refresh"
+        await self.dag_service.hydrate_bulk(
+            dag_batch_size=1000,
+            itersize=5000,
+            log_every_seconds=2.0,
         )
-        self.sync_task = asyncio.create_task(self._sync(), name="scheduler-sync")
-        # self.monitoring_task = asyncio.create_task(self._monitor())
-        self.monitoring_task = None
+
+        self._priority_refresh_event.clear()
+        self.runtime.create_task(
+            self._priority_refresh_loop(),
+            name="scheduler-priority-refresh",
+        )
+        self.runtime.create_task(self._sync(), name="scheduler-sync")
 
         # self._heartbeat_task = asyncio.create_task(
         #     self._heartbeat_loop(self.heartbeat_config)
@@ -847,30 +840,24 @@ class PostgreSQLJobScheduler(JobScheduler):
         self.logger.warning("Heartbeat is currently disabled")
         # await self.heartbeat.start()
 
-        self._poll_task = asyncio.create_task(self._poll(), name="scheduler-poll")
-        self._cluster_state_monitor_task = asyncio.create_task(
+        self.runtime.create_task(self._poll(), name="scheduler-poll")
+        self.runtime.create_task(
             self.__monitor_deployment_updates(),
             name="scheduler-deployment-monitor",
         )
 
-        self._worker_tasks = [
-            asyncio.create_task(
-                self._process_submission_queue(worker_id),
+        for worker_id in range(self.max_workers):
+            self.runtime.create_task(
+                self.submission_service.run_worker(worker_id),
                 name=f"scheduler-submission-{worker_id}",
             )
-            for worker_id in range(self.max_workers)
-        ]
 
-        # Start the MaintenanceService for periodic cleanup tasks
-        try:
-            await self.maintenance_service.start()
-            self.logger.info(
-                f"Started MaintenanceService (interval: {self.maintenance_service.maintenance_interval}s)"
-            )
-        except Exception as e:
-            self.logger.error(f"Error starting MaintenanceService: {e}")
-            # Non-critical - continue without maintenance service
+        await self.maintenance_service.start()
+        self.logger.info(
+            f"Started MaintenanceService (interval: {self.maintenance_service.maintenance_interval}s)"
+        )
 
+        self.running = True
         await self.dag_service.start_sync()
         await self.notify_event()
 
@@ -888,10 +875,10 @@ class PostgreSQLJobScheduler(JobScheduler):
                     scheduler_trace(
                         "scheduler_priority_refresh_due",
                         source="scheduler_loop",
-                        submission_count=self._submission_count,
+                        submission_count=self.submission_service.submission_count,
                         refresh_interval_seconds=self.priority_refresh_interval_seconds,
-                        request_queue_size=self._request_queue.qsize(),
-                        pending_requests=len(self._pending_requests),
+                        request_queue_size=self.submission_service.queue_size,
+                        pending_requests=self.submission_service.pending_count,
                     )
                     self._request_priority_refresh(source="scheduler_loop")
 
@@ -1657,22 +1644,6 @@ class PostgreSQLJobScheduler(JobScheduler):
         )
         return enqueued
 
-    def _owned_background_tasks(self) -> list[asyncio.Task[Any]]:
-        tasks = [
-            self._poll_task,
-            self.monitoring_task,
-            self._producer_task,
-            self._consumer_task,
-            self._heartbeat_task,
-            self._priority_refresh_task,
-            self._cluster_state_monitor_task,
-            self.sync_task,
-            self._dag_state_listener_task,
-        ]
-        tasks.extend(self._worker_tasks or [])
-        tasks.extend(self._job_event_tasks)
-        return list(dict.fromkeys(task for task in tasks if task is not None))
-
     async def stop(self, timeout: float = 2.0) -> None:
         """Stop scheduler-owned work and close its database resources."""
         async with self._lifecycle_lock:
@@ -1685,76 +1656,16 @@ class PostgreSQLJobScheduler(JobScheduler):
         self.running = False
         self._fetch_event.set()
         self._remove_event_subscriptions()
-
-        background_tasks = self._owned_background_tasks()
-        for task in background_tasks:
-            if not task.done():
-                task.cancel()
-
-        service_tasks = [
-            asyncio.create_task(
-                self.notification_service.stop(),
-                name="scheduler-notification-stop",
-            ),
-            asyncio.create_task(
-                self.maintenance_service.stop(),
-                name="scheduler-maintenance-stop",
-            ),
-            asyncio.create_task(
-                self.heartbeat.stop(),
-                name="scheduler-heartbeat-stop",
-            ),
-            asyncio.create_task(
-                self.dag_service.stop_sync(),
-                name="scheduler-dag-sync-stop",
-            ),
-        ]
-        shutdown_tasks = background_tasks + service_tasks
-        if shutdown_tasks:
-            _done, pending = await asyncio.wait(
-                shutdown_tasks,
-                timeout=max(0.0, timeout),
-            )
-            if pending:
-                task_names = sorted(task.get_name() for task in pending)
-                self.logger.warning(
-                    "Scheduler shutdown timed out; cancelling tasks: %s",
-                    ", ".join(task_names),
-                )
-                for task in pending:
-                    task.cancel()
-            results = await asyncio.gather(*shutdown_tasks, return_exceptions=True)
-            for task, result in zip(shutdown_tasks, results):
-                if isinstance(result, Exception):
-                    self.logger.error(
-                        "Task %s failed during scheduler shutdown: %s",
-                        task.get_name(),
-                        result,
-                    )
-
-        while True:
-            try:
-                request = self._request_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            self._pending_requests.pop(request.request_id, None)
-            if request.wait_for_result and not request.result_future.done():
-                request.result_future.set_exception(
-                    RuntimeError("Scheduler stopped before submission was processed")
-                )
-            self._request_queue.task_done()
-
-        self._poll_task = None
-        self.monitoring_task = None
-        self._producer_task = None
-        self._consumer_task = None
-        self._heartbeat_task = None
-        self._priority_refresh_task = None
-        self._cluster_state_monitor_task = None
-        self.sync_task = None
-        self._dag_state_listener_task = None
-        self._worker_tasks = []
-        self._job_event_tasks.clear()
+        await self.runtime.stop(
+            {
+                'scheduler-notification-stop': self.notification_service.stop(),
+                'scheduler-maintenance-stop': self.maintenance_service.stop(),
+                'scheduler-heartbeat-stop': self.heartbeat.stop(),
+                'scheduler-dag-sync-stop': self.dag_service.stop_sync(),
+            },
+            timeout=timeout,
+        )
+        self.submission_service.abort_pending()
 
         await self._close_runtime_resources()
 
@@ -1775,6 +1686,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         self._resources_closed = True
 
     async def _reopen_runtime_resources(self) -> None:
+        submission_count = self.submission_service.submission_count
         self._db_pool = AsyncPostgresConnectionPool()
         self.repository = JobRepository(
             self.config,
@@ -1808,140 +1720,22 @@ class PostgreSQLJobScheduler(JobScheduler):
         )
         self.control_flow_service = self._build_control_flow_service()
         self.attempt_lifecycle_service = self._build_attempt_lifecycle_service()
+        self.submission_service = self._build_submission_service(
+            initial_submission_count=submission_count
+        )
+        self.diagnostics = self._build_diagnostics()
         self.heartbeat = SchedulerHeartbeat(
             self, self.heartbeat_config, self.repository, self.logger
         )
         self._resources_closed = False
 
     async def debug_info(self) -> Dict[str, Any]:
-        """
-        Return comprehensive debugging information about the scheduler's current state.
-
-        Returns:
-            dict: Dictionary containing various debugging information including:
-                - Scheduler status and configuration
-                - Task states and counters
-                - Queue information
-                - Database connection status
-                - Active DAGs and jobs summary
-        """
-
-        current_time = datetime.now(timezone.utc)
-        job_counts, dag_counts = await asyncio.gather(
-            self.repository.count_job_states(),
-            self.repository.count_dag_states(),
-            return_exceptions=True,
+        """Return a diagnostic snapshot of the scheduler runtime."""
+        return await self.diagnostics.snapshot(
+            running=self.running,
+            paused=self._paused,
+            fetch_counter=self._fetch_counter,
         )
-        if isinstance(job_counts, Exception):
-            job_state_counts_error = str(job_counts)
-        else:
-            self._job_state_counts = job_counts
-            job_state_counts_error = None
-        if isinstance(dag_counts, Exception):
-            dag_state_counts_error = str(dag_counts)
-        else:
-            self._dag_state_counts = dag_counts
-            dag_state_counts_error = None
-
-        debug_data = {
-            "scheduler_info": {
-                "running": self.running,
-                "paused": self._paused,
-                "scheduler_mode": self.scheduler_mode,
-                "gateway_instance_id": self.gateway_instance_id,
-                "scheduler_lease_owner": self.lease_owner,
-                "max_concurrent_dags": self.max_concurrent_dags,
-                "known_queues": list(self.known_queues) if self.known_queues else [],
-                "active_dags_count": len(self.active_dags) if self.active_dags else 0,
-            },
-            "timing_info": {
-                "current_time": current_time.isoformat(),
-                "start_time": self._start_time.isoformat(),
-                "uptime_seconds": (current_time - self._start_time).total_seconds(),
-                "uptime_human": str(current_time - self._start_time),
-            },
-            "counters": {
-                "fetch_counter": self._fetch_counter,
-                "submission_count": self._submission_count,
-                "pending_requests": (
-                    len(self._pending_requests) if self._pending_requests else 0
-                ),
-            },
-            "queues": {
-                "request_queue_size": (
-                    self._request_queue.qsize() if self._request_queue else 0
-                ),
-                "event_queue_size": (
-                    self._event_queue.qsize() if self._event_queue else 0
-                ),
-            },
-            "execution_planning": {
-                "execution_planner_available": self.execution_planner is not None,
-            },
-            "sla_policy": {
-                "hard_sla_policy": self.hard_sla_policy,
-                "warning_top_n": self.sla_warning_top_n,
-            },
-        }
-
-        # Add active DAGs information if available
-        if self.active_dags:
-            active = {}
-            for dag_id, dag_info in self.active_dags.items():
-                status_val = "unknown"
-                try:
-                    status_val = dag_info.status
-                except Exception:
-                    pass
-                active[dag_id] = {"dag_id": dag_id, "status": status_val}
-            debug_data["active_dags"] = active
-
-        # Add queue status information
-        try:
-            debug_data["queue_status"] = self.get_queue_status()
-        except Exception as e:
-            debug_data["queue_status_error"] = str(e)
-
-        try:
-            debug_data["frontier_summary"] = self.frontier.summary(detail=True)
-        except Exception as e:
-            debug_data["frontier_summary_error"] = str(e)
-
-        debug_data["job_state_counts"] = self._job_state_counts
-        debug_data["dag_state_counts"] = self._dag_state_counts
-        if job_state_counts_error:
-            debug_data["job_state_counts_error"] = job_state_counts_error
-        if dag_state_counts_error:
-            debug_data["dag_state_counts_error"] = dag_state_counts_error
-
-        # Include detailed frontier summary without using getattr
-        frontier_info = {"available": self.frontier is not None}
-        if self.frontier:
-            try:
-                # Prefer detailed view with top-N stalest items
-                frontier_info["summary"] = self.frontier.summary(detail=True, top_n=10)
-            except TypeError:
-                # Fallback to default signature
-                try:
-                    frontier_info["summary"] = self.frontier.summary(detail=True)
-                except Exception as e:
-                    frontier_info["summary_error"] = str(e)
-            except Exception as e:
-                frontier_info["summary_error"] = str(e)
-
-            # Known scheduler-level frontier settings
-            try:
-                frontier_info["batch_size"] = self.frontier_batch_size
-            except Exception:
-                pass
-            try:
-                frontier_info["lease_ttl_seconds"] = self.lease_ttl_seconds
-            except Exception:
-                pass
-
-        debug_data["frontier"] = frontier_info
-
-        return debug_data
 
     async def enqueue(
         self,
@@ -2152,17 +1946,6 @@ class PostgreSQLJobScheduler(JobScheduler):
 
         return work_item
 
-    async def get_job_for_policy(self, work_info: WorkInfo) -> Optional[WorkInfo]:
-        """
-        Find a job by its name and data (used for policy checks).
-        :param work_info: WorkInfo containing metadata with ref_type and ref_id
-        :return: WorkInfo if found, None otherwise
-        """
-        ref_type = work_info.data.get("metadata", {}).get("ref_type", "")
-        ref_id = work_info.data.get("metadata", {}).get("ref_id", "")
-
-        return await self.repository.get_job_by_policy(ref_type, ref_id)
-
     async def list_jobs(
         self, state: Optional[str | list[str]] = None, batch_size: int = 0
     ) -> Dict[str, WorkInfo]:
@@ -2182,275 +1965,26 @@ class PostgreSQLJobScheduler(JobScheduler):
         return {work_item.id: work_item for work_item in work_items}
 
     async def submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> str:
-        """
-        Inserts a new work item into the scheduler.
-        :param work_info: The work item to insert.
-        :param overwrite: Whether to overwrite the work item if it already exists.
-        :return: The ID of the inserted work item.
-        :raises ValueError: If the job submission fails or if the job already exists.
-        """
-        if not self.running:
-            raise RuntimeError("Job scheduler is not running")
+        """Queue a DAG submission for background persistence."""
+        return await self.submission_service.submit(work_info, overwrite)
 
-        self.logger.info(f"Submitting job : {work_info.id}")
-
-        work_queue = work_info.name
-        if work_info.name not in self.known_queues:
-            self.logger.info(f"Checking for queue: {work_queue}")
-            await self.create_queue(work_queue)
-            await self.create_queue(f"${work_queue}_dlq")
-            self.known_queues.add(work_queue)
-
-        result_future = asyncio.Future()
-        request_id = str(uuid.uuid4())
-        # sync_mode = work_info.data.get("metadata", {}).get("sync_mode", False)
-        sync_mode = False
-
-        submission_request = JobSubmissionRequest(
-            work_info=work_info,
-            overwrite=overwrite,
-            request_id=request_id,
-            result_future=result_future,
-            wait_for_result=sync_mode,
-        )
-
-        if not self.running:
-            raise RuntimeError("Job scheduler stopped during submission")
-
-        self._pending_requests[request_id] = submission_request
-
-        try:
-            queue_size_before = self._request_queue.qsize()
-            self._request_queue.put_nowait(submission_request)
-            scheduler_trace(
-                "scheduler_submission_enqueued",
-                job_id=work_info.id,
-                dag_id=work_info.id,
-                job_name=work_info.name,
-                request_id=request_id,
-                queue_size_before=queue_size_before,
-                queue_size=self._request_queue.qsize(),
-            )
-            self.logger.debug(
-                f"Job {work_info.id} queued successfully (request: {request_id})"
-            )
-            if sync_mode:
-                # Wait for the result
-                result = await result_future
-                return result
-
-            return work_info.id
-        except Exception as e:
-            self._pending_requests.pop(request_id, None)
-            if sync_mode and not result_future.done():
-                result_future.set_exception(e)
-            raise
-
-    async def _handle_priority_refresh(self):
-        """Handle priority refresh"""
+    async def _handle_priority_refresh(self, submission_count: int) -> None:
         refresh_interval = self.priority_refresh_interval
-
-        if self._submission_count % refresh_interval == 0:
+        if submission_count % refresh_interval == 0:
             now = time.monotonic()
             due_in = self._next_priority_refresh_at - now
-            should_wake = due_in <= 0
-            if should_wake:
-                self._request_priority_refresh(source="submission_worker")
+            if due_in <= 0:
+                self._request_priority_refresh(source='submission_worker')
             self.logger.info(
-                f"Requested job priority refresh after {self._submission_count} submissions "
-                f"(interval: {refresh_interval}, due_in={max(0.0, due_in):.3f}s)"
+                f'Requested job priority refresh after {submission_count} submissions '
+                f'(interval: {refresh_interval}, due_in={max(0.0, due_in):.3f}s)'
             )
-
-    async def _send_submission_failure_toast(self, work_info, error: Exception) -> None:
-        """Send a failed toast event when job submission fails."""
-        try:
-            event_name = work_info.data.get("name", work_info.name)
-            api_key = work_info.data.get("api_key", None)
-            metadata = work_info.data.get("metadata", {})
-            ref_type = metadata.get("ref_type")
-
-            if not api_key or not event_name:
-                self.logger.warning(
-                    f"Cannot send failure toast for {work_info.id}: "
-                    f"missing api_key={api_key} or event_name={event_name}"
-                )
-                return
-
-            await mark_as_failed_toast(
-                api_key=api_key,
-                job_id=work_info.id,
-                event_name=event_name,
-                job_tag=ref_type,
-                status="FAILED",
-                timestamp=current_milli_time(),
-                payload={**metadata, "error": str(error)},
-            )
-        except Exception as toast_err:
-            self.logger.error(
-                f"Failed to send failure toast for {work_info.id}: {toast_err}"
-            )
-
-    async def _process_submission_queue(self, worker_id: int) -> None:
-        """Background worker that processes queued job submissions"""
-        self.logger.info(f"Background job submission worker started # {worker_id}")
-
-        while self.running:
-            request = None
-            try:
-                request = await self._request_queue.get()
-                scheduler_trace(
-                    "scheduler_submission_dequeued",
-                    job_id=request.work_info.id,
-                    dag_id=request.work_info.id,
-                    job_name=request.work_info.name,
-                    request_id=request.request_id,
-                    worker_id=worker_id,
-                    queue_size=self._request_queue.qsize(),
-                )
-                try:
-                    result = await self.__submit_job(
-                        request.work_info, request.overwrite
-                    )
-                    self._submission_count += 1
-                    await self._handle_priority_refresh()
-
-                    if request.wait_for_result and not request.result_future.done():
-                        request.result_future.set_result(result)
-
-                    queue_size = self._request_queue.qsize()
-                    self.logger.debug(
-                        f"Successfully processed job: {request.work_info.id} (queue size: {queue_size})"
-                    )
-
-                except ValueError as e:
-                    self.logger.error(
-                        f"Job submission failed for {request.work_info.id}: {e}"
-                    )
-                    if request.wait_for_result and not request.result_future.done():
-                        request.result_future.set_exception(e)
-                except Exception as e:
-                    if request.wait_for_result and not request.result_future.done():
-                        request.result_future.set_exception(e)
-                    self.logger.error(
-                        f"Failed to process job {request.work_info.id}: {e}"
-                    )
-                    await self._send_submission_failure_toast(request.work_info, e)
-                finally:
-                    self._pending_requests.pop(request.request_id, None)
-
-            except asyncio.CancelledError:
-                self.logger.info("Background job submission worker cancelled")
-                break
-            except Exception as e:
-                self.logger.error(f"Unexpected error in submission worker: {e}")
-                await asyncio.sleep(1)
-            finally:
-                if request:
-                    self._request_queue.task_done()
 
     def get_queue_status(self) -> dict:
-        """Get current status of the submission queue"""
-        active_workers = 0
-        total_workers = len(self._worker_tasks) if self._worker_tasks else 0
-
-        if self._worker_tasks:
-            active_workers = sum(
-                1 for task in self._worker_tasks if task and not task.done()
-            )
-
-        return {
-            "queue_size": self._request_queue.qsize(),
-            "pending_requests": len(self._pending_requests),
-            "total_submissions": self._submission_count,
-            "workers": {
-                "total": total_workers,
-                "active": active_workers,
-                "utilization": (
-                    f"{(active_workers / total_workers) * 100:.1f}%"
-                    if total_workers > 0
-                    else "0%"
-                ),
-            },
-        }
-
-    async def __submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> str:
-        """
-        :param work_info: WorkInfo object containing job details
-        :param overwrite:
-        :return:
-        """
-        submission_id = work_info.id
-        submission_policy = ExistingWorkPolicy.create(
-            work_info.policy, default_policy=ExistingWorkPolicy.REJECT_DUPLICATE
+        """Return submission queue and worker status."""
+        return self.submission_service.status(
+            self.runtime.tasks(prefix='scheduler-submission-')
         )
-
-        is_valid = await self.is_valid_submission(work_info, submission_policy)
-        if not is_valid:
-            raise ValueError(
-                f"Job with submission_id {submission_id} already exists."
-                f"For work item : {work_info}."
-            )
-
-        # Build plan & nodes once (used by DB and memory)
-        plan, dag_nodes = query_plan_work_items(work_info)
-        scheduler_trace(
-            "dag_plan_built",
-            job_id=submission_id,
-            dag_id=submission_id,
-            job_name=work_info.name,
-            job_count=len(dag_nodes),
-        )
-
-        # Set dag_id on all nodes
-        for dag_work_info in dag_nodes:
-            dag_work_info.dag_id = submission_id
-
-        # Delegate DAG and job creation to repository
-        scheduler_trace(
-            "dag_persist_start",
-            job_id=submission_id,
-            dag_id=submission_id,
-            job_name=work_info.name,
-            job_count=len(dag_nodes),
-        )
-        new_key_added, new_dag_key = await self.repository.create_dag_with_jobs(
-            dag_id=submission_id,
-            plan=plan,
-            dag_nodes=dag_nodes,
-            work_info=work_info,
-        )
-
-        if not new_key_added:
-            raise ValueError(
-                f"Job with submission_id {submission_id} already exists. "
-                "Please use a different submission_id."
-            )
-
-        scheduler_trace(
-            "dag_persisted",
-            job_id=submission_id,
-            dag_id=submission_id,
-            job_name=work_info.name,
-            job_count=len(dag_nodes),
-            new_dag_key=new_dag_key,
-        )
-        scheduler_trace(
-            "dag_frontier_add_start",
-            job_id=submission_id,
-            dag_id=submission_id,
-            job_name=work_info.name,
-            job_count=len(dag_nodes),
-        )
-        await self.frontier.add_dag(plan, dag_nodes)
-        scheduler_trace(
-            "dag_frontier_added",
-            job_id=submission_id,
-            dag_id=submission_id,
-            job_name=work_info.name,
-            job_count=len(dag_nodes),
-        )
-        await self.notify_event()
-        return submission_id
 
     def _request_priority_refresh(self, source: str) -> None:
         """Queue at most one additional priority refresh."""
@@ -2465,9 +1999,9 @@ class PostgreSQLJobScheduler(JobScheduler):
             source=source,
             coalesced=already_pending,
             refresh_running=self._priority_refresh_running,
-            submission_count=self._submission_count,
-            request_queue_size=self._request_queue.qsize(),
-            pending_requests=len(self._pending_requests),
+            submission_count=self.submission_service.submission_count,
+            request_queue_size=self.submission_service.queue_size,
+            pending_requests=self.submission_service.pending_count,
         )
 
     async def _priority_refresh_loop(self) -> None:
@@ -2488,17 +2022,17 @@ class PostgreSQLJobScheduler(JobScheduler):
                         "scheduler_priority_refresh_returned",
                         source=source,
                         refresh_id=refresh_id,
-                        submission_count=self._submission_count,
+                        submission_count=self.submission_service.submission_count,
                         refresh_interval_seconds=self.priority_refresh_interval_seconds,
-                        request_queue_size=self._request_queue.qsize(),
-                        pending_requests=len(self._pending_requests),
+                        request_queue_size=self.submission_service.queue_size,
+                        pending_requests=self.submission_service.pending_count,
                         elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
                     )
                 except asyncio.TimeoutError:
                     scheduler_trace(
                         "scheduler_priority_refresh_failed",
                         source=source,
-                        submission_count=self._submission_count,
+                        submission_count=self.submission_service.submission_count,
                         elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
                         error="timeout",
                         timeout_seconds=self.priority_refresh_timeout_seconds,
@@ -2521,10 +2055,10 @@ class PostgreSQLJobScheduler(JobScheduler):
             "scheduler_priority_refresh_start",
             source=source,
             refresh_id=refresh_id,
-            submission_count=self._submission_count,
+            submission_count=self.submission_service.submission_count,
             hydrate_missing_limit=self.priority_refresh_hydrate_limit,
-            request_queue_size=self._request_queue.qsize(),
-            pending_requests=len(self._pending_requests),
+            request_queue_size=self.submission_service.queue_size,
+            pending_requests=self.submission_service.pending_count,
         )
         try:
             phase_started = time.perf_counter()
@@ -2532,7 +2066,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 "scheduler_priority_refresh_frontier_start",
                 source=source,
                 refresh_id=refresh_id,
-                submission_count=self._submission_count,
+                submission_count=self.submission_service.submission_count,
                 hydrate_missing_limit=self.priority_refresh_hydrate_limit,
             )
             refresh_stats = await self.dag_service.refresh_frontier_priorities(
@@ -2544,7 +2078,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 "scheduler_priority_refresh_frontier_done",
                 source=source,
                 refresh_id=refresh_id,
-                submission_count=self._submission_count,
+                submission_count=self.submission_service.submission_count,
                 elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
                 tracked=refresh_stats.get("tracked", 0),
                 fetched=refresh_stats.get("fetched", 0),
@@ -2557,14 +2091,14 @@ class PostgreSQLJobScheduler(JobScheduler):
                 "scheduler_priority_refresh_ready_ordering_start",
                 source=source,
                 refresh_id=refresh_id,
-                submission_count=self._submission_count,
+                submission_count=self.submission_service.submission_count,
             )
             await self.frontier.refresh_ready_ordering()
             scheduler_trace(
                 "scheduler_priority_refresh_ready_ordering_done",
                 source=source,
                 refresh_id=refresh_id,
-                submission_count=self._submission_count,
+                submission_count=self.submission_service.submission_count,
                 elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
             )
             self._next_priority_refresh_at = (
@@ -2576,7 +2110,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 "scheduler_priority_refresh_summary_start",
                 source=source,
                 refresh_id=refresh_id,
-                submission_count=self._submission_count,
+                submission_count=self.submission_service.submission_count,
                 top_n=self.sla_warning_top_n,
             )
             frontier_summary = self.frontier.summary(
@@ -2587,7 +2121,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 "scheduler_priority_refresh_summary_done",
                 source=source,
                 refresh_id=refresh_id,
-                submission_count=self._submission_count,
+                submission_count=self.submission_service.submission_count,
                 elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
                 frontier_jobs=frontier_summary.get("totals", {}).get("jobs", 0),
                 frontier_dags=frontier_summary.get("totals", {}).get("dags", 0),
@@ -2610,7 +2144,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                     "scheduler_priority_refresh_done",
                     source=source,
                     refresh_id=refresh_id,
-                    submission_count=self._submission_count,
+                    submission_count=self.submission_service.submission_count,
                     elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
                     tracked=refresh_stats.get("tracked", 0),
                     fetched=refresh_stats.get("fetched", 0),
@@ -2641,7 +2175,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 "scheduler_priority_refresh_hard_sla_policy_start",
                 source=source,
                 refresh_id=refresh_id,
-                submission_count=self._submission_count,
+                submission_count=self.submission_service.submission_count,
                 hard_missed=sla_summary.get("hard_missed", 0),
                 policy=self.hard_sla_policy,
             )
@@ -2650,7 +2184,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 "scheduler_priority_refresh_hard_sla_policy_done",
                 source=source,
                 refresh_id=refresh_id,
-                submission_count=self._submission_count,
+                submission_count=self.submission_service.submission_count,
                 elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
                 hard_missed=sla_summary.get("hard_missed", 0),
                 policy=self.hard_sla_policy,
@@ -2659,7 +2193,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 "scheduler_priority_refresh_done",
                 source=source,
                 refresh_id=refresh_id,
-                submission_count=self._submission_count,
+                submission_count=self.submission_service.submission_count,
                 elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
                 tracked=refresh_stats.get("tracked", 0),
                 fetched=refresh_stats.get("fetched", 0),
@@ -2675,7 +2209,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 "scheduler_priority_refresh_failed",
                 source=source,
                 refresh_id=refresh_id,
-                submission_count=self._submission_count,
+                submission_count=self.submission_service.submission_count,
                 elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
                 error=repr(e),
             )
@@ -2723,42 +2257,8 @@ class PostgreSQLJobScheduler(JobScheduler):
     async def is_valid_submission(
         self, work_info: WorkInfo, policy: ExistingWorkPolicy
     ) -> bool:
-        """
-        Validates a work submission based on the specified policy.
-
-        :param work_info: Information about the work to be checked for validity
-        :param policy: Policy that dictates the rules for the work submission
-        :return: True if the submission is valid according to the policy, False otherwise
-        :raises ValueError: If an unsupported policy is provided
-        """
-        try:
-            if policy in (
-                ExistingWorkPolicy.ALLOW_ALL,
-                ExistingWorkPolicy.ALLOW_DUPLICATE,
-            ):
-                return True
-
-            if policy == ExistingWorkPolicy.REJECT_ALL:
-                return False
-
-            existing_job = await self.get_job_for_policy(work_info)
-
-            if policy == ExistingWorkPolicy.REJECT_DUPLICATE:
-                return existing_job is None
-
-            if policy == ExistingWorkPolicy.REPLACE:
-                return not existing_job or (
-                    existing_job.state is not None and existing_job.state.is_terminal()
-                )
-
-            raise ValueError(f"Unsupported policy: {policy}")
-
-        except Exception as e:
-            logger.error(
-                f"Error validating submission for work '{work_info.name}' "
-                f"with policy '{policy}': {str(e)}"
-            )
-            return False
+        """Validate a submission against the configured existing-work policy."""
+        return await self.submission_service.is_valid_submission(work_info, policy)
 
     def stop_job(self, job_id: str) -> bool:
         """Request a job to exit, fire and forget.
@@ -3305,25 +2805,12 @@ class PostgreSQLJobScheduler(JobScheduler):
             await self.notify_event()
 
     async def get_dag_by_id(self, dag_id: str) -> QueryPlan | None:
-        """
-        Retrieves a DAG by its ID, using in-memory cache if available.
-        Falls back to loading from db if missing.
-        Delegates to DAGManagementService.
-        """
         return await self.dag_service.get_dag(dag_id)
 
     def get_available_slots(self) -> dict[str, int]:
         return available_slots_by_executor(self._semaphore_store)
 
     async def reset_active_dags(self):
-        """
-        Reset the active DAGs dictionary, clearing all currently tracked DAGs.
-        This can be useful for debugging or when you need to force a fresh state.
-        Delegates to DAGManagementService.
-
-        Returns:
-            dict: Information about the reset operation including count of cleared DAGs
-        """
         return await self.dag_service.reset_all_dags()
 
     async def _lease_jobs_db(self, job_name: str, ids: list[str]) -> set[str]:
@@ -3467,26 +2954,6 @@ class PostgreSQLJobScheduler(JobScheduler):
         :return: True if DAG was hydrated, False if not found or failed
         """
         return await self.dag_service.hydrate_single_dag(dag_id)
-
-    async def hydrate_from_db(
-        self,
-        dag_batch_size: int = 1000,
-        itersize: int = 5000,
-        log_every_seconds: float = 2.0,
-    ) -> None:
-        """
-        Rebuild MemoryFrontier from DB in two phases with progress & timing logs.
-        Delegates to DAGManagementService.
-
-        :param dag_batch_size: Number of DAGs to process in each batch
-        :param itersize: Cursor iteration size for streaming
-        :param log_every_seconds: How often to log progress
-        """
-        await self.dag_service.hydrate_bulk(
-            dag_batch_size=dag_batch_size,
-            itersize=itersize,
-            log_every_seconds=log_every_seconds,
-        )
 
     async def __monitor_deployment_updates(self):
         """

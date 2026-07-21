@@ -9,6 +9,7 @@ from marie.scheduler.dag_topology_cache import DagTopologyCache
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.psql import PostgreSQLJobScheduler
 from marie.scheduler.repository import JobRepository
+from marie.scheduler.services import SchedulerRuntime
 
 
 async def _wait_forever() -> None:
@@ -30,38 +31,21 @@ def _scheduler_for_stop() -> PostgreSQLJobScheduler:
     scheduler.maintenance_service = SimpleNamespace(stop=AsyncMock())
     scheduler.heartbeat = SimpleNamespace(stop=AsyncMock())
     scheduler.dag_service = SimpleNamespace(stop_sync=AsyncMock())
-    scheduler._request_queue = asyncio.Queue()
-    scheduler._pending_requests = {}
-    scheduler.monitoring_task = None
-    scheduler._producer_task = None
-    scheduler._consumer_task = None
-    scheduler._heartbeat_task = None
-    scheduler._priority_refresh_task = None
-    scheduler._dag_state_listener_task = None
-    scheduler._job_event_tasks = set()
+    scheduler.runtime = SchedulerRuntime(scheduler.logger)
+    scheduler.submission_service = SimpleNamespace(abort_pending=MagicMock())
     return scheduler
 
 
 @pytest.mark.asyncio
 async def test_stop_cancels_poll_and_workers_before_returning() -> None:
     scheduler = _scheduler_for_stop()
-    poll_task = asyncio.create_task(_wait_forever(), name="scheduler-poll")
-    worker_task = asyncio.create_task(_wait_forever(), name="scheduler-submission-0")
-    sync_task = asyncio.create_task(_wait_forever(), name="scheduler-sync")
-    event_task = asyncio.create_task(_wait_forever(), name="scheduler-job-event")
-    scheduler._poll_task = poll_task
-    scheduler._worker_tasks = [worker_task]
-    scheduler.sync_task = sync_task
-    scheduler._cluster_state_monitor_task = None
-    scheduler._job_event_tasks.add(event_task)
-    result_future = asyncio.get_running_loop().create_future()
-    request = SimpleNamespace(
-        request_id="request-1",
-        wait_for_result=True,
-        result_future=result_future,
+    poll_task = scheduler.runtime.create_task(_wait_forever(), name="scheduler-poll")
+    worker_task = scheduler.runtime.create_task(
+        _wait_forever(), name="scheduler-submission-0"
     )
-    scheduler._request_queue.put_nowait(request)
-    scheduler._pending_requests[request.request_id] = request
+    sync_task = scheduler.runtime.create_task(_wait_forever(), name="scheduler-sync")
+    event_task = asyncio.create_task(_wait_forever(), name="scheduler-job-event")
+    scheduler.runtime.track_event_task(event_task)
 
     async def close_resources() -> None:
         scheduler._resources_closed = True
@@ -80,12 +64,8 @@ async def test_stop_cancels_poll_and_workers_before_returning() -> None:
     scheduler.heartbeat.stop.assert_awaited_once()
     scheduler.dag_service.stop_sync.assert_awaited_once()
     scheduler._close_runtime_resources.assert_awaited_once()
-    assert scheduler._poll_task is None
-    assert scheduler._worker_tasks == []
-    assert scheduler._request_queue.empty()
-    assert scheduler._pending_requests == {}
-    with pytest.raises(RuntimeError, match="stopped before submission"):
-        result_future.result()
+    assert scheduler.runtime.tasks() == []
+    scheduler.submission_service.abort_pending.assert_called_once_with()
 
 
 @pytest.mark.asyncio
@@ -120,6 +100,9 @@ async def test_stopped_scheduler_rejects_submissions_and_job_events() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
     scheduler.running = False
     scheduler._handle_job_event = AsyncMock()
+    scheduler.submission_service = SimpleNamespace(
+        submit=AsyncMock(side_effect=RuntimeError("Job scheduler is not running"))
+    )
 
     with pytest.raises(RuntimeError, match="not running"):
         await scheduler.submit_job(MagicMock())

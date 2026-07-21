@@ -495,8 +495,6 @@ class DAGManagementService:
         if self._notify_callback:
             await self._notify_callback()
 
-    # ==================== DAG State Management ====================
-
     async def get_dag(self, dag_id: str) -> Optional[QueryPlan]:
         """
         Retrieve a DAG by its ID, using in-memory cache if available.
