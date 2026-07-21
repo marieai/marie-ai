@@ -1,4 +1,4 @@
-"""Base class for database-backed agent tools using asyncpg."""
+"""Base class for database-backed agent tools using psycopg 3."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ from typing import Any, Dict, Optional
 
 from marie.agent.tools import AgentTool, ToolOutput
 from marie.helper import run_async
-from marie.storage.database.asyncpg_pool import AsyncPostgresPool
+from marie.storage.database.postgres_pool import AsyncPostgresPool
 
 
 class AsyncDatabaseTool(AgentTool):
-    """Base class for database-backed tools using asyncpg.
+    """Base class for database-backed tools using psycopg 3.
 
     Provides:
     - Automatic pool initialization

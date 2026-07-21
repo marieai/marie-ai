@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from marie.agent.tools import ToolMetadata, ToolOutput
 from marie.storage.database.agent_tools.base import AsyncDatabaseTool
-from marie.storage.database.asyncpg_pool import AsyncPostgresPool
+from marie.storage.database.postgres_pool import AsyncPostgresPool
 
 from .conftest import MockAsyncPostgresPool
 

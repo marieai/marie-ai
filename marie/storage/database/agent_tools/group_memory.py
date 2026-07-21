@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 import logging
-from marie.storage.database.asyncpg_pool import AsyncPostgresPool
+from marie.storage.database.postgres_pool import AsyncPostgresPool
 
 logger = logging.getLogger("marie.storage.database.agent_tools.group_memory")
 

@@ -8,9 +8,8 @@ import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
-import psycopg2
-import psycopg2.extras
-from psycopg2 import pool
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
@@ -99,14 +98,19 @@ class BaseHitlExecutor(MarieExecutor):
     def _init_db_pool(self):
         """Initialize database connection pool."""
         try:
-            self.db_pool = psycopg2.pool.SimpleConnectionPool(
-                minconn=1,
-                maxconn=5,
-                host=self.db_config["host"],
-                port=self.db_config["port"],
-                database=self.db_config["database"],
-                user=self.db_config["user"],
-                password=self.db_config["password"],
+            self.db_pool = ConnectionPool(
+                "",
+                min_size=1,
+                max_size=5,
+                open=True,
+                kwargs={
+                    "host": self.db_config["host"],
+                    "port": self.db_config["port"],
+                    "dbname": self.db_config["database"],
+                    "user": self.db_config["user"],
+                    "password": self.db_config["password"],
+                    "row_factory": dict_row,
+                },
             )
             self.logger.info("Database connection pool initialized")
         except Exception as e:
@@ -152,7 +156,7 @@ class BaseHitlExecutor(MarieExecutor):
         """
         conn = self._get_db_connection()
         try:
-            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cursor = conn.cursor(row_factory=dict_row)
 
             # Calculate timeout timestamp if provided
             timeout_at = None
@@ -261,7 +265,7 @@ class BaseHitlExecutor(MarieExecutor):
             # Poll database for response
             conn = self._get_db_connection()
             try:
-                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cursor = conn.cursor(row_factory=dict_row)
 
                 # Get request status and latest response
                 query = """
@@ -337,7 +341,7 @@ class BaseHitlExecutor(MarieExecutor):
         """
         conn = self._get_db_connection()
         try:
-            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cursor = conn.cursor(row_factory=dict_row)
 
             # Get request config to determine timeout strategy
             cursor.execute(
@@ -418,7 +422,7 @@ class BaseHitlExecutor(MarieExecutor):
     def close(self):
         """Close database connections."""
         if self.db_pool:
-            self.db_pool.closeall()
+            self.db_pool.close()
             self.logger.info("Database connection pool closed")
 
     def __del__(self):

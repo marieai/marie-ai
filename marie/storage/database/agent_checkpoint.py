@@ -36,7 +36,7 @@ class PostgresCheckpointStore:
         if self._pool is not None:
             return self._pool
 
-        from marie.storage.database.asyncpg_pool import AsyncPostgresPool
+        from marie.storage.database.postgres_pool import AsyncPostgresPool
 
         pool = AsyncPostgresPool.get_instance()
         if not pool.is_initialized:

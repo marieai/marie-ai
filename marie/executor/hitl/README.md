@@ -487,7 +487,7 @@ pnpm prisma:generate
 
 ### Database Connection Errors
 
-**Issue**: `psycopg2.OperationalError: could not connect to server`
+**Issue**: PostgreSQL operational error: could not connect to server
 
 **Solution**:
 1. Verify database is running: `psql -U postgres -d marie_studio`

@@ -14,6 +14,21 @@ class _FakePool:
         self.closed = True
 
 
+class _FakeConnectionPool:
+    instances = []
+
+    def __init__(self):
+        self.config = None
+        self.pool = _FakePool()
+        self.__class__.instances.append(self)
+
+    async def initialize(self, config):
+        self.config = config
+
+    async def close(self):
+        await self.pool.close()
+
+
 class _FakeSensorWorker:
     def __init__(self):
         self.storage = None
@@ -32,6 +47,7 @@ def _reset_globals():
     server_runtime._sensor_worker = None
     server_runtime._sensor_storage_pool = None
     server_runtime._sensor_worker_loop = None
+    _FakeConnectionPool.instances = []
     yield
     server_runtime._sensor_worker = None
     server_runtime._sensor_storage_pool = None
@@ -42,12 +58,10 @@ def test_init_sensor_storage_wires_pool_and_schema(monkeypatch):
     fake_worker = _FakeSensorWorker()
     server_runtime._sensor_worker = fake_worker
 
-    fake_pool = _FakePool()
-    create_pool_calls = []
-
-    async def fake_create_pool(**kwargs):
-        create_pool_calls.append(kwargs)
-        return fake_pool
+    monkeypatch.setattr(
+        "marie.storage.database.postgres_pool.AsyncPostgresConnectionPool",
+        _FakeConnectionPool,
+    )
 
     initialize_calls = []
 
@@ -58,7 +72,6 @@ def test_init_sensor_storage_wires_pool_and_schema(monkeypatch):
         initialize_calls.append((pool, schema))
         return _FakeStorage()
 
-    monkeypatch.setattr("asyncpg.create_pool", fake_create_pool)
     monkeypatch.setattr(
         "marie.sensors.state.psql_storage.PostgreSQLSensorStorage.initialize",
         staticmethod(fake_initialize),
@@ -77,16 +90,11 @@ def test_init_sensor_storage_wires_pool_and_schema(monkeypatch):
 
     asyncio.run(server_runtime._init_sensor_storage(db_config))
 
-    assert len(create_pool_calls) == 1
-    call = create_pool_calls[0]
-    assert call["host"] == "db.internal"
-    assert call["port"] == 5432
-    assert call["user"] == "marie"
-    assert call["password"] == "secret"
-    assert call["database"] == "marie_scheduler_db"
-    assert call["min_size"] == 2
-    assert call["max_size"] == 7
+    assert len(_FakeConnectionPool.instances) == 1
+    call = _FakeConnectionPool.instances[0].config
+    assert call == db_config
 
+    fake_pool = _FakeConnectionPool.instances[0]
     assert initialize_calls == [(fake_pool, "marie_scheduler")]
     assert isinstance(fake_worker.storage, _FakeStorage)
     assert server_runtime._sensor_storage_pool is fake_pool
@@ -96,17 +104,16 @@ def test_init_sensor_storage_defaults_schema(monkeypatch):
     fake_worker = _FakeSensorWorker()
     server_runtime._sensor_worker = fake_worker
 
-    fake_pool = _FakePool()
     initialize_calls = []
-
-    async def fake_create_pool(**kwargs):
-        return fake_pool
+    monkeypatch.setattr(
+        "marie.storage.database.postgres_pool.AsyncPostgresConnectionPool",
+        _FakeConnectionPool,
+    )
 
     def fake_initialize(pool, schema):
         initialize_calls.append((pool, schema))
         return object()
 
-    monkeypatch.setattr("asyncpg.create_pool", fake_create_pool)
     monkeypatch.setattr(
         "marie.sensors.state.psql_storage.PostgreSQLSensorStorage.initialize",
         staticmethod(fake_initialize),
@@ -122,7 +129,7 @@ def test_init_sensor_storage_defaults_schema(monkeypatch):
 
     asyncio.run(server_runtime._init_sensor_storage(db_config))
 
-    assert initialize_calls == [(fake_pool, "marie_scheduler")]
+    assert initialize_calls == [(_FakeConnectionPool.instances[0], "marie_scheduler")]
 
 
 def test_init_sensor_storage_noop_when_db_config_empty():
@@ -139,11 +146,6 @@ def test_init_sensor_storage_noop_when_db_config_empty():
 def test_init_sensor_storage_noop_when_worker_none(monkeypatch):
     server_runtime._sensor_worker = None
 
-    async def fake_create_pool(**kwargs):
-        raise AssertionError("create_pool should not be called when worker is None")
-
-    monkeypatch.setattr("asyncpg.create_pool", fake_create_pool)
-
     asyncio.run(server_runtime._init_sensor_storage({"hostname": "db.internal"}))
 
     assert server_runtime._sensor_storage_pool is None
@@ -153,10 +155,14 @@ def test_init_sensor_storage_logs_and_swallows_errors(monkeypatch, caplog):
     fake_worker = _FakeSensorWorker()
     server_runtime._sensor_worker = fake_worker
 
-    async def failing_create_pool(**kwargs):
-        raise RuntimeError("connection refused")
+    class _FailingPool(_FakeConnectionPool):
+        async def initialize(self, config):
+            raise RuntimeError("connection refused")
 
-    monkeypatch.setattr("asyncpg.create_pool", failing_create_pool)
+    monkeypatch.setattr(
+        "marie.storage.database.postgres_pool.AsyncPostgresConnectionPool",
+        _FailingPool,
+    )
 
     # Should not raise.
     asyncio.run(server_runtime._init_sensor_storage({"hostname": "db.internal"}))

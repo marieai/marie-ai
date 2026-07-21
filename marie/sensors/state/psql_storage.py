@@ -1,7 +1,7 @@
 """
 PostgreSQL implementation of sensor state storage.
 
-This implementation uses asyncpg for async database operations
+This implementation uses psycopg 3 for async database operations
 and follows the patterns established in the scheduler repository.
 """
 
@@ -21,7 +21,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
     """
     PostgreSQL storage implementation for sensor state.
 
-    Uses connection pool from asyncpg for efficient async operations.
+    Uses a psycopg 3 async connection pool for efficient async operations.
     All sensor data is stored in the marie_scheduler schema.
     """
 
@@ -31,7 +31,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         """
         Initialize the storage with a connection pool.
 
-        :param pool: asyncpg connection pool
+        :param pool: psycopg 3 async connection pool
         :param schema: Database schema name
         """
         self._pool = pool
@@ -53,7 +53,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         """
         Initialize the singleton instance.
 
-        :param pool: asyncpg connection pool
+        :param pool: psycopg 3 async connection pool
         :param schema: Database schema name
         :return: The storage instance
         """
@@ -648,7 +648,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
     # =========================================================================
 
     def _row_to_dict(self, row) -> Optional[Dict[str, Any]]:
-        """Convert an asyncpg Record to a dictionary."""
+        """Convert a database row to a dictionary."""
         if row is None:
             return None
 

@@ -1,11 +1,9 @@
 import asyncio
 import json
-import select
 import time
 from typing import Any, Callable, Dict, Optional
 
-import psycopg2
-import psycopg2.extensions
+import psycopg
 
 from marie.excepts import RuntimeFailToStart
 from marie.logging_core.logger import MarieLogger
@@ -31,7 +29,7 @@ class NotificationService:
         self.running = False
 
         # Dedicated connection for LISTEN operations (cannot use pool)
-        self._listen_connection: Optional[psycopg2.extensions.connection] = None
+        self._listen_connection: Optional[psycopg.Connection] = None
         self._listener_task: Optional[asyncio.Task] = None
 
         # Map of channel names to handler callbacks
@@ -79,10 +77,10 @@ class NotificationService:
             self.logger.info("Setting up PostgreSQL LISTEN connection")
 
             config = self.config
-            self._listen_connection = psycopg2.connect(
+            self._listen_connection = psycopg.connect(
                 user=config["username"],
                 password=config["password"],
-                database=config["database"],
+                dbname=config["database"],
                 host=config["hostname"],
                 port=int(config["port"]),
                 options='-c timezone=UTC',
@@ -93,10 +91,7 @@ class NotificationService:
                 keepalives_count=5,
             )
 
-            # Set isolation level to autocommit for LISTEN/NOTIFY
-            self._listen_connection.set_isolation_level(
-                psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
-            )
+            self._listen_connection.autocommit = True
 
             # Register LISTEN for all configured channels
             cursor = self._listen_connection.cursor()
@@ -222,53 +217,41 @@ class NotificationService:
                         ):
                             raise RuntimeError("LISTEN connection is closed")
 
-                        ready = await loop.run_in_executor(
-                            None,
-                            lambda: select.select(
-                                [self._listen_connection], [], [], self._select_timeout
-                            ),
+                        notify = await loop.run_in_executor(
+                            None, self._next_notification
                         )
-
-                        if ready == ([], [], []):
+                        if notify is None:
                             continue
+                        self._last_notification_at = time.monotonic()
 
-                        await loop.run_in_executor(None, self._listen_connection.poll)
-
-                        while self._listen_connection.notifies:
-                            notify = self._listen_connection.notifies.pop(0)
-                            self._last_notification_at = time.monotonic()
-
-                            try:
-                                payload = json.loads(notify.payload)
-                                channel = notify.channel
-
-                                self.logger.debug(
-                                    f"Received notification on channel '{channel}': {payload}"
-                                )
-
-                                if channel in self._handlers:
-                                    handler = self._handlers[channel]
-                                    try:
-                                        await handler(payload)
-                                    except Exception as e:
-                                        self.logger.error(
-                                            f"Error in handler for channel '{channel}': {e}",
-                                            exc_info=True,
-                                        )
-                                else:
-                                    self.logger.warning(
-                                        f"No handler registered for channel '{channel}'"
+                        try:
+                            payload = json.loads(notify.payload)
+                            channel = notify.channel
+                            self.logger.debug(
+                                f"Received notification on channel '{channel}': {payload}"
+                            )
+                            if channel in self._handlers:
+                                handler = self._handlers[channel]
+                                try:
+                                    await handler(payload)
+                                except Exception as e:
+                                    self.logger.error(
+                                        f"Error in handler for channel '{channel}': {e}",
+                                        exc_info=True,
                                     )
+                            else:
+                                self.logger.warning(
+                                    f"No handler registered for channel '{channel}'"
+                                )
 
-                            except json.JSONDecodeError as e:
-                                self.logger.error(
-                                    f"Failed to parse notification payload: {e}"
-                                )
-                            except Exception as e:
-                                self.logger.error(
-                                    f"Error processing notification: {e}",
-                                    exc_info=True,
-                                )
+                        except json.JSONDecodeError as e:
+                            self.logger.error(
+                                f"Failed to parse notification payload: {e}"
+                            )
+                        except Exception as e:
+                            self.logger.error(
+                                f"Error processing notification: {e}", exc_info=True
+                            )
                 except asyncio.CancelledError:
                     self.logger.info("Notification listener task cancelled")
                     raise
@@ -299,6 +282,17 @@ class NotificationService:
             self._connected = False
             await asyncio.get_event_loop().run_in_executor(None, self._close_connection)
 
+    def _next_notification(self) -> Optional[psycopg.Notify]:
+        if self._listen_connection is None or self._listen_connection.closed:
+            raise RuntimeError("LISTEN connection is closed")
+        return next(
+            self._listen_connection.notifies(
+                timeout=self._select_timeout,
+                stop_after=1,
+            ),
+            None,
+        )
+
     async def send_notification(self, channel: str, payload: Dict[str, Any]) -> bool:
         """
         Send a notification to a PostgreSQL channel.
@@ -313,20 +307,16 @@ class NotificationService:
         try:
             # Create temporary connection for sending
             config = self.config
-            conn = psycopg2.connect(
+            with psycopg.connect(
                 user=config["username"],
                 password=config["password"],
-                database=config["database"],
+                dbname=config["database"],
                 host=config["hostname"],
                 port=int(config["port"]),
-            )
-            conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
-
-            cursor = conn.cursor()
-            payload_json = json.dumps(payload)
-            cursor.execute(f"SELECT pg_notify(%s, %s)", (channel, payload_json))
-            cursor.close()
-            conn.close()
+                autocommit=True,
+            ) as conn:
+                payload_json = json.dumps(payload)
+                conn.execute("SELECT pg_notify(%s, %s)", (channel, payload_json))
 
             self.logger.debug(f"Sent notification to channel '{channel}': {payload}")
             return True

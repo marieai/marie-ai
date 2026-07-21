@@ -256,19 +256,11 @@ async def _init_sensor_storage(db_config: Optional[Dict[str, Any]] = None) -> No
         return
 
     try:
-        import asyncpg
-
         from marie.sensors.state.psql_storage import PostgreSQLSensorStorage
+        from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
 
-        pool = await asyncpg.create_pool(
-            host=db_config["hostname"],
-            port=int(db_config["port"]),
-            user=db_config["username"],
-            password=db_config["password"],
-            database=db_config["database"],
-            min_size=db_config.get("min_connections", 1),
-            max_size=db_config.get("max_connections", 10),
-        )
+        pool = AsyncPostgresConnectionPool()
+        await pool.initialize(db_config)
         schema = db_config.get("schema", "marie_scheduler")
         storage = PostgreSQLSensorStorage.initialize(pool, schema)
         _sensor_storage_pool = pool
@@ -283,7 +275,7 @@ async def _init_sensor_storage(db_config: Optional[Dict[str, Any]] = None) -> No
 class _CrossLoopJobScheduler:
     """
     Adapter that lets the SensorWorker (its own thread/event loop) submit jobs
-    to a job scheduler that lives on the gateway's event loop (asyncpg pools
+    to a job scheduler that lives on the gateway's event loop (async pools
     and friends are loop-bound, so the scheduler can't be called directly
     from the worker's loop).
 

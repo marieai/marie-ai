@@ -1,7 +1,7 @@
-"""Database-backed agent tools using asyncpg.
+"""Database-backed agent tools using psycopg 3.
 
 This module provides tools that use PostgreSQL for persistent storage,
-using asyncpg for native async database access.
+using psycopg 3 for native async database access.
 """
 
 from marie.storage.database.agent_tools.base import AsyncDatabaseTool

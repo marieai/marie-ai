@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from marie.agent.tools import ToolMetadata, ToolOutput
 from marie.storage.database.agent_tools.base import AsyncDatabaseTool
-from marie.storage.database.asyncpg_pool import AsyncPostgresPool
+from marie.storage.database.postgres_pool import AsyncPostgresPool
 
 
 class PostgresAction(str, Enum):
@@ -260,5 +260,5 @@ class PostgresTool(AsyncDatabaseTool):
 
     @staticmethod
     def _records_to_dicts(records: list) -> List[Dict[str, Any]]:
-        """Convert asyncpg Records to dictionaries."""
+        """Convert database rows to dictionaries."""
         return [dict(r) for r in records]

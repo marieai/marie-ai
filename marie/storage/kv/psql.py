@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 import asyncio
 
-import psycopg2
+import psycopg
 from uuid_extensions import uuid7str
 from marie.helper import get_or_reuse_loop
 from marie.logging_core.logger import MarieLogger
@@ -248,7 +248,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
 
                 for record in cursor:
                     result.append(record[0])
-            except (Exception, psycopg2.Error) as error:
+            except psycopg.Error as error:
                 self.logger.error(f"Error executing sql statement: {error}")
             finally:
                 self._close_cursor(cursor)

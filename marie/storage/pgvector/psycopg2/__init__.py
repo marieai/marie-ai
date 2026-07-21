@@ -1,52 +1,48 @@
+"""Compatibility pgvector registration using psycopg 3."""
+
 import logging
+
 import numpy as np
-import psycopg2
-from psycopg2.extensions import adapt, new_type, register_adapter, register_type
+import psycopg
+from psycopg.adapt import Dumper, Loader
+from psycopg.pq import Format
+from psycopg.types import TypeInfo
+
 from ..utils import from_db, to_db
 
-__all__ = ['register_vector']
+__all__ = ["register_vector"]
 
 logger = logging.getLogger(__name__)
 
 
-class VectorAdapter(object):
-    def __init__(self, vector):
-        self._vector = vector
+class VectorDumper(Dumper):
+    format = Format.TEXT
 
-    def getquoted(self):
-        return adapt(to_db(self._vector)).getquoted()
+    def dump(self, vector):
+        return to_db(vector).encode("utf-8")
 
 
-def cast_vector(value, cur):
-    return from_db(value)
+class VectorLoader(Loader):
+    format = Format.TEXT
+
+    def load(self, value):
+        if isinstance(value, memoryview):
+            value = value.tobytes()
+        return from_db(value.decode("utf-8"))
 
 
 def register_vector(conn_or_curs=None, raise_on_missing: bool = False):
-    """
-    Register the vector type with psycopg2.
-
-    :param conn_or_curs: A psycopg2 connection or cursor
-    :param raise_on_missing: If True, raise an error when the vector type is not found.
-                             If False (default), log a warning and return False.
-    :return: True if registration succeeded, False if vector type not found
-    """
-    cur = conn_or_curs.cursor() if hasattr(conn_or_curs, 'cursor') else conn_or_curs
-
-    try:
-        cur.execute('SELECT NULL::vector')
-        oid = cur.description[0][1]
-    except psycopg2.errors.UndefinedObject:
+    """Register the vector type with a psycopg 3 connection or cursor."""
+    context = getattr(conn_or_curs, "connection", conn_or_curs)
+    info = TypeInfo.fetch(context, "vector")
+    if info is None:
         if raise_on_missing:
-            raise psycopg2.ProgrammingError('vector type not found in the database')
-        logger.debug(
-            'pgvector extension not installed in database; vector type registration skipped'
-        )
-        # Rollback the failed transaction to keep the connection usable
-        if hasattr(conn_or_curs, 'rollback'):
-            conn_or_curs.rollback()
+            raise psycopg.ProgrammingError("vector type not found in the database")
+        logger.debug("pgvector extension is not installed; registration skipped")
         return False
 
-    vector = new_type((oid,), 'VECTOR', cast_vector)
-    register_type(vector)
-    register_adapter(np.ndarray, VectorAdapter)
+    info.register(context)
+    dumper = type("VectorDumper", (VectorDumper,), {"oid": info.oid})
+    context.adapters.register_dumper(np.ndarray, dumper)
+    context.adapters.register_loader(info.oid, VectorLoader)
     return True

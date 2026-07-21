@@ -15,7 +15,7 @@ from marie.mcp.models import (
     MCPTool,
     MCPTransport,
 )
-from marie.storage.database.asyncpg_pool import AsyncPostgresPool
+from marie.storage.database.postgres_pool import AsyncPostgresPool
 
 
 class MCPServerRepository:

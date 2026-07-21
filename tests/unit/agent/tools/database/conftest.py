@@ -11,7 +11,7 @@ import pytest
 
 
 class MockRecord(dict):
-    """Mock asyncpg.Record that supports both dict and attribute access."""
+    """Mock database row that supports both dict and attribute access."""
 
     def __getattr__(self, name):
         try:
@@ -144,7 +144,7 @@ def db_config():
 @pytest.fixture
 def mock_pool_singleton(mock_pool):
     """Patch the AsyncPostgresPool singleton to use mock pool."""
-    with patch("marie.storage.database.asyncpg_pool.AsyncPostgresPool.get_instance") as mock_get:
+    with patch("marie.storage.database.postgres_pool.AsyncPostgresPool.get_instance") as mock_get:
         mock_get.return_value = mock_pool
         yield mock_pool
 

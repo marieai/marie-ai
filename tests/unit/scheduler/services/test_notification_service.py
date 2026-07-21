@@ -1,6 +1,5 @@
 import asyncio
 
-import psycopg2
 import pytest
 
 import marie.scheduler.services.notification_service as notification_service_module
@@ -24,19 +23,16 @@ class FakeConnection:
         self.closed = False
         self.notifies = []
         self.cursor_instance = FakeCursor()
-        self.isolation_level = None
+        self.autocommit = False
 
     def cursor(self):
         return self.cursor_instance
 
-    def set_isolation_level(self, isolation_level):
-        self.isolation_level = isolation_level
-
     def close(self):
         self.closed = True
 
-    def poll(self):
-        return None
+    def notifies(self, **_kwargs):
+        return iter(())
 
 
 @pytest.fixture
@@ -62,7 +58,7 @@ def test_setup_connection_uses_keepalive_and_registers_channels(monkeypatch, con
         captured.update(kwargs)
         return connection
 
-    monkeypatch.setattr(notification_service_module.psycopg2, "connect", fake_connect)
+    monkeypatch.setattr(notification_service_module.psycopg, "connect", fake_connect)
 
     service._setup_connection()
 
@@ -71,7 +67,7 @@ def test_setup_connection_uses_keepalive_and_registers_channels(monkeypatch, con
     assert captured["keepalives_interval"] == 10
     assert captured["keepalives_count"] == 5
     assert captured["application_name"] == "scheduler-test_listener"
-    assert connection.isolation_level == psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
+    assert connection.autocommit is True
     assert connection.cursor_instance.executed == ["LISTEN dag_state_changed;"]
 
 
@@ -99,14 +95,14 @@ async def test_notification_listener_reconnects_after_runtime_failure(
             service._listen_connection.closed = True
         service._listen_connection = None
 
-    select_calls = {"count": 0}
+    notification_calls = {"count": 0}
 
-    def fake_select(_read, _write, _except, _timeout):
-        select_calls["count"] += 1
-        if select_calls["count"] == 1:
+    def fake_next_notification():
+        notification_calls["count"] += 1
+        if notification_calls["count"] == 1:
             raise RuntimeError("socket gone")
         service.running = False
-        return ([], [], [])
+        return None
 
     real_sleep = asyncio.sleep
 
@@ -116,7 +112,7 @@ async def test_notification_listener_reconnects_after_runtime_failure(
 
     monkeypatch.setattr(service, "_setup_connection", fake_setup)
     monkeypatch.setattr(service, "_close_connection", fake_close)
-    monkeypatch.setattr(notification_service_module.select, "select", fake_select)
+    monkeypatch.setattr(service, "_next_notification", fake_next_notification)
     monkeypatch.setattr(notification_service_module.asyncio, "sleep", fake_sleep)
 
     await service._listen_for_notifications()

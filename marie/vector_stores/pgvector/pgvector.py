@@ -6,7 +6,7 @@ It supports unified text + image embeddings via jina-embeddings-v4 in the same s
 Key features:
 - Single unified table for text + images
 - HNSW index for fast similarity search
-- Async support via asyncpg
+- Async support via psycopg 3
 - Metadata filtering
 - Source-based filtering for multi-tenant RAG
 - Index (collection) support for organizing documents
@@ -111,26 +111,21 @@ class PGVectorStore(BasePydanticVectorStore):
 
     @property
     def client(self) -> Any:
-        """Get the asyncpg connection pool."""
+        """Get the psycopg 3 connection pool."""
         return self._pool
 
     async def _ensure_pool(self) -> None:
         """Ensure connection pool is created."""
         if self._pool is None:
-            try:
-                import asyncpg
+            from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
 
-                self._pool = await asyncpg.create_pool(
-                    self.connection_string,
-                    min_size=2,
-                    max_size=10,
-                )
-                logger.info(f"Created asyncpg connection pool for {self.table_name}")
-            except ImportError:
-                raise ImportError(
-                    "asyncpg is required for PGVectorStore. "
-                    "Install with: uv add asyncpg"
-                )
+            self._pool = AsyncPostgresConnectionPool()
+            await self._pool.initialize_dsn(
+                self.connection_string,
+                min_size=2,
+                max_size=10,
+            )
+            logger.info(f"Created psycopg 3 connection pool for {self.table_name}")
 
     async def initialize(self) -> None:
         """Initialize the vector store (create table and indexes).
@@ -1135,7 +1130,7 @@ class PGVectorStore(BasePydanticVectorStore):
         fetch_k = top_k * 2  # Fetch more for fusion
 
         # Each statement binds only the parameters its SQL references —
-        # asyncpg raises IndeterminateDatatypeError for bound-but-unused
+        # PostgreSQL rejects bound-but-unused parameters in prepared queries.
         # placeholders, so vector and text queries get separate param lists
         # ($1 = query term, $2 = limit, $3.. = shared filters).
         def _build_where(start_idx: int) -> tuple[str, List[Any]]:

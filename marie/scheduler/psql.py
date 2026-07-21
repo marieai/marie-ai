@@ -9,7 +9,7 @@ from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from math import inf
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import psycopg
 

@@ -29,17 +29,8 @@ except ImportError:  # pragma: no cover - requests is optional
 
 try:  # pragma: no cover - environment-dependent import
     import psycopg  # type: ignore[import-not-found]
-
-    PSYCOPG_DRIVER = "psycopg"
 except ImportError:  # pragma: no cover - environment-dependent import
     psycopg = None
-    PSYCOPG_DRIVER = None
-
-if psycopg is None:  # pragma: no cover - environment-dependent import
-    try:
-        import psycopg2  # type: ignore[import-not-found]
-    except ImportError:  # pragma: no cover - environment-dependent import
-        psycopg2 = None
 
 
 TOOL_VERSION = "0.1.0"
@@ -258,19 +249,14 @@ def connect_db(args: argparse.Namespace):
     if args.db_password:
         kwargs["password"] = args.db_password
 
-    if PSYCOPG_DRIVER == "psycopg" and psycopg is not None:  # pragma: no branch
+    if psycopg is not None:  # pragma: no branch
         conn = psycopg.connect(**kwargs)
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute("SET default_transaction_read_only = on")
         return conn
 
-    if psycopg2 is not None:  # pragma: no branch
-        conn = psycopg2.connect(**kwargs)
-        conn.set_session(readonly=True, autocommit=True)
-        return conn
-
-    raise RuntimeError("No PostgreSQL driver available (psycopg or psycopg2 required)")
+    raise RuntimeError("psycopg is required for PostgreSQL diagnostics")
 
 
 def run_query(
