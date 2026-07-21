@@ -10,6 +10,9 @@ from marie.job.common import JobInfo, JobStatus
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.psql import PostgreSQLJobScheduler
 from marie.scheduler.repository import JobRepository
+from marie.scheduler.services.attempt_lifecycle_service import (
+    AttemptLifecycleService,
+)
 from marie.scheduler.state import WorkState
 
 JOB_ID = "00000000-0000-0000-0000-000000000001"
@@ -37,15 +40,29 @@ def build_scheduler(
     scheduler.repository = SimpleNamespace(
         cancel_job=AsyncMock(return_value=1),
         cancel_job_attempt=AsyncMock(return_value=cancelled_ids),
+        record_job_attempt_terminal=AsyncMock(),
     )
     scheduler._status_update_lock = AsyncJobLock()
     scheduler._job_cache = {}
     scheduler.frontier = SimpleNamespace(on_job_cancelled=AsyncMock())
-    scheduler._record_terminal_attempt_audit = AsyncMock()
     scheduler._scheduler_counter = MagicMock()
     scheduler._ha_trace_fields = MagicMock(return_value={})
     scheduler.dag_service = SimpleNamespace(resolve_dag_status_with_retry=AsyncMock())
     scheduler.notify_event = AsyncMock()
+    scheduler.lease_owner = "scheduler"
+    scheduler.gateway_instance_id = "gateway"
+    scheduler.attempt_lifecycle_service = AttemptLifecycleService(
+        repository=scheduler.repository,
+        frontier=scheduler.frontier,
+        dag_service=scheduler.dag_service,
+        control_flow_service=MagicMock(),
+        status_update_lock=scheduler._status_update_lock,
+        job_cache=scheduler._job_cache,
+        scheduler_lease_owner=scheduler.lease_owner,
+        gateway_instance_id=scheduler.gateway_instance_id,
+        notify_callback=scheduler.notify_event,
+        counter_callback=scheduler._scheduler_counter,
+    )
     return scheduler
 
 
@@ -91,7 +108,8 @@ async def test_stale_stopped_event_does_not_cancel_current_attempt() -> None:
     scheduler.frontier.on_job_cancelled.assert_not_awaited()
     scheduler.dag_service.resolve_dag_status_with_retry.assert_not_awaited()
     assert (
-        scheduler._record_terminal_attempt_audit.await_args.kwargs["accepted"] is False
+        scheduler.repository.record_job_attempt_terminal.await_args.kwargs["accepted"]
+        is False
     )
     scheduler._scheduler_counter.assert_called_once()
 
@@ -116,7 +134,8 @@ async def test_current_stopped_event_cancels_after_committed_match() -> None:
     assert scheduler._job_cache == {JOB_ID: work_item}
     scheduler.frontier.on_job_cancelled.assert_awaited_once_with(JOB_ID)
     assert (
-        scheduler._record_terminal_attempt_audit.await_args.kwargs["accepted"] is True
+        scheduler.repository.record_job_attempt_terminal.await_args.kwargs["accepted"]
+        is True
     )
     scheduler.dag_service.resolve_dag_status_with_retry.assert_awaited_once()
     scheduler.notify_event.assert_awaited_once_with()

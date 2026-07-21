@@ -186,7 +186,7 @@ async def test_close_runtime_resources_closes_async_pool() -> None:
     assert scheduler._resources_closed
 
 
-def test_control_flow_service_rebuild_uses_current_runtime_resources() -> None:
+def test_scheduler_services_rebuild_with_current_runtime_resources() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
     scheduler.repository = MagicMock()
     scheduler.frontier = MagicMock()
@@ -198,15 +198,30 @@ def test_control_flow_service_rebuild_uses_current_runtime_resources() -> None:
     scheduler.run_ttl_seconds = 60
     scheduler.gateway_instance_id = 'gateway-1'
     scheduler.notify_event = AsyncMock(return_value=True)
+    scheduler._scheduler_counter = MagicMock()
 
-    original_service = scheduler._build_control_flow_service()
+    original_control_flow_service = scheduler._build_control_flow_service()
+    scheduler.control_flow_service = original_control_flow_service
+    original_attempt_service = scheduler._build_attempt_lifecycle_service()
     scheduler.repository = MagicMock()
     scheduler.dag_service = MagicMock()
 
-    service = scheduler._build_control_flow_service()
+    control_flow_service = scheduler._build_control_flow_service()
+    scheduler.control_flow_service = control_flow_service
+    attempt_service = scheduler._build_attempt_lifecycle_service()
 
-    assert service.repository is scheduler.repository
-    assert service.dag_service is scheduler.dag_service
-    assert service.frontier is scheduler.frontier
-    assert service.repository is not original_service.repository
-    assert service.dag_service is not original_service.dag_service
+    assert control_flow_service.repository is scheduler.repository
+    assert control_flow_service.dag_service is scheduler.dag_service
+    assert control_flow_service.frontier is scheduler.frontier
+    assert (
+        control_flow_service.repository is not original_control_flow_service.repository
+    )
+    assert (
+        control_flow_service.dag_service
+        is not original_control_flow_service.dag_service
+    )
+    assert attempt_service.repository is scheduler.repository
+    assert attempt_service.dag_service is scheduler.dag_service
+    assert attempt_service.control_flow_service is control_flow_service
+    assert attempt_service.repository is not original_attempt_service.repository
+    assert attempt_service.dag_service is not original_attempt_service.dag_service

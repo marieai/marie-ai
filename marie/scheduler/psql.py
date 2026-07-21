@@ -45,6 +45,8 @@ from marie.scheduler.planner_util import (
 from marie.scheduler.repository import JobRepository
 from marie.scheduler.scheduler_heartbeat import SchedulerHeartbeat
 from marie.scheduler.services import (
+    TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
+    AttemptLifecycleService,
     ControlFlowExecutionService,
     DAGManagementService,
     MaintenanceService,
@@ -82,7 +84,6 @@ SYNC_POLL_PERIOD = 60.0  # 60s — safety net, not primary dispatch path
 DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
 RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL = "run_lease_extend_stale_attempt_total"
-TERMINAL_EVENT_STALE_ATTEMPT_TOTAL = "terminal_event_stale_attempt_total"
 RUN_LEASE_RECOVERED_RETRY_TOTAL = "run_lease_recovered_retry_total"
 RUN_LEASE_RECOVERED_FAILED_TOTAL = "run_lease_recovered_failed_total"
 
@@ -349,6 +350,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             config.get("gateway_instance_id") or self.lease_owner
         )
         self.control_flow_service = self._build_control_flow_service()
+        self.attempt_lifecycle_service = self._build_attempt_lifecycle_service()
         self.logger.info(
             f"Lease config: lease_ttl_seconds={self.lease_ttl_seconds}, "
             f"run_ttl_seconds={self.run_ttl_seconds}, owner='{self.lease_owner}', "
@@ -385,6 +387,20 @@ class PostgreSQLJobScheduler(JobScheduler):
             notify_callback=self.notify_event,
         )
 
+    def _build_attempt_lifecycle_service(self) -> AttemptLifecycleService:
+        return AttemptLifecycleService(
+            repository=self.repository,
+            frontier=self.frontier,
+            dag_service=self.dag_service,
+            control_flow_service=self.control_flow_service,
+            status_update_lock=self._status_update_lock,
+            job_cache=self._job_cache,
+            scheduler_lease_owner=self.lease_owner,
+            gateway_instance_id=self.gateway_instance_id,
+            notify_callback=self.notify_event,
+            counter_callback=self._scheduler_counter,
+        )
+
     def _ha_trace_fields(self) -> dict[str, str]:
         return {
             "gateway_instance_id": self.gateway_instance_id,
@@ -407,144 +423,6 @@ class PostgreSQLJobScheduler(JobScheduler):
         counters[name] += 1
         scheduler_trace(name, count=counters[name], **fields)
 
-    async def _record_terminal_attempt_audit(
-        self,
-        *,
-        job_id: str,
-        work_item: WorkInfo,
-        status: JobStatus,
-        run_owner: str,
-        run_attempt_id: str,
-        terminal_work_state: str | None,
-        source: str,
-        accepted: bool,
-        reject_reason: str | None = None,
-    ) -> None:
-        try:
-            await self.repository.record_job_attempt_terminal(
-                job_id=job_id,
-                job_name=work_item.name,
-                dag_id=str(work_item.dag_id),
-                run_owner=run_owner,
-                run_attempt_id=run_attempt_id,
-                scheduler_lease_owner=self.lease_owner,
-                gateway_instance_id=self.gateway_instance_id,
-                terminal_status=status.value,
-                terminal_work_state=terminal_work_state,
-                source=source,
-                accepted=accepted,
-                reject_reason=reject_reason,
-            )
-        except Exception as audit_error:
-            scheduler_trace(
-                "job_attempt_audit_failed",
-                job_id=job_id,
-                dag_id=work_item.dag_id,
-                run_owner=run_owner,
-                run_attempt_id=run_attempt_id,
-                source=source,
-                accepted=accepted,
-                error=repr(audit_error),
-                **self._ha_trace_fields(),
-            )
-            self.logger.warning(
-                f"Failed to record terminal audit for attempt {run_attempt_id}: {audit_error}"
-            )
-
-    async def _cancel_stopped_attempt(
-        self,
-        job_id: str,
-        work_item: WorkInfo,
-        *,
-        run_owner: str | None,
-        run_attempt_id: str | None,
-        source: str,
-    ) -> bool:
-        if not run_owner or not run_attempt_id:
-            scheduler_trace(
-                "job_terminal_attempt_rejected",
-                job_id=job_id,
-                dag_id=work_item.dag_id,
-                status=JobStatus.STOPPED.value,
-                reason="missing_attempt",
-                source=source,
-                **self._ha_trace_fields(),
-            )
-            self.logger.warning(
-                f"Ignoring stopped job event without run attempt: job_id={job_id}"
-            )
-            return False
-
-        async with self._status_update_lock[job_id]:
-            cancelled_ids = await self.repository.cancel_job_attempt(
-                job_id=job_id,
-                queue_name=work_item.name,
-                run_owner=run_owner,
-                run_attempt_id=run_attempt_id,
-                schema=DEFAULT_SCHEMA,
-            )
-
-        if job_id not in cancelled_ids:
-            scheduler_trace(
-                "job_terminal_attempt_rejected",
-                job_id=job_id,
-                dag_id=work_item.dag_id,
-                status=JobStatus.STOPPED.value,
-                run_owner=run_owner,
-                run_attempt_id=run_attempt_id,
-                reason="db_update_zero_rows",
-                source=source,
-                **self._ha_trace_fields(),
-            )
-            await self._record_terminal_attempt_audit(
-                job_id=job_id,
-                work_item=work_item,
-                status=JobStatus.STOPPED,
-                run_owner=run_owner,
-                run_attempt_id=run_attempt_id,
-                terminal_work_state=None,
-                source=source,
-                accepted=False,
-                reject_reason="db_update_zero_rows",
-            )
-            self._scheduler_counter(
-                TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
-                job_id=job_id,
-                dag_id=work_item.dag_id,
-                status=JobStatus.STOPPED.value,
-                run_owner=run_owner,
-                run_attempt_id=run_attempt_id,
-                source=source,
-            )
-            return False
-
-        work_item.state = WorkState.CANCELLED
-        work_item.run_owner = None
-        work_item.run_attempt_id = None
-        self._job_cache[job_id] = work_item
-        await self._record_terminal_attempt_audit(
-            job_id=job_id,
-            work_item=work_item,
-            status=JobStatus.STOPPED,
-            run_owner=run_owner,
-            run_attempt_id=run_attempt_id,
-            terminal_work_state=WorkState.CANCELLED.value,
-            source=source,
-            accepted=True,
-        )
-        scheduler_trace(
-            "job_terminal_attempt_accepted",
-            job_id=job_id,
-            dag_id=work_item.dag_id,
-            status=JobStatus.STOPPED.value,
-            run_owner=run_owner,
-            run_attempt_id=run_attempt_id,
-            source=source,
-            **self._ha_trace_fields(),
-        )
-        await self.frontier.on_job_cancelled(job_id)
-        return True
-
     async def handle_job_event(self, event_type: str, message: Any):
         """Process a job event while the scheduler is accepting work."""
         if not getattr(self, "running", True):
@@ -559,27 +437,6 @@ class PostgreSQLJobScheduler(JobScheduler):
         finally:
             if task is not None and job_event_tasks is not None:
                 job_event_tasks.discard(task)
-
-    @staticmethod
-    def _job_failure_metadata(
-        *, message: Any, runtime_env: Any, source: str
-    ) -> Dict[str, Any]:
-        metadata: Dict[str, Any] = {"failure_source": source}
-        if message:
-            metadata["error_message"] = str(message)
-        if not isinstance(runtime_env, dict):
-            return metadata
-
-        error = runtime_env.get("error")
-        if isinstance(error, dict):
-            metadata["error"] = {
-                key: error[key]
-                for key in ("type", "message", "filename", "name", "line_no")
-                if key in error
-            }
-        elif error:
-            metadata["error"] = str(error)
-        return metadata
 
     async def _handle_job_event(self, event_type: str, message: Any):
         """
@@ -604,211 +461,28 @@ class PostgreSQLJobScheduler(JobScheduler):
                 self.logger.error(f"WorkItem not found: {job_id}")
                 raise ValueError(f"WorkItem not found: {job_id}")
 
-            now = datetime.now(timezone.utc)
-            work_state = convert_job_status_to_work_state(status)
             run_owner = message.get("run_owner")
             run_attempt_id = message.get("run_attempt_id")
 
-            # Track actual work state for failures (may be 'retry' or 'failed')
-            actual_work_state: Optional[str] = None
-
             if status == JobStatus.PENDING:
                 self.logger.debug(f"Job pending : {job_id}")
-            elif status == JobStatus.SUCCEEDED:
-                if not run_owner or not run_attempt_id:
-                    scheduler_trace(
-                        "job_terminal_attempt_rejected",
-                        job_id=job_id,
-                        dag_id=work_item.dag_id,
-                        status=status.value,
-                        reason="missing_attempt",
-                        **self._ha_trace_fields(),
-                    )
-                    self.logger.warning(
-                        f"Ignoring terminal job event without run attempt: job_id={job_id}, status={status}"
-                    )
-                    return
-
-                guardrail_commit = (
-                    await self.control_flow_service.commit_guardrail_route_if_needed(
-                        job_id,
-                        work_item,
-                        run_owner=run_owner,
-                        run_attempt_id=run_attempt_id,
-                    )
-                )
-                if guardrail_commit is None:
-                    completed = await self.complete(
-                        job_id,
-                        work_item,
-                        run_owner=run_owner,
-                        run_attempt_id=run_attempt_id,
-                    )
-                    reject_reason = "db_update_zero_rows"
-                else:
-                    committed, _, reject_reason = guardrail_commit
-                    completed = 1 if committed else 0
-                if completed <= 0:
-                    scheduler_trace(
-                        "job_terminal_attempt_rejected",
-                        job_id=job_id,
-                        dag_id=work_item.dag_id,
-                        status=status.value,
-                        run_owner=run_owner,
-                        run_attempt_id=run_attempt_id,
-                        reason=reject_reason or "db_update_zero_rows",
-                        **self._ha_trace_fields(),
-                    )
-                    await self._record_terminal_attempt_audit(
-                        job_id=job_id,
-                        work_item=work_item,
-                        status=status,
-                        run_owner=run_owner,
-                        run_attempt_id=run_attempt_id,
-                        terminal_work_state=None,
-                        source="job_event",
-                        accepted=False,
-                        reject_reason=reject_reason or "db_update_zero_rows",
-                    )
-                    self._scheduler_counter(
-                        TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
-                        job_id=job_id,
-                        dag_id=work_item.dag_id,
-                        status=status.value,
-                        run_owner=run_owner,
-                        run_attempt_id=run_attempt_id,
-                        source="job_event",
-                    )
-                    return
-                work_item.state = WorkState.COMPLETED
-                self._job_cache[job_id] = work_item
-                await self._record_terminal_attempt_audit(
-                    job_id=job_id,
-                    work_item=work_item,
-                    status=status,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                    terminal_work_state=WorkState.COMPLETED.value,
-                    source="job_event",
-                    accepted=True,
-                )
-                scheduler_trace(
-                    "job_terminal_attempt_accepted",
-                    job_id=job_id,
-                    dag_id=work_item.dag_id,
-                    status=status.value,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                    **self._ha_trace_fields(),
-                )
-                if guardrail_commit is None:
-                    await self.control_flow_service.handle_successful_job_completion(
-                        job_id, work_item
-                    )
-            elif status == JobStatus.FAILED:
-                if not run_owner or not run_attempt_id:
-                    scheduler_trace(
-                        "job_terminal_attempt_rejected",
-                        job_id=job_id,
-                        dag_id=work_item.dag_id,
-                        status=status.value,
-                        reason="missing_attempt",
-                        **self._ha_trace_fields(),
-                    )
-                    self.logger.warning(
-                        f"Ignoring failed job event without run attempt: job_id={job_id}"
-                    )
-                    return
-
+            elif status.is_terminal():
                 replace_kwargs = message.get("jobinfo_replace_kwargs")
                 runtime_env = (
                     replace_kwargs.get("runtime_env")
                     if isinstance(replace_kwargs, dict)
                     else None
                 )
-                failure_metadata = self._job_failure_metadata(
+                await self.attempt_lifecycle_service.transition_terminal(
+                    job_id,
+                    work_item,
+                    status,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    source="job_event",
                     message=message.get("message"),
                     runtime_env=runtime_env,
-                    source="job_event",
                 )
-                self.logger.error(
-                    f"Job failure received: job_id={job_id} "
-                    f"dag_id={work_item.dag_id} details={failure_metadata}"
-                )
-                actual_work_state = await self.fail(
-                    job_id,
-                    work_item,
-                    failure_metadata,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                )
-                if actual_work_state is None:
-                    scheduler_trace(
-                        "job_terminal_attempt_rejected",
-                        job_id=job_id,
-                        dag_id=work_item.dag_id,
-                        status=status.value,
-                        run_owner=run_owner,
-                        run_attempt_id=run_attempt_id,
-                        reason="db_update_zero_rows",
-                        **self._ha_trace_fields(),
-                    )
-                    await self._record_terminal_attempt_audit(
-                        job_id=job_id,
-                        work_item=work_item,
-                        status=status,
-                        run_owner=run_owner,
-                        run_attempt_id=run_attempt_id,
-                        terminal_work_state=None,
-                        source="job_event",
-                        accepted=False,
-                        reject_reason="db_update_zero_rows",
-                    )
-                    self._scheduler_counter(
-                        TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
-                        job_id=job_id,
-                        dag_id=work_item.dag_id,
-                        status=status.value,
-                        run_owner=run_owner,
-                        run_attempt_id=run_attempt_id,
-                        source="job_event",
-                    )
-                    return
-                work_item.state = WorkState(actual_work_state)
-                self._job_cache[job_id] = work_item
-                await self._record_terminal_attempt_audit(
-                    job_id=job_id,
-                    work_item=work_item,
-                    status=status,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                    terminal_work_state=actual_work_state,
-                    source="job_event",
-                    accepted=True,
-                )
-                scheduler_trace(
-                    "job_terminal_attempt_accepted",
-                    job_id=job_id,
-                    dag_id=work_item.dag_id,
-                    status=status.value,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                    final_state=actual_work_state,
-                    **self._ha_trace_fields(),
-                )
-                if actual_work_state == WorkState.RETRY.value:
-                    await self.frontier.on_job_retry(job_id, work_item)
-                else:
-                    await self.frontier.on_job_failed(job_id)
-            elif status == JobStatus.STOPPED:
-                if not await self._cancel_stopped_attempt(
-                    job_id,
-                    work_item,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                    source="job_event",
-                ):
-                    return
             elif status == JobStatus.RUNNING:
                 if not run_owner or not run_attempt_id:
                     scheduler_trace(
@@ -849,6 +523,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                     )
                     return
 
+                work_state = convert_job_status_to_work_state(status)
                 work_item.state = work_state
                 work_item.run_owner = run_owner
                 work_item.run_attempt_id = run_attempt_id
@@ -856,50 +531,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 await self.frontier.update_job_state(job_id, work_state)
                 self.logger.debug(f"Job running : {job_id}")
             else:
-                self.logger.error(f"Unhandled job status: {status}. Marking as FAILED.")
-                actual_work_state = await self.fail(
-                    job_id,
-                    work_item,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                )  # Fail-safe
-                if actual_work_state is None:
-                    return
-                work_item.state = WorkState(actual_work_state)
-                self._job_cache[job_id] = work_item
-                if actual_work_state == WorkState.RETRY.value:
-                    await self.frontier.on_job_retry(job_id, work_item)
-                else:
-                    await self.frontier.on_job_failed(job_id)
-
-            # Only resolve DAG status for truly terminal states
-            # For FAILED jobs, check if they went to 'failed' (not 'retry')
-            is_truly_terminal = (
-                status == JobStatus.SUCCEEDED
-                or status == JobStatus.STOPPED
-                or (
-                    status == JobStatus.FAILED
-                    and actual_work_state == WorkState.FAILED.value
-                )
-            )
-
-            if is_truly_terminal:
-                self.logger.debug(
-                    f"Job is in terminal state {status} (work_state={actual_work_state}), job_id: {job_id}"
-                )
-
-                self._status_update_lock.release(job_id)
-                await self.dag_service.resolve_dag_status_with_retry(
-                    job_id,
-                    work_item,
-                    source="job_event",
-                )
-                await self.notify_event()
-            elif (
-                status == JobStatus.FAILED
-                and actual_work_state == WorkState.RETRY.value
-            ):
-                self.logger.info(f"Job {job_id} will be retried, DAG remains active")
+                self.logger.error(f"Unhandled job status: {status}")
         except Exception as e:
             self.logger.error(
                 f"Error handling job event {event_type} for job {job_id}: {e}"
@@ -2212,6 +1844,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             maintenance_interval=self._maintenance_interval,
         )
         self.control_flow_service = self._build_control_flow_service()
+        self.attempt_lifecycle_service = self._build_attempt_lifecycle_service()
         self.heartbeat = SchedulerHeartbeat(
             self, self.heartbeat_config, self.repository, self.logger
         )
@@ -3578,229 +3211,17 @@ class PostgreSQLJobScheduler(JobScheduler):
             )
             return False
 
-        meta = {"synced": True}
-        actual_work_state: Optional[str] = None
-        run_owner = job_info.run_owner
-        run_attempt_id = job_info.run_attempt_id
-
-        if job_info.status == JobStatus.SUCCEEDED:
-            if not run_owner or not run_attempt_id:
-                scheduler_trace(
-                    "job_terminal_attempt_rejected",
-                    job_id=job_id,
-                    dag_id=work_item.dag_id,
-                    status=job_info.status.value,
-                    reason="sync_missing_attempt",
-                    **self._ha_trace_fields(),
-                )
-                return False
-            guardrail_commit = (
-                await self.control_flow_service.commit_guardrail_route_if_needed(
-                    job_id,
-                    work_item,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                )
-            )
-            if guardrail_commit is None:
-                completed = await self.complete(
-                    job_id,
-                    work_item,
-                    meta,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                )
-                reject_reason = "sync_db_update_zero_rows"
-            else:
-                committed, _, reject_reason = guardrail_commit
-                completed = 1 if committed else 0
-            if completed <= 0:
-                scheduler_trace(
-                    "job_terminal_attempt_rejected",
-                    job_id=job_id,
-                    dag_id=work_item.dag_id,
-                    status=job_info.status.value,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                    reason=reject_reason or "sync_db_update_zero_rows",
-                    **self._ha_trace_fields(),
-                )
-                await self._record_terminal_attempt_audit(
-                    job_id=job_id,
-                    work_item=work_item,
-                    status=job_info.status,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                    terminal_work_state=None,
-                    source="storage_sync",
-                    accepted=False,
-                    reject_reason=reject_reason or "sync_db_update_zero_rows",
-                )
-                self._scheduler_counter(
-                    TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
-                    job_id=job_id,
-                    dag_id=work_item.dag_id,
-                    status=job_info.status.value,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                    source="storage_sync",
-                )
-                return False
-            await self._record_terminal_attempt_audit(
-                job_id=job_id,
-                work_item=work_item,
-                status=job_info.status,
-                run_owner=run_owner,
-                run_attempt_id=run_attempt_id,
-                terminal_work_state=WorkState.COMPLETED.value,
-                source="storage_sync",
-                accepted=True,
-            )
-            scheduler_trace(
-                "job_terminal_attempt_accepted",
-                job_id=job_id,
-                dag_id=work_item.dag_id,
-                status=job_info.status.value,
-                run_owner=run_owner,
-                run_attempt_id=run_attempt_id,
-                source="storage_sync",
-                **self._ha_trace_fields(),
-            )
-            if guardrail_commit is None:
-                await self.control_flow_service.handle_successful_job_completion(
-                    job_id, work_item
-                )
-        elif job_info.status == JobStatus.FAILED:
-            if not run_owner or not run_attempt_id:
-                scheduler_trace(
-                    "job_terminal_attempt_rejected",
-                    job_id=job_id,
-                    dag_id=work_item.dag_id,
-                    status=job_info.status.value,
-                    reason="sync_missing_attempt",
-                    **self._ha_trace_fields(),
-                )
-                return False
-            meta.update(
-                self._job_failure_metadata(
-                    message=job_info.message,
-                    runtime_env=job_info.runtime_env,
-                    source="storage_sync",
-                )
-            )
-            actual_work_state = await self.fail(
-                job_id,
-                work_item,
-                meta,
-                run_owner=run_owner,
-                run_attempt_id=run_attempt_id,
-            )
-            if actual_work_state is None:
-                scheduler_trace(
-                    "job_terminal_attempt_rejected",
-                    job_id=job_id,
-                    dag_id=work_item.dag_id,
-                    status=job_info.status.value,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                    reason="sync_db_update_zero_rows",
-                    **self._ha_trace_fields(),
-                )
-                await self._record_terminal_attempt_audit(
-                    job_id=job_id,
-                    work_item=work_item,
-                    status=job_info.status,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                    terminal_work_state=None,
-                    source="storage_sync",
-                    accepted=False,
-                    reject_reason="sync_db_update_zero_rows",
-                )
-                self._scheduler_counter(
-                    TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
-                    job_id=job_id,
-                    dag_id=work_item.dag_id,
-                    status=job_info.status.value,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                    source="storage_sync",
-                )
-                return False
-            await self._record_terminal_attempt_audit(
-                job_id=job_id,
-                work_item=work_item,
-                status=job_info.status,
-                run_owner=run_owner,
-                run_attempt_id=run_attempt_id,
-                terminal_work_state=actual_work_state,
-                source="storage_sync",
-                accepted=True,
-            )
-            scheduler_trace(
-                "job_terminal_attempt_accepted",
-                job_id=job_id,
-                dag_id=work_item.dag_id,
-                status=job_info.status.value,
-                run_owner=run_owner,
-                run_attempt_id=run_attempt_id,
-                final_state=actual_work_state,
-                source="storage_sync",
-                **self._ha_trace_fields(),
-            )
-            if actual_work_state == WorkState.RETRY.value:
-                await self.frontier.on_job_retry(job_id, work_item)
-            else:
-                await self.frontier.on_job_failed(job_id)
-        elif job_info.status == JobStatus.STOPPED:
-            if not await self._cancel_stopped_attempt(
-                job_id,
-                work_item,
-                run_owner=run_owner,
-                run_attempt_id=run_attempt_id,
-                source="storage_sync",
-            ):
-                return False
-        else:
-            self.logger.error(
-                f"Unhandled job status: {job_info.status}. Marking as FAILED."
-            )
-            actual_work_state = await self.fail(job_id, work_item)
-            if actual_work_state == WorkState.RETRY.value:
-                await self.frontier.on_job_retry(job_id, work_item)
-            else:
-                await self.frontier.on_job_failed(job_id)
-
-        is_truly_terminal = (
-            job_info.status == JobStatus.SUCCEEDED
-            or job_info.status == JobStatus.STOPPED
-            or (
-                job_info.status == JobStatus.FAILED
-                and actual_work_state == WorkState.FAILED.value
-            )
+        return await self.attempt_lifecycle_service.transition_terminal(
+            job_id,
+            work_item,
+            job_info.status,
+            run_owner=job_info.run_owner,
+            run_attempt_id=job_info.run_attempt_id,
+            source="storage_sync",
+            output_metadata={"synced": True},
+            message=job_info.message,
+            runtime_env=job_info.runtime_env,
         )
-
-        if is_truly_terminal:
-            self.logger.info(
-                f"Synchronized job {job_id} is in terminal state {job_info.status}"
-            )
-            self._status_update_lock.release(job_id)
-            await self.dag_service.resolve_dag_status_with_retry(
-                job_id,
-                work_item,
-                source="storage_sync",
-            )
-            await self.notify_event()
-        elif (
-            job_info.status == JobStatus.FAILED
-            and actual_work_state == WorkState.RETRY.value
-        ):
-            self.logger.info(
-                f"Synchronized job {job_id} marked for retry, DAG remains active"
-            )
-            await self.notify_event()
-
-        return True
 
     async def notify_event(self) -> bool:
         if self._debounced_notify:
@@ -3880,54 +3301,24 @@ class PostgreSQLJobScheduler(JobScheduler):
     ) -> None:
         error_message = str(error) if error is not None else "dispatch failed"
 
-        actual_work_state = await self.fail(
+        transitioned = await self.attempt_lifecycle_service.transition_terminal(
             wi.id,
             wi,
-            {
+            JobStatus.FAILED,
+            run_owner=run_owner,
+            run_attempt_id=run_attempt_id,
+            source="dispatch_failure",
+            output_metadata={
                 "dispatch_failed": True,
                 "dispatch_error": error_message,
                 "failure_stage": "enqueue",
             },
-            run_owner=run_owner,
-            run_attempt_id=run_attempt_id,
+            message=error_message,
         )
-        if actual_work_state is not None and run_owner and run_attempt_id:
-            await self._record_terminal_attempt_audit(
-                job_id=wi.id,
-                work_item=wi,
-                status=JobStatus.FAILED,
-                run_owner=run_owner,
-                run_attempt_id=run_attempt_id,
-                terminal_work_state=actual_work_state,
-                source="dispatch_failure",
-                accepted=True,
-            )
-        elif run_owner and run_attempt_id:
-            await self._record_terminal_attempt_audit(
-                job_id=wi.id,
-                work_item=wi,
-                status=JobStatus.FAILED,
-                run_owner=run_owner,
-                run_attempt_id=run_attempt_id,
-                terminal_work_state=None,
-                source="dispatch_failure",
-                accepted=False,
-                reject_reason="db_update_zero_rows",
-            )
-
-        if actual_work_state == WorkState.RETRY.value:
-            await self.frontier.on_job_retry(wi.id, wi)
-        elif actual_work_state == WorkState.FAILED.value:
-            await self.frontier.on_job_failed(wi.id)
-            await self.dag_service.resolve_dag_status_with_retry(
-                wi.id,
-                wi,
-                source="dispatch_failure",
-            )
-        else:
+        if not transitioned:
             self.logger.error(
                 f"Dispatch failure cleanup could not transition job {wi.id}; "
-                f"actual_work_state={actual_work_state}"
+                f"run_attempt_id={run_attempt_id}"
             )
             await self.frontier.release_lease_local(wi.id)
 
@@ -3947,7 +3338,8 @@ class PostgreSQLJobScheduler(JobScheduler):
                 f"{release_error}"
             )
 
-        await self.notify_event()
+        if not transitioned:
+            await self.notify_event()
 
     async def get_dag_by_id(self, dag_id: str) -> QueryPlan | None:
         """
