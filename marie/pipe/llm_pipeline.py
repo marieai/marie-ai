@@ -1,8 +1,8 @@
 import os
+from collections import defaultdict
 from typing import Any, List, Optional, Union
 
 import numpy as np
-from black.trans import defaultdict
 from PIL import Image
 
 from marie.boxes import PSMode
@@ -45,7 +45,9 @@ class LLMPipeline(BasePipeline):
 
             pipeline_config = load_yaml(
                 os.path.join(
-                    __config_dir__, "tests-integration", "pipeline-integration.partial.yml"
+                    __config_dir__,
+                    "tests-integration",
+                    "pipeline-integration.partial.yml",
                 )
             )
             pipeline = IndexingPipeline(pipeline_config=pipeline_config["pipeline"])

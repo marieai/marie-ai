@@ -75,7 +75,6 @@ dependencies = [
     "aiofiles",
     "aiohttp",
     "aiostream",
-    "black==24.3.0",
     "anyconfig",
     "matplotlib",
     "albumentations",
@@ -253,7 +252,6 @@ dev = [
     "mock",
     "requests-mock",
     "pytest-custom_exit_code",
-    "black==24.3.0",
     "kubernetes>=18.20.0,<31.0.0",
     "pytest-kind==22.11.1",
     "pytest-lazy-fixture",
@@ -284,7 +282,7 @@ dev = [
     "gradio",
     "python-dotenv",
     "pre-commit>=4.6.0",
-    "ruff>=0.15.22",
+    "ruff==0.15.22",
 ]
 
 legacy-gradio = [
@@ -294,39 +292,47 @@ legacy-gradio = [
     "nltk",
 ]
 
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
 [tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82", "I"]
 ignore = ["ASYNC109"]
+fixable = ["I"]
+exclude = [
+    "marie/boxes/dit/**",
+    "marie/core/**",
+    "marie/models/**",
+    "marie/proto/docarray_v1/**",
+    "marie/proto/docarray_v2/**",
+    "marie/resources/**",
+    "marie/storage/**",
+]
 
 [tool.ruff.lint.per-file-ignores]
-# Ignore the timeout signature across all files or target packages. This is a known issue with ruff and pytest-asyncio, and can be removed once the issue is resolved.
-"*" = ["ASYNC109"]
+"hubble/resources/**" = ["E9", "F63", "F7", "F82"]
+"marie/helloworld/**" = ["I"]
+"marie/proto/pb/jina_pb2.py" = ["I"]
+"marie/proto/pb/jina_pb2_grpc.py" = ["I"]
+"marie/proto/pb2/jina_pb2.py" = ["I"]
+"marie/proto/pb2/jina_pb2_grpc.py" = ["I"]
+"marie/serve/consensus/**" = ["E9", "F63", "F7", "F82"]
+"marie/utils/patches.py" = ["E9", "F63", "F7", "F82"]
+"old/**" = ["E9", "F63", "F7", "F82"]
+"tests/**" = ["E9", "F63", "F7", "F82"]
 
-
-
-[tool.isort]
-profile = "black"
-line_length = 127
-multi_line_output = 3
-include_trailing_comma = true
-virtual_env = "venv"
-
-[tool.black]
-line-length = 88
-target-version = ["py312"]
-include = "\\.pyi?$"
-preview = false
-skip-string-normalization = true
-exclude = """
-/(
-      .eggs
-    | .git
-    | .hg
-    | .mypy_cache
-    | .tox
-    | venv
-    | _build
-    | buck-out
-    | build
-    | dist
-  )/
-"""
+[tool.ruff.format]
+quote-style = "preserve"
+docstring-code-format = true
+exclude = [
+    "hubble/resources/**",
+    "marie/boxes/dit/**",
+    "marie/core/**",
+    "marie/models/**",
+    "marie/proto/docarray_v1/**",
+    "marie/proto/docarray_v2/**",
+    "marie/resources/**",
+    "marie/storage/**",
+    "tests/**",
+]
