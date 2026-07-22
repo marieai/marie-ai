@@ -215,15 +215,28 @@ def delete_queue_function(schema: str) -> str:
     $$
     DECLARE
       table_name varchar;
-    BEGIN  
-      WITH deleted AS (
-        DELETE FROM {schema}.queue
-        WHERE name = queue_name
-        RETURNING partition_name
-      )
-      SELECT partition_name FROM deleted INTO table_name;
+    BEGIN
+      SELECT queue.partition_name
+      INTO table_name
+      FROM {schema}.queue AS queue
+      WHERE queue.name = delete_queue.queue_name
+      FOR UPDATE;
 
+      IF table_name IS NULL THEN
+        RETURN;
+      END IF;
+
+      DELETE FROM {schema}.job AS job
+      WHERE job.name = delete_queue.queue_name;
+
+      EXECUTE format(
+        'ALTER TABLE {schema}.job DETACH PARTITION {schema}.%I',
+        table_name
+      );
       EXECUTE format('DROP TABLE IF EXISTS {schema}.%I', table_name);
+
+      DELETE FROM {schema}.queue AS queue
+      WHERE queue.name = delete_queue.queue_name;
     END;
     $$
     LANGUAGE plpgsql;

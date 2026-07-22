@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -282,12 +283,37 @@ class AttemptLifecycleService:
     ) -> None:
         if terminal:
             self._status_update_lock.release(job_id)
-            await self.dag_service.resolve_dag_status_with_retry(
+            resolution_started = time.perf_counter()
+            scheduler_trace(
+                'terminal_dag_resolution_started',
+                job_id=job_id,
+                dag_id=work_item.dag_id,
+                source=source,
+            )
+            dag_resolved = await self.dag_service.resolve_dag_status_with_retry(
                 job_id,
                 work_item,
                 source=source,
             )
-        await self._notify_callback()
+            scheduler_trace(
+                'terminal_dag_resolution_completed',
+                job_id=job_id,
+                dag_id=work_item.dag_id,
+                source=source,
+                dag_resolved=dag_resolved,
+                elapsed_ms=(time.perf_counter() - resolution_started) * 1000.0,
+            )
+        wake_started = time.perf_counter()
+        wake_queued = await self._notify_callback()
+        scheduler_trace(
+            'terminal_scheduler_wake_completed',
+            job_id=job_id,
+            dag_id=work_item.dag_id,
+            source=source,
+            terminal=terminal,
+            wake_queued=wake_queued,
+            elapsed_ms=(time.perf_counter() - wake_started) * 1000.0,
+        )
 
     async def _accept(
         self,

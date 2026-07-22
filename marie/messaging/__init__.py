@@ -8,6 +8,7 @@ from .grpc_toast_handler import GrpcToastHandler  # isort:skip depends on Toast
 from .otel_toast_handler import OTELToastHandler  # isort:skip depends on Toast
 
 from .publisher import (  # isort:skip depends on Toast
+    mark_as_accepted,
     mark_as_complete,
     mark_as_failed,
     mark_as_scheduled,
@@ -22,6 +23,7 @@ __all__ = [
     "GrpcEventBroker",
     "GrpcToastHandler",
     "OTELToastHandler",
+    "mark_as_accepted",
     "mark_as_complete",
     "mark_as_started",
     "mark_as_scheduled",

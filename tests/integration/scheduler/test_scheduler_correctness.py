@@ -9,7 +9,11 @@ from datetime import datetime, timezone
 import psycopg
 import pytest
 
-from tools.stress.scheduler_correctness import SchedulerCorrectnessVerifier
+from tools.stress.scheduler_correctness import (
+    FORCED_FAILURE_CHECK,
+    PARALLEL_GRAPH_CHECK,
+    SchedulerCorrectnessVerifier,
+)
 from tools.stress.scheduler_db_stresser import CorpusGenerator, StressConfig, connect
 
 pytestmark = [
@@ -331,10 +335,10 @@ def seeded_corpus(request: pytest.FixtureRequest) -> Iterator[SeededCorpus]:
 
     with connect(config) as connection:
         generator = CorpusGenerator(connection)
-        version = generator.initialize()
+        generator.initialize()
         generator.acquire_lock(run_id)
         try:
-            manifest = generator.prepare_manifest(config, version)
+            manifest = generator.prepare_manifest(config)
             generator.ensure_queue(config)
             generator.create_staging_tables()
             generator.seed(config, int(manifest["high_water_mark"]))
@@ -411,10 +415,10 @@ def test_gateway_disagreement_and_leaked_capacity_fail(
     with seeded_corpus.connection.cursor() as cursor:
         cursor.execute(
             """
-            SELECT id
+            SELECT DISTINCT dag_id AS id
             FROM marie_scheduler.job
             WHERE data->'metadata'->>'stress_run_id' = %s
-            ORDER BY id
+            ORDER BY dag_id
             LIMIT 1
             """,
             (seeded_corpus.run_id,),
@@ -439,3 +443,125 @@ def test_gateway_disagreement_and_leaked_capacity_fail(
     assert report["passed"] is False
     assert checks["gateway_terminal_agreement"]["status"] == "fail"
     assert checks["post_drain_capacity"]["status"] == "fail"
+
+
+def test_gateway_scope_verifies_persisted_dags(
+    seeded_corpus: SeededCorpus,
+) -> None:
+    with seeded_corpus.connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE marie_scheduler.job job
+            SET data = jsonb_set(
+                job.data,
+                '{metadata,stress_planner}',
+                to_jsonb(dag.planner)
+            )
+            FROM marie_scheduler.dag dag
+            WHERE dag.id = job.dag_id
+              AND job.data->'metadata'->>'stress_run_id' = %s
+            """,
+            (seeded_corpus.run_id,),
+        )
+        cursor.execute(
+            """
+            SELECT DISTINCT dag_id::TEXT AS id
+            FROM marie_scheduler.job
+            WHERE data->'metadata'->>'stress_run_id' = %s
+            ORDER BY id
+            """,
+            (seeded_corpus.run_id,),
+        )
+        dag_ids = [str(row["id"]) for row in cursor.fetchall()]
+    seeded_corpus.connection.commit()
+
+    gateway_report = {
+        "run_identity": {"run_id": seeded_corpus.run_id},
+        "summary": {"submitted_jobs": len(dag_ids)},
+        "jobs": [
+            {
+                "job_id": dag_id,
+                "stress_run_id": seeded_corpus.run_id,
+                "terminal_status": "completed",
+                "raw_events": [
+                    "job.scheduled",
+                    "job.started",
+                    "job.completed",
+                ],
+            }
+            for dag_id in dag_ids
+        ],
+        "post_drain_capacity": {"ok": True, "used": 0, "holder_count": 0},
+    }
+    verifier = SchedulerCorrectnessVerifier(
+        seeded_corpus.connection,
+        seeded_corpus.run_id,
+        sample_limit=10,
+        settle_deadline=datetime.now(timezone.utc),
+        scope="gateway",
+        dag_ids=dag_ids,
+    )
+
+    report = verifier.verify(gateway_report)
+
+    assert report["passed"] is True
+    assert report["scope"] == "gateway"
+    assert report["manifest"] is None
+    assert report["status_counts"] == {"pass": 13}
+
+
+def test_gateway_topology_evidence_and_failure_queries_execute_in_postgresql(
+    seeded_corpus: SeededCorpus,
+) -> None:
+    with seeded_corpus.connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id::TEXT AS id
+            FROM marie_scheduler.dag
+            WHERE planner = %s
+            ORDER BY id
+            """,
+            (f"stress:{seeded_corpus.run_id}",),
+        )
+        dag_ids = [str(row["id"]) for row in cursor.fetchall()]
+
+    verifier = SchedulerCorrectnessVerifier(
+        seeded_corpus.connection,
+        seeded_corpus.run_id,
+        sample_limit=1,
+        settle_deadline=datetime.now(timezone.utc),
+        scope="gateway",
+        dag_ids=dag_ids,
+        forced_dag_ids=(dag_ids[0],),
+    )
+
+    topology = verifier.run_check(PARALLEL_GRAPH_CHECK)
+    failure_propagation = verifier.run_check(FORCED_FAILURE_CHECK)
+
+    assert topology.status == "fail"
+    assert topology.bad_rows == len(dag_ids)
+    assert topology.observed["dag_count"] == len(dag_ids)
+    assert topology.observed["nodes_min"] == 3
+    assert topology.observed["nodes_max"] == 3
+    assert topology.observed["edges_min"] == 2
+    assert topology.observed["edges_max"] == 2
+    assert topology.observed["roots_min"] == 1
+    assert topology.observed["roots_max"] == 1
+    assert topology.observed["leaves_min"] == 1
+    assert topology.observed["leaves_max"] == 1
+    assert topology.observed["fanout_nodes_min"] == 0
+    assert topology.observed["fanout_nodes_max"] == 0
+    assert topology.observed["fanin_nodes_min"] == 0
+    assert topology.observed["fanin_nodes_max"] == 0
+    assert topology.observed["dag_sample_truncated"] is True
+    assert len(topology.observed["dag_sample"]) == 1
+    sampled_dag = topology.observed["dag_sample"][0]
+    assert sampled_dag["dag_id"] in dag_ids
+    assert sampled_dag["nodes"] == 3
+    assert sampled_dag["edges"] == 2
+    assert sampled_dag["roots"] == 1
+    assert sampled_dag["leaves"] == 1
+    assert sampled_dag["fanout_nodes"] == 0
+    assert sampled_dag["fanin_nodes"] == 0
+    assert failure_propagation.status == "fail"
+    assert failure_propagation.bad_rows > 0

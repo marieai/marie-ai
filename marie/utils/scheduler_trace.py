@@ -14,10 +14,19 @@ _LOCK = threading.Lock()
 _DEFAULT_PATH = "/tmp/marie-scheduler-trace.jsonl"
 _DEFAULT_PROFILE = "compact"
 
+_SENSITIVE_FIELDS = {
+    "api_key",
+    "project_id",
+}
+
 _COMPACT_EVENTS = {
     "gateway_submit_received",
     "gateway_dispatch_start",
     "gateway_dispatch_confirmed",
+    "job_supervisor_dispatch_admitted",
+    "job_supervisor_send_task_completed",
+    "job_supervisor_worker_ack_wait_completed",
+    "job_monitor_terminal_observed",
     "executor_success_recorded",
     "executor_failed_recorded",
     "candidate_built",
@@ -28,6 +37,11 @@ _COMPACT_EVENTS = {
     "job_attempt_audit_failed",
     "job_terminal_attempt_accepted",
     "job_terminal_attempt_rejected",
+    "job_status_event_dropped",
+    "scheduler_job_event_received",
+    "terminal_dag_resolution_started",
+    "terminal_dag_resolution_completed",
+    "terminal_scheduler_wake_completed",
     "semaphore_reserve_batch_done",
     "slot_unavailable",
     "slot_reserve_failed",
@@ -50,10 +64,8 @@ _COMPACT_EVENTS = {
 }
 
 _COMPACT_DROP_FIELDS = {
-    "api_key",
     "event_name",
     "planner",
-    "project_id",
     "ref_id",
     "ref_type",
 }
@@ -74,6 +86,10 @@ def _compact_fields(event: str, fields: dict[str, Any]) -> dict[str, Any] | None
 def scheduler_trace(event: str, **fields: Any) -> None:
     if not to_bool(os.getenv("MARIE_SCHEDULER_TRACE_ENABLED"), default=False):
         return
+
+    fields = {
+        key: value for key, value in fields.items() if key not in _SENSITIVE_FIELDS
+    }
 
     profile = _profile()
     if profile in {"compact", "endurance"}:
@@ -96,7 +112,7 @@ def scheduler_trace(event: str, **fields: Any) -> None:
 
     try:
         with _LOCK:
-            trace_path = Path(path)
+            trace_path = Path(path).expanduser()
             trace_path.parent.mkdir(parents=True, exist_ok=True)
             with trace_path.open("a", encoding="utf-8") as fp:
                 fp.write(line)

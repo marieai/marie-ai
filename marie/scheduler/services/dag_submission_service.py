@@ -8,6 +8,7 @@ from typing import Any
 
 from marie.logging_core.logger import MarieLogger
 from marie.messaging import mark_as_failed as mark_as_failed_toast
+from marie.messaging import mark_as_scheduled as mark_as_scheduled_toast
 from marie.scheduler.job_scheduler import JobSubmissionRequest
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import ExistingWorkPolicy, WorkInfo
@@ -120,6 +121,7 @@ class DagSubmissionService:
                         request.work_info,
                         request.overwrite,
                     )
+                    await self._send_scheduled_toast(request.work_info)
                     self.submission_count += 1
                     await self._submission_processed_callback(self.submission_count)
                     if request.wait_for_result and not request.result_future.done():
@@ -326,3 +328,28 @@ class DagSubmissionService:
             self.logger.error(
                 f'Failed to send failure toast for {work_info.id}: {toast_error}'
             )
+
+    async def _send_scheduled_toast(self, work_info: WorkInfo) -> None:
+        event_name = work_info.data.get('name', work_info.name)
+        api_key = work_info.data.get('api_key')
+        metadata = work_info.data.get('metadata', {})
+        metadata = metadata if isinstance(metadata, dict) else {}
+        ref_type = metadata.get('ref_type')
+        if not api_key or not event_name:
+            self.logger.warning(
+                f'Cannot send scheduled toast for {work_info.id}: '
+                f'missing api_key={api_key} or event_name={event_name}'
+            )
+            return
+
+        published = await mark_as_scheduled_toast(
+            api_key=api_key,
+            job_id=work_info.id,
+            event_name=event_name,
+            job_tag=ref_type,
+            status='OK',
+            timestamp=current_milli_time(),
+            payload=metadata,
+        )
+        if not published:
+            self.logger.warning(f'Failed to send scheduled toast for {work_info.id}')

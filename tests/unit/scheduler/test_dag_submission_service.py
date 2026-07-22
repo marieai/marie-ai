@@ -78,6 +78,120 @@ async def test_submission_worker_accounts_for_successful_persistence() -> None:
 
 
 @pytest.mark.asyncio
+async def test_submission_worker_publishes_scheduled_after_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running = [True]
+    service = build_service(running=running)
+    submitted = work_item('job-1')
+    submitted.data = {
+        'api_key': 'project-1',
+        'name': 'extract',
+        'metadata': {'ref_type': 'invoice', 'ref_id': 'document-1'},
+    }
+    calls: list[str] = []
+
+    async def persist(*_: object) -> str:
+        calls.append('persist')
+        return 'job-1'
+
+    async def publish(**kwargs: object) -> bool:
+        calls.append('scheduled')
+        timestamp = kwargs.pop('timestamp')
+        assert isinstance(timestamp, int)
+        assert kwargs == {
+            'api_key': 'project-1',
+            'job_id': 'job-1',
+            'event_name': 'extract',
+            'job_tag': 'invoice',
+            'status': 'OK',
+            'payload': {'ref_type': 'invoice', 'ref_id': 'document-1'},
+        }
+        return True
+
+    service.persist = persist
+    monkeypatch.setattr(submission_module, 'mark_as_scheduled_toast', publish)
+
+    await service.submit(submitted)
+    worker = asyncio.create_task(service.run_worker(0))
+    async with asyncio.timeout(1):
+        while service.submission_count == 0:
+            await asyncio.sleep(0)
+
+    running[0] = False
+    worker.cancel()
+    await worker
+
+    assert calls == ['persist', 'scheduled']
+
+
+@pytest.mark.asyncio
+async def test_submission_worker_does_not_publish_scheduled_when_persistence_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running = [True]
+    service = build_service(running=running)
+    submitted = work_item('job-1')
+    submitted.data = {
+        'api_key': 'project-1',
+        'name': 'extract',
+        'metadata': {'ref_type': 'invoice'},
+    }
+    service.persist = AsyncMock(side_effect=RuntimeError('database unavailable'))
+    scheduled = AsyncMock(return_value=True)
+    failure = AsyncMock(return_value=True)
+    monkeypatch.setattr(submission_module, 'mark_as_scheduled_toast', scheduled)
+    monkeypatch.setattr(submission_module, 'mark_as_failed_toast', failure)
+
+    await service.submit(submitted)
+    worker = asyncio.create_task(service.run_worker(0))
+    async with asyncio.timeout(1):
+        while service.pending_count:
+            await asyncio.sleep(0)
+
+    running[0] = False
+    worker.cancel()
+    await worker
+
+    scheduled.assert_not_awaited()
+    failure.assert_awaited_once()
+    assert service.submission_count == 0
+
+
+@pytest.mark.asyncio
+async def test_scheduled_publication_failure_does_not_fail_persisted_submission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running = [True]
+    service = build_service(running=running)
+    submitted = work_item('job-1')
+    submitted.data = {
+        'api_key': 'project-1',
+        'name': 'extract',
+        'metadata': {'ref_type': 'invoice'},
+    }
+    service.persist = AsyncMock(return_value='job-1')
+    monkeypatch.setattr(
+        submission_module,
+        'mark_as_scheduled_toast',
+        AsyncMock(return_value=False),
+    )
+
+    await service.submit(submitted)
+    worker = asyncio.create_task(service.run_worker(0))
+    async with asyncio.timeout(1):
+        while service.submission_count == 0:
+            await asyncio.sleep(0)
+
+    running[0] = False
+    worker.cancel()
+    await worker
+
+    assert service.submission_count == 1
+    service._submission_processed_callback.assert_awaited_once_with(1)
+
+
+@pytest.mark.asyncio
 async def test_persist_builds_and_commits_the_dag_before_frontier_admission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

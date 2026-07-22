@@ -27,6 +27,17 @@ Restart all gateways after applying the schema. New HA runs should populate
 `marie_scheduler.job_attempt` with `gateway_instance_id`,
 `scheduler_lease_owner`, dispatch timestamps, and terminal audit fields.
 
+Install the optional invariant helper before running the shared HA checks or
+`scheduler_correctness.py`:
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -f config/psql/high-availability/scheduler_attempt_invariant_checks.sql
+```
+
+The helper creates one read-only diagnostic function. It is not part of the
+scheduler schema version and gateway startup does not require it.
+
 ## Run The SQL Checks
 
 Run after the workload has drained. Open
@@ -58,8 +69,9 @@ SET marie.ha_run_end = '2026-05-19 10:00:00+00';
 ```
 
 Use an explicit window for real HA validation so historical repairs or old
-stress runs do not pollute the result. The script creates only temporary tables
-and does not modify persistent scheduler data.
+stress runs do not pollute the result. After the optional helper is installed,
+the check script creates only temporary tables and does not modify persistent
+scheduler data.
 
 From `psql`, the same plain SQL file can be run without variables:
 

@@ -159,8 +159,36 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
         in schema_query
     )
     assert "CREATE TABLE IF NOT EXISTS marie_scheduler.job_attempt" in schema_query
+    assert (
+        "CREATE TABLE IF NOT EXISTS marie_scheduler.resource_workflow_binding"
+        in schema_query
+    )
     assert "VALUES ('default')" in schema_query
-    assert "VALUES ('71')" in schema_query
+    assert "VALUES ('72')" in schema_query
+
+
+@pytest.mark.asyncio
+async def test_create_tables_installs_safe_queue_partition_deletion() -> None:
+    connection = FakeConnection(fetchval=[True, True])
+    repository = build_repository(connection)
+
+    await repository.create_tables()
+
+    delete_queue_query = next(
+        query
+        for method, query, _args in connection.calls
+        if method == "execute"
+        and "CREATE OR REPLACE FUNCTION marie_scheduler.delete_queue" in query
+    )
+    delete_jobs = delete_queue_query.index("DELETE FROM marie_scheduler.job AS job")
+    detach_partition = delete_queue_query.index("DETACH PARTITION")
+    drop_partition = delete_queue_query.index("DROP TABLE IF EXISTS")
+    delete_registration = delete_queue_query.index(
+        "DELETE FROM marie_scheduler.queue AS queue"
+    )
+
+    assert delete_jobs < detach_partition < drop_partition < delete_registration
+    assert "CASCADE" not in delete_queue_query
 
 
 @pytest.mark.asyncio
@@ -557,7 +585,6 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
             True,
             True,
             True,
-            True,
             (
                 "run_attempt_id lease_owner = _run_owner INSERT INTO "
                 "marie_scheduler.job_attempt _gateway_instance_id"
@@ -570,10 +597,12 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
 
     await repository.validate_durable_scheduler_schema()
 
-    _, invariant_query, _ = connection.calls[3]
-    _, activation_query, _ = connection.calls[4]
-    assert "scheduler_attempt_invariant_checks" in invariant_query
+    _, activation_query, _ = connection.calls[3]
     assert "p.pronargs = 4" in activation_query
+    assert all(
+        "scheduler_attempt_invariant_checks" not in query
+        for _, query, _ in connection.calls
+    )
 
 
 @pytest.mark.asyncio

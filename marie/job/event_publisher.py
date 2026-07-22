@@ -1,10 +1,11 @@
-# Python
 import asyncio
 import inspect
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, List, Optional, TypeVar, Union
 
 from marie.logging_core.predefined import default_logger as logger
+from marie.utils.scheduler_trace import scheduler_trace
 
 T = TypeVar("T")
 
@@ -41,7 +42,9 @@ class EventPublisher:
         :param publish_blocking: If True, publish() will await a queue slot; otherwise it drops when full.
         """
         self._subscribers: Dict[str, List[Callable[[str, T], None]]] = {}
-        self._queue: asyncio.Queue = asyncio.Queue(maxsize=max_queue_size)
+        self._queue: asyncio.Queue[tuple[str, T, float]] = asyncio.Queue(
+            maxsize=max_queue_size
+        )
         self._dispatcher_task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
 
@@ -80,27 +83,60 @@ class EventPublisher:
         :param message: Payload.
         :param timeout_s: Optional max time to wait for a queue slot when publish_blocking=True.
         """
+        publish_started = time.perf_counter()
+        enqueued_at = time.perf_counter()
+        job_id = message.get("job_id") if isinstance(message, dict) else None
+        trace_fields = {
+            "job_id": job_id,
+            "status": str(event_type),
+            "subscriber_count": len(self._subscribers.get(event_type, [])),
+        }
+        trace_job_event = isinstance(job_id, str) and bool(job_id)
+
         # Backpressure handling
         if self._publish_blocking:
             if timeout_s is None:
-                await self._queue.put((event_type, message))
+                await self._queue.put((event_type, message, enqueued_at))
             else:
                 try:
                     await asyncio.wait_for(
-                        self._queue.put((event_type, message)), timeout=timeout_s
+                        self._queue.put((event_type, message, enqueued_at)),
+                        timeout=timeout_s,
                     )
                 except asyncio.TimeoutError:
-                    # Drop or raise on publish timeout
+                    if trace_job_event:
+                        scheduler_trace(
+                            "job_status_event_dropped",
+                            **trace_fields,
+                            reason="publish_timeout",
+                            queue_size=self._queue.qsize(),
+                            elapsed_ms=(time.perf_counter() - publish_started) * 1000.0,
+                        )
                     logger.error(
                         f"EventPublisher: publish timeout for event '{event_type}'"
                     )
                     return
         else:
             try:
-                self._queue.put_nowait((event_type, message))
+                self._queue.put_nowait((event_type, message, enqueued_at))
             except asyncio.QueueFull:
-                # Drop newest when full to prevent unbounded latency growth
+                if trace_job_event:
+                    scheduler_trace(
+                        "job_status_event_dropped",
+                        **trace_fields,
+                        reason="queue_full",
+                        queue_size=self._queue.qsize(),
+                        elapsed_ms=(time.perf_counter() - publish_started) * 1000.0,
+                    )
                 return
+
+        if trace_job_event:
+            scheduler_trace(
+                "job_status_event_enqueued",
+                **trace_fields,
+                queue_size=self._queue.qsize(),
+                elapsed_ms=(time.perf_counter() - publish_started) * 1000.0,
+            )
 
         # Soft visibility into pressure
         try:
@@ -119,7 +155,25 @@ class EventPublisher:
 
         while not self._stopped.is_set():
             try:
-                event_type, message = await self._queue.get()
+                event_type, message, enqueued_at = await self._queue.get()
+                dispatch_started = time.perf_counter()
+                subscriber_count = len(self._subscribers.get(event_type, []))
+                job_id = message.get("job_id") if isinstance(message, dict) else None
+                trace_fields = {
+                    "job_id": job_id,
+                    "status": str(event_type),
+                    "subscriber_count": subscriber_count,
+                }
+                trace_job_event = isinstance(job_id, str) and bool(job_id)
+                if trace_job_event:
+                    scheduler_trace(
+                        "job_status_event_dequeued",
+                        **trace_fields,
+                        queue_size=self._queue.qsize(),
+                        queue_wait_ms=(dispatch_started - enqueued_at) * 1000.0,
+                    )
+                timeout_count = 0
+                error_count = 0
                 if event_type in self._subscribers:
                     # Build tasks for all subscribers
                     subscriber_tasks = []
@@ -159,10 +213,21 @@ class EventPublisher:
                         # Log timeouts/errors but continue to preserve forward progress
                         for r in results:
                             if isinstance(r, asyncio.TimeoutError):
+                                timeout_count += 1
                                 logger.warning("EventPublisher: subscriber timed out")
                             elif isinstance(r, Exception):
+                                error_count += 1
                                 logger.error(f"EventPublisher: subscriber error: {r}")
 
+                if trace_job_event:
+                    scheduler_trace(
+                        "job_status_event_dispatch_completed",
+                        **trace_fields,
+                        queue_size=self._queue.qsize(),
+                        timeout_count=timeout_count,
+                        error_count=error_count,
+                        elapsed_ms=(time.perf_counter() - dispatch_started) * 1000.0,
+                    )
                 self._queue.task_done()
             except asyncio.CancelledError:
                 break

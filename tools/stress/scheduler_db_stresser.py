@@ -68,10 +68,8 @@ CREATE TABLE IF NOT EXISTS {STRESS_SCHEMA}.run_manifest (
     endpoint TEXT NOT NULL,
     active_lease_seconds INTEGER NOT NULL DEFAULT 2592000,
     config_hash TEXT NOT NULL,
-    scheduler_schema_version INTEGER NOT NULL,
     target_dag_count BIGINT NOT NULL,
     high_water_mark BIGINT NOT NULL DEFAULT 0,
-    schema_transitions JSONB NOT NULL DEFAULT '[]'::JSONB,
     checkpoints JSONB NOT NULL DEFAULT '[]'::JSONB,
     created_on TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_on TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -85,6 +83,9 @@ ALTER TABLE {STRESS_SCHEMA}.run_manifest
     ADD COLUMN IF NOT EXISTS checkpoints JSONB NOT NULL DEFAULT '[]'::JSONB;
 ALTER TABLE {STRESS_SCHEMA}.run_manifest
     ADD COLUMN IF NOT EXISTS checkpoint_started_on TIMESTAMPTZ;
+ALTER TABLE {STRESS_SCHEMA}.run_manifest
+    DROP COLUMN IF EXISTS scheduler_schema_version,
+    DROP COLUMN IF EXISTS schema_transitions;
 """
 
 
@@ -248,7 +249,6 @@ class StressConfig:
     active_lease_seconds: int
     report: str | None
     database: Mapping[str, Any]
-    allow_schema_transition: bool = False
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> StressConfig:
@@ -280,7 +280,6 @@ class StressConfig:
             ),
             report=(str(values["report"]) if values.get("report") else None),
             database=dict(database),
-            allow_schema_transition=bool(values.get("allow_schema_transition", False)),
         )
         config.validate()
         return config
@@ -680,7 +679,7 @@ class CorpusGenerator:
     def __init__(self, connection: psycopg.Connection[dict[str, Any]]) -> None:
         self.connection = connection
 
-    def initialize(self) -> int:
+    def initialize(self) -> None:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT to_regclass('{SCHEDULER_SCHEMA}.version') AS version_table"
@@ -689,14 +688,13 @@ class CorpusGenerator:
             if not row or row["version_table"] is None:
                 raise RuntimeError("marie_scheduler schema is not installed")
             cursor.execute(
-                f"SELECT MAX(version) AS version FROM {SCHEDULER_SCHEMA}.version"
+                f"SELECT EXISTS (SELECT 1 FROM {SCHEDULER_SCHEMA}.version) AS installed"
             )
-            version_row = cursor.fetchone()
-            if not version_row or version_row["version"] is None:
+            installed_row = cursor.fetchone()
+            if not installed_row or not installed_row["installed"]:
                 raise RuntimeError("marie_scheduler.version has no installed version")
             cursor.execute(MANIFEST_DDL)
         self.connection.commit()
-        return int(version_row["version"])
 
     def acquire_lock(self, run_id: str) -> None:
         with self.connection.cursor() as cursor:
@@ -717,9 +715,7 @@ class CorpusGenerator:
             )
         self.connection.commit()
 
-    def prepare_manifest(
-        self, config: StressConfig, scheduler_schema_version: int
-    ) -> dict[str, Any]:
+    def prepare_manifest(self, config: StressConfig) -> dict[str, Any]:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 f"""
@@ -727,11 +723,11 @@ class CorpusGenerator:
                     run_id, generator_version, uuid_derivation_version, seed,
                     graph_shape, nodes_per_dag, queue_name, workload_profile,
                     projection_mode, executor, endpoint, active_lease_seconds,
-                    config_hash, scheduler_schema_version, target_dag_count
+                    config_hash, target_dag_count
                 )
                 VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s
+                    %s
                 )
                 ON CONFLICT (run_id) DO NOTHING
                 """,
@@ -749,7 +745,6 @@ class CorpusGenerator:
                     config.endpoint,
                     config.active_lease_seconds,
                     config.cohort_hash,
-                    scheduler_schema_version,
                     config.target_dag_count,
                 ),
             )
@@ -768,37 +763,6 @@ class CorpusGenerator:
                     f"Refusing to shrink cohort from {high_water_mark} to "
                     f"{config.target_dag_count} DAGs"
                 )
-            stored_version = int(manifest["scheduler_schema_version"])
-            if stored_version != scheduler_schema_version:
-                if not config.allow_schema_transition:
-                    raise RuntimeError(
-                        "Scheduler schema changed from "
-                        f"{stored_version} to {scheduler_schema_version}; "
-                        "start a new run or pass --allow-schema-transition"
-                    )
-                cursor.execute(
-                    f"""
-                    UPDATE {STRESS_SCHEMA}.run_manifest
-                    SET scheduler_schema_version = %s,
-                        schema_transitions = schema_transitions || jsonb_build_array(
-                            jsonb_build_object(
-                                'from', %s,
-                                'to', %s,
-                                'recorded_on', NOW()
-                            )
-                        ),
-                        updated_on = NOW()
-                    WHERE run_id = %s
-                    """,
-                    (
-                        scheduler_schema_version,
-                        stored_version,
-                        scheduler_schema_version,
-                        config.run_id,
-                    ),
-                )
-                manifest["scheduler_schema_version"] = scheduler_schema_version
-
             cursor.execute(
                 f"""
                 UPDATE {STRESS_SCHEMA}.run_manifest
@@ -980,7 +944,7 @@ class CorpusGenerator:
                             'high_water_mark', high_water_mark,
                             'started_on', checkpoint_started_on,
                             'completed_on', NOW(),
-                            'requested_report', %s
+                            'requested_report', %s::text
                         )
                     ),
                     updated_on = NOW()
@@ -1294,7 +1258,7 @@ class CorpusGenerator:
                 f"""
                 WITH queue_partition AS (
                     SELECT format(
-                        '{SCHEDULER_SCHEMA}.%I', partition_name
+                        '{SCHEDULER_SCHEMA}.%%I', partition_name
                     ) AS relation_name
                     FROM {SCHEDULER_SCHEMA}.queue
                     WHERE name = %s
@@ -1635,7 +1599,6 @@ def public_config(config: StressConfig) -> dict[str, Any]:
         "endpoint": config.endpoint,
         "active_lease_seconds": config.active_lease_seconds,
         "report": config.report,
-        "allow_schema_transition": config.allow_schema_transition,
         "config_hash": config.cohort_hash,
     }
 
@@ -1656,21 +1619,14 @@ def command_report(
 def run_database_command(command: str, config: StressConfig) -> dict[str, Any]:
     with connect(config) as connection:
         generator = CorpusGenerator(connection)
-        scheduler_schema_version = generator.initialize()
+        generator.initialize()
         generator.acquire_lock(config.run_id)
         try:
             if command == "seed":
-                manifest = generator.prepare_manifest(config, scheduler_schema_version)
+                manifest = generator.prepare_manifest(config)
             else:
                 manifest = generator.manifest(config.run_id)
                 generator._validate_manifest(config, manifest)
-                if (
-                    int(manifest["scheduler_schema_version"])
-                    != scheduler_schema_version
-                ):
-                    raise RuntimeError(
-                        "Scheduler schema version does not match the run manifest"
-                    )
             current_count = int(manifest["high_water_mark"])
             if current_count > config.target_dag_count:
                 raise RuntimeError(
@@ -1697,7 +1653,6 @@ def run_database_command(command: str, config: StressConfig) -> dict[str, Any]:
                     command,
                     config,
                     {
-                        "scheduler_schema_version": scheduler_schema_version,
                         "plan": build_plan(config, current_count),
                         "seed": seed_result,
                         "verification": verification,
@@ -1712,10 +1667,7 @@ def run_database_command(command: str, config: StressConfig) -> dict[str, Any]:
                 return command_report(
                     command,
                     config,
-                    {
-                        "scheduler_schema_version": scheduler_schema_version,
-                        "verification": verification,
-                    },
+                    {"verification": verification},
                 )
 
             if command == "benchmark":
@@ -1728,7 +1680,6 @@ def run_database_command(command: str, config: StressConfig) -> dict[str, Any]:
                     command,
                     config,
                     {
-                        "scheduler_schema_version": scheduler_schema_version,
                         "database": generator.database_snapshot(config),
                         "benchmark": generator.benchmark(config),
                     },
@@ -1753,7 +1704,6 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--endpoint")
     parser.add_argument("--active-lease-seconds", type=int)
     parser.add_argument("--report")
-    parser.add_argument("--allow-schema-transition", action="store_true", default=None)
     parser.add_argument("--dry-run", action="store_true")
 
 
@@ -1784,7 +1734,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "endpoint": args.endpoint,
         "active_lease_seconds": args.active_lease_seconds,
         "report": args.report,
-        "allow_schema_transition": args.allow_schema_transition,
     }
     try:
         config = load_config(args.config, overrides)

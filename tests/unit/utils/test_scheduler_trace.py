@@ -31,6 +31,27 @@ def test_scheduler_trace_writes_jsonl_when_enabled(monkeypatch, tmp_path):
     assert "pid" in rows[0]
 
 
+def test_scheduler_trace_full_profile_drops_sensitive_fields(monkeypatch, tmp_path):
+    trace_path = tmp_path / "scheduler-trace.jsonl"
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_ENABLED", "true")
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PATH", str(trace_path))
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PROFILE", "full")
+
+    scheduler_trace(
+        "gateway_submit_received",
+        job_id="job-1",
+        api_key="secret-api-key",
+        project_id="secret-project-id",
+        ref_id="document-1",
+    )
+
+    row = json.loads(trace_path.read_text().strip())
+    assert row["job_id"] == "job-1"
+    assert row["ref_id"] == "document-1"
+    assert "api_key" not in row
+    assert "project_id" not in row
+
+
 def test_scheduler_trace_bad_path_is_best_effort(monkeypatch, tmp_path):
     monkeypatch.setenv("MARIE_SCHEDULER_TRACE_ENABLED", "true")
     monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PATH", str(tmp_path))

@@ -56,7 +56,7 @@ this directory, not from an external artifact directory.
 | `etcd3-0.12.0-py2.py3-none-any.whl` | `9b5c36c42a6764d4926c40d131cacd4248f5a3cefc6452fb05a2b3e1e489ed7a` | Distributed etcd3 wheel with modern protobuf dependency support. |
 | `etcd3-0.12.0.tar.gz` | `46fd3624665bddbd0957823777d45ed91e2b7f7d698223db984c79bf225b64f3` | Source archive used to rebuild the distributed etcd3 wheel. |
 | `fastwer-0.1.3-cp312-cp312-linux_x86_64.whl` | `1d2cbe8bce96cfced4b65c89a9f377a147e69b4886299cde342f4c382ccb46bc` | Distributed Python 3.12 fastwer wheel. |
-| `fastwer-0.1.3.tar.gz` | `f411662f337b588ce21aabf51f3170e891bfed3f19f6331b946ad1974401d54d` | Source archive used by `tools/scripts/setup-py312-torch212-cu130.sh build-fastwer`. |
+| `fastwer-0.1.3.tar.gz` | `f411662f337b588ce21aabf51f3170e891bfed3f19f6331b946ad1974401d54d` | Source archive used by `scripts/setup-py312-torch212-cu130.sh build-fastwer`. |
 
 ## PyTorch 2.12 / CUDA 13 build outputs
 
@@ -75,14 +75,14 @@ resolver dependency wheels such as `fvcore`, `iopath`, `omegaconf`, `numpy`,
 `pillow`, or `matplotlib` are installed through normal dependency resolution and
 must not be copied into `wheels/` or a `resolver-spillover/` subdirectory.
 
-Run `tools/scripts/setup-py312-torch212-cu130.sh manifest` after rebuilding to
+Run `scripts/setup-py312-torch212-cu130.sh manifest` after rebuilding to
 write the verified wheel list and SHA256s to the command-output manifest.
 
 <!-- local-wheels-inventory:start -->
 
 ## Generated file inventory
 
-Updated by tools/scripts/setup-py312-torch212-cu130.sh wheels-readme.
+Updated by scripts/setup-py312-torch212-cu130.sh wheels-readme.
 
 | File | Size bytes | SHA256 |
 | --- | ---: | --- |
@@ -95,4 +95,3 @@ Updated by tools/scripts/setup-py312-torch212-cu130.sh wheels-readme.
 | fastwer-0.1.3.tar.gz | 4877 | f411662f337b588ce21aabf51f3170e891bfed3f19f6331b946ad1974401d54d |
 
 <!-- local-wheels-inventory:end -->
-

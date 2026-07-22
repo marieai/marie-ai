@@ -37,8 +37,18 @@ run_suite "Scheduler units and database pool" \
   tests/unit/storage/test_postgres_pool_backpressure.py \
   tests/unit/executor/storage/test_postgres_handler_psycopg3.py
 
+run_suite "Scheduler messaging and gateway submission" \
+  tests/unit/messaging/test_publisher.py \
+  tests/unit/serve/runtimes/gateway/test_marie_gateway_submission.py \
+  tests/unit/tools/stress/test_analyze_scheduler_trace.py \
+  tests/unit/tools/stress/test_gateway_e2e_stresser.py \
+  tests/unit/tools/stress/test_scheduler_correctness.py
+
 run_suite "Scheduler-adjacent runtime units" \
+  tests/unit/job/test_event_publisher_trace.py \
   tests/unit/job/test_gateway_job_distributor.py \
+  tests/unit/job/test_job_manager_monitor_trace.py \
+  tests/unit/job/test_job_supervisor_trace.py \
   tests/integration/job/test_job_supervisor.py \
   tests/unit/query_planner/test_guardrail_evaluator.py \
   tests/unit/query_planner/test_guardrail_mapper.py \

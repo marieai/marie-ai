@@ -20,6 +20,7 @@ from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
 from marie.state.state_store import DesiredStore, StatusStore
 from marie.types_core.request.data import DataRequest
+from marie.utils.scheduler_trace import scheduler_trace
 
 
 class JobSupervisor:
@@ -285,6 +286,12 @@ class JobSupervisor:
         self.logger.error(
             f"Request sending failed for {node}/{deployment_name}, job {self._job_id}. Exception: {exception}"
         )
+        scheduler_trace(
+            "job_supervisor_send_failed",
+            job_id=self._job_id,
+            deployment=deployment_name,
+            error_type=type(exception).__name__,
+        )
 
     async def pre_send_callback(
         self, requests: Union[List[DataRequest], DataRequest], ctx: Dict
@@ -294,21 +301,47 @@ class JobSupervisor:
         JobSupervisor does not reserve or release capacity anymore.
         """
         self.logger.debug("Pre-send callback invoked (no reservation).")
+        callback_started = time.perf_counter()
+        deployment = ctx.get("deployment", "N/A")
+        scheduler_trace(
+            "job_supervisor_pre_send_started",
+            job_id=self._job_id,
+            deployment=deployment,
+        )
         self._signal_confirmation_threadsafe()
+        scheduler_trace(
+            "job_supervisor_dispatch_admitted",
+            job_id=self._job_id,
+            deployment=deployment,
+            elapsed_ms=(time.perf_counter() - callback_started) * 1000.0,
+        )
 
         try:
             node_addr = ctx["address"]
             deployment = ctx["deployment"]
-
             node = self._netloc(node_addr)
             params = {"job_id": self._job_id}
             desired = await self._loop.run_in_executor(
                 None, self._desired_store.schedule_new_epoch, node, deployment, params
             )
             self._current_job_epoch = desired.epoch if desired else None
+            scheduler_trace(
+                "job_supervisor_desired_state_written",
+                job_id=self._job_id,
+                deployment=deployment,
+                epoch=self._current_job_epoch,
+                elapsed_ms=(time.perf_counter() - callback_started) * 1000.0,
+            )
             await asyncio.sleep(0.01)
 
         except Exception as e:
+            scheduler_trace(
+                "job_supervisor_desired_state_write_failed",
+                job_id=self._job_id,
+                deployment=deployment,
+                error_type=type(e).__name__,
+                elapsed_ms=(time.perf_counter() - callback_started) * 1000.0,
+            )
             self.logger.error(f"pre-send callback failed: {e}")
             self._current_job_epoch = None
             raise
@@ -326,10 +359,26 @@ class JobSupervisor:
         node = ctx["address"]
         deployment_name = ctx["deployment"]
         epoch = self._current_job_epoch
+        callback_started = time.perf_counter()
+        scheduler_trace(
+            "job_supervisor_response_received",
+            job_id=self._job_id,
+            deployment=deployment_name,
+            epoch=epoch,
+        )
 
         self._signal_confirmation_threadsafe()
 
         if epoch is None:
+            scheduler_trace(
+                "job_supervisor_worker_ack_wait_completed",
+                job_id=self._job_id,
+                deployment=deployment_name,
+                epoch=epoch,
+                acknowledged=False,
+                skipped=True,
+                elapsed_ms=(time.perf_counter() - callback_started) * 1000.0,
+            )
             self.logger.warning("No desired epoch recorded; skipping ack wait")
             return
 
@@ -340,11 +389,28 @@ class JobSupervisor:
             self.logger.debug(
                 "Worker ack for %s/%s epoch=%s: %s", node, deployment_name, epoch, ack
             )
+            scheduler_trace(
+                "job_supervisor_worker_ack_wait_completed",
+                job_id=self._job_id,
+                deployment=deployment_name,
+                epoch=epoch,
+                acknowledged=ack,
+                skipped=False,
+                elapsed_ms=(time.perf_counter() - callback_started) * 1000.0,
+            )
             if not ack:
                 self.logger.warning(
                     f"Timed out waiting for worker ack for job {self._job_id}"
                 )
         except Exception as e:
+            scheduler_trace(
+                "job_supervisor_worker_ack_wait_failed",
+                job_id=self._job_id,
+                deployment=deployment_name,
+                epoch=epoch,
+                error_type=type(e).__name__,
+                elapsed_ms=(time.perf_counter() - callback_started) * 1000.0,
+            )
             self.logger.error("Ack wait error for %s/%s: %s", node, deployment_name, e)
 
     async def _submit_job_in_background(self, job_info: JobInfo):
@@ -380,18 +446,39 @@ class JobSupervisor:
                 Finalize the job once the send_task is completed.
                 """
                 try:
-                    start_time = time.monotonic()
+                    start_time = time.perf_counter()
                     response = (
                         await send_task
                     )  # this may take long time, so we await it here
 
-                    elapsed = time.monotonic() - start_time
+                    elapsed = time.perf_counter() - start_time
+                    scheduler_trace(
+                        "job_supervisor_send_task_completed",
+                        job_id=self._job_id,
+                        response_code=response.status.code,
+                        elapsed_ms=elapsed * 1000.0,
+                    )
                     self.logger.info(
                         f"Job processed successfully in {elapsed:.2f}s for job {self._job_id}"
                     )
 
+                    status_read_started = time.perf_counter()
                     current_status = await self._job_info_client.get_status(
                         self._job_id
+                    )
+                    scheduler_trace(
+                        "job_supervisor_terminal_status_read",
+                        job_id=self._job_id,
+                        status=str(current_status)
+                        if current_status is not None
+                        else None,
+                        found=current_status is not None,
+                        terminal=(
+                            current_status.is_terminal()
+                            if current_status is not None
+                            else False
+                        ),
+                        elapsed_ms=(time.perf_counter() - status_read_started) * 1000.0,
                     )
                     if current_status is None:
                         self.logger.warning(

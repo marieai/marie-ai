@@ -7,12 +7,12 @@ This harness exercises the full job path:
 1. Discover local files or existing S3 assets
 2. Optionally upload local files to S3/MinIO using the Marie storage layer
 3. Submit planner-aware jobs through the gateway
-4. Consume scheduler lifecycle events from RabbitMQ
+4. Consume scheduler lifecycle events from the Message Bus
 5. Report submit, queue, execution, end-to-end, and failure metrics
 
 The tool is intentionally separate from `gateway_stresser.py`. The existing
 stresser remains a lightweight request benchmark; this script owns the
-scheduler/S3/RabbitMQ concerns needed for full end-to-end validation.
+scheduler/S3/Message Bus concerns needed for full end-to-end validation.
 """
 
 from __future__ import annotations
@@ -143,7 +143,6 @@ MOCK_FAILURE_MODES = ("exception", "timeout", "random")
 REDACTED_SECRET = "<redacted>"
 PREFLIGHT_FAILURE_REASONS = (
     "endpoint_unavailable",
-    "queue_missing",
     "executor_missing",
     "zero_capacity",
     "zero_available_capacity",
@@ -521,31 +520,6 @@ def _percentile(values: List[float], pct: float) -> float:
     return sorted_values[idx]
 
 
-def _extract_ref_id_from_event(message: Dict[str, Any]) -> Optional[str]:
-    payload = message.get("payload")
-    if payload is None:
-        return None
-
-    try:
-        payload_dict = json.loads(payload) if isinstance(payload, str) else payload
-    except Exception:
-        return None
-
-    if not isinstance(payload_dict, dict):
-        return None
-
-    metadata = payload_dict.get("metadata")
-    if isinstance(metadata, dict):
-        ref_id = metadata.get("ref_id")
-        if isinstance(ref_id, str) and ref_id:
-            return ref_id
-
-    ref_id = payload_dict.get("ref_id")
-    if isinstance(ref_id, str) and ref_id:
-        return ref_id
-    return None
-
-
 def _extract_failure_error(message: Any) -> str:
     if not isinstance(message, dict):
         return "Queue reported failed event"
@@ -649,6 +623,7 @@ class JobRun:
     stress_run_id: Optional[str] = None
     required_executors: List[str] = field(default_factory=list)
     llm_pool_id: Optional[str] = None
+    mock_process_time: Optional[float] = None
     mock_failure_rate: Optional[float] = None
     mock_failure_mode: Optional[str] = None
     force_fail: bool = False
@@ -1120,6 +1095,7 @@ class GatewayE2EStresser:
         llm_pool_id: Optional[str] = None,
         llm_pool_cycle: Optional[List[str]] = None,
         purge_annotators: Optional[List[str]] = None,
+        mock_process_time: Optional[float] = None,
         mock_failure_rate: Optional[float] = None,
         mock_failure_mode: str = "exception",
         force_failure_every: Optional[int] = None,
@@ -1206,6 +1182,7 @@ class GatewayE2EStresser:
             if annotator_name and annotator_name not in seen_purge_annotators:
                 self.purge_annotators.append(annotator_name)
                 seen_purge_annotators.add(annotator_name)
+        self.mock_process_time = mock_process_time
         self.mock_failure_rate = mock_failure_rate
         self.mock_failure_mode = mock_failure_mode
         self.force_failure_every = force_failure_every
@@ -1286,6 +1263,8 @@ class GatewayE2EStresser:
             0.0 <= self.mock_failure_rate <= 1.0
         ):
             raise ValueError("--mock-failure-rate must be between 0 and 1 inclusive")
+        if self.mock_process_time is not None and self.mock_process_time <= 0:
+            raise ValueError("--mock-process-time must be greater than zero")
         if self.mock_failure_mode not in MOCK_FAILURE_MODES:
             raise ValueError(
                 f"--mock-failure-mode must be one of {', '.join(MOCK_FAILURE_MODES)}"
@@ -1337,7 +1316,11 @@ class GatewayE2EStresser:
         self._logger = logging.getLogger(self.__class__.__name__)
         self._runs_by_request_id: Dict[str, JobRun] = {}
         self._runs_by_job_id: Dict[str, JobRun] = {}
-        self._runs_by_ref_id: Dict[str, JobRun] = {}
+        self._early_events_by_job_id: Dict[str, List[Dict[str, Any]]] = {}
+        self._early_event_count = 0
+        self._replayed_early_event_count = 0
+        self._dropped_early_event_count = 0
+        self._early_event_capacity = self.submit_concurrency * self.max_events_per_job
         self._debug_samples: List[DebugSnapshot] = []
         self._verification_errors: List[str] = []
         self._preflight_attempts: List[Dict[str, Any]] = []
@@ -1559,6 +1542,7 @@ class GatewayE2EStresser:
             "estimated_job_count": self.estimated_job_count,
             "submit_rate": self.submit_rate,
             "submit_concurrency": self.submit_concurrency,
+            "mock_process_time": self.mock_process_time,
             "failure_simulation": {
                 "mock_failure_rate": self.mock_failure_rate,
                 "mock_failure_mode": self.mock_failure_mode,
@@ -1785,6 +1769,7 @@ class GatewayE2EStresser:
                     "job_name": run.job_name,
                     "fault_profile": run.fault_profile,
                     "llm_pool_id": run.llm_pool_id,
+                    "mock_process_time": run.mock_process_time,
                     "mock_failure_rate": run.mock_failure_rate,
                     "mock_failure_mode": run.mock_failure_mode,
                     "force_fail": run.force_fail,
@@ -1825,6 +1810,7 @@ class GatewayE2EStresser:
             "mock_failure_rate": self.mock_failure_rate,
             "mock_failure_mode": self.mock_failure_mode,
             "force_failure_every": self.force_failure_every,
+            "mock_process_time": self.mock_process_time,
             "submit_rate": self.submit_rate,
             "submit_concurrency": self.submit_concurrency,
             "batch_size": self.batch_size,
@@ -1970,15 +1956,13 @@ class GatewayE2EStresser:
             "reason": None,
             "target_queue": self.queue_name,
             "known_queues": known_queues,
+            "queue_known_before_submission": self.queue_name in known_queues,
             "required_executors": list(self.required_executors),
             "matched_slots": {},
             "missing_executors": [],
             "zero_capacity_executors": [],
             "zero_available_executors": [],
         }
-        if self.queue_name not in known_queues:
-            interpretation["reason"] = "queue_missing"
-            return interpretation
         if not self.required_executors:
             interpretation["reason"] = "executor_missing"
             interpretation["missing_executors"] = [
@@ -2108,7 +2092,7 @@ class GatewayE2EStresser:
             normalized = _coerce_gateway_debug_payload(payload)
             totals = normalized.get("totals") if isinstance(normalized, dict) else None
             self._post_drain_capacity = {
-                "ok": isinstance(totals, dict),
+                "ok": status_code == 200 and isinstance(totals, dict),
                 "status_code": status_code,
                 "capacity": int((totals or {}).get("capacity", 0)),
                 "used": int((totals or {}).get("used", 0)),
@@ -2121,11 +2105,6 @@ class GatewayE2EStresser:
 
     def _preflight_failure_message(self, interpretation: Dict[str, Any]) -> str:
         reason = interpretation.get("reason")
-        if reason == "queue_missing":
-            return (
-                f"Target queue {self.queue_name!r} is not monitored; known queues: "
-                f"{interpretation.get('known_queues', [])}"
-            )
         if reason == "executor_missing":
             return (
                 "Required executor capacity slots are missing: "
@@ -2153,7 +2132,6 @@ class GatewayE2EStresser:
     def _register_run(self, run: JobRun) -> None:
         with self._state_lock:
             self._runs_by_request_id[run.request_id] = run
-            self._runs_by_ref_id[run.ref_id] = run
             self._created_job_count += 1
 
     def _mark_submit_result(self, run: JobRun, result: SubmitResult) -> None:
@@ -2164,6 +2142,17 @@ class GatewayE2EStresser:
                 run.job_id = result.job_id
                 if result.job_id:
                     self._runs_by_job_id[result.job_id] = run
+                    early_events = self._early_events_by_job_id.pop(result.job_id, [])
+                    self._early_event_count -= len(early_events)
+                    terminal_seen = False
+                    for message in early_events:
+                        terminal_seen = (
+                            self._apply_event_locked(run, message) or terminal_seen
+                        )
+                    self._replayed_early_event_count += len(early_events)
+                    if terminal_seen:
+                        self._stream_job_record_locked(run)
+                        self._enforce_retention_locked()
             else:
                 run.submit_error_type = result.error_type
                 run.submit_error_message = result.error_message
@@ -2200,76 +2189,92 @@ class GatewayE2EStresser:
     def _handle_event_message(self, message: Dict[str, Any]) -> None:
         event_name = message.get("event")
         job_id = message.get("jobid")
-        ref_id = _extract_ref_id_from_event(message)
-        timestamp = _extract_event_timestamp(message)
 
-        if not isinstance(event_name, str):
+        if not isinstance(event_name, str) or not isinstance(job_id, str) or not job_id:
             return
 
         with self._state_lock:
-            run = self._runs_by_job_id.get(job_id) if job_id else None
-            if run is None and ref_id:
-                run = self._runs_by_ref_id.get(ref_id)
-                if run is not None and job_id:
-                    run.job_id = job_id
-                    self._runs_by_job_id[job_id] = run
-
+            run = self._runs_by_job_id.get(job_id)
             if run is None:
+                unresolved = any(
+                    candidate.submit_finished_at is None
+                    for candidate in self._runs_by_request_id.values()
+                )
+                pending = self._early_events_by_job_id.get(job_id, [])
+                if (
+                    unresolved
+                    and len(pending) < self.max_events_per_job
+                    and self._early_event_count < self._early_event_capacity
+                ):
+                    self._early_events_by_job_id.setdefault(job_id, []).append(message)
+                    self._early_event_count += 1
+                elif unresolved:
+                    self._dropped_early_event_count += 1
                 return
 
-            run.raw_events.append(event_name)
-            if len(run.raw_events) > self.max_events_per_job:
-                del run.raw_events[0]
-
-            event_rank = 0
-            if event_name.endswith(".scheduled"):
-                event_rank = 1
-                run.scheduled_event_count += 1
-                if run.scheduled_at is None:
-                    run.scheduled_at = timestamp
-            elif event_name.endswith(".started"):
-                event_rank = 2
-                run.started_event_count += 1
-                if run.started_at is None:
-                    run.started_at = timestamp
-            elif event_name.endswith(".completed"):
-                event_rank = 3
-                if run.completed_event_count > 0:
-                    run.duplicate_terminal_events += 1
-                if run.failed_event_count > 0:
-                    run.conflicting_terminal_events += 1
-                run.completed_event_count += 1
-                if run.completed_at is None and run.failed_at is None:
-                    run.completed_at = timestamp
-            elif event_name.endswith(".failed"):
-                event_rank = 3
-                if run.failed_event_count > 0:
-                    run.duplicate_terminal_events += 1
-                if run.completed_event_count > 0:
-                    run.conflicting_terminal_events += 1
-                run.failed_event_count += 1
-                if run.failed_at is None and run.completed_at is None:
-                    run.failed_at = timestamp
-                    run.failure_reason = _extract_failure_error(message)
-
-            if event_rank:
-                if event_rank < run.last_event_rank:
-                    run.event_order_errors.append(
-                        f"{event_name} arrived after rank {run.last_event_rank}"
-                    )
-                elif event_rank == 2 and run.scheduled_event_count == 0:
-                    run.event_order_errors.append(
-                        f"{event_name} arrived before a scheduled event"
-                    )
-                elif event_rank == 3 and run.started_event_count == 0:
-                    run.event_order_errors.append(
-                        f"{event_name} arrived before a started event"
-                    )
-                run.last_event_rank = max(run.last_event_rank, event_rank)
-
-            if event_rank == 3:
+            if self._apply_event_locked(run, message):
                 self._stream_job_record_locked(run)
                 self._enforce_retention_locked()
+
+    def _apply_event_locked(
+        self,
+        run: JobRun,
+        message: Dict[str, Any],
+    ) -> bool:
+        event_name = message["event"]
+        timestamp = _extract_event_timestamp(message)
+
+        run.raw_events.append(event_name)
+        if len(run.raw_events) > self.max_events_per_job:
+            del run.raw_events[0]
+
+        event_rank = 0
+        if event_name.endswith(".scheduled"):
+            event_rank = 1
+            run.scheduled_event_count += 1
+            if run.scheduled_at is None:
+                run.scheduled_at = timestamp
+        elif event_name.endswith(".started"):
+            event_rank = 2
+            run.started_event_count += 1
+            if run.started_at is None:
+                run.started_at = timestamp
+        elif event_name.endswith(".completed"):
+            event_rank = 3
+            if run.completed_event_count > 0:
+                run.duplicate_terminal_events += 1
+            if run.failed_event_count > 0:
+                run.conflicting_terminal_events += 1
+            run.completed_event_count += 1
+            if run.completed_at is None and run.failed_at is None:
+                run.completed_at = timestamp
+        elif event_name.endswith(".failed"):
+            event_rank = 3
+            if run.failed_event_count > 0:
+                run.duplicate_terminal_events += 1
+            if run.completed_event_count > 0:
+                run.conflicting_terminal_events += 1
+            run.failed_event_count += 1
+            if run.failed_at is None and run.completed_at is None:
+                run.failed_at = timestamp
+                run.failure_reason = _extract_failure_error(message)
+
+        if event_rank:
+            if event_rank < run.last_event_rank:
+                run.event_order_errors.append(
+                    f"{event_name} arrived after rank {run.last_event_rank}"
+                )
+            elif event_rank == 2 and run.scheduled_event_count == 0:
+                run.event_order_errors.append(
+                    f"{event_name} arrived before a scheduled event"
+                )
+            elif event_rank == 3 and run.started_event_count == 0:
+                run.event_order_errors.append(
+                    f"{event_name} arrived before a started event"
+                )
+            run.last_event_rank = max(run.last_event_rank, event_rank)
+
+        return event_rank == 3
 
     def _job_record_payload(self, run: JobRun) -> Dict[str, Any]:
         return {
@@ -2285,6 +2290,7 @@ class GatewayE2EStresser:
             "job_name": run.job_name,
             "required_executors": list(run.required_executors),
             "fault_profile": run.fault_profile,
+            "mock_process_time": run.mock_process_time,
             "terminal_status": run.terminal_status,
             "scheduled_at": run.scheduled_at,
             "started_at": run.started_at,
@@ -2345,8 +2351,6 @@ class GatewayE2EStresser:
             self._runs_by_request_id.pop(run.request_id, None)
             if run.job_id and self._runs_by_job_id.get(run.job_id) is run:
                 self._runs_by_job_id.pop(run.job_id, None)
-            if self._runs_by_ref_id.get(run.ref_id) is run:
-                self._runs_by_ref_id.pop(run.ref_id, None)
 
     def _build_run(self, asset: InputAsset, job_index: int) -> JobRun:
         if self._run_namespace is not None:
@@ -2379,6 +2383,7 @@ class GatewayE2EStresser:
             stress_run_id=self.run_id,
             required_executors=list(self.required_executors),
             llm_pool_id=self._resolve_llm_pool_id(job_index),
+            mock_process_time=self.mock_process_time,
         )
 
     def _resolve_llm_pool_id(self, job_index: int) -> Optional[str]:
@@ -2485,6 +2490,8 @@ class GatewayE2EStresser:
             metadata["stress_queue"] = self.queue_name
             metadata["stress_required_executors"] = list(self.required_executors)
         metadata["uri"] = run.s3_uri
+        if run.mock_process_time is not None:
+            metadata["process_time"] = run.mock_process_time
         metadata.update(self._build_failure_metadata(run))
         soft_offset, hard_offset = self._resolve_sla_offsets(run)
         if soft_offset is not None:
@@ -3048,9 +3055,10 @@ class GatewayE2EStresser:
         with tempfile.TemporaryDirectory(
             prefix="marie-gateway-correctness-"
         ) as tmp_dir:
+            gateway_report = self.build_report_payload()
             gateway_report_path = Path(tmp_dir) / "gateway-report.json"
             gateway_report_path.write_text(
-                json.dumps(self.build_report_payload(), default=str),
+                json.dumps(gateway_report, default=str),
                 encoding="utf-8",
             )
             verifier_report_path = (
@@ -3063,6 +3071,8 @@ class GatewayE2EStresser:
                 str(verifier_path),
                 "--run-id",
                 str(self.run_id),
+                "--scope",
+                "gateway",
                 "--gateway-report",
                 str(gateway_report_path),
                 "--report",
@@ -3070,6 +3080,10 @@ class GatewayE2EStresser:
             ]
             if self.correctness_config_path:
                 command.extend(["--config", self.correctness_config_path])
+            if self.planner == "mock_parallel_subgraphs":
+                command.append("--require-parallel-graph")
+            if any(job.get("force_fail") for job in gateway_report["jobs"]):
+                command.append("--require-failure-propagation")
 
             started_at = _now()
             try:
@@ -3358,6 +3372,13 @@ class GatewayE2EStresser:
         with self._state_lock:
             runs = list(self._runs_by_request_id.values())
             debug_samples = list(self._debug_samples)
+            early_event_buffer = {
+                "capacity": self._early_event_capacity,
+                "replayed_events": self._replayed_early_event_count,
+                "dropped_events": self._dropped_early_event_count,
+                "unmatched_events": self._early_event_count,
+                "unmatched_job_ids": len(self._early_events_by_job_id),
+            }
         report_now = self.metrics.end_time or _now()
 
         debug_sample_payload = [
@@ -3442,6 +3463,7 @@ class GatewayE2EStresser:
                 "mock_failure_rate": self.mock_failure_rate,
                 "mock_failure_mode": self.mock_failure_mode,
                 "force_failure_every": self.force_failure_every,
+                "mock_process_time": self.mock_process_time,
                 "submitted_jobs": self.metrics.submitted_jobs,
                 "completed_jobs": self.metrics.completed_jobs,
                 "failed_jobs": self.metrics.failed_jobs,
@@ -3541,6 +3563,7 @@ class GatewayE2EStresser:
                 "event_order_errors": self.metrics.event_order_errors,
                 "duplicate_terminal_events": self.metrics.duplicate_terminal_events,
                 "conflicting_terminal_events": self.metrics.conflicting_terminal_events,
+                "early_event_buffer": early_event_buffer,
             },
             "correctness_verifier": self._correctness_result,
             "trace_mode": self.trace_mode,
@@ -3576,6 +3599,7 @@ class GatewayE2EStresser:
                     "ref_id": run.ref_id,
                     "required_executors": list(run.required_executors),
                     "fault_profile": run.fault_profile,
+                    "mock_process_time": run.mock_process_time,
                     "mock_failure_rate": run.mock_failure_rate,
                     "mock_failure_mode": run.mock_failure_mode,
                     "force_fail": run.force_fail,
@@ -3793,6 +3817,12 @@ Examples:
         choices=["normal", "timeout", "error", "chaos"],
         default="normal",
         help="Logical fault profile label for this run; combine with AIMock config/admin control when using mock backends",
+    )
+    parser.add_argument(
+        "--mock-process-time",
+        type=float,
+        default=None,
+        help="Fixed per-node mock executor processing time override in seconds",
     )
     parser.add_argument(
         "--mock-failure-rate",
@@ -4194,6 +4224,8 @@ Examples:
         0.0 <= args.mock_failure_rate <= 1.0
     ):
         parser.error("--mock-failure-rate must be between 0 and 1 inclusive")
+    if args.mock_process_time is not None and args.mock_process_time <= 0:
+        parser.error("--mock-process-time must be greater than zero")
     if args.force_failure_every is not None and args.force_failure_every <= 0:
         parser.error("--force-failure-every must be greater than zero")
     if args.soft_sla_seconds is not None and args.soft_sla_seconds < 0:
@@ -4437,6 +4469,7 @@ async def main() -> None:
         llm_pool_id=args.llm_pool_id,
         llm_pool_cycle=args.llm_pool_cycle_values,
         purge_annotators=args.purge_annotators_values,
+        mock_process_time=args.mock_process_time,
         mock_failure_rate=args.mock_failure_rate,
         mock_failure_mode=args.mock_failure_mode,
         force_failure_every=args.force_failure_every,

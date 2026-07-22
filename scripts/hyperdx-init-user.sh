@@ -5,11 +5,11 @@
 # Creates or resets the default admin user for HyperDX.
 #
 # Usage:
-#   ./tools/scripts/hyperdx-init-user.sh [--env-file <path>] [email] [password]
+#   ./scripts/hyperdx-init-user.sh [--env-file <path>] [email] [password]
 #
 # Examples:
-#   ./tools/scripts/hyperdx-init-user.sh --env-file ./config/.env.dev
-#   ./tools/scripts/hyperdx-init-user.sh admin@example.com mypassword
+#   ./scripts/hyperdx-init-user.sh --env-file ./config/.env.dev
+#   ./scripts/hyperdx-init-user.sh admin@example.com mypassword
 #
 # Environment Variables:
 #   HYPERDX_ADMIN_EMAIL    - Admin email (default: admin@localhost)
@@ -28,16 +28,16 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPO_ROOT="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)"
 
 usage() {
     cat <<'EOF'
 Usage:
-  ./tools/scripts/hyperdx-init-user.sh [--env-file <path>] [email] [password]
+  ./scripts/hyperdx-init-user.sh [--env-file <path>] [email] [password]
 
 Examples:
-  ./tools/scripts/hyperdx-init-user.sh --env-file ./config/.env.dev
-  ./tools/scripts/hyperdx-init-user.sh admin@example.com mypassword
+  ./scripts/hyperdx-init-user.sh --env-file ./config/.env.dev
+  ./scripts/hyperdx-init-user.sh admin@example.com mypassword
 EOF
 }
 

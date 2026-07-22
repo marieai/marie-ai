@@ -206,3 +206,40 @@ async def test_stopped_attempt_clears_attempt_identity_after_commit() -> None:
     context.frontier.on_job_cancelled.assert_awaited_once_with(JOB_ID)
     context.dag_service.resolve_dag_status_with_retry.assert_awaited_once()
     context.notify.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_terminal_transition_traces_resolution_before_scheduler_wake(
+    monkeypatch,
+) -> None:
+    context = build_service()
+    context.dag_service.resolve_dag_status_with_retry.return_value = True
+    trace = MagicMock()
+    monkeypatch.setattr(
+        "marie.scheduler.services.attempt_lifecycle_service.scheduler_trace",
+        trace,
+    )
+
+    accepted = await context.service.transition_terminal(
+        JOB_ID,
+        context.work_item,
+        JobStatus.SUCCEEDED,
+        run_owner="worker-1",
+        run_attempt_id=ATTEMPT_ID,
+        source="job_event",
+    )
+
+    assert accepted is True
+    events = [item.args[0] for item in trace.call_args_list]
+    assert events == [
+        "job_terminal_attempt_accepted",
+        "terminal_dag_resolution_started",
+        "terminal_dag_resolution_completed",
+        "terminal_scheduler_wake_completed",
+    ]
+    resolution = trace.call_args_list[2].kwargs
+    assert resolution["dag_resolved"] is True
+    assert resolution["elapsed_ms"] >= 0
+    wake = trace.call_args_list[3].kwargs
+    assert wake["wake_queued"] is True
+    assert wake["terminal"] is True

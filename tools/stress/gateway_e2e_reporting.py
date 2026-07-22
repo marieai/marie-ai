@@ -105,12 +105,7 @@ def _html_cards(cards: List[Tuple[str, Any]]) -> str:
 
 
 def _html_section(title: str, body: str) -> str:
-    return (
-        '<section class="section">'
-        f"<h2>{html.escape(title)}</h2>"
-        f"{body}"
-        "</section>"
-    )
+    return f'<section class="section"><h2>{html.escape(title)}</h2>{body}</section>'
 
 
 def _render_html_document(
@@ -522,6 +517,7 @@ def _render_final_report_html(payload: Dict[str, Any]) -> str:
             ("Timed Out", summary.get("event_timeout_jobs")),
             ("Throughput", summary.get("throughput")),
             ("Fault Profile", summary.get("fault_profile")),
+            ("Mock Process Time", summary.get("mock_process_time")),
             ("Generated At", summary.get("report_generated_at")),
             ("Preflight", (preflight.get("result") or {}).get("passed")),
             ("Reliability", reliability.get("passed")),
@@ -539,7 +535,11 @@ def _render_final_report_html(payload: Dict[str, Any]) -> str:
             ["Reason", preflight_result.get("reason")],
             ["Attempts", preflight_result.get("attempts")],
             ["Target Queue", preflight_final.get("target_queue")],
-            ["Known Queues", preflight_final.get("known_queues")],
+            [
+                "Queue Known Before Submission",
+                preflight_final.get("queue_known_before_submission"),
+            ],
+            ["Known Queues Before Submission", preflight_final.get("known_queues")],
             ["Required Executors", preflight_final.get("required_executors")],
             ["Matched Slots", preflight_final.get("matched_slots")],
             ["Error", preflight_result.get("error")],

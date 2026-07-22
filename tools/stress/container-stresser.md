@@ -29,7 +29,7 @@ This tool helps you verify application resilience and reconnection behavior.
 Run the script using Python:
 
 ```bash
-python3 container_stresser.py --container <container_name> [OPTIONS]
+python tools/stress/container_stresser.py --container <container_name> [OPTIONS]
 ```
 
 ---
@@ -66,7 +66,12 @@ Random restarts/stops/kills with random intervals.
 Example:
 
 ```bash
-python3 container_stresser.py --container my_app --mode random --duration 20 --min-interval 10 --max-interval 60
+python tools/stress/container_stresser.py \
+  --container my_app \
+  --mode random \
+  --duration 20 \
+  --min-interval 10 \
+  --max-interval 60
 ```
 
 ---
@@ -84,7 +89,12 @@ Fixed number of actions at regular intervals.
 Example:
 
 ```bash
-python3 container_stresser.py --container my_app --mode periodic --count 5 --interval 20 --action stop
+python tools/stress/container_stresser.py \
+  --container my_app \
+  --mode periodic \
+  --count 5 \
+  --interval 20 \
+  --action stop
 ```
 
 ---
@@ -102,7 +112,12 @@ Rapid sequences of restarts followed by rest periods.
 Example:
 
 ```bash
-python3 container_stresser.py --container my_app --mode burst --burst-count 3 --burst-interval 5 --rest-period 60
+python tools/stress/container_stresser.py \
+  --container my_app \
+  --mode burst \
+  --burst-count 3 \
+  --burst-interval 5 \
+  --rest-period 60
 ```
 
 ---
@@ -118,7 +133,10 @@ Completely random actions and timings.
 Example:
 
 ```bash
-python3 container_stresser.py --container my_app --mode chaos --duration 30
+python tools/stress/container_stresser.py \
+  --container my_app \
+  --mode chaos \
+  --duration 30
 ```
 
 ---
@@ -153,25 +171,41 @@ Press `Ctrl+C` to stop the stress test gracefully. The script ensures:
 Random mode for 5 minutes:
 
 ```bash
-python3 container_stresser.py --container test_container --mode random --duration 5
+python tools/stress/container_stresser.py \
+  --container test_container \
+  --mode random \
+  --duration 5
 ```
 
 Periodic mode with 3 kills every 10 seconds:
 
 ```bash
-python3 container_stresser.py --container test_container --mode periodic --count 3 --interval 10 --action kill
+python tools/stress/container_stresser.py \
+  --container test_container \
+  --mode periodic \
+  --count 3 \
+  --interval 10 \
+  --action kill
 ```
 
 Burst mode with 4 restarts per burst:
 
 ```bash
-python3 container_stresser.py --container test_container --mode burst --burst-count 4 --burst-interval 3 --rest-period 20
+python tools/stress/container_stresser.py \
+  --container test_container \
+  --mode burst \
+  --burst-count 4 \
+  --burst-interval 3 \
+  --rest-period 20
 ```
 
 Chaos mode for 10 minutes:
 
 ```bash
-python3 container_stresser.py --container test_container --mode chaos --duration 10
+python tools/stress/container_stresser.py \
+  --container test_container \
+  --mode chaos \
+  --duration 10
 ```
 
 

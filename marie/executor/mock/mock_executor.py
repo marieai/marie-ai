@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import os
 import random
 import time
@@ -8,6 +10,7 @@ import torch
 from docarray import DocList
 
 from marie.api.docs import AssetKeyDoc
+from marie.assets import AssetTracker
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
@@ -127,16 +130,11 @@ class IntegrationExecutorMock(MarieExecutor):
 
         self.logger.info(f"func called : {len(docs)}, {parameters}")
 
-        # Get processing time (allow per-request override)
         process_time = parameters.get("process_time", self.process_time)
-
-        # Add randomness if requested (for more realistic simulation)
         if parameters.get("randomize_time", False):
             min_time = process_time * 0.5
             max_time = process_time * 1.5
             process_time = random.uniform(min_time, max_time)
-
-        # Check if we should fail this request
 
         failure_rate = parameters.get("failure_rate", self.failure_rate)
         failure_mode = parameters.get("failure_mode", self.failure_mode)
@@ -152,7 +150,6 @@ class IntegrationExecutorMock(MarieExecutor):
                     f"Mock failure: Simulated exception in {self.runtime_info['instance_name']}"
                 )
             elif failure_mode == "timeout":
-                # Simulate a timeout by sleeping much longer
                 self.logger.warning(
                     "Simulating timeout by sleeping for extended period"
                 )
@@ -161,7 +158,6 @@ class IntegrationExecutorMock(MarieExecutor):
                     f"Mock failure: Simulated timeout in {self.runtime_info['instance_name']}"
                 )
             elif failure_mode == "random":
-                # Randomly choose between different failure types
                 failure_types = [
                     RuntimeError("Mock failure: Random runtime error"),
                     ValueError("Mock failure: Random value error"),
@@ -240,16 +236,8 @@ class IntegrationExecutorMock(MarieExecutor):
                 docs=docs,
             )
 
-        # Asset tracking
         if self.asset_tracking_enabled and job_id:
-            import hashlib
-            import json
-
-            from marie.assets import AssetTracker
-
             assets = []
-
-            # Create a random number of mock assets between 1 and 5
             n_assets = random.randint(1, 5)
 
             for i in range(n_assets):
@@ -282,7 +270,6 @@ class IntegrationExecutorMock(MarieExecutor):
                     }
                 )
 
-            # Record materializations
             if assets:
                 try:
                     upstream = self._get_upstream_asset_tuples(dag_id, node_task_id)

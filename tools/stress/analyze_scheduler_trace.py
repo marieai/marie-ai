@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -37,12 +38,36 @@ EVENTS = (
     "gateway_dispatch_start",
     "gateway_dispatch_submitted",
     "gateway_dispatch_confirmed",
+    "job_supervisor_pre_send_started",
+    "job_supervisor_dispatch_admitted",
+    "job_supervisor_desired_state_written",
+    "job_supervisor_desired_state_write_failed",
+    "job_supervisor_response_received",
+    "job_supervisor_worker_ack_wait_completed",
+    "job_supervisor_worker_ack_wait_failed",
+    "job_supervisor_send_failed",
+    "job_supervisor_send_task_completed",
+    "job_supervisor_terminal_status_read",
+    "job_monitor_status_observed",
+    "job_monitor_terminal_observed",
+    "job_monitor_sleep_started",
+    "job_status_event_enqueued",
+    "job_status_event_dropped",
+    "job_status_event_dequeued",
+    "job_status_event_dispatch_completed",
+    "scheduler_job_event_received",
     "executor_request_received",
     "executor_running_recorded",
     "executor_callback_invoked",
     "executor_slot_released",
     "executor_success_recorded",
     "executor_failed_recorded",
+    "job_run_attempt_started",
+    "job_terminal_attempt_accepted",
+    "job_terminal_attempt_rejected",
+    "terminal_dag_resolution_started",
+    "terminal_dag_resolution_completed",
+    "terminal_scheduler_wake_completed",
     "scheduler_priority_refresh_requested",
     "scheduler_priority_refresh_due",
     "scheduler_priority_refresh_start",
@@ -73,6 +98,7 @@ EVENTS = (
     "scheduler_priority_refresh_summary_done",
     "scheduler_priority_refresh_hard_sla_policy_start",
     "scheduler_priority_refresh_hard_sla_policy_done",
+    "scheduler_priority_refresh_completed",
     "scheduler_priority_refresh_done",
     "scheduler_priority_refresh_failed",
     "scheduler_priority_refresh_returned",
@@ -110,12 +136,44 @@ REPORT_LATENCIES = (
     ("db-lease->slot", "db_lease_to_slot"),
     ("slot->active", "slot_to_active"),
     ("active->dispatch", "activate_to_dispatch"),
-    ("dispatch->confirm", "dispatch_to_confirm"),
+    ("attempt->dispatch", "attempt_to_dispatch"),
+    ("dispatch->admission", "dispatch_to_confirm"),
+    ("dispatch->supervisor-pre-send", "dispatch_to_supervisor_pre_send"),
+    ("supervisor-pre-send->admission", "supervisor_pre_send_to_admission"),
+    ("admission->desired-state", "admission_to_desired_state"),
+    ("supervisor-response->worker-ack", "supervisor_response_to_worker_ack"),
     ("dispatch->executor", "dispatch_to_executor"),
     ("receive->running", "executor_start_record"),
     ("service", "executor_service"),
     ("callback->release", "callback_to_slot_release"),
     ("callback->terminal", "callback_to_terminal_status"),
+    (
+        "executor-terminal->supervisor-send-complete",
+        "executor_terminal_to_supervisor_send_complete",
+    ),
+    (
+        "executor-terminal->monitor-observed",
+        "executor_terminal_to_monitor_observed",
+    ),
+    (
+        "supervisor-send-complete->status-read",
+        "supervisor_send_complete_to_status_read",
+    ),
+    ("status-read->event-enqueue", "status_read_to_event_enqueue"),
+    ("event-queue", "event_queue_wait"),
+    ("event-dequeue->scheduler-handler", "event_dequeue_to_scheduler_handler"),
+    (
+        "scheduler-handler->durable-terminal",
+        "scheduler_handler_to_terminal",
+    ),
+    (
+        "durable-terminal->event-dispatch-complete",
+        "terminal_to_event_dispatch_complete",
+    ),
+    ("admission->durable-terminal", "admission_to_terminal"),
+    ("durable-terminal->DAG-resolution", "terminal_to_dag_resolution"),
+    ("DAG-resolution", "dag_resolution"),
+    ("DAG-resolution->scheduler-wake", "dag_resolution_to_wake"),
 )
 
 SCHEDULER_DISPATCH_PATH = (
@@ -139,7 +197,11 @@ DISPATCH_BOTTLENECK_STAGES = (
     ("db-lease->slot", "db_lease_to_slot"),
     ("slot->active", "slot_to_active"),
     ("active->dispatch", "activate_to_dispatch"),
-    ("dispatch->confirm", "dispatch_to_confirm"),
+    ("dispatch->admission", "dispatch_to_confirm"),
+    ("dispatch->supervisor-pre-send", "dispatch_to_supervisor_pre_send"),
+    ("supervisor-pre-send->admission", "supervisor_pre_send_to_admission"),
+    ("admission->desired-state", "admission_to_desired_state"),
+    ("supervisor-response->worker-ack", "supervisor_response_to_worker_ack"),
     ("dispatch->executor", "dispatch_to_executor"),
     ("receive->running", "executor_start_record"),
     ("callback->release", "callback_to_slot_release"),
@@ -183,14 +245,16 @@ PRIORITY_REFRESH_EVENTS = (
     "scheduler_priority_refresh_summary_done",
     "scheduler_priority_refresh_hard_sla_policy_start",
     "scheduler_priority_refresh_hard_sla_policy_done",
+    "scheduler_priority_refresh_completed",
     "scheduler_priority_refresh_done",
     "scheduler_priority_refresh_failed",
     "scheduler_priority_refresh_returned",
 )
 
 PRIORITY_REFRESH_PHASES = (
-    ("due->returned", "scheduler_priority_refresh_returned"),
-    ("total", "scheduler_priority_refresh_done"),
+    ("total", "scheduler_priority_refresh_completed"),
+    ("legacy-total", "scheduler_priority_refresh_done"),
+    ("legacy-return", "scheduler_priority_refresh_returned"),
     ("frontier", "scheduler_priority_refresh_frontier_done"),
     (
         "frontier-priority-load",
@@ -238,6 +302,8 @@ POSTGRES_POOL_EVENTS = (
     "postgres_pool_acquire_timeout",
 )
 
+TERMINAL_STATUSES = {"FAILED", "STOPPED", "SUCCEEDED"}
+
 
 def _event_times(rows: list[dict[str, Any]]) -> dict[str, float]:
     by_event: dict[str, float] = {}
@@ -260,6 +326,35 @@ def _first(by_event: dict[str, float], *events: str) -> float | None:
         if event in by_event:
             return by_event[event]
     return None
+
+
+def _first_event_row(
+    rows: list[dict[str, Any]],
+    event: str,
+    *,
+    pid: int | None = None,
+    status: str | None = None,
+    terminal_only: bool = False,
+) -> dict[str, Any] | None:
+    for row in sorted(rows, key=lambda item: item.get("ts_unix", 0.0)):
+        if row.get("event") != event:
+            continue
+        if pid is not None and row.get("pid") != pid:
+            continue
+        row_status = row.get("status")
+        if status is not None and row_status != status:
+            continue
+        if terminal_only and row_status not in TERMINAL_STATUSES:
+            continue
+        return row
+    return None
+
+
+def _row_time(row: dict[str, Any] | None) -> float | None:
+    if row is None:
+        return None
+    ts = row.get("ts_unix")
+    return float(ts) if isinstance(ts, (int, float)) else None
 
 
 def _fmt(value: float | None) -> str:
@@ -359,6 +454,8 @@ def summarize_job(
         terminal_event = "executor_success_recorded"
     elif "executor_failed_recorded" in by_event:
         terminal_event = "executor_failed_recorded"
+    elif "job_terminal_attempt_accepted" in by_event:
+        terminal_event = "job_terminal_attempt_accepted"
 
     dispatch_start = by_event.get("gateway_dispatch_start")
     accepted_at = _first(
@@ -370,6 +467,71 @@ def summarize_job(
         dag_events,
         "gateway_submit_notified",
         "gateway_submit_scheduled_event",
+    )
+    accepted_terminal_row = _first_event_row(
+        rows,
+        "job_terminal_attempt_accepted",
+        terminal_only=True,
+    ) or _first_event_row(rows, "job_terminal_attempt_accepted")
+    scheduler_pid = (
+        accepted_terminal_row.get("pid")
+        if accepted_terminal_row is not None
+        and isinstance(accepted_terminal_row.get("pid"), int)
+        else None
+    )
+    accepted_status = (
+        accepted_terminal_row.get("status")
+        if accepted_terminal_row is not None
+        and isinstance(accepted_terminal_row.get("status"), str)
+        else None
+    )
+    supervisor_send_completed = _first_event_row(
+        rows,
+        "job_supervisor_send_task_completed",
+        pid=scheduler_pid,
+    )
+    supervisor_status_read = _first_event_row(
+        rows,
+        "job_supervisor_terminal_status_read",
+        pid=scheduler_pid,
+    )
+    monitor_terminal_observed = _first_event_row(
+        rows,
+        "job_monitor_terminal_observed",
+        pid=scheduler_pid,
+        status=accepted_status,
+        terminal_only=accepted_status is None,
+    )
+    status_event_enqueued = _first_event_row(
+        rows,
+        "job_status_event_enqueued",
+        pid=scheduler_pid,
+        status=accepted_status,
+        terminal_only=accepted_status is None,
+    )
+    status_event_dequeued = _first_event_row(
+        rows,
+        "job_status_event_dequeued",
+        pid=scheduler_pid,
+        status=accepted_status,
+        terminal_only=accepted_status is None,
+    )
+    scheduler_event_received = _first_event_row(
+        rows,
+        "scheduler_job_event_received",
+        pid=scheduler_pid,
+        status=accepted_status,
+        terminal_only=accepted_status is None,
+    )
+    status_event_dispatch_completed = _first_event_row(
+        rows,
+        "job_status_event_dispatch_completed",
+        pid=scheduler_pid,
+        status=accepted_status,
+        terminal_only=accepted_status is None,
+    )
+    executor_terminal_at = (
+        by_event.get(terminal_event) if terminal_event is not None else None
     )
 
     return {
@@ -435,9 +597,29 @@ def summarize_job(
             by_event.get("job_active_marked"),
             dispatch_start,
         ),
+        "attempt_to_dispatch": _milliseconds(
+            by_event.get("job_run_attempt_started"),
+            dispatch_start,
+        ),
         "dispatch_to_confirm": _milliseconds(
             dispatch_start,
             by_event.get("gateway_dispatch_confirmed"),
+        ),
+        "dispatch_to_supervisor_pre_send": _milliseconds(
+            dispatch_start,
+            by_event.get("job_supervisor_pre_send_started"),
+        ),
+        "supervisor_pre_send_to_admission": _milliseconds(
+            by_event.get("job_supervisor_pre_send_started"),
+            by_event.get("job_supervisor_dispatch_admitted"),
+        ),
+        "admission_to_desired_state": _milliseconds(
+            by_event.get("job_supervisor_dispatch_admitted"),
+            by_event.get("job_supervisor_desired_state_written"),
+        ),
+        "supervisor_response_to_worker_ack": _milliseconds(
+            by_event.get("job_supervisor_response_received"),
+            by_event.get("job_supervisor_worker_ack_wait_completed"),
         ),
         "dispatch_to_executor": _milliseconds(
             dispatch_start,
@@ -458,6 +640,54 @@ def summarize_job(
         "callback_to_terminal_status": _milliseconds(
             by_event.get("executor_callback_invoked"),
             by_event.get(terminal_event) if terminal_event else None,
+        ),
+        "executor_terminal_to_supervisor_send_complete": _milliseconds(
+            executor_terminal_at,
+            _row_time(supervisor_send_completed),
+        ),
+        "executor_terminal_to_monitor_observed": _milliseconds(
+            executor_terminal_at,
+            _row_time(monitor_terminal_observed),
+        ),
+        "supervisor_send_complete_to_status_read": _milliseconds(
+            _row_time(supervisor_send_completed),
+            _row_time(supervisor_status_read),
+        ),
+        "status_read_to_event_enqueue": _milliseconds(
+            _row_time(supervisor_status_read),
+            _row_time(status_event_enqueued),
+        ),
+        "event_queue_wait": _milliseconds(
+            _row_time(status_event_enqueued),
+            _row_time(status_event_dequeued),
+        ),
+        "event_dequeue_to_scheduler_handler": _milliseconds(
+            _row_time(status_event_dequeued),
+            _row_time(scheduler_event_received),
+        ),
+        "scheduler_handler_to_terminal": _milliseconds(
+            _row_time(scheduler_event_received),
+            _row_time(accepted_terminal_row),
+        ),
+        "terminal_to_event_dispatch_complete": _milliseconds(
+            _row_time(accepted_terminal_row),
+            _row_time(status_event_dispatch_completed),
+        ),
+        "admission_to_terminal": _milliseconds(
+            by_event.get("gateway_dispatch_confirmed"),
+            by_event.get("job_terminal_attempt_accepted"),
+        ),
+        "terminal_to_dag_resolution": _milliseconds(
+            by_event.get("job_terminal_attempt_accepted"),
+            by_event.get("terminal_dag_resolution_started"),
+        ),
+        "dag_resolution": _milliseconds(
+            by_event.get("terminal_dag_resolution_started"),
+            by_event.get("terminal_dag_resolution_completed"),
+        ),
+        "dag_resolution_to_wake": _milliseconds(
+            by_event.get("terminal_dag_resolution_completed"),
+            by_event.get("terminal_scheduler_wake_completed"),
         ),
         "terminal": terminal_event or "-",
         "events": sum(1 for row in rows if row.get("event") in EVENTS),
@@ -563,6 +793,29 @@ def _event_intervals_ms(rows: list[dict[str, Any]], event_name: str) -> list[flo
         and isinstance(row.get("ts_unix"), (int, float))
     )
     return [(end - start) * 1000.0 for start, end in zip(times, times[1:])]
+
+
+def _next_event_delays_ms(
+    rows: list[dict[str, Any]], start_event: str, end_event: str
+) -> list[float]:
+    starts = sorted(
+        float(row["ts_unix"])
+        for row in rows
+        if row.get("event") == start_event
+        and isinstance(row.get("ts_unix"), (int, float))
+    )
+    ends = sorted(
+        float(row["ts_unix"])
+        for row in rows
+        if row.get("event") == end_event
+        and isinstance(row.get("ts_unix"), (int, float))
+    )
+    delays: list[float] = []
+    for started_at in starts:
+        index = bisect.bisect_left(ends, started_at)
+        if index < len(ends):
+            delays.append((ends[index] - started_at) * 1000.0)
+    return delays
 
 
 def _max_observed_free_slots(rows: list[dict[str, Any]]) -> int | None:
@@ -830,15 +1083,17 @@ def _print_dispatch_efficiency_report(
     )
     if submit_rate is not None and dispatch_rate is not None:
         drift = submit_rate - dispatch_rate
-        print("submit-dispatch drift: " f"{drift:.3f}/s ({drift * 3600.0:.0f}/hour)")
+        print(f"submit-dispatch drift: {drift:.3f}/s ({drift * 3600.0:.0f}/hour)")
 
     _print_distribution(
-        "frontier backlog wait",
+        "DAG-frontier to job-candidate",
         _numeric_values(summaries, "frontier_to_candidate"),
     )
+    if _numeric_values(summaries, "frontier_to_candidate"):
+        print("  includes dependency, DAG-admission, and ready-backlog wait")
     _print_distribution("scheduler dispatch path", scheduler_path)
     _print_distribution("executor handoff path", handoff_path)
-    _print_distribution("dispatch confirmation", dispatch_confirm)
+    _print_distribution("dispatch admission", dispatch_confirm)
     _print_distribution("callback to slot release", callback_release)
     _print_distribution("callback to terminal", callback_terminal)
     _print_distribution("first candidate to selected", first_candidate_wait)
@@ -942,9 +1197,159 @@ def _print_dispatch_efficiency_report(
         if p50 is not None:
             stage_rows.append((p50, label, _percentile(values, 0.95)))
     if stage_rows:
-        print("largest non-backlog p50 stages:")
+        print("largest post-candidate p50 stages:")
         for p50, label, p95 in sorted(stage_rows, reverse=True)[:5]:
             print(f"  {label}: p50={_fmt(p50)} p95={_fmt(p95)}")
+
+
+def _print_trace_coverage(rows: list[dict[str, Any]]) -> None:
+    events = _event_counts(rows)
+    dispatches = events.get("gateway_dispatch_start", 0)
+    if not dispatches:
+        return
+
+    executor_terminal = events.get("executor_success_recorded", 0) + events.get(
+        "executor_failed_recorded", 0
+    )
+    scheduler_pids = {
+        row.get("pid")
+        for row in rows
+        if row.get("event") == "scheduler_job_event_received"
+        and row.get("status") in TERMINAL_STATUSES
+        and isinstance(row.get("pid"), int)
+    }
+    event_bus = Counter(
+        row["event"]
+        for row in rows
+        if row.get("pid") in scheduler_pids
+        and row.get("status") in TERMINAL_STATUSES
+        and row.get("event")
+        in {
+            "job_status_event_enqueued",
+            "job_status_event_dropped",
+            "job_status_event_dequeued",
+            "job_status_event_dispatch_completed",
+        }
+    )
+    scheduler_terminal_received = sum(
+        1
+        for row in rows
+        if row.get("event") == "scheduler_job_event_received"
+        and row.get("status") in TERMINAL_STATUSES
+    )
+    print("\nTrace Coverage")
+    print(
+        "scheduler: "
+        f"dispatch={dispatches} "
+        f"admission={events.get('gateway_dispatch_confirmed', 0)} "
+        f"terminal_handler={scheduler_terminal_received} "
+        f"durable_terminal={events.get('job_terminal_attempt_accepted', 0)}"
+    )
+    print(
+        "supervisor: "
+        f"pre_send={events.get('job_supervisor_pre_send_started', 0)} "
+        f"admitted={events.get('job_supervisor_dispatch_admitted', 0)} "
+        f"response={events.get('job_supervisor_response_received', 0)} "
+        f"ack_wait={events.get('job_supervisor_worker_ack_wait_completed', 0)} "
+        f"send_complete={events.get('job_supervisor_send_task_completed', 0)} "
+        f"status_read={events.get('job_supervisor_terminal_status_read', 0)}"
+    )
+    print(
+        "status event bus: "
+        f"enqueued={event_bus.get('job_status_event_enqueued', 0)} "
+        f"dequeued={event_bus.get('job_status_event_dequeued', 0)} "
+        f"dispatched={event_bus.get('job_status_event_dispatch_completed', 0)} "
+        f"dropped={event_bus.get('job_status_event_dropped', 0)}"
+    )
+    print(
+        "executor: "
+        f"received={events.get('executor_request_received', 0)} "
+        f"running={events.get('executor_running_recorded', 0)} "
+        f"callback={events.get('executor_callback_invoked', 0)} "
+        f"slot_released={events.get('executor_slot_released', 0)} "
+        f"terminal={executor_terminal}"
+    )
+
+
+def _print_terminal_handoff_report(
+    rows: list[dict[str, Any]], summaries: list[dict[str, Any]]
+) -> None:
+    handoff_keys = (
+        (
+            "executor terminal to supervisor send-task completion",
+            "executor_terminal_to_supervisor_send_complete",
+        ),
+        (
+            "executor terminal to monitor observation",
+            "executor_terminal_to_monitor_observed",
+        ),
+        (
+            "supervisor send-task completion to status read",
+            "supervisor_send_complete_to_status_read",
+        ),
+        ("status read to event enqueue", "status_read_to_event_enqueue"),
+        ("status-event queue wait", "event_queue_wait"),
+        (
+            "event dequeue to scheduler handler",
+            "event_dequeue_to_scheduler_handler",
+        ),
+        (
+            "scheduler handler to durable terminal acceptance",
+            "scheduler_handler_to_terminal",
+        ),
+        (
+            "durable terminal acceptance to event dispatch completion",
+            "terminal_to_event_dispatch_complete",
+        ),
+    )
+    if not any(_numeric_values(summaries, key) for _, key in handoff_keys):
+        return
+
+    print("\nTerminal Status Event Handoff")
+    for label, key in handoff_keys:
+        _print_distribution(label, _numeric_values(summaries, key))
+    _print_distribution(
+        "configured monitor poll sleep",
+        _numeric_event_field(rows, "job_monitor_sleep_started", "wait_ms"),
+    )
+
+
+def _print_terminal_feedback_report(
+    rows: list[dict[str, Any]], summaries: list[dict[str, Any]]
+) -> None:
+    terminal_count = _event_counts(rows).get("job_terminal_attempt_accepted", 0)
+    if not terminal_count:
+        return
+
+    print("\nTerminal Feedback")
+    _print_distribution(
+        "terminal to DAG-resolution start",
+        _numeric_values(summaries, "terminal_to_dag_resolution"),
+    )
+    _print_distribution(
+        "DAG resolution",
+        _numeric_values(summaries, "dag_resolution"),
+    )
+    _print_distribution(
+        "DAG-resolution completion to scheduler wake",
+        _numeric_values(summaries, "dag_resolution_to_wake"),
+    )
+    _print_distribution(
+        "terminal to next global candidate snapshot",
+        _next_event_delays_ms(
+            rows,
+            "job_terminal_attempt_accepted",
+            "candidate_built",
+        ),
+    )
+    _print_distribution(
+        "scheduler wake to next global candidate snapshot",
+        _next_event_delays_ms(
+            rows,
+            "terminal_scheduler_wake_completed",
+            "candidate_built",
+        ),
+    )
 
 
 def _print_latency_report(summaries: list[dict[str, Any]]) -> None:
@@ -1088,15 +1493,25 @@ def _sort_refresh_id(refresh_id: str) -> tuple[int, str]:
 
 def _refresh_attempt_status(rows: list[dict[str, Any]]) -> str:
     events = Counter(row.get("event") for row in rows)
+    if events.get("scheduler_priority_refresh_completed", 0):
+        return "completed"
     if events.get("scheduler_priority_refresh_returned", 0):
-        return "returned"
+        return "completed"
     if events.get("scheduler_priority_refresh_failed", 0):
-        return "failed_no_return"
+        return "failed"
     if events.get("scheduler_priority_refresh_done", 0):
-        return "done_no_return"
+        return "completed"
     if events.get("scheduler_priority_refresh_start", 0):
         return "in_progress"
     return "due_only"
+
+
+def _priority_refresh_success_count(events: Counter[str]) -> int:
+    return max(
+        events.get("scheduler_priority_refresh_completed", 0),
+        events.get("scheduler_priority_refresh_done", 0),
+        events.get("scheduler_priority_refresh_returned", 0),
+    )
 
 
 def _print_priority_refresh_report(rows: list[dict[str, Any]]) -> None:
@@ -1127,14 +1542,13 @@ def _print_priority_refresh_report(rows: list[dict[str, Any]]) -> None:
             print(f"{event} {count}")
 
     due = events.get("scheduler_priority_refresh_due", 0)
-    returned = events.get("scheduler_priority_refresh_returned", 0)
     started = events.get("scheduler_priority_refresh_start", 0)
-    completed = events.get("scheduler_priority_refresh_done", 0)
+    completed = _priority_refresh_success_count(events)
     failed = events.get("scheduler_priority_refresh_failed", 0)
-    if due != returned or started != completed + failed:
+    if due != completed + failed or started != completed + failed:
         print(
             "incomplete: "
-            f"due_without_return={max(0, due - returned)} "
+            f"due_without_terminal={max(0, due - completed - failed)} "
             f"started_without_terminal={max(0, started - completed - failed)}"
         )
 
@@ -1180,7 +1594,7 @@ def _print_priority_refresh_report(rows: list[dict[str, Any]]) -> None:
     incomplete_attempts = [
         (refresh_id, attempt_rows)
         for refresh_id, attempt_rows in attempts.items()
-        if _refresh_attempt_status(attempt_rows) != "returned"
+        if _refresh_attempt_status(attempt_rows) != "completed"
     ]
     if not incomplete_attempts:
         return
@@ -1307,6 +1721,43 @@ def _print_findings(
             "Gateway-to-executor handoff is high "
             f"(dispatch->executor p95={_fmt(_percentile(dispatch_to_executor, 0.95))})."
         )
+    terminal_handoff_stages = (
+        (
+            "executor terminal to supervisor send-task completion",
+            "executor_terminal_to_supervisor_send_complete",
+        ),
+        (
+            "supervisor send-task completion to status read",
+            "supervisor_send_complete_to_status_read",
+        ),
+        ("status read to event enqueue", "status_read_to_event_enqueue"),
+        ("status-event queue wait", "event_queue_wait"),
+        (
+            "event dequeue to scheduler handler",
+            "event_dequeue_to_scheduler_handler",
+        ),
+        (
+            "scheduler handler to durable terminal acceptance",
+            "scheduler_handler_to_terminal",
+        ),
+    )
+    terminal_stage_rows: list[tuple[float, str, float | None]] = []
+    for label, key in terminal_handoff_stages:
+        values = [value for value in _numeric_values(summaries, key) if value >= 0]
+        p50 = _percentile(values, 0.50)
+        if p50 is not None:
+            terminal_stage_rows.append((p50, label, _percentile(values, 0.95)))
+    if terminal_stage_rows:
+        p50, label, p95 = max(terminal_stage_rows)
+        findings.append(
+            "The largest measured terminal-handoff stage is "
+            f"{label} (p50={_fmt(p50)}, p95={_fmt(p95)})."
+        )
+    dropped_status_events = events.get("job_status_event_dropped", 0)
+    if dropped_status_events:
+        findings.append(
+            f"The status event bus dropped {dropped_status_events} event(s)."
+        )
     dispatch_rate = rate_stats["gateway_dispatch_start"][1]
     slot_hold = _slot_hold_ms(rows)
     slot_hold_capacity = _capacity_per_second(_percentile(slot_hold, 0.50))
@@ -1336,7 +1787,7 @@ def _print_findings(
         if stage_rows:
             p50, label, p95 = max(stage_rows)
             findings.append(
-                "With near-zero executor service time, the largest non-backlog "
+                "With near-zero executor service time, the largest post-candidate "
                 f"dispatch interval is {label} "
                 f"(p50={_fmt(p50)}, p95={_fmt(p95)})."
             )
@@ -1371,17 +1822,15 @@ def _print_findings(
                 and row.get("event") in PRIORITY_REFRESH_EVENTS
             )
             source_due = source_events.get("scheduler_priority_refresh_due", 0)
-            source_returned = source_events.get(
-                "scheduler_priority_refresh_returned", 0
-            )
+            source_completed = _priority_refresh_success_count(source_events)
             source_started = source_events.get("scheduler_priority_refresh_start", 0)
-            source_terminal = source_events.get(
-                "scheduler_priority_refresh_done", 0
-            ) + source_events.get("scheduler_priority_refresh_failed", 0)
-            if source_due > source_returned:
+            source_terminal = source_completed + source_events.get(
+                "scheduler_priority_refresh_failed", 0
+            )
+            if source_due > source_terminal:
                 findings.append(
-                    f"Priority refresh source={source} did not return "
-                    f"(due={source_due}, returned={source_returned})."
+                    f"Priority refresh source={source} has no terminal event "
+                    f"(due={source_due}, terminal={source_terminal})."
                 )
             elif source_started > source_terminal:
                 findings.append(
@@ -1390,15 +1839,14 @@ def _print_findings(
                 )
     else:
         refresh_due = events.get("scheduler_priority_refresh_due", 0)
-        refresh_returned = events.get("scheduler_priority_refresh_returned", 0)
         refresh_started = events.get("scheduler_priority_refresh_start", 0)
-        refresh_terminal = events.get(
-            "scheduler_priority_refresh_done", 0
-        ) + events.get("scheduler_priority_refresh_failed", 0)
-        if refresh_due > refresh_returned:
+        refresh_terminal = _priority_refresh_success_count(events) + events.get(
+            "scheduler_priority_refresh_failed", 0
+        )
+        if refresh_due > refresh_terminal:
             findings.append(
                 "Priority refresh appears to block the submission worker "
-                f"(due={refresh_due}, returned={refresh_returned})."
+                f"(due={refresh_due}, terminal={refresh_terminal})."
             )
         elif refresh_started > refresh_terminal:
             findings.append(
@@ -1411,6 +1859,26 @@ def _print_findings(
         findings.append(
             f"Postgres connection pool acquisition timed out {pool_timeouts} time(s)."
         )
+
+    dispatches = events.get("gateway_dispatch_start", 0)
+    executor_received = events.get("executor_request_received", 0)
+    executor_terminal = events.get("executor_success_recorded", 0) + events.get(
+        "executor_failed_recorded", 0
+    )
+    if dispatches and not executor_received:
+        if executor_terminal:
+            findings.append(
+                "Executor trace coverage is compact: terminal executor events are "
+                "present, but request, service, and slot-release stages were not "
+                "recorded. Use the full trace profile for stage-level latency."
+            )
+        else:
+            findings.append(
+                "Executor trace coverage is absent: no executor request events were "
+                f"captured for {dispatches} gateway dispatches. Enable the scheduler "
+                "trace on every executor process and use the same trace path before "
+                "interpreting executor-service or slot-release latency."
+            )
 
     if not findings:
         return
@@ -1467,6 +1935,8 @@ def print_report(
         count, rate, span = rates[event]
         print(f"{event} {count} {_fmt_rate(rate)} {_fmt_s(span)}")
 
+    _print_trace_coverage(rows)
+
     print("\nExecution Capacity")
     if executors:
         parts = [f"{pid}={count}" for pid, count in sorted(executors.items())]
@@ -1488,6 +1958,8 @@ def print_report(
     _print_priority_refresh_report(rows)
     _print_dag_sync_report(rows)
     _print_postgres_pool_report(rows)
+    _print_terminal_handoff_report(rows, summaries)
+    _print_terminal_feedback_report(rows, summaries)
     _print_latency_report(summaries)
     _print_findings(rates, summaries, events, rows)
 
@@ -1518,7 +1990,25 @@ def main() -> int:
             "taken_to_db_lease",
             "db_lease_to_slot",
             "slot_to_active",
+            "attempt_to_dispatch",
+            "dispatch_to_confirm",
+            "dispatch_to_supervisor_pre_send",
+            "supervisor_pre_send_to_admission",
+            "admission_to_desired_state",
+            "supervisor_response_to_worker_ack",
             "dispatch_to_executor",
+            "executor_terminal_to_supervisor_send_complete",
+            "executor_terminal_to_monitor_observed",
+            "supervisor_send_complete_to_status_read",
+            "status_read_to_event_enqueue",
+            "event_queue_wait",
+            "event_dequeue_to_scheduler_handler",
+            "scheduler_handler_to_terminal",
+            "terminal_to_event_dispatch_complete",
+            "admission_to_terminal",
+            "terminal_to_dag_resolution",
+            "dag_resolution",
+            "dag_resolution_to_wake",
             "dag_scheduled_to_dispatch",
             "dag_persisted_to_dispatch",
             "executor_service",
@@ -1556,8 +2046,18 @@ def main() -> int:
         "submit-queue dequeue->persist-start dag-persist persisted->frontier "
         "frontier->dispatch frontier->candidate candidate->planned "
         "planned->taken taken->db-lease db-lease->slot slot->active "
-        "active->dispatch dispatch->confirm dispatch->executor "
+        "active->dispatch attempt->dispatch dispatch->supervisor-pre-send "
+        "supervisor-pre-send->admission admission->desired-state "
+        "supervisor-response->worker-ack dispatch->admission dispatch->executor "
         "receive->running service callback->release callback->terminal "
+        "executor-terminal->supervisor-send-complete "
+        "executor-terminal->monitor-observed "
+        "supervisor-send-complete->status-read status-read->event-enqueue "
+        "event-queue event-dequeue->scheduler-handler "
+        "scheduler-handler->durable-terminal "
+        "durable-terminal->event-dispatch-complete "
+        "admission->durable-terminal terminal->DAG-resolution DAG-resolution "
+        "DAG-resolution->wake "
         "terminal events"
     )
     for item in summaries[: args.limit]:
@@ -1579,12 +2079,29 @@ def main() -> int:
             f"{_fmt(item['db_lease_to_slot'])} "
             f"{_fmt(item['slot_to_active'])} "
             f"{_fmt(item['activate_to_dispatch'])} "
+            f"{_fmt(item['attempt_to_dispatch'])} "
+            f"{_fmt(item['dispatch_to_supervisor_pre_send'])} "
+            f"{_fmt(item['supervisor_pre_send_to_admission'])} "
+            f"{_fmt(item['admission_to_desired_state'])} "
+            f"{_fmt(item['supervisor_response_to_worker_ack'])} "
             f"{_fmt(item['dispatch_to_confirm'])} "
             f"{_fmt(item['dispatch_to_executor'])} "
             f"{_fmt(item['executor_start_record'])} "
             f"{_fmt(item['executor_service'])} "
             f"{_fmt(item['callback_to_slot_release'])} "
             f"{_fmt(item['callback_to_terminal_status'])} "
+            f"{_fmt(item['executor_terminal_to_supervisor_send_complete'])} "
+            f"{_fmt(item['executor_terminal_to_monitor_observed'])} "
+            f"{_fmt(item['supervisor_send_complete_to_status_read'])} "
+            f"{_fmt(item['status_read_to_event_enqueue'])} "
+            f"{_fmt(item['event_queue_wait'])} "
+            f"{_fmt(item['event_dequeue_to_scheduler_handler'])} "
+            f"{_fmt(item['scheduler_handler_to_terminal'])} "
+            f"{_fmt(item['terminal_to_event_dispatch_complete'])} "
+            f"{_fmt(item['admission_to_terminal'])} "
+            f"{_fmt(item['terminal_to_dag_resolution'])} "
+            f"{_fmt(item['dag_resolution'])} "
+            f"{_fmt(item['dag_resolution_to_wake'])} "
             f"{item['terminal']} "
             f"{item['events']}"
         )

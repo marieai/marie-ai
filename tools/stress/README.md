@@ -2,6 +2,10 @@
 
 This directory contains stress testing tools for testing the Marie gateway and networking components.
 
+For the complete Docker-backed PostgreSQL, database-correctness, and live
+gateway qualification workflow, see
+[Scheduler Correctness and Gateway Qualification Runbook](scheduler-correctness-and-gateway-runbook.md).
+
 ## Tools
 
 ### 1. `gateway_e2e_stresser.py`
@@ -13,7 +17,7 @@ This tool is for validating the full path:
 - pre-staged S3 selection or optional local upload
 - optional S3/MinIO upload when you want full-pipeline benchmarking
 - planner-aware `job submit` through the gateway
-- RabbitMQ scheduler event tracking
+- Message Bus scheduler event tracking
 - end-to-end latency and failure reporting
 
 Use it when the goal is to test:
@@ -87,12 +91,11 @@ python tools/stress/gateway_e2e_stresser.py \
   --report /tmp/scheduler-scale-v1-gateway.json
 ```
 
-`--verify-correctness` requires the same `run_id` to exist in
-`marie_stress.run_manifest`; use it for a corpus created by
-`scheduler_db_stresser.py`, not for an unrelated ad hoc gateway run. The final
-JSON and HTML reports include sanitized preflight evidence, lifecycle counters,
-the verifier result, trace mode, query-budget deltas, post-drain capacity, and
-retention details.
+`--verify-correctness` verifies the accepted gateway DAG IDs directly and does
+not require a `marie_stress.run_manifest` row. Use a fresh run ID and retain
+every accepted job record. The final JSON and HTML reports include sanitized
+preflight evidence, lifecycle counters, the verifier result, trace mode,
+query-budget deltas, post-drain capacity, and retention details.
 
 #### Usage
 
@@ -112,7 +115,7 @@ endurance runs and keeps submit, dispatch, terminal, batch, priority-refresh,
 DAG-sync, and pool-pressure signals. Use `MARIE_SCHEDULER_TRACE_PROFILE=full`
 for short bottleneck investigations that need scheduler submission queue
 enqueue/dequeue, DAG persistence, frontier insertion, planner selection,
-frontier and DB leasing, semaphore reservation, gateway dispatch confirmation,
+frontier and DB leasing, semaphore reservation, supervisor dispatch admission,
 executor request receipt, RUNNING/SUCCEEDED/FAILED status writes, callbacks, and
 slot release. The full profile splits end-to-end latency into submission queue
 wait, DAG persistence, frontier wait, dispatch wait, executor service time, and
@@ -121,6 +124,27 @@ candidate visibility, planner selection, frontier take, DB lease, semaphore
 reservation, and activation. Planner and frontier phases are emitted as batch
 events with `job_ids`; the analyzer expands them per job without writing one
 trace line per selected job.
+
+The gateway's `gateway_dispatch_confirmed` event is a supervisor pre-send
+admission signal. It does not prove executor receipt. Full traces record the
+supervisor pre-send callback, desired-state write, response, worker
+acknowledgement, durable terminal acceptance, DAG resolution, and scheduler
+wake as separate boundaries. The analyzer's `Trace Coverage` section must show
+non-zero executor receipt, running, callback, slot-release, and terminal counts
+before executor latency is considered complete. If those counts are zero, the
+executor processes were not started with the trace variables above or cannot
+write the shared trace path.
+
+For terminal-delay investigations, `Terminal Status Event Handoff` separates
+executor completion, supervisor send-task completion, the final status read,
+gateway status-event enqueue/dequeue, scheduler handler entry, and durable
+terminal acceptance. It also reports the job monitor's randomized polling
+sleep and terminal observation as a comparison. The monitor only detects
+terminal jobs for supervision cleanup; it does not publish the scheduler's
+terminal event.
+
+Trace output always drops `api_key` and `project_id`, including in the full
+profile. Treat traces produced by older code as sensitive artifacts.
 
 After a run, summarize the slowest handoffs:
 
@@ -132,7 +156,8 @@ python tools/stress/analyze_scheduler_trace.py \
 ```
 
 Or print an aggregate report with event rates, executor utilization, planner
-pressure, control-flow balance, and latency percentiles:
+pressure, terminal-to-wake feedback, trace coverage, control-flow balance, and
+latency percentiles:
 
 ```bash
 python tools/stress/analyze_scheduler_trace.py \
@@ -244,7 +269,7 @@ The usual scheduler-stress path is:
 
 1. start the mock LLM backend
 2. start LiteLLM pointed at that mock backend
-3. make sure gateway + RabbitMQ + MinIO/S3 are already running
+3. make sure the gateway, Message Bus, and MinIO/S3 are already running
 4. run `gateway_e2e_stresser.py` against pre-staged `s3://` assets
 
 The repo-local base files for this tool are:
@@ -258,7 +283,7 @@ These files are examples only. They are not required.
 - `gateway-e2e.s3-uri-manifest.example.txt` is a sample manifest showing the expected `s3://` URI format
 
 Copy the config example to an ignored local file and replace every
-`replace-with-*` value. Do not commit real gateway, S3, or RabbitMQ credentials.
+`replace-with-*` value. Do not commit real gateway, S3, or Message Bus credentials.
 
 Create the shared Docker network once:
 
@@ -883,11 +908,12 @@ python tools/stress/gateway_e2e_stresser.py \
 | `--planner` | Planner to place in metadata |
 | `--run-id` / `--seed` | Correlated run identity and optional deterministic-ID seed |
 | `--required-executor` | Required capacity slot; repeat for every executor used by the plan |
-| `--skip-preflight` | Disable the default queue and executor readiness preflight |
+| `--skip-preflight` | Disable the default gateway and executor readiness preflight |
 | `--preflight-deadline` / `--preflight-interval` | Bound preflight retry duration and cadence |
 | `--llm-pool-id` | Fixed LLM dispatch pool ID to place in `metadata.pool_id`, for example `document-small` |
 | `--llm-pool-cycle` | Comma-separated LLM dispatch pool IDs to cycle through `metadata.pool_id` by generated job index |
 | `--purge-annotators` | Comma-separated annotator names to purge before annotation, for example `mock-llm` |
+| `--mock-process-time` | Fixed per-node mock executor processing time override in seconds |
 | `--submit-rate` | Target submit rate in jobs per second |
 | `--dry-run-preview-count` | Number of sample submissions to show when `--dry-run` is combined with `--run-time` |
 | `--fault-profile` | Run label and AIMock control target: `normal`, `timeout`, `error`, `chaos` |
@@ -1085,6 +1111,29 @@ RESULT: EXCELLENT - Gateway performing well under load
 
 ---
 
+### 3. `container_stresser.py`
+
+Injects Docker container restarts, stops, and kills to verify application
+recovery and reconnection behavior. It supports random, periodic, burst, and
+chaos fault schedules.
+
+This command mutates the named container. Always resolve and confirm the exact
+test container before running it.
+
+```bash
+python tools/stress/container_stresser.py \
+  --container etcd-single \
+  --mode periodic \
+  --count 3 \
+  --interval 15 \
+  --action restart
+```
+
+See [Docker Container Stresser](container-stresser.md) for every mode and
+option.
+
+---
+
 ### 4. `etcd_outage_simulator.py`
 
 Injects ETCD outages by calling `docker pause` / `docker unpause` against a
@@ -1213,15 +1262,19 @@ expiry when a checkpoint completes.
 
 ### 6. `scheduler_correctness.py`
 
-Runs the authoritative, read-only correctness checks for one manifest-backed
-scheduler stress cohort. PostgreSQL evaluates the invariants and only bounded
-failure samples enter Python. An unknown `run_id` is an error; the verifier
-never falls back to a database-wide scan.
+Runs authoritative, read-only PostgreSQL correctness checks. The default
+`corpus` scope verifies one manifest-backed database-stresser cohort. The
+`gateway` scope verifies only the accepted DAG IDs retained in a gateway report
+and does not fall back to a run-wide or database-wide scan.
 
-Scheduler schema version 71 provides the shared
-`marie_scheduler.scheduler_attempt_invariant_checks(...)` contract used by this
-tool and the HA operator scripts. Apply current scheduler migrations before
-running the verifier against an older testing database.
+The verifier and HA operator scripts share the optional
+`marie_scheduler.scheduler_attempt_invariant_checks(...)` diagnostic helper.
+Install it before running the verifier; it is not part of gateway startup:
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -f config/psql/high-availability/scheduler_attempt_invariant_checks.sql
+```
 
 ```bash
 python tools/stress/scheduler_correctness.py \
@@ -1231,15 +1284,16 @@ python tools/stress/scheduler_correctness.py \
   --report /tmp/scheduler-scale-v1-correctness.json
 ```
 
-To correlate the optional gateway evidence after its settle deadline:
+To verify a completed live gateway run:
 
 ```bash
 python tools/stress/scheduler_correctness.py \
-  --run-id scheduler-scale-v1 \
+  --run-id scheduler-mock-parallel-success-v1 \
+  --scope gateway \
   --config tools/stress/scheduler-db.config.example.json \
-  --gateway-report /tmp/gateway-e2e-report.json \
-  --settle-deadline 2026-07-21T22:00:00Z \
-  --report /tmp/scheduler-scale-v1-correctness.json
+  --gateway-report /tmp/scheduler-mock-parallel-success-v1-gateway.json \
+  --require-parallel-graph \
+  --report /tmp/scheduler-mock-parallel-success-v1-correctness.json
 ```
 
 The command writes JSON to stdout, writes the same payload to `--report` when
@@ -1285,7 +1339,7 @@ python tools/stress/scheduler_reliability_runner.py etcd \
   --gateway-command '["python","tools/stress/gateway_e2e_stresser.py","--config","tools/stress/gateway-e2e.config.json","--s3-uri-manifest","tools/stress/gateway-e2e.s3-uri-manifest.example.txt","--run-time","2m","--job-name","gen5_extract","--planner","extract","--run-id","scheduler-scale-v1","--job-jsonl","/tmp/gateway-etcd-jobs.jsonl","--report","/tmp/gateway-etcd.json"]' \
   --gateway-report /tmp/gateway-etcd.json \
   --gateway-job-jsonl /tmp/gateway-etcd-jobs.jsonl \
-  --verifier-command '["python","tools/stress/scheduler_correctness.py","--run-id","scheduler-scale-v1","--config","tools/stress/scheduler-db.config.example.json","--gateway-report","/tmp/gateway-etcd.json","--report","/tmp/correctness-etcd.json"]' \
+  --verifier-command '["python","tools/stress/scheduler_correctness.py","--run-id","scheduler-scale-v1","--scope","gateway","--config","tools/stress/scheduler-db.config.example.json","--gateway-report","/tmp/gateway-etcd.json","--report","/tmp/correctness-etcd.json"]' \
   --verifier-report /tmp/correctness-etcd.json \
   --report /tmp/scheduler-etcd-reliability.json
 ```
@@ -1298,14 +1352,14 @@ retry policy. The runner refuses repeated flapping without at least three cycles
 and a seed.
 
 Use the 1K cohort for scheduler reliability changes. For nightly 100K trials,
-enable Slice 04's streaming job JSONL output and pass it through
+enable streaming job JSONL output and pass it through
 `--gateway-job-jsonl` so dispatch checks remain complete when the gateway report
 uses bounded retention. Always run a dry-run first; dry-run skips Docker
 mutation, capacity polling, gateway load, and database verification.
 
 ### 8. `scheduler_qualification.py`
 
-Expands and evaluates the Slice 07 scale, overload, burst, and endurance
+Expands and evaluates the scale, overload, burst, and endurance
 matrix. It does not start services or inject faults. Use the gateway and
 reliability runners to execute each planned trial, then provide their
 consolidated JSON or JSONL results to the evaluator.

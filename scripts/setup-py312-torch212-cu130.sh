@@ -35,7 +35,7 @@ STEP_NO=0
 usage() {
   cat <<'EOF'
 Usage:
-  tools/scripts/setup-py312-torch212-cu130.sh <step>
+  scripts/setup-py312-torch212-cu130.sh <step>
 
 Run this from, or inside, the Marie AI checkout. All repo-local paths resolve
 from the Marie AI checkout, not from marie-assistant/analysis.
@@ -175,7 +175,7 @@ write_invocation() {
     printf 'export MARIE_FAISS_CUDA_ARCH=%q\n' "${MARIE_FAISS_CUDA_ARCH}"
     printf 'export MARIE_BUILD_JOBS=%q\n' "${MARIE_BUILD_JOBS}"
     printf '\n'
-    printf '%q' "${MARIE_TORCH_WORKTREE}/tools/scripts/setup-py312-torch212-cu130.sh"
+    printf '%q' "${MARIE_TORCH_WORKTREE}/scripts/setup-py312-torch212-cu130.sh"
     for arg in "$@"; do
       printf ' %q' "${arg}"
     done
@@ -691,7 +691,7 @@ block = '\\n'.join([
     '',
     '## Generated file inventory',
     '',
-    'Updated by tools/scripts/setup-py312-torch212-cu130.sh wheels-readme.',
+    'Updated by scripts/setup-py312-torch212-cu130.sh wheels-readme.',
     '',
     '| File | Size bytes | SHA256 |',
     '| --- | ---: | --- |',

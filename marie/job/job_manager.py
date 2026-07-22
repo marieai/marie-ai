@@ -20,6 +20,7 @@ from marie.job.scheduling_strategies import (
 from marie.logging_core.logger import MarieLogger
 from marie.serve.discovery.etcd_client import EtcdClient
 from marie.storage.kv.storage_client import StorageArea
+from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.utils import get_exception_traceback
 
 # The max time to wait for the JobSupervisor to start before failing the job.
@@ -38,15 +39,11 @@ def generate_job_id() -> str:
 def increment_uuid7str(uuid_str: str, increment_value: int) -> str:
     # Remove dashes to get a continuous hex string
     hex_str = uuid_str.replace('-', '')
-    # Convert hex string to integer
     int_val = int(hex_str, 16)
-
-    # Add the increment
     int_val += increment_value
 
     # Enforce 128-bit (32 hex chars), strip possible sign if negative
     new_hex_str = format(int_val & ((1 << 128) - 1), '032x')
-
     # Re-insert the standard dash positions for a UUID
     return (
         new_hex_str[0:8]
@@ -171,9 +168,20 @@ class JobManager:
                     )
                     is_alive = False
                     break
+                scheduler_trace(
+                    "job_monitor_status_observed",
+                    job_id=job_id,
+                    status=job_status.value,
+                    terminal=job_status.is_terminal(),
+                )
                 self.logger.debug(f"Monitored job status: {job_id} : {job_status}")
 
                 if job_status.is_terminal():
+                    scheduler_trace(
+                        "job_monitor_terminal_observed",
+                        job_id=job_id,
+                        status=job_status.value,
+                    )
                     if job_status == JobStatus.SUCCEEDED:
                         is_alive = False
                         self.logger.info(f"Job succeeded : {job_id}")
@@ -259,6 +267,13 @@ class JobManager:
 
                 jitter = random.uniform(0.9, 1.3)
                 wait_time = self.JOB_MONITOR_LOOP_PERIOD_S * jitter
+                scheduler_trace(
+                    "job_monitor_sleep_started",
+                    job_id=job_id,
+                    status=job_status.value,
+                    jitter=jitter,
+                    wait_ms=wait_time * 1000.0,
+                )
                 await asyncio.sleep(wait_time)
             except Exception as e:
                 is_alive = False
@@ -405,13 +420,10 @@ class JobManager:
                 confirmation_event=confirmation_event,
             )
 
-            # non-blocking
             task = asyncio.create_task(
                 supervisor.run(_start_signal_actor=_start_signal_actor)
             )
             task.set_name(f"supervisor:{submission_id}")
-
-            # track & surface exceptions so they don’t get swallowed
             self._active_tasks.add(task)
 
             def _done(t: asyncio.Task) -> None:

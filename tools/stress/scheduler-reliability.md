@@ -118,7 +118,7 @@ Scenario-specific deadlines may be shorter but cannot exceed them.
 | `rabbitmq-pause` | 120s / 30s / 180s / 300s | Durable terminal state reconciles after the broker returns. |
 | `rabbitmq-consumer-disconnect` | 120s / 30s / 180s / 300s | The consumer reconnects and durable terminal state reconciles. |
 
-ETCD discovery and capacity faults remain owned by Slice 05. Reference their
+ETCD discovery and capacity faults remain owned by the ETCD recovery runner. Reference its
 timeline artifact from a reliability scenario instead of adding another ETCD
 injector.
 
@@ -132,7 +132,7 @@ Grant only the control needed by the selected target:
 | Scheduler lease and lost-event SQL | Connect to the test database; read scheduler audit tables; update only the exact selected scheduler/KV rows for mutating scenarios. |
 | Executor event faults | Publish test events to the selected test queue or call the dedicated test injector. Do not reuse production routing credentials. |
 | PostgreSQL service faults | Pause/restart one test service or enable one exact proxy toxic. Pool exhaustion must use a bounded test client count. |
-| RabbitMQ faults | Pause/restart one test broker or disconnect one named test consumer through its supervisor or management API. |
+| Message Bus faults | Pause/restart one test broker or disconnect one named test consumer through its supervisor or management API. |
 | Read-only verification | Read the run manifest, scheduler job/attempt state, PostgreSQL statistics, gateway debug output, and capacity state. |
 
 The final report contains the sanitized configuration hash, all declared
@@ -167,6 +167,7 @@ configuration supplies the database connection and credentials.
 
 ```bash
 psql -X --set ON_ERROR_STOP=1 \
+  -f config/psql/high-availability/scheduler_attempt_invariant_checks.sql \
   -c "SET marie.ha_run_start = '2026-07-21 18:00:00+00'" \
   -c "SET marie.ha_run_end = '2026-07-21 18:15:00+00'" \
   -f config/psql/high-availability/ha_scheduler_checks.sql
@@ -185,7 +186,7 @@ python tools/stress/scheduler_reliability_runner.py --config /path/to/reliabilit
 python tools/stress/scheduler_reliability_runner.py --config /path/to/reliability.json --scenario postgres-latency --allow-mutation --confirm-target postgres-test-proxy --report /tmp/postgres-latency.json
 python tools/stress/scheduler_reliability_runner.py --config /path/to/reliability.json --scenario postgres-statement-timeout --allow-mutation --confirm-target postgres-test-proxy --report /tmp/postgres-timeout.json
 
-# RabbitMQ service or one named consumer
+# Message Bus service or one named consumer
 python tools/stress/scheduler_reliability_runner.py --config /path/to/reliability.json --scenario rabbitmq-pause --allow-mutation --confirm-target rabbitmq-test --report /tmp/rabbitmq-pause.json
 python tools/stress/scheduler_reliability_runner.py --config /path/to/reliability.json --scenario rabbitmq-consumer-disconnect --allow-mutation --confirm-target scheduler-event-consumer-1 --report /tmp/rabbitmq-consumer.json
 ```

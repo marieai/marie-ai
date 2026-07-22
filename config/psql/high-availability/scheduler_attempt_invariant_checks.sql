@@ -1,6 +1,6 @@
--- Canonical read-only attempt, lease, and terminal invariant checks.
+-- Optional read-only attempt, lease, and terminal invariant checks for HA tests.
 
-CREATE OR REPLACE FUNCTION {schema}.scheduler_attempt_invariant_checks(
+CREATE OR REPLACE FUNCTION marie_scheduler.scheduler_attempt_invariant_checks(
     _planner TEXT DEFAULT NULL,
     _run_start TIMESTAMPTZ DEFAULT NULL,
     _run_end TIMESTAMPTZ DEFAULT NULL,
@@ -19,19 +19,19 @@ STABLE
 AS $$
 WITH scoped_dags AS MATERIALIZED (
     SELECT dag.id
-    FROM {schema}.dag dag
+    FROM marie_scheduler.dag dag
     WHERE _planner IS NULL OR dag.planner = _planner
 ),
 scoped_jobs AS MATERIALIZED (
     SELECT job.*
-    FROM {schema}.job job
+    FROM marie_scheduler.job job
     JOIN scoped_dags dag ON dag.id = job.dag_id
     WHERE (_run_start IS NULL OR COALESCE(job.started_on, job.created_on) >= _run_start)
       AND (_run_end IS NULL OR COALESCE(job.started_on, job.created_on) < _run_end)
 ),
 scoped_attempts AS MATERIALIZED (
     SELECT attempt.*
-    FROM {schema}.job_attempt attempt
+    FROM marie_scheduler.job_attempt attempt
     WHERE (_planner IS NULL OR (
             attempt.job_id IN (SELECT id FROM scoped_jobs)
             OR attempt.dag_id IN (SELECT id FROM scoped_dags)
@@ -136,7 +136,7 @@ violations(check_name, entity_id) AS MATERIALIZED (
     UNION ALL
     SELECT 'attempt_identity_scope', attempt.run_attempt_id::TEXT
     FROM scoped_attempts attempt
-    LEFT JOIN {schema}.job job
+    LEFT JOIN marie_scheduler.job job
       ON job.name = attempt.job_name
      AND job.id = attempt.job_id
     WHERE job.id IS NULL
@@ -232,7 +232,7 @@ LEFT JOIN counts ON counts.check_name = contract.check_name
 ORDER BY contract.check_name;
 $$;
 
-COMMENT ON FUNCTION {schema}.scheduler_attempt_invariant_checks(
+COMMENT ON FUNCTION marie_scheduler.scheduler_attempt_invariant_checks(
     TEXT,
     TIMESTAMPTZ,
     TIMESTAMPTZ,

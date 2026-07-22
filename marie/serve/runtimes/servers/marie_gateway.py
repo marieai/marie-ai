@@ -18,6 +18,10 @@ from docarray import DocList
 from docarray.documents import TextDoc
 from fastapi import FastAPI, Request
 from grpc_health.v1.health_pb2 import HealthCheckResponse
+from marie.engine.llm_queue.registry import (
+    dispatch_runtime_live_state,
+    dispatch_runtime_snapshot,
+)
 from rich.traceback import install
 
 import marie.helper
@@ -31,10 +35,6 @@ from marie.constants import (
     __marie_home__,
     __model_path__,
 )
-from marie.engine.llm_queue.registry import (
-    dispatch_runtime_live_state,
-    dispatch_runtime_snapshot,
-)
 from marie.excepts import BadConfigSource, RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
 from marie.jaml import JAML
@@ -42,7 +42,7 @@ from marie.job.gateway_job_distributor import GatewayJobDistributor
 from marie.job.job_manager import JobManager
 from marie.kb.gateway_routes import register_kb_routes
 from marie.logging_core.predefined import default_logger as logger
-from marie.messaging import Toast, mark_as_failed, mark_as_scheduled
+from marie.messaging import Toast, mark_as_accepted, mark_as_failed
 from marie.messaging.events import (
     EngineEventData,
     EventMessage,
@@ -537,7 +537,7 @@ class MarieServerGateway(CompositeServer):
                 summary="Get live LLM dispatch runtime information /api/llm-dispatch/runtime",
             )
             async def get_llm_dispatch_runtime(
-                limit: int = Query(default=50, ge=1, le=250)
+                limit: int = Query(default=50, ge=1, le=250),
             ):
                 self.logger.info(
                     f"LLM dispatch runtime requested at {datetime.now(timezone.utc)}"
@@ -1304,6 +1304,9 @@ class MarieServerGateway(CompositeServer):
                 metadata.get("soft_sla"),
                 metadata.get("hard_sla"),
             )
+            publish_accepted_event = strtobool(
+                os.environ.get("MARIE_GATEWAY_PUBLISH_ACCEPTED_EVENT", False)
+            )
         except ValueError as exc:
             return self.error_response(str(exc), None, silence_exceptions)
 
@@ -1388,23 +1391,25 @@ class MarieServerGateway(CompositeServer):
                 "job_id": job_id,
             }
             self.logger.info(f"Job submitted with id {job_id}")
-            await mark_as_scheduled(
-                api_key=api_key,  # project_id,
-                job_id=job_id,
-                event_name=event_name,
-                job_tag=ref_type,
-                status="OK",
-                timestamp=current_milli_time(),
-                payload=metadata,
-            )
-            scheduler_trace(
-                "gateway_submit_notified",
-                dag_id=job_id,
-                event_name=event_name,
-                ref_id=ref_id,
-                ref_type=ref_type,
-                gateway_instance_id=self.gateway_instance_id,
-            )
+            if publish_accepted_event:
+                published = await mark_as_accepted(
+                    api_key=api_key,
+                    job_id=job_id,
+                    event_name=event_name,
+                    job_tag=ref_type,
+                    status="OK",
+                    timestamp=current_milli_time(),
+                    payload=metadata,
+                )
+                scheduler_trace(
+                    "gateway_submit_accepted_notified",
+                    dag_id=job_id,
+                    event_name=event_name,
+                    ref_id=ref_id,
+                    ref_type=ref_type,
+                    published=published,
+                    gateway_instance_id=self.gateway_instance_id,
+                )
 
             return response
         except BaseException as ex:

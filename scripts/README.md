@@ -1,4 +1,29 @@
-# 📌 Repackage Python Module Tool
+# Marie AI scripts
+
+Run project automation from the repository root through `scripts/`. This is the
+canonical location for human-invoked build, development, operations, release,
+and verification utilities.
+
+## Quick index
+
+| Area | Commands |
+| --- | --- |
+| Verification and formatting | `test-scheduler.sh`, `black.sh`, `test-vllm.py` |
+| Python and CUDA environment | `setup-py312-torch212-cu130.sh` |
+| Wheels and packaging | `fetch-wheels.sh`, `build-wasm-compilers.sh`, `repackage_tool.py`, `repackage_llama_index.py` |
+| Containers and local services | `build-container.sh`, `start_documentdb.sh`, `setup-s3-users.sh`, `hyperdx-init-user.sh` |
+| Releases and versions | `release.sh`, `get-versions.sh`, `get-last-release-note.py`, `prepend_version_json.py`, `update-version.sh` |
+| Developer utilities | `devbot.sh`, `update-autocomplete-cli.py` |
+
+Use each command's help output for its supported arguments. For example:
+
+```bash
+scripts/fetch-wheels.sh help
+scripts/setup-py312-torch212-cu130.sh help
+scripts/hyperdx-init-user.sh --help
+```
+
+## Repackage Python module tool
 
 This tool automates the process of **cloning**, **updating**, and **repackaging** a Python module into a new namespace. It is **generic**, allowing transformations for any repository, and is **configurable** for different module structures.
 
@@ -22,7 +47,7 @@ You can use this tool either from the command line or as a Python script.
 🔹 Running from Command Line
 
 ```bash
-python repackage_tool.py --repo-url https://github.com/run-llama/llama_index \
+python scripts/repackage_tool.py --repo-url https://github.com/run-llama/llama_index \
                          --branch main \
                          --source-namespace llama_index.core \
                          --target-namespace marie.core \
@@ -66,5 +91,4 @@ After (marie.core)
 from marie.core.base.llms.types import ChatMessage
 from marie.core.callbacks import CallbackManager
 ```
-
 

@@ -19,7 +19,8 @@ from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import mark_as_complete as mark_as_complete_toast
 from marie.messaging import mark_as_failed as mark_as_failed_toast
-from marie.messaging import mark_as_started as mark_as_started_toast
+
+# from marie.messaging import mark_as_started as mark_as_started_toast
 from marie.query_planner.base import (
     QueryPlan,
 )
@@ -481,6 +482,11 @@ class PostgreSQLJobScheduler(JobScheduler):
         job_id = message.get("job_id")
         try:
             status = JobStatus(event_type)
+            scheduler_trace(
+                "scheduler_job_event_received",
+                job_id=job_id,
+                status=status.value,
+            )
             work_item: Optional[WorkInfo] = await self.get_job(job_id)
 
             if work_item is None:
@@ -1904,8 +1910,9 @@ class PostgreSQLJobScheduler(JobScheduler):
                     **self._ha_trace_fields(),
                 )
 
-                # Wait for the supervisor to confirm it has received the job and is running.
-                # The timeout covers submit + confirmation and must stay inside the lease TTL.
+                # Wait for the supervisor's pre-send admission signal. Executor receipt and
+                # worker acknowledgement are traced independently by the supervisor/runtime.
+                # The timeout covers submit + admission and must stay inside the lease TTL.
                 await confirmation_event.wait()
                 scheduler_trace(
                     "gateway_dispatch_confirmed",

@@ -9,18 +9,29 @@ $$
 DECLARE
     table_name VARCHAR;
 BEGIN
-    -- Delete queue and get partition name
-    WITH deleted AS (
-        DELETE FROM {schema}.queue
-        WHERE name = queue_name
-        RETURNING partition_name
-    )
-    SELECT partition_name FROM deleted INTO table_name;
+    SELECT queue.partition_name
+    INTO table_name
+    FROM {schema}.queue AS queue
+    WHERE queue.name = delete_queue.queue_name
+    FOR UPDATE;
 
-    -- Drop the partition table if it exists
-    IF table_name IS NOT NULL THEN
-        EXECUTE format('DROP TABLE IF EXISTS {schema}.%I', table_name);
+    IF table_name IS NULL THEN
+        RETURN;
     END IF;
+
+    -- Clear referencing rows before detaching the queue partition. The job
+    -- foreign keys cascade to dependency, HITL, and search-projection rows.
+    DELETE FROM {schema}.job AS job
+    WHERE job.name = delete_queue.queue_name;
+
+    EXECUTE format(
+        'ALTER TABLE {schema}.job DETACH PARTITION {schema}.%I',
+        table_name
+    );
+    EXECUTE format('DROP TABLE IF EXISTS {schema}.%I', table_name);
+
+    DELETE FROM {schema}.queue AS queue
+    WHERE queue.name = delete_queue.queue_name;
 END;
 $$
 LANGUAGE plpgsql;

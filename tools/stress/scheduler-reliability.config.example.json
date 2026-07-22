@@ -205,6 +205,8 @@
               "tools/stress/scheduler_correctness.py",
               "--run-id",
               "{run_id}",
+              "--scope",
+              "gateway",
               "--gateway-report",
               "/tmp/{run_id}-gateway.json",
               "--report",

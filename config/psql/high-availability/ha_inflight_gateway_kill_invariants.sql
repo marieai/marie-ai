@@ -11,6 +11,7 @@
 --
 -- The script only creates temporary tables. It does not modify persistent
 -- scheduler tables.
+-- Requires scheduler_attempt_invariant_checks.sql from this directory.
 
 -- Setup: define the test window and, optionally, the killed gateway/owner from
 -- current-session marie.ha_* settings. Unset values retain safe defaults.

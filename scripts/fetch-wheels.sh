@@ -13,7 +13,7 @@ WHEELS_README="${MARIE_WHEELS_DIR}/README.md"
 usage() {
   cat <<'EOF'
 Usage:
-  tools/scripts/fetch-wheels.sh <command>
+  scripts/fetch-wheels.sh <command>
 
 Provision the distributed wheels/ artifacts (etcd3, fastwer, Marie fairseq
 fork, detectron2, FAISS CUDA 13, and the sdists) from a GitHub release instead
@@ -158,7 +158,7 @@ cmd_publish() {
     gh release create "${MARIE_WHEELS_TAG}" \
       --repo "${MARIE_WHEELS_REPO}" \
       --title "Distributed wheels: torch 2.12 / cu130 / cp312" \
-      --notes "Distributed wheels/ artifacts for the PyTorch 2.12.1+cu130 / Python 3.12 lane. SHA256 source of truth: wheels/README.md generated inventory. Provision with tools/scripts/fetch-wheels.sh."
+      --notes "Distributed wheels/ artifacts for the PyTorch 2.12.1+cu130 / Python 3.12 lane. SHA256 source of truth: wheels/README.md generated inventory. Provision with scripts/fetch-wheels.sh."
   fi
 
   local i file

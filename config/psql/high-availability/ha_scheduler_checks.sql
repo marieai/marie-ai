@@ -8,6 +8,7 @@
 --
 -- The script only creates temporary tables. It does not modify persistent
 -- scheduler tables.
+-- Requires scheduler_attempt_invariant_checks.sql from this directory.
 
 -- Setup: define the run window used by every check in this file.
 DROP TABLE IF EXISTS ha_check_params;

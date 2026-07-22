@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify one scheduler stress cohort against PostgreSQL state."""
+"""Verify a generated scheduler corpus or a live gateway run."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ DATABASE_KEYS = {
     "connect_timeout",
 }
 STATUSES = {"pass", "fail", "skipped", "error"}
+SCOPES = {"corpus", "gateway"}
 TERMINAL_STATES = {"completed", "failed", "cancelled", "expired", "skipped"}
 ATTEMPT_CHECK_CATEGORIES = {
     "active_missing_attempt_identity": "attempts",
@@ -69,6 +70,37 @@ scoped_jobs AS MATERIALIZED (
 )
 """
 
+GATEWAY_SCOPE_CTES = f"""
+params AS (
+    SELECT
+        %s::TEXT AS run_id,
+        %s::INTEGER AS sample_limit,
+        %s::TIMESTAMPTZ AS settle_deadline,
+        %s::TEXT[] AS dag_ids,
+        %s::TEXT[] AS forced_dag_ids
+),
+requested_dags AS MATERIALIZED (
+    SELECT DISTINCT requested.id
+    FROM params
+    CROSS JOIN LATERAL unnest(params.dag_ids) AS requested(id)
+),
+forced_dags AS MATERIALIZED (
+    SELECT DISTINCT forced.id
+    FROM params
+    CROSS JOIN LATERAL unnest(params.forced_dag_ids) AS forced(id)
+),
+scoped_dags AS MATERIALIZED (
+    SELECT dag.*
+    FROM {SCHEDULER_SCHEMA}.dag dag
+    JOIN requested_dags requested ON requested.id = dag.id::TEXT
+),
+scoped_jobs AS MATERIALIZED (
+    SELECT job.*
+    FROM {SCHEDULER_SCHEMA}.job job
+    JOIN scoped_dags dag ON dag.id = job.dag_id
+)
+"""
+
 
 @dataclass(frozen=True)
 class CheckSpec:
@@ -76,6 +108,8 @@ class CheckSpec:
     category: str
     expectation: str
     violations_sql: str
+    context_sql: str | None = None
+    observed_sql: str | None = None
 
 
 @dataclass(frozen=True)
@@ -101,8 +135,18 @@ def _spec(
     category: str,
     expectation: str,
     violations_sql: str,
+    *,
+    context_sql: str | None = None,
+    observed_sql: str | None = None,
 ) -> CheckSpec:
-    return CheckSpec(name, category, expectation, violations_sql.strip())
+    return CheckSpec(
+        name,
+        category,
+        expectation,
+        violations_sql.strip(),
+        context_sql.strip() if context_sql else None,
+        observed_sql.strip() if observed_sql else None,
+    )
 
 
 CHECKS = (
@@ -111,11 +155,10 @@ CHECKS = (
         "structure",
         "Manifest target, high-water mark, and committed DAG count agree.",
         """
-        SELECT format(
-            'target=%s high_water=%s dags=%s',
-            manifest.target_dag_count,
-            manifest.high_water_mark,
-            counts.dags
+        SELECT concat(
+            'target=', manifest.target_dag_count,
+            ' high_water=', manifest.high_water_mark,
+            ' dags=', counts.dags
         ) AS id
         FROM manifest
         CROSS JOIN (SELECT COUNT(*) AS dags FROM scoped_dags) counts
@@ -128,7 +171,7 @@ CHECKS = (
         "structure",
         "The run has nodes_per_dag jobs for every committed DAG.",
         """
-        SELECT format('expected=%s observed=%s', expected_jobs, observed_jobs) AS id
+        SELECT concat('expected=', expected_jobs, ' observed=', observed_jobs) AS id
         FROM (
             SELECT
                 manifest.high_water_mark * manifest.nodes_per_dag AS expected_jobs,
@@ -162,7 +205,7 @@ CHECKS = (
             ELSE TRUE
         END
         UNION ALL
-        SELECT format('duplicate-coordinate:%s:%s', dag_index, node_index)
+        SELECT concat('duplicate-coordinate:', dag_index, ':', node_index)
         FROM job_identity
         GROUP BY dag_index, node_index
         HAVING COUNT(*) <> 1
@@ -177,7 +220,7 @@ CHECKS = (
         "job_dag_run_scope",
         "structure",
         "Every tagged job belongs to a DAG in the same run.",
-        """
+        f"""
         SELECT job.id::TEXT AS id
         FROM scoped_jobs job
         LEFT JOIN scoped_dags dag ON dag.id = job.dag_id
@@ -215,12 +258,12 @@ CHECKS = (
         )
         SELECT 'invalid-serialized:' || id::TEXT AS id FROM invalid_serialized
         UNION ALL
-        SELECT format('duplicate-node:%s:%s', dag_id, task_id)
+        SELECT concat('duplicate-node:', dag_id, ':', task_id)
         FROM nodes
         GROUP BY dag_id, task_id
         HAVING task_id IS NULL OR COUNT(*) <> 1
         UNION ALL
-        SELECT format('node-without-job:%s:%s', node.dag_id, node.task_id)
+        SELECT concat('node-without-job:', node.dag_id, ':', node.task_id)
         FROM nodes node
         LEFT JOIN scoped_jobs job
           ON job.dag_id = node.dag_id
@@ -247,7 +290,7 @@ CHECKS = (
         "normalized_dependencies_match",
         "dependencies",
         "Normalized and JSON dependencies agree and remain inside each DAG.",
-        """
+        f"""
         WITH json_dependencies AS (
             SELECT job.id AS job_id, job.dag_id, dependency.value AS depends_on_id
             FROM scoped_jobs job
@@ -276,21 +319,21 @@ CHECKS = (
         FROM scoped_jobs job
         WHERE jsonb_typeof(job.dependencies) IS DISTINCT FROM 'array'
         UNION ALL
-        SELECT format('json-only:%s:%s', job_id, depends_on_id) AS id
+        SELECT concat('json-only:', job_id, ':', depends_on_id) AS id
         FROM (
             SELECT job_id, depends_on_id FROM json_dependencies
             EXCEPT
             SELECT job_id, depends_on_id FROM normalized
         ) missing
         UNION ALL
-        SELECT format('normalized-only:%s:%s', job_id, depends_on_id)
+        SELECT concat('normalized-only:', job_id, ':', depends_on_id)
         FROM (
             SELECT job_id, depends_on_id FROM normalized
             EXCEPT
             SELECT job_id, depends_on_id FROM json_dependencies
         ) extra
         UNION ALL
-        SELECT format('cross-dag:%s:%s', job_id, depends_on_id)
+        SELECT concat('cross-dag:', job_id, ':', depends_on_id)
         FROM normalized
         WHERE parent_dag_id IS NULL OR parent_dag_id <> dag_id
         """,
@@ -300,7 +343,7 @@ CHECKS = (
         "dependencies",
         "Every dependency edge moves from a higher parent level to a lower child level.",
         f"""
-        SELECT format('%s->%s', parent.id, child.id) AS id
+        SELECT parent.id::TEXT || '->' || child.id::TEXT AS id
         FROM {SCHEDULER_SCHEMA}.job_dependencies dependency
         JOIN scoped_jobs child
           ON child.name = dependency.job_name
@@ -340,7 +383,7 @@ CHECKS = (
             JOIN scoped_jobs job ON job.dag_id = dag.id
             GROUP BY dag.id
         )
-        SELECT format('%s:roots=%s:leaves=%s', topology.id, roots, leaves) AS id
+        SELECT concat(topology.id, ':roots=', roots, ':leaves=', leaves) AS id
         FROM topology, manifest
         WHERE roots <> 1
            OR leaves <> CASE manifest.graph_shape
@@ -385,7 +428,7 @@ CHECKS = (
         "dependencies",
         "A child starts only after every required parent succeeds.",
         f"""
-        SELECT format('%s->%s', parent.id, child.id) AS id
+        SELECT parent.id::TEXT || '->' || child.id::TEXT AS id
         FROM {SCHEDULER_SCHEMA}.job_dependencies dependency
         JOIN scoped_jobs child
           ON child.name = dependency.job_name
@@ -406,7 +449,7 @@ CHECKS = (
         "dependencies",
         "Failed dependencies do not expose ordinary descendants.",
         f"""
-        SELECT format('%s->%s', parent.id, child.id) AS id
+        SELECT parent.id::TEXT || '->' || child.id::TEXT AS id
         FROM {SCHEDULER_SCHEMA}.job_dependencies dependency
         JOIN scoped_jobs child
           ON child.name = dependency.job_name
@@ -479,6 +522,253 @@ CHECKS = (
     ),
 )
 
+GATEWAY_DAG_SCOPE_CHECK = _spec(
+    "gateway_dag_scope",
+    "structure",
+    "Every accepted gateway ID resolves to one fully run-tagged DAG.",
+    """
+    SELECT 'missing-dag:' || requested.id AS id
+    FROM requested_dags requested
+    LEFT JOIN scoped_dags dag ON dag.id::TEXT = requested.id
+    WHERE dag.id IS NULL
+    UNION ALL
+    SELECT 'run-tag:' || job.id::TEXT
+    FROM scoped_jobs job, params
+    WHERE job.data->'metadata'->>'stress_run_id' IS DISTINCT FROM params.run_id
+    UNION ALL
+    SELECT 'planner-tag:' || job.id::TEXT
+    FROM scoped_jobs job
+    JOIN scoped_dags dag ON dag.id = job.dag_id
+    WHERE job.data->'metadata'->>'stress_planner' IS DISTINCT FROM dag.planner
+    """,
+)
+
+PARALLEL_GRAPH_CONTEXT_SQL = f"""
+    node_degrees AS MATERIALIZED (
+        SELECT
+            job.dag_id,
+            job.id,
+            (
+                SELECT COUNT(*)
+                FROM {SCHEDULER_SCHEMA}.job_dependencies dependency
+                WHERE dependency.job_name = job.name
+                  AND dependency.job_id = job.id
+            ) AS indegree,
+            (
+                SELECT COUNT(*)
+                FROM {SCHEDULER_SCHEMA}.job_dependencies dependency
+                WHERE dependency.depends_on_name = job.name
+                  AND dependency.depends_on_id = job.id
+            ) AS outdegree
+        FROM scoped_jobs job
+    ), topology AS MATERIALIZED (
+        SELECT
+            dag.id,
+            COUNT(node.id) AS nodes,
+            COALESCE(SUM(node.indegree), 0) AS edges,
+            COUNT(*) FILTER (WHERE node.indegree = 0) AS roots,
+            COUNT(*) FILTER (WHERE node.outdegree = 0) AS leaves,
+            COUNT(*) FILTER (WHERE node.outdegree > 1) AS fanout_nodes,
+            COUNT(*) FILTER (WHERE node.indegree > 1) AS fanin_nodes
+        FROM scoped_dags dag
+        LEFT JOIN node_degrees node ON node.dag_id = dag.id
+        GROUP BY dag.id
+    )
+"""
+
+PARALLEL_GRAPH_OBSERVED_SQL = """
+    jsonb_build_object(
+        'bad_rows', COUNT(*),
+        'dag_count', (SELECT COUNT(*) FROM topology),
+        'nodes_min', (SELECT MIN(nodes) FROM topology),
+        'nodes_max', (SELECT MAX(nodes) FROM topology),
+        'edges_min', (SELECT MIN(edges) FROM topology),
+        'edges_max', (SELECT MAX(edges) FROM topology),
+        'roots_min', (SELECT MIN(roots) FROM topology),
+        'roots_max', (SELECT MAX(roots) FROM topology),
+        'leaves_min', (SELECT MIN(leaves) FROM topology),
+        'leaves_max', (SELECT MAX(leaves) FROM topology),
+        'fanout_nodes_min', (SELECT MIN(fanout_nodes) FROM topology),
+        'fanout_nodes_max', (SELECT MAX(fanout_nodes) FROM topology),
+        'fanin_nodes_min', (SELECT MIN(fanin_nodes) FROM topology),
+        'fanin_nodes_max', (SELECT MAX(fanin_nodes) FROM topology),
+        'dag_sample_truncated', (
+            SELECT COUNT(*) FROM topology
+        ) > (SELECT sample_limit FROM params),
+        'dag_sample', COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'dag_id', topology_sample.id::TEXT,
+                    'nodes', topology_sample.nodes,
+                    'edges', topology_sample.edges,
+                    'roots', topology_sample.roots,
+                    'leaves', topology_sample.leaves,
+                    'fanout_nodes', topology_sample.fanout_nodes,
+                    'fanin_nodes', topology_sample.fanin_nodes
+                ) ORDER BY topology_sample.id
+            )
+            FROM (
+                SELECT *
+                FROM topology
+                ORDER BY id
+                LIMIT (SELECT sample_limit FROM params)
+            ) topology_sample
+        ), '[]'::JSONB)
+    )
+"""
+
+PARALLEL_GRAPH_CHECK = _spec(
+    "parallel_graph_topology",
+    "dependencies",
+    "Every live DAG is multi-node and contains both fan-out and fan-in.",
+    """
+    SELECT concat(
+        id, ':nodes=', nodes, ':edges=', edges, ':roots=', roots,
+        ':leaves=', leaves, ':fanout=', fanout_nodes, ':fanin=', fanin_nodes
+    ) AS id
+    FROM topology
+    WHERE nodes < 2
+       OR edges < 1
+       OR roots <> 1
+       OR leaves < 1
+       OR fanout_nodes < 1
+       OR fanin_nodes < 1
+    """,
+    context_sql=PARALLEL_GRAPH_CONTEXT_SQL,
+    observed_sql=PARALLEL_GRAPH_OBSERVED_SQL,
+)
+
+FAILED_DESCENDANTS_CHECK = _spec(
+    "failed_descendants_blocked",
+    "dependencies",
+    "No transitive descendant starts after a required ancestor fails.",
+    f"""
+    WITH RECURSIVE edges AS (
+        SELECT
+            child.dag_id,
+            parent.id AS parent_id,
+            child.id AS child_id
+        FROM {SCHEDULER_SCHEMA}.job_dependencies dependency
+        JOIN scoped_jobs child
+          ON child.name = dependency.job_name
+         AND child.id = dependency.job_id
+        JOIN scoped_jobs parent
+          ON parent.name = dependency.depends_on_name
+         AND parent.id = dependency.depends_on_id
+    ), descendants AS (
+        SELECT dag_id, parent_id AS ancestor_id, child_id AS descendant_id
+        FROM edges
+        UNION
+        SELECT
+            descendants.dag_id,
+            descendants.ancestor_id,
+            edges.child_id
+        FROM descendants
+        JOIN edges
+          ON edges.dag_id = descendants.dag_id
+         AND edges.parent_id = descendants.descendant_id
+    )
+    SELECT ancestor.id::TEXT || '->' || descendant.id::TEXT AS id
+    FROM descendants
+    JOIN scoped_jobs ancestor ON ancestor.id = descendants.ancestor_id
+    JOIN scoped_jobs descendant ON descendant.id = descendants.descendant_id
+    WHERE ancestor.state::TEXT IN ('failed', 'cancelled', 'expired')
+      AND (descendant.started_on IS NOT NULL OR descendant.state::TEXT = 'active')
+      AND COALESCE(descendant.branch_metadata->>'skipped', 'false') <> 'true'
+    """,
+)
+
+FORCED_FAILURE_CHECK = _spec(
+    "forced_failure_propagation",
+    "terminals",
+    "Every force-failed DAG fails and cancels its unstarted downstream work.",
+    f"""
+    WITH RECURSIVE forced_edges AS (
+        SELECT
+            child.dag_id,
+            parent.id AS parent_id,
+            child.id AS child_id
+        FROM {SCHEDULER_SCHEMA}.job_dependencies dependency
+        JOIN scoped_jobs child
+          ON child.name = dependency.job_name
+         AND child.id = dependency.job_id
+        JOIN scoped_jobs parent
+          ON parent.name = dependency.depends_on_name
+         AND parent.id = dependency.depends_on_id
+        JOIN forced_dags forced ON forced.id = child.dag_id::TEXT
+    ), forced_descendants AS (
+        SELECT dag_id, parent_id AS ancestor_id, child_id AS descendant_id
+        FROM forced_edges
+        UNION
+        SELECT
+            descendants.dag_id,
+            descendants.ancestor_id,
+            edge.child_id
+        FROM forced_descendants descendants
+        JOIN forced_edges edge
+          ON edge.dag_id = descendants.dag_id
+         AND edge.parent_id = descendants.descendant_id
+    )
+    SELECT 'no-forced-dags' AS id
+    FROM params
+    WHERE cardinality(params.forced_dag_ids) = 0
+    UNION ALL
+    SELECT 'missing-forced-dag:' || forced.id
+    FROM forced_dags forced
+    LEFT JOIN scoped_dags dag ON dag.id::TEXT = forced.id
+    WHERE dag.id IS NULL
+    UNION ALL
+    SELECT 'forced-dag-state:' || dag.id::TEXT || ':' || dag.state::TEXT
+    FROM forced_dags forced
+    JOIN scoped_dags dag ON dag.id::TEXT = forced.id
+    WHERE dag.state::TEXT NOT IN ('failed', 'cancelled')
+    UNION ALL
+    SELECT 'forced-nonterminal-job:' || job.id::TEXT || ':' || job.state::TEXT
+    FROM forced_dags forced
+    JOIN scoped_dags dag ON dag.id::TEXT = forced.id
+    JOIN scoped_jobs job ON job.dag_id = dag.id
+    WHERE job.state::TEXT NOT IN (
+        'completed', 'skipped', 'failed', 'cancelled', 'expired'
+    )
+    UNION ALL
+    SELECT 'forced-dag-without-failed-job:' || dag.id::TEXT
+    FROM forced_dags forced
+    JOIN scoped_dags dag ON dag.id::TEXT = forced.id
+    JOIN scoped_jobs job ON job.dag_id = dag.id
+    GROUP BY dag.id
+    HAVING COUNT(*) FILTER (WHERE job.state::TEXT = 'failed') = 0
+    UNION ALL
+    SELECT 'forced-dag-without-cancelled-downstream:' || dag.id::TEXT
+    FROM forced_dags forced
+    JOIN scoped_dags dag ON dag.id::TEXT = forced.id
+    JOIN scoped_jobs job ON job.dag_id = dag.id
+    GROUP BY dag.id
+    HAVING NOT EXISTS (
+        SELECT 1
+        FROM forced_descendants descendants
+        JOIN scoped_jobs ancestor ON ancestor.id = descendants.ancestor_id
+        JOIN scoped_jobs descendant ON descendant.id = descendants.descendant_id
+        WHERE descendants.dag_id = dag.id
+          AND ancestor.state::TEXT = 'failed'
+          AND descendant.state::TEXT = 'cancelled'
+          AND descendant.output->>'cancel_reason' = 'dag_failed'
+    )
+    """,
+)
+
+GATEWAY_REUSED_CHECK_NAMES = (
+    "job_dag_run_scope",
+    "serialized_graph_matches_jobs",
+    "normalized_dependencies_match",
+    "dependency_levels_acyclic",
+    "dependency_start_order",
+    "failed_dependency_not_started",
+    "terminal_dag_consistency",
+)
+GATEWAY_REUSED_CHECKS = tuple(
+    spec for spec in CHECKS if spec.name in GATEWAY_REUSED_CHECK_NAMES
+)
+
 
 def inspect_serialized_plan(plan: Mapping[str, Any] | Any) -> dict[str, Any]:
     payload = plan.model_dump() if hasattr(plan, "model_dump") else plan
@@ -504,6 +794,8 @@ def inspect_serialized_plan(plan: Mapping[str, Any] | Any) -> dict[str, Any]:
             if dependency_id in dependents:
                 dependents[dependency_id].append(node_id)
                 indegree[node_id] += 1
+    fanout_nodes = sum(len(children) > 1 for children in dependents.values())
+    fanin_nodes = sum(degree > 1 for degree in indegree.values())
     pending = deque(node_id for node_id, degree in indegree.items() if degree == 0)
     visited = 0
     while pending:
@@ -519,6 +811,8 @@ def inspect_serialized_plan(plan: Mapping[str, Any] | Any) -> dict[str, Any]:
         "edge_count": edge_count,
         "root_count": sum(not (node.get("dependencies", []) or []) for node in nodes),
         "leaf_count": sum(not dependents[node_id] for node_id in node_ids),
+        "fanout_nodes": fanout_nodes,
+        "fanin_nodes": fanin_nodes,
         "duplicate_node_ids": duplicates,
         "missing_dependencies": missing,
         "cyclic": bool(nodes) and visited != len(nodes),
@@ -553,16 +847,25 @@ def connect(
     return psycopg.connect(**kwargs, row_factory=dict_row)
 
 
-def _query_for(spec: CheckSpec) -> str:
+def _query_for(spec: CheckSpec, scope_ctes: str = SCOPE_CTES) -> str:
+    ctes = [scope_ctes]
+    if spec.context_sql:
+        ctes.append(spec.context_sql)
+    ctes.append(
+        f"""
+        violations AS MATERIALIZED (
+            {spec.violations_sql}
+        )
+        """
+    )
+    observed_sql = spec.observed_sql or "jsonb_build_object('bad_rows', COUNT(*))"
+    rendered_ctes = ",\n".join(ctes)
     return f"""
     /* scheduler-correctness:{spec.name} */
-    WITH {SCOPE_CTES},
-    violations AS MATERIALIZED (
-        {spec.violations_sql}
-    )
+    WITH {rendered_ctes}
     SELECT
         COUNT(*)::BIGINT AS bad_rows,
-        jsonb_build_object('bad_rows', COUNT(*)) AS observed,
+        {observed_sql} AS observed,
         jsonb_build_object('bad_rows', 0) AS expected,
         COALESCE((
             SELECT jsonb_agg(sample.id ORDER BY sample.id)
@@ -601,15 +904,34 @@ class SchedulerCorrectnessVerifier:
         run_id: str,
         sample_limit: int,
         settle_deadline: datetime,
+        *,
+        scope: str = "corpus",
+        dag_ids: Sequence[str] = (),
+        forced_dag_ids: Sequence[str] = (),
+        require_parallel_graph: bool = False,
+        require_failure_propagation: bool = False,
     ) -> None:
         if not run_id.strip():
             raise ValueError("run_id is required")
         if sample_limit <= 0 or sample_limit > 1_000:
             raise ValueError("sample_limit must be between 1 and 1000")
+        if scope not in SCOPES:
+            raise ValueError(f"Unsupported correctness scope: {scope}")
+        if scope == "gateway" and not dag_ids:
+            raise ValueError("Gateway correctness scope requires accepted DAG IDs")
+        if scope != "gateway" and (
+            require_parallel_graph or require_failure_propagation
+        ):
+            raise ValueError("Live graph requirements need --scope gateway")
         self.connection = connection
         self.run_id = run_id
         self.sample_limit = sample_limit
         self.settle_deadline = settle_deadline
+        self.scope = scope
+        self.dag_ids = tuple(dag_ids)
+        self.forced_dag_ids = tuple(forced_dag_ids)
+        self.require_parallel_graph = require_parallel_graph
+        self.require_failure_propagation = require_failure_propagation
 
     def manifest(self) -> dict[str, Any]:
         with self.connection.transaction():
@@ -626,14 +948,23 @@ class SchedulerCorrectnessVerifier:
 
     def run_check(self, spec: CheckSpec) -> CheckResult:
         started = time.perf_counter()
+        if self.scope == "gateway":
+            scope_ctes = GATEWAY_SCOPE_CTES
+            params = (
+                self.run_id,
+                self.sample_limit,
+                self.settle_deadline,
+                list(self.dag_ids),
+                list(self.forced_dag_ids),
+            )
+        else:
+            scope_ctes = SCOPE_CTES
+            params = (self.run_id, self.sample_limit, self.settle_deadline)
         try:
             with self.connection.transaction():
                 with self.connection.cursor() as cursor:
                     cursor.execute("SET TRANSACTION READ ONLY")
-                    cursor.execute(
-                        _query_for(spec),
-                        (self.run_id, self.sample_limit, self.settle_deadline),
-                    )
+                    cursor.execute(_query_for(spec, scope_ctes), params)
                     row = cursor.fetchone()
             if row is None:
                 raise RuntimeError("check query returned no result")
@@ -746,23 +1077,44 @@ class SchedulerCorrectnessVerifier:
             ]
 
     def verify(self, gateway_report: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        manifest = self.manifest()
         results: list[CheckResult] = []
-        for spec in CHECKS:
-            if (
-                spec.name == "graph_root_leaf_shape"
-                and manifest["graph_shape"] == "mixed"
-            ):
-                results.append(
-                    skipped_result(
-                        spec.name,
-                        spec.category,
-                        "Mixed cohorts validate each serialized graph but have no single root/leaf formula.",
+        manifest_payload: dict[str, Any] | None
+        if self.scope == "gateway":
+            if gateway_report is None:
+                raise ValueError("Gateway correctness scope requires --gateway-report")
+            results.append(self.run_check(GATEWAY_DAG_SCOPE_CHECK))
+            results.extend(self.run_check(spec) for spec in GATEWAY_REUSED_CHECKS)
+            if self.require_parallel_graph:
+                results.append(self.run_check(PARALLEL_GRAPH_CHECK))
+            results.append(self.run_check(FAILED_DESCENDANTS_CHECK))
+            if self.require_failure_propagation:
+                results.append(self.run_check(FORCED_FAILURE_CHECK))
+            manifest_payload = None
+        else:
+            manifest = self.manifest()
+            for spec in CHECKS:
+                if (
+                    spec.name == "graph_root_leaf_shape"
+                    and manifest["graph_shape"] == "mixed"
+                ):
+                    results.append(
+                        skipped_result(
+                            spec.name,
+                            spec.category,
+                            "Mixed cohorts validate each serialized graph but have no single root/leaf formula.",
+                        )
                     )
-                )
-                continue
-            results.append(self.run_check(spec))
-        results.extend(self.run_attempt_checks())
+                    continue
+                results.append(self.run_check(spec))
+            results.extend(self.run_attempt_checks())
+            manifest_payload = {
+                "target_dag_count": manifest["target_dag_count"],
+                "high_water_mark": manifest["high_water_mark"],
+                "nodes_per_dag": manifest["nodes_per_dag"],
+                "graph_shape": manifest["graph_shape"],
+                "workload_profile": manifest["workload_profile"],
+                "projection_mode": manifest["projection_mode"],
+            }
         results.extend(self._gateway_checks(gateway_report))
         counts = Counter(result.status for result in results)
         passed = not any(
@@ -774,15 +1126,18 @@ class SchedulerCorrectnessVerifier:
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "settle_deadline": self.settle_deadline.isoformat(),
             "sample_limit": self.sample_limit,
-            "manifest": {
-                "target_dag_count": manifest["target_dag_count"],
-                "high_water_mark": manifest["high_water_mark"],
-                "nodes_per_dag": manifest["nodes_per_dag"],
-                "graph_shape": manifest["graph_shape"],
-                "workload_profile": manifest["workload_profile"],
-                "projection_mode": manifest["projection_mode"],
-                "scheduler_schema_version": manifest["scheduler_schema_version"],
-            },
+            "scope": self.scope,
+            "manifest": manifest_payload,
+            "gateway_scope": (
+                {
+                    "accepted_dag_count": len(self.dag_ids),
+                    "forced_failure_dag_count": len(self.forced_dag_ids),
+                    "require_parallel_graph": self.require_parallel_graph,
+                    "require_failure_propagation": self.require_failure_propagation,
+                }
+                if self.scope == "gateway"
+                else None
+            ),
             "passed": passed,
             "status_counts": dict(counts),
             "checks": [asdict(result) for result in results],
@@ -831,6 +1186,18 @@ class SchedulerCorrectnessVerifier:
             job_id for job_id, count in Counter(job_ids).items() if count > 1
         )
         if not job_ids:
+            if self.scope == "gateway":
+                return CheckResult(
+                    name="gateway_scheduler_identity",
+                    category="events",
+                    status="fail",
+                    observed={"accepted_dag_ids": 0},
+                    expected={"accepted_dag_ids": ">0"},
+                    bad_rows=1,
+                    sample=[],
+                    query_duration_ms=0.0,
+                    reason="The gateway report contains no accepted DAG IDs.",
+                )
             return skipped_result(
                 "gateway_scheduler_identity",
                 "events",
@@ -838,26 +1205,38 @@ class SchedulerCorrectnessVerifier:
             )
         started = time.perf_counter()
         query = f"""
-            SELECT submitted.id, COUNT(job.id) AS matches
+            SELECT
+                submitted.id,
+                COUNT(DISTINCT dag.id) AS dag_matches,
+                COUNT(job.id) FILTER (
+                    WHERE job.data->'metadata'->>'stress_run_id' = %s
+                ) AS tagged_jobs
             FROM unnest(%s::TEXT[]) submitted(id)
-            LEFT JOIN {SCHEDULER_SCHEMA}.job job
-              ON job.id::TEXT = submitted.id
-             AND job.data->'metadata'->>'stress_run_id' = %s
+            LEFT JOIN {SCHEDULER_SCHEMA}.dag dag ON dag.id::TEXT = submitted.id
+            LEFT JOIN {SCHEDULER_SCHEMA}.job job ON job.dag_id = dag.id
             GROUP BY submitted.id
         """
         try:
             with self.connection.transaction():
                 with self.connection.cursor() as cursor:
                     cursor.execute("SET TRANSACTION READ ONLY")
-                    cursor.execute(query, (job_ids, self.run_id))
+                    cursor.execute(query, (self.run_id, job_ids))
                     rows = cursor.fetchall()
-            bad = duplicates + [str(row["id"]) for row in rows if row["matches"] != 1]
+            bad = duplicates + [
+                str(row["id"])
+                for row in rows
+                if row["dag_matches"] != 1 or row["tagged_jobs"] < 1
+            ]
             return CheckResult(
                 name="gateway_scheduler_identity",
                 category="events",
                 status="pass" if not bad else "fail",
-                observed={"submitted_ids": len(job_ids), "bad_rows": len(bad)},
-                expected={"matches_per_id": 1, "duplicates": 0},
+                observed={"accepted_dag_ids": len(job_ids), "bad_rows": len(bad)},
+                expected={
+                    "dag_matches_per_id": 1,
+                    "tagged_jobs": ">=1",
+                    "duplicates": 0,
+                },
                 bad_rows=len(bad),
                 sample=bad[: self.sample_limit],
                 query_duration_ms=(time.perf_counter() - started) * 1000,
@@ -871,7 +1250,7 @@ class SchedulerCorrectnessVerifier:
                 category="events",
                 status="error",
                 observed=None,
-                expected={"matches_per_id": 1},
+                expected={"dag_matches_per_id": 1},
                 bad_rows=0,
                 sample=[],
                 query_duration_ms=(time.perf_counter() - started) * 1000,
@@ -885,8 +1264,12 @@ class SchedulerCorrectnessVerifier:
             if not isinstance(job, dict):
                 bad.append(f"index:{index}")
                 continue
+            if not job.get("job_id"):
+                continue
             events = job.get("raw_events")
             if not isinstance(events, list) or not events:
+                if self.scope == "gateway":
+                    bad.append(f"{job['job_id']}:missing-events")
                 continue
             observed_events += len(events)
             kinds = [str(event).rsplit(".", 1)[-1] for event in events]
@@ -898,7 +1281,12 @@ class SchedulerCorrectnessVerifier:
             terminal_positions = [
                 positions[kind] for kind in ("completed", "failed") if kind in positions
             ]
-            invalid = (
+            invalid = self.scope == "gateway" and (
+                kinds.count("scheduled") < 1
+                or kinds.count("started") < 1
+                or sum(kind in {"completed", "failed"} for kind in kinds) != 1
+            )
+            invalid = invalid or (
                 (
                     "scheduled" in positions
                     and "started" in positions
@@ -920,6 +1308,18 @@ class SchedulerCorrectnessVerifier:
             if invalid:
                 bad.append(str(job.get("job_id") or job.get("request_id") or index))
         if observed_events == 0:
+            if self.scope == "gateway":
+                return CheckResult(
+                    name="gateway_event_order",
+                    category="events",
+                    status="fail",
+                    observed={"events": 0, "bad_rows": max(1, len(bad))},
+                    expected={"events": ">0", "bad_rows": 0},
+                    bad_rows=max(1, len(bad)),
+                    sample=bad[: self.sample_limit],
+                    query_duration_ms=0.0,
+                    reason="The gateway report contains no scheduler event evidence.",
+                )
             return skipped_result(
                 "gateway_event_order",
                 "events",
@@ -938,6 +1338,11 @@ class SchedulerCorrectnessVerifier:
         )
 
     def _gateway_terminal_agreement(self, jobs: list[Any]) -> CheckResult:
+        accepted_job_ids = {
+            str(job["job_id"])
+            for job in jobs
+            if isinstance(job, dict) and job.get("job_id")
+        }
         terminal_jobs = {
             str(job["job_id"]): str(job["terminal_status"])
             for job in jobs
@@ -946,6 +1351,18 @@ class SchedulerCorrectnessVerifier:
             and job.get("terminal_status")
         }
         if not terminal_jobs:
+            if self.scope == "gateway":
+                return CheckResult(
+                    name="gateway_terminal_agreement",
+                    category="events",
+                    status="fail",
+                    observed={"terminal_jobs": 0},
+                    expected={"terminal_jobs": len(accepted_job_ids)},
+                    bad_rows=max(1, len(accepted_job_ids)),
+                    sample=sorted(accepted_job_ids)[: self.sample_limit],
+                    query_duration_ms=0.0,
+                    reason="The gateway report contains no terminal outcomes.",
+                )
             return skipped_result(
                 "gateway_terminal_agreement",
                 "events",
@@ -953,20 +1370,29 @@ class SchedulerCorrectnessVerifier:
             )
         started = time.perf_counter()
         query = f"""
-            SELECT submitted.id, dag.state
+            SELECT
+                submitted.id,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM {SCHEDULER_SCHEMA}.job job
+                        WHERE job.dag_id = dag.id
+                          AND job.data->'metadata'->>'stress_run_id' = %s
+                    ) THEN dag.state
+                END AS state
             FROM unnest(%s::TEXT[]) submitted(id)
-            LEFT JOIN {SCHEDULER_SCHEMA}.job job
-              ON job.id::TEXT = submitted.id
-             AND job.data->'metadata'->>'stress_run_id' = %s
-            LEFT JOIN {SCHEDULER_SCHEMA}.dag dag ON dag.id = job.dag_id
+            LEFT JOIN {SCHEDULER_SCHEMA}.dag dag ON dag.id::TEXT = submitted.id
         """
         try:
             with self.connection.transaction():
                 with self.connection.cursor() as cursor:
                     cursor.execute("SET TRANSACTION READ ONLY")
-                    cursor.execute(query, (list(terminal_jobs), self.run_id))
+                    cursor.execute(query, (self.run_id, list(terminal_jobs)))
                     rows = cursor.fetchall()
-            bad = []
+            bad = [
+                f"{job_id}:missing-terminal"
+                for job_id in sorted(accepted_job_ids - terminal_jobs.keys())
+            ]
             for row in rows:
                 gateway_state = terminal_jobs[str(row["id"])]
                 database_state = row["state"]
@@ -1010,27 +1436,40 @@ class SchedulerCorrectnessVerifier:
     def _post_drain_capacity(self, report: Mapping[str, Any]) -> CheckResult:
         snapshot = report.get("post_drain_capacity")
         if not isinstance(snapshot, Mapping):
+            if self.scope == "gateway":
+                return CheckResult(
+                    name="post_drain_capacity",
+                    category="capacity",
+                    status="fail",
+                    observed=None,
+                    expected={"ok": True, "used": 0, "holder_count": 0},
+                    bad_rows=1,
+                    sample=[],
+                    query_duration_ms=0.0,
+                    reason="The gateway report has no post_drain_capacity snapshot.",
+                )
             return skipped_result(
                 "post_drain_capacity",
                 "capacity",
                 "The gateway report has no post_drain_capacity snapshot.",
             )
-        used = int(snapshot.get("used", 0))
-        holders = int(snapshot.get("holder_count", 0))
-        bad_rows = int(used != 0) + int(holders != 0)
+        ok = snapshot.get("ok")
+        used = snapshot.get("used")
+        holders = snapshot.get("holder_count")
+        bad_rows = int(ok is not True) + int(used != 0) + int(holders != 0)
         return CheckResult(
             name="post_drain_capacity",
             category="capacity",
             status="pass" if bad_rows == 0 else "fail",
-            observed={"used": used, "holder_count": holders},
-            expected={"used": 0, "holder_count": 0},
+            observed={"ok": ok, "used": used, "holder_count": holders},
+            expected={"ok": True, "used": 0, "holder_count": 0},
             bad_rows=bad_rows,
             sample=[],
             query_duration_ms=0.0,
             reason=(
                 None
                 if bad_rows == 0
-                else "Capacity usage or holders remain after drain."
+                else "Capacity snapshot is unhealthy, incomplete, or not drained."
             ),
         )
 
@@ -1059,6 +1498,43 @@ def load_gateway_report(
     return payload, None
 
 
+def gateway_scope_ids(
+    report: Mapping[str, Any], run_id: str
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    run_identity = report.get("run_identity")
+    if not isinstance(run_identity, Mapping) or run_identity.get("run_id") != run_id:
+        raise ValueError("Gateway report run_id does not match --run-id")
+
+    jobs = report.get("jobs")
+    if not isinstance(jobs, list):
+        raise ValueError("Gateway report does not contain a jobs array")
+
+    accepted = [
+        job
+        for job in jobs
+        if isinstance(job, Mapping) and job.get("job_id") is not None
+    ]
+    job_ids = tuple(str(job["job_id"]) for job in accepted)
+    if not job_ids:
+        raise ValueError("Gateway report contains no accepted DAG IDs")
+
+    summary = report.get("summary")
+    submitted_jobs = (
+        summary.get("submitted_jobs") if isinstance(summary, Mapping) else None
+    )
+    if submitted_jobs is not None and int(submitted_jobs) != len(job_ids):
+        raise ValueError(
+            "Gateway report does not retain every accepted job; set "
+            "--max-retained-jobs at least as high as --job-count"
+        )
+
+    if any(job.get("stress_run_id") != run_id for job in accepted):
+        raise ValueError("Gateway job records do not all match --run-id")
+
+    forced_ids = tuple(str(job["job_id"]) for job in accepted if job.get("force_fail"))
+    return job_ids, forced_ids
+
+
 def emit_report(report: Mapping[str, Any], output_path: str | None) -> None:
     rendered = json.dumps(report, indent=2, sort_keys=True, default=str)
     print(rendered)
@@ -1085,11 +1561,14 @@ def print_summary(report: Mapping[str, Any]) -> None:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Verify one scheduler stress cohort against PostgreSQL"
+        description="Verify a scheduler corpus or live gateway run against PostgreSQL"
     )
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--scope", choices=sorted(SCOPES), default="corpus")
     parser.add_argument("--config", help="Optional scheduler stresser JSON config")
     parser.add_argument("--gateway-report")
+    parser.add_argument("--require-parallel-graph", action="store_true")
+    parser.add_argument("--require-failure-propagation", action="store_true")
     parser.add_argument("--settle-deadline", help="ISO-8601 timestamp; defaults to now")
     parser.add_argument("--sample-limit", type=int, default=50)
     parser.add_argument("--report", help="Optional JSON report path")
@@ -1101,12 +1580,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         database = load_database_config(args.config)
         gateway_report, gateway_error = load_gateway_report(args.gateway_report)
+        if args.scope == "gateway":
+            if gateway_error:
+                raise ValueError(f"Gateway report is unavailable: {gateway_error}")
+            if gateway_report is None:
+                raise ValueError("--scope gateway requires --gateway-report")
+            dag_ids, forced_dag_ids = gateway_scope_ids(gateway_report, args.run_id)
+        else:
+            dag_ids, forced_dag_ids = (), ()
         with connect(args.run_id, database) as connection:
             verifier = SchedulerCorrectnessVerifier(
                 connection,
                 args.run_id,
                 args.sample_limit,
                 parse_deadline(args.settle_deadline),
+                scope=args.scope,
+                dag_ids=dag_ids,
+                forced_dag_ids=forced_dag_ids,
+                require_parallel_graph=args.require_parallel_graph,
+                require_failure_propagation=args.require_failure_propagation,
             )
             report = verifier.verify(gateway_report)
         if gateway_error:

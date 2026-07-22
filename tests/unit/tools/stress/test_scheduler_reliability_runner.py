@@ -541,6 +541,13 @@ def test_example_config_loads_and_rejects_credentials(tmp_path: Path) -> None:
     )
 
     assert "gateway-owner-kill-example" in config.scenarios
+    correctness_verifier = next(
+        verifier
+        for verifier in config.scenarios["gateway-owner-kill-example"].verifiers
+        if verifier.name == "scheduler-correctness"
+    )
+    scope_index = correctness_verifier.command.argv.index("--scope")
+    assert correctness_verifier.command.argv[scope_index + 1] == "gateway"
     assert len(config.config_sha256) == 64
 
     credential_config = tmp_path / "credential.json"
@@ -557,6 +564,7 @@ def test_ha_sql_uses_session_parameters_and_safe_mutation_default() -> None:
     scheduler_checks = (ha_root / "ha_scheduler_checks.sql").read_text()
     gateway_checks = (ha_root / "ha_inflight_gateway_kill_invariants.sql").read_text()
     lost_event = (ha_root / "ha_lost_terminal_event_reconciliation.sql").read_text()
+    invariant_helper = (ha_root / "scheduler_attempt_invariant_checks.sql").read_text()
 
     assert "current_setting('marie.ha_run_start', TRUE)" in scheduler_checks
     assert "current_setting('marie.ha_run_end', TRUE)" in scheduler_checks
@@ -568,6 +576,11 @@ def test_ha_sql_uses_session_parameters_and_safe_mutation_default() -> None:
     assert "current_setting('marie.ha_enable_mutation', TRUE)" in lost_event
     assert "FALSE\n    ) AS enable_mutation" in lost_event
     assert "AND p.enable_mutation IS FALSE" in lost_event
+    assert (
+        "CREATE OR REPLACE FUNCTION "
+        "marie_scheduler.scheduler_attempt_invariant_checks" in invariant_helper
+    )
+    assert "{schema}" not in invariant_helper
 
 
 def etcd_capacity(*slots: tuple[str, int, int]) -> dict[str, Any]:
@@ -743,7 +756,7 @@ def test_etcd_zero_slot_detection_and_recovery_pass() -> None:
     assert report["dispatch"]["control_flow_during_suppression"] == 1
 
 
-def test_etcd_runner_consumes_slice04_bounded_report_and_job_jsonl(
+def test_etcd_runner_uses_streamed_job_records_for_dispatch_timing(
     tmp_path: Path,
 ) -> None:
     runner, workload = build_etcd_runner(

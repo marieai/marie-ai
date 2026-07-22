@@ -101,6 +101,9 @@ copied schema SQL; Kubernetes deployments should point `MARIE_PSQL_DIR`
 and `MARIE_SCHEMA_DIR` at the packaged image paths, or at an explicitly
 managed external runtime mount.
 
+`config/psql/schema` is the only active scheduler schema tree. Do not create
+parallel `schema-v*` or environment-specific schema directories.
+
 ## Testing Changes
 
 ```bash

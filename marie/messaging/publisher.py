@@ -7,6 +7,7 @@ from marie.messaging.events import EventMessage, MarieEventType
 from marie.utils.json import to_json
 
 TOAST_DISABLED = False
+STATUS_ACCEPTED = "accepted"
 STATUS_SCHEDULED = "scheduled"
 STATUS_STARTED = "started"
 STATUS_FAILED = "failed"
@@ -91,18 +92,7 @@ async def mark_as_scheduled(
     timestamp: int,
     payload: Any,
 ) -> bool:
-    """
-    Mark request as scheduled for processing, this will be called by when the request is received by the server
-
-    :param api_key: The API key that is used to authenticate the request.
-    :param job_id:  The unique identifier that is assigned to the job.
-    :param status: The status of the job. Valid values are Succeeded, Failed, or Error.
-    :param event_name: The operation used to analyze the input document, such as Extract or Overlay.
-    :param job_tag: The user-specified identifier for the job(ex: ref_type)
-    :param timestamp: The Unix timestamp that indicates when the job finished, returned in milliseconds.
-    :param payload:
-    :return: True if the event was sent successfully, False otherwise
-    """
+    """Publish scheduler admission after DAG and job persistence succeeds."""
     return await _mark_job_status(
         api_key,
         job_id,
@@ -112,6 +102,29 @@ async def mark_as_scheduled(
         timestamp,
         payload,
         status_suffix=STATUS_SCHEDULED,
+        disabled_return_value=True,
+    )
+
+
+async def mark_as_accepted(
+    api_key: str,
+    job_id: str,
+    event_name: str,
+    job_tag: str,
+    status: str,
+    timestamp: int,
+    payload: Any,
+) -> bool:
+    """Publish gateway acceptance after a submission enters its local queue."""
+    return await _mark_job_status(
+        api_key,
+        job_id,
+        event_name,
+        job_tag,
+        status,
+        timestamp,
+        payload,
+        status_suffix=STATUS_ACCEPTED,
         disabled_return_value=True,
     )
 

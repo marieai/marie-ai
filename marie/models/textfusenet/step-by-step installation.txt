@@ -10,4 +10,4 @@ uv sync --extra cu130 --group dev
 To rebuild detectron2 for the PyTorch 2.12 / CUDA 13 lane:
 
 MARIE_TORCH_ENV_NAME=marie-ai-pytorch-2-12 \
-  tools/scripts/setup-py312-torch212-cu130.sh build-detectron2
+  scripts/setup-py312-torch212-cu130.sh build-detectron2

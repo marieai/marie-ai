@@ -81,6 +81,24 @@ async def test_stopped_event_requires_attempt_identity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_job_event_trace_records_scheduler_handler_entry(monkeypatch) -> None:
+    work_item = build_work_item()
+    scheduler = build_scheduler(work_item, {JOB_ID})
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "marie.scheduler.psql.scheduler_trace",
+        lambda event, **fields: events.append((event, fields)),
+    )
+
+    await scheduler._handle_job_event(JobStatus.STOPPED.value, {"job_id": JOB_ID})
+
+    assert events[0] == (
+        "scheduler_job_event_received",
+        {"job_id": JOB_ID, "status": "STOPPED"},
+    )
+
+
+@pytest.mark.asyncio
 async def test_stale_stopped_event_does_not_cancel_current_attempt() -> None:
     work_item = build_work_item()
     scheduler = build_scheduler(work_item, set())

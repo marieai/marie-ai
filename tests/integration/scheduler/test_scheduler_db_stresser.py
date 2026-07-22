@@ -47,12 +47,29 @@ def test_seed_resume_and_verify_against_scheduler_schema(
 
     with connect(first) as connection:
         generator = CorpusGenerator(connection)
-        version = generator.initialize()
+        generator.initialize()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'marie_stress'
+                  AND table_name = 'run_manifest'
+                  AND column_name IN (
+                      'scheduler_schema_version',
+                      'schema_transitions'
+                  )
+                """
+            )
+            assert cursor.fetchall() == []
         generator.acquire_lock(run_id)
         try:
-            manifest = generator.prepare_manifest(first, version)
+            manifest = generator.prepare_manifest(first)
             generator.ensure_queue(first)
             generator.create_staging_tables()
+            snapshot = generator.database_snapshot(first)
+            relation_names = {row["logical_name"] for row in snapshot["relations"]}
+            assert {"queue_partition", "run_manifest"} <= relation_names
             original_copy = generator._copy_chunk
 
             def fail_second_chunk(
@@ -76,12 +93,12 @@ def test_seed_resume_and_verify_against_scheduler_schema(
             assert result["inserted_dags"] == 1
             assert verification["passed"] is True
 
-            manifest = generator.prepare_manifest(first, version)
+            manifest = generator.prepare_manifest(first)
             result = generator.seed(first, int(manifest["high_water_mark"]))
             assert result["inserted_dags"] == 0
 
             second = StressConfig.from_mapping({**base, "target_dag_count": 3})
-            manifest = generator.prepare_manifest(second, version)
+            manifest = generator.prepare_manifest(second)
             result = generator.seed(second, int(manifest["high_water_mark"]))
             verification = generator.verify(second)
 
@@ -94,22 +111,8 @@ def test_seed_resume_and_verify_against_scheduler_schema(
 
             smaller = StressConfig.from_mapping({**base, "target_dag_count": 2})
             with pytest.raises(RuntimeError, match="Refusing to shrink"):
-                generator.prepare_manifest(smaller, version)
+                generator.prepare_manifest(smaller)
             assert generator.manifest(run_id)["target_dag_count"] == 3
-
-            with pytest.raises(RuntimeError, match="Scheduler schema changed"):
-                generator.prepare_manifest(second, version + 1)
-            transitioned_config = StressConfig.from_mapping(
-                {**base, "target_dag_count": 3, "allow_schema_transition": True}
-            )
-            transitioned = generator.prepare_manifest(
-                transitioned_config,
-                version + 1,
-            )
-            assert transitioned["scheduler_schema_version"] == version + 1
-            recorded = generator.manifest(run_id)
-            assert recorded["schema_transitions"][-1]["from"] == version
-            assert recorded["schema_transitions"][-1]["to"] == version + 1
         finally:
             generator.release_lock(run_id)
             with connection.cursor() as cursor:
@@ -167,10 +170,10 @@ def test_correctness_verifier_detects_corrupted_dependency_level() -> None:
 
     with connect(config) as connection:
         generator = CorpusGenerator(connection)
-        version = generator.initialize()
+        generator.initialize()
         generator.acquire_lock(run_id)
         try:
-            manifest = generator.prepare_manifest(config, version)
+            manifest = generator.prepare_manifest(config)
             generator.ensure_queue(config)
             generator.create_staging_tables()
             generator.seed(config, int(manifest["high_water_mark"]))
@@ -261,10 +264,10 @@ def test_active_profile_persists_and_verifies_durable_attempt() -> None:
 
     with connect(config) as connection:
         generator = CorpusGenerator(connection)
-        version = generator.initialize()
+        generator.initialize()
         generator.acquire_lock(run_id)
         try:
-            manifest = generator.prepare_manifest(config, version)
+            manifest = generator.prepare_manifest(config)
             generator.ensure_queue(config)
             generator.create_staging_tables()
             generator.seed(config, int(manifest["high_water_mark"]))
