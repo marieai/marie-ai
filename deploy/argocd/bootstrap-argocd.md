@@ -29,12 +29,15 @@ See `deploy/README.md § Prerequisites` for the full cluster prerequisite list.
 
 ## 1. Install Argo CD
 
-The `deploy/smoke-marie-helm.sh` script (invoked by `deploy/bootstrap.sh`) can
-install Argo CD for you on a local k3d/kind cluster:
+The top-level bootstrap script can install Argo CD for you on a local k3d/kind
+cluster by delegating to `deploy/bootstrap.sh`:
 
 ```bash
 # Install Marie + Argo CD together on a local cluster:
-INSTALL_ARGOCD=true ./deploy/bootstrap.sh k3d
+./bootstrap-marie.sh --with-argocd
+
+# Use kind instead of k3d:
+./bootstrap-marie.sh --with-argocd --k8s-provider kind
 ```
 
 For a direct install (what the smoke script does internally):
@@ -46,10 +49,10 @@ kubectl apply -n argocd \
 kubectl -n argocd rollout status deploy/argocd-server
 ```
 
-Override the version or namespace with environment variables:
+Override the version or namespace with flags:
 
 ```bash
-ARGOCD_VERSION=v2.13.0 ARGOCD_NAMESPACE=argocd ./deploy/bootstrap.sh k3d
+./bootstrap-marie.sh --with-argocd --argocd-version v2.13.0 --argocd-namespace argocd
 ```
 
 Reach the Argo CD API and UI:

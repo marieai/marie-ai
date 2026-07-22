@@ -20,7 +20,7 @@ global:
   marie:
     image:
       repository: marieai/marie
-      tag: "4.5rc1-cuda"
+      tag: "5.0.0-cuda"
     logging:
       level: INFO
     debugQueryPlanner: "FALSE"
@@ -113,7 +113,7 @@ global:
 marie:
   image:
     repository: marieai/marie
-    tag: "4.5rc1-cuda"
+    tag: "5.0.0-cuda"
     pullPolicy: IfNotPresent
 
   # Configuration that maps to marie.yml
@@ -150,7 +150,7 @@ server:
 
   image:
     repository: marieai/marie-gateway
-    tag: "4.5rc1-cpu"
+    tag: "5.0.0-cpu"
 
   config:
     configFile: /etc/marie/config/service/marie-gateway-4.0.0.yml

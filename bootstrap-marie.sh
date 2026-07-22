@@ -8,6 +8,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 PROJECT_NAME="marie"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILES=(
     "./Dockerfiles/docker-compose.storage.yml"
     "./Dockerfiles/docker-compose.s3.yml"
@@ -31,8 +32,23 @@ DEPLOY_LITELLM=${DEPLOY_LITELLM:-false}
 DEPLOY_CLICKHOUSE=${DEPLOY_CLICKHOUSE:-true}
 DEPLOY_CLICKSTACK=${DEPLOY_CLICKSTACK:-false}
 DEPLOY_GITEA=${DEPLOY_GITEA:-true}
+RUN_VERIFY=${RUN_VERIFY:-true}
+VERIFY_ONLY=${VERIFY_ONLY:-false}
+VERIFY_ATTEMPTS=${VERIFY_ATTEMPTS:-20}
+VERIFY_SLEEP_SECONDS=${VERIFY_SLEEP_SECONDS:-3}
+VERIFY_CONNECT_TIMEOUT_SECONDS=${VERIFY_CONNECT_TIMEOUT_SECONDS:-2}
+VERIFY_HTTP_TIMEOUT_SECONDS=${VERIFY_HTTP_TIMEOUT_SECONDS:-5}
+CHECK_IMAGE_AVAILABILITY=${CHECK_IMAGE_AVAILABILITY:-true}
+CHECK_IMAGE_IMPORTS=${CHECK_IMAGE_IMPORTS:-true}
 # Note: Mem0 is now integrated as a Python SDK, not a separate container
 # The database is always created in initialize_databases()
+
+# Kubernetes / Helm bootstrap configuration
+K8S_MODE=${K8S_MODE:-false}
+K8S_PROVIDER="${K8S_PROVIDER:-k3d}"
+INSTALL_ARGOCD="${INSTALL_ARGOCD:-false}"
+ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
+ARGOCD_VERSION="${ARGOCD_VERSION:-stable}"
 
 # Vagrant configuration
 VAGRANT_MODE=${VAGRANT_MODE:-false}
@@ -40,6 +56,7 @@ VAGRANT_DIR="./vagrant"
 VAGRANT_INSTANCE="${VAGRANT_INSTANCE:-1}"
 VAGRANT_VM_NAME="${VAGRANT_VM_NAME:-marie-test-${VAGRANT_INSTANCE}}"
 VAGRANT_SYNC_IMAGES=${VAGRANT_SYNC_IMAGES:-false}
+VAGRANT_ACTION="${VAGRANT_ACTION:-}"
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}    Marie-AI System Bootstrap${NC}"
@@ -129,11 +146,12 @@ check_running_services() {
             echo "2) Stop compose services only"
         fi
         echo "3) Continue without cleanup (may cause conflicts)"
-        echo "4) Exit"
+        echo "4) Verify current stack and exit"
+        echo "5) Exit"
         echo ""
 
         local choice
-        read -p "Choose an option (1-4): " choice
+        read -p "Choose an option (1-5): " choice
 
         case $choice in
             1)
@@ -158,6 +176,10 @@ check_running_services() {
                 echo -e "${YELLOW}Continuing with existing services...${NC}"
                 ;;
             4)
+                verify_stack
+                exit $?
+                ;;
+            5)
                 echo -e "${BLUE}Exiting...${NC}"
                 exit 0
                 ;;
@@ -901,9 +923,9 @@ vagrant_sync_images() {
             "quay.io/coreos/etcd:v3.6.1"
             "gitea/gitea:latest"
             "clickhouse/clickhouse-server:latest"
-            "marieai/marie-gateway:4.0.0-cpu"
-            "marieai/marie:4.0.0-cuda"
-            "marieai/marie:4.0.0-cpu"
+            "marieai/marie-gateway:5.0.0-cpu"
+            "marieai/marie:5.0.0-cuda"
+            "marieai/marie:5.0.0-cpu"
         )
     fi
 
@@ -1074,7 +1096,76 @@ show_deployment_config() {
     echo -e "  Application Services:"
     echo -e "    ├── Gateway: ${DEPLOY_GATEWAY}"
     echo -e "    └── Extract Executors: ${DEPLOY_EXTRACT}"
+    echo -e "  Sandbox Control Plane:"
+    echo -e "    └── Argo CD: skipped (Kubernetes only; use --with-argocd)"
     echo ""
+}
+
+show_kubernetes_deployment_config() {
+    local cluster_name="${CLUSTER_NAME:-marie-helm-smoke}"
+    local namespace="${NAMESPACE:-marie}"
+    local release="${RELEASE:-marie}"
+    local marie_image="${MARIE_IMAGE:-marieai/marie:5.0.0-cuda}"
+    local gateway_image="${GATEWAY_IMAGE:-marieai/marie-gateway:5.0.0-cpu}"
+    local load_local_images="${LOAD_LOCAL_IMAGES:-true}"
+    local skip_optional="${SKIP_OPTIONAL:-false}"
+    local wait_timeout="${WAIT_TIMEOUT:-20m}"
+    local k3d_agents="${K3D_AGENTS:-2}"
+    local kind_workers="${KIND_WORKERS:-2}"
+    local k3d_image_import_mode="${K3D_IMAGE_IMPORT_MODE:-direct}"
+
+    echo -e "${BLUE}Kubernetes Deployment Configuration:${NC}"
+    echo -e "  Provider: ${K8S_PROVIDER}"
+    echo -e "  Cluster: ${cluster_name}"
+    echo -e "  Namespace: ${namespace}"
+    echo -e "  Release: ${release}"
+    echo -e "  Helm Chart:"
+    echo -e "    ├── Chart: deploy/helm/charts/marie"
+    echo -e "    ├── Values: deploy/helm/charts/marie/values-local.yaml"
+    echo -e "    ├── Marie image: ${marie_image}"
+    echo -e "    ├── Gateway image: ${gateway_image}"
+    echo -e "    └── Gitea: false (Studio-only dependency disabled for Marie-AI smoke)"
+    echo -e "  Local Cluster:"
+    if [ "$K8S_PROVIDER" = "k3d" ]; then
+        echo -e "    ├── k3d agents: ${k3d_agents}"
+        echo -e "    └── Image import mode: ${k3d_image_import_mode}"
+    else
+        echo -e "    └── kind workers: ${kind_workers}"
+    fi
+    echo -e "  Smoke Options:"
+    echo -e "    ├── Load local images: ${load_local_images}"
+    echo -e "    ├── Skip optional workloads: ${skip_optional}"
+    echo -e "    └── Wait timeout: ${wait_timeout}"
+    echo -e "  Sandbox Control Plane:"
+    echo -e "    ├── Argo CD: ${INSTALL_ARGOCD}"
+    if [ "$INSTALL_ARGOCD" = "true" ]; then
+        echo -e "    ├── Argo CD namespace: ${ARGOCD_NAMESPACE}"
+        echo -e "    └── Argo CD version: ${ARGOCD_VERSION}"
+    else
+        echo -e "    └── Argo CD: skipped (use --with-argocd for sandboxes)"
+    fi
+    echo ""
+}
+
+kubernetes_bootstrap() {
+    local bootstrap_script="${SCRIPT_DIR}/deploy/bootstrap.sh"
+
+    if [ ! -x "$bootstrap_script" ]; then
+        echo -e "${RED}❌ Kubernetes bootstrap script not found or not executable: $bootstrap_script${NC}"
+        exit 1
+    fi
+
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE}    Marie-AI Kubernetes Bootstrap${NC}"
+    echo -e "${BLUE}    Provider: ${K8S_PROVIDER}${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    echo ""
+    show_kubernetes_deployment_config
+
+    INSTALL_ARGOCD="$INSTALL_ARGOCD" \
+        ARGOCD_NAMESPACE="$ARGOCD_NAMESPACE" \
+        ARGOCD_VERSION="$ARGOCD_VERSION" \
+        "$bootstrap_script" "$K8S_PROVIDER"
 }
 
 validate_environment() {
@@ -1084,6 +1175,388 @@ validate_environment() {
         exit 1
     fi
     echo -e "${GREEN}✅ Environment file found: $ENV_FILE${NC}"
+}
+
+get_marie_code_version() {
+    local version_file="${SCRIPT_DIR}/marie/_version.py"
+    local version
+
+    version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$version_file" 2>/dev/null | head -n 1)
+    echo "${version:-5.0.0}"
+}
+
+set_default_runtime_image_tags() {
+    local code_version
+    code_version=$(get_marie_code_version)
+
+    GATEWAY_IMAGE_TAG="${GATEWAY_IMAGE_TAG:-${code_version}-cpu}"
+    EXTRACT_IMAGE_TAG="${EXTRACT_IMAGE_TAG:-${code_version}-cuda}"
+    export GATEWAY_IMAGE_TAG EXTRACT_IMAGE_TAG
+}
+
+load_runtime_env() {
+    local shell_gateway_image_tag="${GATEWAY_IMAGE_TAG:-}"
+    local shell_extract_image_tag="${EXTRACT_IMAGE_TAG:-}"
+
+    if [ -f "$ENV_FILE" ]; then
+        source "$ENV_FILE"
+    fi
+
+    if [ -n "$shell_gateway_image_tag" ]; then
+        GATEWAY_IMAGE_TAG="$shell_gateway_image_tag"
+    fi
+
+    if [ -n "$shell_extract_image_tag" ]; then
+        EXTRACT_IMAGE_TAG="$shell_extract_image_tag"
+    fi
+
+    set_default_runtime_image_tags
+}
+
+show_runtime_install_plan() {
+    local code_version
+    code_version=$(get_marie_code_version)
+
+    echo -e "${BLUE}Runtime Install Plan:${NC}"
+    echo -e "  Marie code version: ${code_version}"
+    echo -e "  Images:"
+    if [ "$DEPLOY_GATEWAY" = "true" ]; then
+        echo -e "    ├── Gateway: marieai/marie-gateway:${GATEWAY_IMAGE_TAG}"
+    else
+        echo -e "    ├── Gateway: skipped"
+    fi
+
+    if [ "$DEPLOY_EXTRACT" = "true" ]; then
+        echo -e "    └── Extract Executor: marieai/marie:${EXTRACT_IMAGE_TAG}"
+    else
+        echo -e "    └── Extract Executor: skipped"
+    fi
+    echo ""
+}
+
+check_runtime_image_tag() {
+    local label="$1"
+    local tag="$2"
+    local code_version="$3"
+    local code_major="$4"
+    local tag_version="${tag%%-*}"
+    local tag_major=""
+
+    if [[ "$tag_version" =~ ^([0-9]+)(\.|$) ]]; then
+        tag_major="${BASH_REMATCH[1]}"
+        if [ "$tag_major" != "$code_major" ]; then
+            if [ "${ALLOW_MARIE_IMAGE_VERSION_MISMATCH:-false}" = "true" ]; then
+                echo -e "${YELLOW}⚠️  ${label} image tag '${tag}' does not match Marie code version ${code_version}${NC}"
+            else
+                echo -e "${RED}❌ ${label} image tag '${tag}' does not match Marie code version ${code_version}${NC}"
+            fi
+            return 1
+        fi
+
+        if [ "$tag_version" != "$code_version" ]; then
+            echo -e "${YELLOW}⚠️  ${label} image tag '${tag}' is not the exact Marie code version ${code_version}${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠️  ${label} image tag '${tag}' is not version-formatted; assuming this is an intentional build tag${NC}"
+    fi
+
+    return 0
+}
+
+validate_runtime_image_versions() {
+    local enforce="${1:-true}"
+    local code_version
+    local code_major
+    local failed=0
+
+    code_version=$(get_marie_code_version)
+    code_major="${code_version%%.*}"
+
+    if [ "$DEPLOY_GATEWAY" = "true" ]; then
+        check_runtime_image_tag "Gateway" "$GATEWAY_IMAGE_TAG" "$code_version" "$code_major" || failed=1
+    fi
+
+    if [ "$DEPLOY_EXTRACT" = "true" ]; then
+        check_runtime_image_tag "Extract Executor" "$EXTRACT_IMAGE_TAG" "$code_version" "$code_major" || failed=1
+    fi
+
+    if [ "$failed" -eq 0 ]; then
+        return 0
+    fi
+
+    if [ "${ALLOW_MARIE_IMAGE_VERSION_MISMATCH:-false}" = "true" ]; then
+        echo -e "${YELLOW}⚠️  Continuing despite Marie image/code version mismatch.${NC}"
+        return 0
+    fi
+
+    if [ "$enforce" = "true" ] && [ "${ALLOW_MARIE_IMAGE_VERSION_MISMATCH:-false}" != "true" ]; then
+        echo ""
+        echo -e "${RED}❌ Runtime config selects Marie images that do not match the checked-out code version.${NC}"
+        echo "Update the image tags in $ENV_FILE, export matching GATEWAY_IMAGE_TAG/EXTRACT_IMAGE_TAG values,"
+        echo "or set ALLOW_MARIE_IMAGE_VERSION_MISMATCH=true if this mismatch is intentional."
+        exit 1
+    fi
+
+    return 1
+}
+
+runtime_image_available() {
+    local image="$1"
+
+    docker image inspect "$image" >/dev/null 2>&1 || docker manifest inspect "$image" >/dev/null 2>&1
+}
+
+validate_runtime_images_available() {
+    if [ "$CHECK_IMAGE_AVAILABILITY" != "true" ]; then
+        return 0
+    fi
+
+    local failed=0
+
+    if [ "$DEPLOY_GATEWAY" = "true" ] && ! runtime_image_available "marieai/marie-gateway:${GATEWAY_IMAGE_TAG}"; then
+        echo -e "${RED}❌ Planned Gateway image is not available locally or in the registry: marieai/marie-gateway:${GATEWAY_IMAGE_TAG}${NC}"
+        failed=1
+    fi
+
+    if [ "$DEPLOY_EXTRACT" = "true" ] && ! runtime_image_available "marieai/marie:${EXTRACT_IMAGE_TAG}"; then
+        echo -e "${RED}❌ Planned Extract Executor image is not available locally or in the registry: marieai/marie:${EXTRACT_IMAGE_TAG}${NC}"
+        failed=1
+    fi
+
+    if [ "$failed" -eq 0 ]; then
+        return 0
+    fi
+
+    echo ""
+    echo "Build, pull, or retag the planned image before bootstrapping, or set CHECK_IMAGE_AVAILABILITY=false"
+    echo "if Docker Compose should attempt the pull anyway."
+    exit 1
+}
+
+runtime_image_tag_matches_code_major() {
+    local tag="$1"
+    local code_version
+    local code_major
+    local tag_version="${tag%%-*}"
+
+    code_version=$(get_marie_code_version)
+    code_major="${code_version%%.*}"
+
+    if [[ "$tag_version" =~ ^([0-9]+)(\.|$) ]]; then
+        [ "${BASH_REMATCH[1]}" = "$code_major" ]
+        return
+    fi
+
+    return 0
+}
+
+runtime_image_import_available() {
+    local image="$1"
+    local module="$2"
+
+    docker run --rm --entrypoint python "$image" -c "import ${module}" >/dev/null 2>&1
+}
+
+validate_runtime_image_imports() {
+    if [ "$CHECK_IMAGE_IMPORTS" != "true" ]; then
+        return 0
+    fi
+
+    if [ "$DEPLOY_GATEWAY" != "true" ]; then
+        return 0
+    fi
+
+    if [ "${ALLOW_MARIE_IMAGE_VERSION_MISMATCH:-false}" = "true" ] && ! runtime_image_tag_matches_code_major "$GATEWAY_IMAGE_TAG"; then
+        echo -e "${YELLOW}⚠️  Gateway import preflight skipped for allowed legacy image tag '${GATEWAY_IMAGE_TAG}'${NC}"
+        return 0
+    fi
+
+    if ! runtime_image_import_available "marieai/marie-gateway:${GATEWAY_IMAGE_TAG}" "marie.kb"; then
+        echo -e "${RED}❌ Planned Gateway image cannot import required module: marie.kb${NC}"
+        echo "Rebuild or retag a gateway image that includes the checked-out Marie package, or set"
+        echo "CHECK_IMAGE_IMPORTS=false if this check should be skipped."
+        exit 1
+    fi
+}
+
+verify_pass() {
+    echo -e "${GREEN}  ✅ $1${NC}"
+}
+
+verify_fail() {
+    echo -e "${RED}  ❌ $1${NC}"
+}
+
+verify_skip() {
+    echo -e "${YELLOW}  ⚠️  $1 skipped${NC}"
+}
+
+verify_wait() {
+    local label="$1"
+    shift
+
+    local attempt=1
+    while [ "$attempt" -le "$VERIFY_ATTEMPTS" ]; do
+        if "$@" >/dev/null 2>&1; then
+            verify_pass "$label"
+            return 0
+        fi
+        sleep "$VERIFY_SLEEP_SECONDS"
+        ((attempt++))
+    done
+
+    verify_fail "$label"
+    return 1
+}
+
+container_is_running() {
+    [ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = "true" ]
+}
+
+verify_container_running() {
+    local label="$1"
+    local container="$2"
+
+    if container_is_running "$container"; then
+        verify_pass "$label container running"
+        return 0
+    fi
+
+    verify_fail "$label container running"
+    return 1
+}
+
+verify_container_image() {
+    local label="$1"
+    local container="$2"
+    local expected_image="$3"
+    local actual_image
+
+    actual_image=$(docker inspect -f '{{.Config.Image}}' "$container" 2>/dev/null || true)
+    if [ "$actual_image" = "$expected_image" ]; then
+        verify_pass "$label image"
+        return 0
+    fi
+
+    verify_fail "$label image (expected $expected_image, running ${actual_image:-unknown})"
+    return 1
+}
+
+verify_http() {
+    local label="$1"
+    local url="$2"
+
+    verify_wait "$label" curl -fsS \
+        --connect-timeout "$VERIFY_CONNECT_TIMEOUT_SECONDS" \
+        --max-time "$VERIFY_HTTP_TIMEOUT_SECONDS" \
+        "$url"
+}
+
+verify_http_basic() {
+    local label="$1"
+    local url="$2"
+    local username="$3"
+    local password="$4"
+
+    verify_wait "$label" curl -fsS \
+        --connect-timeout "$VERIFY_CONNECT_TIMEOUT_SECONDS" \
+        --max-time "$VERIFY_HTTP_TIMEOUT_SECONDS" \
+        -u "${username}:${password}" \
+        "$url"
+}
+
+verify_minio_login() {
+    local minio_user="${MINIO_ROOT_USER:-marieadmin}"
+    local minio_password="${MINIO_ROOT_PASSWORD:-marietopsecret}"
+
+    verify_wait "MinIO login + bucket access" docker run --rm \
+        --network marie_default \
+        --entrypoint /bin/sh \
+        -e MINIO_ROOT_USER="$minio_user" \
+        -e MINIO_ROOT_PASSWORD="$minio_password" \
+        minio/mc:latest \
+        -c 'mc alias set local http://marie-s3-server:8000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc ls local/marie >/dev/null'
+}
+
+verify_stack() {
+    load_runtime_env
+
+    echo ""
+    echo -e "${BLUE}Verifying Marie-AI stack...${NC}"
+
+    local failed=0
+
+    if [ "$DEPLOY_INFRASTRUCTURE" = "true" ]; then
+        verify_container_running "PostgreSQL" "marie-psql-server" || failed=1
+        verify_wait "PostgreSQL login" docker exec marie-psql-server \
+            psql -U "${POSTGRES_USER:-postgres}" -d postgres -tAc "SELECT 1" || failed=1
+
+        verify_container_running "MinIO" "marie-s3-server" || failed=1
+        verify_http "MinIO health" "http://localhost:8000/minio/health/live" || failed=1
+        verify_minio_login || failed=1
+
+        verify_container_running "RabbitMQ" "marie-rabbitmq" || failed=1
+        verify_http_basic "RabbitMQ management login" "http://localhost:15672/api/overview" \
+            "${RABBIT_MQ_USERNAME:-marie}" "${RABBIT_MQ_PASSWORD:-mariepassword}" || failed=1
+
+        verify_container_running "Valkey" "marie-valkey" || failed=1
+        verify_wait "Valkey ping" docker exec marie-valkey valkey-cli -h 127.0.0.1 ping || failed=1
+
+        verify_container_running "etcd" "etcd-single" || failed=1
+        verify_wait "etcd endpoint health" docker exec etcd-single \
+            etcdctl endpoint health --endpoints=http://127.0.0.1:2379 || failed=1
+
+        if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
+            verify_container_running "ClickHouse" "marie-clickhouse" || failed=1
+            verify_http_basic "ClickHouse login + query" \
+                "http://localhost:${CLICKHOUSE_HTTP_PORT:-8123}/?query=SELECT%201" \
+                "${CLICKHOUSE_USER:-default}" "${CLICKHOUSE_PASSWORD:-}" || failed=1
+        fi
+
+        if [ "$DEPLOY_GITEA" = "true" ]; then
+            verify_container_running "Gitea" "marie-gitea" || failed=1
+            verify_http "Gitea health" "http://localhost:${GITEA_HTTP_PORT:-3001}/api/healthz" || failed=1
+            verify_http_basic "Gitea admin login" "http://localhost:${GITEA_HTTP_PORT:-3001}/api/v1/user" \
+                "${GITEA_ADMIN_USER:-marie}" "${GITEA_ADMIN_PASSWORD:-rycerz}" || failed=1
+        fi
+
+        if [ "$DEPLOY_LITELLM" = "true" ]; then
+            verify_container_running "LiteLLM" "marie-litellm" || failed=1
+            verify_wait "LiteLLM health" curl -fsS \
+                -H "Authorization: Bearer ${LITELLM_MASTER_KEY:-sk-1234}" \
+                "http://localhost:4000/health" || failed=1
+        else
+            verify_skip "LiteLLM"
+        fi
+
+        if [ "$DEPLOY_CLICKSTACK" = "true" ]; then
+            verify_container_running "OTel collector" "marie-otel-collector" || failed=1
+            verify_container_running "Log collector" "marie-log-collector" || failed=1
+            verify_http "HyperDX UI" "http://localhost:${HYPERDX_UI_PORT:-8080}/" || failed=1
+        else
+            verify_skip "ClickStack"
+        fi
+    fi
+
+    if [ "$DEPLOY_GATEWAY" = "true" ]; then
+        verify_container_running "Gateway" "marieai-gateway" || failed=1
+        verify_container_image "Gateway" "marieai-gateway" "marieai/marie-gateway:${GATEWAY_IMAGE_TAG}" || failed=1
+        verify_http "Gateway status" "http://localhost:51000/status" || failed=1
+    fi
+
+    if [ "$DEPLOY_EXTRACT" = "true" ]; then
+        local extract_container="marieai-${EXTRACT_STACK_NAME:-dev}-server"
+        verify_container_running "Extract executor" "$extract_container" || failed=1
+        verify_container_image "Extract executor" "$extract_container" "marieai/marie:${EXTRACT_IMAGE_TAG}" || failed=1
+    fi
+
+    if [ "$failed" -eq 0 ]; then
+        echo -e "${GREEN}✅ Stack verification passed${NC}"
+        return 0
+    fi
+
+    echo -e "${RED}❌ Stack verification failed${NC}"
+    return 1
 }
 
 create_docker_network() {
@@ -1419,7 +1892,7 @@ bootstrap_system() {
     echo ""
     echo -e "${BLUE}Starting Marie-AI system bootstrap...${NC}"
 
-    source "$ENV_FILE"
+    load_runtime_env
     echo -e "${GREEN}✅ Environment loaded from $ENV_FILE${NC}"
 
     # Create Docker network if it doesn't exist
@@ -1754,10 +2227,10 @@ show_service_endpoints() {
     if [ "$DEPLOY_INFRASTRUCTURE" = "true" ]; then
         local valkey_url="${LLM_QUEUE_VALKEY_URL:-redis://localhost:6379/0}"
         echo -e "${GREEN}Infrastructure Services:${NC}"
-        echo "  🐰 RabbitMQ Management: http://localhost:15672 (${RABBIT_MQ_USERNAME}/${RABBIT_MQ_PASSWORD})"
+        echo "  🐰 RabbitMQ Management: http://localhost:15672 (${RABBIT_MQ_USERNAME:-marie}/${RABBIT_MQ_PASSWORD:-mariepassword})"
         echo "  🧠 Valkey LLM Queue: ${valkey_url}"
-        echo "  💾 MinIO S3 API: http://localhost:9000 (marieadmin/marietopsecret)"
-        echo "  💾 MinIO Console: http://localhost:9001 (marieadmin/marietopsecret)"
+        echo "  💾 MinIO S3 API: http://localhost:8000 (${MINIO_ROOT_USER:-marieadmin}/${MINIO_ROOT_PASSWORD:-marietopsecret})"
+        echo "  💾 MinIO Console: http://localhost:8001 (${MINIO_ROOT_USER:-marieadmin}/${MINIO_ROOT_PASSWORD:-marietopsecret})"
         echo "  🗄️  etcd: http://localhost:2379"
 
         if [ "$DEPLOY_LITELLM" = "true" ]; then
@@ -1789,8 +2262,8 @@ show_service_endpoints() {
 
     if [ "$DEPLOY_GATEWAY" = "true" ]; then
         echo -e "${GREEN}Application Services:${NC}"
-        echo "  🌐 HTTP Gateway: http://localhost:52000"
-        echo "  🔌 GRPC Gateway: grpc://localhost:51000"
+        echo "  🌐 HTTP Gateway: http://localhost:51000"
+        echo "  🔌 GRPC Gateway: grpc://localhost:52000"
     fi
 
     if [ "$DEPLOY_EXTRACT" = "true" ]; then
@@ -1808,6 +2281,52 @@ parse_args() {
             --additional-files)
                 COMPOSE_ADDITIONAL_FILES="$2"
                 shift 2
+                ;;
+            --k8s|--helm)
+                K8S_MODE=true
+                shift
+                ;;
+            --k8s-provider|--provider)
+                K8S_PROVIDER="$2"
+                shift 2
+                ;;
+            --k8s-provider=*|--provider=*)
+                K8S_PROVIDER="${1#*=}"
+                shift
+                ;;
+            --with-argocd)
+                K8S_MODE=true
+                INSTALL_ARGOCD=true
+                shift
+                ;;
+            --no-argocd)
+                INSTALL_ARGOCD=false
+                shift
+                ;;
+            --argocd-namespace)
+                ARGOCD_NAMESPACE="$2"
+                shift 2
+                ;;
+            --argocd-namespace=*)
+                ARGOCD_NAMESPACE="${1#*=}"
+                shift
+                ;;
+            --argocd-version)
+                ARGOCD_VERSION="$2"
+                shift 2
+                ;;
+            --argocd-version=*)
+                ARGOCD_VERSION="${1#*=}"
+                shift
+                ;;
+            --verify)
+                VERIFY_ONLY=true
+                RUN_VERIFY=true
+                shift
+                ;;
+            --no-verify)
+                RUN_VERIFY=false
+                shift
                 ;;
             --stop-all)
                 stop_all_services
@@ -1921,6 +2440,14 @@ show_help() {
     echo "Options:"
     echo "  --env-file PATH       Path to .env file (default: ./config/.env.dev)"
     echo "  --additional-files    FILE1.yml[,FILE2.yml]  Extra docker-compose files to include"
+    echo "  --k8s, --helm         Bootstrap Marie-AI on local Kubernetes via deploy/bootstrap.sh"
+    echo "  --k8s-provider NAME   Kubernetes provider for --k8s: k3d or kind (default: k3d)"
+    echo "  --with-argocd         Bootstrap Kubernetes and install Argo CD for sandboxes"
+    echo "  --no-argocd           Disable Argo CD install when INSTALL_ARGOCD=true is set"
+    echo "  --argocd-namespace NS Argo CD namespace for --with-argocd (default: argocd)"
+    echo "  --argocd-version TAG  Argo CD install manifest tag/channel (default: stable)"
+    echo "  --verify              Verify the currently running Compose stack and exit"
+    echo "  --no-verify           Skip post-bootstrap verification"
     echo "  --stop-all            Stop and remove all Marie-AI services and containers"
     echo "  --no-gateway          Skip gateway deployment"
     echo "  --no-extract          Skip extract executor deployment"
@@ -1951,9 +2478,21 @@ show_help() {
     echo "  AI Memory:      Mem0 (SDK-based, uses existing PostgreSQL)"
     echo "  Application:    Gateway, Extract Executors"
     echo ""
+    echo "Runtime Image Checks:"
+    echo "  Bootstrap reads marie/_version.py and warns about image tags that do not"
+    echo "  match the checked-out Marie major version."
+    echo "  Set ALLOW_MARIE_IMAGE_VERSION_MISMATCH=true only for intentional legacy tests."
+    echo "  Set CHECK_IMAGE_AVAILABILITY=false to skip the local/registry image preflight."
+    echo "  Set CHECK_IMAGE_IMPORTS=false to skip the gateway module import preflight."
+    echo ""
     echo "Examples:"
     echo "  $0                              # Deploy everything (ClickStack disabled by default)"
     echo "  $0 --with-clickstack            # Deploy everything including observability"
+    echo "  $0 --k8s                        # Bootstrap local k3d cluster with Marie Helm chart"
+    echo "  $0 --k8s --k8s-provider kind    # Bootstrap local kind cluster with Marie Helm chart"
+    echo "  $0 --with-argocd                # Bootstrap local k3d cluster with Marie + Argo CD"
+    echo "  $0 --with-argocd --argocd-version v2.13.0"
+    echo "  $0 --verify                     # Verify existing containers and login-capable UIs"
     echo "  $0 --stop-all                   # Stop all services and cleanup"
     echo "  $0 --infrastructure-only        # Deploy infrastructure only"
     echo "  $0 --services-only              # Deploy only gateway + extract"
@@ -1981,6 +2520,39 @@ show_help() {
 
 main() {
     parse_args "$@"
+
+    if [ "$VERIFY_ONLY" = "true" ]; then
+        validate_environment
+        load_runtime_env
+        show_runtime_install_plan
+        validate_runtime_image_versions false || true
+        verify_stack
+        exit $?
+    fi
+
+    if [ "$INSTALL_ARGOCD" = "true" ] && [ "$K8S_MODE" != "true" ]; then
+        echo -e "${RED}❌ INSTALL_ARGOCD=true requires Kubernetes bootstrap mode${NC}"
+        echo "Use: $0 --with-argocd"
+        exit 1
+    fi
+
+    if [ "$K8S_MODE" = "true" ]; then
+        if [ "$VAGRANT_MODE" = "true" ] || [ -n "$VAGRANT_ACTION" ]; then
+            echo -e "${RED}❌ Kubernetes bootstrap cannot be combined with Vagrant options${NC}"
+            exit 1
+        fi
+        case "$K8S_PROVIDER" in
+            k3d|kind)
+                ;;
+            *)
+                echo -e "${RED}❌ Unsupported Kubernetes provider: $K8S_PROVIDER${NC}"
+                echo "Use k3d or kind."
+                exit 1
+                ;;
+        esac
+        kubernetes_bootstrap
+        exit $?
+    fi
 
     # Handle Vagrant actions (must be after parse_args to get --instance)
     if [ -n "$VAGRANT_ACTION" ]; then
@@ -2014,11 +2586,20 @@ main() {
     append_additional_compose_files
     show_deployment_config
     validate_environment
+    load_runtime_env
+    show_runtime_install_plan
+    validate_runtime_image_versions true
+    validate_runtime_images_available
+    validate_runtime_image_imports
     validate_compose_files
 
     check_running_services
 
     bootstrap_system
+
+    if [ "$RUN_VERIFY" = "true" ]; then
+        verify_stack
+    fi
 
     echo ""
     echo -e "${BLUE}========================================${NC}"

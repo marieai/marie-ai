@@ -9,7 +9,7 @@ global:
   marie:
     image:
       repository: marieai/marie
-      tag: "4.5rc1-cuda"
+      tag: "5.0.0-cuda"
     debugQueryPlanner: "FALSE"
   grpc:
     trace: ""

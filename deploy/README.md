@@ -2,8 +2,8 @@
 
 This guide tests the Marie-AI backend and its bootstrap dependencies on a local Kubernetes cluster. It uses the official Marie runtime images:
 
-- Gateway: `marieai/marie-gateway:4.5rc1-cpu`
-- Server/executor: `marieai/marie:4.5rc1-cuda`
+- Gateway: `marieai/marie-gateway:5.0.0-cpu`
+- Server/executor: `marieai/marie:5.0.0-cuda`
 
 The Marie-AI chart is tested independently from Marie Studio / M3 Forge. For this smoke test, keep `gitea.enabled=false`; Gitea is a Studio dependency, not a Marie-AI backend requirement.
 
@@ -14,9 +14,9 @@ The local test is valid when:
 - PostgreSQL, MinIO, RabbitMQ, Valkey, etcd, and ClickHouse are running.
 - The PostgreSQL migration job applies the scheduler schema and lease functions.
 - `marie_scheduler.hydrate_frontier_dags()` exists in PostgreSQL.
-- The gateway starts from `marieai/marie-gateway:4.5rc1-cpu`.
+- The gateway starts from `marieai/marie-gateway:5.0.0-cpu`.
 - The gateway `/status` endpoint returns HTTP 200.
-- The executor starts from `marieai/marie:4.5rc1-cuda`.
+- The executor starts from `marieai/marie:5.0.0-cuda`.
 
 ## Quick Start
 
@@ -24,15 +24,15 @@ From the repo root:
 
 ```bash
 cd /home/gbugaj/dev/marieai/marie-assistant/projects/marie-ai
-deploy/bootstrap.sh
+./bootstrap-marie.sh --k8s
 ```
 
-That is the normal local path. It creates or reuses a `k3d` cluster named `marie-helm-smoke`, installs the Marie-AI Helm chart with `values-local.yaml`, disables Studio-only Gitea, loads local Marie images if present, and waits for the gateway, executor, and Valkey.
+That is the normal local path. It creates or reuses a `k3d` cluster named `marie-helm-smoke`, installs the Marie-AI Helm chart with `values-local.yaml`, disables Studio-only Gitea, loads local Marie images if present, and waits for the gateway, executor, and Valkey. k3d is the default because it starts faster and is easier to iterate against locally.
 
-Use Kind instead of k3d when needed:
+Use kind instead of k3d when needed:
 
 ```bash
-deploy/bootstrap.sh kind
+./bootstrap-marie.sh --k8s --k8s-provider kind
 ```
 
 After bootstrap completes:
@@ -68,9 +68,9 @@ For local Docker or IDE runs, `/mnt/data/marie-ai/config/.env` can still be usef
 `deploy/bootstrap.sh` checks the executor image when it exists locally. Run this manually only when debugging image startup:
 
 ```bash
-docker image inspect marieai/marie-gateway:4.5rc1-cpu
-docker image inspect marieai/marie:4.5rc1-cuda
-docker run --rm --entrypoint python marieai/marie:4.5rc1-cuda -c "import pkg_resources; print('pkg_resources ok')"
+docker image inspect marieai/marie-gateway:5.0.0-cpu
+docker image inspect marieai/marie:5.0.0-cuda
+docker run --rm --entrypoint python marieai/marie:5.0.0-cuda -c "import pkg_resources; print('pkg_resources ok')"
 ```
 
 If the last command fails with `ModuleNotFoundError: No module named 'pkg_resources'`, the executor image cannot start the current extraction executor. Rebuild/publish the image from the Dockerfile fix that pins `setuptools<81`, then rerun this test with the corrected tag. Do not work around this by installing packages inside running pods.
@@ -271,10 +271,13 @@ feature: marie-studio writes per-sandbox desired state to Git and Argo CD reconc
 complete, isolated Marie system in its own namespace. It is a platform-level dependency, installed once per
 cluster — **not** part of the Marie Helm release.
 
-The smoke script can install it for you:
+The top-level bootstrap script can install it for local sandbox smoke testing:
 
 ```bash
-INSTALL_ARGOCD=true ./deploy/bootstrap.sh k3d
+./bootstrap-marie.sh --with-argocd
+
+# Use kind instead of k3d:
+./bootstrap-marie.sh --with-argocd --k8s-provider kind
 ```
 
 Or install it directly (the smoke script does the equivalent):
@@ -296,7 +299,11 @@ kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath='{.data.password}' | base64 -d; echo
 ```
 
-Override the namespace or version with `ARGOCD_NAMESPACE` / `ARGOCD_VERSION` (e.g. `ARGOCD_VERSION=v2.13.0`).
+Override the namespace or version with flags:
+
+```bash
+./bootstrap-marie.sh --with-argocd --argocd-namespace argocd --argocd-version v2.13.0
+```
 
 Argo CD references:
 
@@ -335,7 +342,7 @@ ClickHouse rejects `max_memory_usage`
 
 Executor fails with `No module named 'pkg_resources'`
 
-The `marieai/marie:4.5rc1-cuda` image was built with a setuptools version that no longer ships `pkg_resources`. Rebuild/publish the image with `setuptools<81`.
+The executor image was built with a setuptools version that no longer ships `pkg_resources`. Rebuild/publish the image with `setuptools<81`.
 
 Gateway is running but logs `Gateway not ready yet`
 

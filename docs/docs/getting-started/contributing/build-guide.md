@@ -95,8 +95,8 @@ The script automatically sets these Docker build arguments:
 
 ## Output
 After successful builds you will have images like:
-- marieai/marie-gateway:4.0.0-cpu
-- marieai/marie:4.0.0-cuda
+- marieai/marie-gateway:5.0.0-cpu
+- marieai/marie:5.0.0-cuda
 
 ## Troubleshooting
 Common issues:
@@ -104,4 +104,3 @@ Common issues:
 2. Dockerfile not found: Check that the Dockerfile exists at the specified path
 3. Build context missing: Ensure patches/ and wheels/ directories exist
 4. Permission denied: Make sure the script has execute permissions with chmod +x build.sh
-

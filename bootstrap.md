@@ -10,6 +10,7 @@ The Marie-AI System Bootstrap script (`bootstrap-marie.sh`) is a comprehensive d
 
 - **Automated Infrastructure Deployment**: Deploys essential services including RabbitMQ, Valkey, MinIO, ETCD, and PostgreSQL
 - **Application Service Management**: Manages Gateway and Extract Executor services
+- **Kubernetes Smoke Bootstrap**: Delegates to the Helm-based local k3d/kind bootstrap, including optional Argo CD for sandboxes
 - **Flexible Deployment Options**: Supports infrastructure-only, services-only, or complete deployments
 - **Health Monitoring**: Includes comprehensive health checks and status reporting
 - **Environment Validation**: Validates system requirements and configuration files
@@ -41,6 +42,7 @@ The Marie-AI System Bootstrap script (`bootstrap-marie.sh`) is a comprehensive d
 
 - **Docker Engine**: >= 20.10.0
 - **Docker Compose**: >= 2.0.0
+- **kubectl**, **helm**, and **k3d** or **kind** for Kubernetes bootstrap mode
 
 ### Hardware Requirements
 
@@ -211,6 +213,33 @@ Execute the service bootstrap script:
 ./bootstrap-marie.sh --services-only
 ```
 
+### Kubernetes + Argo CD
+
+The sandbox/snapshot control plane uses Argo CD as the GitOps reconciler. For a local k3d or kind cluster,
+run the Kubernetes bootstrap mode from the same top-level script:
+
+```shell
+./bootstrap-marie.sh --k8s
+```
+
+Install Marie and Argo CD together for sandbox smoke testing:
+
+```shell
+./bootstrap-marie.sh --with-argocd
+```
+
+Use kind or pin an Argo CD version when needed:
+
+```shell
+./bootstrap-marie.sh --k8s --k8s-provider kind
+./bootstrap-marie.sh --with-argocd --argocd-version v2.13.0
+```
+
+This delegates to `deploy/bootstrap.sh`, which installs the Marie Helm chart and, when enabled, installs
+Argo CD into `argocd` by default. Before any cluster changes, the script prints a Kubernetes deployment
+configuration summary covering the provider, cluster, namespace, Helm chart, images, smoke options, and
+Argo CD settings.
+
 ## Usage
 
 ```markdown
@@ -221,6 +250,14 @@ Unknown option --
 Usage: ./bootstrap-marie.sh [options]
 
 Options:
+  --k8s, --helm         Bootstrap Marie-AI on local Kubernetes via deploy/bootstrap.sh
+  --k8s-provider NAME   Kubernetes provider for --k8s: k3d or kind (default: k3d)
+  --with-argocd         Bootstrap Kubernetes and install Argo CD for sandboxes
+  --no-argocd           Disable Argo CD install when INSTALL_ARGOCD=true is set
+  --argocd-namespace NS Argo CD namespace for --with-argocd (default: argocd)
+  --argocd-version TAG  Argo CD install manifest tag/channel (default: stable)
+  --verify              Verify the currently running Compose stack and exit
+  --no-verify           Skip post-bootstrap verification
   --stop-all            Stop and remove all Marie-AI services and containers
   --no-gateway          Skip gateway deployment
   --no-extract          Skip extract executor deployment
@@ -237,6 +274,9 @@ Service Categories:
 
 Examples:
   ./bootstrap-marie.sh                    # Deploy everything
+  ./bootstrap-marie.sh --k8s              # Bootstrap local k3d cluster with Marie Helm chart
+  ./bootstrap-marie.sh --with-argocd      # Bootstrap local k3d cluster with Marie + Argo CD
+  ./bootstrap-marie.sh --verify           # Verify existing containers and login-capable UIs
   ./bootstrap-marie.sh --stop-all         # Stop all services and cleanup
   ./bootstrap-marie.sh --infrastructure-only  # Deploy infrastructure + LiteLLM
   ./bootstrap-marie.sh --services-only        # Deploy only gateway + extract
@@ -270,12 +310,13 @@ Examples:
 
 | Service              | URL                                                              |
 | -------------------- | ---------------------------------------------------------------- |
-| RabbitMQ Management  | [http://localhost:15672](http://localhost:15672) (`guest/guest`) |
+| RabbitMQ Management  | [http://localhost:15672](http://localhost:15672) (configured env credentials; default `marie/mariepassword`) |
 | Valkey LLM Queue     | `redis://localhost:6379/0`                                       |
+| MinIO S3 API         | [http://localhost:8000](http://localhost:8000)                   |
 | MinIO Console        | [http://localhost:8001](http://localhost:8001)                   |
 | Monitoring (Grafana) | [http://localhost:3000](http://localhost:3000)                   |
-| HTTP Gateway         | [http://localhost:52000](http://localhost:52000)                 |
-| GRPC Gateway         | grpc://localhost:51000                                           |
+| HTTP Gateway         | [http://localhost:51000](http://localhost:51000)                 |
+| GRPC Gateway         | grpc://localhost:52000                                           |
 | Extract Executor     | [http://localhost:8080](http://localhost:8080)                   |
 
 > **Note:** Services depend on deployment options.
@@ -398,13 +439,13 @@ Services status:
 
 Application Services:
 NAME                 IMAGE                             COMMAND                  SERVICE                  CREATED        STATUS                                     PORTS
-marieai-dev-server   marieai/marie:4.0.0-cuda          "marie server --star…"   marie-extract-executor   1 second ago   Up Less than a second                      
-marieai-gateway      marieai/marie-gateway:4.0.0-cpu   "marie gateway --use…"   marie-gateway            1 second ago   Up Less than a second (health: starting)   
+marieai-dev-server   marieai/marie:5.0.0-cuda          "marie server --star…"   marie-extract-executor   1 second ago   Up Less than a second
+marieai-gateway      marieai/marie-gateway:5.0.0-cpu   "marie gateway --use…"   marie-gateway            1 second ago   Up Less than a second (health: starting)
 
 🔗 Service Endpoints:
 Application Services:
-  🌐 HTTP Gateway: http://localhost:52000
-  🔌 GRPC Gateway: grpc://localhost:51000
+  🌐 HTTP Gateway: http://localhost:51000
+  🔌 GRPC Gateway: grpc://localhost:52000
   🔍 Extract Executor: http://localhost:8080
 
 ========================================
@@ -418,8 +459,8 @@ Bootstrap completed successfully!
 ┌── marie-ai on  develop [@14 !10 +3 ?2 ] ⬢ v16.16.0   v3.12.3(marie-3.12) 34 hours ago    
 └─λ docker ps
 CONTAINER ID   IMAGE                                             COMMAND                  CREATED              STATUS                        PORTS     NAMES
-7c999f7e4b00   marieai/marie:4.0.0-cuda                          "marie server --star…"   About a minute ago   Up About a minute                       marieai-dev-server
-31acc1cc4ec0   marieai/marie-gateway:4.0.0-cpu                   "marie gateway --use…"   About a minute ago   Up About a minute (healthy)             marieai-gateway
+7c999f7e4b00   marieai/marie:5.0.0-cuda                          "marie server --star…"   About a minute ago   Up About a minute                       marieai-dev-server
+31acc1cc4ec0   marieai/marie-gateway:5.0.0-cpu                   "marie gateway --use…"   About a minute ago   Up About a minute (healthy)             marieai-gateway
 60921ce11677   ghcr.io/ferretdb/postgres-documentdb:17-0.103.0   "docker-entrypoint.s…"   20 minutes ago       Up 20 minutes                           marie-psql-server
 afe2b9aad84c   minio/minio:latest                                "/usr/bin/docker-ent…"   20 minutes ago       Up 20 minutes (healthy)                 marie-s3-server
 5a4f81dcf644   rabbitmq:3-management-alpine                      "docker-entrypoint.s…"   20 minutes ago       Up 20 minutes                           marie-rabbitmq
