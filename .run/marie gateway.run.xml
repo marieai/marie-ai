@@ -1,6 +1,7 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="marie gateway" type="PythonConfigurationType" factoryName="Python">
     <module name="marie-ai" />
+    <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
     <envs>
@@ -11,7 +12,9 @@
     <option name="IS_MODULE_SDK" value="true" />
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
+    <option name="DEBUG_JUST_MY_CODE" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+    <option name="RUN_TOOL" value="" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/marie/__main__.py" />
     <option name="PARAMETERS" value="gateway --protocol GRPC --host 192.168.102.53 --port 52000 --discovery --discovery-host 127.0.0.1 --discovery-port 8500" />
     <option name="SHOW_COMMAND_LINE" value="false" />

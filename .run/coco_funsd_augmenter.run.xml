@@ -12,7 +12,9 @@
     <option name="IS_MODULE_SDK" value="true" />
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
+    <option name="DEBUG_JUST_MY_CODE" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+    <option name="RUN_TOOL" value="" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/tools/coco_funsd_augmenter.py" />
     <option name="PARAMETERS" value="convert-all --mode test  --strip_file_name_path true --aug-count 1 --dir ~/datasets/private/corr-indexer  --config ~/datasets/private/corr-indexer/config.json" />
     <option name="SHOW_COMMAND_LINE" value="false" />
