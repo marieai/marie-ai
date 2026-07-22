@@ -1,8 +1,10 @@
 import asyncio
 import threading
+from types import SimpleNamespace
 
 import pytest
 
+from marie.sensors.daemon.worker import SensorWorker
 from marie.utils import server_runtime
 
 
@@ -100,6 +102,18 @@ def test_init_sensor_storage_wires_pool_and_schema(monkeypatch):
     assert server_runtime._sensor_storage_pool is fake_pool
 
 
+def test_sensor_worker_shares_storage_pool_with_evaluators():
+    worker = object.__new__(SensorWorker)
+    worker._resources = {}
+    pool = object()
+    storage = SimpleNamespace(pool=pool)
+
+    worker.set_storage(storage)
+
+    assert worker._storage is storage
+    assert worker._resources["postgres_pool"] is pool
+
+
 def test_init_sensor_storage_defaults_schema(monkeypatch):
     fake_worker = _FakeSensorWorker()
     server_runtime._sensor_worker = fake_worker
@@ -180,7 +194,9 @@ def test_run_sensor_worker_closes_pool_on_shutdown(monkeypatch):
     async def fake_init_sensor_storage(db_config):
         server_runtime._sensor_storage_pool = fake_pool
 
-    monkeypatch.setattr(server_runtime, "_init_sensor_storage", fake_init_sensor_storage)
+    monkeypatch.setattr(
+        server_runtime, "_init_sensor_storage", fake_init_sensor_storage
+    )
 
     server_runtime._run_sensor_worker({"hostname": "db.internal"})
 
@@ -251,6 +267,7 @@ def test_attach_sensor_worker_scheduler_bridges_two_real_loops():
     worker_thread.start()
 
     try:
+
         async def _call_attach():
             return server_runtime.attach_sensor_worker_scheduler(fake_scheduler)
 

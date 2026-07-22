@@ -170,6 +170,7 @@ class SensorWorker:
     def set_storage(self, storage: PostgreSQLSensorStorage) -> None:
         """Set the storage instance (called during initialization)."""
         self._storage = storage
+        self._resources["postgres_pool"] = storage.pool
 
     def set_job_scheduler(self, job_scheduler) -> None:
         """Set the job scheduler reference."""
@@ -663,8 +664,7 @@ class SensorWorker:
         )
 
         logger.info(
-            f"Recovered tick {tick_id}: status={status.value}, "
-            f"jobs={len(new_run_ids)}"
+            f"Recovered tick {tick_id}: status={status.value}, jobs={len(new_run_ids)}"
         )
 
     # =========================================================================

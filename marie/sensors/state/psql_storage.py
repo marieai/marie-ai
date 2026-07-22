@@ -37,12 +37,16 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         self._pool = pool
         self._schema = schema
 
+    @property
+    def pool(self) -> Any:
+        return self._pool
+
     @classmethod
     def get_instance(cls) -> "PostgreSQLSensorStorage":
         """Get the singleton instance."""
         if cls._instance is None:
             raise RuntimeError(
-                "PostgreSQLSensorStorage not initialized. " "Call initialize() first."
+                "PostgreSQLSensorStorage not initialized. Call initialize() first."
             )
         return cls._instance
 

@@ -309,6 +309,7 @@ async def test_sensor(
         config=sensor.get("config", {}),
         target_job_name=sensor.get("target_job_name"),
         target_dag_id=sensor.get("target_dag_id"),
+        resources={"postgres_pool": storage.pool},
     )
 
     # Add test payload if provided

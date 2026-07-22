@@ -1,20 +1,23 @@
 """KB document sensor: watches the KB S3 prefix and triggers kb_indexing runs.
 
 Key pattern: tenants/{tenant_id}/kb-indexes/{index_id}/sources/{source_id}/{filename}
-Run params come from marie_kb.index_bindings (written by marie-studio; spec D8/D11).
+Run params come from the scheduler-owned resource workflow binding.
 """
 
-import json
 import os
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from uuid import UUID
 
 from marie.sensors.context import SensorEvaluationContext
 from marie.sensors.definitions.data_sink.base import FileObject
 from marie.sensors.definitions.data_sink.s3_sensor import S3DataSinkSensor
 from marie.sensors.registry import register_sensor
 from marie.sensors.types import RunRequest, SensorResult, SensorType
+
+if TYPE_CHECKING:
+    from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
 
 KB_KEY_RE = re.compile(
     r"^tenants/(?P<tenant_id>[0-9a-fA-F-]{36})"
@@ -29,9 +32,8 @@ class KbDocumentSensor(S3DataSinkSensor):
     """Sensor for monitoring KB document uploads under `tenants/.../kb-indexes/...`.
 
     Unlike the generic S3 data sink, run params are not part of the sensor
-    config: they are loaded per-index from `marie_kb.index_bindings` (owned
-    by marie-studio) so each KB index can carry its own parse/multimodal
-    settings. Batch mode is not supported; each file always fires its own
+    config: they are loaded from the scheduler's per-resource workflow
+    bindings. Batch mode is not supported; each file always fires its own
     RunRequest.
     """
 
@@ -48,32 +50,38 @@ class KbDocumentSensor(S3DataSinkSensor):
         super().__init__(sensor_data)
         self.batch_mode = False
 
-    def load_binding(self, index_id: str) -> Optional[Dict[str, Any]]:
-        """Read run params for an index from marie_kb.index_bindings; None if absent."""
-        import psycopg
-
-        dsn = self.get_config_value("database_url") or os.getenv("DATABASE_URL")
-        if not dsn:
-            raise ValueError(
-                "database_url not in sensor config and DATABASE_URL env not set — "
-                "kb-document-sensor cannot resolve index bindings"
-            )
-        with psycopg.connect(dsn) as conn:
-            row = conn.execute(
-                "SELECT workflow_name, run_params FROM marie_kb.index_bindings WHERE index_id = %s",
-                (index_id,),
-            ).fetchone()
+    async def load_binding(
+        self, context: SensorEvaluationContext, index_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Read the scheduler-owned workflow binding for a KB index."""
+        pool: Optional["AsyncPostgresConnectionPool"] = context.resources.get(
+            "postgres_pool"
+        )
+        if pool is None:
+            raise RuntimeError("Sensor PostgreSQL pool is not available")
+        row = await pool.fetchrow(
+            """
+            SELECT workflow_name, run_params
+            FROM marie_scheduler.resource_workflow_binding
+            WHERE resource_type = 'kb_index' AND resource_id = $1
+            """,
+            UUID(index_id),
+        )
         if row is None:
             return None
-        run_params = row[1] if isinstance(row[1], dict) else json.loads(row[1] or "{}")
-        return {"workflow_name": row[0], "run_params": run_params}
+        return {
+            "workflow_name": row["workflow_name"],
+            "run_params": row["run_params"] or {},
+        }
 
-    def build_run_request(self, obj: FileObject, bucket: str) -> Optional[RunRequest]:
+    async def build_run_request(
+        self, context: SensorEvaluationContext, obj: FileObject, bucket: str
+    ) -> Optional[RunRequest]:
         """Build the kb_indexing RunRequest for a KB file, or None to skip it."""
         m = KB_KEY_RE.match(obj.key)
         if not m:
             return None
-        binding = self.load_binding(m.group("index_id"))
+        binding = await self.load_binding(context, m.group("index_id"))
         if binding is None:
             return None
         return self._build_run_request(obj, bucket, m, binding)
@@ -112,9 +120,9 @@ class KbDocumentSensor(S3DataSinkSensor):
         """Evaluate by listing new KB files and firing one RunRequest per file.
 
         Overrides the base data-sink evaluate() because run requests here are
-        built from `marie_kb.index_bindings`, not the generic provider/bucket
-        run_config shape, and objects outside the KB key pattern (or with no
-        binding) are skipped rather than emitted.
+        built from scheduler-owned workflow bindings, not the generic
+        provider/bucket run_config shape, and objects outside the KB key
+        pattern (or with no binding) are skipped rather than emitted.
         """
         cursor_timestamp: Optional[datetime] = None
         if context.cursor:
@@ -157,12 +165,15 @@ class KbDocumentSensor(S3DataSinkSensor):
         # earliest of them; otherwise it advances to the latest listed object.
         run_requests: List[RunRequest] = []
         recoverable_skips: List[FileObject] = []
+        bindings: Dict[str, Optional[Dict[str, Any]]] = {}
         for obj in objects:
             m = KB_KEY_RE.match(obj.key)
             if not m:
                 continue
             index_id = m.group("index_id")
-            binding = self.load_binding(index_id)
+            if index_id not in bindings:
+                bindings[index_id] = await self.load_binding(context, index_id)
+            binding = bindings[index_id]
             if binding is None:
                 context.log_warning(
                     f"No index binding for index_id={index_id} (key={obj.key}); "
