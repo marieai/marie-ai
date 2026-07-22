@@ -11,7 +11,6 @@ from marie.scheduler.models import HeartbeatConfig
 _HARD_SLA_POLICIES = {
     'track_only',
     'escalate_only',
-    'expire_unfinished',
 }
 
 
@@ -77,6 +76,10 @@ class PostgreSQLSchedulerConfig:
             raise BadConfigSource('heartbeat must be a mapping')
 
         hard_sla_policy = str(config.get('hard_sla_policy', 'track_only')).lower()
+        if hard_sla_policy == 'expire_unfinished':
+            raise BadConfigSource(
+                'hard_sla_policy=expire_unfinished is not implemented'
+            )
         invalid_hard_sla_policy = None
         if hard_sla_policy not in _HARD_SLA_POLICIES:
             invalid_hard_sla_policy = hard_sla_policy

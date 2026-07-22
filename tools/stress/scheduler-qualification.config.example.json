@@ -1,0 +1,21 @@
+{
+  "run_id": "scheduler-scale-v1",
+  "database_identity": "scheduler-scale-lab-primary",
+  "source_identity": "replace-with-source-commit",
+  "configuration_identity": "scheduler-scale-default-v1",
+  "executor_capacity_jobs_per_second": 10.0,
+  "scale_targets": [1000, 100000, 1000000, 10000000],
+  "capacity_factors": [0.6, 0.75, 0.9, 1.0, 1.2],
+  "overload_factors": [2.0],
+  "burst_factors": [5.0, 10.0],
+  "capacity_duration_seconds": 600,
+  "burst_duration_seconds": 60,
+  "burst_targets": [100000, 1000000, 10000000],
+  "endurance_targets": [1000000, 10000000],
+  "endurance_duration_seconds": [28800, 86400],
+  "endurance_load_factor": 0.75,
+  "trace_modes": ["off", "compact"],
+  "recovery_max_queue_age_seconds": 30,
+  "recovery_max_backlog_jobs": 0,
+  "resource_budgets": {}
+}

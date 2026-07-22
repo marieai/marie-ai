@@ -109,7 +109,7 @@ git clone https://github.com/marieai/marie-ai.git
 cd marie-ai
 git checkout develop
 
-sudo apt-get install libpq-dev # Required to install psycopg2
+sudo apt-get install libpq-dev # PostgreSQL client headers for psycopg 3
 
 uv sync --group dev
 ```

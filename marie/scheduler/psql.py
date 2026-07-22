@@ -111,6 +111,16 @@ class ControlFlowBatchResult:
         return self.completed > 0 or self.reconciled > 0
 
 
+@dataclass(frozen=True, slots=True)
+class PriorityRefreshResult:
+    refresh_id: int
+    error: str | None = None
+
+    @property
+    def succeeded(self) -> bool:
+        return self.error is None
+
+
 def limit_planned_jobs_to_available_slots(
     planned: List[tuple[str, WorkInfo]],
     slots_by_executor: Dict[str, int],
@@ -2067,20 +2077,33 @@ class PostgreSQLJobScheduler(JobScheduler):
                 refresh_started = time.perf_counter()
                 self._priority_refresh_running = True
                 try:
-                    refresh_id = await asyncio.wait_for(
+                    result = await asyncio.wait_for(
                         self._refresh_job_priorities(source=source),
                         timeout=self.priority_refresh_timeout_seconds,
                     )
-                    scheduler_trace(
-                        "scheduler_priority_refresh_returned",
-                        source=source,
-                        refresh_id=refresh_id,
-                        submission_count=self.submission_service.submission_count,
-                        refresh_interval_seconds=self.priority_refresh_interval_seconds,
-                        request_queue_size=self.submission_service.queue_size,
-                        pending_requests=self.submission_service.pending_count,
-                        elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
-                    )
+                    if result.succeeded:
+                        scheduler_trace(
+                            "scheduler_priority_refresh_completed",
+                            source=source,
+                            refresh_id=result.refresh_id,
+                            submission_count=self.submission_service.submission_count,
+                            refresh_interval_seconds=self.priority_refresh_interval_seconds,
+                            request_queue_size=self.submission_service.queue_size,
+                            pending_requests=self.submission_service.pending_count,
+                            elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
+                        )
+                    else:
+                        scheduler_trace(
+                            "scheduler_priority_refresh_failed",
+                            source=source,
+                            refresh_id=result.refresh_id,
+                            submission_count=self.submission_service.submission_count,
+                            elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
+                            error=result.error,
+                        )
+                        self.logger.error(
+                            f"Failed to refresh job priorities: {result.error}"
+                        )
                 except asyncio.TimeoutError:
                     scheduler_trace(
                         "scheduler_priority_refresh_failed",
@@ -2099,7 +2122,9 @@ class PostgreSQLJobScheduler(JobScheduler):
             except asyncio.CancelledError:
                 break
 
-    async def _refresh_job_priorities(self, source: str = "unknown") -> int:
+    async def _refresh_job_priorities(
+        self, source: str = "unknown"
+    ) -> PriorityRefreshResult:
         """Sync DB priority edits into memory and log current SLA pressure."""
         self._priority_refresh_seq += 1
         refresh_id = self._priority_refresh_seq
@@ -2166,8 +2191,8 @@ class PostgreSQLJobScheduler(JobScheduler):
                 submission_count=self.submission_service.submission_count,
                 top_n=self.sla_warning_top_n,
             )
-            frontier_summary = self.frontier.summary(
-                detail=True, top_n=self.sla_warning_top_n
+            frontier_summary = await self.frontier.priority_refresh_summary(
+                top_n=self.sla_warning_top_n
             )
             sla_summary = frontier_summary.get("sla", {})
             scheduler_trace(
@@ -2193,19 +2218,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                     f"hydrated_missing={refresh_stats.get('hydrated_missing', 0)}, "
                     "no frontier-tracked jobs"
                 )
-                scheduler_trace(
-                    "scheduler_priority_refresh_done",
-                    source=source,
-                    refresh_id=refresh_id,
-                    submission_count=self.submission_service.submission_count,
-                    elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
-                    tracked=refresh_stats.get("tracked", 0),
-                    fetched=refresh_stats.get("fetched", 0),
-                    changed=refresh_stats.get("changed", 0),
-                    hydrated_missing=refresh_stats.get("hydrated_missing", 0),
-                    has_sla_summary=False,
-                )
-                return refresh_id
+                return PriorityRefreshResult(refresh_id=refresh_id)
 
             self.logger.info(
                 "[SLA] Refresh checkpoint: "
@@ -2242,32 +2255,12 @@ class PostgreSQLJobScheduler(JobScheduler):
                 hard_missed=sla_summary.get("hard_missed", 0),
                 policy=self.hard_sla_policy,
             )
-            scheduler_trace(
-                "scheduler_priority_refresh_done",
-                source=source,
-                refresh_id=refresh_id,
-                submission_count=self.submission_service.submission_count,
-                elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
-                tracked=refresh_stats.get("tracked", 0),
-                fetched=refresh_stats.get("fetched", 0),
-                changed=refresh_stats.get("changed", 0),
-                hydrated_missing=refresh_stats.get("hydrated_missing", 0),
-                has_sla_summary=True,
-                soft_missed=sla_summary.get("soft_missed", 0),
-                hard_missed=sla_summary.get("hard_missed", 0),
-                highest_bucket=sla_summary.get("highest_bucket", 0),
-            )
+            return PriorityRefreshResult(refresh_id=refresh_id)
         except Exception as e:
-            scheduler_trace(
-                "scheduler_priority_refresh_failed",
-                source=source,
+            return PriorityRefreshResult(
                 refresh_id=refresh_id,
-                submission_count=self.submission_service.submission_count,
-                elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
-                error=repr(e),
+                error=str(e),
             )
-            self.logger.error(f"Failed to refresh job priorities: {e}")
-        return refresh_id
 
     async def _handle_hard_sla_policy(self, sla_summary: Dict[str, Any]) -> None:
         """Current hard-SLA behavior hook for the in-memory scheduler."""

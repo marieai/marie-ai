@@ -695,7 +695,7 @@ pytest tests/integration/scheduler/ -k hitl -v
 
 ### Database Connection Errors
 
-**Issue**: `psycopg2.OperationalError: could not connect to server`
+**Issue**: `psycopg.OperationalError: could not connect to server`
 
 **Solution**:
 1. Verify database is running: `psql -U postgres -d marie_studio`

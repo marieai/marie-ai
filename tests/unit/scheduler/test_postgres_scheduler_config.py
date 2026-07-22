@@ -27,6 +27,16 @@ def test_scheduler_config_normalizes_unknown_hard_sla_policy() -> None:
     assert config.invalid_hard_sla_policy == 'unknown'
 
 
+def test_scheduler_config_rejects_unimplemented_expire_policy() -> None:
+    with pytest.raises(BadConfigSource, match="expire_unfinished.*not implemented"):
+        PostgreSQLSchedulerConfig.from_dict(
+            {
+                'queue_names': ['extract'],
+                'hard_sla_policy': 'expire_unfinished',
+            }
+        )
+
+
 @pytest.mark.parametrize(
     ('override', 'message'),
     [

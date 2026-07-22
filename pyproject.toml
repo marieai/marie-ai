@@ -284,6 +284,7 @@ dev = [
     "gradio",
     "python-dotenv",
     "pre-commit>=4.6.0",
+    "ruff>=0.15.22",
 ]
 
 legacy-gradio = [
@@ -292,6 +293,15 @@ legacy-gradio = [
     "timm==1.0.27",
     "nltk",
 ]
+
+[tool.ruff.lint]
+ignore = ["ASYNC109"]
+
+[tool.ruff.lint.per-file-ignores]
+# Ignore the timeout signature across all files or target packages. This is a known issue with ruff and pytest-asyncio, and can be removed once the issue is resolved.
+"*" = ["ASYNC109"]
+
+
 
 [tool.isort]
 profile = "black"

@@ -17,6 +17,7 @@ from marie.scheduler.state import WorkState, is_terminal_state
 from marie.scheduler.util import is_control_flow_entrypoint
 
 DEFAULT_RETRY_DELAY_SECONDS = 2
+_COOPERATIVE_BATCH_SIZE = 256
 
 
 class ReadyEntry(NamedTuple):
@@ -103,28 +104,44 @@ class MemoryFrontier:
             ),
         )
 
-    def _rebuild_ready_heap_locked(self) -> None:
-        """Rebuild heap entries so updated priorities/levels take effect immediately."""
+    async def _rebuild_ready_heap_locked(self) -> None:
         rebuilt: list[ReadyEntry] = []
-        for jid in list(self._ready_set):
+        versions: dict[str, int] = {}
+        added_at_updates: dict[str, float] = {}
+        missing: list[str] = []
+        sequence = self._seq
+
+        for index, jid in enumerate(self._ready_set, start=1):
+            if index % _COOPERATIVE_BATCH_SIZE == 0:
+                await asyncio.sleep(0)
+
             wi = self.jobs_by_id.get(jid)
             if wi is None:
-                self._ready_set.discard(jid)
+                missing.append(jid)
                 continue
-            self._ver[jid] += 1
-            if jid not in self._added_at:
-                self._added_at[jid] = self._now()
-            self._seq += 1
+
+            version = self._ver.get(jid, 0) + 1
+            added_at = self._added_at.get(jid)
+            if added_at is None:
+                added_at = self._now()
+                added_at_updates[jid] = added_at
+            sequence += 1
+            versions[jid] = version
             rebuilt.append(
                 ReadyEntry(
                     self._priority_key(wi),
-                    self._added_at[jid],
-                    self._seq,
-                    self._ver[jid],
+                    added_at,
+                    sequence,
+                    version,
                     jid,
                 )
             )
-        heapq.heapify(rebuilt)
+
+        await asyncio.to_thread(heapq.heapify, rebuilt)
+        self._ready_set.difference_update(missing)
+        self._ver.update(versions)
+        self._added_at.update(added_at_updates)
+        self._seq = sequence
         self._ready_heap = rebuilt
 
     def _entry_is_current(self, entry: ReadyEntry) -> bool:
@@ -577,25 +594,77 @@ class MemoryFrontier:
         """
         async with self._lock:
             changed = 0
-            for jid, new_priority in priorities_by_job_id.items():
-                wi = self.jobs_by_id.get(jid)
-                if wi is None:
-                    continue
-                new_priority = int(new_priority)
-                if int(wi.priority) == new_priority:
-                    continue
-                wi.priority = new_priority
-                changed += 1
+            previous_priorities: dict[str, int] = {}
+            try:
+                for index, (jid, new_priority) in enumerate(
+                    priorities_by_job_id.items(), start=1
+                ):
+                    if index % _COOPERATIVE_BATCH_SIZE == 0:
+                        await asyncio.sleep(0)
 
-            if changed > 0:
-                self._rebuild_ready_heap_locked()
+                    wi = self.jobs_by_id.get(jid)
+                    if wi is None:
+                        continue
+                    new_priority = int(new_priority)
+                    if int(wi.priority) == new_priority:
+                        continue
+                    previous_priorities[jid] = int(wi.priority)
+                    wi.priority = new_priority
+                    changed += 1
+
+                if changed > 0:
+                    await self._rebuild_ready_heap_locked()
+            except BaseException:
+                for jid, previous_priority in previous_priorities.items():
+                    self.jobs_by_id[jid].priority = previous_priority
+                raise
 
             return changed
 
     async def refresh_ready_ordering(self) -> None:
         """Rebuild ready ordering so time-based SLA changes are reflected in heap order."""
         async with self._lock:
-            self._rebuild_ready_heap_locked()
+            await self._rebuild_ready_heap_locked()
+
+    async def priority_refresh_summary(self, top_n: int = 5) -> dict[str, Any]:
+        async with self._lock:
+            work_items: list[WorkInfo] = []
+            blocked = 0
+            for index, work_item in enumerate(self.jobs_by_id.values(), start=1):
+                work_items.append(work_item.model_copy())
+                blocked += int(self.unmet_count.get(work_item.id, 0) > 0)
+                if index % _COOPERATIVE_BATCH_SIZE == 0:
+                    await asyncio.sleep(0)
+
+            ready = 0
+            for index, job_id in enumerate(self._ready_set, start=1):
+                ready += int(self._still_ready(job_id))
+                if index % _COOPERATIVE_BATCH_SIZE == 0:
+                    await asyncio.sleep(0)
+
+            edges = 0
+            for index, children in enumerate(self.dependents.values(), start=1):
+                edges += len(children)
+                if index % _COOPERATIVE_BATCH_SIZE == 0:
+                    await asyncio.sleep(0)
+
+            totals = {
+                "dags": len(self.dag_nodes),
+                "jobs": len(work_items),
+                "edges": edges,
+                "ready": ready,
+                "leased": len(self.leased_until),
+                "blocked": blocked,
+            }
+
+        sla_summary = await asyncio.to_thread(
+            summarize_sla_work_items,
+            work_items,
+            now=datetime.now(timezone.utc),
+            top_n=top_n,
+            interval_seconds=self.sla_priority_interval_seconds,
+        )
+        return {"totals": totals, "sla": sla_summary}
 
     @staticmethod
     def _executor_of(wi: WorkInfo) -> str:

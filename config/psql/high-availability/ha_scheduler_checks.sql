@@ -3,8 +3,8 @@
 -- This file is plain PostgreSQL SQL. It is safe to run from database clients
 -- such as DataGrip, PyCharm Database, DBeaver, psql, or the Postgres console.
 --
--- Edit the ha_check_params statement below to scope the run. The default scans
--- the last 24 hours.
+-- Set marie.ha_run_start and marie.ha_run_end in the current session to scope
+-- the run. Unset parameters default to the last 24 hours.
 --
 -- The script only creates temporary tables. It does not modify persistent
 -- scheduler tables.
@@ -14,15 +14,19 @@ DROP TABLE IF EXISTS ha_check_params;
 
 CREATE TEMP TABLE ha_check_params AS
 SELECT
-    now() - INTERVAL '24 hours' AS run_start,
-    now() AS run_end;
+    COALESCE(
+        NULLIF(current_setting('marie.ha_run_start', TRUE), '')::timestamptz,
+        now() - INTERVAL '24 hours'
+    ) AS run_start,
+    COALESCE(
+        NULLIF(current_setting('marie.ha_run_end', TRUE), '')::timestamptz,
+        now()
+    ) AS run_end;
 
--- For an exact HA run window, replace the CREATE TEMP TABLE above with:
+-- For an exact HA run window, set the parameters before running this file:
 --
--- CREATE TEMP TABLE ha_check_params AS
--- SELECT
---     '2026-05-19 09:45:00+00'::timestamptz AS run_start,
---     '2026-05-19 10:00:00+00'::timestamptz AS run_end;
+-- SET marie.ha_run_start = '2026-05-19 09:45:00+00';
+-- SET marie.ha_run_end = '2026-05-19 10:00:00+00';
 
 -- Query: show the effective run window so copied results are self-describing.
 SELECT
@@ -122,9 +126,20 @@ JOIN marie_scheduler.job j ON j.id = a.job_id
 GROUP BY j.state::text
 ORDER BY jobs DESC, job_state;
 
--- Query: machine-readable PASS/FAIL summary for HA correctness. Investigate
--- any row where result = FAIL, unless the failure is expected by a fault test.
-WITH checks AS (
+-- Query: machine-readable PASS/FAIL summary for HA correctness. Attempt,
+-- lease, and terminal semantics come from the same schema function used by
+-- the scheduler stress verifier. Investigate any FAIL unless expected by a
+-- fault test.
+WITH shared_checks AS (
+    SELECT check_name, bad_rows, expectation
+    FROM marie_scheduler.scheduler_attempt_invariant_checks(
+        NULL,
+        (SELECT run_start FROM ha_check_params),
+        (SELECT run_end FROM ha_check_params),
+        (SELECT run_end FROM ha_check_params),
+        50
+    )
+), ha_specific_checks AS (
     SELECT
         'active_active_gateway_count' AS check_name,
         COUNT(DISTINCT gateway_instance_id) FILTER (
@@ -143,99 +158,22 @@ WITH checks AS (
 
     UNION ALL
     SELECT
-        'dispatched_missing_terminal',
-        COUNT(*),
-        COUNT(*),
-        'After drain, every dispatched attempt should have an accepted terminal event or a recovery marker.'
-    FROM ha_scoped_attempts
-    WHERE dispatch_confirmed_at IS NOT NULL
-      AND terminal_accepted IS DISTINCT FROM TRUE
-      AND recovery_state IS NULL
-
-    UNION ALL
-    SELECT
-        'completed_dispatched_missing_terminal',
-        COUNT(*),
-        COUNT(*),
-        'Completed terminal jobs with confirmed dispatch must have terminal audit.'
-    FROM ha_scoped_attempts a
-    JOIN marie_scheduler.job j ON j.id = a.job_id
-    WHERE j.state::text IN ('completed', 'failed', 'cancelled', 'expired', 'skipped')
-      AND a.dispatch_confirmed_at IS NOT NULL
-      AND a.terminal_accepted IS DISTINCT FROM TRUE
-      AND a.recovery_state IS NULL
-
-    UNION ALL
-    SELECT
         'terminal_rejected',
         COUNT(*),
         COUNT(*),
         'Normal no-fault HA runs should not reject terminal events. Fault tests may intentionally reject stale attempts.'
     FROM ha_scoped_attempts
     WHERE terminal_accepted IS FALSE
-
-    UNION ALL
+), checks AS (
     SELECT
-        'duplicate_completed_terminal_by_job',
-        COUNT(*),
-        COUNT(*),
-        'A job should not have more than one accepted completed terminal attempt.'
-    FROM (
-        SELECT job_id
-        FROM ha_scoped_attempts
-        WHERE terminal_accepted IS TRUE
-          AND terminal_work_state = 'completed'
-        GROUP BY job_id
-        HAVING COUNT(*) > 1
-    ) duplicate_completed
-
+        check_name,
+        bad_rows AS observed_count,
+        bad_rows,
+        expectation
+    FROM shared_checks
     UNION ALL
-    SELECT
-        'dispatched_without_gateway_instance',
-        COUNT(*),
-        COUNT(*),
-        'Every dispatched attempt should record the gateway instance that activated it.'
-    FROM ha_scoped_attempts
-    WHERE dispatch_confirmed_at IS NOT NULL
-      AND gateway_instance_id IS NULL
-
-    UNION ALL
-    SELECT
-        'terminal_without_gateway_instance',
-        COUNT(*),
-        COUNT(*),
-        'Every accepted terminal event should record the gateway instance that handled it.'
-    FROM ha_scoped_attempts
-    WHERE terminal_accepted IS TRUE
-      AND terminal_gateway_instance_id IS NULL
-
-    UNION ALL
-    SELECT
-        'active_missing_attempt_identity',
-        COUNT(*),
-        COUNT(*),
-        'Active jobs in the run window must have run_owner, run_attempt_id, and run_lease_expires_at.'
-    FROM marie_scheduler.job j
-    WHERE COALESCE(j.started_on, j.created_on) >= (SELECT run_start FROM ha_check_params)
-      AND COALESCE(j.started_on, j.created_on) < (SELECT run_end FROM ha_check_params)
-      AND j.state::text = 'active'
-      AND (
-          j.run_owner IS NULL
-          OR j.run_attempt_id IS NULL
-          OR j.run_lease_expires_at IS NULL
-      )
-
-    UNION ALL
-    SELECT
-        'expired_active_run_leases',
-        COUNT(*),
-        COUNT(*),
-        'After maintenance settles, active jobs in the run window should not have expired run leases.'
-    FROM marie_scheduler.job j
-    WHERE COALESCE(j.started_on, j.created_on) >= (SELECT run_start FROM ha_check_params)
-      AND COALESCE(j.started_on, j.created_on) < (SELECT run_end FROM ha_check_params)
-      AND j.state::text = 'active'
-      AND j.run_lease_expires_at < now()
+    SELECT check_name, observed_count, bad_rows, expectation
+    FROM ha_specific_checks
 )
 -- Query: return the HA correctness check results. Rows with result = FAIL need
 -- investigation unless the failure is expected by a fault-injection test.

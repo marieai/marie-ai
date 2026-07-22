@@ -493,16 +493,24 @@ def _render_live_report_html(payload: Dict[str, Any], refresh_seconds: float) ->
 
 
 def _render_final_report_html(payload: Dict[str, Any]) -> str:
+    run_identity = payload.get("run_identity", {})
     summary = payload.get("summary", {})
     latency_stats = payload.get("latency_stats_ms", {})
     failure_reasons = payload.get("failure_reasons", {})
     sla = payload.get("sla", {})
     sla_verification = payload.get("sla_verification", {})
     debug_sampling = payload.get("debug_sampling", {})
+    preflight = payload.get("preflight", {})
+    reliability = payload.get("reliability", {})
+    event_validation = payload.get("event_validation", {})
+    correctness = payload.get("correctness_verifier") or {}
+    verification = payload.get("verification", {})
+    job_record_stream = payload.get("job_record_stream", {})
     jobs = payload.get("jobs", [])
 
     cards = _html_cards(
         [
+            ("Run ID", run_identity.get("run_id")),
             ("Run Mode", summary.get("run_mode")),
             ("Duration Seconds", summary.get("duration_seconds")),
             ("Configured Jobs", summary.get("configured_job_count")),
@@ -515,7 +523,94 @@ def _render_final_report_html(payload: Dict[str, Any]) -> str:
             ("Throughput", summary.get("throughput")),
             ("Fault Profile", summary.get("fault_profile")),
             ("Generated At", summary.get("report_generated_at")),
+            ("Preflight", (preflight.get("result") or {}).get("passed")),
+            ("Reliability", reliability.get("passed")),
+            ("Correctness", correctness.get("passed")),
         ]
+    )
+
+    preflight_result = preflight.get("result") or {}
+    preflight_final = preflight_result.get("final") or {}
+    preflight_table = _html_table(
+        ["Field", "Value"],
+        [
+            ["Enabled", preflight_result.get("enabled")],
+            ["Passed", preflight_result.get("passed")],
+            ["Reason", preflight_result.get("reason")],
+            ["Attempts", preflight_result.get("attempts")],
+            ["Target Queue", preflight_final.get("target_queue")],
+            ["Known Queues", preflight_final.get("known_queues")],
+            ["Required Executors", preflight_final.get("required_executors")],
+            ["Matched Slots", preflight_final.get("matched_slots")],
+            ["Error", preflight_result.get("error")],
+        ],
+    )
+    preflight_attempts = preflight.get("attempts") or []
+    preflight_attempts_table = _html_table(
+        [
+            "Attempt",
+            "Captured At",
+            "Debug Status",
+            "Debug Snapshot",
+            "Capacity Status",
+            "Capacity Snapshot",
+            "Ready",
+            "Reason",
+        ],
+        [
+            [
+                attempt.get("attempt"),
+                attempt.get("captured_at"),
+                (attempt.get("debug") or {}).get("status_code"),
+                (attempt.get("debug") or {}).get("payload"),
+                (attempt.get("capacity") or {}).get("status_code"),
+                (attempt.get("capacity") or {}).get("payload"),
+                (attempt.get("interpretation") or {}).get("ready"),
+                (attempt.get("interpretation") or {}).get("reason"),
+            ]
+            for attempt in preflight_attempts
+        ],
+    )
+
+    reliability_table = _html_table(
+        ["Field", "Value"],
+        [
+            ["Passed", reliability.get("passed")],
+            *[
+                [name, value]
+                for name, value in (reliability.get("observed") or {}).items()
+            ],
+            *[
+                [f"gate: {name}", value]
+                for name, value in (reliability.get("gates") or {}).items()
+            ],
+            *[["Error", error] for error in reliability.get("errors") or []],
+        ],
+    )
+
+    event_table = _html_table(
+        ["Validation Counter", "Count"],
+        [[name, value] for name, value in event_validation.items()],
+    )
+
+    verifier_table = _html_table(
+        ["Field", "Value"],
+        [
+            ["Overall Verification Passed", verification.get("passed")],
+            ["Correctness Enabled", correctness.get("enabled")],
+            ["Correctness Passed", correctness.get("passed")],
+            ["Correctness Status", correctness.get("status")],
+            ["Correctness Exit Code", correctness.get("exit_code")],
+            ["Correctness Error", correctness.get("error")],
+            ["Trace Mode", payload.get("trace_mode")],
+            ["Query Budget Deltas", payload.get("query_budget_deltas")],
+            ["Post-Drain Capacity", payload.get("post_drain_capacity")],
+            ["Job JSONL", job_record_stream.get("path")],
+            ["Streamed Records", job_record_stream.get("records_written")],
+            ["Retained Jobs", job_record_stream.get("retained_jobs")],
+            ["Retention Truncated", job_record_stream.get("truncated")],
+            *[["Error", error] for error in verification.get("errors") or []],
+        ],
     )
 
     latency_rows: List[List[Any]] = []
@@ -741,6 +836,12 @@ def _render_final_report_html(payload: Dict[str, Any]) -> str:
     body = "".join(
         [
             _html_section("Run Summary", cards),
+            _html_section(
+                "Dispatch Preflight", preflight_table + preflight_attempts_table
+            ),
+            _html_section("Reliability Gates", reliability_table),
+            _html_section("Event Validation", event_table),
+            _html_section("Correctness and Instrumentation", verifier_table),
             _html_section("Latency Breakdown", latency_table),
             _html_section("Failure Reasons", failure_table),
             _html_section("SLA Outcome", sla_summary_body),

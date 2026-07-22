@@ -17,9 +17,11 @@ from marie.scheduler.services.control_flow_execution_service import (
 
 
 def build_service() -> ControlFlowExecutionService:
+    frontier = AsyncMock()
+    frontier.leased_until = {}
     return ControlFlowExecutionService(
         repository=AsyncMock(),
-        frontier=AsyncMock(),
+        frontier=frontier,
         dag_service=AsyncMock(),
         status_update_lock=AsyncJobLock(),
         topology_cache=DagTopologyCache(),

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -13,17 +15,21 @@ from tools.stress.gateway_e2e_stresser import (
     GatewayE2EStresser,
     InputAsset,
     JobRun,
+    PreflightError,
     SubmitResult,
     _build_debug_snapshot,
     _build_input_assets,
     _coerce_gateway_debug_payload,
+    _extract_capacity_slots,
     _extract_failure_error,
+    _extract_known_queues,
     _extract_ref_id_from_event,
     _extract_template,
     _parse_duration_seconds,
     _resolve_inputs,
     _resolve_runtime_config,
     _resolve_s3_inputs,
+    _sanitize_report_value,
 )
 
 VALID_FAKE_API_KEY = "mau_" + ("A" * 54)
@@ -1417,3 +1423,396 @@ def test_coerce_gateway_debug_payload_unwraps_gateway_result() -> None:
     )
 
     assert payload == {"scheduler_info": {"running": True}}
+
+
+def _make_slice04_stresser(**overrides: Any) -> GatewayE2EStresser:
+    arguments: dict[str, Any] = {
+        "gateway_host": "localhost",
+        "gateway_port": 51000,
+        "http_port": 51000,
+        "protocol": "http",
+        "endpoint": "/api/v1/invoke",
+        "api_key": VALID_FAKE_API_KEY,
+        "queue_name": "scheduler_stress_v1",
+        "planner": "mock_parallel_subgraphs",
+        "input_assets": [
+            InputAsset(
+                source_name="sample.tif",
+                source_path="s3://marie/stress/sample.tif",
+                existing_s3_uri="s3://marie/stress/sample.tif",
+            )
+        ],
+        "job_count": 1,
+        "run_time_seconds": None,
+        "submit_concurrency": 1,
+        "submit_rate": 100.0,
+        "timeout": 1.0,
+        "terminal_timeout": 0.01,
+        "s3_config": None,
+        "queue_config": None,
+        "metadata_template": {"on": "mock-executor://process"},
+        "template_job_name": None,
+        "fault_profile": "normal",
+    }
+    arguments.update(overrides)
+    return GatewayE2EStresser(**arguments)
+
+
+def test_run_identity_and_metadata_are_deterministic() -> None:
+    first = _make_slice04_stresser(run_id="cohort-a", seed=41)
+    second = _make_slice04_stresser(run_id="cohort-a", seed=41)
+
+    first_run = first._build_run(first.input_assets[0], 7)
+    second_run = second._build_run(second.input_assets[0], 7)
+    first_metadata = first._build_metadata(first_run, sla_anchor_at=100.0)
+    second_metadata = second._build_metadata(second_run, sla_anchor_at=100.0)
+
+    assert first_run.request_id == second_run.request_id
+    assert first_run.ref_id == second_run.ref_id == "cohort-a-000000000007"
+    assert first_metadata == second_metadata
+    assert first_metadata["stress_run_id"] == "cohort-a"
+    assert first_metadata["stress_logical_index"] == 7
+    assert first_metadata["stress_queue"] == "scheduler_stress_v1"
+    assert first_metadata["stress_planner"] == "mock_parallel_subgraphs"
+    assert first_metadata["stress_required_executors"] == ["mock-executor"]
+
+
+def test_preflight_parsers_accept_wrapped_and_unwrapped_payloads() -> None:
+    wrapped_debug = {
+        "status": "OK",
+        "result": {
+            "scheduler_info": {
+                "known_queues": ["scheduler_stress_v1", "default"]
+            }
+        },
+    }
+    capacity = {
+        "slots": [
+            {
+                "name": "mock-executor",
+                "capacity": 4,
+                "available": 2,
+                "used": 2,
+                "target": 4,
+            }
+        ]
+    }
+
+    assert _extract_known_queues(wrapped_debug) == [
+        "default",
+        "scheduler_stress_v1",
+    ]
+    assert _extract_known_queues(wrapped_debug["result"]) == [
+        "default",
+        "scheduler_stress_v1",
+    ]
+    assert _extract_capacity_slots({"status": "OK", "result": capacity}) == {
+        "mock-executor": {
+            "name": "mock-executor",
+            "capacity": 4.0,
+            "available": 2.0,
+            "target": 4.0,
+            "used": 2.0,
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    ("queues", "slots", "expected_reason"),
+    [
+        (["other"], [{"name": "mock-executor", "capacity": 1, "available": 1}], "queue_missing"),
+        (["scheduler_stress_v1"], [], "executor_missing"),
+        (
+            ["scheduler_stress_v1"],
+            [{"name": "mock-executor", "capacity": 0, "available": 0}],
+            "zero_capacity",
+        ),
+        (
+            ["scheduler_stress_v1"],
+            [{"name": "mock-executor", "capacity": 2, "available": 0}],
+            "zero_available_capacity",
+        ),
+    ],
+)
+def test_preflight_distinguishes_readiness_failures(
+    queues: list[str], slots: list[dict[str, Any]], expected_reason: str
+) -> None:
+    stresser = _make_slice04_stresser(preflight_enabled=True)
+
+    interpretation = stresser._interpret_preflight(
+        {"scheduler_info": {"known_queues": queues}}, {"slots": slots}
+    )
+
+    assert interpretation["ready"] is False
+    assert interpretation["reason"] == expected_reason
+
+
+@pytest.mark.asyncio
+async def test_preflight_retries_until_queue_and_executor_are_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stresser = _make_slice04_stresser(
+        preflight_enabled=True,
+        preflight_deadline=0.2,
+        preflight_interval=0.001,
+    )
+    debug_calls = 0
+
+    async def fetch(path: str) -> tuple[int, dict[str, Any]]:
+        nonlocal debug_calls
+        if path == "/api/debug":
+            debug_calls += 1
+            queues = [] if debug_calls == 1 else ["scheduler_stress_v1"]
+            return 200, {"scheduler_info": {"known_queues": queues}}
+        return 200, {
+            "api_key": VALID_FAKE_API_KEY,
+            "slots": [
+                {"name": "mock-executor", "capacity": 2, "available": 2}
+            ]
+        }
+
+    monkeypatch.setattr(stresser, "_fetch_gateway_json", fetch)
+
+    await stresser._run_preflight()
+
+    assert stresser._preflight_result == {
+        "enabled": True,
+        "passed": True,
+        "reason": None,
+        "attempts": 2,
+        "final": stresser._preflight_attempts[-1]["interpretation"],
+    }
+    assert len(stresser._preflight_attempts) == 2
+    assert VALID_FAKE_API_KEY not in json.dumps(stresser.build_report_payload())
+
+
+@pytest.mark.asyncio
+async def test_failed_preflight_never_starts_submission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stresser = _make_slice04_stresser(preflight_enabled=True)
+    submission_started = False
+
+    async def fail_preflight() -> None:
+        raise PreflightError("queue_missing", "queue is not monitored")
+
+    def setup_storage() -> None:
+        nonlocal submission_started
+        submission_started = True
+
+    monkeypatch.setattr(stresser, "_run_preflight", fail_preflight)
+    monkeypatch.setattr(stresser, "_setup_storage", setup_storage)
+
+    with pytest.raises(PreflightError, match="queue is not monitored"):
+        await stresser.run()
+
+    assert submission_started is False
+    assert stresser._created_job_count == 0
+
+
+@pytest.mark.asyncio
+async def test_preflight_endpoint_failure_is_bounded_and_specific(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stresser = _make_slice04_stresser(
+        preflight_enabled=True,
+        preflight_deadline=0.002,
+        preflight_interval=0.001,
+    )
+
+    async def unavailable(_: str) -> tuple[int, dict[str, Any]]:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(stresser, "_fetch_gateway_json", unavailable)
+
+    with pytest.raises(PreflightError) as error:
+        await stresser._run_preflight()
+
+    assert error.value.reason == "endpoint_unavailable"
+    assert stresser._preflight_result is not None
+    assert stresser._preflight_result["passed"] is False
+    assert stresser._preflight_result["attempts"] <= 4
+
+
+def test_event_validation_counts_order_duplicates_and_conflicts() -> None:
+    stresser = _make_slice04_stresser(
+        require_event_order=True,
+        max_duplicate_terminal_events=0,
+        max_conflicting_terminal_events=0,
+    )
+    run = stresser._build_run(stresser.input_assets[0], 0)
+    stresser._register_run(run)
+    stresser._mark_submit_result(
+        run,
+        SubmitResult(
+            request_id=run.request_id,
+            success=True,
+            latency_ms=1.0,
+            job_id="job-1",
+        ),
+    )
+
+    for event in (
+        "extract.started",
+        "extract.scheduled",
+        "extract.completed",
+        "extract.completed",
+        "extract.failed",
+    ):
+        stresser._handle_event_message(
+            {"event": event, "jobid": "job-1", "timestamp": 100.0}
+        )
+    stresser._finalize_metrics()
+
+    assert stresser.metrics.event_order_errors == 2
+    assert stresser.metrics.duplicate_terminal_events == 1
+    assert stresser.metrics.conflicting_terminal_events == 1
+    assert any("Event lifecycle validation failed" in error for error in stresser.verification_errors)
+    assert any("Duplicate terminal events" in error for error in stresser.verification_errors)
+    assert any("Conflicting terminal events" in error for error in stresser.verification_errors)
+
+
+def test_jsonl_streaming_and_job_retention_are_bounded(tmp_path: Path) -> None:
+    jsonl_path = tmp_path / "jobs.jsonl"
+    stresser = _make_slice04_stresser(
+        job_count=3,
+        run_id="bounded-run",
+        job_jsonl_path=str(jsonl_path),
+        max_retained_jobs=1,
+        max_metric_samples=2,
+    )
+
+    for index in range(3):
+        run = stresser._build_run(stresser.input_assets[0], index)
+        stresser._register_run(run)
+        stresser._mark_submit_result(
+            run,
+            SubmitResult(
+                request_id=run.request_id,
+                success=True,
+                latency_ms=float(index + 1),
+                job_id=f"job-{index}",
+            ),
+        )
+        for event in ("extract.scheduled", "extract.started", "extract.completed"):
+            stresser._handle_event_message(
+                {"event": event, "jobid": f"job-{index}", "timestamp": index + 1.0}
+            )
+
+    stresser._finalize_metrics()
+    lines = [json.loads(line) for line in jsonl_path.read_text().splitlines()]
+    report = stresser.build_report_payload()
+
+    assert [line["logical_index"] for line in lines] == [0, 1, 2]
+    assert len(stresser._runs_by_request_id) == 1
+    assert stresser.metrics.total_jobs == 3
+    assert stresser.metrics.completed_jobs == 3
+    assert len(stresser.metrics.submit_latencies_ms) == 2
+    assert report["job_record_stream"]["truncated"] is True
+    assert report["job_record_stream"]["records_written"] == 3
+
+
+def test_report_sanitizes_preflight_snapshots() -> None:
+    payload = _sanitize_report_value(
+        {
+            "authorization": f"Bearer {VALID_FAKE_API_KEY}",
+            "nested": {"password": "secret-value", "safe": "visible"},
+            "message": f"key={VALID_FAKE_API_KEY}",
+        },
+        VALID_FAKE_API_KEY,
+    )
+
+    assert payload == {
+        "authorization": REDACTED_SECRET,
+        "nested": {"password": REDACTED_SECRET, "safe": "visible"},
+        "message": f"key={REDACTED_SECRET}",
+    }
+
+
+class _FakeVerifierProcess:
+    def __init__(
+        self,
+        returncode: int,
+        report_path: Path | None,
+        report_passed: bool,
+        timeout_once: bool = False,
+    ) -> None:
+        self.returncode = returncode
+        self.report_path = report_path
+        self.report_passed = report_passed
+        self.timeout_once = timeout_once
+        self.killed = False
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        if self.timeout_once and not self.killed:
+            await asyncio.sleep(3600)
+        if self.report_path is not None:
+            self.report_path.parent.mkdir(parents=True, exist_ok=True)
+            self.report_path.write_text(json.dumps({"passed": self.report_passed}))
+        return b"{}", b"verifier output"
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("returncode", "report_passed"), [(0, True), (1, False)])
+async def test_correctness_verifier_propagates_success_and_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+    report_passed: bool,
+) -> None:
+    result_path = tmp_path / "correctness.json"
+    stresser = _make_slice04_stresser(
+        run_id="verify-run",
+        verify_correctness=True,
+        correctness_report_path=str(result_path),
+    )
+
+    async def create_process(*command: str, **_: Any) -> _FakeVerifierProcess:
+        report_index = command.index("--report") + 1
+        return _FakeVerifierProcess(
+            returncode,
+            Path(command[report_index]),
+            report_passed,
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    await stresser._run_correctness_verifier()
+
+    assert stresser._correctness_result is not None
+    assert stresser._correctness_result["passed"] is report_passed
+    assert bool(stresser.verification_errors) is (not report_passed)
+
+
+@pytest.mark.asyncio
+async def test_correctness_verifier_timeout_and_invocation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeout_stresser = _make_slice04_stresser(
+        run_id="timeout-run",
+        verify_correctness=True,
+        correctness_timeout=0.001,
+    )
+
+    async def create_timeout_process(*_: Any, **__: Any) -> _FakeVerifierProcess:
+        return _FakeVerifierProcess(1, None, False, timeout_once=True)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_timeout_process)
+    await timeout_stresser._run_correctness_verifier()
+    assert timeout_stresser._correctness_result is not None
+    assert timeout_stresser._correctness_result["status"] == "timeout"
+
+    invocation_stresser = _make_slice04_stresser(
+        run_id="invocation-run", verify_correctness=True
+    )
+
+    async def fail_to_create(*_: Any, **__: Any) -> _FakeVerifierProcess:
+        raise OSError("cannot execute")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fail_to_create)
+    await invocation_stresser._run_correctness_verifier()
+    assert invocation_stresser._correctness_result is not None
+    assert invocation_stresser._correctness_result["status"] == "invocation_error"

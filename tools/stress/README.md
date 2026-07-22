@@ -38,6 +38,61 @@ Use it when the goal is to test:
 - **SLA verification**: stamps `soft_sla` / `hard_sla` onto each request and reports compliance
 - **Mock executor failure injection**: stamps `failure_rate`, `failure_mode`, and deterministic `force_fail` controls for mock-executor runs
 - **AIMock fault profile integration**: can switch the mock backend into `normal`, `timeout`, `error`, or randomized `chaos`
+- **Dispatch-readiness preflight**: proves the scheduler monitors the target queue and every required executor has positive configured and available capacity before the first submission
+- **Run correlation**: stamps deterministic request/ref IDs, `stress_run_id`, logical index, queue, planner, and executor identities
+- **Reliability gates**: validates submission acceptance, terminal completion, event loss, lifecycle order, duplicate terminals, and conflicting outcomes
+- **Bounded endurance reporting**: optionally streams terminal job records to JSONL while retaining only configured job, event, and latency samples in memory
+- **Database correctness handoff**: optionally runs `scheduler_correctness.py` after drain and propagates its exit status
+
+#### Dispatch preflight and run identity
+
+Real runs perform `/api/debug` and `/api/capacity` preflight by default. Supply
+each executor used by the selected query plan with repeated
+`--required-executor` options. Executor identities can also be inferred from
+`on: executor://endpoint` values in the request metadata template. A missing
+queue, missing executor, zero configured capacity, zero initially available
+capacity, or unavailable endpoint stops the command before it uploads or
+submits work. `--skip-preflight` is intended only for payload dry-runs and
+diagnostic cases where dispatch readiness is deliberately outside the test.
+
+`--run-id` makes request IDs, ref IDs, and template UUIDs deterministic. The
+command generates a unique run ID when it is omitted. Reuse an explicit run ID
+only when continuing the same scheduler corpus; use a new ID for an independent
+trial.
+
+For a strict mock-executor qualification run:
+
+```bash
+python tools/stress/gateway_e2e_stresser.py \
+  --config tools/stress/gateway-e2e.config.json \
+  --s3-uri-manifest tools/stress/gateway-e2e.s3-uri-manifest.example.txt \
+  --job-count 1000 \
+  --run-id scheduler-scale-v1 \
+  --job-name gen5_extract \
+  --planner extract \
+  --required-executor extract_executor \
+  --min-submission-acceptance-pct 100 \
+  --min-terminal-completion-pct 100 \
+  --max-event-timeout-jobs 0 \
+  --max-open-jobs 0 \
+  --require-event-order \
+  --max-duplicate-terminal-events 0 \
+  --max-conflicting-terminal-events 0 \
+  --job-jsonl /tmp/scheduler-scale-v1-jobs.jsonl \
+  --max-retained-jobs 1000 \
+  --max-metric-samples 10000 \
+  --verify-correctness \
+  --correctness-config tools/stress/scheduler-db.config.example.json \
+  --correctness-report /tmp/scheduler-scale-v1-correctness.json \
+  --report /tmp/scheduler-scale-v1-gateway.json
+```
+
+`--verify-correctness` requires the same `run_id` to exist in
+`marie_stress.run_manifest`; use it for a corpus created by
+`scheduler_db_stresser.py`, not for an unrelated ad hoc gateway run. The final
+JSON and HTML reports include sanitized preflight evidence, lifecycle counters,
+the verifier result, trace mode, query-budget deltas, post-drain capacity, and
+retention details.
 
 #### Usage
 
@@ -92,7 +147,8 @@ python tools/stress/gateway_e2e_stresser.py \
     --input-dir ~/.marie/generators \
     --job-count 25 \
     --job-name extract \
-    --planner extract
+    --planner extract \
+    --required-executor extract_executor
 
 # Submit TIFFs at 4 jobs/sec and write an HTML report
 python tools/stress/gateway_e2e_stresser.py \
@@ -101,6 +157,7 @@ python tools/stress/gateway_e2e_stresser.py \
     --job-count 50 \
     --job-name gen5_extract \
     --planner extract \
+  --required-executor extract_executor \
     --soft-sla-seconds 30 \
     --hard-sla-seconds 90 \
     --soft-sla-step-seconds 10 \
@@ -118,6 +175,7 @@ python tools/stress/gateway_e2e_stresser.py \
     --run-time 1h \
     --job-name gen5_extract \
     --planner extract \
+  --required-executor extract_executor \
     --submit-rate 10 \
     --progress-interval 2 \
     --live-report /tmp/gateway-e2e-live.html \
@@ -130,6 +188,7 @@ python tools/stress/gateway_e2e_stresser.py \
     --job-count 10 \
     --job-name gen5_extract \
     --planner extract \
+  --required-executor extract_executor \
     --fault-profile chaos \
     --aimock-admin-url http://localhost:4011
 
@@ -140,6 +199,14 @@ python tools/stress/gateway_e2e_stresser.py \
     --job-count 50 \
     --job-name mock_parallel_subgraphs \
     --planner mock_parallel_subgraphs \
+    --required-executor mock_executor_a \
+    --required-executor mock_executor_b \
+    --required-executor mock_executor_c \
+    --required-executor mock_executor_d \
+    --required-executor mock_executor_e \
+    --required-executor mock_executor_f \
+    --required-executor mock_executor_g \
+    --required-executor mock_executor_h \
     --mock-failure-rate 0.10 \
     --mock-failure-mode exception \
     --force-failure-every 5 \
@@ -189,6 +256,9 @@ These files are examples only. They are not required.
 
 - `gateway-e2e.config.example.json` is a local starter config for the tool
 - `gateway-e2e.s3-uri-manifest.example.txt` is a sample manifest showing the expected `s3://` URI format
+
+Copy the config example to an ignored local file and replace every
+`replace-with-*` value. Do not commit real gateway, S3, or RabbitMQ credentials.
 
 Create the shared Docker network once:
 
@@ -344,6 +414,7 @@ python tools/stress/gateway_e2e_stresser.py \
   --run-time 30m \
   --job-name gen5_extract \
   --planner extract \
+  --required-executor extract_executor \
   --submit-rate 10 \
   --progress-interval 2 \
   --live-report /tmp/gateway-e2e-live.html
@@ -379,6 +450,7 @@ python tools/stress/gateway_e2e_stresser.py \
   --run-time 15m \
   --job-name gen5_extract \
   --planner extract \
+  --required-executor extract_executor \
   --submit-rate 5 \
   --debug-sample-interval 5 \
   --live-report /tmp/gateway-e2e-live.html
@@ -409,6 +481,7 @@ python tools/stress/gateway_e2e_stresser.py \
   --run-time 30m \
   --job-name gen5_extract \
   --planner extract \
+  --required-executor extract_executor \
   --submit-rate 10 \
   --progress-interval 2 \
   --live-report /tmp/gateway-e2e-live.html
@@ -467,6 +540,7 @@ python tools/stress/gateway_e2e_stresser.py \
   --job-count 1000 \
   --job-name gen5_extract \
   --planner extract \
+  --required-executor extract_executor \
   --submit-rate 4 \
   --fault-profile normal \
   --aimock-admin-url http://localhost:4011 \
@@ -474,7 +548,7 @@ python tools/stress/gateway_e2e_stresser.py \
 ```
 
 
-python tools/stress/gateway_e2e_stresser.py   --config tools/stress/gateway-e2e.config.example.json   --input-dir ~/.marie/generators   --run-time 5m   --job-name extract   --planner extract   --submit-concurrency 1   --submit-rate 1   --soft-sla-seconds 30   --hard-sla-seconds 120   --min-soft-sla-compliance-pct 95   --min-hard-sla-compliance-pct 99   --progress-interval 5   --terminal-timeout 1800   --fault-profile normal   --live-report ~/tmp/gateway-e2e-8h-live.html   --report ~/tmp/gateway-e2e-8h-final.json
+python tools/stress/gateway_e2e_stresser.py   --config tools/stress/gateway-e2e.config.example.json   --input-dir ~/.marie/generators   --run-time 5m   --job-name extract   --planner extract   --required-executor extract   --submit-concurrency 1   --submit-rate 1   --soft-sla-seconds 30   --hard-sla-seconds 120   --min-soft-sla-compliance-pct 95   --min-hard-sla-compliance-pct 99   --progress-interval 5   --terminal-timeout 1800   --fault-profile normal   --live-report ~/tmp/gateway-e2e-8h-live.html   --report ~/tmp/gateway-e2e-8h-final.json
 
 
 
@@ -495,6 +569,7 @@ python tools/stress/gateway_e2e_stresser.py \
   --run-time 8h \
   --job-name extract \
   --planner extract \
+  --required-executor extract_executor \
   --submit-concurrency 100 \
   --submit-rate 8 \
   --soft-sla-seconds 30 \
@@ -661,6 +736,7 @@ python tools/stress/gateway_e2e_stresser.py \
   --job-count 250 \
   --job-name gen5_extract \
   --planner extract \
+  --required-executor extract_executor \
   --submit-rate 2 \
   --fault-profile timeout \
   --aimock-admin-url http://localhost:4011 \
@@ -676,6 +752,7 @@ python tools/stress/gateway_e2e_stresser.py \
   --job-count 200 \
   --job-name gen5_extract \
   --planner extract \
+  --required-executor extract_executor \
   --submit-rate 4 \
   --soft-sla-seconds 20 \
   --hard-sla-seconds 60 \
@@ -695,6 +772,7 @@ python tools/stress/gateway_e2e_stresser.py \
   --job-count 300 \
   --job-name gen5_extract \
   --planner extract \
+  --required-executor extract_executor \
   --submit-rate 5 \
   --soft-sla-seconds 15 \
   --hard-sla-seconds 45 \
@@ -723,6 +801,7 @@ python tools/stress/gateway_e2e_stresser.py \
   --job-count 200 \
   --job-name gen5_extract \
   --planner extract \
+  --required-executor extract_executor \
   --submit-rate 4 \
   --soft-sla-seconds 40 \
   --hard-sla-seconds 120 \
@@ -752,6 +831,7 @@ python tools/stress/gateway_e2e_stresser.py \
   --job-count 500 \
   --job-name gen5_extract \
   --planner extract \
+  --required-executor extract_executor \
   --submit-rate 3 \
   --fault-profile chaos \
   --aimock-admin-url http://localhost:4011 \
@@ -767,6 +847,7 @@ python tools/stress/gateway_e2e_stresser.py \
   --job-count 100 \
   --job-name gen5_extract \
   --planner extract \
+  --required-executor extract_executor \
   --submit-rate 2 \
   --report /tmp/gateway-upload-report.html
 ```
@@ -780,6 +861,7 @@ python tools/stress/gateway_e2e_stresser.py \
   --job-count 60 \
   --job-name gen5_extract \
   --planner extract \
+  --required-executor extract_executor \
   --llm-pool-cycle document-small,document-medium,document-large \
   --debug-sample-interval 5
 ```
@@ -799,6 +881,10 @@ python tools/stress/gateway_e2e_stresser.py \
 | `--live-report-format` | Override live report format; default `auto` infers from `.json` or `.html` |
 | `--job-name` | Gateway submit name / scheduler queue name |
 | `--planner` | Planner to place in metadata |
+| `--run-id` / `--seed` | Correlated run identity and optional deterministic-ID seed |
+| `--required-executor` | Required capacity slot; repeat for every executor used by the plan |
+| `--skip-preflight` | Disable the default queue and executor readiness preflight |
+| `--preflight-deadline` / `--preflight-interval` | Bound preflight retry duration and cadence |
 | `--llm-pool-id` | Fixed LLM dispatch pool ID to place in `metadata.pool_id`, for example `document-small` |
 | `--llm-pool-cycle` | Comma-separated LLM dispatch pool IDs to cycle through `metadata.pool_id` by generated job index |
 | `--purge-annotators` | Comma-separated annotator names to purge before annotation, for example `mock-llm` |
@@ -817,6 +903,18 @@ python tools/stress/gateway_e2e_stresser.py \
 | `--submit-concurrency` | Concurrent upload+submit workers |
 | `--submit-rate` | Job submit rate in jobs/sec |
 | `--terminal-timeout` | Max wait for terminal scheduler events |
+| `--min-submission-acceptance-pct` | Minimum accepted submissions before the run fails |
+| `--min-terminal-completion-pct` | Minimum completed percentage among accepted jobs |
+| `--max-event-timeout-jobs` / `--max-open-jobs` | Event-loss and unexplained-open-job limits |
+| `--require-event-order` | Require scheduled, started, then one terminal lifecycle |
+| `--max-duplicate-terminal-events` | Duplicate terminal event limit |
+| `--max-conflicting-terminal-events` | Completed/failed conflict limit |
+| `--job-jsonl` | Append terminal job records to a correlated JSONL stream |
+| `--max-retained-jobs` | Bound terminal job records retained in memory |
+| `--max-metric-samples` / `--max-events-per-job` | Bound latency and per-job event samples |
+| `--verify-correctness` | Run the database verifier after drain and propagate failure |
+| `--correctness-config` / `--correctness-report` | Database verifier input and persistent result path |
+| `--trace-mode` / `--query-budget-report` | Record observer mode and external query-budget deltas |
 | `--request-template` | JSON file containing metadata or a full `invoke_action` template |
 | `--report` | Write the final report as JSON or HTML |
 | `--report-format` | Override final report format; default `auto` infers from `.json` or `.html` |
@@ -990,31 +1088,49 @@ RESULT: EXCELLENT - Gateway performing well under load
 ### 4. `etcd_outage_simulator.py`
 
 Injects ETCD outages by calling `docker pause` / `docker unpause` against a
-running ETCD container such as `etcd-single`.
+running ETCD container. The command requires the exact container name and an
+explicit mutation opt-in. It refuses an initially paused or non-running target.
 
 #### Features
 
 - **Repeatable outage cycles**: Pause/recover ETCD for a fixed number of cycles
-- **Safe cleanup**: Attempts to unpause the container if the script is interrupted
-- **Jitter support**: Add randomness to outage and recovery windows
-- **Dry-run mode**: Validate timing and workflow without touching Docker
+- **Owned cleanup**: Unpause a container paused by this process on success,
+  failure, timeout, or interruption
+- **Seeded jitter**: Reproduce the same outage and recovery schedule
+- **Structured timeline**: Record planned and actual command, state, duration,
+  failure, interruption, and cleanup data as sanitized JSON
+- **Dry-run mode**: Build the schedule without invoking Docker mutation commands
 
 #### Usage
 
 ```bash
-# Single 10 second ETCD outage against the default etcd-single container
-python tools/stress/etcd_outage_simulator.py --pause-seconds 10 --recover-seconds 20
-
-# Three outage cycles with jitter
+# Preview the exact target and seeded schedule without mutating Docker
 python tools/stress/etcd_outage_simulator.py \
+    --container etcd-single \
+    --dry-run \
     --cycles 3 \
+    --seed 4217 \
+    --timeline-json /tmp/etcd-preview.json
+
+# Run one explicitly authorized 10-second outage
+python tools/stress/etcd_outage_simulator.py \
+    --container etcd-single \
+    --allow-container-mutation \
+    --pause-seconds 10 \
+    --recover-seconds 20 \
+    --timeline-json /tmp/etcd-outage.json
+
+# Run three reproducible flap cycles
+python tools/stress/etcd_outage_simulator.py \
+    --container etcd-single \
+    --allow-container-mutation \
+    --cycles 3 \
+    --seed 4217 \
     --pause-seconds 8 \
     --recover-seconds 15 \
     --pause-jitter 2 \
-    --recover-jitter 3
-
-# Preview the outage schedule without running docker commands
-python tools/stress/etcd_outage_simulator.py --dry-run --cycles 2
+    --recover-jitter 3 \
+    --timeline-json /tmp/etcd-flap.json
 ```
 
 #### Typical workflow for reconnect testing
@@ -1024,11 +1140,211 @@ python tools/stress/etcd_outage_simulator.py --dry-run --cycles 2
 python tools/stress/gateway_stresser.py --protocol http --http-port 51000 --duration 120
 
 # Terminal 2: inject ETCD outages
-python tools/stress/etcd_outage_simulator.py --cycles 3 --pause-seconds 10 --recover-seconds 20
+python tools/stress/etcd_outage_simulator.py \
+    --container etcd-single \
+    --allow-container-mutation \
+    --cycles 3 \
+    --pause-seconds 10 \
+    --recover-seconds 20
 
 # Terminal 3: watch logs or ETCD keys
 docker exec etcd-single etcdctl get "/marie/gateway/marie" --prefix=true
 ```
+
+### 5. `scheduler_db_stresser.py`
+
+Builds a deterministic scheduler corpus directly in the real PostgreSQL
+scheduler tables. Use it for persistent 1K, 100K, 1M, and 10M scale checkpoints.
+
+The target is the desired total for one `run_id`, not the number of rows to add.
+Growing a cohort from 1K to 100K therefore adds 99K DAGs. The tool does not
+truncate scheduler tables or provide an automatic cleanup path.
+
+It preserves:
+
+- the configured scheduler testing database between checkpoints
+- queue partition routing through `marie_scheduler.create_queue()`
+- foreign keys and normalized dependencies
+- job and DAG history triggers
+- deterministic UUIDv5 DAG, job, and attempt identities
+- a transactional `marie_stress.run_manifest` high-water mark
+
+Database connection fields come from the JSON config and standard libpq
+environment variables. Keep passwords out of the config and supply them through
+`PGPASSWORD` or the normal secured runtime environment.
+
+```bash
+# Inspect the requested checkpoint without connecting to PostgreSQL
+python tools/stress/scheduler_db_stresser.py plan \
+  --config tools/stress/scheduler-db.config.example.json
+
+# Seed the initial 1K checkpoint
+python tools/stress/scheduler_db_stresser.py seed \
+  --config tools/stress/scheduler-db.config.example.json
+
+# Grow the same run to a total of 100K DAGs
+python tools/stress/scheduler_db_stresser.py seed \
+  --config tools/stress/scheduler-db.config.example.json \
+  --target-dags 100000 \
+  --report /tmp/scheduler-scale-v1-100k.json
+
+# Verify the manifest, row counts, dependencies, attempts, projections, and
+# trigger-generated history
+python tools/stress/scheduler_db_stresser.py verify \
+  --config tools/stress/scheduler-db.config.example.json \
+  --target-dags 100000
+
+# Capture read-only EXPLAIN plans and pg_stat_statements deltas without resetting
+# shared PostgreSQL statistics
+python tools/stress/scheduler_db_stresser.py benchmark \
+  --config tools/stress/scheduler-db.config.example.json \
+  --target-dags 100000 \
+  --report /tmp/scheduler-scale-v1-100k-benchmark.json
+```
+
+Before running a backlog-drain test, add the configured queue to the gateway
+scheduler's monitored `queue_names`. The corpus generator creates the database
+queue and partition; it does not rewrite or restart gateway configuration.
+Keep the scheduler stopped or leave this queue unmonitored while building a
+persistent `ready` corpus, then enable the queue only when the drain measurement
+starts. For `active` profiles, set `active_lease_seconds` long enough for the
+largest checkpoint; the generator refreshes leases that are within one hour of
+expiry when a checkpoint completes.
+
+### 6. `scheduler_correctness.py`
+
+Runs the authoritative, read-only correctness checks for one manifest-backed
+scheduler stress cohort. PostgreSQL evaluates the invariants and only bounded
+failure samples enter Python. An unknown `run_id` is an error; the verifier
+never falls back to a database-wide scan.
+
+Scheduler schema version 71 provides the shared
+`marie_scheduler.scheduler_attempt_invariant_checks(...)` contract used by this
+tool and the HA operator scripts. Apply current scheduler migrations before
+running the verifier against an older testing database.
+
+```bash
+python tools/stress/scheduler_correctness.py \
+  --run-id scheduler-scale-v1 \
+  --config tools/stress/scheduler-db.config.example.json \
+  --sample-limit 50 \
+  --report /tmp/scheduler-scale-v1-correctness.json
+```
+
+To correlate the optional gateway evidence after its settle deadline:
+
+```bash
+python tools/stress/scheduler_correctness.py \
+  --run-id scheduler-scale-v1 \
+  --config tools/stress/scheduler-db.config.example.json \
+  --gateway-report /tmp/gateway-e2e-report.json \
+  --settle-deadline 2026-07-21T22:00:00Z \
+  --report /tmp/scheduler-scale-v1-correctness.json
+```
+
+The command writes JSON to stdout, writes the same payload to `--report` when
+provided, and prints a compact status summary to stderr. It exits `0` on pass,
+`1` when a mandatory check fails or errors, and `2` for configuration,
+connection, or unknown-run failures. Database passwords must come from libpq's
+secured environment, never from the JSON config or report.
+
+### 7. `scheduler_reliability_runner.py`
+
+Runs the scheduler fault matrix. Its `etcd` subcommand produces one joined ETCD
+outage, capacity, dispatch, backlog, and PostgreSQL correctness trial. It starts
+`gateway_e2e_stresser.py` as a child command for non-idle ETCD scenarios and
+invokes `scheduler_correctness.py` after recovery. The runner does not edit
+scheduler rows or restart a healthy scheduler.
+
+Use the same `run_id` in the gateway command, verifier command, and runner. The
+gateway JSON report must include its run identity, accepted and terminal counts,
+and open-job count. Supply dispatch timestamps through the report or its job
+JSONL stream. Normal executor dispatch between zero-capacity detection and
+restoration fails the trial. Scheduler-local control-flow dispatch can be marked
+with `consumes_executor_slot: false` and is reported separately.
+
+Commands are JSON argument arrays, not shell strings. Keep credentials in the
+gateway config and secured environment. If `/api/capacity` requires a bearer
+token, export it under `MARIE_API_KEY` or select another variable with
+`--api-key-env`; the value is never written to the joined report. Use fresh
+gateway, JSONL, and verifier output paths for each run; the runner refuses stale
+artifacts instead of silently mixing trials.
+
+```bash
+python tools/stress/scheduler_reliability_runner.py etcd \
+  --scenario repeated-flapping \
+  --run-id scheduler-scale-v1 \
+  --capacity-url http://localhost:51000/api/capacity \
+  --required-executor extract_executor \
+  --container etcd-single \
+  --allow-container-mutation \
+  --cycles 3 \
+  --seed 4217 \
+  --pause-seconds 10 \
+  --recover-seconds 20 \
+  --gateway-command '["python","tools/stress/gateway_e2e_stresser.py","--config","tools/stress/gateway-e2e.config.json","--s3-uri-manifest","tools/stress/gateway-e2e.s3-uri-manifest.example.txt","--run-time","2m","--job-name","gen5_extract","--planner","extract","--run-id","scheduler-scale-v1","--job-jsonl","/tmp/gateway-etcd-jobs.jsonl","--report","/tmp/gateway-etcd.json"]' \
+  --gateway-report /tmp/gateway-etcd.json \
+  --gateway-job-jsonl /tmp/gateway-etcd-jobs.jsonl \
+  --verifier-command '["python","tools/stress/scheduler_correctness.py","--run-id","scheduler-scale-v1","--config","tools/stress/scheduler-db.config.example.json","--gateway-report","/tmp/gateway-etcd.json","--report","/tmp/correctness-etcd.json"]' \
+  --verifier-report /tmp/correctness-etcd.json \
+  --report /tmp/scheduler-etcd-reliability.json
+```
+
+Run `idle-reconnect` without a gateway command. For
+`ttl-crossing-outage`, supply both TTL values and set `--pause-seconds` longer
+than each. For `gateway-restart-during-outage`, supply a
+`--gateway-restart-command` that uses the deployment's normal supervisor or
+retry policy. The runner refuses repeated flapping without at least three cycles
+and a seed.
+
+Use the 1K cohort for scheduler reliability changes. For nightly 100K trials,
+enable Slice 04's streaming job JSONL output and pass it through
+`--gateway-job-jsonl` so dispatch checks remain complete when the gateway report
+uses bounded retention. Always run a dry-run first; dry-run skips Docker
+mutation, capacity polling, gateway load, and database verification.
+
+### 8. `scheduler_qualification.py`
+
+Expands and evaluates the Slice 07 scale, overload, burst, and endurance
+matrix. It does not start services or inject faults. Use the gateway and
+reliability runners to execute each planned trial, then provide their
+consolidated JSON or JSONL results to the evaluator.
+
+The matrix keeps one `run_id` and database identity across 1K, 100K, 1M, and
+10M checkpoints. Every capacity, overload, burst, and endurance point has a
+matched trace-off and compact-trace trial. Full tracing is intentionally
+excluded from qualification and remains a short diagnostic mode.
+
+```bash
+# Review the full matrix before running external workloads
+python tools/stress/scheduler_qualification.py plan \
+  --config tools/stress/scheduler-qualification.config.example.json \
+  --output /tmp/scheduler-scale-v1-matrix.json
+
+# Evaluate completed trial records and matched trace pairs
+python tools/stress/scheduler_qualification.py evaluate \
+  --config tools/stress/scheduler-qualification.config.example.json \
+  --results /tmp/scheduler-scale-v1-results.jsonl \
+  --output /tmp/scheduler-scale-v1-qualification.json
+```
+
+Each result must copy the planned trial identity and include queue/executor
+preflight, the same-corpus database checkpoint, correctness-verifier result,
+job counts, queue samples, resource samples, post-drain capacity holders, and
+the trace comparison metrics. The evaluator rejects mismatched source,
+configuration, database, workload, duration, or trace identities instead of
+presenting them as a matched pair.
+
+Resource thresholds are empty in the example config because they require a
+reviewed hardware-class baseline. Add a budget only after defining its maximum
+residual growth per hour and, where applicable, the measured per-backlog or
+per-history-row cost. The evaluator removes those declared workload effects
+before classifying growth; it does not guess leak thresholds. An endurance
+trial cannot pass evaluation while `resource_budgets` is empty.
+
+Keep per-window JSONL, PostgreSQL snapshots, traces, and multi-hour samples in
+the external artifact directory. Commit only compact sanitized summaries that
+are intentionally promoted for review.
 
 ---
 

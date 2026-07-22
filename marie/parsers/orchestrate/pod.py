@@ -166,7 +166,7 @@ def mixin_pod_parser(parser, pod_type: str = "worker"):
             help="If set, the Gateway will restart while serving if YAML configuration source is changed.",
         )
     mixin_pod_runtime_args_parser(gp, pod_type=pod_type)
-    mixin_stateful_parser(gp)
+    mixin_stateful_parser(parser)
 
 
 def mixin_pod_runtime_args_parser(arg_group, pod_type="worker"):

@@ -110,3 +110,23 @@ def test_scheduler_trace_compact_writes_scheduler_counters(monkeypatch, tmp_path
     assert row["event"] == "terminal_event_stale_attempt_total"
     assert row["count"] == 1
     assert row["job_id"] == "job-1"
+
+
+def test_scheduler_trace_compact_writes_priority_refresh_completion(
+    monkeypatch, tmp_path
+):
+    trace_path = tmp_path / "scheduler-trace.jsonl"
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_ENABLED", "true")
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PATH", str(trace_path))
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PROFILE", "compact")
+
+    scheduler_trace(
+        "scheduler_priority_refresh_completed",
+        refresh_id=8,
+        elapsed_ms=12.5,
+    )
+
+    row = json.loads(trace_path.read_text().strip())
+    assert row["event"] == "scheduler_priority_refresh_completed"
+    assert row["refresh_id"] == 8
+    assert row["elapsed_ms"] == 12.5

@@ -12,25 +12,33 @@
 -- The script only creates temporary tables. It does not modify persistent
 -- scheduler tables.
 
--- Setup: define the test window and, optionally, the killed gateway/owner.
--- Replace the timestamps with the exact test window for reviewable results.
+-- Setup: define the test window and, optionally, the killed gateway/owner from
+-- current-session marie.ha_* settings. Unset values retain safe defaults.
 DROP TABLE IF EXISTS pg_temp.ha_kill_check_params;
 
 CREATE TEMP TABLE ha_kill_check_params AS
 SELECT
-    now() - INTERVAL '2 hours' AS run_start,
-    now() AS run_end,
-    NULL::text AS killed_gateway_instance_id,
-    NULL::text AS killed_scheduler_lease_owner;
+    COALESCE(
+        NULLIF(current_setting('marie.ha_run_start', TRUE), '')::timestamptz,
+        now() - INTERVAL '2 hours'
+    ) AS run_start,
+    COALESCE(
+        NULLIF(current_setting('marie.ha_run_end', TRUE), '')::timestamptz,
+        now()
+    ) AS run_end,
+    NULLIF(
+        current_setting('marie.ha_killed_gateway_instance_id', TRUE), ''
+    )::text AS killed_gateway_instance_id,
+    NULLIF(
+        current_setting('marie.ha_killed_scheduler_lease_owner', TRUE), ''
+    )::text AS killed_scheduler_lease_owner;
 
 -- Example exact window with known killed gateway:
 --
--- CREATE TEMP TABLE ha_kill_check_params AS
--- SELECT
---     '2026-05-19 10:00:00+00'::timestamptz AS run_start,
---     '2026-05-19 10:10:00+00'::timestamptz AS run_end,
---     'xpredator:gateway-instance-id'::text AS killed_gateway_instance_id,
---     'xpredator:scheduler-lease-owner'::text AS killed_scheduler_lease_owner;
+-- SET marie.ha_run_start = '2026-05-19 10:00:00+00';
+-- SET marie.ha_run_end = '2026-05-19 10:10:00+00';
+-- SET marie.ha_killed_gateway_instance_id = 'xpredator:gateway-instance-id';
+-- SET marie.ha_killed_scheduler_lease_owner = 'xpredator:scheduler-lease-owner';
 
 -- Query: show the effective test window and optional killed owner filters.
 SELECT
@@ -115,86 +123,33 @@ WHERE (
 GROUP BY gateway_instance_id, scheduler_lease_owner
 ORDER BY attempts DESC, gateway_instance_id;
 
--- Query: PASS/FAIL invariant summary. All rows should PASS after the system has
--- settled. Fault tests may intentionally create terminal_rejected rows; those
--- are inspected in detail below, not treated as a failure by themselves.
-WITH checks AS (
+-- Query: PASS/FAIL invariant summary. Common attempt, lease, and terminal
+-- semantics come from the same schema function used by the scheduler stress
+-- verifier. The recovery check below is specific to the kill scenario.
+WITH shared_checks AS (
+    SELECT check_name, bad_rows, expectation
+    FROM marie_scheduler.scheduler_attempt_invariant_checks(
+        NULL,
+        (SELECT run_start FROM ha_kill_check_params),
+        (SELECT run_end FROM ha_kill_check_params),
+        (SELECT run_end FROM ha_kill_check_params),
+        50
+    )
+), kill_specific_checks AS (
     SELECT
-        'active_missing_attempt_identity' AS check_name,
+        'recovered_attempt_still_expired_active' AS check_name,
         COUNT(*) AS bad_rows,
-        'Active jobs must have run_owner, run_attempt_id, and run_lease_expires_at.' AS expectation
-    FROM marie_scheduler.job j
-    WHERE COALESCE(j.started_on, j.created_on) >= (
-            SELECT run_start FROM ha_kill_check_params
-        )
-      AND COALESCE(j.started_on, j.created_on) < (
-            SELECT run_end FROM ha_kill_check_params
-        )
-      AND j.state::text = 'active'
-      AND (
-          j.run_owner IS NULL
-          OR j.run_attempt_id IS NULL
-          OR j.run_lease_expires_at IS NULL
-      )
-
-    UNION ALL
-    SELECT
-        'expired_active_run_leases',
-        COUNT(*),
-        'After run_ttl_seconds plus maintenance buffer, active jobs must not have expired run leases.'
-    FROM marie_scheduler.job j
-    WHERE COALESCE(j.started_on, j.created_on) >= (
-            SELECT run_start FROM ha_kill_check_params
-        )
-      AND COALESCE(j.started_on, j.created_on) < (
-            SELECT run_end FROM ha_kill_check_params
-        )
-      AND j.state::text = 'active'
-      AND j.run_lease_expires_at < now()
-
-    UNION ALL
-    SELECT
-        'dispatched_missing_terminal_or_recovery',
-        COUNT(*),
-        'Every confirmed dispatch must have accepted terminal audit or recovery audit after drain.'
-    FROM ha_kill_attempts a
-    WHERE a.dispatch_confirmed_at IS NOT NULL
-      AND a.terminal_accepted IS DISTINCT FROM TRUE
-      AND a.recovery_state IS NULL
-
-    UNION ALL
-    SELECT
-        'duplicate_accepted_completed_terminal_by_job',
-        COUNT(*),
-        'A job must not accept more than one completed terminal attempt.'
-    FROM (
-        SELECT job_id
-        FROM ha_kill_attempts
-        WHERE terminal_accepted IS TRUE
-          AND terminal_work_state = 'completed'
-        GROUP BY job_id
-        HAVING COUNT(*) > 1
-    ) duplicate_completed
-
-    UNION ALL
-    SELECT
-        'accepted_terminal_missing_terminal_gateway',
-        COUNT(*),
-        'Accepted terminal attempts must record the gateway that handled the terminal event.'
-    FROM ha_kill_attempts
-    WHERE terminal_accepted IS TRUE
-      AND terminal_gateway_instance_id IS NULL
-
-    UNION ALL
-    SELECT
-        'recovered_attempt_still_expired_active',
-        COUNT(*),
         'Recovered attempts must not leave the job in an expired active state.'
+            AS expectation
     FROM ha_kill_attempts a
     JOIN marie_scheduler.job j ON j.id = a.job_id
     WHERE a.recovery_state IS NOT NULL
       AND j.state::text = 'active'
       AND j.run_lease_expires_at < now()
+), checks AS (
+    SELECT check_name, bad_rows, expectation FROM shared_checks
+    UNION ALL
+    SELECT check_name, bad_rows, expectation FROM kill_specific_checks
 )
 SELECT
     check_name,

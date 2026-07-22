@@ -12,7 +12,7 @@ T = TypeVar("T")
 U = TypeVar("U")
 V = TypeVar("V")
 
-EPOCH = datetime.datetime.utcfromtimestamp(0)
+EPOCH = datetime.datetime(1970, 1, 1)
 
 PICKLE_PROTOCOL = 4
 

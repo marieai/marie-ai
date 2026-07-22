@@ -160,7 +160,7 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
     )
     assert "CREATE TABLE IF NOT EXISTS marie_scheduler.job_attempt" in schema_query
     assert "VALUES ('default')" in schema_query
-    assert "VALUES ('70')" in schema_query
+    assert "VALUES ('71')" in schema_query
 
 
 @pytest.mark.asyncio
@@ -557,6 +557,7 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
             True,
             True,
             True,
+            True,
             (
                 "run_attempt_id lease_owner = _run_owner INSERT INTO "
                 "marie_scheduler.job_attempt _gateway_instance_id"
@@ -569,7 +570,9 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
 
     await repository.validate_durable_scheduler_schema()
 
-    _, activation_query, _ = connection.calls[3]
+    _, invariant_query, _ = connection.calls[3]
+    _, activation_query, _ = connection.calls[4]
+    assert "scheduler_attempt_invariant_checks" in invariant_query
     assert "p.pronargs = 4" in activation_query
 
 

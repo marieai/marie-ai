@@ -1,0 +1,242 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "name": "gateway-owner-kill-example",
+      "fault": "gateway-owner-kill",
+      "enabled": false,
+      "unavailable_reason": "Replace the operator helper paths and exact target, then enable this scenario.",
+      "seed": 1701,
+      "run_id": "scheduler-ha-gateway-kill-001",
+      "queue": "0000-0000-0000-0000",
+      "required_executors": [
+        "extract_executor"
+      ],
+      "load_profile": {
+        "name": "one-active-long-running-attempt",
+        "command": {
+          "name": "gateway-workload",
+          "argv": [
+            "/path/to/start-gateway-workload",
+            "--run-id",
+            "{run_id}",
+            "--queue",
+            "{queue}",
+            "--seed",
+            "{seed}"
+          ],
+          "timeout_seconds": 900,
+          "artifacts": [
+            "/tmp/{run_id}-gateway.json"
+          ]
+        }
+      },
+      "preflight": [
+        {
+          "name": "healthy-dispatch-preflight",
+          "command": {
+            "name": "healthy-dispatch-preflight",
+            "argv": [
+              "/path/to/gateway-probe",
+              "healthy",
+              "--queue",
+              "{queue}",
+              "--required-executor",
+              "extract_executor"
+            ],
+            "timeout_seconds": 10
+          },
+          "deadline_seconds": 60,
+          "poll_interval_seconds": 2
+        }
+      ],
+      "active_active": true,
+      "gateway_diagnostics": [
+        {
+          "endpoint": "http://gateway-1:51000",
+          "probe": {
+            "name": "gateway-1-diagnostics",
+            "command": {
+              "name": "gateway-1-diagnostics",
+              "argv": [
+                "/path/to/gateway-probe",
+                "diagnostics",
+                "--endpoint",
+                "http://gateway-1:51000"
+              ],
+              "timeout_seconds": 10
+            },
+            "deadline_seconds": 10
+          }
+        },
+        {
+          "endpoint": "http://gateway-2:51000",
+          "probe": {
+            "name": "gateway-2-diagnostics",
+            "command": {
+              "name": "gateway-2-diagnostics",
+              "argv": [
+                "/path/to/gateway-probe",
+                "diagnostics",
+                "--endpoint",
+                "http://gateway-2:51000"
+              ],
+              "timeout_seconds": 10
+            },
+            "deadline_seconds": 10
+          }
+        }
+      ],
+      "target": {
+        "kind": "container",
+        "value": "marie-gateway-1"
+      },
+      "trigger": {
+        "name": "owned-dispatch-confirmed",
+        "command": {
+          "name": "owned-dispatch-confirmed",
+          "argv": [
+            "/path/to/scheduler-probe",
+            "owned-dispatch-confirmed",
+            "--run-id",
+            "{run_id}",
+            "--owner",
+            "marie-gateway-1"
+          ],
+          "timeout_seconds": 10
+        },
+        "deadline_seconds": 120,
+        "poll_interval_seconds": 2
+      },
+      "injection": {
+        "name": "pause-gateway-owner",
+        "argv": [
+          "docker",
+          "pause",
+          "{target}"
+        ],
+        "timeout_seconds": 15,
+        "artifacts": [
+          "/tmp/{run_id}-gateway-pause.json"
+        ]
+      },
+      "fault_probe": {
+        "name": "gateway-owner-paused",
+        "command": {
+          "name": "gateway-owner-paused",
+          "argv": [
+            "/path/to/container-probe",
+            "paused",
+            "--container",
+            "{target}"
+          ],
+          "timeout_seconds": 5
+        },
+        "deadline_seconds": 15,
+        "poll_interval_seconds": 1
+      },
+      "fault_hold_seconds": 15,
+      "recovery": {
+        "name": "unpause-gateway-owner",
+        "argv": [
+          "docker",
+          "unpause",
+          "{target}"
+        ],
+        "timeout_seconds": 15,
+        "artifacts": [
+          "/tmp/{run_id}-gateway-recovery.json"
+        ]
+      },
+      "recovery_probe": {
+        "name": "surviving-gateway-recovered-work",
+        "command": {
+          "name": "surviving-gateway-recovered-work",
+          "argv": [
+            "/path/to/scheduler-probe",
+            "recovery-observed",
+            "--run-id",
+            "{run_id}",
+            "--endpoint",
+            "http://gateway-2:51000"
+          ],
+          "timeout_seconds": 10
+        },
+        "deadline_seconds": 180,
+        "poll_interval_seconds": 2
+      },
+      "settle": [
+        {
+          "name": "accepted-items-accounted-for",
+          "command": {
+            "name": "accepted-items-accounted-for",
+            "argv": [
+              "/path/to/scheduler-probe",
+              "settled",
+              "--run-id",
+              "{run_id}"
+            ],
+            "timeout_seconds": 15
+          },
+          "deadline_seconds": 300,
+          "poll_interval_seconds": 5
+        }
+      ],
+      "acceptable_outcomes": [
+        "completed_once",
+        "failed_durably_within_retry_policy",
+        "accepted_recovery_audit",
+        "intentionally_pending_with_documented_reason"
+      ],
+      "required_verifier_checks": [
+        "stale_terminal_not_accepted",
+        "duplicate_completed_terminal",
+        "terminal_leases_released",
+        "dispatched_terminal_or_recovery",
+        "post_drain_capacity"
+      ],
+      "verifiers": [
+        {
+          "name": "scheduler-correctness",
+          "command": {
+            "name": "scheduler-correctness",
+            "argv": [
+              "python",
+              "tools/stress/scheduler_correctness.py",
+              "--run-id",
+              "{run_id}",
+              "--gateway-report",
+              "/tmp/{run_id}-gateway.json",
+              "--report",
+              "/tmp/{run_id}-correctness.json"
+            ],
+            "timeout_seconds": 120,
+            "artifacts": [
+              "/tmp/{run_id}-correctness.json"
+            ]
+          },
+          "deadline_seconds": 120,
+          "mandatory": true
+        },
+        {
+          "name": "ha-sql-invariants",
+          "command": {
+            "name": "ha-sql-invariants",
+            "argv": [
+              "/path/to/ha-sql-probe",
+              "config/psql/high-availability/ha_inflight_gateway_kill_invariants.sql",
+              "--run-id",
+              "{run_id}"
+            ],
+            "timeout_seconds": 120,
+            "artifacts": [
+              "/tmp/{run_id}-ha-sql.json"
+            ]
+          },
+          "deadline_seconds": 120,
+          "mandatory": true
+        }
+      ]
+    }
+  ]
+}

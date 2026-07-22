@@ -11,12 +11,13 @@ optimal execution plans under various conditions including:
 
 The tests verify that the GlobalPriorityExecutionPlanner correctly prioritizes jobs according to:
 1. Runnable (has free slots) before blocked
-2. Existing DAGs before new DAGs
-3. Deeper level (critical path) first
-4. Higher user priority
-5. More executor free slots (tie-breaker)
-6. Shorter estimated runtime
-7. FIFO (original input order)
+2. Higher user priority
+3. Higher SLA urgency
+4. Existing DAGs before new DAGs within the same priority tier
+5. Deeper level (critical path) first
+6. More executor free slots (tie-breaker)
+7. Shorter estimated runtime
+8. FIFO (original input order)
 """
 
 import copy
@@ -714,26 +715,37 @@ def test_dag_fairness_existing_vs_new():
     """
     Test fairness between existing and new DAGs.
 
-    Validates that existing DAGs are prioritized to minimize the number of
-    concurrent DAGs in the system (DAG minimization strategy).
+    Validates that existing DAGs are prioritized when higher-ranked signals tie.
     """
     planner = GlobalPriorityExecutionPlanner()
     active_dags = {"active_1", "active_2"}
     slots = {"executor_a": 10}
 
     jobs = [
-        # New DAG with higher priority
-        create_work_info("new_high", "new_dag", job_level=5, priority=1000, endpoint="executor_a://ep"),
-        # Existing DAG with lower priority
-        create_work_info("existing_low", "active_1", job_level=5, priority=100, endpoint="executor_a://ep"),
-        # Existing DAG with even lower priority
-        create_work_info("existing_lower", "active_2", job_level=5, priority=50, endpoint="executor_a://ep"),
+        # All priorities tie so existing/new DAG status decides the order.
+        create_work_info(
+            "new_high", "new_dag", job_level=5, priority=100, endpoint="executor_a://ep"
+        ),
+        create_work_info(
+            "existing_low",
+            "active_1",
+            job_level=5,
+            priority=100,
+            endpoint="executor_a://ep",
+        ),
+        create_work_info(
+            "existing_lower",
+            "active_2",
+            job_level=5,
+            priority=100,
+            endpoint="executor_a://ep",
+        ),
     ]
 
     planned = planner.plan(jobs, slots, active_dags)
     planned_ids = [wi.id for _, wi in planned]
 
-    # Existing DAGs should come first, regardless of priority
+    # Existing DAGs should come first within the tied priority tier.
     assert planned_ids[0] == "existing_low"
     assert planned_ids[1] == "existing_lower"
     assert planned_ids[2] == "new_high"
@@ -835,14 +847,20 @@ def test_massive_job_queue_1000_jobs():
     # Should have many runnable jobs
     assert runnable_count > 0
 
-    # 2. Existing DAGs before new DAGs (among runnable jobs)
-    existing_ended = False
-    for endpoint, wi in planned[:runnable_count]:
-        is_new = wi.dag_id not in active_dags
-        if is_new:
-            existing_ended = True
-        elif existing_ended:
-            assert False, "Existing DAG job found after new DAG job"
+    # 2. Priority descending, then existing DAGs before new DAGs within a tier.
+    runnable_jobs = [wi for _, wi in planned[:runnable_count]]
+    priorities = [wi.priority for wi in runnable_jobs]
+    assert priorities == sorted(priorities, reverse=True)
+
+    for priority in set(priorities):
+        priority_tier = [wi for wi in runnable_jobs if wi.priority == priority]
+        saw_new_dag = False
+        for wi in priority_tier:
+            is_new = wi.dag_id not in active_dags
+            if is_new:
+                saw_new_dag = True
+            elif saw_new_dag:
+                assert False, "Existing DAG job found after new DAG in priority tier"
 
 
 @pytest.mark.slow

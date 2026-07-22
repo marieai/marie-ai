@@ -33,22 +33,28 @@ Run after the workload has drained. Open
 `config/psql/high-availability/ha_scheduler_checks.sql` in your database client
 and run the whole file.
 
-The script defaults to the last 24 hours:
+The script defaults to the last 24 hours. It reads optional current-session
+settings so automation can scope the checked-in SQL without rewriting it:
 
 ```sql
 CREATE TEMP TABLE ha_check_params AS
 SELECT
-    now() - INTERVAL '24 hours' AS run_start,
-    now() AS run_end;
+    COALESCE(
+        NULLIF(current_setting('marie.ha_run_start', TRUE), '')::timestamptz,
+        now() - INTERVAL '24 hours'
+    ) AS run_start,
+    COALESCE(
+        NULLIF(current_setting('marie.ha_run_end', TRUE), '')::timestamptz,
+        now()
+    ) AS run_end;
 ```
 
-For an exact HA run, replace that block with a fixed UTC window:
+For an exact HA run, set a fixed UTC window in the same database session before
+running the file:
 
 ```sql
-CREATE TEMP TABLE ha_check_params AS
-SELECT
-    '2026-05-19 09:45:00+00'::timestamptz AS run_start,
-    '2026-05-19 10:00:00+00'::timestamptz AS run_end;
+SET marie.ha_run_start = '2026-05-19 09:45:00+00';
+SET marie.ha_run_end = '2026-05-19 10:00:00+00';
 ```
 
 Use an explicit window for real HA validation so historical repairs or old
@@ -83,9 +89,10 @@ The post-kill run should happen after:
 run_ttl_seconds + maintenance interval + buffer
 ```
 
-The script defaults to the last 2 hours. For reviewable results, edit its
-`ha_kill_check_params` block to use the exact UTC test window and, optionally,
-the killed `gateway_instance_id` and `scheduler_lease_owner`.
+The script defaults to the last 2 hours. For reviewable results, set
+`marie.ha_run_start`, `marie.ha_run_end`, and optionally
+`marie.ha_killed_gateway_instance_id` and
+`marie.ha_killed_scheduler_lease_owner` in the current session.
 
 Expected post-kill DB invariant results:
 
@@ -123,22 +130,19 @@ This test creates the mismatch directly:
 - The script bypasses `JobInfoStorageClientProxy.put_status()`, so no
   gateway-local job event is published.
 
-The file is guarded. By default:
+The file is guarded. By default, `marie.ha_enable_mutation` is unset and
+therefore false. Mutation also requires an exact job ID:
 
 ```sql
-FALSE::boolean AS enable_mutation
+SET marie.ha_target_job_id = '00000000-0000-0000-0000-000000000000';
+SET marie.ha_enable_mutation = 'true';
 ```
 
-With mutation disabled, it only selects a target and shows the current DB/KV
-state. To run the test, edit the parameter block to:
-
-```sql
-TRUE::boolean AS enable_mutation
-```
-
-Then run the file against one active dispatched job. After the mutation, wait
-one or two scheduler sync cycles, usually 60-120 seconds, and rerun the file
-with `enable_mutation = FALSE` and `target_job_id` set to the same job.
+With mutation disabled, it selects a candidate and shows the current DB/KV
+state. Enabling mutation without `marie.ha_target_job_id` selects no row. After
+the mutation, wait one or two scheduler sync cycles, usually 60-120 seconds,
+then set `marie.ha_enable_mutation = 'false'` and rerun the file with the same
+job ID.
 
 Expected result:
 

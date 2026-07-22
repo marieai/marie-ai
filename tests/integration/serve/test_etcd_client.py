@@ -9,7 +9,9 @@ from marie.serve.discovery.etcd_client import EtcdClient
 # Assuming a fixture `etcd_client` is available in a conftest.py
 @pytest.fixture(scope='function')
 def etcd_client(tmpdir):
-    etcd_client = EtcdClient("localhost", 2379)
+    etcd_client = EtcdClient(
+        "localhost", 2379, namespace=f"marie-test-{uuid.uuid4().hex[:8]}"
+    )
     yield etcd_client
 
 
@@ -102,8 +104,6 @@ def test_delete_prefix(client: EtcdClient):
     assert len(list(client.get_prefix(prefix))) == 0
 
 
-@pytest.mark.xfail(
-    reason="EtcdClient.Txn uses etcd3.transactions comparators with wrong casing; put_if_absent relies on Txn")
 def test_put_if_absent(client: EtcdClient):
     """Test the atomic put_if_absent operation."""
     key = f"test/absent/{uuid.uuid4()}"
@@ -121,8 +121,6 @@ def test_put_if_absent(client: EtcdClient):
     assert val.decode('utf-8') == "first_val"
 
 
-@pytest.mark.xfail(
-    reason="EtcdClient.Txn compares with tx.version/tx.value etc., but etcd3 exposes Version/Value; fix client Txn first")
 def test_transaction(client: EtcdClient):
     """Test a simple transaction using the fluent builder."""
     key = f"test/txn/{uuid.uuid4()}"

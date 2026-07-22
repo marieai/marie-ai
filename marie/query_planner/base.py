@@ -4,7 +4,7 @@ import json
 import os
 import warnings
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Type
@@ -59,11 +59,11 @@ class PlannerMetadata(BaseModel):
         None, description="JSON plan definition (for JSON-based planners)"
     )
     created_at: str = Field(
-        default_factory=lambda: datetime.utcnow().isoformat(),
+        default_factory=lambda: datetime.now(UTC).isoformat(),
         description="Creation timestamp",
     )
     updated_at: str = Field(
-        default_factory=lambda: datetime.utcnow().isoformat(),
+        default_factory=lambda: datetime.now(UTC).isoformat(),
         description="Last update timestamp",
     )
 

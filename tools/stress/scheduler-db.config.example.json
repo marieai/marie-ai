@@ -1,0 +1,22 @@
+{
+  "run_id": "scheduler-scale-v1",
+  "target_dag_count": 1000,
+  "nodes_per_dag": 1,
+  "graph_shape": "single",
+  "workload_profile": "ready",
+  "queue_name": "scheduler_stress_v1",
+  "batch_size": 10000,
+  "seed": 20260721,
+  "projection_mode": "scheduler",
+  "analyze_after_seed": true,
+  "executor": "mock_executor",
+  "endpoint": "/document/extract",
+  "active_lease_seconds": 2592000,
+  "report": "/tmp/scheduler-scale-v1-1k.json",
+  "database": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "dbname": "postgres",
+    "user": "postgres"
+  }
+}

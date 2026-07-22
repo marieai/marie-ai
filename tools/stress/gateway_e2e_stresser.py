@@ -27,6 +27,7 @@ import os
 import re
 import statistics
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -48,17 +49,69 @@ from tools.stress.gateway_e2e_reporting import (
     write_text_atomically,
 )
 
-IMPORT_ERROR: Optional[ImportError] = None
+IMPORT_ERRORS: Dict[str, ImportError] = {}
 try:
     import aiohttp
-    import grpc
-    import pika
+except ImportError as exc:
+    IMPORT_ERRORS["aiohttp"] = exc
 
+try:
+    import grpc
+except ImportError as exc:
+    IMPORT_ERRORS["grpcio"] = exc
+
+try:
+    import pika
+except ImportError as exc:
+    IMPORT_ERRORS["pika"] = exc
+
+try:
     from marie.runtime import Client, Document, DocumentArray
+except ImportError as exc:
+    IMPORT_ERRORS["marie.runtime"] = exc
+
+try:
     from marie.storage import S3StorageHandler, StorageManager
+except ImportError as exc:
+    IMPORT_ERRORS["marie.storage"] = exc
+
+try:
     from marie.utils.asset_util import s3_asset_path
 except ImportError as exc:
-    IMPORT_ERROR = exc
+    IMPORT_ERRORS["marie.utils.asset_util"] = exc
+
+if "StorageManager" not in globals():
+
+    class StorageManager:  # type: ignore[no-redef]
+        @classmethod
+        def register_handler(cls, *, handler: Any) -> None:
+            raise RuntimeError("Marie storage dependencies are unavailable")
+
+        @classmethod
+        def write(cls, source: str, target: str, *, overwrite: bool) -> Any:
+            raise RuntimeError("Marie storage dependencies are unavailable")
+
+
+if "s3_asset_path" not in globals():
+
+    def s3_asset_path(
+        ref_id: str,
+        ref_type: str,
+        include_prefix: bool = False,
+        include_filename: bool = False,
+    ) -> str:
+        if include_prefix and include_filename:
+            raise ValueError("include_prefix and include_filename are exclusive")
+        filename = ref_id.split("/")[-1]
+        prefix = os.path.splitext(filename)[0]
+        safe_ref_type = ref_type.replace("/", "_").lower()
+        bucket = os.environ.get("MARIE_S3_BUCKET", "marie")
+        root = f"s3://{bucket}/{safe_ref_type}/{prefix.lower()}"
+        if include_prefix:
+            return f"{root}/{prefix}"
+        if include_filename:
+            return f"{root}/{filename}"
+        return root
 
 
 logging.basicConfig(
@@ -88,6 +141,13 @@ MARIE_GENERATED_ARTIFACT_DIRS = {
 
 MOCK_FAILURE_MODES = ("exception", "timeout", "random")
 REDACTED_SECRET = "<redacted>"
+PREFLIGHT_FAILURE_REASONS = (
+    "endpoint_unavailable",
+    "queue_missing",
+    "executor_missing",
+    "zero_capacity",
+    "zero_available_capacity",
+)
 
 
 def _parse_duration_seconds(duration_str: str) -> float:
@@ -114,6 +174,112 @@ def _parse_csv_values(raw: Optional[str]) -> List[str]:
         return []
     values = [item.strip() for item in raw.split(",")]
     return [item for item in values if item]
+
+
+class PreflightError(RuntimeError):
+    def __init__(self, reason: str, message: str) -> None:
+        if reason not in PREFLIGHT_FAILURE_REASONS:
+            raise ValueError(f"Unknown preflight failure reason: {reason}")
+        self.reason = reason
+        super().__init__(message)
+
+
+def _sanitize_report_value(value: Any, api_key: Optional[str] = None) -> Any:
+    sensitive_tokens = ("authorization", "api_key", "password", "secret", "token")
+    if isinstance(value, dict):
+        sanitized: Dict[str, Any] = {}
+        for key, item in value.items():
+            if any(token in str(key).lower() for token in sensitive_tokens):
+                sanitized[str(key)] = REDACTED_SECRET
+            else:
+                sanitized[str(key)] = _sanitize_report_value(item, api_key)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_report_value(item, api_key) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_report_value(item, api_key) for item in value]
+    if isinstance(value, str) and api_key:
+        return value.replace(api_key, REDACTED_SECRET)
+    return value
+
+
+def _extract_known_queues(payload: Any) -> List[str]:
+    normalized = _coerce_gateway_debug_payload(payload)
+    if not isinstance(normalized, dict):
+        return []
+    scheduler_info = normalized.get("scheduler_info")
+    if not isinstance(scheduler_info, dict):
+        return []
+    raw_queues = scheduler_info.get("known_queues")
+    if isinstance(raw_queues, dict):
+        return sorted(str(name) for name in raw_queues)
+    if isinstance(raw_queues, (list, tuple, set)):
+        return sorted(str(name) for name in raw_queues)
+    if isinstance(raw_queues, str) and raw_queues.strip():
+        return [raw_queues.strip()]
+    return []
+
+
+def _extract_capacity_slots(payload: Any) -> Dict[str, Dict[str, Any]]:
+    normalized = _coerce_gateway_debug_payload(payload)
+    if not isinstance(normalized, dict):
+        return {}
+    raw_slots = normalized.get("slots")
+    if not isinstance(raw_slots, list):
+        return {}
+
+    slots: Dict[str, Dict[str, Any]] = {}
+    for raw_slot in raw_slots:
+        if not isinstance(raw_slot, dict) or not raw_slot.get("name"):
+            continue
+        name = str(raw_slot["name"])
+        slots[name] = {
+            "name": name,
+            "capacity": _coerce_nonnegative_float(raw_slot.get("capacity")),
+            "available": _coerce_nonnegative_float(raw_slot.get("available")),
+            "target": _coerce_nonnegative_float(raw_slot.get("target")),
+            "used": _coerce_nonnegative_float(raw_slot.get("used")),
+        }
+    return slots
+
+
+def _coerce_nonnegative_float(value: Any) -> float:
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _executor_from_target(value: str) -> Optional[str]:
+    target = value.strip()
+    if not target:
+        return None
+    if "://" in target:
+        return target.split("://", 1)[0].strip() or None
+    return target
+
+
+def _infer_executor_names(metadata: Any) -> List[str]:
+    names: set[str] = set()
+
+    def visit(value: Any, key: Optional[str] = None) -> None:
+        if isinstance(value, dict):
+            for child_key, child_value in value.items():
+                visit(child_value, str(child_key).lower())
+            return
+        if isinstance(value, list):
+            for child in value:
+                visit(child, key)
+            return
+        if key not in {"on", "executor", "executor_name", "target_executor"}:
+            return
+        if isinstance(value, str):
+            name = _executor_from_target(value)
+            if name:
+                names.add(name)
+
+    visit(metadata)
+    return sorted(names)
 
 
 @dataclass(frozen=True)
@@ -480,6 +646,8 @@ class JobRun:
     planner: str
     job_name: str
     fault_profile: str
+    stress_run_id: Optional[str] = None
+    required_executors: List[str] = field(default_factory=list)
     llm_pool_id: Optional[str] = None
     mock_failure_rate: Optional[float] = None
     mock_failure_mode: Optional[str] = None
@@ -504,6 +672,15 @@ class JobRun:
     failed_at: Optional[float] = None
     failure_reason: Optional[str] = None
     raw_events: List[str] = field(default_factory=list)
+    event_order_errors: List[str] = field(default_factory=list)
+    duplicate_terminal_events: int = 0
+    conflicting_terminal_events: int = 0
+    scheduled_event_count: int = 0
+    started_event_count: int = 0
+    completed_event_count: int = 0
+    failed_event_count: int = 0
+    last_event_rank: int = 0
+    job_record_written: bool = False
 
     @property
     def terminal_status(self) -> Optional[str]:
@@ -628,6 +805,12 @@ class E2EMetrics:
     hard_sla_missed_jobs: int = 0
     soft_sla_lateness_ms: List[float] = field(default_factory=list)
     hard_sla_lateness_ms: List[float] = field(default_factory=list)
+    missing_scheduled_events: int = 0
+    missing_started_events: int = 0
+    missing_terminal_events: int = 0
+    event_order_errors: int = 0
+    duplicate_terminal_events: int = 0
+    conflicting_terminal_events: int = 0
 
     @property
     def throughput(self) -> float:
@@ -660,6 +843,7 @@ class DebugSnapshot:
     error: Optional[str] = None
     scheduler_running: Optional[bool] = None
     scheduler_paused: Optional[bool] = None
+    known_queues: Optional[List[str]] = None
     active_dags_count: Optional[int] = None
     max_concurrent_dags: Optional[int] = None
     fetch_counter: Optional[int] = None
@@ -722,6 +906,7 @@ def _build_debug_snapshot(
         scheduler_paused=(
             bool(scheduler_info.get("paused")) if "paused" in scheduler_info else None
         ),
+        known_queues=_extract_known_queues(normalized_payload),
         active_dags_count=(
             int(scheduler_info.get("active_dags_count"))
             if scheduler_info.get("active_dags_count") is not None
@@ -945,6 +1130,29 @@ class GatewayE2EStresser:
         progress_interval: float = 5.0,
         live_report_path: Optional[str] = None,
         live_report_format: str = "auto",
+        run_id: Optional[str] = None,
+        seed: Optional[int] = None,
+        required_executors: Optional[List[str]] = None,
+        preflight_enabled: bool = False,
+        preflight_deadline: float = 30.0,
+        preflight_interval: float = 1.0,
+        min_submission_acceptance_pct: Optional[float] = None,
+        min_terminal_completion_pct: Optional[float] = None,
+        max_event_timeout_jobs: Optional[int] = None,
+        max_open_jobs: Optional[int] = None,
+        require_event_order: bool = False,
+        max_duplicate_terminal_events: Optional[int] = None,
+        max_conflicting_terminal_events: Optional[int] = None,
+        job_jsonl_path: Optional[str] = None,
+        max_retained_jobs: Optional[int] = None,
+        max_metric_samples: Optional[int] = None,
+        max_events_per_job: int = 100,
+        verify_correctness: bool = False,
+        correctness_config_path: Optional[str] = None,
+        correctness_timeout: float = 300.0,
+        correctness_report_path: Optional[str] = None,
+        trace_mode: Optional[str] = None,
+        query_budget_deltas: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.gateway_host = gateway_host
         self.gateway_port = gateway_port
@@ -1008,6 +1216,49 @@ class GatewayE2EStresser:
         self.progress_interval = progress_interval
         self.live_report_path = live_report_path
         self.live_report_format = live_report_format
+        self.run_id = run_id.strip() if run_id and run_id.strip() else None
+        self.seed = seed
+        self._run_namespace = (
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"marie-gateway-stress:{self.run_id}:{self.seed}",
+            )
+            if self.run_id
+            else None
+        )
+        inferred_executors = _infer_executor_names(self.metadata_template)
+        self.required_executors = sorted(
+            {
+                item.strip()
+                for item in [*(required_executors or []), *inferred_executors]
+                if item.strip()
+            }
+        )
+        self.preflight_enabled = preflight_enabled
+        self.preflight_deadline = preflight_deadline
+        self.preflight_interval = preflight_interval
+        self.min_submission_acceptance_pct = min_submission_acceptance_pct
+        self.min_terminal_completion_pct = min_terminal_completion_pct
+        self.max_event_timeout_jobs = max_event_timeout_jobs
+        self.max_open_jobs = max_open_jobs
+        self.require_event_order = require_event_order
+        self.max_duplicate_terminal_events = max_duplicate_terminal_events
+        self.max_conflicting_terminal_events = max_conflicting_terminal_events
+        self.job_jsonl_path = job_jsonl_path
+        self.max_retained_jobs = max_retained_jobs
+        self.max_metric_samples = max_metric_samples
+        self.max_events_per_job = max_events_per_job
+        self.verify_correctness = verify_correctness
+        self.correctness_config_path = correctness_config_path
+        self.correctness_timeout = correctness_timeout
+        self.correctness_report_path = correctness_report_path
+        self.trace_mode = trace_mode or (
+            "enabled"
+            if os.environ.get("MARIE_SCHEDULER_TRACE_ENABLED", "").lower()
+            in {"1", "true", "yes", "on"}
+            else "disabled"
+        )
+        self.query_budget_deltas = query_budget_deltas
         self.requires_upload = any(
             asset.local_path is not None for asset in input_assets
         )
@@ -1047,14 +1298,56 @@ class GatewayE2EStresser:
             )
         if llm_pool_cycle is not None and not self.llm_pool_cycle:
             raise ValueError("--llm-pool-cycle must contain at least one pool ID")
+        if self.preflight_deadline <= 0:
+            raise ValueError("--preflight-deadline must be greater than zero")
+        if self.preflight_interval <= 0:
+            raise ValueError("--preflight-interval must be greater than zero")
+        for value, option in (
+            (self.min_submission_acceptance_pct, "--min-submission-acceptance-pct"),
+            (self.min_terminal_completion_pct, "--min-terminal-completion-pct"),
+        ):
+            if value is not None and not 0.0 <= value <= 100.0:
+                raise ValueError(f"{option} must be between 0 and 100 inclusive")
+        for value, option in (
+            (self.max_event_timeout_jobs, "--max-event-timeout-jobs"),
+            (self.max_open_jobs, "--max-open-jobs"),
+            (
+                self.max_duplicate_terminal_events,
+                "--max-duplicate-terminal-events",
+            ),
+            (
+                self.max_conflicting_terminal_events,
+                "--max-conflicting-terminal-events",
+            ),
+        ):
+            if value is not None and value < 0:
+                raise ValueError(f"{option} must be greater than or equal to zero")
+        if self.max_retained_jobs is not None and self.max_retained_jobs <= 0:
+            raise ValueError("--max-retained-jobs must be greater than zero")
+        if self.max_metric_samples is not None and self.max_metric_samples <= 0:
+            raise ValueError("--max-metric-samples must be greater than zero")
+        if self.max_events_per_job <= 0:
+            raise ValueError("--max-events-per-job must be greater than zero")
+        if self.correctness_timeout <= 0:
+            raise ValueError("--correctness-timeout must be greater than zero")
+        if self.verify_correctness and not self.run_id:
+            raise ValueError("--verify-correctness requires --run-id")
 
-        self.metrics = E2EMetrics(total_jobs=self.job_count or 0)
+        self.metrics = E2EMetrics()
         self._logger = logging.getLogger(self.__class__.__name__)
         self._runs_by_request_id: Dict[str, JobRun] = {}
         self._runs_by_job_id: Dict[str, JobRun] = {}
         self._runs_by_ref_id: Dict[str, JobRun] = {}
         self._debug_samples: List[DebugSnapshot] = []
         self._verification_errors: List[str] = []
+        self._preflight_attempts: List[Dict[str, Any]] = []
+        self._preflight_result: Optional[Dict[str, Any]] = None
+        self._post_drain_capacity: Optional[Dict[str, Any]] = None
+        self._correctness_result: Optional[Dict[str, Any]] = None
+        self._reporting_errors: List[str] = []
+        self._created_job_count = 0
+        self._archived_metrics = E2EMetrics()
+        self._streamed_job_records = 0
         self._state_lock = threading.Lock()
         self._http_session: Optional[aiohttp.ClientSession] = None
         self._event_consumer: Optional[SchedulerEventConsumer] = None
@@ -1193,13 +1486,14 @@ class GatewayE2EStresser:
             latest_debug_sample = (
                 self._debug_samples[-1] if self._debug_samples else None
             )
+            created = self._created_job_count
+            archived = self._archived_metrics
 
-        created = len(runs)
-        submitted = 0
-        completed = 0
-        failed = 0
-        submit_failed = 0
-        event_timeout = 0
+        submitted = archived.submitted_jobs
+        completed = archived.completed_jobs
+        failed = archived.failed_jobs
+        submit_failed = archived.submit_failed_jobs
+        event_timeout = archived.event_timeout_jobs
         pending_submit = 0
 
         for run in runs:
@@ -1226,19 +1520,19 @@ class GatewayE2EStresser:
         )
         completion_pct = ((completed / created) * 100.0) if created > 0 else None
 
-        submit_latency_ms = [
+        submit_latency_ms = list(archived.submit_latencies_ms) + [
             run.submit_latency_ms for run in runs if run.submit_latency_ms is not None
         ]
-        scheduling_ms = [
+        scheduling_ms = list(archived.scheduling_latencies_ms) + [
             run.scheduling_ms for run in runs if run.scheduling_ms is not None
         ]
-        queue_wait_ms = [
+        queue_wait_ms = list(archived.queue_wait_ms) + [
             run.queue_wait_ms for run in runs if run.queue_wait_ms is not None
         ]
-        execution_ms = [
+        execution_ms = list(archived.execution_latencies_ms) + [
             run.execution_ms for run in runs if run.execution_ms is not None
         ]
-        end_to_end_ms = [
+        end_to_end_ms = list(archived.end_to_end_latencies_ms) + [
             run.end_to_end_ms for run in runs if run.end_to_end_ms is not None
         ]
 
@@ -1258,6 +1552,7 @@ class GatewayE2EStresser:
         payload: Dict[str, Any] = {
             "status": status,
             "updated_at": _format_epoch_seconds(now),
+            "run_id": self.run_id,
             "run_mode": self.run_mode,
             "configured_job_count": self.job_count,
             "configured_run_time_seconds": self.run_time_seconds,
@@ -1337,6 +1632,8 @@ class GatewayE2EStresser:
             ),
             "recent_jobs": [
                 {
+                    "stress_run_id": run.stress_run_id,
+                    "logical_index": run.job_index,
                     "job_index": run.job_index,
                     "request_id": run.request_id,
                     "job_id": run.job_id,
@@ -1468,6 +1765,8 @@ class GatewayE2EStresser:
 
             submissions.append(
                 {
+                    "stress_run_id": run.stress_run_id,
+                    "logical_index": run.job_index,
                     "job_index": run.job_index,
                     "request_id": run.request_id,
                     "source_path": run.source_path,
@@ -1503,6 +1802,11 @@ class GatewayE2EStresser:
         return {
             "dry_run": True,
             "generated_at": _format_epoch_seconds(generated_at),
+            "run_identity": {
+                "run_id": self.run_id,
+                "seed": self.seed,
+                "deterministic_ids": self.run_id is not None,
+            },
             "run_mode": self.run_mode,
             "job_count": self.job_count,
             "run_time_seconds": self.run_time_seconds,
@@ -1513,6 +1817,8 @@ class GatewayE2EStresser:
             "endpoint": self.endpoint,
             "planner": self.planner,
             "job_name": self.queue_name,
+            "required_executors": list(self.required_executors),
+            "preflight_enabled": self.preflight_enabled,
             "fault_profile": self.fault_profile,
             "llm_pool_id": self.llm_pool_id,
             "llm_pool_cycle": list(self.llm_pool_cycle),
@@ -1566,7 +1872,10 @@ class GatewayE2EStresser:
             url = f"http://{self.gateway_host}:{self.http_port}/api/debug"
             async with session.get(
                 url,
-                headers={"Accept": "application/json"},
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {self.api_key}",
+                },
                 timeout=aiohttp.ClientTimeout(total=min(self.timeout, 10.0)),
             ) as response:
                 response_text = await response.text()
@@ -1610,6 +1919,230 @@ class GatewayE2EStresser:
             if owns_session:
                 await session.close()
 
+    async def _fetch_gateway_json(self, path: str) -> Tuple[int, Dict[str, Any]]:
+        if self.http_port is None:
+            raise RuntimeError("Gateway HTTP port is unavailable")
+
+        owns_session = False
+        session = self._http_session
+        if session is None:
+            session = aiohttp.ClientSession()
+            owns_session = True
+        try:
+            url = f"http://{self.gateway_host}:{self.http_port}{path}"
+            async with session.get(
+                url,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+                timeout=aiohttp.ClientTimeout(total=min(self.timeout, 10.0)),
+            ) as response:
+                response_text = await response.text()
+                if not 200 <= response.status < 300:
+                    raise RuntimeError(
+                        f"{path} returned HTTP {response.status}: {response_text[:200]}"
+                    )
+                try:
+                    payload = json.loads(response_text)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(f"{path} returned invalid JSON: {exc}") from exc
+                if not isinstance(payload, dict):
+                    raise RuntimeError(f"{path} did not return a JSON object")
+                if payload.get("status") == "error":
+                    raise RuntimeError(
+                        f"{path} returned an error: {payload.get('result')}"
+                    )
+                return response.status, payload
+        finally:
+            if owns_session:
+                await session.close()
+
+    def _interpret_preflight(
+        self,
+        debug_payload: Dict[str, Any],
+        capacity_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        known_queues = _extract_known_queues(debug_payload)
+        slots = _extract_capacity_slots(capacity_payload)
+        interpretation: Dict[str, Any] = {
+            "ready": False,
+            "reason": None,
+            "target_queue": self.queue_name,
+            "known_queues": known_queues,
+            "required_executors": list(self.required_executors),
+            "matched_slots": {},
+            "missing_executors": [],
+            "zero_capacity_executors": [],
+            "zero_available_executors": [],
+        }
+        if self.queue_name not in known_queues:
+            interpretation["reason"] = "queue_missing"
+            return interpretation
+        if not self.required_executors:
+            interpretation["reason"] = "executor_missing"
+            interpretation["missing_executors"] = [
+                "<no executor inferred; use --required-executor>"
+            ]
+            return interpretation
+
+        missing = [name for name in self.required_executors if name not in slots]
+        if missing:
+            interpretation["reason"] = "executor_missing"
+            interpretation["missing_executors"] = missing
+            return interpretation
+
+        matched_slots = {name: slots[name] for name in self.required_executors}
+        interpretation["matched_slots"] = matched_slots
+        zero_capacity = [
+            name
+            for name, slot in matched_slots.items()
+            if float(slot.get("capacity", 0.0)) <= 0.0
+        ]
+        if zero_capacity:
+            interpretation["reason"] = "zero_capacity"
+            interpretation["zero_capacity_executors"] = zero_capacity
+            return interpretation
+
+        zero_available = [
+            name
+            for name, slot in matched_slots.items()
+            if float(slot.get("available", 0.0)) <= 0.0
+        ]
+        if zero_available:
+            interpretation["reason"] = "zero_available_capacity"
+            interpretation["zero_available_executors"] = zero_available
+            return interpretation
+
+        interpretation["ready"] = True
+        return interpretation
+
+    async def _run_preflight(self) -> None:
+        if not self.preflight_enabled:
+            self._preflight_result = {
+                "enabled": False,
+                "passed": None,
+                "reason": "disabled",
+            }
+            return
+
+        deadline = time.monotonic() + self.preflight_deadline
+        attempt_number = 0
+        last_reason = "endpoint_unavailable"
+        last_message = "Preflight endpoints were unavailable"
+        while True:
+            attempt_number += 1
+            attempt: Dict[str, Any] = {
+                "attempt": attempt_number,
+                "captured_at": _format_epoch_seconds(_now()),
+                "debug": None,
+                "capacity": None,
+                "interpretation": None,
+            }
+            try:
+                debug_status, debug_payload = await self._fetch_gateway_json(
+                    "/api/debug"
+                )
+                attempt["debug"] = {
+                    "status_code": debug_status,
+                    "payload": _sanitize_report_value(debug_payload, self.api_key),
+                }
+                capacity_status, capacity_payload = await self._fetch_gateway_json(
+                    "/api/capacity"
+                )
+                attempt["capacity"] = {
+                    "status_code": capacity_status,
+                    "payload": _sanitize_report_value(capacity_payload, self.api_key),
+                }
+                interpretation = self._interpret_preflight(
+                    debug_payload, capacity_payload
+                )
+                attempt["interpretation"] = interpretation
+                last_reason = str(
+                    interpretation.get("reason") or "endpoint_unavailable"
+                )
+                last_message = self._preflight_failure_message(interpretation)
+                if interpretation["ready"]:
+                    self._preflight_attempts.append(attempt)
+                    self._preflight_result = {
+                        "enabled": True,
+                        "passed": True,
+                        "reason": None,
+                        "attempts": attempt_number,
+                        "final": interpretation,
+                    }
+                    return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                last_reason = "endpoint_unavailable"
+                last_message = str(exc)
+                attempt["interpretation"] = {
+                    "ready": False,
+                    "reason": last_reason,
+                    "error": str(exc),
+                }
+
+            self._preflight_attempts.append(attempt)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._preflight_result = {
+                    "enabled": True,
+                    "passed": False,
+                    "reason": last_reason,
+                    "attempts": attempt_number,
+                    "error": last_message,
+                }
+                raise PreflightError(last_reason, last_message)
+            await asyncio.sleep(min(self.preflight_interval, remaining))
+
+    async def _capture_post_drain_capacity(self) -> None:
+        if self.http_port is None:
+            self._post_drain_capacity = {
+                "ok": False,
+                "error": "Gateway HTTP port is unavailable",
+            }
+            return
+        try:
+            status_code, payload = await self._fetch_gateway_json("/api/capacity")
+            normalized = _coerce_gateway_debug_payload(payload)
+            totals = normalized.get("totals") if isinstance(normalized, dict) else None
+            self._post_drain_capacity = {
+                "ok": isinstance(totals, dict),
+                "status_code": status_code,
+                "capacity": int((totals or {}).get("capacity", 0)),
+                "used": int((totals or {}).get("used", 0)),
+                "available": int((totals or {}).get("available", 0)),
+                "holder_count": int((totals or {}).get("holder_count", 0)),
+                "raw": _sanitize_report_value(payload, self.api_key),
+            }
+        except Exception as exc:
+            self._post_drain_capacity = {"ok": False, "error": str(exc)}
+
+    def _preflight_failure_message(self, interpretation: Dict[str, Any]) -> str:
+        reason = interpretation.get("reason")
+        if reason == "queue_missing":
+            return (
+                f"Target queue {self.queue_name!r} is not monitored; known queues: "
+                f"{interpretation.get('known_queues', [])}"
+            )
+        if reason == "executor_missing":
+            return (
+                "Required executor capacity slots are missing: "
+                f"{interpretation.get('missing_executors', [])}"
+            )
+        if reason == "zero_capacity":
+            return (
+                "Required executors have zero configured capacity: "
+                f"{interpretation.get('zero_capacity_executors', [])}"
+            )
+        if reason == "zero_available_capacity":
+            return (
+                "Required executors have no initially available capacity: "
+                f"{interpretation.get('zero_available_executors', [])}"
+            )
+        return "Gateway preflight endpoints are unavailable"
+
     async def _debug_sampler(self) -> None:
         while self.metrics.end_time is None:
             await asyncio.sleep(self.debug_sample_interval)
@@ -1621,6 +2154,7 @@ class GatewayE2EStresser:
         with self._state_lock:
             self._runs_by_request_id[run.request_id] = run
             self._runs_by_ref_id[run.ref_id] = run
+            self._created_job_count += 1
 
     def _mark_submit_result(self, run: JobRun, result: SubmitResult) -> None:
         with self._state_lock:
@@ -1633,6 +2167,9 @@ class GatewayE2EStresser:
             else:
                 run.submit_error_type = result.error_type
                 run.submit_error_message = result.error_message
+            if run.terminal_status is not None:
+                self._stream_job_record_locked(run)
+                self._enforce_retention_locked()
 
     def _log_submit_summary(self, run: JobRun, result: SubmitResult) -> None:
         if result.success:
@@ -1681,19 +2218,147 @@ class GatewayE2EStresser:
                 return
 
             run.raw_events.append(event_name)
-            if event_name.endswith(".scheduled") and run.scheduled_at is None:
-                run.scheduled_at = timestamp
-            elif event_name.endswith(".started") and run.started_at is None:
-                run.started_at = timestamp
-            elif event_name.endswith(".completed") and run.completed_at is None:
-                run.completed_at = timestamp
-            elif event_name.endswith(".failed") and run.failed_at is None:
-                run.failed_at = timestamp
-                run.failure_reason = _extract_failure_error(message)
+            if len(run.raw_events) > self.max_events_per_job:
+                del run.raw_events[0]
+
+            event_rank = 0
+            if event_name.endswith(".scheduled"):
+                event_rank = 1
+                run.scheduled_event_count += 1
+                if run.scheduled_at is None:
+                    run.scheduled_at = timestamp
+            elif event_name.endswith(".started"):
+                event_rank = 2
+                run.started_event_count += 1
+                if run.started_at is None:
+                    run.started_at = timestamp
+            elif event_name.endswith(".completed"):
+                event_rank = 3
+                if run.completed_event_count > 0:
+                    run.duplicate_terminal_events += 1
+                if run.failed_event_count > 0:
+                    run.conflicting_terminal_events += 1
+                run.completed_event_count += 1
+                if run.completed_at is None and run.failed_at is None:
+                    run.completed_at = timestamp
+            elif event_name.endswith(".failed"):
+                event_rank = 3
+                if run.failed_event_count > 0:
+                    run.duplicate_terminal_events += 1
+                if run.completed_event_count > 0:
+                    run.conflicting_terminal_events += 1
+                run.failed_event_count += 1
+                if run.failed_at is None and run.completed_at is None:
+                    run.failed_at = timestamp
+                    run.failure_reason = _extract_failure_error(message)
+
+            if event_rank:
+                if event_rank < run.last_event_rank:
+                    run.event_order_errors.append(
+                        f"{event_name} arrived after rank {run.last_event_rank}"
+                    )
+                elif event_rank == 2 and run.scheduled_event_count == 0:
+                    run.event_order_errors.append(
+                        f"{event_name} arrived before a scheduled event"
+                    )
+                elif event_rank == 3 and run.started_event_count == 0:
+                    run.event_order_errors.append(
+                        f"{event_name} arrived before a started event"
+                    )
+                run.last_event_rank = max(run.last_event_rank, event_rank)
+
+            if event_rank == 3:
+                self._stream_job_record_locked(run)
+                self._enforce_retention_locked()
+
+    def _job_record_payload(self, run: JobRun) -> Dict[str, Any]:
+        return {
+            "stress_run_id": run.stress_run_id,
+            "logical_index": run.job_index,
+            "request_id": run.request_id,
+            "job_id": run.job_id,
+            "ref_id": run.ref_id,
+            "source_path": run.source_path,
+            "input_mode": run.input_mode,
+            "s3_uri": run.s3_uri,
+            "planner": run.planner,
+            "job_name": run.job_name,
+            "required_executors": list(run.required_executors),
+            "fault_profile": run.fault_profile,
+            "terminal_status": run.terminal_status,
+            "scheduled_at": run.scheduled_at,
+            "started_at": run.started_at,
+            "completed_at": run.completed_at,
+            "failed_at": run.failed_at,
+            "submit_latency_ms": run.submit_latency_ms,
+            "scheduling_ms": run.scheduling_ms,
+            "queue_wait_ms": run.queue_wait_ms,
+            "execution_ms": run.execution_ms,
+            "end_to_end_ms": run.end_to_end_ms,
+            "failure_reason": run.failure_reason,
+            "submit_error_type": run.submit_error_type,
+            "submit_error_message": run.submit_error_message,
+            "raw_events": list(run.raw_events),
+            "event_order_errors": list(run.event_order_errors),
+            "duplicate_terminal_events": run.duplicate_terminal_events,
+            "conflicting_terminal_events": run.conflicting_terminal_events,
+            "scheduled_event_count": run.scheduled_event_count,
+            "started_event_count": run.started_event_count,
+            "completed_event_count": run.completed_event_count,
+            "failed_event_count": run.failed_event_count,
+        }
+
+    def _stream_job_record_locked(self, run: JobRun) -> None:
+        if (
+            not self.job_jsonl_path
+            or run.job_record_written
+            or run.submit_finished_at is None
+        ):
+            return
+        try:
+            path = Path(self.job_jsonl_path).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(self._job_record_payload(run), default=str))
+                stream.write("\n")
+            run.job_record_written = True
+            self._streamed_job_records += 1
+        except OSError as exc:
+            error = f"Unable to write job JSONL record: {exc}"
+            if error not in self._reporting_errors:
+                self._reporting_errors.append(error)
+
+    def _enforce_retention_locked(self) -> None:
+        if self.max_retained_jobs is None:
+            return
+        while len(self._runs_by_request_id) > self.max_retained_jobs:
+            evictable = [
+                run
+                for run in self._runs_by_request_id.values()
+                if run.terminal_status is not None
+                and run.submit_finished_at is not None
+            ]
+            if not evictable:
+                return
+            run = min(evictable, key=lambda item: item.job_index)
+            self._accumulate_run(self._archived_metrics, run)
+            self._runs_by_request_id.pop(run.request_id, None)
+            if run.job_id and self._runs_by_job_id.get(run.job_id) is run:
+                self._runs_by_job_id.pop(run.job_id, None)
+            if self._runs_by_ref_id.get(run.ref_id) is run:
+                self._runs_by_ref_id.pop(run.ref_id, None)
 
     def _build_run(self, asset: InputAsset, job_index: int) -> JobRun:
-        request_id = f"job-{job_index}-{uuid.uuid4().hex[:10]}"
-        ref_id = asset.source_name
+        if self._run_namespace is not None:
+            request_token = uuid.uuid5(self._run_namespace, f"request:{job_index}").hex[
+                :16
+            ]
+            request_id = f"stress-{job_index}-{request_token}"
+            safe_run_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", self.run_id or "run")
+            ref_id = f"{safe_run_id}-{job_index:012d}"
+        else:
+            request_id = f"job-{job_index}-{uuid.uuid4().hex[:10]}"
+            ref_id = asset.source_name
         s3_uri = asset.existing_s3_uri or s3_asset_path(
             ref_id=ref_id,
             ref_type=self.ref_type,
@@ -1711,6 +2376,8 @@ class GatewayE2EStresser:
             planner=self.planner,
             job_name=self.queue_name,
             fault_profile=self.fault_profile,
+            stress_run_id=self.run_id,
+            required_executors=list(self.required_executors),
             llm_pool_id=self._resolve_llm_pool_id(job_index),
         )
 
@@ -1776,12 +2443,17 @@ class GatewayE2EStresser:
         return failure_metadata
 
     def _build_metadata(self, run: JobRun, *, sla_anchor_at: float) -> Dict[str, Any]:
+        template_uuid = (
+            uuid.uuid5(self._run_namespace, f"metadata:{run.job_index}").hex
+            if self._run_namespace is not None
+            else uuid.uuid4().hex
+        )
         template_vars = {
             "request_id": run.request_id,
             "job_index": str(run.job_index),
             "timestamp": str(int(sla_anchor_at)),
             "timestamp_ms": str(int(sla_anchor_at * 1000)),
-            "uuid": uuid.uuid4().hex,
+            "uuid": template_uuid,
             "api_key": self.api_key,
             "job_name": self.queue_name,
             "planner": self.planner,
@@ -1806,6 +2478,12 @@ class GatewayE2EStresser:
         metadata["ref_type"] = run.ref_type
         metadata["policy"] = metadata.get("policy", self.policy)
         metadata["stress_fault_profile"] = self.fault_profile
+        if self.run_id:
+            metadata["stress_run_id"] = self.run_id
+            metadata["stress_logical_index"] = run.job_index
+            metadata["stress_planner"] = self.planner
+            metadata["stress_queue"] = self.queue_name
+            metadata["stress_required_executors"] = list(self.required_executors)
         metadata["uri"] = run.s3_uri
         metadata.update(self._build_failure_metadata(run))
         soft_offset, hard_offset = self._resolve_sla_offsets(run)
@@ -2112,75 +2790,224 @@ class GatewayE2EStresser:
             await asyncio.sleep(0.25)
 
         with self._state_lock:
-            for run in self._runs_by_request_id.values():
+            for run in list(self._runs_by_request_id.values()):
                 if run.terminal_status is None:
                     run.failed_at = run.failed_at or _now()
                     if run.failure_reason is None:
                         run.failure_reason = "terminal event timeout"
+                    self._stream_job_record_locked(run)
+            self._enforce_retention_locked()
+
+    def _append_metric_sample(self, values: List[float], value: float) -> None:
+        values.append(value)
+        if self.max_metric_samples is not None:
+            overflow = len(values) - self.max_metric_samples
+            if overflow > 0:
+                del values[:overflow]
+
+    def _accumulate_run(self, metrics: E2EMetrics, run: JobRun) -> None:
+        metrics.total_jobs += 1
+        if run.job_id:
+            metrics.submitted_jobs += 1
+        for value, values in (
+            (run.submit_latency_ms, metrics.submit_latencies_ms),
+            (run.scheduling_ms, metrics.scheduling_latencies_ms),
+            (run.queue_wait_ms, metrics.queue_wait_ms),
+            (run.execution_ms, metrics.execution_latencies_ms),
+            (run.end_to_end_ms, metrics.end_to_end_latencies_ms),
+        ):
+            if value is not None:
+                self._append_metric_sample(values, value)
+
+        status = run.terminal_status
+        if status == "completed":
+            metrics.completed_jobs += 1
+        elif status == "failed":
+            if run.failure_reason == "terminal event timeout":
+                metrics.event_timeout_jobs += 1
+            else:
+                metrics.failed_jobs += 1
+            reason = run.failure_reason or "unknown failure"
+            metrics.failure_reasons[reason] = metrics.failure_reasons.get(reason, 0) + 1
+        elif status == "submit_failed":
+            metrics.submit_failed_jobs += 1
+            reason = run.submit_error_type or "submit failed"
+            metrics.failure_reasons[reason] = metrics.failure_reasons.get(reason, 0) + 1
+
+        if run.job_id:
+            if run.scheduled_event_count == 0:
+                metrics.missing_scheduled_events += 1
+            if run.started_event_count == 0:
+                metrics.missing_started_events += 1
+            if run.completed_event_count + run.failed_event_count == 0:
+                metrics.missing_terminal_events += 1
+        metrics.event_order_errors += len(run.event_order_errors)
+        metrics.duplicate_terminal_events += run.duplicate_terminal_events
+        metrics.conflicting_terminal_events += run.conflicting_terminal_events
+
+        if run.job_id and run.soft_sla_at is not None:
+            metrics.soft_sla_configured_jobs += 1
+            if run.soft_sla_met is True:
+                metrics.soft_sla_met_jobs += 1
+            else:
+                metrics.soft_sla_missed_jobs += 1
+            if run.soft_sla_lateness_ms is not None and run.soft_sla_lateness_ms > 0:
+                self._append_metric_sample(
+                    metrics.soft_sla_lateness_ms, run.soft_sla_lateness_ms
+                )
+
+        if run.job_id and run.hard_sla_at is not None:
+            metrics.hard_sla_configured_jobs += 1
+            if run.hard_sla_met is True:
+                metrics.hard_sla_met_jobs += 1
+            else:
+                metrics.hard_sla_missed_jobs += 1
+            if run.hard_sla_lateness_ms is not None and run.hard_sla_lateness_ms > 0:
+                self._append_metric_sample(
+                    metrics.hard_sla_lateness_ms, run.hard_sla_lateness_ms
+                )
+
+    def _merge_metrics(self, target: E2EMetrics, source: E2EMetrics) -> None:
+        counter_fields = (
+            "total_jobs",
+            "submitted_jobs",
+            "completed_jobs",
+            "failed_jobs",
+            "submit_failed_jobs",
+            "event_timeout_jobs",
+            "soft_sla_configured_jobs",
+            "soft_sla_met_jobs",
+            "soft_sla_missed_jobs",
+            "hard_sla_configured_jobs",
+            "hard_sla_met_jobs",
+            "hard_sla_missed_jobs",
+            "missing_scheduled_events",
+            "missing_started_events",
+            "missing_terminal_events",
+            "event_order_errors",
+            "duplicate_terminal_events",
+            "conflicting_terminal_events",
+        )
+        for name in counter_fields:
+            setattr(target, name, getattr(target, name) + getattr(source, name))
+        for name in (
+            "submit_latencies_ms",
+            "scheduling_latencies_ms",
+            "queue_wait_ms",
+            "execution_latencies_ms",
+            "end_to_end_latencies_ms",
+            "soft_sla_lateness_ms",
+            "hard_sla_lateness_ms",
+        ):
+            for value in getattr(source, name):
+                self._append_metric_sample(getattr(target, name), value)
+        for reason, count in source.failure_reasons.items():
+            target.failure_reasons[reason] = (
+                target.failure_reasons.get(reason, 0) + count
+            )
 
     def _finalize_metrics(self) -> None:
         with self._state_lock:
+            for run in list(self._runs_by_request_id.values()):
+                if run.terminal_status is not None:
+                    self._stream_job_record_locked(run)
+            self._enforce_retention_locked()
             runs = list(self._runs_by_request_id.values())
 
-        metrics = E2EMetrics(total_jobs=len(runs))
+        metrics = E2EMetrics()
         metrics.start_time = self.metrics.start_time
         metrics.end_time = self.metrics.end_time
-
+        self._merge_metrics(metrics, self._archived_metrics)
         for run in runs:
-            if run.job_id:
-                metrics.submitted_jobs += 1
-            if run.submit_latency_ms is not None:
-                metrics.submit_latencies_ms.append(run.submit_latency_ms)
-            if run.scheduling_ms is not None:
-                metrics.scheduling_latencies_ms.append(run.scheduling_ms)
-            if run.queue_wait_ms is not None:
-                metrics.queue_wait_ms.append(run.queue_wait_ms)
-            if run.execution_ms is not None:
-                metrics.execution_latencies_ms.append(run.execution_ms)
-            if run.end_to_end_ms is not None:
-                metrics.end_to_end_latencies_ms.append(run.end_to_end_ms)
-
-            status = run.terminal_status
-            if status == "completed":
-                metrics.completed_jobs += 1
-            elif status == "failed":
-                if run.failure_reason == "terminal event timeout":
-                    metrics.event_timeout_jobs += 1
-                else:
-                    metrics.failed_jobs += 1
-                reason = run.failure_reason or "unknown failure"
-                metrics.failure_reasons[reason] = (
-                    metrics.failure_reasons.get(reason, 0) + 1
-                )
-            elif status == "submit_failed":
-                metrics.submit_failed_jobs += 1
-                reason = run.submit_error_type or "submit failed"
-                metrics.failure_reasons[reason] = (
-                    metrics.failure_reasons.get(reason, 0) + 1
-                )
-
-            if run.job_id and run.soft_sla_at is not None:
-                metrics.soft_sla_configured_jobs += 1
-                if run.soft_sla_met is True:
-                    metrics.soft_sla_met_jobs += 1
-                else:
-                    metrics.soft_sla_missed_jobs += 1
-                lateness_ms = run.soft_sla_lateness_ms
-                if lateness_ms is not None and lateness_ms > 0:
-                    metrics.soft_sla_lateness_ms.append(lateness_ms)
-
-            if run.job_id and run.hard_sla_at is not None:
-                metrics.hard_sla_configured_jobs += 1
-                if run.hard_sla_met is True:
-                    metrics.hard_sla_met_jobs += 1
-                else:
-                    metrics.hard_sla_missed_jobs += 1
-                lateness_ms = run.hard_sla_lateness_ms
-                if lateness_ms is not None and lateness_ms > 0:
-                    metrics.hard_sla_lateness_ms.append(lateness_ms)
+            self._accumulate_run(metrics, run)
+        metrics.total_jobs = self._created_job_count
 
         self.metrics = metrics
-        self._verification_errors = self._evaluate_sla_verification_errors()
+        self._verification_errors = [
+            *self._reporting_errors,
+            *self._evaluate_sla_verification_errors(),
+            *self._evaluate_reliability_verification_errors(runs),
+        ]
+
+    def _evaluate_reliability_verification_errors(
+        self, retained_runs: List[JobRun]
+    ) -> List[str]:
+        errors: List[str] = []
+        submission_pct = (
+            (self.metrics.submitted_jobs / self.metrics.total_jobs) * 100.0
+            if self.metrics.total_jobs > 0
+            else 0.0
+        )
+        terminal_completion_pct = (
+            (self.metrics.completed_jobs / self.metrics.submitted_jobs) * 100.0
+            if self.metrics.submitted_jobs > 0
+            else 0.0
+        )
+        open_jobs = sum(run.terminal_status is None for run in retained_runs)
+        if (
+            self.min_submission_acceptance_pct is not None
+            and submission_pct < self.min_submission_acceptance_pct
+        ):
+            errors.append(
+                f"Submission acceptance {submission_pct:.2f}% is below the required "
+                f"{self.min_submission_acceptance_pct:.2f}%"
+            )
+        if (
+            self.min_terminal_completion_pct is not None
+            and terminal_completion_pct < self.min_terminal_completion_pct
+        ):
+            errors.append(
+                f"Terminal completion {terminal_completion_pct:.2f}% is below the required "
+                f"{self.min_terminal_completion_pct:.2f}%"
+            )
+        if (
+            self.max_event_timeout_jobs is not None
+            and self.metrics.event_timeout_jobs > self.max_event_timeout_jobs
+        ):
+            errors.append(
+                f"Event timeout jobs {self.metrics.event_timeout_jobs} exceed the allowed "
+                f"{self.max_event_timeout_jobs}"
+            )
+        if self.max_open_jobs is not None and open_jobs > self.max_open_jobs:
+            errors.append(
+                f"Open jobs after drain {open_jobs} exceed the allowed {self.max_open_jobs}"
+            )
+        if self.require_event_order:
+            event_validation_failures = (
+                self.metrics.event_order_errors
+                + self.metrics.missing_scheduled_events
+                + self.metrics.missing_started_events
+                + self.metrics.missing_terminal_events
+            )
+            if event_validation_failures:
+                errors.append(
+                    "Event lifecycle validation failed: "
+                    f"order={self.metrics.event_order_errors}, "
+                    f"missing_scheduled={self.metrics.missing_scheduled_events}, "
+                    f"missing_started={self.metrics.missing_started_events}, "
+                    f"missing_terminal={self.metrics.missing_terminal_events}"
+                )
+        if (
+            self.max_duplicate_terminal_events is not None
+            and self.metrics.duplicate_terminal_events
+            > self.max_duplicate_terminal_events
+        ):
+            errors.append(
+                "Duplicate terminal events "
+                f"{self.metrics.duplicate_terminal_events} exceed the allowed "
+                f"{self.max_duplicate_terminal_events}"
+            )
+        if (
+            self.max_conflicting_terminal_events is not None
+            and self.metrics.conflicting_terminal_events
+            > self.max_conflicting_terminal_events
+        ):
+            errors.append(
+                "Conflicting terminal events "
+                f"{self.metrics.conflicting_terminal_events} exceed the allowed "
+                f"{self.max_conflicting_terminal_events}"
+            )
+        return errors
 
     def _evaluate_sla_verification_errors(self) -> List[str]:
         errors: List[str] = []
@@ -2212,7 +3039,110 @@ class GatewayE2EStresser:
                 )
         return errors
 
+    async def _run_correctness_verifier(self) -> None:
+        if not self.verify_correctness:
+            self._correctness_result = {"enabled": False, "passed": None}
+            return
+
+        verifier_path = Path(__file__).with_name("scheduler_correctness.py")
+        with tempfile.TemporaryDirectory(
+            prefix="marie-gateway-correctness-"
+        ) as tmp_dir:
+            gateway_report_path = Path(tmp_dir) / "gateway-report.json"
+            gateway_report_path.write_text(
+                json.dumps(self.build_report_payload(), default=str),
+                encoding="utf-8",
+            )
+            verifier_report_path = (
+                Path(self.correctness_report_path).expanduser()
+                if self.correctness_report_path
+                else Path(tmp_dir) / "correctness-report.json"
+            )
+            command = [
+                sys.executable,
+                str(verifier_path),
+                "--run-id",
+                str(self.run_id),
+                "--gateway-report",
+                str(gateway_report_path),
+                "--report",
+                str(verifier_report_path),
+            ]
+            if self.correctness_config_path:
+                command.extend(["--config", self.correctness_config_path])
+
+            started_at = _now()
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        process.communicate(), timeout=self.correctness_timeout
+                    )
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.communicate()
+                    message = (
+                        "Scheduler correctness verifier timed out after "
+                        f"{self.correctness_timeout:.1f}s"
+                    )
+                    self._correctness_result = {
+                        "enabled": True,
+                        "passed": False,
+                        "status": "timeout",
+                        "duration_seconds": _now() - started_at,
+                        "error": message,
+                    }
+                    self._verification_errors.append(message)
+                    return
+
+                report_payload: Optional[Dict[str, Any]] = None
+                if verifier_report_path.exists():
+                    try:
+                        loaded = json.loads(verifier_report_path.read_text())
+                        if isinstance(loaded, dict):
+                            report_payload = loaded
+                    except (OSError, json.JSONDecodeError):
+                        report_payload = None
+                passed = process.returncode == 0 and bool(
+                    report_payload and report_payload.get("passed") is True
+                )
+                self._correctness_result = {
+                    "enabled": True,
+                    "passed": passed,
+                    "status": "passed" if passed else "failed",
+                    "exit_code": process.returncode,
+                    "duration_seconds": _now() - started_at,
+                    "report_path": (
+                        str(verifier_report_path)
+                        if self.correctness_report_path
+                        else None
+                    ),
+                    "report": report_payload,
+                    "stdout": stdout.decode("utf-8", errors="replace")[-4000:],
+                    "stderr": stderr.decode("utf-8", errors="replace")[-4000:],
+                }
+                if not passed:
+                    self._verification_errors.append(
+                        "Scheduler correctness verifier failed with exit code "
+                        f"{process.returncode}"
+                    )
+            except OSError as exc:
+                message = f"Unable to invoke scheduler correctness verifier: {exc}"
+                self._correctness_result = {
+                    "enabled": True,
+                    "passed": False,
+                    "status": "invocation_error",
+                    "duration_seconds": _now() - started_at,
+                    "error": str(exc),
+                }
+                self._verification_errors.append(message)
+
     async def run(self) -> E2EMetrics:
+        await self._run_preflight()
         self._setup_storage()
         self._start_event_consumer()
         await self._apply_aimock_fault_profile()
@@ -2277,12 +3207,15 @@ class GatewayE2EStresser:
                 await asyncio.gather(debug_sampler, return_exceptions=True)
             if self.debug_sample_interval > 0:
                 await self._capture_debug_snapshot("end")
+            if self.preflight_enabled or self.verify_correctness:
+                await self._capture_post_drain_capacity()
             if self._http_session is not None:
                 await self._http_session.close()
                 self._http_session = None
             self._stop_event_consumer()
 
         self._finalize_metrics()
+        await self._run_correctness_verifier()
         if self.live_report_path:
             await asyncio.to_thread(
                 self._write_live_report_payload,
@@ -2456,8 +3389,28 @@ class GatewayE2EStresser:
             if self.metrics.start_time is not None and self.metrics.end_time is not None
             else None
         )
+        submission_acceptance_pct = (
+            (self.metrics.submitted_jobs / self.metrics.total_jobs) * 100.0
+            if self.metrics.total_jobs > 0
+            else 0.0
+        )
+        terminal_completion_pct = (
+            (self.metrics.completed_jobs / self.metrics.submitted_jobs) * 100.0
+            if self.metrics.submitted_jobs > 0
+            else 0.0
+        )
+        open_jobs = sum(run.terminal_status is None for run in runs)
+        reliability_errors = self._evaluate_reliability_verification_errors(runs)
 
         return {
+            "run_identity": {
+                "run_id": self.run_id,
+                "seed": self.seed,
+                "deterministic_ids": self.run_id is not None,
+                "planner": self.planner,
+                "queue": self.queue_name,
+                "required_executors": list(self.required_executors),
+            },
             "summary": {
                 "report_generated_at": _format_epoch_seconds(_now()),
                 "start_time": (
@@ -2506,6 +3459,8 @@ class GatewayE2EStresser:
                 "sla_step_every_jobs": self.sla_step_every_jobs,
                 "sla_step_cycle": self.sla_step_cycle,
                 "debug_sample_count": len(debug_sample_payload),
+                "retained_job_records": len(runs),
+                "streamed_job_records": self._streamed_job_records,
             },
             "latencies_ms": {
                 "submit": self.metrics.submit_latencies_ms,
@@ -2549,9 +3504,57 @@ class GatewayE2EStresser:
                 "sla_step_cycle": self.sla_step_cycle,
                 "min_soft_sla_compliance_pct": self.min_soft_sla_compliance_pct,
                 "min_hard_sla_compliance_pct": self.min_hard_sla_compliance_pct,
+                "passed": not self._evaluate_sla_verification_errors(),
+                "errors": self._evaluate_sla_verification_errors(),
+            },
+            "verification": {
                 "passed": not self._verification_errors,
                 "errors": self.verification_errors,
             },
+            "preflight": {
+                "result": self._preflight_result,
+                "attempts": list(self._preflight_attempts),
+            },
+            "reliability": {
+                "passed": not reliability_errors,
+                "errors": reliability_errors,
+                "gates": {
+                    "min_submission_acceptance_pct": self.min_submission_acceptance_pct,
+                    "min_terminal_completion_pct": self.min_terminal_completion_pct,
+                    "max_event_timeout_jobs": self.max_event_timeout_jobs,
+                    "max_open_jobs": self.max_open_jobs,
+                    "require_event_order": self.require_event_order,
+                    "max_duplicate_terminal_events": self.max_duplicate_terminal_events,
+                    "max_conflicting_terminal_events": self.max_conflicting_terminal_events,
+                },
+                "observed": {
+                    "submission_acceptance_pct": submission_acceptance_pct,
+                    "terminal_completion_pct": terminal_completion_pct,
+                    "event_timeout_jobs": self.metrics.event_timeout_jobs,
+                    "open_jobs": open_jobs,
+                },
+            },
+            "event_validation": {
+                "missing_scheduled_events": self.metrics.missing_scheduled_events,
+                "missing_started_events": self.metrics.missing_started_events,
+                "missing_terminal_events": self.metrics.missing_terminal_events,
+                "event_order_errors": self.metrics.event_order_errors,
+                "duplicate_terminal_events": self.metrics.duplicate_terminal_events,
+                "conflicting_terminal_events": self.metrics.conflicting_terminal_events,
+            },
+            "correctness_verifier": self._correctness_result,
+            "trace_mode": self.trace_mode,
+            "query_budget_deltas": self.query_budget_deltas,
+            "job_record_stream": {
+                "path": self.job_jsonl_path,
+                "records_written": self._streamed_job_records,
+                "max_retained_jobs": self.max_retained_jobs,
+                "max_metric_samples": self.max_metric_samples,
+                "max_events_per_job": self.max_events_per_job,
+                "retained_jobs": len(runs),
+                "truncated": self.metrics.total_jobs > len(runs),
+            },
+            "post_drain_capacity": self._post_drain_capacity,
             "sla": self._build_sla_payload(runs, now=report_now),
             "debug_sampling": {
                 "enabled": self.debug_sample_interval > 0,
@@ -2560,6 +3563,8 @@ class GatewayE2EStresser:
             },
             "jobs": [
                 {
+                    "stress_run_id": run.stress_run_id,
+                    "logical_index": run.job_index,
                     "request_id": run.request_id,
                     "job_index": run.job_index,
                     "job_id": run.job_id,
@@ -2568,6 +3573,8 @@ class GatewayE2EStresser:
                     "s3_uri": run.s3_uri,
                     "planner": run.planner,
                     "job_name": run.job_name,
+                    "ref_id": run.ref_id,
+                    "required_executors": list(run.required_executors),
                     "fault_profile": run.fault_profile,
                     "mock_failure_rate": run.mock_failure_rate,
                     "mock_failure_mode": run.mock_failure_mode,
@@ -2601,6 +3608,13 @@ class GatewayE2EStresser:
                     "submit_error_type": run.submit_error_type,
                     "submit_error_message": run.submit_error_message,
                     "raw_events": run.raw_events,
+                    "event_order_errors": run.event_order_errors,
+                    "duplicate_terminal_events": run.duplicate_terminal_events,
+                    "conflicting_terminal_events": run.conflicting_terminal_events,
+                    "scheduled_event_count": run.scheduled_event_count,
+                    "started_event_count": run.started_event_count,
+                    "completed_event_count": run.completed_event_count,
+                    "failed_event_count": run.failed_event_count,
                 }
                 for run in runs
             ],
@@ -2628,6 +3642,7 @@ Examples:
       --job-count 50 \\
       --job-name gen5_extract \\
       --planner extract \\
+      --required-executor extract_executor \\
       --soft-sla-seconds 30 \\
       --hard-sla-seconds 90 \\
       --soft-sla-step-seconds 10 \\
@@ -2644,6 +3659,7 @@ Examples:
       --run-time 1h \\
       --job-name gen5_extract \\
       --planner extract \\
+      --required-executor extract_executor \\
       --submit-rate 10 \\
       --live-report /tmp/gateway-e2e-live.html
 
@@ -2653,6 +3669,7 @@ Examples:
       --job-count 10 \\
       --job-name gen5_extract \\
       --planner extract \\
+      --required-executor extract_executor \\
       --fault-profile chaos \\
       --aimock-admin-url http://localhost:4011
 
@@ -2662,6 +3679,14 @@ Examples:
       --job-count 50 \\
       --job-name mock_parallel_subgraphs \\
       --planner mock_parallel_subgraphs \\
+      --required-executor mock_executor_a \\
+      --required-executor mock_executor_b \\
+      --required-executor mock_executor_c \\
+      --required-executor mock_executor_d \\
+      --required-executor mock_executor_e \\
+      --required-executor mock_executor_f \\
+      --required-executor mock_executor_g \\
+      --required-executor mock_executor_h \\
       --mock-failure-rate 0.10 \\
       --mock-failure-mode exception \\
       --force-failure-every 5
@@ -2671,7 +3696,8 @@ Examples:
       --input-dir /mnt/data/marie-ai/generators \\
       --job-count 25 \\
       --job-name gen5_extract \\
-      --planner extract
+      --planner extract \\
+      --required-executor extract_executor
         """,
     )
 
@@ -2700,6 +3726,17 @@ Examples:
         help="Gateway endpoint (default: /api/v1/invoke)",
     )
     parser.add_argument("--api-key", default=None, help="Gateway API key override")
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Stress run identifier; generated automatically when omitted",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Optional seed included in deterministic request and template IDs",
+    )
 
     input_group = parser.add_mutually_exclusive_group(required=False)
     input_group.add_argument(
@@ -2866,6 +3903,32 @@ Examples:
         default=None,
         help="Comma-separated annotator names to purge before annotation, for example mock-llm",
     )
+    parser.add_argument(
+        "--required-executor",
+        action="append",
+        default=None,
+        help=(
+            "Executor capacity slot required by preflight; repeat for multiple "
+            "executors. Values are also inferred from metadata 'on' targets."
+        ),
+    )
+    parser.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        help="Skip /api/debug and /api/capacity dispatch-readiness checks",
+    )
+    parser.add_argument(
+        "--preflight-deadline",
+        type=float,
+        default=30.0,
+        help="Maximum seconds to retry dispatch-readiness preflight",
+    )
+    parser.add_argument(
+        "--preflight-interval",
+        type=float,
+        default=1.0,
+        help="Seconds between dispatch-readiness preflight attempts",
+    )
 
     parser.add_argument(
         "--submit-concurrency",
@@ -2884,6 +3947,106 @@ Examples:
         type=float,
         default=900.0,
         help="How long to wait for completion/failed events after submissions finish",
+    )
+    parser.add_argument(
+        "--min-submission-acceptance-pct",
+        type=float,
+        default=None,
+        help="Fail when accepted submissions fall below this percentage",
+    )
+    parser.add_argument(
+        "--min-terminal-completion-pct",
+        type=float,
+        default=None,
+        help="Fail when completed jobs fall below this percentage of accepted jobs",
+    )
+    parser.add_argument(
+        "--max-event-timeout-jobs",
+        type=int,
+        default=None,
+        help="Fail when terminal event timeouts exceed this count",
+    )
+    parser.add_argument(
+        "--max-open-jobs",
+        type=int,
+        default=None,
+        help="Fail when unexplained open jobs after drain exceed this count",
+    )
+    parser.add_argument(
+        "--require-event-order",
+        action="store_true",
+        help="Require scheduled, started, and terminal events in lifecycle order",
+    )
+    parser.add_argument(
+        "--max-duplicate-terminal-events",
+        type=int,
+        default=None,
+        help="Fail when duplicate terminal events exceed this count",
+    )
+    parser.add_argument(
+        "--max-conflicting-terminal-events",
+        type=int,
+        default=None,
+        help="Fail when completed/failed event conflicts exceed this count",
+    )
+    parser.add_argument(
+        "--job-jsonl",
+        type=str,
+        default=None,
+        help="Optional append-only JSONL path for terminal job records",
+    )
+    parser.add_argument(
+        "--max-retained-jobs",
+        type=int,
+        default=None,
+        help="Maximum terminal job records retained in memory",
+    )
+    parser.add_argument(
+        "--max-metric-samples",
+        type=int,
+        default=None,
+        help="Maximum samples retained for each latency distribution",
+    )
+    parser.add_argument(
+        "--max-events-per-job",
+        type=int,
+        default=100,
+        help="Maximum recent event names retained per in-memory job",
+    )
+    parser.add_argument(
+        "--verify-correctness",
+        action="store_true",
+        help="Run scheduler_correctness.py after drain and fail on its result",
+    )
+    parser.add_argument(
+        "--correctness-config",
+        type=str,
+        default=None,
+        help="Database config passed to scheduler_correctness.py (default: --config)",
+    )
+    parser.add_argument(
+        "--correctness-timeout",
+        type=float,
+        default=300.0,
+        help="Maximum seconds allowed for the post-run correctness verifier",
+    )
+    parser.add_argument(
+        "--correctness-report",
+        type=str,
+        default=None,
+        help="Optional persistent JSON output path for scheduler_correctness.py",
+    )
+    parser.add_argument(
+        "--trace-mode",
+        type=str,
+        default=None,
+        help="Trace profile label recorded in the report (defaults from trace env)",
+    )
+    parser.add_argument(
+        "--query-budget-report",
+        type=str,
+        default=None,
+        help="Optional JSON file containing query-budget deltas to embed",
     )
     parser.add_argument(
         "--batch-size", type=int, default=1, help="Dummy documents per submit request"
@@ -2995,6 +4158,38 @@ Examples:
         parser.error("--progress-interval must be greater than zero")
     if args.dry_run_preview_count <= 0:
         parser.error("--dry-run-preview-count must be greater than zero")
+    if args.preflight_deadline <= 0:
+        parser.error("--preflight-deadline must be greater than zero")
+    if args.preflight_interval <= 0:
+        parser.error("--preflight-interval must be greater than zero")
+    if args.correctness_timeout <= 0:
+        parser.error("--correctness-timeout must be greater than zero")
+    if args.max_retained_jobs is not None and args.max_retained_jobs <= 0:
+        parser.error("--max-retained-jobs must be greater than zero")
+    if args.max_metric_samples is not None and args.max_metric_samples <= 0:
+        parser.error("--max-metric-samples must be greater than zero")
+    if args.max_events_per_job <= 0:
+        parser.error("--max-events-per-job must be greater than zero")
+    for value, option in (
+        (args.min_submission_acceptance_pct, "--min-submission-acceptance-pct"),
+        (args.min_terminal_completion_pct, "--min-terminal-completion-pct"),
+    ):
+        if value is not None and not 0.0 <= value <= 100.0:
+            parser.error(f"{option} must be between 0 and 100 inclusive")
+    for value, option in (
+        (args.max_event_timeout_jobs, "--max-event-timeout-jobs"),
+        (args.max_open_jobs, "--max-open-jobs"),
+        (
+            args.max_duplicate_terminal_events,
+            "--max-duplicate-terminal-events",
+        ),
+        (
+            args.max_conflicting_terminal_events,
+            "--max-conflicting-terminal-events",
+        ),
+    ):
+        if value is not None and value < 0:
+            parser.error(f"{option} must be greater than or equal to zero")
     if args.mock_failure_rate is not None and not (
         0.0 <= args.mock_failure_rate <= 1.0
     ):
@@ -3116,15 +4311,14 @@ def _resolve_runtime_config(
 
 
 async def main() -> None:
-    if IMPORT_ERROR is not None:
-        raise SystemExit(
-            f"Error importing dependencies: {IMPORT_ERROR}\n"
-            "Make sure marie, aiohttp, grpcio, and pika are installed."
-        )
-
     args = parse_args()
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+    run_id = args.run_id or (
+        "gateway-"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-"
+        f"{uuid.uuid4().hex[:8]}"
+    )
     run_time_seconds = (
         _parse_duration_seconds(args.run_time) if args.run_time is not None else None
     )
@@ -3162,6 +4356,33 @@ async def main() -> None:
     )
     if not input_assets:
         raise ValueError("No inputs resolved for stress run")
+    missing_dependencies: List[str] = []
+    if (
+        protocol == "http"
+        or not args.skip_preflight
+        or args.debug_sample_interval > 0
+        or args.aimock_admin_url
+    ) and "aiohttp" not in globals():
+        missing_dependencies.append("aiohttp")
+    if protocol == "grpc" and ("grpc" not in globals() or "Client" not in globals()):
+        missing_dependencies.extend(["grpcio", "marie.runtime"])
+    if queue_config is not None and "pika" not in globals():
+        missing_dependencies.append("pika")
+    if any(asset.local_path is not None for asset in input_assets) and (
+        "S3StorageHandler" not in globals() or "marie.storage" in IMPORT_ERRORS
+    ):
+        missing_dependencies.append("marie.storage")
+    if missing_dependencies:
+        unique_dependencies = sorted(set(missing_dependencies))
+        details = "; ".join(
+            f"{name}: {IMPORT_ERRORS[name]}"
+            for name in unique_dependencies
+            if name in IMPORT_ERRORS
+        )
+        raise SystemExit(
+            "Missing dependencies required by this run: "
+            f"{', '.join(unique_dependencies)}" + (f" ({details})" if details else "")
+        )
     if (
         any(asset.local_path is not None for asset in input_assets)
         and not s3_config
@@ -3175,6 +4396,10 @@ async def main() -> None:
         logger.warning(
             "No queue configuration found in config. End-to-end event metrics will be incomplete."
         )
+
+    query_budget_deltas = None
+    if args.query_budget_report:
+        query_budget_deltas = _load_json(args.query_budget_report)
 
     stresser = GatewayE2EStresser(
         gateway_host=gateway_host,
@@ -3222,6 +4447,29 @@ async def main() -> None:
         live_report_format=args.live_report_format,
         debug_sample_interval=args.debug_sample_interval,
         dry_run_preview_count=args.dry_run_preview_count,
+        run_id=run_id,
+        seed=args.seed,
+        required_executors=args.required_executor,
+        preflight_enabled=not args.skip_preflight,
+        preflight_deadline=args.preflight_deadline,
+        preflight_interval=args.preflight_interval,
+        min_submission_acceptance_pct=args.min_submission_acceptance_pct,
+        min_terminal_completion_pct=args.min_terminal_completion_pct,
+        max_event_timeout_jobs=args.max_event_timeout_jobs,
+        max_open_jobs=args.max_open_jobs,
+        require_event_order=args.require_event_order,
+        max_duplicate_terminal_events=args.max_duplicate_terminal_events,
+        max_conflicting_terminal_events=args.max_conflicting_terminal_events,
+        job_jsonl_path=args.job_jsonl,
+        max_retained_jobs=args.max_retained_jobs,
+        max_metric_samples=args.max_metric_samples,
+        max_events_per_job=args.max_events_per_job,
+        verify_correctness=args.verify_correctness,
+        correctness_config_path=args.correctness_config or args.config,
+        correctness_timeout=args.correctness_timeout,
+        correctness_report_path=args.correctness_report,
+        trace_mode=args.trace_mode,
+        query_budget_deltas=query_budget_deltas,
     )
 
     if args.dry_run:
@@ -3235,7 +4483,12 @@ async def main() -> None:
             logger.info("Wrote dry-run %s report to %s", resolved_format, args.report)
         return
 
-    await stresser.run()
+    try:
+        await stresser.run()
+    except PreflightError as exc:
+        if args.report:
+            stresser.write_report(args.report, args.report_format)
+        raise SystemExit(f"Gateway preflight failed [{exc.reason}]: {exc}") from exc
     stresser.print_report()
     if args.report:
         resolved_format = resolve_report_format(args.report, args.report_format)

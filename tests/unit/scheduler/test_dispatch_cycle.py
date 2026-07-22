@@ -127,6 +127,101 @@ async def test_dispatch_cycle_plans_leases_activates_and_dispatches_once(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_cycle_reconciles_partial_database_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = build_scheduler()
+    leased = SimpleNamespace(
+        id="job-leased",
+        dag_id="dag-1",
+        name="extract",
+        data={"metadata": {"on": "extract://default"}},
+        state=WorkState.CREATED,
+    )
+    missing = SimpleNamespace(
+        id="job-missing",
+        dag_id="dag-1",
+        name="extract",
+        data={"metadata": {"on": "extract://default"}},
+        state=WorkState.CREATED,
+    )
+    selected = [leased, missing]
+    scheduler.active_dags[leased.dag_id] = object()
+    scheduler.frontier.peek_ready.return_value = selected
+    scheduler.frontier.take.return_value = selected
+    scheduler.execution_planner.plan.return_value = [
+        ("extract://default", leased),
+        ("extract://default", missing),
+    ]
+    scheduler._lease_jobs_db.return_value = {leased.id}
+    scheduler._reconcile_db_lease_shortfall.return_value = 1
+    scheduler._reserve_semaphore_slots.return_value = {leased.id}
+    scheduler._activate_from_lease_db.return_value = {leased.id: "attempt-1"}
+    monkeypatch.setattr(
+        scheduler_psql,
+        "available_slots_by_executor",
+        lambda _sem: {"extract": 2},
+    )
+    monkeypatch.setattr(scheduler_psql, "debug_candidates_and_plan", AsyncMock())
+
+    result = await scheduler.run_dispatch_cycle(cycle_index=1)
+
+    assert result == DispatchCycleResult(scheduled=True)
+    scheduler._lease_jobs_db.assert_awaited_once_with(
+        "extract", [leased.id, missing.id]
+    )
+    scheduler._reconcile_db_lease_shortfall.assert_awaited_once_with(
+        selected, {leased.id}
+    )
+    scheduler._reserve_semaphore_slots.assert_awaited_once_with("extract", [leased])
+    scheduler._activate_from_lease_db.assert_awaited_once_with([leased.id])
+    scheduler._activate_and_enqueue_job.assert_awaited_once_with(
+        leased,
+        run_owner="scheduler-1",
+        run_attempt_id="attempt-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_cycle_releases_resources_when_database_activation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = build_scheduler()
+    work_item = SimpleNamespace(
+        id="job-1",
+        dag_id="dag-1",
+        name="extract",
+        data={"metadata": {"on": "extract://default"}},
+        state=WorkState.CREATED,
+    )
+    scheduler.active_dags[work_item.dag_id] = object()
+    scheduler.frontier.peek_ready.return_value = [work_item]
+    scheduler.frontier.take.return_value = [work_item]
+    scheduler.execution_planner.plan.return_value = [("extract://default", work_item)]
+    scheduler._lease_jobs_db.return_value = {work_item.id}
+    scheduler._reserve_semaphore_slots.return_value = {work_item.id}
+    scheduler._activate_from_lease_db.side_effect = RuntimeError("activation failed")
+    monkeypatch.setattr(
+        scheduler_psql,
+        "available_slots_by_executor",
+        lambda _sem: {"extract": 1},
+    )
+    monkeypatch.setattr(scheduler_psql, "debug_candidates_and_plan", AsyncMock())
+
+    result = await scheduler.run_dispatch_cycle(cycle_index=1)
+
+    assert result == DispatchCycleResult(scheduled=False)
+    scheduler._release_lease_db.assert_awaited_once_with([work_item.id])
+    scheduler.frontier.release_lease_local.assert_awaited_once_with(work_item.id)
+    scheduler._semaphore_store.release_owned.assert_called_once_with(
+        "extract", work_item.id, owner=work_item.id
+    )
+    scheduler._activate_and_enqueue_job.assert_not_awaited()
+    scheduler._handle_dispatch_failure.assert_not_awaited()
+    scheduler.notify_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_dispatch_cycle_preserves_control_flow_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

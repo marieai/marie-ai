@@ -20,8 +20,9 @@
       <env name="LLM_QUEUE_VALKEY_URL" value="redis://localhost:6379/0" />
     </envs>
     <option name="SDK_HOME" value="" />
+    <option name="SDK_NAME" value="Python 3.12 (marie-ai)" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/" />
-    <option name="IS_MODULE_SDK" value="true" />
+    <option name="IS_MODULE_SDK" value="false" />
     <option name="ADD_CONTENT_ROOTS" value="false" />
     <option name="ADD_SOURCE_ROOTS" value="false" />
     <option name="DEBUG_JUST_MY_CODE" value="true" />

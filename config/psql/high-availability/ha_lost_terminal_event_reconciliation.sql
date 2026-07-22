@@ -24,26 +24,38 @@
 -- For the first run, leave target_job_id NULL and enable_mutation FALSE. The
 -- script will show the latest active dispatched job that can be used.
 --
--- To inject the mismatch, set enable_mutation TRUE and optionally paste a
--- specific target_job_id. If target_job_id stays NULL, the latest active
--- dispatched job is selected.
+-- To inject the mismatch, set marie.ha_enable_mutation TRUE and set the exact
+-- marie.ha_target_job_id. Mutation with no exact target selects no row.
 DROP TABLE IF EXISTS pg_temp.ha_lost_event_params;
 
 CREATE TEMP TABLE ha_lost_event_params AS
 SELECT
-    NULL::uuid AS target_job_id,
-    TRUE::boolean AS enable_mutation,
-    INTERVAL '5 minutes' AS extend_run_lease_by,
-    INTERVAL '10 minutes' AS synthetic_terminal_age;
+    NULLIF(
+        current_setting('marie.ha_target_job_id', TRUE), ''
+    )::uuid AS target_job_id,
+    COALESCE(
+        NULLIF(current_setting('marie.ha_enable_mutation', TRUE), '')::boolean,
+        FALSE
+    ) AS enable_mutation,
+    COALESCE(
+        NULLIF(
+            current_setting('marie.ha_extend_run_lease_by', TRUE), ''
+        )::interval,
+        INTERVAL '5 minutes'
+    ) AS extend_run_lease_by,
+    COALESCE(
+        NULLIF(
+            current_setting('marie.ha_synthetic_terminal_age', TRUE), ''
+        )::interval,
+        INTERVAL '10 minutes'
+    ) AS synthetic_terminal_age;
 
 -- Example mutation setup:
 --
--- CREATE TEMP TABLE ha_lost_event_params AS
--- SELECT
---     '00000000-0000-0000-0000-000000000000'::uuid AS target_job_id,
---     TRUE::boolean AS enable_mutation,
---     INTERVAL '5 minutes' AS extend_run_lease_by,
---     INTERVAL '10 minutes' AS synthetic_terminal_age;
+-- SET marie.ha_target_job_id = '00000000-0000-0000-0000-000000000000';
+-- SET marie.ha_enable_mutation = 'true';
+-- SET marie.ha_extend_run_lease_by = '5 minutes';
+-- SET marie.ha_synthetic_terminal_age = '10 minutes';
 
 -- Query: show effective parameters. If enable_mutation is false, persistent
 -- scheduler state will not be changed by this file.
@@ -89,6 +101,7 @@ WHERE (
     )
    OR (
         p.target_job_id IS NULL
+        AND p.enable_mutation IS FALSE
         AND j.state::text = 'active'
         AND ja.dispatch_confirmed_at IS NOT NULL
         AND j.run_owner IS NOT NULL
