@@ -389,10 +389,34 @@ python tools/stress/analyze_scheduler_trace.py \
 
 The `Trace Coverage` section must contain non-zero supervisor and executor
 counts. `Terminal Status Event Handoff` separates executor completion,
-supervisor send-task completion, final status lookup, status-event bus queueing,
-scheduler handler entry, and durable terminal acceptance. The analyzer keys
-queue events to the scheduler process ID so executor-local event publishers
-cannot be mistaken for the gateway event bus.
+supervisor send-task completion, final status lookup, internal status-publisher
+queueing, scheduler-event queueing, scheduler handler entry, and durable
+terminal acceptance. The analyzer keys queue events to the scheduler process
+ID so executor-local publishers cannot be mistaken for the scheduler's
+publisher.
+
+```mermaid
+flowchart LR
+    supervisor[Job supervisor] --> publisher["EventPublisher<br/>process-local FIFO"]
+    publisher --> route["Route by job_id<br/>enqueue and return"]
+    route --> shard0[Worker 0]
+    route --> shard1[Worker 1]
+    route --> shardN[Worker N]
+    shard0 --> lifecycle[Existing scheduler lifecycle handler]
+    shard1 --> lifecycle
+    shardN --> lifecycle
+    lifecycle --> postgres[(PostgreSQL)]
+```
+
+The same `job_id` always routes to the same worker, which preserves its
+`PENDING` → `RUNNING` → terminal order. Different jobs can progress on
+different workers. Both boundaries are bounded: the job manager's internal
+publisher applies backpressure instead of dropping status events, while the
+scheduler processor defaults to eight workers and 1,024 queued events.
+Override those defaults with
+`job_event_worker_count` and `job_event_queue_size` in the scheduler section.
+The trace must show equal non-zero `scheduler event processor` enqueued,
+dequeued, and processed counts, with `failed=0`.
 
 The same section reports the randomized job-monitor sleep and terminal
 observation. Those values are diagnostic comparisons: the monitor reads job

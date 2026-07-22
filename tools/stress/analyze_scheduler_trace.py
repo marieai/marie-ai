@@ -55,7 +55,11 @@ EVENTS = (
     "job_status_event_dropped",
     "job_status_event_dequeued",
     "job_status_event_dispatch_completed",
+    "scheduler_job_event_enqueued",
+    "scheduler_job_event_dequeued",
     "scheduler_job_event_received",
+    "scheduler_job_event_processed",
+    "scheduler_job_event_failed",
     "executor_request_received",
     "executor_running_recorded",
     "executor_callback_invoked",
@@ -147,6 +151,7 @@ REPORT_LATENCIES = (
     ("service", "executor_service"),
     ("callback->release", "callback_to_slot_release"),
     ("callback->terminal", "callback_to_terminal_status"),
+    ("slot-release->durable-terminal", "slot_release_to_terminal"),
     (
         "executor-terminal->supervisor-send-complete",
         "executor_terminal_to_supervisor_send_complete",
@@ -160,15 +165,17 @@ REPORT_LATENCIES = (
         "supervisor_send_complete_to_status_read",
     ),
     ("status-read->event-enqueue", "status_read_to_event_enqueue"),
-    ("event-queue", "event_queue_wait"),
-    ("event-dequeue->scheduler-handler", "event_dequeue_to_scheduler_handler"),
+    ("event-bus-queue", "event_queue_wait"),
+    ("event-bus->scheduler-queue", "event_dequeue_to_scheduler_enqueue"),
+    ("scheduler-event-queue", "scheduler_event_queue_wait"),
+    ("scheduler-dequeue->handler", "scheduler_event_dequeue_to_handler"),
     (
         "scheduler-handler->durable-terminal",
         "scheduler_handler_to_terminal",
     ),
     (
-        "durable-terminal->event-dispatch-complete",
-        "terminal_to_event_dispatch_complete",
+        "durable-terminal->scheduler-event-complete",
+        "terminal_to_scheduler_event_processed",
     ),
     ("admission->durable-terminal", "admission_to_terminal"),
     ("durable-terminal->DAG-resolution", "terminal_to_dag_resolution"),
@@ -516,9 +523,30 @@ def summarize_job(
         status=accepted_status,
         terminal_only=accepted_status is None,
     )
+    scheduler_event_enqueued = _first_event_row(
+        rows,
+        "scheduler_job_event_enqueued",
+        pid=scheduler_pid,
+        status=accepted_status,
+        terminal_only=accepted_status is None,
+    )
+    scheduler_event_dequeued = _first_event_row(
+        rows,
+        "scheduler_job_event_dequeued",
+        pid=scheduler_pid,
+        status=accepted_status,
+        terminal_only=accepted_status is None,
+    )
     scheduler_event_received = _first_event_row(
         rows,
         "scheduler_job_event_received",
+        pid=scheduler_pid,
+        status=accepted_status,
+        terminal_only=accepted_status is None,
+    )
+    scheduler_event_processed = _first_event_row(
+        rows,
+        "scheduler_job_event_processed",
         pid=scheduler_pid,
         status=accepted_status,
         terminal_only=accepted_status is None,
@@ -641,6 +669,10 @@ def summarize_job(
             by_event.get("executor_callback_invoked"),
             by_event.get(terminal_event) if terminal_event else None,
         ),
+        "slot_release_to_terminal": _milliseconds(
+            by_event.get("executor_slot_released"),
+            _row_time(accepted_terminal_row),
+        ),
         "executor_terminal_to_supervisor_send_complete": _milliseconds(
             executor_terminal_at,
             _row_time(supervisor_send_completed),
@@ -661,17 +693,25 @@ def summarize_job(
             _row_time(status_event_enqueued),
             _row_time(status_event_dequeued),
         ),
-        "event_dequeue_to_scheduler_handler": _milliseconds(
+        "event_dequeue_to_scheduler_enqueue": _milliseconds(
             _row_time(status_event_dequeued),
+            _row_time(scheduler_event_enqueued or scheduler_event_received),
+        ),
+        "scheduler_event_queue_wait": _milliseconds(
+            _row_time(scheduler_event_enqueued),
+            _row_time(scheduler_event_dequeued),
+        ),
+        "scheduler_event_dequeue_to_handler": _milliseconds(
+            _row_time(scheduler_event_dequeued),
             _row_time(scheduler_event_received),
         ),
         "scheduler_handler_to_terminal": _milliseconds(
             _row_time(scheduler_event_received),
             _row_time(accepted_terminal_row),
         ),
-        "terminal_to_event_dispatch_complete": _milliseconds(
+        "terminal_to_scheduler_event_processed": _milliseconds(
             _row_time(accepted_terminal_row),
-            _row_time(status_event_dispatch_completed),
+            _row_time(scheduler_event_processed or status_event_dispatch_completed),
         ),
         "admission_to_terminal": _milliseconds(
             by_event.get("gateway_dispatch_confirmed"),
@@ -818,23 +858,132 @@ def _next_event_delays_ms(
     return delays
 
 
-def _max_observed_free_slots(rows: list[dict[str, Any]]) -> int | None:
+def _workload_executors(rows: list[dict[str, Any]]) -> set[str]:
+    reserved = {
+        str(row["executor"])
+        for row in rows
+        if row.get("event") == "slot_reserved"
+        and isinstance(row.get("executor"), str)
+        and row.get("executor")
+    }
+    if reserved:
+        return reserved
+
+    dispatched: set[str] = set()
+    for row in rows:
+        if row.get("event") != "gateway_dispatch_start":
+            continue
+        entrypoint = row.get("entrypoint")
+        if isinstance(entrypoint, str) and "://" in entrypoint:
+            executor, _ = entrypoint.split("://", 1)
+            if executor:
+                dispatched.add(executor)
+    return dispatched
+
+
+def _job_executors(rows: list[dict[str, Any]]) -> dict[str, str]:
+    executors: dict[str, str] = {}
+    for row in rows:
+        job_id = row.get("job_id")
+        if not isinstance(job_id, str):
+            continue
+        if row.get("event") == "slot_reserved":
+            executor = row.get("executor")
+        elif row.get("event") == "gateway_dispatch_start":
+            entrypoint = row.get("entrypoint")
+            executor = (
+                entrypoint.split("://", 1)[0]
+                if isinstance(entrypoint, str) and "://" in entrypoint
+                else None
+            )
+        else:
+            continue
+        if isinstance(executor, str) and executor:
+            executors[job_id] = executor
+    return executors
+
+
+def _candidate_slot_capacity(
+    rows: list[dict[str, Any]], workload_executors: set[str]
+) -> tuple[list[float], list[float]]:
+    job_executors = _job_executors(rows)
+    free_slots: list[float] = []
+    compatible_slots: list[float] = []
+    for row in rows:
+        if row.get("event") != "candidate_built":
+            continue
+        slots = row.get("slots_by_executor")
+        if not isinstance(slots, dict):
+            continue
+        available = {
+            executor: value
+            for executor, value in slots.items()
+            if executor in workload_executors and isinstance(value, int)
+        }
+        if not available:
+            continue
+        job_ids = row.get("job_ids")
+        if (
+            not isinstance(job_ids, list)
+            or not job_ids
+            or any(
+                not isinstance(job_id, str) or job_id not in job_executors
+                for job_id in job_ids
+            )
+        ):
+            continue
+        free_slots.append(float(sum(available.values())))
+        ready_by_executor = Counter(job_executors[job_id] for job_id in job_ids)
+        compatible_slots.append(
+            float(
+                sum(
+                    min(ready_count, available.get(executor, 0))
+                    for executor, ready_count in ready_by_executor.items()
+                )
+            )
+        )
+    return free_slots, compatible_slots
+
+
+def _max_observed_free_slots(
+    rows: list[dict[str, Any]], workload_executors: set[str]
+) -> int | None:
     max_slots: int | None = None
+    per_executor_max: dict[str, int] = {}
     for row in rows:
         event = row.get("event")
         if event == "candidate_built":
             slots = row.get("slots_by_executor")
             if not isinstance(slots, dict):
                 continue
-            total = sum(value for value in slots.values() if isinstance(value, int))
+            total = sum(
+                value
+                for executor, value in slots.items()
+                if executor in workload_executors and isinstance(value, int)
+            )
         elif event == "slot_reserved":
+            executor = row.get("executor")
             slots_before = row.get("slots_before")
-            if not isinstance(slots_before, int):
+            if (
+                not isinstance(executor, str)
+                or executor not in workload_executors
+                or not isinstance(slots_before, int)
+            ):
                 continue
-            total = slots_before
+            per_executor_max[executor] = max(
+                per_executor_max.get(executor, 0), slots_before
+            )
+            continue
         else:
             continue
         max_slots = total if max_slots is None else max(max_slots, total)
+    if per_executor_max:
+        reserved_capacity = sum(per_executor_max.values())
+        max_slots = (
+            reserved_capacity
+            if max_slots is None
+            else max(max_slots, reserved_capacity)
+        )
     return max_slots
 
 
@@ -1072,18 +1221,25 @@ def _print_dispatch_efficiency_report(
     idle_by_executor = _executor_slot_idle_ms(rows)
     slot_cycles_by_executor = _slot_cycle_ms(rows)
     candidate_appearances, first_candidate_wait = _candidate_selection_attempts(rows)
-    max_observed_slots = _max_observed_free_slots(rows)
+    dispatch_batch_sizes = _numeric_event_field(rows, "dispatch_batch_start", "count")
+    dispatch_batch_intervals = _event_intervals_ms(rows, "dispatch_batch_start")
+    workload_executors = _workload_executors(rows)
+    free_slots, compatible_slots = _candidate_slot_capacity(rows, workload_executors)
+    max_observed_slots = _max_observed_free_slots(rows, workload_executors)
 
     print("\nDispatch Efficiency")
     print(
         "rates: "
-        f"submit={_fmt_rate(submit_rate)} "
-        f"dispatch={_fmt_rate(dispatch_rate)} "
-        f"complete={_fmt_rate(success_rate)}"
+        f"dag_submit={_fmt_rate(submit_rate)} "
+        f"executor_dispatch={_fmt_rate(dispatch_rate)} "
+        f"executor_complete={_fmt_rate(success_rate)}"
     )
-    if submit_rate is not None and dispatch_rate is not None:
-        drift = submit_rate - dispatch_rate
-        print(f"submit-dispatch drift: {drift:.3f}/s ({drift * 3600.0:.0f}/hour)")
+    print("rate units: dag_submit counts DAGs; executor rates count executable jobs")
+    if workload_executors:
+        print(
+            f"workload executors: {len(workload_executors)} "
+            f"({', '.join(sorted(workload_executors))})"
+        )
 
     _print_distribution(
         "DAG-frontier to job-candidate",
@@ -1103,7 +1259,7 @@ def _print_dispatch_efficiency_report(
     )
     _print_count_distribution(
         "dispatch batch size",
-        _numeric_event_field(rows, "dispatch_batch_start", "count"),
+        dispatch_batch_sizes,
     )
     _print_count_distribution(
         "semaphore reserve requested",
@@ -1119,8 +1275,17 @@ def _print_dispatch_efficiency_report(
     )
     _print_distribution(
         "dispatch batch interval",
-        _event_intervals_ms(rows, "dispatch_batch_start"),
+        dispatch_batch_intervals,
     )
+    _print_count_distribution("workload free slots at candidate", free_slots)
+    _print_count_distribution("ready-compatible slots at candidate", compatible_slots)
+    free_slot_avg = _avg(free_slots)
+    compatible_slot_avg = _avg(compatible_slots)
+    if free_slot_avg and compatible_slot_avg is not None:
+        print(
+            "ready-compatible share of workload free slots: "
+            f"{(compatible_slot_avg / free_slot_avg) * 100.0:.1f}%"
+        )
     if candidate_appearances:
         print(
             "candidate snapshots before selection: "
@@ -1155,6 +1320,17 @@ def _print_dispatch_efficiency_report(
                 print(
                     "actual dispatch vs aggregate slot-hold estimate: "
                     f"{(dispatch_rate / aggregate_capacity) * 100.0:.1f}%"
+                )
+            batch_size_avg = _avg(dispatch_batch_sizes)
+            batch_interval_avg = _avg(dispatch_batch_intervals)
+            if batch_size_avg is not None and batch_interval_avg:
+                batch_fill = batch_size_avg / max_observed_slots
+                cadence_efficiency = slot_hold_p50 / batch_interval_avg
+                print(
+                    "capacity-use factors: "
+                    f"batch_fill={batch_fill * 100.0:.1f}% "
+                    f"dispatch_cadence={cadence_efficiency * 100.0:.1f}% "
+                    f"combined={batch_fill * cadence_efficiency * 100.0:.1f}%"
                 )
 
     service_p50 = _percentile(service, 0.50)
@@ -1255,11 +1431,18 @@ def _print_trace_coverage(rows: list[dict[str, Any]]) -> None:
         f"status_read={events.get('job_supervisor_terminal_status_read', 0)}"
     )
     print(
-        "status event bus: "
+        "internal status publisher: "
         f"enqueued={event_bus.get('job_status_event_enqueued', 0)} "
         f"dequeued={event_bus.get('job_status_event_dequeued', 0)} "
         f"dispatched={event_bus.get('job_status_event_dispatch_completed', 0)} "
         f"dropped={event_bus.get('job_status_event_dropped', 0)}"
+    )
+    print(
+        "scheduler event processor: "
+        f"enqueued={events.get('scheduler_job_event_enqueued', 0)} "
+        f"dequeued={events.get('scheduler_job_event_dequeued', 0)} "
+        f"processed={events.get('scheduler_job_event_processed', 0)} "
+        f"failed={events.get('scheduler_job_event_failed', 0)}"
     )
     print(
         "executor: "
@@ -1276,6 +1459,10 @@ def _print_terminal_handoff_report(
 ) -> None:
     handoff_keys = (
         (
+            "slot release to durable terminal acceptance",
+            "slot_release_to_terminal",
+        ),
+        (
             "executor terminal to supervisor send-task completion",
             "executor_terminal_to_supervisor_send_complete",
         ),
@@ -1288,18 +1475,26 @@ def _print_terminal_handoff_report(
             "supervisor_send_complete_to_status_read",
         ),
         ("status read to event enqueue", "status_read_to_event_enqueue"),
-        ("status-event queue wait", "event_queue_wait"),
+        ("status event-bus queue wait", "event_queue_wait"),
         (
-            "event dequeue to scheduler handler",
-            "event_dequeue_to_scheduler_handler",
+            "event-bus dequeue to scheduler enqueue",
+            "event_dequeue_to_scheduler_enqueue",
+        ),
+        (
+            "scheduler event queue wait",
+            "scheduler_event_queue_wait",
+        ),
+        (
+            "scheduler event dequeue to handler",
+            "scheduler_event_dequeue_to_handler",
         ),
         (
             "scheduler handler to durable terminal acceptance",
             "scheduler_handler_to_terminal",
         ),
         (
-            "durable terminal acceptance to event dispatch completion",
-            "terminal_to_event_dispatch_complete",
+            "durable terminal acceptance to scheduler event completion",
+            "terminal_to_scheduler_event_processed",
         ),
     )
     if not any(_numeric_values(summaries, key) for _, key in handoff_keys):
@@ -1322,6 +1517,21 @@ def _print_terminal_feedback_report(
         return
 
     print("\nTerminal Feedback")
+    wake_results = Counter(
+        bool(row["wake_queued"])
+        for row in rows
+        if row.get("event") == "terminal_scheduler_wake_completed"
+        and isinstance(row.get("wake_queued"), bool)
+    )
+    wake_total = sum(wake_results.values())
+    if wake_total:
+        queued = wake_results[True]
+        coalesced = wake_results[False]
+        print(
+            "terminal scheduler wakes: "
+            f"queued={queued} coalesced={coalesced} "
+            f"coalesced_pct={(coalesced / wake_total) * 100.0:.1f}%"
+        )
     _print_distribution(
         "terminal to DAG-resolution start",
         _numeric_values(summaries, "terminal_to_dag_resolution"),
@@ -1678,23 +1888,6 @@ def _print_findings(
 ) -> None:
     findings: list[str] = []
 
-    submit_rate = rate_stats["gateway_submit_received"][1]
-    success_rate = rate_stats["executor_success_recorded"][1]
-    if submit_rate is not None and success_rate is not None:
-        drift = submit_rate - success_rate
-        if drift > 0.01:
-            findings.append(
-                f"Backlog is growing by about {drift:.3f} jobs/s "
-                f"({drift * 3600:.0f} jobs/hour)."
-            )
-        elif drift < -0.01:
-            findings.append(
-                f"Completion is draining faster than submissions by about "
-                f"{abs(drift):.3f} jobs/s."
-            )
-        else:
-            findings.append("Submission and completion rates are roughly balanced.")
-
     started = events.get("control_flow_started", 0)
     completed = events.get("control_flow_completed", 0)
     if started != completed:
@@ -1723,6 +1916,10 @@ def _print_findings(
         )
     terminal_handoff_stages = (
         (
+            "slot release to durable terminal acceptance",
+            "slot_release_to_terminal",
+        ),
+        (
             "executor terminal to supervisor send-task completion",
             "executor_terminal_to_supervisor_send_complete",
         ),
@@ -1731,10 +1928,18 @@ def _print_findings(
             "supervisor_send_complete_to_status_read",
         ),
         ("status read to event enqueue", "status_read_to_event_enqueue"),
-        ("status-event queue wait", "event_queue_wait"),
+        ("status event-bus queue wait", "event_queue_wait"),
         (
-            "event dequeue to scheduler handler",
-            "event_dequeue_to_scheduler_handler",
+            "event-bus dequeue to scheduler enqueue",
+            "event_dequeue_to_scheduler_enqueue",
+        ),
+        (
+            "scheduler event queue wait",
+            "scheduler_event_queue_wait",
+        ),
+        (
+            "scheduler event dequeue to handler",
+            "scheduler_event_dequeue_to_handler",
         ),
         (
             "scheduler handler to durable terminal acceptance",
@@ -1761,7 +1966,8 @@ def _print_findings(
     dispatch_rate = rate_stats["gateway_dispatch_start"][1]
     slot_hold = _slot_hold_ms(rows)
     slot_hold_capacity = _capacity_per_second(_percentile(slot_hold, 0.50))
-    max_observed_slots = _max_observed_free_slots(rows)
+    workload_executors = _workload_executors(rows)
+    max_observed_slots = _max_observed_free_slots(rows, workload_executors)
     aggregate_slot_hold_capacity = (
         slot_hold_capacity * max_observed_slots
         if slot_hold_capacity is not None and max_observed_slots
@@ -1775,7 +1981,43 @@ def _print_findings(
         findings.append(
             "Dispatch rate is below the slot-hold capacity estimate "
             f"({_fmt_rate(dispatch_rate)} actual vs "
-            f"{_fmt_rate(aggregate_slot_hold_capacity)} estimated aggregate)."
+            f"{_fmt_rate(aggregate_slot_hold_capacity)} estimated across "
+            f"{max_observed_slots} workload slots)."
+        )
+    free_slots, compatible_slots = _candidate_slot_capacity(rows, workload_executors)
+    free_slot_avg = _avg(free_slots)
+    compatible_slot_avg = _avg(compatible_slots)
+    if (
+        free_slot_avg
+        and compatible_slot_avg is not None
+        and compatible_slot_avg < free_slot_avg * 0.75
+    ):
+        findings.append(
+            "Ready-job executor affinity makes only "
+            f"{compatible_slot_avg:.1f} of {free_slot_avg:.1f} average workload "
+            "free slots fillable per candidate snapshot; graph topology and "
+            "per-executor demand are limiting slot use."
+        )
+    dispatch_batch_sizes = _numeric_event_field(rows, "dispatch_batch_start", "count")
+    dispatch_batch_intervals = _event_intervals_ms(rows, "dispatch_batch_start")
+    batch_size_avg = _avg(dispatch_batch_sizes)
+    batch_interval_avg = _avg(dispatch_batch_intervals)
+    slot_hold_p50 = _percentile(slot_hold, 0.50)
+    if (
+        batch_size_avg is not None
+        and batch_interval_avg
+        and slot_hold_p50 is not None
+        and max_observed_slots
+    ):
+        batch_fill = batch_size_avg / max_observed_slots
+        cadence_efficiency = slot_hold_p50 / batch_interval_avg
+        findings.append(
+            "Capacity use factors into "
+            f"{batch_fill * 100.0:.1f}% average batch fill "
+            f"({batch_size_avg:.1f}/{max_observed_slots} workload slots) and "
+            f"{cadence_efficiency * 100.0:.1f}% dispatch cadence efficiency "
+            f"({_fmt(slot_hold_p50)} slot hold vs "
+            f"{_fmt(batch_interval_avg)} batch interval)."
         )
     if service and (_percentile(service, 0.95) or 0.0) < 5.0:
         stage_rows: list[tuple[float, str, float | None]] = []
@@ -2002,9 +2244,11 @@ def main() -> int:
             "supervisor_send_complete_to_status_read",
             "status_read_to_event_enqueue",
             "event_queue_wait",
-            "event_dequeue_to_scheduler_handler",
+            "event_dequeue_to_scheduler_enqueue",
+            "scheduler_event_queue_wait",
+            "scheduler_event_dequeue_to_handler",
             "scheduler_handler_to_terminal",
-            "terminal_to_event_dispatch_complete",
+            "terminal_to_scheduler_event_processed",
             "admission_to_terminal",
             "terminal_to_dag_resolution",
             "dag_resolution",
@@ -2053,9 +2297,10 @@ def main() -> int:
         "executor-terminal->supervisor-send-complete "
         "executor-terminal->monitor-observed "
         "supervisor-send-complete->status-read status-read->event-enqueue "
-        "event-queue event-dequeue->scheduler-handler "
+        "event-bus-queue event-bus->scheduler-queue scheduler-event-queue "
+        "scheduler-dequeue->handler "
         "scheduler-handler->durable-terminal "
-        "durable-terminal->event-dispatch-complete "
+        "durable-terminal->scheduler-event-complete "
         "admission->durable-terminal terminal->DAG-resolution DAG-resolution "
         "DAG-resolution->wake "
         "terminal events"
@@ -2095,9 +2340,11 @@ def main() -> int:
             f"{_fmt(item['supervisor_send_complete_to_status_read'])} "
             f"{_fmt(item['status_read_to_event_enqueue'])} "
             f"{_fmt(item['event_queue_wait'])} "
-            f"{_fmt(item['event_dequeue_to_scheduler_handler'])} "
+            f"{_fmt(item['event_dequeue_to_scheduler_enqueue'])} "
+            f"{_fmt(item['scheduler_event_queue_wait'])} "
+            f"{_fmt(item['scheduler_event_dequeue_to_handler'])} "
             f"{_fmt(item['scheduler_handler_to_terminal'])} "
-            f"{_fmt(item['terminal_to_event_dispatch_complete'])} "
+            f"{_fmt(item['terminal_to_scheduler_event_processed'])} "
             f"{_fmt(item['admission_to_terminal'])} "
             f"{_fmt(item['terminal_to_dag_resolution'])} "
             f"{_fmt(item['dag_resolution'])} "

@@ -137,11 +137,18 @@ write the shared trace path.
 
 For terminal-delay investigations, `Terminal Status Event Handoff` separates
 executor completion, supervisor send-task completion, the final status read,
-gateway status-event enqueue/dequeue, scheduler handler entry, and durable
-terminal acceptance. It also reports the job monitor's randomized polling
-sleep and terminal observation as a comparison. The monitor only detects
-terminal jobs for supervision cleanup; it does not publish the scheduler's
-terminal event.
+internal status-publisher enqueue/dequeue, scheduler-event queue wait,
+scheduler handler entry, and durable terminal acceptance. `EventPublisher`
+keeps its process-local FIFO contract and the job manager applies backpressure
+instead of dropping status events. Its scheduler subscriber only routes an
+event to one of eight bounded workers. A stable `job_id` mapping preserves
+order for one job while independent jobs can be handled concurrently. Tune
+this boundary with `job_event_worker_count` and `job_event_queue_size` in the
+scheduler configuration. The analyzer reports the publisher and scheduler
+queues separately, so a slow lifecycle handler no longer appears as publisher
+queue time. It also reports the job monitor's randomized polling sleep and
+terminal observation as a comparison. The monitor only detects terminal jobs
+for supervision cleanup; it does not publish the scheduler's terminal event.
 
 Trace output always drops `api_key` and `project_id`, including in the full
 profile. Treat traces produced by older code as sensitive artifacts.

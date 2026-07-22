@@ -52,6 +52,7 @@ from marie.scheduler.services import (
     MaintenanceService,
     NotificationService,
     SchedulerDiagnostics,
+    SchedulerJobEventProcessor,
     SchedulerRuntime,
 )
 from marie.scheduler.state import WorkState
@@ -223,6 +224,13 @@ class PostgreSQLJobScheduler(JobScheduler):
         self.logger.info(f"Queue names to monitor: {self.known_queues}")
 
         self.job_manager = job_manager
+        self.job_event_worker_count = scheduler_config.job_event_worker_count
+        self.job_event_processor = SchedulerJobEventProcessor(
+            handler=self._handle_job_event,
+            logger=self.logger,
+            worker_count=self.job_event_worker_count,
+            queue_size=scheduler_config.job_event_queue_size,
+        )
         self._setup_event_subscriptions()
         self._db_pool = AsyncPostgresConnectionPool()
         self.repository = JobRepository(
@@ -451,19 +459,18 @@ class PostgreSQLJobScheduler(JobScheduler):
         scheduler_trace(name, count=counters[name], **fields)
 
     async def handle_job_event(self, event_type: str, message: Any):
-        """Process a job event while the scheduler is accepting work."""
-        if not getattr(self, "running", True):
+        """Queue a job event while the scheduler is accepting work."""
+        if not self.running:
             return
 
         task = asyncio.current_task()
-        runtime = getattr(self, 'runtime', None)
-        if task is not None and runtime is not None:
-            runtime.track_event_task(task)
+        if task is not None:
+            self.runtime.track_event_task(task)
         try:
-            await self._handle_job_event(event_type, message)
+            await self.job_event_processor.enqueue(event_type, message)
         finally:
-            if task is not None and runtime is not None:
-                runtime.discard_event_task(task)
+            if task is not None:
+                self.runtime.discard_event_task(task)
 
     async def _handle_job_event(self, event_type: str, message: Any):
         """
@@ -881,6 +888,11 @@ class PostgreSQLJobScheduler(JobScheduler):
 
         self._priority_refresh_event.clear()
         self.running = True
+        for worker_id in range(self.job_event_worker_count):
+            self.runtime.create_task(
+                self.job_event_processor.run_worker(worker_id),
+                name=f"scheduler-job-event-{worker_id}",
+            )
         self.runtime.create_task(
             self._priority_refresh_loop(),
             name="scheduler-priority-refresh",
@@ -1735,6 +1747,13 @@ class PostgreSQLJobScheduler(JobScheduler):
             timeout=timeout,
         )
         self.submission_service.abort_pending()
+        aborted_job_events = self.job_event_processor.abort_pending()
+        if aborted_job_events:
+            self.logger.warning(
+                'Discarded %s queued job event(s) during scheduler shutdown; '
+                'durable state reconciliation will recover them',
+                aborted_job_events,
+            )
 
         await self._close_runtime_resources()
 

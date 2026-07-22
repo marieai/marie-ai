@@ -226,21 +226,21 @@ The CUDA profile expects the distributed wheels — `etcd3`, `fastwer`, Marie's 
 Fetch and verify them:
 
 ```shell
-tools/scripts/fetch-wheels.sh          # download missing artifacts and check SHA256s
-tools/scripts/fetch-wheels.sh verify   # check what is already present
+scripts/fetch-wheels.sh          # download missing artifacts and check SHA256s
+scripts/fetch-wheels.sh verify   # check what is already present
 ```
 
 The script prefers the `gh` CLI (required for private releases); `curl` with `GITHUB_TOKEN` is the fallback.
 
 ### Rebuild From Source
 
-You do not have to configure the native build toolchain by hand — `tools/scripts/setup-py312-torch212-cu130.sh` automates the whole Python 3.12 / PyTorch 2.12 / CUDA 13 lane: venv creation, torch/torchvision from the cu130 index, the CUDA 13 `nvcc` toolkit and library symlinks, source checkouts at the pinned refs, patches, and the wheel builds themselves.
+You do not have to configure the native build toolchain by hand — `scripts/setup-py312-torch212-cu130.sh` automates the whole Python 3.12 / PyTorch 2.12 / CUDA 13 lane: venv creation, torch/torchvision from the cu130 index, the CUDA 13 `nvcc` toolkit and library symlinks, source checkouts at the pinned refs, patches, and the wheel builds themselves.
 
 For a brand-new environment, one command runs everything end to end, including the native/GPU verification gates:
 
 ```shell
 MARIE_TORCH_ENV_NAME=marie-ai-pytorch-2-12 \
-  tools/scripts/setup-py312-torch212-cu130.sh all
+  scripts/setup-py312-torch212-cu130.sh all
 ```
 
 If you already have a build environment, prep it once and then build every wheel with a single step — no guessing at the order:
@@ -250,21 +250,21 @@ export MARIE_VENV_BASE=~/environments
 export MARIE_TORCH_ENV_NAME=marie-ai-pytorch-2-12
 
 # one-time environment prep
-tools/scripts/setup-py312-torch212-cu130.sh venv       # Python 3.12 venv + build tools, symlinks .venv to it
-tools/scripts/setup-py312-torch212-cu130.sh torch      # torch 2.12.1 / torchvision 0.27.1 (cu130)
-tools/scripts/setup-py312-torch212-cu130.sh app-deps   # Marie editable install + test/runtime helpers
+scripts/setup-py312-torch212-cu130.sh venv       # Python 3.12 venv + build tools, symlinks .venv to it
+scripts/setup-py312-torch212-cu130.sh torch      # torch 2.12.1 / torchvision 0.27.1 (cu130)
+scripts/setup-py312-torch212-cu130.sh app-deps   # Marie editable install + test/runtime helpers
 
 # builds cuda-toolkit, fastwer, fairseq, detectron2, and FAISS in order,
 # then validates wheels/ and refreshes the README inventory
-tools/scripts/setup-py312-torch212-cu130.sh build-wheels
+scripts/setup-py312-torch212-cu130.sh build-wheels
 ```
 
-`build-wheels` checks its prerequisites and tells you which step is missing instead of failing mid-build. Run `tools/scripts/setup-py312-torch212-cu130.sh help` for the full step list. Every step writes full command output under `command-output/repro-*`, including the invocation script needed to reproduce the run.
+`build-wheels` checks its prerequisites and tells you which step is missing instead of failing mid-build. Run `scripts/setup-py312-torch212-cu130.sh help` for the full step list. Every step writes full command output under `command-output/repro-*`, including the invocation script needed to reproduce the run.
 
 Both paths finish with the `wheels/README.md` inventory already refreshed, so publishing the new artifacts for other checkouts is just:
 
 ```shell
-tools/scripts/fetch-wheels.sh publish
+scripts/fetch-wheels.sh publish
 ```
 
 ## Docker Images

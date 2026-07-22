@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="document_classifier" type="PythonConfigurationType" factoryName="Python">
-    <module name="marie-ai" />
+    <module name="marie-ai@1" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />

@@ -22,6 +22,8 @@ class PostgreSQLSchedulerConfig:
     scheduler_mode: str
     max_workers: int
     submission_queue_size: int
+    job_event_worker_count: int
+    job_event_queue_size: int
     sla_priority_interval_seconds: int
     max_concurrent_dags: int
     dag_resolution_retry_limit: int
@@ -91,6 +93,8 @@ class PostgreSQLSchedulerConfig:
                 scheduler_mode=str(config.get('scheduler_mode', 'parallel')),
                 max_workers=int(config.get('max_workers', 5)),
                 submission_queue_size=int(config.get('submission_queue_size', 1000)),
+                job_event_worker_count=int(config.get('job_event_worker_count', 8)),
+                job_event_queue_size=int(config.get('job_event_queue_size', 1024)),
                 sla_priority_interval_seconds=max(
                     1, int(config.get('sla_priority_interval_seconds', 15 * 60))
                 ),
@@ -149,6 +153,12 @@ class PostgreSQLSchedulerConfig:
             raise BadConfigSource('max_workers must be zero or greater')
         if self.submission_queue_size <= 0:
             raise BadConfigSource('submission_queue_size must be greater than zero')
+        if self.job_event_worker_count <= 0:
+            raise BadConfigSource('job_event_worker_count must be greater than zero')
+        if self.job_event_queue_size < self.job_event_worker_count:
+            raise BadConfigSource(
+                'job_event_queue_size must be at least job_event_worker_count'
+            )
         if self.max_concurrent_dags <= 0:
             raise BadConfigSource(
                 'dag_manager.max_concurrent_dags must be greater than zero'

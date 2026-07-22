@@ -176,6 +176,8 @@ with:
     <<: *psql_conf_shared
     default_table: job_scheduler
     max_workers: 2
+    job_event_worker_count: 8
+    job_event_queue_size: 1024
     max_pool_size: 5
     max_connections: 5
     queue_names:

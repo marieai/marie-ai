@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="marie server - G5 annotator_table" type="PythonConfigurationType" factoryName="Python" folderName="G5-Annotators" singleton="false">
-    <module name="marie-ai" />
+    <module name="marie-ai@1" />
     <option name="ENV_FILES" value="$PROJECT_DIR$/config/.grpc.env" />
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />

@@ -170,9 +170,9 @@ networks:
 #    docker compose --env-file ./config/.env.dev -f ./Dockerfiles/docker-compose.clickstack.yml --profile ui up -d
 #
 # 5. (First-time only) Initialize HyperDX admin user:
-#    ./tools/scripts/hyperdx-init-user.sh
+#    ./scripts/hyperdx-init-user.sh
 #    Or with custom credentials:
-#    HYPERDX_ADMIN_EMAIL=you@example.com HYPERDX_ADMIN_PASSWORD=secret ./tools/scripts/hyperdx-init-user.sh
+#    HYPERDX_ADMIN_EMAIL=you@example.com HYPERDX_ADMIN_PASSWORD=secret ./scripts/hyperdx-init-user.sh
 #
 # 6. (First-time only) Configure HyperDX → ClickHouse connection:
 #    Open http://localhost:8080, go to Team Settings → Connections, add ClickHouse:

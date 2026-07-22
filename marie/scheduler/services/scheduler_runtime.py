@@ -8,7 +8,7 @@ from marie.logging_core.logger import MarieLogger
 
 
 class SchedulerRuntime:
-    """Own scheduler background tasks from creation through cancellation."""
+    """Own scheduler background tasks creation through cancellation."""
 
     def __init__(self, logger: MarieLogger) -> None:
         self._logger = logger

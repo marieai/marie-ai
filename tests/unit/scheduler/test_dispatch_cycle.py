@@ -109,10 +109,19 @@ async def test_dispatch_cycle_plans_leases_activates_and_dispatches_once(
         "debug_candidates_and_plan",
         AsyncMock(),
     )
+    scheduler.frontier.dag_remaining_counts.return_value = {work_item.dag_id: 1}
 
     result = await scheduler.run_dispatch_cycle(cycle_index=1)
 
     assert result == DispatchCycleResult(scheduled=True)
+    scheduler.execution_planner.plan.assert_called_once_with(
+        [("extract://default", work_item)],
+        {"extract": 1},
+        scheduler.active_dags,
+        exclude_blocked=True,
+        dag_remaining={work_item.dag_id: 1},
+    )
+    scheduler.frontier.dag_remaining_counts.assert_called_once_with()
     scheduler.frontier.take.assert_awaited_once_with([work_item.id], lease_ttl=5)
     scheduler._lease_jobs_db.assert_awaited_once_with("extract", [work_item.id])
     scheduler._reserve_semaphore_slots.assert_awaited_once_with("extract", [work_item])

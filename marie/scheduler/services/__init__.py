@@ -8,6 +8,7 @@ from marie.scheduler.services.control_flow_execution_service import (
 )
 from marie.scheduler.services.dag_management_service import DAGManagementService
 from marie.scheduler.services.dag_submission_service import DagSubmissionService
+from marie.scheduler.services.job_event_processor import SchedulerJobEventProcessor
 from marie.scheduler.services.maintenance_service import MaintenanceService
 from marie.scheduler.services.notification_service import NotificationService
 from marie.scheduler.services.scheduler_diagnostics import SchedulerDiagnostics
@@ -19,6 +20,7 @@ __all__ = [
     "ControlFlowExecutionService",
     "DAGManagementService",
     "DagSubmissionService",
+    "SchedulerJobEventProcessor",
     "MaintenanceService",
     "NotificationService",
     "SchedulerDiagnostics",

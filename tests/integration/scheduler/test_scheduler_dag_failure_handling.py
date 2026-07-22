@@ -843,7 +843,7 @@ async def test_late_success_for_old_run_attempt_updates_zero_rows(monkeypatch):
         lambda event, **fields: trace_events.append((event, fields)),
     )
 
-    await scheduler.handle_job_event(
+    await scheduler._handle_job_event(
         JobStatus.SUCCEEDED.value,
         {
             "job_id": work_item.id,
@@ -915,7 +915,7 @@ async def test_late_failure_for_old_run_attempt_updates_zero_rows(monkeypatch):
         lambda event, **fields: trace_events.append((event, fields)),
     )
 
-    await scheduler.handle_job_event(
+    await scheduler._handle_job_event(
         JobStatus.FAILED.value,
         {
             "job_id": work_item.id,
@@ -997,7 +997,7 @@ async def test_stale_running_heartbeat_exposes_run_lease_counter(monkeypatch):
         lambda event, **fields: trace_events.append((event, fields)),
     )
 
-    await scheduler.handle_job_event(
+    await scheduler._handle_job_event(
         JobStatus.RUNNING.value,
         {
             "job_id": work_item.id,
@@ -1118,6 +1118,10 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
     async def noop():
         return None
 
+    scheduler.job_event_worker_count = 1
+    scheduler.job_event_processor = SimpleNamespace(
+        run_worker=lambda _worker_id: noop()
+    )
     scheduler.notify_event = notify_event
     scheduler._sync = noop
     scheduler._poll = noop

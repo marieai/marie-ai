@@ -30,7 +30,7 @@ run_suite() {
   "${python_bin}" -m pytest -q "$@"
 }
 
-run_suite "Scheduler units and database pool" \
+run_suite "Scheduler units, SLA configuration, and database pool" \
   tests/unit/scheduler \
   tests/unit/utils/test_scheduler_trace.py \
   tests/unit/agent/tools/database/test_postgres_pool.py \
@@ -72,7 +72,7 @@ echo "Process-spawning worker runtime tests are not part of this deterministic r
 
 echo
 echo "Note: test_job_scheduler_core.py is excluded because it wipes the default local scheduler database."
-run_suite "Scheduler integrations" \
+run_suite "Scheduler integrations, SLA ordering, and persistence" \
   tests/integration/scheduler \
   --ignore=tests/integration/scheduler/test_job_scheduler_core.py
 

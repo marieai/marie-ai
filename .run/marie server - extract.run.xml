@@ -1,7 +1,7 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="marie server - extract" type="PythonConfigurationType" factoryName="Python" folderName="Executors" singleton="false">
     <output_file path="$USER_HOME$/tmp/executor-extract.log" is_save="true" />
-    <module name="marie-ai" />
+    <module name="marie-ai@1" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />

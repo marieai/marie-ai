@@ -1,12 +1,11 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="marie gateway-FILE" type="PythonConfigurationType" factoryName="Python" singleton="false">
     <output_file path="$USER_HOME$/tmp/gateway.log" is_save="true" />
-    <module name="marie-ai" />
+    <module name="marie-ai@1" />
     <option name="ENV_FILES" value="$PROJECT_DIR$/config/.grpc.env" />
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
     <envs>
-      <env name="PYTHONUNBUFFERED" value="1" />
       <env name="COLUMNS" value="180" />
       <env name="GRPC_TRACE" value="ALL" />
       <env name="GRPC_VERBOSITY" value="DEBUG" />
@@ -17,10 +16,11 @@
       <env name="MARIE_DEBUG_QUERY_PLANNER" value="FALSE" />
       <env name="MARIE_DEFAULT_MOUNT" value="/mnt/data/marie-ai" />
       <env name="MARIE_SCHEDULER_TRACE_ENABLED" value="true" />
-      <env name="MARIE_SCHEDULER_TRACE_PATH" value="$USER_HOME$/tmp/marie-scheduler-trace.jsonl" />
-      <env name="MARIE_SCHEDULER_TRACE_PROFILE" value="compact" />
+      <env name="MARIE_SCHEDULER_TRACE_PATH" value="~/tmp/marie-scheduler-trace.jsonl" />
+      <env name="MARIE_SCHEDULER_TRACE_PROFILE" value="full" />
       <env name="OPENAI_API_BASE" value="http://192.222.48.192" />
       <env name="OPENAI_API_KEY" value="EMPTY" />
+      <env name="PYTHONUNBUFFERED" value="1" />
     </envs>
     <option name="SDK_HOME" value="" />
     <option name="SDK_NAME" value="Python 3.12 (marie-ai)" />

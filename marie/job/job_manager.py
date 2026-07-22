@@ -83,7 +83,10 @@ class JobManager:
 
         self.logger = MarieLogger(self.__class__.__name__)
         self._job_distributor = job_distributor
-        self.event_publisher = EventPublisher()
+        self.event_publisher = EventPublisher(
+            publish_blocking=True,
+            subscriber_timeout_s=0,
+        )
         self._log_client = JobLogStorageClient()
         self._etcd_client = etcd_client
         self._job_info_client = JobInfoStorageClientProxy(self.event_publisher, storage)
