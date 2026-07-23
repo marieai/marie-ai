@@ -27,7 +27,7 @@ async def test_record_failed_job_without_exception_still_publishes_failed_status
     handler._job_info_client = RecordingJobInfoClient()
     handler._worker_state = None
     handler._set_deployment_status = lambda *_args, **_kwargs: None
-    handler._sem_untrack = lambda *_args, **_kwargs: None
+    handler._sem_untrack = lambda *_args, **_kwargs: True
     handler._request_attributes = lambda _requests: {"source": "test"}
     handler._schedule_deployment_ready_after_terminal = lambda **_kwargs: None
     handler.is_dry_run = lambda _requests: False

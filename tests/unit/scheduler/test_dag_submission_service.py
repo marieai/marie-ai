@@ -40,12 +40,24 @@ def work_item(job_id: str) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_submission_queue_is_bounded_and_abortable() -> None:
+async def test_submission_queue_applies_backpressure_and_is_abortable() -> None:
     service = build_service(queue_size=1)
 
     assert await service.submit(work_item('job-1')) == 'job-1'
-    with pytest.raises(asyncio.QueueFull):
-        await service.submit(work_item('job-2'))
+    blocked_submit = asyncio.create_task(service.submit(work_item('job-2')))
+    async with asyncio.timeout(1):
+        while service.pending_count < 2:
+            await asyncio.sleep(0)
+
+    assert service.queue_size == 1
+    assert service.pending_count == 2
+    assert not blocked_submit.done()
+
+    first_request = service._queue.get_nowait()
+    service._queue.task_done()
+    service._pending.pop(first_request.request_id)
+    assert first_request.work_info.id == 'job-1'
+    assert await blocked_submit == 'job-2'
 
     assert service.queue_size == 1
     assert service.pending_count == 1
@@ -54,6 +66,25 @@ async def test_submission_queue_is_bounded_and_abortable() -> None:
 
     assert service.queue_size == 0
     assert service.pending_count == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_submission_waiter_is_removed_from_pending() -> None:
+    service = build_service(queue_size=1)
+
+    await service.submit(work_item('job-1'))
+    blocked_submit = asyncio.create_task(service.submit(work_item('job-2')))
+    async with asyncio.timeout(1):
+        while service.pending_count < 2:
+            await asyncio.sleep(0)
+
+    blocked_submit.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await blocked_submit
+
+    assert service.queue_size == 1
+    assert service.pending_count == 1
+    service.abort_pending()
 
 
 @pytest.mark.asyncio

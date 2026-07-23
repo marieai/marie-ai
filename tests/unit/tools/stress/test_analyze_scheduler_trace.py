@@ -4,6 +4,7 @@ from tools.stress.analyze_scheduler_trace import (
     _candidate_slot_capacity,
     _max_observed_free_slots,
     _print_dispatch_efficiency_report,
+    _print_findings,
     _print_priority_refresh_report,
     _print_terminal_feedback_report,
     _print_terminal_handoff_report,
@@ -57,6 +58,19 @@ def test_trace_coverage_exposes_missing_executor_process_events(capsys) -> None:
         in output
     )
     assert "executor: received=0" in output
+    assert "slot_release_failed=0" in output
+
+
+def test_findings_report_executor_slot_release_failures(capsys) -> None:
+    _print_findings(
+        {"gateway_dispatch_start": (0, None, None)},
+        [],
+        Counter({"executor_slot_release_failed": 2}),
+        [],
+    )
+
+    output = capsys.readouterr().out
+    assert "Executor slot release failed for 2 terminal jobs" in output
 
 
 def test_terminal_feedback_reports_resolution_and_next_candidate(capsys) -> None:

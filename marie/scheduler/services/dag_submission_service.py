@@ -59,7 +59,7 @@ class DagSubmissionService:
         if not self._is_running():
             raise RuntimeError('Job scheduler is not running')
 
-        self.logger.info(f'Submitting job : {work_info.id}')
+        self.logger.debug(f'Submitting job : {work_info.id}')
         await self._ensure_queue(work_info.name)
 
         result_future = asyncio.get_running_loop().create_future()
@@ -79,7 +79,9 @@ class DagSubmissionService:
         self._pending[request_id] = request
         try:
             queue_size_before = self._queue.qsize()
-            self._queue.put_nowait(request)
+            enqueue_started = time.perf_counter()
+            await self._queue.put(request)
+            enqueue_wait_ms = (time.perf_counter() - enqueue_started) * 1000
             scheduler_trace(
                 'scheduler_submission_enqueued',
                 job_id=work_info.id,
@@ -88,6 +90,8 @@ class DagSubmissionService:
                 request_id=request_id,
                 queue_size_before=queue_size_before,
                 queue_size=self._queue.qsize(),
+                queue_capacity=self._queue.maxsize,
+                enqueue_wait_ms=enqueue_wait_ms,
             )
             self.logger.debug(
                 f'Job {work_info.id} queued successfully (request: {request_id})'
@@ -95,6 +99,11 @@ class DagSubmissionService:
             if wait_for_result:
                 return await result_future
             return work_info.id
+        except asyncio.CancelledError:
+            self._pending.pop(request_id, None)
+            if not result_future.done():
+                result_future.cancel()
+            raise
         except Exception as error:
             self._pending.pop(request_id, None)
             if wait_for_result and not result_future.done():
@@ -276,6 +285,7 @@ class DagSubmissionService:
         total_workers = len(tasks)
         return {
             'queue_size': self.queue_size,
+            'queue_capacity': self._queue.maxsize,
             'pending_requests': self.pending_count,
             'total_submissions': self.submission_count,
             'workers': {

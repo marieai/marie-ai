@@ -1,3 +1,4 @@
+import argparse
 import os
 import time
 import urllib.error
@@ -10,6 +11,9 @@ from marie.excepts import RuntimeFailToStart
 from marie.importer import ImportExtensions
 from marie.logging_core.predefined import default_logger as logger
 from marie.utils.types import strtobool
+
+# FIX: Register argparse.Namespace for fairseq model loading bug
+torch.serialization.add_safe_globals([argparse.Namespace])
 
 
 def setup_cache(list_of_models: list[dict[str, str]] = None) -> None:

@@ -61,7 +61,8 @@ run_suite "Scheduler-adjacent runtime units" \
   tests/unit/serve/test_discovery_lease_params.py \
   tests/unit/serve/test_timeout_utils.py \
   tests/unit/serve/runtimes/worker/test_status_lease_timings.py \
-  tests/unit/serve/runtimes/worker/test_worker_request_handler_failure_reporting.py
+  tests/unit/serve/runtimes/worker/test_worker_request_handler_failure_reporting.py \
+  tests/unit/serve/runtimes/worker/test_worker_request_handler_semaphore.py
 
 run_suite "LLM queue units" \
   tests/unit/engine/llm_queue

@@ -159,7 +159,7 @@ class JobMetadata(BaseModel):
         :param layout: Designates which layout configuration to apply.
         :return: A populated JobMetadata object.
         """
-        logger.info(
+        logger.debug(
             f"Processing task: {task}",
         )
 

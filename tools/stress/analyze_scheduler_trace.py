@@ -64,6 +64,7 @@ EVENTS = (
     "executor_running_recorded",
     "executor_callback_invoked",
     "executor_slot_released",
+    "executor_slot_release_failed",
     "executor_success_recorded",
     "executor_failed_recorded",
     "job_run_attempt_started",
@@ -1450,6 +1451,7 @@ def _print_trace_coverage(rows: list[dict[str, Any]]) -> None:
         f"running={events.get('executor_running_recorded', 0)} "
         f"callback={events.get('executor_callback_invoked', 0)} "
         f"slot_released={events.get('executor_slot_released', 0)} "
+        f"slot_release_failed={events.get('executor_slot_release_failed', 0)} "
         f"terminal={executor_terminal}"
     )
 
@@ -1887,6 +1889,13 @@ def _print_findings(
     rows: list[dict[str, Any]],
 ) -> None:
     findings: list[str] = []
+
+    slot_release_failures = events.get("executor_slot_release_failed", 0)
+    if slot_release_failures:
+        findings.append(
+            f"Executor slot release failed for {slot_release_failures} terminal jobs; "
+            "capacity remains unavailable until lease expiry or reconciliation."
+        )
 
     started = events.get("control_flow_started", 0)
     completed = events.get("control_flow_completed", 0)
