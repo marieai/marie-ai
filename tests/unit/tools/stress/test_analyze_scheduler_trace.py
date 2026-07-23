@@ -61,6 +61,31 @@ def test_trace_coverage_exposes_missing_executor_process_events(capsys) -> None:
     assert "slot_release_failed=0" in output
 
 
+def test_trace_coverage_reports_deferred_frontier_admission(capsys) -> None:
+    rows = [
+        trace_row("gateway_dispatch_start", 1.0, job_id="job-1"),
+        trace_row("dag_frontier_added", 1.1, dag_id="dag-1"),
+        trace_row(
+            "dag_frontier_deferred",
+            1.2,
+            dag_id="dag-2",
+            reason="active_limit",
+        ),
+        trace_row(
+            "dag_frontier_deferred",
+            1.3,
+            dag_id="dag-3",
+            reason="executor_capacity",
+        ),
+    ]
+
+    _print_trace_coverage(rows)
+
+    output = capsys.readouterr().out
+    assert "submission frontier: admitted=1 deferred=2" in output
+    assert "active_limit=1 executor_capacity=1" in output
+
+
 def test_findings_report_executor_slot_release_failures(capsys) -> None:
     _print_findings(
         {"gateway_dispatch_start": (0, None, None)},

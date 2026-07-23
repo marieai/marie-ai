@@ -148,6 +148,16 @@ class DAGManagementService:
         admitted, _ = await self._admit_dag(dag_id, dag, source=source)
         return admitted
 
+    async def admit_submitted_dag(
+        self, dag_id: str, dag: QueryPlan, nodes: List[WorkInfo]
+    ) -> tuple[bool, str]:
+        return await self._admit_dag(
+            dag_id,
+            dag,
+            nodes=nodes,
+            source="submission",
+        )
+
     async def _admit_hydrated_dag(
         self, dag_id: str, dag: QueryPlan, nodes: List[WorkInfo], *, source: str
     ) -> tuple[bool, str]:

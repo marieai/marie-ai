@@ -378,7 +378,7 @@ class PostgreSQLJobScheduler(JobScheduler):
     ) -> DagSubmissionService:
         return DagSubmissionService(
             repository=self.repository,
-            frontier=self.frontier,
+            dag_admission_callback=self.dag_service.admit_submitted_dag,
             known_queues=self.known_queues,
             notify_callback=self.notify_event,
             is_running=lambda: self.running,

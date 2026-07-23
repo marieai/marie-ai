@@ -9,8 +9,8 @@ from typing import Any
 from marie.logging_core.logger import MarieLogger
 from marie.messaging import mark_as_failed as mark_as_failed_toast
 from marie.messaging import mark_as_scheduled as mark_as_scheduled_toast
+from marie.query_planner.base import QueryPlan
 from marie.scheduler.job_scheduler import JobSubmissionRequest
-from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import ExistingWorkPolicy, WorkInfo
 from marie.scheduler.planner_util import query_plan_work_items
 from marie.scheduler.repository import JobRepository
@@ -25,7 +25,9 @@ class DagSubmissionService:
         self,
         *,
         repository: JobRepository,
-        frontier: MemoryFrontier,
+        dag_admission_callback: Callable[
+            [str, QueryPlan, list[WorkInfo]], Awaitable[tuple[bool, str]]
+        ],
         known_queues: set[str],
         notify_callback: Callable[[], Awaitable[bool]],
         is_running: Callable[[], bool],
@@ -35,7 +37,7 @@ class DagSubmissionService:
         initial_submission_count: int = 0,
     ) -> None:
         self.repository = repository
-        self.frontier = frontier
+        self._dag_admission_callback = dag_admission_callback
         self.known_queues = known_queues
         self._notify_callback = notify_callback
         self._is_running = is_running
@@ -221,14 +223,27 @@ class DagSubmissionService:
             job_name=work_info.name,
             job_count=len(dag_nodes),
         )
-        await self.frontier.add_dag(plan, dag_nodes)
-        scheduler_trace(
-            'dag_frontier_added',
-            job_id=submission_id,
-            dag_id=submission_id,
-            job_name=work_info.name,
-            job_count=len(dag_nodes),
+        admitted, reason = await self._dag_admission_callback(
+            submission_id, plan, dag_nodes
         )
+        if admitted:
+            scheduler_trace(
+                'dag_frontier_added',
+                job_id=submission_id,
+                dag_id=submission_id,
+                job_name=work_info.name,
+                job_count=len(dag_nodes),
+                admission_reason=reason,
+            )
+        else:
+            scheduler_trace(
+                'dag_frontier_deferred',
+                job_id=submission_id,
+                dag_id=submission_id,
+                job_name=work_info.name,
+                job_count=len(dag_nodes),
+                reason=reason,
+            )
         await self._notify_callback()
         return submission_id
 

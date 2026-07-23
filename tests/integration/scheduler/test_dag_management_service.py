@@ -466,6 +466,29 @@ async def test_hydrated_dag_with_only_unavailable_mock_ready_work_is_not_admitte
 
 
 @pytest.mark.asyncio
+async def test_submitted_dag_is_left_durable_when_active_limit_is_reached():
+    repo = FakeRepository(priorities={}, hydratable_dags=[])
+    service, frontier, active_dags = make_service(
+        {"mock_executor_a": 1}, max_active_dags=1, repo=repo
+    )
+    active_dags["dag-existing"] = QueryPlan(nodes=[])
+    dag_id = "dag-submitted"
+    nodes = [
+        make_wi("job-submitted", dag_id, "mock_executor_a://document/process")
+    ]
+
+    admitted, reason = await service.admit_submitted_dag(
+        dag_id, QueryPlan(nodes=[]), nodes
+    )
+
+    assert admitted is False
+    assert reason == "active_limit"
+    assert repo.marked_active_dags == []
+    assert dag_id not in active_dags
+    assert dag_id not in frontier.dag_nodes
+
+
+@pytest.mark.asyncio
 async def test_hydrated_dag_with_ready_annotator_llm_work_is_admitted():
     repo = FakeRepository(priorities={}, hydratable_dags=[])
     service, frontier, active_dags = make_service(
