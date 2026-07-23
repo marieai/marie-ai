@@ -920,7 +920,7 @@ vagrant_sync_images() {
             "rabbitmq:3-management-alpine"
             "minio/minio:latest"
             "minio/mc:latest"
-            "quay.io/coreos/etcd:v3.6.1"
+            "quay.io/coreos/etcd:v3.7.0"
             "gitea/gitea:latest"
             "clickhouse/clickhouse-server:latest"
             "marieai/marie-gateway:5.0.0-cpu"

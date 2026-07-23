@@ -16,8 +16,9 @@ This document describes how to deploy a secure etcd cluster using Docker Compose
    * [Ansible Automation](#ansible-automation)
 6. [Directory Structure](#directory-structure)
 7. [Commands Reference](#commands-reference)
-8. [Troubleshooting](#troubleshooting)
-9. [Cleanup](#cleanup)
+8. [Recreate Local Data](#recreate-local-data)
+9. [Troubleshooting](#troubleshooting)
+10. [Cleanup](#cleanup)
 
 ---
 
@@ -30,6 +31,11 @@ This document describes how to deploy a secure etcd cluster using Docker Compose
 * Git (to clone this repository)
 
 Ensure you have network connectivity between all etcd nodes on ports **2379** (client) and **2380** (peer).
+
+The bundled deployments use etcd **v3.7.0** and retain one hour of MVCC
+history. Standard deployments set a 4 GiB backend quota; the 1 GiB sandbox
+volume uses a 512 MiB quota. Keep the backing filesystem larger than the
+backend quota so snapshots, WAL files, and defragmentation have room.
 
 ---
 
@@ -185,6 +191,34 @@ Role variables can be adjusted in `roles/etcd_cluster/defaults/main.yml`.
 | Start multi-node (manual) | `docker-compose -f docker-compose.etcd.yml up -d` |
 | Ansible deploy            | `ansible-playbook -i inventory.yml site.yml`      |
 | Check endpoint health     | `etcdctl endpoint health --cluster [params]`      |
+
+---
+
+## Recreate Local Data
+
+The local single-member deployment does not migrate older data directories.
+Recreate its named volume when moving an existing local installation to v3.7.0:
+
+```bash
+docker compose \
+  -p marie-infrastructure \
+  -f Dockerfiles/docker-compose.etcd.yml \
+  stop etcd-single
+
+docker compose \
+  -p marie-infrastructure \
+  -f Dockerfiles/docker-compose.etcd.yml \
+  rm -f etcd-single
+
+docker volume rm marie-infrastructure_etcd_data
+
+docker compose \
+  -p marie-infrastructure \
+  -f Dockerfiles/docker-compose.etcd.yml \
+  up -d etcd-single
+```
+
+This permanently deletes the local etcd keyspace.
 
 ---
 

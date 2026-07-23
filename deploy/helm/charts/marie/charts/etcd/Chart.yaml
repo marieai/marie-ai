@@ -3,4 +3,4 @@ name: etcd
 description: etcd dependency matching the Marie bootstrap image
 type: application
 version: 0.1.0
-appVersion: "v3.6.1"
+appVersion: "v3.7.0"

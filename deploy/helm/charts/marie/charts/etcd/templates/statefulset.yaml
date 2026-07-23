@@ -33,6 +33,9 @@ spec:
           args:
             - --name=single
             - --data-dir=/etcd-data
+            - --auto-compaction-mode={{ .Values.autoCompaction.mode }}
+            - --auto-compaction-retention={{ .Values.autoCompaction.retention }}
+            - {{ printf "--quota-backend-bytes=%s" .Values.quotaBackendBytes | quote }}
             - --listen-client-urls=http://0.0.0.0:2379
             - --advertise-client-urls=http://$(POD_NAME).{{ include "etcd.headlessName" . }}.$(POD_NAMESPACE).svc.cluster.local:2379
             - --listen-peer-urls=http://0.0.0.0:2380
@@ -60,22 +63,16 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           startupProbe:
-            exec:
-              command:
-                - etcdctl
-                - endpoint
-                - health
-                - --endpoints=http://127.0.0.1:2379
+            httpGet:
+              path: /livez
+              port: client
             initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 30
           livenessProbe:
-            exec:
-              command:
-                - etcdctl
-                - endpoint
-                - health
-                - --endpoints=http://127.0.0.1:2379
+            httpGet:
+              path: /livez
+              port: client
             periodSeconds: 30
             timeoutSeconds: 10
           readinessProbe:

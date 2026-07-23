@@ -374,7 +374,13 @@ etcd:
   image:
     registry: quay.io
     repository: coreos/etcd
-    tag: "v3.6.1"
+    tag: "v3.7.0"
+
+  autoCompaction:
+    mode: periodic
+    retention: 1h
+
+  quotaBackendBytes: "4294967296"
 
   auth:
     rbac:

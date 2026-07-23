@@ -383,7 +383,7 @@ No application services configured to start
 Services status:
 Infrastructure Services:
 NAME                IMAGE                                             COMMAND                  SERVICE       CREATED          STATUS                    PORTS
-etcd-single         quay.io/coreos/etcd:v3.6.1                        "/usr/local/bin/etcd…"   etcd-single   31 seconds ago   Up 31 seconds (healthy)   
+etcd-single         quay.io/coreos/etcd:v3.7.0                        "/usr/local/bin/etcd…"   etcd-single   31 seconds ago   Up 31 seconds (healthy)
 marie-psql-server   ghcr.io/ferretdb/postgres-documentdb:17-0.103.0   "docker-entrypoint.s…"   psql          31 seconds ago   Up 31 seconds             
 marie-rabbitmq      rabbitmq:3-management-alpine                      "docker-entrypoint.s…"   rabbitmq      31 seconds ago   Up 31 seconds             
 marie-s3-server     minio/minio:latest                                "/usr/bin/docker-ent…"   s3server      31 seconds ago   Up 31 seconds (healthy)   
@@ -464,7 +464,7 @@ CONTAINER ID   IMAGE                                             COMMAND        
 60921ce11677   ghcr.io/ferretdb/postgres-documentdb:17-0.103.0   "docker-entrypoint.s…"   20 minutes ago       Up 20 minutes                           marie-psql-server
 afe2b9aad84c   minio/minio:latest                                "/usr/bin/docker-ent…"   20 minutes ago       Up 20 minutes (healthy)                 marie-s3-server
 5a4f81dcf644   rabbitmq:3-management-alpine                      "docker-entrypoint.s…"   20 minutes ago       Up 20 minutes                           marie-rabbitmq
-db5950b54663   quay.io/coreos/etcd:v3.6.1                        "/usr/local/bin/etcd…"   20 minutes ago       Up 20 minutes (healthy)                 etcd-single
+db5950b54663   quay.io/coreos/etcd:v3.7.0                        "/usr/local/bin/etcd…"   20 minutes ago       Up 20 minutes (healthy)                 etcd-single
 ```
 
 ## Gateway verification

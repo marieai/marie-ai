@@ -4,8 +4,14 @@ replicaCount: 1
 image:
   registry: quay.io
   repository: coreos/etcd
-  tag: "v3.6.1"
+  tag: "v3.7.0"
   pullPolicy: IfNotPresent
+
+autoCompaction:
+  mode: periodic
+  retention: 1h
+
+quotaBackendBytes: "4294967296"
 
 service:
   type: ClusterIP

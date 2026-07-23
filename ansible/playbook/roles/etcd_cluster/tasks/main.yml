@@ -40,6 +40,9 @@
       /usr/local/bin/etcd
         --name {{ etcd_name }}
         --data-dir /etcd-data
+        --auto-compaction-mode {{ etcd_auto_compaction_mode }}
+        --auto-compaction-retention {{ etcd_auto_compaction_retention }}
+        --quota-backend-bytes {{ etcd_quota_backend_bytes }}
         {% if enable_tls %}
           --cert-file={{ etcd_cert_dir }}/etcd.pem
           --key-file={{ etcd_cert_dir }}/etcd-key.pem
@@ -54,7 +57,6 @@
         --listen-peer-urls http://0.0.0.0:2380
         --listen-client-urls http://0.0.0.0:2379
         --advertise-client-urls http://{{ etcd_ip }}:2379
-        {% endif %}
         --initial-cluster-token {{ etcd_cluster_token }}
         --initial-cluster {{ initial_cluster }}
         --initial-cluster-state new

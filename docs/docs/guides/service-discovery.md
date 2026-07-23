@@ -12,8 +12,11 @@ Here we are going to show how to use the `EtcdServiceResolver` to resolve servic
 ```bash
 docker run  -d  -p 2379:2379  --name etcd \
 -v /usr/share/ca-certificates/:/etc/ssl/certs \
-quay.io/coreos/etcd:v3.6.1 /usr/local/bin/etcd -advertise-client-urls \
+quay.io/coreos/etcd:v3.7.0 /usr/local/bin/etcd -advertise-client-urls \
 http://0.0.0.0:2379 -listen-client-urls http://0.0.0.0:2379 \
+--auto-compaction-mode=periodic \
+--auto-compaction-retention=1h \
+--quota-backend-bytes=4294967296 \
 --log-level=info \
 --log-outputs=stdout
 ```

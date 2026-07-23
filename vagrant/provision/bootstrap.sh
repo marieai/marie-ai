@@ -165,7 +165,7 @@ docker pull ghcr.io/ferretdb/postgres-documentdb:17-0.103.0 &
 docker pull rabbitmq:3-management-alpine &
 docker pull minio/minio:latest &
 docker pull minio/mc:latest &
-docker pull quay.io/coreos/etcd:v3.6.1 &
+docker pull quay.io/coreos/etcd:v3.7.0 &
 docker pull gitea/gitea:latest &
 docker pull clickhouse/clickhouse-server:latest &
 

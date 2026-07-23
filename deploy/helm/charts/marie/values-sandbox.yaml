@@ -309,6 +309,7 @@ valkey:
 etcd:
   persistence:
     size: 1Gi
+  quotaBackendBytes: "536870912"
 
 clickhouse:
   enabled: false

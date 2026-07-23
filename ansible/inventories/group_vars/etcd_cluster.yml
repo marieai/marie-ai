@@ -1,9 +1,12 @@
 # ETCD Cluster Configuration
 etcd_cluster_token: etcd-cluster-1
-etcd_image: quay.io/coreos/etcd:v3.6.1
+etcd_image: quay.io/coreos/etcd:v3.7.0
 etcd_data_dir: /var/lib/etcd
 etcd_client_port: 2379
 etcd_peer_port: 2380
+etcd_auto_compaction_mode: periodic
+etcd_auto_compaction_retention: 1h
+etcd_quota_backend_bytes: 4294967296
 enable_tls: false  # Toggle TLS
 etcd_cert_dir: /etc/etcd/certs
 shared_cert: true
