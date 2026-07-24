@@ -163,6 +163,10 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
         "CREATE TABLE IF NOT EXISTS marie_scheduler.resource_workflow_binding"
         in schema_query
     )
+    assert (
+        "CREATE OR REPLACE FUNCTION marie_scheduler.admission_candidate_dags("
+        in schema_query
+    )
     assert "VALUES ('default')" in schema_query
     assert "VALUES ('72')" in schema_query
 
@@ -419,6 +423,29 @@ async def test_discover_hydratable_dags_uses_database_function_contract() -> Non
 
 
 @pytest.mark.asyncio
+async def test_discover_admission_candidates_uses_database_function_contract() -> None:
+    excluded = "00000000-0000-0000-0000-000000000001"
+    connection = FakeConnection(fetch=[[]])
+    repository = build_repository(connection)
+
+    assert await repository.discover_admission_candidates(
+        limit=25,
+        sla_interval_seconds=900,
+        excluded_dag_ids=[excluded],
+    ) == []
+
+    _, query, params = connection.calls[0]
+    assert "FROM marie_scheduler.admission_candidate_dags(" in query
+    assert "JOIN marie_scheduler.dag" not in query
+    assert "WITH ORDINALITY" in query
+    assert "ORDER BY candidate.admission_rank" in query
+    assert "priority" not in query
+    assert "soft_sla" not in query
+    assert "hard_sla" not in query
+    assert params == (25, 900, [excluded])
+
+
+@pytest.mark.asyncio
 async def test_load_dag_and_jobs_uses_database_function_contract() -> None:
     dag_id = "00000000-0000-0000-0000-000000000001"
     connection = FakeConnection(fetchrow=[None])
@@ -585,6 +612,7 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
             True,
             True,
             True,
+            True,
             (
                 "run_attempt_id lease_owner = _run_owner INSERT INTO "
                 "marie_scheduler.job_attempt _gateway_instance_id"
@@ -597,7 +625,13 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
 
     await repository.validate_durable_scheduler_schema()
 
-    _, activation_query, _ = connection.calls[3]
+    _, function_query, function_params = connection.calls[3]
+    assert "to_regprocedure" in function_query
+    assert function_params == (
+        "marie_scheduler.admission_candidate_dags(integer,integer,uuid[])",
+    )
+
+    _, activation_query, _ = connection.calls[4]
     assert "p.pronargs = 4" in activation_query
     assert all(
         "scheduler_attempt_invariant_checks" not in query

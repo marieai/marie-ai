@@ -24,6 +24,8 @@ class FakeRepository:
         self._hydratable_jobs = hydratable_jobs or {}
         self._mark_dag_active_result = mark_dag_active_result
         self.marked_active_dags = []
+        self.admission_candidate_calls = []
+        self.hydratable_job_calls = []
         self._closed = []
         self._rows = []
 
@@ -49,7 +51,25 @@ class FakeRepository:
         rows = list(self._hydratable_dags)
         return rows[:limit] if limit > 0 else rows
 
+    async def discover_admission_candidates(
+        self,
+        *,
+        limit,
+        sla_interval_seconds,
+        excluded_dag_ids=(),
+    ):
+        self.admission_candidate_calls.append(
+            (limit, sla_interval_seconds, tuple(excluded_dag_ids))
+        )
+        rows = [
+            row
+            for row in self._hydratable_dags
+            if str(row[0]) not in excluded_dag_ids
+        ]
+        return rows[:limit]
+
     async def load_hydratable_jobs(self, dag_ids):
+        self.hydratable_job_calls.append(tuple(map(str, dag_ids)))
         rows = []
         for dag_id in map(str, dag_ids):
             rows.extend((dag_id, job) for job in self._hydratable_jobs.get(dag_id, []))
@@ -181,9 +201,7 @@ async def test_hydrate_bulk_preserves_sla_fields():
 
 
 @pytest.mark.asyncio
-async def test_refresh_frontier_priorities_updates_memory_and_hydrates_missing(
-    monkeypatch,
-):
+async def test_refresh_frontier_priorities_updates_memory_and_requests_admission():
     now = datetime.now(timezone.utc)
     frontier = MemoryFrontier(higher_priority_wins=True, default_lease_ttl=0.25)
     existing = WorkInfo(
@@ -214,28 +232,21 @@ async def test_refresh_frontier_priorities_updates_memory_and_hydrates_missing(
         active_dags=active_dags,
     )
 
-    hydrated = []
-
-    async def fake_hydrate_single_dag(dag_id: str) -> bool:
-        hydrated.append(dag_id)
-        return True
-
-    monkeypatch.setattr(service, "hydrate_single_dag", fake_hydrate_single_dag)
-
     stats = await service.refresh_frontier_priorities(hydrate_missing_limit=10)
 
     assert stats == {
         "tracked": 1,
         "fetched": 1,
         "changed": 1,
-        "hydrated_missing": 1,
+        "hydrated_missing": 0,
     }
     assert frontier.jobs_by_id["job-1"].priority == 99
-    assert hydrated == ["dag-2"]
+    assert service._admission_event.is_set()
+    assert repo.admission_candidate_calls == []
 
 
 @pytest.mark.asyncio
-async def test_refresh_frontier_priorities_skips_dags_already_in_frontier(monkeypatch):
+async def test_refresh_frontier_priorities_defers_discovery_to_admission_worker():
     frontier = MemoryFrontier(higher_priority_wins=True, default_lease_ttl=0.25)
     await frontier.add_dag(
         None,
@@ -254,18 +265,11 @@ async def test_refresh_frontier_priorities_skips_dags_already_in_frontier(monkey
         active_dags={},
     )
 
-    hydrated = []
-
-    async def fake_hydrate_single_dag(dag_id: str) -> bool:
-        hydrated.append(dag_id)
-        return True
-
-    monkeypatch.setattr(service, "hydrate_single_dag", fake_hydrate_single_dag)
-
     stats = await service.refresh_frontier_priorities(hydrate_missing_limit=10)
 
-    assert stats["hydrated_missing"] == 1
-    assert hydrated == ["dag-missing"]
+    assert stats["hydrated_missing"] == 0
+    assert service._admission_event.is_set()
+    assert repo.admission_candidate_calls == []
 
 
 @pytest.mark.asyncio
@@ -378,6 +382,7 @@ async def test_handle_failed_state_evicts_without_rehydrating() -> None:
         repository=FakeRepository(priorities={}, hydratable_dags=[]),
         frontier=frontier,
         active_dags={dag_id: object()},
+        max_active_dags=1,
     )
     service.hydrate_single_dag = AsyncMock()
 
@@ -388,6 +393,7 @@ async def test_handle_failed_state_evicts_without_rehydrating() -> None:
     service.hydrate_single_dag.assert_not_awaited()
     assert dag_id not in service.active_dags
     assert dag_id not in frontier.dag_nodes
+    assert service._admission_event.is_set()
 
 
 @pytest.mark.asyncio
@@ -425,6 +431,7 @@ async def test_suspended_state_releases_active_dag_capacity() -> None:
 
     assert dag_id not in active_dags
     assert dag_id not in frontier.dag_nodes
+    assert not service._admission_event.is_set()
 
 
 @pytest.mark.asyncio
@@ -439,6 +446,24 @@ async def test_sync_task_is_owned_and_stopped_by_service() -> None:
     assert sync_task is not None
     assert sync_task.cancelled()
     assert service._sync_task is None
+
+
+@pytest.mark.asyncio
+async def test_admission_worker_uses_durable_candidate_function_and_stops() -> None:
+    repo = FakeRepository(priorities={}, hydratable_dags=[])
+    service, _, _ = make_service({"mock_executor_a": 1}, repo=repo)
+
+    await service.start_admission()
+    task = service._admission_task
+    async with asyncio.timeout(1):
+        while not repo.admission_candidate_calls:
+            await asyncio.sleep(0)
+    await service.stop_admission()
+
+    assert repo.admission_candidate_calls == [(100, 900, ())]
+    assert task is not None
+    assert task.done()
+    assert service._admission_task is None
 
 
 @pytest.mark.asyncio
@@ -466,26 +491,67 @@ async def test_hydrated_dag_with_only_unavailable_mock_ready_work_is_not_admitte
 
 
 @pytest.mark.asyncio
-async def test_submitted_dag_is_left_durable_when_active_limit_is_reached():
-    repo = FakeRepository(priorities={}, hydratable_dags=[])
+async def test_durable_admission_preserves_database_candidate_order():
+    dag_ids = ["dag-priority", "dag-sla", "dag-fifo"]
+    hydratable_dags = [(dag_id, {"nodes": []}) for dag_id in dag_ids]
+    hydratable_jobs = {
+        dag_id: [
+            serialize_wi(
+                make_wi(
+                    f"job-{dag_id}",
+                    dag_id,
+                    "mock_executor_a://document/process",
+                )
+            )
+        ]
+        for dag_id in dag_ids
+    }
+    repo = FakeRepository(
+        priorities={},
+        hydratable_dags=hydratable_dags,
+        hydratable_jobs=hydratable_jobs,
+    )
     service, frontier, active_dags = make_service(
+        {"mock_executor_a": 2}, max_active_dags=2, repo=repo
+    )
+    result = await service.admit_durable_candidates(source="test")
+
+    assert result == {"candidates": 3, "admitted": 2, "deferred": 0, "skipped": 0}
+    assert repo.marked_active_dags == dag_ids[:2]
+    assert list(active_dags) == dag_ids[:2]
+    assert set(frontier.dag_nodes) == set(dag_ids[:2])
+    assert repo.admission_candidate_calls == [(8, 900, ())]
+    assert repo.hydratable_job_calls == [tuple(dag_ids)]
+
+
+@pytest.mark.asyncio
+async def test_durable_admission_hydrates_only_the_overscan_window():
+    dag_ids = [f"dag-{index}" for index in range(10)]
+    repo = FakeRepository(
+        priorities={},
+        hydratable_dags=[(dag_id, {"nodes": []}) for dag_id in dag_ids],
+        hydratable_jobs={
+            dag_id: [
+                serialize_wi(
+                    make_wi(
+                        f"job-{dag_id}",
+                        dag_id,
+                        "mock_executor_a://document/process",
+                    )
+                )
+            ]
+            for dag_id in dag_ids
+        },
+    )
+    service, _, _ = make_service(
         {"mock_executor_a": 1}, max_active_dags=1, repo=repo
     )
-    active_dags["dag-existing"] = QueryPlan(nodes=[])
-    dag_id = "dag-submitted"
-    nodes = [
-        make_wi("job-submitted", dag_id, "mock_executor_a://document/process")
-    ]
 
-    admitted, reason = await service.admit_submitted_dag(
-        dag_id, QueryPlan(nodes=[]), nodes
-    )
+    result = await service.admit_durable_candidates(source="test")
 
-    assert admitted is False
-    assert reason == "active_limit"
-    assert repo.marked_active_dags == []
-    assert dag_id not in active_dags
-    assert dag_id not in frontier.dag_nodes
+    assert result == {"candidates": 4, "admitted": 1, "deferred": 0, "skipped": 0}
+    assert repo.admission_candidate_calls == [(4, 900, ())]
+    assert repo.hydratable_job_calls == [tuple(dag_ids[:4])]
 
 
 @pytest.mark.asyncio

@@ -1,14 +1,9 @@
 import logging
 import time
-from importlib.util import find_spec
 from typing import Dict, List, Optional, Union
 
 import diskcache as dc
 import torch
-from PIL import Image
-from pydantic import BaseModel
-from transformers import AutoTokenizer
-
 from marie.engine import MODEL_NAME_MAP
 from marie.engine.base import EngineLM
 from marie.engine.device import initialize_device_settings
@@ -20,21 +15,18 @@ from marie.engine.engine_utils import (
     process_vision_info,
 )
 from marie.engine.vllm_config import VLLM_MODEL_MAP as MODEL_MAP
+from PIL import Image
+from pydantic import BaseModel
+from transformers import AutoTokenizer
 
-# Ensures vLLM and flash-attention are installed
+# Ensure vLLM is installed.
 try:
     from vllm import SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
+    from vllm.sampling_params import StructuredOutputsParams
 except ImportError as e:
     raise ImportError(
-        "vLLM is required to run this module. Install it using:\n" "  uv add vllm"
+        "vLLM is required to run this module. Install it using:\n  uv add vllm"
     ) from e
-
-if find_spec("flash_attn") is None:
-    raise ImportError(
-        "flash-attention 2 is required to run this module. Install it using:\n"
-        "  uv add flash-attn"
-    )
 
 
 class VLLMEngine(EngineLM):
@@ -260,7 +252,7 @@ class VLLMEngine(EngineLM):
         # https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/structured_outputs.py
         guided_backend = "xgrammar:disable-any-whitespace"
 
-        guided_decoding = self._get_guided_decoding_params(
+        structured_outputs = self._get_structured_outputs_params(
             guided_json,
             guided_regex,
             guided_choice,
@@ -293,7 +285,7 @@ class VLLMEngine(EngineLM):
         # },
         #
         sampling_params = SamplingParams(
-            guided_decoding=guided_decoding,
+            structured_outputs=structured_outputs,
             temperature=kwargs.get("temperature", 0),  # 0 = GREEDY
             top_p=kwargs.get("top_p", 1.0),
             top_k=kwargs.get("top_k", -1),
@@ -301,9 +293,7 @@ class VLLMEngine(EngineLM):
             stop_token_ids=None,  # No specific stop tokens enforced
             n=1,
         )
-        batch_inputs = [
-            {"prompt": prompt, "batch_id": idx} for idx, prompt in enumerate(prompts)
-        ]
+        batch_inputs = [{"prompt": prompt} for prompt in prompts]
 
         if self.is_multimodal:
             for idx, messages in enumerate(messages_list):
@@ -376,7 +366,7 @@ class VLLMEngine(EngineLM):
             return results[0]
         return results
 
-    def _get_guided_decoding_params(
+    def _get_structured_outputs_params(
         self,
         guided_json: Optional[Union[Dict, BaseModel, str]] = None,
         guided_regex: Optional[str] = None,
@@ -385,16 +375,28 @@ class VLLMEngine(EngineLM):
         guided_json_object: Optional[bool] = None,
         guided_backend: Optional[str] = None,
         guided_whitespace_pattern: Optional[str] = None,
-    ) -> GuidedDecodingParams:
-        """Constructs GuidedDecodingParams based on guided_mode."""
-        # ref : vllm/model_executor/guided_decoding/__init__.py
+    ) -> Optional[StructuredOutputsParams]:
+        if not any(
+            value is not None
+            for value in (
+                guided_json,
+                guided_regex,
+                guided_choice,
+                guided_grammar,
+                guided_json_object,
+            )
+        ):
+            return None
 
-        return GuidedDecodingParams.from_optional(
+        return StructuredOutputsParams(
             json=guided_json,
             regex=guided_regex,
             choice=guided_choice,
             grammar=guided_grammar,
             json_object=guided_json_object,
-            backend=guided_backend,
+            disable_any_whitespace=(
+                guided_backend is not None
+                and "disable-any-whitespace" in guided_backend
+            ),
             whitespace_pattern=guided_whitespace_pattern,
         )

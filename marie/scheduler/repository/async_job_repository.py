@@ -377,6 +377,37 @@ class AsyncJobRepository:
             )
         return [(str(row[0]), row[1]) for row in rows]
 
+    async def discover_admission_candidates(
+        self,
+        *,
+        limit: int,
+        sla_interval_seconds: int,
+        excluded_dag_ids: Sequence[str] = (),
+    ) -> List[Tuple[str, Dict]]:
+        """Return eligible DAGs in durable admission order."""
+        if limit <= 0:
+            return []
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT candidate.dag_id, candidate.serialized_dag
+                FROM {DEFAULT_SCHEMA}.admission_candidate_dags(
+                    %s,
+                    %s,
+                    %s::uuid[]
+                ) WITH ORDINALITY AS candidate(
+                    dag_id,
+                    serialized_dag,
+                    admission_rank
+                )
+                ORDER BY candidate.admission_rank
+                """,
+                limit,
+                max(1, int(sla_interval_seconds)),
+                list(excluded_dag_ids),
+            )
+        return [(str(row[0]), row[1]) for row in rows]
+
     async def load_hydratable_jobs(self, dag_ids: List[str]) -> List[Tuple[str, Dict]]:
         if not dag_ids:
             return []
@@ -1509,6 +1540,11 @@ class AsyncJobRepository:
                 """,
                 (schema,),
                 f"{schema}.job_attempt is missing",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NOT NULL",
+                (f"{schema}.admission_candidate_dags(integer,integer,uuid[])",),
+                f"{schema}.admission_candidate_dags is missing",
             ),
         )
         async with self._pool.acquire() as conn:

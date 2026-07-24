@@ -11,7 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # Tweak this list to reduce build time
 # https://developer.nvidia.com/cuda-gpus
-ENV TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0"
+ENV TORCH_CUDA_ARCH_LIST="8.6;8.9;12.0"
 
 RUN test -e /usr/local/cuda/bin/nvcc && /usr/local/cuda/bin/nvcc --version
 
@@ -44,6 +44,7 @@ RUN apt-get update -o APT::Update::Error-Mode=any && \
         python3.12 \
         python3.12-dev \
         python3.12-venv \
+        unzip \
         wget \
         zlib1g && \
     rm -rf /var/lib/apt/lists/*
@@ -54,9 +55,9 @@ RUN ln -sf /usr/bin/python3.12 /usr/bin/python3 && \
 
 # change on pyproject.toml or uv.lock will invalidate the dependency cache
 COPY pyproject.toml uv.lock README.md /tmp/
-# the project version is dynamic (attr: marie.__version__); uv sync needs it
+# the project version is dynamic (attr: marie._version.__version__); uv sync needs it
 # to build project metadata even with --no-install-project
-COPY marie/__init__.py /tmp/marie/__init__.py
+COPY marie/_version.py /tmp/marie/_version.py
 # Copy directories
 COPY packages/ /tmp/packages/
 COPY patches/ /tmp/patches/
@@ -72,12 +73,14 @@ RUN set -eux; \
     test "$(find /tmp/wheels -maxdepth 1 -name 'fairseq-*.whl' | wc -l)" -eq 1; \
     test "$(find /tmp/wheels -maxdepth 1 -name 'detectron2-*.whl' | wc -l)" -eq 1; \
     test "$(find /tmp/wheels -maxdepth 1 \( -name 'faiss*.whl' -o -name 'faiss_gpu_cu13-*.whl' \) | wc -l)" -eq 1; \
+    test "$(find /tmp/wheels -maxdepth 1 -name 'vllm-*.whl' | wc -l)" -eq 1; \
     sha256sum \
         /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl \
         /tmp/wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl \
         /tmp/wheels/fairseq-*.whl \
         /tmp/wheels/detectron2-*.whl \
-        /tmp/wheels/faiss*.whl
+        /tmp/wheels/faiss*.whl \
+        /tmp/wheels/vllm-*.whl
 
 # Install the CUDA profile dependencies from uv.lock (project excluded so this
 # layer stays cached across source-only changes).
@@ -91,8 +94,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         if [ "$i" = "3" ]; then \
             exit 1; \
         fi; \
-        echo "Attempt $i failed, purging uv cache and retrying..."; \
-        uv cache clean || true; \
+        echo "Attempt $i failed, retrying..."; \
         sleep 5; \
     done
 
@@ -102,7 +104,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY . /marie/
 RUN --mount=type=cache,target=/root/.cache/uv \
     cd /marie && \
-    uv sync --locked --no-dev --extra cu130 --no-editable --compile-bytecode --python /usr/bin/python3.12 && \
+    uv sync --locked --no-dev --group runtime --extra cu130 --no-editable --compile-bytecode --python /usr/bin/python3.12 && \
+    test -x /opt/venv/bin/marie && \
+    python3 -c 'import torch, vllm; assert torch.__version__.startswith("2.12.1"); print("vllm", vllm.__version__, "torch", torch.__version__)' && \
     python3 /tmp/patches/patch-omegaconf-py312.py --no-confirm && \
     python3 /tmp/patches/patch-detectron2-metadata.py --no-confirm && \
     uv pip check --python /opt/venv/bin/python && \
@@ -123,12 +127,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=${TZ} \
     PYTHONUNBUFFERED=1
 
-# Runtime libraries only: no compilers, headers, or -dev packages.
+# vLLM/Triton compile runtime launchers on first use.
 # Ubuntu 24.04 ships Python 3.12 natively; no external PPA needed.
 RUN apt-get update -o APT::Update::Error-Mode=any && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        build-essential \
         git \
         graphviz \
         imagemagick \
@@ -141,6 +146,7 @@ RUN apt-get update -o APT::Update::Error-Mode=any && \
         openssh-client \
         poppler-utils \
         python3.12 \
+        python3.12-dev \
         tzdata && \
     ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
@@ -175,4 +181,4 @@ LABEL org.opencontainers.image.vendor="Marie AI" \
       org.opencontainers.image.version=${MARIE_VERSION} \
       org.opencontainers.image.revision=${VCS_REF}
 
-ENTRYPOINT ["marie"]
+ENTRYPOINT ["/opt/venv/bin/marie"]

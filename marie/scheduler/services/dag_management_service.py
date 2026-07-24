@@ -15,6 +15,8 @@ from marie.scheduler.state import WorkState
 from marie.scheduler.util import executor_name, is_control_flow_entrypoint
 from marie.utils.scheduler_trace import scheduler_trace
 
+ADMISSION_OVERSCAN = 4
+
 
 class DAGManagementService:
     """
@@ -40,6 +42,8 @@ class DAGManagementService:
         resolution_retry_delay: float = 1.0,
         resolution_retry_backoff: bool = True,
         resolution_retry_max_delay: float = 30.0,
+        admission_batch_size: int = 100,
+        sla_priority_interval_seconds: int = 15 * 60,
     ):
         """
         Initialize the DAG management service.
@@ -65,6 +69,12 @@ class DAGManagementService:
         self._resolution_retry_delay = max(0.0, resolution_retry_delay)
         self._resolution_retry_backoff = resolution_retry_backoff
         self._resolution_retry_max_delay = max(0.0, resolution_retry_max_delay)
+        self._admission_batch_size = max(1, admission_batch_size)
+        self._sla_priority_interval_seconds = max(1, sla_priority_interval_seconds)
+        self._admission_event = asyncio.Event()
+        self._admission_task: Optional[asyncio.Task] = None
+        self._admission_running = False
+        self._admission_source = "startup"
 
         # Sync task
         self._sync_task: Optional[asyncio.Task] = None
@@ -148,20 +158,199 @@ class DAGManagementService:
         admitted, _ = await self._admit_dag(dag_id, dag, source=source)
         return admitted
 
-    async def admit_submitted_dag(
-        self, dag_id: str, dag: QueryPlan, nodes: List[WorkInfo]
-    ) -> tuple[bool, str]:
-        return await self._admit_dag(
-            dag_id,
-            dag,
-            nodes=nodes,
-            source="submission",
-        )
-
     async def _admit_hydrated_dag(
         self, dag_id: str, dag: QueryPlan, nodes: List[WorkInfo], *, source: str
     ) -> tuple[bool, str]:
         return await self._admit_dag(dag_id, dag, nodes=nodes, source=source)
+
+    async def request_admission(self, source: str) -> bool:
+        """Wake the single durable admission worker."""
+        coalesced = self._admission_event.is_set()
+        self._admission_source = source
+        self._admission_event.set()
+        scheduler_trace(
+            "scheduler_dag_admission_requested",
+            source=source,
+            coalesced=coalesced,
+            active_dags=len(self.active_dags),
+            max_active_dags=self.max_active_dags,
+        )
+        return not coalesced
+
+    async def start_admission(self) -> None:
+        if self._admission_task and not self._admission_task.done():
+            return
+        self._admission_running = True
+        self._admission_task = asyncio.create_task(
+            self._admission_loop(), name="scheduler-dag-admission"
+        )
+        await self.request_admission("startup")
+
+    async def stop_admission(self) -> None:
+        self._admission_running = False
+        self._admission_event.set()
+        if self._admission_task:
+            self._admission_task.cancel()
+            try:
+                await self._admission_task
+            except asyncio.CancelledError:
+                pass
+            self._admission_task = None
+
+    async def _admission_loop(self) -> None:
+        while self._admission_running:
+            try:
+                await self._admission_event.wait()
+                self._admission_event.clear()
+                source = self._admission_source
+
+                while self._admission_running:
+                    result = await self.admit_durable_candidates(source=source)
+                    if result["admitted"] == 0:
+                        break
+                    if (
+                        self.max_active_dags > 0
+                        and len(self.active_dags) >= self.max_active_dags
+                    ):
+                        break
+            except asyncio.CancelledError:
+                break
+            except Exception as error:
+                self.logger.error(
+                    f"Durable DAG admission failed: {error}", exc_info=True
+                )
+
+    @staticmethod
+    def _work_info_from_hydrated_job(dag_id: str, job_dict: dict) -> WorkInfo:
+        state_raw = job_dict.get("state")
+        work_info = WorkInfo(
+            id=str(job_dict["id"]),
+            name=job_dict["name"],
+            priority=job_dict["priority"],
+            state=WorkState(state_raw) if state_raw else None,
+            retry_limit=job_dict["retry_limit"],
+            start_after=job_dict["start_after"],
+            expire_in_seconds=job_dict.get("expire_in_seconds", 0),
+            data=job_dict["data"],
+            retry_delay=job_dict["retry_delay"],
+            retry_backoff=job_dict["retry_backoff"],
+            keep_until=job_dict["keep_until"],
+            dag_id=dag_id,
+            job_level=job_dict["job_level"],
+            soft_sla=job_dict.get("soft_sla"),
+            hard_sla=job_dict.get("hard_sla"),
+        )
+        work_info.dependencies = [
+            str(dep) for dep in job_dict.get("dependencies") or []
+        ]
+        return work_info
+
+    async def admit_durable_candidates(self, *, source: str) -> dict[str, int]:
+        """Fill the bounded frontier from SQL-ranked durable DAG candidates."""
+        capacity = (
+            self._admission_batch_size
+            if self.max_active_dags <= 0
+            else max(0, self.max_active_dags - len(self.active_dags))
+        )
+        target = min(capacity, self._admission_batch_size)
+        if target <= 0:
+            return {"candidates": 0, "admitted": 0, "deferred": 0, "skipped": 0}
+
+        candidate_limit = min(
+            self._admission_batch_size,
+            max(target, target * ADMISSION_OVERSCAN),
+        )
+        candidate_rows = await self.repository.discover_admission_candidates(
+            limit=candidate_limit,
+            sla_interval_seconds=self._sla_priority_interval_seconds,
+            excluded_dag_ids=tuple(self.active_dags),
+        )
+        if not candidate_rows:
+            return {"candidates": 0, "admitted": 0, "deferred": 0, "skipped": 0}
+
+        candidate_ids = [str(dag_id) for dag_id, _ in candidate_rows]
+        job_rows = await self.repository.load_hydratable_jobs(candidate_ids)
+        jobs_by_dag: dict[str, list[WorkInfo]] = defaultdict(list)
+        skipped = 0
+        for dag_id, job_dict in job_rows:
+            try:
+                jobs_by_dag[str(dag_id)].append(
+                    self._work_info_from_hydrated_job(str(dag_id), job_dict)
+                )
+            except Exception as error:
+                skipped += 1
+                self.logger.error(
+                    f"Failed to parse admission job for DAG {dag_id}: {error}"
+                )
+
+        admitted = 0
+        deferred = 0
+        for dag_id, serialized_dag in candidate_rows:
+            dag_id = str(dag_id)
+            if dag_id in self.active_dags:
+                continue
+            nodes = jobs_by_dag.get(dag_id, [])
+            if not nodes or not serialized_dag:
+                skipped += 1
+                continue
+            try:
+                dag = QueryPlan.model_validate(serialized_dag)
+            except Exception as error:
+                skipped += 1
+                self.logger.error(f"Failed to parse admission DAG {dag_id}: {error}")
+                continue
+
+            scheduler_trace(
+                "dag_frontier_add_start",
+                dag_id=dag_id,
+                job_id=dag_id,
+                job_count=len(nodes),
+                source=source,
+            )
+            was_admitted, reason = await self._admit_hydrated_dag(
+                dag_id, dag, nodes, source=f"durable_admission:{source}"
+            )
+            if was_admitted:
+                admitted += 1
+                scheduler_trace(
+                    "dag_frontier_added",
+                    dag_id=dag_id,
+                    job_id=dag_id,
+                    job_count=len(nodes),
+                    source=source,
+                    admission_reason=reason,
+                )
+                if admitted >= target:
+                    break
+            else:
+                deferred += 1
+                scheduler_trace(
+                    "dag_frontier_deferred",
+                    dag_id=dag_id,
+                    job_id=dag_id,
+                    job_count=len(nodes),
+                    source=source,
+                    reason=reason,
+                )
+
+        scheduler_trace(
+            "scheduler_dag_admission_completed",
+            source=source,
+            candidates=len(candidate_rows),
+            admitted=admitted,
+            deferred=deferred,
+            skipped=skipped,
+            active_dags=len(self.active_dags),
+            max_active_dags=self.max_active_dags,
+        )
+        if admitted and self._notify_callback:
+            await self._notify_callback()
+        return {
+            "candidates": len(candidate_rows),
+            "admitted": admitted,
+            "deferred": deferred,
+            "skipped": skipped,
+        }
 
     async def _admit_dag(
         self,
@@ -274,29 +463,7 @@ class DAGManagementService:
             nodes = []
             for _, job_dict in job_rows:
                 try:
-                    # Manually construct WorkInfo with field mapping and defaults
-                    state_raw = job_dict.get("state")
-                    wi = WorkInfo(
-                        id=str(job_dict["id"]),
-                        name=job_dict["name"],
-                        priority=job_dict["priority"],
-                        state=WorkState(state_raw) if state_raw else None,
-                        retry_limit=job_dict["retry_limit"],
-                        start_after=job_dict["start_after"],
-                        expire_in_seconds=job_dict.get("expire_in_seconds", 0),
-                        data=job_dict["data"],
-                        retry_delay=job_dict["retry_delay"],
-                        retry_backoff=job_dict["retry_backoff"],
-                        keep_until=job_dict["keep_until"],
-                        dag_id=dag_id,
-                        job_level=job_dict["job_level"],
-                        soft_sla=job_dict.get("soft_sla"),
-                        hard_sla=job_dict.get("hard_sla"),
-                    )
-                    # Handle dependencies separately
-                    deps = job_dict.get("dependencies") or []
-                    wi.dependencies = [str(d) for d in deps]
-                    nodes.append(wi)
+                    nodes.append(self._work_info_from_hydrated_job(dag_id, job_dict))
                 except Exception as e:
                     self.logger.error(f"Failed to parse job for DAG {dag_id}: {e}")
                     traceback.print_exc()
@@ -412,27 +579,7 @@ class DAGManagementService:
                 if dag_id not in dags:
                     continue
                 try:
-                    state_raw = j.get("state")
-                    wi = WorkInfo(
-                        id=str(j["id"]),
-                        name=j["name"],
-                        priority=j["priority"],
-                        state=WorkState(state_raw) if state_raw else None,
-                        retry_limit=j["retry_limit"],
-                        start_after=j["start_after"],
-                        expire_in_seconds=0,
-                        data=j["data"],
-                        retry_delay=j["retry_delay"],
-                        retry_backoff=j["retry_backoff"],
-                        keep_until=j["keep_until"],
-                        dag_id=dag_id,
-                        job_level=j["job_level"],
-                        soft_sla=j.get("soft_sla"),
-                        hard_sla=j.get("hard_sla"),
-                    )
-                    deps = j.get("dependencies") or []
-                    wi.dependencies = [str(d) for d in deps]
-                    buckets[dag_id].append(wi)
+                    buckets[dag_id].append(self._work_info_from_hydrated_job(dag_id, j))
                     processed_jobs += 1
                 except Exception as e:
                     self.logger.error(
@@ -598,21 +745,26 @@ class DAGManagementService:
                 self.logger.warning(f"Received notification without dag_id: {payload}")
                 return
 
+            frontier_was_full = (
+                self.max_active_dags > 0
+                and len(self.active_dags) >= self.max_active_dags
+            )
+            removed = False
+            admission_requested = False
             if op == "DELETE":
-                await self.evict_dag(dag_id, "deleted from database")
+                removed = await self.evict_dag(dag_id, "deleted from database")
             elif op == "UPDATE":
                 new_state = payload.get("state")
                 if new_state == "created":
-                    await self.evict_dag(dag_id, "reset to created")
-                    if not await self.hydrate_single_dag(dag_id):
-                        self.logger.warning(
-                            f"Could not re-hydrate DAG {dag_id}; "
-                            "it may not have eligible jobs"
-                        )
+                    removed = await self.evict_dag(dag_id, "reset to created")
+                    await self.request_admission("dag_state_created")
+                    admission_requested = True
                 elif new_state in {"cancelled", "suspended"}:
-                    await self.evict_dag(dag_id, f"state changed to {new_state}")
+                    removed = await self.evict_dag(
+                        dag_id, f"state changed to {new_state}"
+                    )
                 elif new_state in {"completed", "failed"}:
-                    await self.evict_dag(
+                    removed = await self.evict_dag(
                         dag_id,
                         f"state changed to {new_state}",
                         clear_terminal_state=False,
@@ -630,6 +782,9 @@ class DAGManagementService:
                     )
             else:
                 self.logger.warning(f"Unknown operation '{op}' in DAG notification")
+
+            if frontier_was_full and removed and not admission_requested:
+                await self.request_admission("frontier_deficit")
 
             if self._notify_callback:
                 await self._notify_callback()
@@ -724,6 +879,7 @@ class DAGManagementService:
                     f"resolved as {dag_state}",
                     clear_terminal_state=False,
                 )
+                await self.request_admission("dag_terminal")
                 if self._terminal_event_callback:
                     await self._terminal_event_callback(dag_state, work_info)
                 return True
@@ -798,13 +954,21 @@ class DAGManagementService:
         invalid_dags = (set(memory_dag_ids) - valid_db_dags).union(terminal_dags)
 
         if invalid_dags:
+            frontier_was_full = (
+                self.max_active_dags > 0
+                and len(self.active_dags) >= self.max_active_dags
+            )
+            removed_any = False
             self.logger.info(f"Found {len(invalid_dags)} invalid DAGs in memory")
             for dag_id in sorted(invalid_dags):
-                await self.evict_dag(
+                removed = await self.evict_dag(
                     dag_id,
                     "no longer active or deleted in database",
                     clear_terminal_state=dag_id not in terminal_dags,
                 )
+                removed_any = removed or removed_any
+            if frontier_was_full and removed_any:
+                await self.request_admission("dag_sync_deficit")
             if self._notify_callback:
                 await self._notify_callback()
         else:
@@ -824,10 +988,7 @@ class DAGManagementService:
         refresh_id: Optional[int] = None,
         source: str = "unknown",
     ) -> Dict[str, int]:
-        """
-        Refresh manual priorities from DB and hydrate missing DAGs that are
-        currently eligible for the frontier.
-        """
+        """Refresh tracked priorities and wake durable DAG admission."""
         tracked_job_ids = list(self.frontier.jobs_by_id.keys())
         changed = 0
         if tracked_job_ids:
@@ -868,110 +1029,19 @@ class DAGManagementService:
         else:
             priorities = {}
 
-        phase_started = time.perf_counter()
-        scheduler_trace(
-            "scheduler_priority_refresh_frontier_discover_start",
-            source=source,
-            refresh_id=refresh_id,
-            hydrate_missing_limit=hydrate_missing_limit,
-            active_dags=len(self.active_dags),
-            max_active_dags=self.max_active_dags,
-        )
-        hydratable_dags = await self.repository.discover_hydratable_dags(
-            hydrate_missing_limit
-        )
-        scheduler_trace(
-            "scheduler_priority_refresh_frontier_discover_done",
-            source=source,
-            refresh_id=refresh_id,
-            hydrate_missing_limit=hydrate_missing_limit,
-            hydratable_dags=len(hydratable_dags),
-            active_dags=len(self.active_dags),
-            max_active_dags=self.max_active_dags,
-            elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
-        )
+        await self.request_admission(f"priority_refresh:{source}")
 
-        hydrated = 0
-        for index, (dag_id, _serialized_dag) in enumerate(hydratable_dags):
-            if dag_id in self.active_dags:
-                scheduler_trace(
-                    "scheduler_priority_refresh_frontier_hydrate_skip",
-                    source=source,
-                    refresh_id=refresh_id,
-                    dag_id=dag_id,
-                    index=index,
-                    reason="already_active",
-                    active_dags=len(self.active_dags),
-                    max_active_dags=self.max_active_dags,
-                )
-                continue
-            if dag_id in self.frontier.dag_nodes:
-                scheduler_trace(
-                    "scheduler_priority_refresh_frontier_hydrate_skip",
-                    source=source,
-                    refresh_id=refresh_id,
-                    dag_id=dag_id,
-                    index=index,
-                    reason="frontier_tracked",
-                    active_dags=len(self.active_dags),
-                    max_active_dags=self.max_active_dags,
-                )
-                continue
-            if (
-                self.max_active_dags > 0
-                and len(self.active_dags) >= self.max_active_dags
-            ):
-                scheduler_trace(
-                    "scheduler_priority_refresh_frontier_hydrate_stop",
-                    source=source,
-                    refresh_id=refresh_id,
-                    dag_id=dag_id,
-                    index=index,
-                    reason="active_limit",
-                    active_dags=len(self.active_dags),
-                    max_active_dags=self.max_active_dags,
-                )
-                self.logger.debug(
-                    f"Skipping DAG hydration refresh at capacity "
-                    f"{len(self.active_dags)}/{self.max_active_dags}"
-                )
-                break
-            phase_started = time.perf_counter()
-            scheduler_trace(
-                "scheduler_priority_refresh_frontier_hydrate_start",
-                source=source,
-                refresh_id=refresh_id,
-                dag_id=dag_id,
-                index=index,
-                active_dags=len(self.active_dags),
-                max_active_dags=self.max_active_dags,
-            )
-            hydrated_dag = await self.hydrate_single_dag(dag_id)
-            scheduler_trace(
-                "scheduler_priority_refresh_frontier_hydrate_done",
-                source=source,
-                refresh_id=refresh_id,
-                dag_id=dag_id,
-                index=index,
-                admitted=hydrated_dag,
-                active_dags=len(self.active_dags),
-                max_active_dags=self.max_active_dags,
-                elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
-            )
-            if hydrated_dag:
-                hydrated += 1
-
-        if changed > 0 or hydrated > 0:
+        if changed > 0:
             self.logger.info(
                 f"Refreshed priorities from DB: tracked={len(tracked_job_ids)}, "
-                f"fetched={len(priorities)}, changed={changed}, hydrated_missing={hydrated}"
+                f"fetched={len(priorities)}, changed={changed}"
             )
 
         return {
             "tracked": len(tracked_job_ids),
             "fetched": len(priorities),
             "changed": changed,
-            "hydrated_missing": hydrated,
+            "hydrated_missing": 0,
         }
 
     def get_active_dag_count(self) -> int:

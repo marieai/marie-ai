@@ -6,10 +6,10 @@ set -e
 CPU_COUNT=$(grep -c ^processor /proc/cpuinfo)
 CPU_COUNT=$((CPU_COUNT-1))
 
-readonly INIT_FILE="marie/__init__.py"
-readonly DEFAULT_VERSION=$(sed -n '/^__version__/p' "${INIT_FILE}" | cut -d \' -f2)
+readonly VERSION_FILE="marie/_version.py"
+readonly DEFAULT_VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "${VERSION_FILE}" | head -n 1)
 if [[ -z "$DEFAULT_VERSION" ]]; then
-    echo -e "\033[0;31m[ERROR]\033[0m Failed to read version from ${INIT_FILE}" >&2
+    echo -e "\033[0;31m[ERROR]\033[0m Failed to read version from ${VERSION_FILE}" >&2
     exit 1
 fi
 VERSION="${MARIE_VERSION:-$DEFAULT_VERSION}"
@@ -264,7 +264,6 @@ build_image() {
         --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
         --build-arg MARIE_VERSION="$VERSION" \
         --build-arg TARGETPLATFORM=linux/amd64 \
-        --no-cache \
         -f "$dockerfile_path" \
         -t "$full_image_name"
 

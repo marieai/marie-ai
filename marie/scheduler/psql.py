@@ -276,6 +276,8 @@ class PostgreSQLJobScheduler(JobScheduler):
             resolution_retry_delay=self._dag_resolution_retry_delay,
             resolution_retry_backoff=self._dag_resolution_retry_backoff,
             resolution_retry_max_delay=self._dag_resolution_retry_max_delay,
+            admission_batch_size=scheduler_config.priority_refresh_hydrate_limit,
+            sla_priority_interval_seconds=self.sla_priority_interval_seconds,
         )
 
         # Register handler for DAG state changes (delegate to DAGManagementService)
@@ -378,7 +380,7 @@ class PostgreSQLJobScheduler(JobScheduler):
     ) -> DagSubmissionService:
         return DagSubmissionService(
             repository=self.repository,
-            dag_admission_callback=self.dag_service.admit_submitted_dag,
+            dag_admission_callback=self.dag_service.request_admission,
             known_queues=self.known_queues,
             notify_callback=self.notify_event,
             is_running=lambda: self.running,
@@ -860,7 +862,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             await self.repository.create_queue(work_queue)
             await self.repository.create_queue(f"${work_queue}_dlq")
 
-        # Start the NotificationService before hydrating or polling so DAG
+        # Start the NotificationService before admission or polling so DAG
         # state transitions cannot race ahead of the LISTEN connection.
         try:
             await self.notification_service.start()
@@ -874,11 +876,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             self.logger.error(f"Unexpected error starting NotificationService: {e}")
             raise RuntimeFailToStart(f"NotificationService failed to start: {e}") from e
 
-        await self.dag_service.hydrate_bulk(
-            dag_batch_size=1000,
-            itersize=5000,
-            log_every_seconds=2.0,
-        )
+        await self.dag_service.start_admission()
 
         await self.maintenance_service.start()
         self.logger.info(
@@ -1560,9 +1558,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                     for exe, cnt in sorted(jobs_scheduled_this_cycle.items()):
                         self.logger.info(f"  - {exe}: {cnt} scheduled")
 
-                if scheduled_any:
-                    await self.notify_event()
-
                 return DispatchCycleResult(scheduled=scheduled_any)
             finally:
                 if compact_ready_heap:
@@ -1579,6 +1574,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         failures = 0
         idle_streak = 0
         cycle_index = 0
+        drain_ready = False
         cycle_stats = {
             "count": 0,
             "sum_total": 0.0,
@@ -1593,22 +1589,24 @@ class PostgreSQLJobScheduler(JobScheduler):
             cycle_started_at = time.perf_counter()
             active_started_at: float | None = None
             try:
-                priority_due_in = max(
-                    0.0, self._next_priority_refresh_at - time.monotonic()
-                )
-                effective_wait_time = min(wait_time, priority_due_in)
-                self.logger.debug(
-                    f"Polling : {effective_wait_time:.2f}s — "
-                    f"Queue size: {self._event_queue.qsize()} — "
-                    f"Idle streak: {idle_streak}"
-                )
-                woke = await self._wait_for_dispatch_wake(effective_wait_time)
-                if woke:
-                    idle_streak = 0
-                    wait_time = MIN_POLL_PERIOD
+                if not drain_ready:
+                    priority_due_in = max(
+                        0.0, self._next_priority_refresh_at - time.monotonic()
+                    )
+                    effective_wait_time = min(wait_time, priority_due_in)
+                    self.logger.debug(
+                        f"Polling : {effective_wait_time:.2f}s — "
+                        f"Queue size: {self._event_queue.qsize()} — "
+                        f"Idle streak: {idle_streak}"
+                    )
+                    woke = await self._wait_for_dispatch_wake(effective_wait_time)
+                    if woke:
+                        idle_streak = 0
+                        wait_time = MIN_POLL_PERIOD
 
                 active_started_at = time.perf_counter()
                 result = await self.run_dispatch_cycle(cycle_index)
+                drain_ready = result.scheduled
                 idle_streak = 0 if result.scheduled else idle_streak + 1
                 if result.wait_interval is not None:
                     wait_time = result.wait_interval
@@ -1622,6 +1620,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                     )
                 failures = 0
             except Exception as error:
+                drain_ready = False
                 if _is_known_connection_error(error):
                     self.logger.warning(
                         "Poll loop: ETCD connection unavailable, waiting for reconnect"
@@ -1743,6 +1742,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 'scheduler-maintenance-stop': self.maintenance_service.stop(),
                 'scheduler-heartbeat-stop': self.heartbeat.stop(),
                 'scheduler-dag-sync-stop': self.dag_service.stop_sync(),
+                'scheduler-dag-admission-stop': self.dag_service.stop_admission(),
             },
             timeout=timeout,
         )
@@ -1796,6 +1796,8 @@ class PostgreSQLJobScheduler(JobScheduler):
             resolution_retry_delay=self._dag_resolution_retry_delay,
             resolution_retry_backoff=self._dag_resolution_retry_backoff,
             resolution_retry_max_delay=self._dag_resolution_retry_max_delay,
+            admission_batch_size=self.priority_refresh_hydrate_limit,
+            sla_priority_interval_seconds=self.sla_priority_interval_seconds,
         )
         self.notification_service.register_handler(
             channel='dag_state_changed', handler=self.dag_service.handle_state_change

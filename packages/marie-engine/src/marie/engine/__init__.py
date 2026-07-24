@@ -3,13 +3,15 @@ from marie.engine.base import EngineLM
 # Supported LLM providers
 # Note: Claude is accessed via 'openai' provider with LiteLLM base_url
 SUPPORTED_PROVIDERS = ["vllm", "openai"]
-
+# FIXME : MOVE THIS TOO A CONFIG
 # TODO add  Gemma 3 (Based on v4.49.0)
 # https://github.com/huggingface/transformers/releases/tag/v4.49.0-Gemma-3
 MODEL_NAME_MAP = {
     "qwen2_5_vl_3b": "Qwen/Qwen2.5-VL-3B-Instruct",
     "qwen2_5_vl_7b": "Qwen/Qwen2.5-VL-7B-Instruct",
     "qwen2_5_vl_7b_awq": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+    "qwen3_vl_4b": "Qwen/Qwen3-VL-4B-Instruct",
+    "qwen3_vl_4b_merged_lora": "qwen3_vl_4b_merged_lora",
     "qwen2_5_7b": "Qwen/Qwen2.5-7B-Instruct",
     "qwen2_5_3b": "Qwen/Qwen2.5-3B-Instruct",
     "qwen2_5_14b": "Qwen/Qwen2.5-14B-Instruct",
@@ -31,6 +33,8 @@ __MULTIMODAL_MODELS__ = [
     MODEL_NAME_MAP["qwen2_5_vl_3b"],
     MODEL_NAME_MAP["qwen2_5_vl_7b"],
     MODEL_NAME_MAP["qwen2_5_vl_7b_awq"],
+    MODEL_NAME_MAP["qwen3_vl_4b"],
+    MODEL_NAME_MAP["qwen3_vl_4b_merged_lora"],
     MODEL_NAME_MAP["meta_llama_11b"],
     MODEL_NAME_MAP["phi3_5_vl"],
     MODEL_NAME_MAP["pixtral_12b"],

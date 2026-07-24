@@ -20,7 +20,7 @@ def build_service(
             get_job_by_policy=AsyncMock(return_value=None),
             create_dag_with_jobs=AsyncMock(return_value=(True, 'dag-1')),
         ),
-        dag_admission_callback=AsyncMock(return_value=(True, 'admitted')),
+        dag_admission_callback=AsyncMock(return_value=True),
         known_queues={'extract'},
         notify_callback=AsyncMock(return_value=True),
         is_running=lambda: running[0],
@@ -223,7 +223,7 @@ async def test_scheduled_publication_failure_does_not_fail_persisted_submission(
 
 
 @pytest.mark.asyncio
-async def test_persist_builds_and_commits_the_dag_before_frontier_admission(
+async def test_persist_commits_the_dag_before_requesting_admission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = build_service()
@@ -246,16 +246,16 @@ async def test_persist_builds_and_commits_the_dag_before_frontier_admission(
         dag_nodes=nodes,
         work_info=submitted,
     )
-    service._dag_admission_callback.assert_awaited_once_with('dag-1', plan, nodes)
+    service._dag_admission_callback.assert_awaited_once_with('submission')
     service._notify_callback.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
-async def test_persist_keeps_dag_durable_when_frontier_admission_is_deferred(
+async def test_persist_keeps_dag_durable_when_admission_wake_is_coalesced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = build_service()
-    service._dag_admission_callback.return_value = (False, 'active_limit')
+    service._dag_admission_callback.return_value = False
     plan = object()
     nodes = [SimpleNamespace(dag_id=None)]
     monkeypatch.setattr(
@@ -269,5 +269,5 @@ async def test_persist_keeps_dag_durable_when_frontier_admission_is_deferred(
 
     assert result == 'dag-1'
     service.repository.create_dag_with_jobs.assert_awaited_once()
-    service._dag_admission_callback.assert_awaited_once_with('dag-1', plan, nodes)
+    service._dag_admission_callback.assert_awaited_once_with('submission')
     service._notify_callback.assert_awaited_once_with()

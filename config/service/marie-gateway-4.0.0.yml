@@ -93,6 +93,10 @@ with:
     <<: *psql_conf_shared
     default_table: job_scheduler
     max_workers: 2
+    # Absorb large ingress bursts; submitters backpressure when this fills.
+    submission_queue_size: 100000
+    job_event_worker_count: 8
+    job_event_queue_size: 1024
     max_pool_size: 5
     max_connections: 5
     queue_names: [extract,classify,transform,load,gen5_extract,longextract_bench] # Queue names for the job scheduler to monitor

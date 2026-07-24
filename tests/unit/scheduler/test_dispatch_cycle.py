@@ -131,7 +131,7 @@ async def test_dispatch_cycle_plans_leases_activates_and_dispatches_once(
         run_owner="scheduler-1",
         run_attempt_id="attempt-1",
     )
-    scheduler.notify_event.assert_awaited_once_with()
+    scheduler.notify_event.assert_not_awaited()
     scheduler._wait_for_dispatch_wake.assert_not_awaited()
 
 
@@ -278,7 +278,7 @@ async def test_dispatch_cycle_preserves_control_flow_progress(
         [control_flow], 5
     )
     scheduler._activate_and_enqueue_job.assert_not_awaited()
-    scheduler.notify_event.assert_awaited_once_with()
+    scheduler.notify_event.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -447,4 +447,35 @@ async def test_poll_uses_cycle_wait_interval_for_the_next_wake() -> None:
     assert [call.args[0] for call in scheduler.run_dispatch_cycle.await_args_list] == [
         0,
         1,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_poll_drains_scheduled_cycles_before_waiting_again() -> None:
+    scheduler = build_scheduler()
+    results = [
+        DispatchCycleResult(scheduled=True),
+        DispatchCycleResult(scheduled=False, wait_interval=0.1),
+        DispatchCycleResult(scheduled=False),
+    ]
+
+    async def run_dispatch_cycle(_cycle_index: int) -> DispatchCycleResult:
+        result = results.pop(0)
+        if not results:
+            scheduler.running = False
+        return result
+
+    scheduler.run_dispatch_cycle = AsyncMock(side_effect=run_dispatch_cycle)
+
+    await scheduler._poll()
+
+    assert scheduler._wait_for_dispatch_wake.await_count == 2
+    assert [call.args[0] for call in scheduler._wait_for_dispatch_wake.await_args_list] == [
+        scheduler_psql.INIT_POLL_PERIOD,
+        0.1,
+    ]
+    assert [call.args[0] for call in scheduler.run_dispatch_cycle.await_args_list] == [
+        0,
+        1,
+        2,
     ]

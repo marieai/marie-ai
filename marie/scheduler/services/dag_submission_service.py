@@ -9,7 +9,6 @@ from typing import Any
 from marie.logging_core.logger import MarieLogger
 from marie.messaging import mark_as_failed as mark_as_failed_toast
 from marie.messaging import mark_as_scheduled as mark_as_scheduled_toast
-from marie.query_planner.base import QueryPlan
 from marie.scheduler.job_scheduler import JobSubmissionRequest
 from marie.scheduler.models import ExistingWorkPolicy, WorkInfo
 from marie.scheduler.planner_util import query_plan_work_items
@@ -25,9 +24,7 @@ class DagSubmissionService:
         self,
         *,
         repository: JobRepository,
-        dag_admission_callback: Callable[
-            [str, QueryPlan, list[WorkInfo]], Awaitable[tuple[bool, str]]
-        ],
+        dag_admission_callback: Callable[[str], Awaitable[bool]],
         known_queues: set[str],
         notify_callback: Callable[[], Awaitable[bool]],
         is_running: Callable[[], bool],
@@ -216,34 +213,14 @@ class DagSubmissionService:
             job_count=len(dag_nodes),
             new_dag_key=new_dag_key,
         )
+        await self._dag_admission_callback('submission')
         scheduler_trace(
-            'dag_frontier_add_start',
+            'dag_admission_requested',
             job_id=submission_id,
             dag_id=submission_id,
             job_name=work_info.name,
             job_count=len(dag_nodes),
         )
-        admitted, reason = await self._dag_admission_callback(
-            submission_id, plan, dag_nodes
-        )
-        if admitted:
-            scheduler_trace(
-                'dag_frontier_added',
-                job_id=submission_id,
-                dag_id=submission_id,
-                job_name=work_info.name,
-                job_count=len(dag_nodes),
-                admission_reason=reason,
-            )
-        else:
-            scheduler_trace(
-                'dag_frontier_deferred',
-                job_id=submission_id,
-                dag_id=submission_id,
-                job_name=work_info.name,
-                job_count=len(dag_nodes),
-                reason=reason,
-            )
         await self._notify_callback()
         return submission_id
 

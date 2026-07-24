@@ -30,7 +30,10 @@ def _scheduler_for_stop() -> PostgreSQLJobScheduler:
     scheduler.notification_service = SimpleNamespace(stop=AsyncMock())
     scheduler.maintenance_service = SimpleNamespace(stop=AsyncMock())
     scheduler.heartbeat = SimpleNamespace(stop=AsyncMock())
-    scheduler.dag_service = SimpleNamespace(stop_sync=AsyncMock())
+    scheduler.dag_service = SimpleNamespace(
+        stop_admission=AsyncMock(),
+        stop_sync=AsyncMock(),
+    )
     scheduler.runtime = SchedulerRuntime(scheduler.logger)
     scheduler.submission_service = SimpleNamespace(abort_pending=MagicMock())
     scheduler.job_event_processor = SimpleNamespace(
@@ -67,7 +70,8 @@ def _scheduler_for_start() -> PostgreSQLJobScheduler:
     )
     scheduler.heartbeat = SimpleNamespace(stop=AsyncMock())
     scheduler.dag_service = SimpleNamespace(
-        hydrate_bulk=AsyncMock(),
+        start_admission=AsyncMock(),
+        stop_admission=AsyncMock(),
         start_sync=AsyncMock(),
         stop_sync=AsyncMock(),
     )
@@ -122,7 +126,7 @@ async def test_start_tasks_observe_running_after_suspending_dependency_start() -
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_stage", ["hydrate", "initial_wake"])
+@pytest.mark.parametrize("failure_stage", ["admission", "initial_wake"])
 async def test_start_rolls_back_partial_startup(failure_stage: str) -> None:
     scheduler = _scheduler_for_start()
 
@@ -139,9 +143,9 @@ async def test_start_rolls_back_partial_startup(failure_stage: str) -> None:
     scheduler.submission_service.run_worker = wait_forever_worker
     scheduler.job_event_processor.run_worker = wait_forever_worker
 
-    if failure_stage == "hydrate":
-        scheduler.dag_service.hydrate_bulk.side_effect = RuntimeError(
-            "hydration failed"
+    if failure_stage == "admission":
+        scheduler.dag_service.start_admission.side_effect = RuntimeError(
+            "admission failed"
         )
     else:
         scheduler.notify_event.side_effect = RuntimeError("initial wake failed")
@@ -155,6 +159,7 @@ async def test_start_rolls_back_partial_startup(failure_stage: str) -> None:
         scheduler.notification_service.stop.assert_awaited_once_with()
         scheduler.maintenance_service.stop.assert_awaited_once_with()
         scheduler.heartbeat.stop.assert_awaited_once_with()
+        scheduler.dag_service.stop_admission.assert_awaited_once_with()
         scheduler.dag_service.stop_sync.assert_awaited_once_with()
         scheduler.submission_service.abort_pending.assert_called_once_with()
         scheduler.job_event_processor.abort_pending.assert_called_once_with()
@@ -192,6 +197,7 @@ async def test_stop_cancels_poll_and_workers_before_returning() -> None:
     scheduler.notification_service.stop.assert_awaited_once()
     scheduler.maintenance_service.stop.assert_awaited_once()
     scheduler.heartbeat.stop.assert_awaited_once()
+    scheduler.dag_service.stop_admission.assert_awaited_once()
     scheduler.dag_service.stop_sync.assert_awaited_once()
     scheduler._close_runtime_resources.assert_awaited_once()
     assert scheduler.runtime.tasks() == []

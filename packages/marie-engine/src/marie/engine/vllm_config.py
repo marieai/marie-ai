@@ -7,15 +7,8 @@ try:
     from vllm import LLM
 except ImportError as e:
     raise ImportError(
-        "vLLM is required to run this module. Install it using:\n" "  uv add vllm"
+        "vLLM is required to run this module. Install it using:\n  uv add vllm"
     ) from e
-
-# Ensure flash-attention is installed before proceeding
-if find_spec("flash_attn") is None:
-    raise ImportError(
-        "flash-attention 2 is required to run this module. Install it using:\n"
-        "  uv add flash-attn"
-    )
 
 
 def load_format_and_quantization(
@@ -77,7 +70,6 @@ def create_llm_instance(
         model=model_name,
         max_model_len=max_model_len,
         tensor_parallel_size=kwargs.pop("tensor_parallel_size", 1),
-        disable_mm_preprocessor_cache=True,
         quantization=quantization if supports_quantization else None,
         load_format=load_format,
         enforce_eager=enforce_eager,
@@ -94,6 +86,34 @@ def create_llm_instance(
 # ---- Model Configurations ----
 def config_qwen2_5_vl(model_name: str, modality: str = "image"):
     """Configures Qwen2.5-VL model."""
+    assert modality == "image"
+    if find_spec("qwen_vl_utils") is None:
+        print(
+            'WARNING: `qwen-vl-utils` not installed, input images will not '
+            'be automatically resized. You can enable this functionality by '
+            '`uv add qwen-vl-utils`.'
+        )
+
+    mm_processor_kwargs = {
+        "min_pixels": 1 * 28 * 28,
+        "max_pixels": 1280 * 28 * 28,
+        "fps": 1,
+    }
+
+    llm = create_llm_instance(
+        model_name,
+        supports_quantization=False,
+        dtype="bfloat16",
+        mm_processor_kwargs=mm_processor_kwargs,
+    )
+
+    prompt = "<|im_start|>system\nSYSTEM_PROMPT_PLACEHOLDER<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>\n<|im_start|>assistant\n"
+
+    return llm, prompt, None, mm_processor_kwargs
+
+
+def config_qwen3_vl(model_name: str, modality: str = "image"):
+    """Configures Qwen3-VL model."""
     assert modality == "image"
     if find_spec("qwen_vl_utils") is None:
         print(
@@ -242,6 +262,8 @@ VLLM_MODEL_MAP = {
     MODEL_NAME_MAP["qwen2_5_vl_3b"]: config_qwen2_5_vl,
     MODEL_NAME_MAP["qwen2_5_vl_7b"]: config_qwen2_5_vl,
     MODEL_NAME_MAP["qwen2_5_vl_7b_awq"]: config_qwen2_5_vl,
+    MODEL_NAME_MAP["qwen3_vl_4b"]: config_qwen3_vl,
+    MODEL_NAME_MAP["qwen3_vl_4b_merged_lora"]: config_qwen3_vl,
     MODEL_NAME_MAP["qwen2_5_3b"]: config_qwen2_5,
     MODEL_NAME_MAP["qwen2_5_7b"]: config_qwen2_5,
     MODEL_NAME_MAP["qwen2_5_14b"]: config_qwen2_5,

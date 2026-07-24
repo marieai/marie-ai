@@ -23,6 +23,7 @@ EVENTS = (
     "dag_persisted",
     "dag_frontier_add_start",
     "dag_frontier_added",
+    "dag_frontier_deferred",
     "dag_admission_decision",
     "candidate_built",
     "planner_selected",
@@ -1422,6 +1423,21 @@ def _print_trace_coverage(rows: list[dict[str, Any]]) -> None:
         f"terminal_handler={scheduler_terminal_received} "
         f"durable_terminal={events.get('job_terminal_attempt_accepted', 0)}"
     )
+    deferred_reasons = Counter(
+        str(row.get("reason", "unknown"))
+        for row in rows
+        if row.get("event") == "dag_frontier_deferred"
+    )
+    if events.get("dag_frontier_added", 0) or deferred_reasons:
+        reason_summary = " ".join(
+            f"{reason}={count}" for reason, count in sorted(deferred_reasons.items())
+        )
+        print(
+            "submission frontier: "
+            f"admitted={events.get('dag_frontier_added', 0)} "
+            f"deferred={sum(deferred_reasons.values())}"
+            + (f" ({reason_summary})" if reason_summary else "")
+        )
     print(
         "supervisor: "
         f"pre_send={events.get('job_supervisor_pre_send_started', 0)} "

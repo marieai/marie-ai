@@ -17,20 +17,6 @@ ARG BUILD_DATE
 ARG MARIE_VERSION
 ARG TARGETPLATFORM
 
-# constant, wont invalidate cache
-LABEL org.opencontainers.image.vendor="Marie AI" \
-      org.opencontainers.image.licenses="Apache 2.0" \
-      org.opencontainers.image.title="MarieAI" \
-      org.opencontainers.image.description="Deploy production-ready AI agent systems for document processing, content analysis, and multimodal intelligence via containerized cloud services" \
-      org.opencontainers.image.authors="hello@marieai.co" \
-      org.opencontainers.image.url="https://github.com/marieai/marie-ai" \
-      org.opencontainers.image.documentation="https://docs.marieai.co" \
-      org.opencontainers.image.created=${BUILD_DATE} \
-      org.opencontainers.image.source="https://github.com/marieai/marie-ai${VCS_REF}" \
-      org.opencontainers.image.version=${MARIE_VERSION} \
-      org.opencontainers.image.revision=${VCS_REF}
-
-
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Tweak this list to reduce build time
@@ -81,6 +67,9 @@ RUN ln -sf /usr/bin/python3.12 /usr/bin/python3 \
 
 # change on pyproject.toml or uv.lock will invalidate the dependency cache
 COPY pyproject.toml uv.lock README.md /tmp/
+# the project version is dynamic (attr: marie._version.__version__); uv sync needs it
+# to build project metadata even with --no-install-project
+COPY marie/_version.py /tmp/marie/_version.py
 
 # Copy directories
 COPY packages/ /tmp/packages/
@@ -149,13 +138,6 @@ ENV TERM=xterm-256color \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_LINK_MODE=copy
 
-# the following label use ARG hence will invalid the cache
-LABEL org.opencontainers.image.created=${BUILD_DATE} \
-      org.opencontainers.image.source="https://github.com/marieai/marie-ai${VCS_REF}" \
-      org.opencontainers.image.version=${MARIE_VERSION} \
-      org.opencontainers.image.revision=${VCS_REF}
-
-
 # Install necessary apt packages
 RUN apt-get update -o APT::Update::Error-Mode=any && \
     DEBIAN_FRONTEND=noninteractive apt-get -qq install software-properties-common
@@ -214,10 +196,18 @@ COPY ./marie/proto/docarray_v2/ /marie/proto/docarray_v2/
 
 # install marie from the locked uv project without resolving new dependencies
 RUN cd /marie && \
-    uv sync --locked --no-dev --no-editable --compile-bytecode --python /opt/venv/bin/python && \
+    uv sync --locked --no-dev --group runtime --no-editable --compile-bytecode --python /opt/venv/bin/python && \
+    test -x /opt/venv/bin/marie && \
     uv pip check --python /opt/venv/bin/python && \
     echo "MARIE-AI installed successfully"
     #rm -rf /tmp/* && rm -rf /marie
 
 WORKDIR ${WORKDIR}
-ENTRYPOINT ["marie"]
+
+# Keep volatile build metadata after all filesystem layers so it cannot bust their cache.
+LABEL org.opencontainers.image.created=${BUILD_DATE} \
+      org.opencontainers.image.source="https://github.com/marieai/marie-ai${VCS_REF}" \
+      org.opencontainers.image.version=${MARIE_VERSION} \
+      org.opencontainers.image.revision=${VCS_REF}
+
+ENTRYPOINT ["/opt/venv/bin/marie"]

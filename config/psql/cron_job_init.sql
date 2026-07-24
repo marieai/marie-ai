@@ -17,11 +17,9 @@ SELECT cron.schedule(
 );
 
 
-SELECT cron.schedule(
-    'refresh_job_priority',
-    '*/1 * * * *',  -- adjust to */0.5 with external loop if sub-minute needed
-    $$SELECT marie_scheduler.refresh_job_priority();$$
-);
+SELECT cron.unschedule(jobid)
+FROM cron.job
+WHERE jobname = 'refresh_job_priority';
 
 
 -- =========================================================

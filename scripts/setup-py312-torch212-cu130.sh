@@ -9,6 +9,7 @@ MARIE_TORCH_WORKTREE="${MARIE_TORCH_WORKTREE:-${MARIE_AI_ROOT}}"
 MARIE_VENV_BASE="${MARIE_VENV_BASE:-${MARIE_AI_PARENT}/.venvs}"
 MARIE_TORCH_ENV_NAME="${MARIE_TORCH_ENV_NAME:-}"
 MARIE_TORCH_VENV="${MARIE_TORCH_VENV:-}"
+MARIE_UV_CACHE_DIR="${MARIE_UV_CACHE_DIR:-}"
 MARIE_WHEELS_DIR="${MARIE_WHEELS_DIR:-${MARIE_TORCH_WORKTREE}/wheels}"
 MARIE_MODEL_MOUNT="${MARIE_MODEL_MOUNT:-/mnt/data/marie-ai}"
 
@@ -19,13 +20,19 @@ MARIE_SOURCE_ROOT="${MARIE_SOURCE_ROOT:-${MARIE_AI_PARENT}/sources/torch-2.12-cu
 MARIE_FAIRSEQ_REF="${MARIE_FAIRSEQ_REF:-main}"
 MARIE_DETECTRON2_REF="${MARIE_DETECTRON2_REF:-main}"
 MARIE_FAISS_REF="${MARIE_FAISS_REF:-5622e93733b64b2e033362dbdfda019b2ab33ef0}"
+MARIE_VLLM_REF="${MARIE_VLLM_REF:-11840796b73d3f39c622a2a3815e04410efef72d}"
+MARIE_VLLM_FETCH_REF="${MARIE_VLLM_FETCH_REF:-refs/pull/45082/head}"
+MARIE_VLLM_VERSION="${MARIE_VLLM_VERSION:-0.23.1rc1.dev737+g11840796b}"
 MARIE_FAIRSEQ_REPO="${MARIE_FAIRSEQ_REPO:-https://github.com/marieai/fairseq.git}"
 MARIE_DETECTRON2_REPO="${MARIE_DETECTRON2_REPO:-https://github.com/facebookresearch/detectron2.git}"
 MARIE_FAISS_REPO="${MARIE_FAISS_REPO:-https://github.com/facebookresearch/faiss.git}"
-MARIE_NUMPY_VERSION="${MARIE_NUMPY_VERSION:-2.4.6}"
-MARIE_TORCH_CUDA_ARCH_LIST="${MARIE_TORCH_CUDA_ARCH_LIST:-7.5;8.0;8.6;8.9;9.0}"
+MARIE_VLLM_REPO="${MARIE_VLLM_REPO:-https://github.com/vllm-project/vllm.git}"
+MARIE_NUMPY_VERSION="${MARIE_NUMPY_VERSION:-2.3.5}"
+MARIE_TORCH_CUDA_ARCH_LIST="${MARIE_TORCH_CUDA_ARCH_LIST:-8.6;8.9;12.0}"
 MARIE_FAISS_CUDA_ARCH="${MARIE_FAISS_CUDA_ARCH:-89}"
 MARIE_BUILD_JOBS="${MARIE_BUILD_JOBS:-$(nproc)}"
+MARIE_VLLM_BUILD_JOBS="${MARIE_VLLM_BUILD_JOBS:-16}"
+MARIE_VLLM_WHEEL="vllm-${MARIE_VLLM_VERSION}-cp312-cp312-linux_x86_64.whl"
 
 FAIRSEQ_PATCH="${MARIE_TORCH_WORKTREE}/patches/fairseq-marie-torch212-wheel-metadata.patch"
 FAISS_PATCH="${MARIE_TORCH_WORKTREE}/patches/faiss-cuda13-profiler-api.patch"
@@ -53,8 +60,10 @@ Steps:
   build-detectron2     Build detectron2 wheel from the configured ref.
   reject-faiss-cu12    Record why the current faiss-gpu-cu12 package path is rejected.
   build-faiss          Build CUDA-enabled FAISS from source with the CUDA 13 patch.
+  build-vllm           Build the pinned vLLM CUDA wheel for the configured GPU targets.
+  lock-vllm-wheel      Refresh uv.lock after the pinned vLLM wheel exists.
   build-wheels         Build every wheel in order (cuda-toolkit, fastwer, fairseq,
-                       detectron2, faiss), then check-wheels and wheels-readme.
+                       detectron2, faiss, vllm), then check-wheels and wheels-readme.
                        Requires an existing venv with torch installed.
   check-wheels         Verify wheels/ contains only expected top-level artifacts.
   install-wheels       Install fastwer/etcd3 plus repo-local wheels into the venv.
@@ -71,13 +80,16 @@ Useful environment overrides:
   MARIE_TORCH_ENV_NAME=marie-ai-pytorch-2-12
   MARIE_VENV_BASE=/path/to/venvs
   MARIE_TORCH_VENV=/path/to/venv
+  MARIE_UV_CACHE_DIR=/path/to/user-owned/uv-cache
   MARIE_WHEELS_DIR=/path/to/marie-ai-checkout/wheels
   MARIE_REPRO_LOG_DIR=/path/to/logs
   MARIE_MODEL_MOUNT=/mnt/data/marie-ai
-  MARIE_NUMPY_VERSION=2.4.6
+  MARIE_NUMPY_VERSION=2.3.5
   MARIE_FAIRSEQ_REPO=https://github.com/marieai/fairseq.git
   MARIE_DETECTRON2_REPO=https://github.com/facebookresearch/detectron2.git
   MARIE_FAISS_REPO=https://github.com/facebookresearch/faiss.git
+  MARIE_VLLM_REPO=https://github.com/vllm-project/vllm.git
+  MARIE_VLLM_BUILD_JOBS=16
   MARIE_BUILD_JOBS=12
 
 Every step writes full command output to MARIE_REPRO_LOG_DIR.
@@ -119,7 +131,8 @@ resolve_environment() {
     MARIE_TORCH_ENV_NAME="$(basename "${MARIE_TORCH_VENV}")"
   fi
 
-  export MARIE_TORCH_ENV_NAME MARIE_TORCH_VENV
+  MARIE_UV_CACHE_DIR="${MARIE_UV_CACHE_DIR:-${MARIE_TORCH_VENV}/.cache/uv}"
+  export MARIE_TORCH_ENV_NAME MARIE_TORCH_VENV MARIE_UV_CACHE_DIR
 }
 
 guard_new_environment() {
@@ -159,6 +172,7 @@ write_invocation() {
     printf 'export MARIE_VENV_BASE=%q\n' "${MARIE_VENV_BASE}"
     printf 'export MARIE_TORCH_ENV_NAME=%q\n' "${MARIE_TORCH_ENV_NAME}"
     printf 'export MARIE_TORCH_VENV=%q\n' "${MARIE_TORCH_VENV}"
+    printf 'export MARIE_UV_CACHE_DIR=%q\n' "${MARIE_UV_CACHE_DIR}"
     printf 'export MARIE_WHEELS_DIR=%q\n' "${MARIE_WHEELS_DIR}"
     printf 'export MARIE_MODEL_MOUNT=%q\n' "${MARIE_MODEL_MOUNT}"
     printf 'export MARIE_REPRO_RUN_ID=%q\n' "${MARIE_REPRO_RUN_ID}"
@@ -167,13 +181,18 @@ write_invocation() {
     printf 'export MARIE_FAIRSEQ_REF=%q\n' "${MARIE_FAIRSEQ_REF}"
     printf 'export MARIE_DETECTRON2_REF=%q\n' "${MARIE_DETECTRON2_REF}"
     printf 'export MARIE_FAISS_REF=%q\n' "${MARIE_FAISS_REF}"
+    printf 'export MARIE_VLLM_REF=%q\n' "${MARIE_VLLM_REF}"
+    printf 'export MARIE_VLLM_FETCH_REF=%q\n' "${MARIE_VLLM_FETCH_REF}"
+    printf 'export MARIE_VLLM_VERSION=%q\n' "${MARIE_VLLM_VERSION}"
     printf 'export MARIE_FAIRSEQ_REPO=%q\n' "${MARIE_FAIRSEQ_REPO}"
     printf 'export MARIE_DETECTRON2_REPO=%q\n' "${MARIE_DETECTRON2_REPO}"
     printf 'export MARIE_FAISS_REPO=%q\n' "${MARIE_FAISS_REPO}"
+    printf 'export MARIE_VLLM_REPO=%q\n' "${MARIE_VLLM_REPO}"
     printf 'export MARIE_NUMPY_VERSION=%q\n' "${MARIE_NUMPY_VERSION}"
     printf 'export MARIE_TORCH_CUDA_ARCH_LIST=%q\n' "${MARIE_TORCH_CUDA_ARCH_LIST}"
     printf 'export MARIE_FAISS_CUDA_ARCH=%q\n' "${MARIE_FAISS_CUDA_ARCH}"
     printf 'export MARIE_BUILD_JOBS=%q\n' "${MARIE_BUILD_JOBS}"
+    printf 'export MARIE_VLLM_BUILD_JOBS=%q\n' "${MARIE_VLLM_BUILD_JOBS}"
     printf '\n'
     printf '%q' "${MARIE_TORCH_WORKTREE}/scripts/setup-py312-torch212-cu130.sh"
     for arg in "$@"; do
@@ -247,7 +266,7 @@ cuda_home_for_venv() {
 
 venv_prefix() {
   local prefix
-  prefix="source \"${MARIE_TORCH_VENV}/bin/activate\"; export VIRTUAL_ENV=\"${MARIE_TORCH_VENV}\"; export VENV_PYTHON=\"${MARIE_TORCH_VENV}/bin/python\"; "
+  prefix="source \"${MARIE_TORCH_VENV}/bin/activate\"; export VIRTUAL_ENV=\"${MARIE_TORCH_VENV}\"; export VENV_PYTHON=\"${MARIE_TORCH_VENV}/bin/python\"; mkdir -p \"${MARIE_UV_CACHE_DIR}\"; export UV_CACHE_DIR=\"${MARIE_UV_CACHE_DIR}\"; "
 
   local cuda_home=""
   if cuda_home="$(cuda_home_for_venv 2>/dev/null)"; then
@@ -286,6 +305,7 @@ MARIE_TORCH_WORKTREE=${MARIE_TORCH_WORKTREE}
 MARIE_VENV_BASE=${MARIE_VENV_BASE}
 MARIE_TORCH_ENV_NAME=${MARIE_TORCH_ENV_NAME}
 MARIE_TORCH_VENV=${MARIE_TORCH_VENV}
+MARIE_UV_CACHE_DIR=${MARIE_UV_CACHE_DIR}
 MARIE_WHEELS_DIR=${MARIE_WHEELS_DIR}
 MARIE_REPRO_LOG_DIR=${MARIE_REPRO_LOG_DIR}
 MARIE_SOURCE_ROOT=${MARIE_SOURCE_ROOT}
@@ -293,12 +313,18 @@ MARIE_MODEL_MOUNT=${MARIE_MODEL_MOUNT}
 MARIE_FAIRSEQ_REF=${MARIE_FAIRSEQ_REF}
 MARIE_DETECTRON2_REF=${MARIE_DETECTRON2_REF}
 MARIE_FAISS_REF=${MARIE_FAISS_REF}
+MARIE_VLLM_REF=${MARIE_VLLM_REF}
+MARIE_VLLM_FETCH_REF=${MARIE_VLLM_FETCH_REF}
+MARIE_VLLM_VERSION=${MARIE_VLLM_VERSION}
+MARIE_VLLM_WHEEL=${MARIE_VLLM_WHEEL}
 MARIE_FAIRSEQ_REPO=${MARIE_FAIRSEQ_REPO}
 MARIE_DETECTRON2_REPO=${MARIE_DETECTRON2_REPO}
 MARIE_FAISS_REPO=${MARIE_FAISS_REPO}
+MARIE_VLLM_REPO=${MARIE_VLLM_REPO}
 MARIE_NUMPY_VERSION=${MARIE_NUMPY_VERSION}
 MARIE_TORCH_CUDA_ARCH_LIST=${MARIE_TORCH_CUDA_ARCH_LIST}
 MARIE_FAISS_CUDA_ARCH=${MARIE_FAISS_CUDA_ARCH}
+MARIE_VLLM_BUILD_JOBS=${MARIE_VLLM_BUILD_JOBS}
 EOF
 python3.12 --version
 uv --version
@@ -378,7 +404,7 @@ PY"
 }
 
 step_cuda_toolkit() {
-  run_venv cuda-toolkit "uv pip install --python \"\${VENV_PYTHON}\" 'nvidia-cuda-nvcc==13.0.88' 'nvidia-nvvm==13.0.88' 'nvidia-cuda-crt==13.0.88' 'nvidia-cuda-cccl==13.0.85'
+  run_venv cuda-toolkit "uv pip install --python \"\${VENV_PYTHON}\" 'nvidia-cuda-nvcc==13.0.88' 'nvidia-cuda-nvrtc==13.0.88' 'nvidia-nvvm==13.0.88' 'nvidia-cuda-crt==13.0.88' 'nvidia-cuda-cccl==13.0.85'
 export CUDA_HOME=\"${MARIE_TORCH_VENV}/lib/python3.12/site-packages/nvidia/cu13\"
 export PATH=\"\${CUDA_HOME}/bin:\${PATH}\"
 export LD_LIBRARY_PATH=\"\${CUDA_HOME}/lib:\${CUDA_HOME}/lib64:\${LD_LIBRARY_PATH:-}\"
@@ -388,6 +414,7 @@ mkdir -p \"\${CUDA_HOME}/lib\"
 test -e \"\${CUDA_HOME}/lib64\" || ln -s lib \"\${CUDA_HOME}/lib64\"
 cd \"\${CUDA_HOME}/lib\"
 test -e libcudart.so || ln -s libcudart.so.13 libcudart.so
+test -e libnvrtc.so || ln -s libnvrtc.so.13 libnvrtc.so
 if test -e libcublas.so.13 && ! test -e libcublas.so; then ln -s libcublas.so.13 libcublas.so; fi
 if test -e libcublasLt.so.13 && ! test -e libcublasLt.so; then ln -s libcublasLt.so.13 libcublasLt.so; fi
 nvcc --version
@@ -399,6 +426,7 @@ from torch.utils.cpp_extension import CUDA_HOME
 
 for dist, version in (
     ('nvidia-cuda-nvcc', '13.0.88'),
+    ('nvidia-cuda-nvrtc', '13.0.88'),
     ('nvidia-nvvm', '13.0.88'),
     ('nvidia-cuda-crt', '13.0.88'),
     ('nvidia-cuda-cccl', '13.0.85'),
@@ -517,6 +545,68 @@ ls -l \"${MARIE_WHEELS_DIR}\"/faiss*.whl
 sha256sum \"${MARIE_WHEELS_DIR}\"/faiss*.whl"
 }
 
+step_build_vllm() {
+  run_venv build-vllm "mkdir -p \"${MARIE_SOURCE_ROOT}\" \"${MARIE_WHEELS_DIR}\"
+command -v cargo
+command -v rustc
+if [[ -z \"\${CUDA_HOME:-}\" || ! -x \"\${CUDA_HOME}/bin/nvcc\" ]]; then
+  echo 'CUDA 13 compiler not found; run the cuda-toolkit step first' >&2
+  exit 1
+fi
+if ! \"\${CUDA_HOME}/bin/nvcc\" --version | rg -q 'release 13\.0, V13\.0\.88'; then
+  echo 'Expected nvcc 13.0.88; run the cuda-toolkit step before build-vllm' >&2
+  exit 1
+fi
+cd \"${MARIE_SOURCE_ROOT}\"
+if test -d vllm/.git; then
+  echo \"reusing source checkout: ${MARIE_SOURCE_ROOT}/vllm\"
+else
+  git init vllm
+  git -C vllm remote add origin \"${MARIE_VLLM_REPO}\"
+  git -C vllm fetch --depth 1 origin \"${MARIE_VLLM_FETCH_REF}\"
+fi
+cd vllm
+if ! git cat-file -e \"${MARIE_VLLM_REF}^{commit}\" 2>/dev/null; then
+  git fetch --depth 1 origin \"${MARIE_VLLM_FETCH_REF}\"
+fi
+test -z \"\$(git status --porcelain --untracked-files=no)\"
+git checkout --detach \"${MARIE_VLLM_REF}\"
+test \"\$(git rev-parse HEAD)\" = \"${MARIE_VLLM_REF}\"
+uv pip install --python \"\${VENV_PYTHON}\" --torch-backend cu130 -r requirements/build/cuda.txt
+export VLLM_TARGET_DEVICE=cuda
+export VLLM_VERSION_OVERRIDE=\"${MARIE_VLLM_VERSION}\"
+export TORCH_CUDA_ARCH_LIST=\"${MARIE_TORCH_CUDA_ARCH_LIST}\"
+export MAX_JOBS=\"${MARIE_VLLM_BUILD_JOBS}\"
+export NVCC_THREADS=1
+export CMAKE_ARGS=\"-DCUDAToolkit_ROOT=\${CUDA_HOME} -DCUDA_nvrtc_LIBRARY=\${CUDA_HOME}/lib/libnvrtc.so -DCUDA_NVRTC_LIB=\${CUDA_HOME}/lib/libnvrtc.so \${CMAKE_ARGS:-}\"
+export VERBOSE=1
+python - <<'PY'
+import torch
+
+assert torch.__version__.startswith('2.12.1'), torch.__version__
+assert torch.version.cuda == '13.0', torch.version.cuda
+print('torch', torch.__version__, 'cuda', torch.version.cuda)
+PY
+uv build -v --wheel --python \"\${VENV_PYTHON}\" --no-build-isolation --out-dir \"${MARIE_WHEELS_DIR}\" .
+test -f \"${MARIE_WHEELS_DIR}/${MARIE_VLLM_WHEEL}\"
+ls -lh \"${MARIE_WHEELS_DIR}/${MARIE_VLLM_WHEEL}\"
+sha256sum \"${MARIE_WHEELS_DIR}/${MARIE_VLLM_WHEEL}\""
+}
+
+step_lock_vllm_wheel() {
+  run_cmd lock-vllm-wheel "cd \"${MARIE_TORCH_WORKTREE}\"
+test -f \"${MARIE_WHEELS_DIR}/${MARIE_VLLM_WHEEL}\"
+lock_cache=\"${MARIE_REPRO_LOG_DIR}/uv-lock-cache\"
+mkdir -p \"\${lock_cache}\"
+UV_CACHE_DIR=\"\${lock_cache}\" uv lock
+UV_CACHE_DIR=\"\${lock_cache}\" uv lock --check
+if rg -n 'github.com/vllm-project/vllm|refs/pull/45082' pyproject.toml uv.lock; then
+  echo 'vLLM Git source remains after wheel lock refresh' >&2
+  exit 1
+fi
+rg -n 'vllm.*wheels/vllm-|source = \\{ path = \"wheels/vllm-' pyproject.toml uv.lock"
+}
+
 step_check_wheels() {
   run_cmd check-wheels "cd \"${MARIE_TORCH_WORKTREE}\"
 test ! -d \"${MARIE_WHEELS_DIR}/resolver-spillover\"
@@ -524,14 +614,17 @@ shopt -s nullglob
 fairseq=(\"${MARIE_WHEELS_DIR}\"/fairseq-*.whl)
 detectron2=(\"${MARIE_WHEELS_DIR}\"/detectron2-*.whl)
 faiss=(\"${MARIE_WHEELS_DIR}\"/faiss*.whl)
+vllm=(\"${MARIE_WHEELS_DIR}\"/vllm-*.whl)
 if [[ \${#fairseq[@]} -ne 1 ]]; then echo \"expected exactly one fairseq wheel, found \${#fairseq[@]}\" >&2; exit 1; fi
 if [[ \${#detectron2[@]} -ne 1 ]]; then echo \"expected exactly one detectron2 wheel, found \${#detectron2[@]}\" >&2; exit 1; fi
 if [[ \${#faiss[@]} -ne 1 ]]; then echo \"expected exactly one faiss wheel, found \${#faiss[@]}\" >&2; exit 1; fi
+if [[ \${#vllm[@]} -ne 1 ]]; then echo \"expected exactly one vllm wheel, found \${#vllm[@]}\" >&2; exit 1; fi
+test \"\${vllm[0]}\" = \"${MARIE_WHEELS_DIR}/${MARIE_VLLM_WHEEL}\"
 unexpected=0
 for path in \"${MARIE_WHEELS_DIR}\"/*.whl; do
   base=\"\$(basename \"\${path}\")\"
   case \"\${base}\" in
-    etcd3-0.12.0-py2.py3-none-any.whl|fastwer-0.1.3-cp312-*.whl|fairseq-*.whl|detectron2-*.whl|faiss*.whl) ;;
+    etcd3-0.12.0-py2.py3-none-any.whl|fastwer-0.1.3-cp312-*.whl|fairseq-*.whl|detectron2-*.whl|faiss*.whl|vllm-*.whl) ;;
     *) echo \"unexpected wheel in wheels/: \${base}\" >&2; unexpected=1 ;;
   esac
 done
@@ -558,18 +651,20 @@ import torchvision
 import fairseq
 import detectron2
 import faiss
+import vllm
 from detectron2 import _C
 from detectron2.layers import ROIAlign
 from marie.utils.patches import patchify
 
 print('python packages')
-for dist in ('torch', 'torchvision', 'numpy', 'fairseq', 'detectron2', 'faiss-gpu-cu13', 'fastwer', 'timm'):
+for dist in ('torch', 'torchvision', 'numpy', 'fairseq', 'detectron2', 'faiss-gpu-cu13', 'vllm', 'fastwer', 'timm'):
     print(dist, metadata.version(dist))
 print('pytesseract spec', importlib.util.find_spec('pytesseract'))
 print('faiss import version', getattr(faiss, '__version__', 'unknown'))
 
 assert torch.__version__.startswith('2.12.1'), torch.__version__
 assert torch.version.cuda == '13.0', torch.version.cuda
+assert vllm.__version__ == '${MARIE_VLLM_VERSION}', vllm.__version__
 assert torch.cuda.is_available()
 x = torch.randn(1, 1, 8, 8, device='cuda')
 boxes = torch.tensor([[0, 0, 0, 7, 7]], dtype=torch.float32, device='cuda')
@@ -708,7 +803,7 @@ if start in text and end in text:
 else:
     text = f'{text.rstrip()}\\n\\n{block}'
 
-readme.write_text(text)
+readme.write_text(text.rstrip() + '\n')
 print(block)
 PY"
 }
@@ -725,6 +820,8 @@ run_all() {
   step_build_detectron2
   step_reject_faiss_cu12
   step_build_faiss
+  step_build_vllm
+  step_lock_vllm_wheel
   step_check_wheels
   step_install_wheels
   step_verify_native
@@ -742,6 +839,8 @@ run_build_wheels() {
   step_build_detectron2
   step_reject_faiss_cu12
   step_build_faiss
+  step_build_vllm
+  step_lock_vllm_wheel
   step_check_wheels
   step_wheels_readme
 }
@@ -774,6 +873,8 @@ main() {
     build-detectron2) step_build_detectron2 ;;
     reject-faiss-cu12) step_reject_faiss_cu12 ;;
     build-faiss) step_build_faiss ;;
+    build-vllm) step_build_vllm ;;
+    lock-vllm-wheel) step_lock_vllm_wheel ;;
     build-wheels) run_build_wheels ;;
     check-wheels) step_check_wheels ;;
     install-wheels) step_install_wheels ;;

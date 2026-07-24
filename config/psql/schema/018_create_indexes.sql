@@ -68,6 +68,11 @@ CREATE INDEX IF NOT EXISTS job_state_start_after_ready_idx
     INCLUDE (id, name)
     WHERE state IN ('created', 'retry');
 
+CREATE INDEX IF NOT EXISTS job_admission_ready_idx
+    ON {schema}.job (dag_id)
+    INCLUDE (priority, start_after)
+    WHERE state IN ('created', 'retry');
+
 CREATE INDEX IF NOT EXISTS idx_job_dag_id
     ON {schema}.job (dag_id);
 
@@ -105,6 +110,11 @@ CREATE INDEX IF NOT EXISTS dag_id_state_not_bad_idx
 CREATE INDEX IF NOT EXISTS dag_ok_idx
     ON {schema}.dag (id)
     WHERE state NOT IN ('completed', 'failed', 'cancelled');
+
+CREATE INDEX IF NOT EXISTS dag_admission_active_idx
+    ON {schema}.dag (id)
+    INCLUDE (soft_sla, hard_sla, created_on)
+    WHERE state IN ('created', 'active');
 
 CREATE INDEX IF NOT EXISTS job_id_failed_idx
     ON {schema}.job (id)

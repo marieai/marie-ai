@@ -271,6 +271,7 @@ async def test_resolve_dag_status_failed_finalizes_frontier_and_cancels_pending_
     assert frontier.finalize_calls == [dag_id]
     assert dag_id not in scheduler.active_dags
     assert scheduler.dag_service._terminal_dag_states == {dag_id: "failed"}
+    assert scheduler.dag_service._admission_event.is_set()
     assert failed_job.id not in scheduler._job_cache
     assert sibling_job.id not in scheduler._job_cache
     assert await frontier.get_jobs_by_dag_id(dag_id) == []
@@ -411,7 +412,8 @@ async def test_dag_state_notification_created_clears_terminal_guard():
     )
 
     assert dag_id not in scheduler.dag_service._terminal_dag_states
-    assert scheduler.hydrated_dag_ids == [dag_id]
+    assert scheduler.hydrated_dag_ids == []
+    assert scheduler.dag_service._admission_event.is_set()
     assert dag_id not in scheduler.active_dags
     assert frontier.finalize_calls == [dag_id]
     assert scheduler.notify_calls == [True]
@@ -1039,7 +1041,7 @@ async def test_admit_dag_requires_db_activation_success():
 
 
 @pytest.mark.asyncio
-async def test_scheduler_start_initializes_notification_listener_before_hydration(
+async def test_scheduler_start_initializes_notifications_before_admission(
     monkeypatch,
 ):
     order: list[str] = []
@@ -1076,8 +1078,8 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
             order.append("maintenance_start")
 
     class DagService:
-        async def hydrate_bulk(self, **_kwargs):
-            order.append("hydrate_bulk")
+        async def start_admission(self):
+            order.append("admission_start")
 
         async def start_sync(self):
             order.append("dag_sync_start")
@@ -1131,7 +1133,7 @@ async def test_scheduler_start_initializes_notification_listener_before_hydratio
 
     await scheduler.start()
 
-    assert order.index("notification_start") < order.index("hydrate_bulk")
+    assert order.index("notification_start") < order.index("admission_start")
     assert order[-1] == "notify_event"
 
 
@@ -1247,6 +1249,7 @@ async def test_sync_dag_once_reaps_stale_memory_dags_and_notifies():
     repository = RecordingRepository(dag_state="active")
     frontier = RecordingFrontier()
     scheduler = build_scheduler(repository, frontier)
+    scheduler.dag_service.max_active_dags = 2
     scheduler.active_dags.update({"dag-valid": object(), "dag-stale": object()})
     scheduler.dag_service._terminal_dag_states = {"dag-stale": "completed"}
     resolved: list[str] = []
@@ -1272,6 +1275,7 @@ async def test_sync_dag_once_reaps_stale_memory_dags_and_notifies():
     assert scheduler.dag_service._terminal_dag_states == {"dag-stale": "completed"}
     assert frontier.finalize_calls == ["dag-stale"]
     assert scheduler.notify_calls == [True]
+    assert scheduler.dag_service._admission_event.is_set()
 
 
 @pytest.mark.asyncio

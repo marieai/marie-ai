@@ -68,15 +68,29 @@ directory:
 | `fairseq-*.whl` | `github.com/marieai/fairseq` at the script ref, default `main` to match `Dockerfiles/cuda-312.Dockerfile` | `patches/fairseq-marie-torch212-wheel-metadata.patch` |
 | `detectron2-*.whl` | `github.com/facebookresearch/detectron2` at the script ref, default `main` to match `Dockerfiles/cuda-312.Dockerfile` | none |
 | `faiss_gpu_cu13-*.whl` | `github.com/facebookresearch/faiss` at the pinned script ref; imports as `faiss` | `patches/faiss-cuda13-profiler-api.patch` |
+| `vllm-*.whl` | `github.com/vllm-project/vllm` at commit `11840796b73d3f39c622a2a3815e04410efef72d` | none |
 
-Only those three source-built native wheels belong in this directory as PyTorch
-2.12 / CUDA 13 build outputs. The reproducible build baseline is NumPy 2.4.6;
+Only those four source-built native wheels belong in this directory as PyTorch
+2.12 / CUDA 13 build outputs. The reproducible build baseline is NumPy 2.3.5;
 resolver dependency wheels such as `fvcore`, `iopath`, `omegaconf`, `numpy`,
 `pillow`, or `matplotlib` are installed through normal dependency resolution and
 must not be copied into `wheels/` or a `resolver-spillover/` subdirectory.
 
 Run `scripts/setup-py312-torch212-cu130.sh manifest` after rebuilding to
 write the verified wheel list and SHA256s to the command-output manifest.
+
+Build and lock the vLLM wheel before building the CUDA image:
+
+```bash
+MARIE_TORCH_VENV="$(readlink -f .venv)" \
+  ./scripts/setup-py312-torch212-cu130.sh cuda-toolkit
+
+MARIE_TORCH_VENV="$(readlink -f .venv)" \
+  ./scripts/setup-py312-torch212-cu130.sh build-vllm
+
+MARIE_TORCH_VENV="$(readlink -f .venv)" \
+  ./scripts/setup-py312-torch212-cu130.sh lock-vllm-wheel
+```
 
 <!-- local-wheels-inventory:start -->
 
@@ -90,8 +104,9 @@ Updated by scripts/setup-py312-torch212-cu130.sh wheels-readme.
 | etcd3-0.12.0-py2.py3-none-any.whl | 39112 | 9b5c36c42a6764d4926c40d131cacd4248f5a3cefc6452fb05a2b3e1e489ed7a |
 | etcd3-0.12.0.tar.gz | 62608 | 46fd3624665bddbd0957823777d45ed91e2b7f7d698223db984c79bf225b64f3 |
 | fairseq-0.12.2+marieai.torch212cu130-cp312-cp312-linux_x86_64.whl | 30915780 | 615d9aa51a0f03b75cc6fca35b89587e636c65b3a709e3e774cd02841ab7e458 |
-| faiss_gpu_cu13-1.14.1+cu130-py3-none-any.whl | 39931313 | 5676332a3e2d5e17e1e252984aedd353d1afe41b262948c70d15082355e753f9 |
+| faiss_gpu_cu13-1.14.1+cu130-py3-none-any.whl | 39931315 | de4ae1ba11b84f1a55adc647084c856763ce5400022fea3c5fdfef7aa0f57e21 |
 | fastwer-0.1.3-cp312-cp312-linux_x86_64.whl | 1098219 | 6fc055f390e333e76394d1942b55f94a8c2cd591a4854946b9f0a40fcfd387a9 |
 | fastwer-0.1.3.tar.gz | 4877 | f411662f337b588ce21aabf51f3170e891bfed3f19f6331b946ad1974401d54d |
+| vllm-0.23.1rc1.dev737+g11840796b-cp312-cp312-linux_x86_64.whl | 457510900 | 7e9f3765b008c5327b0bcec3c7aa7d2ff511a82a1d15f6a04ddfac3ad100396c |
 
 <!-- local-wheels-inventory:end -->
