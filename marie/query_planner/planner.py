@@ -2,10 +2,11 @@ import traceback
 from collections import defaultdict, deque
 from io import StringIO
 from pprint import pprint
-from typing import Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 
-import matplotlib.pyplot as plt
-import networkx as nx
+if TYPE_CHECKING:
+    import networkx as nx
+
 import yaml
 
 from marie.job.job_manager import generate_job_id, increment_uuid7str
@@ -313,6 +314,9 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
     :param output_path: The file path to save the graph image (default: 'query_plan_graph.png').
     """
 
+    import matplotlib.pyplot as plt
+    import networkx as nx
+
     # https://mermaid.live/
     mermaid_code = generate_mermaid_from_query_plan(plan)
     print(mermaid_code)
@@ -431,7 +435,7 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
     plt.show()
 
 
-def nx_to_mermaid(graph: nx.DiGraph) -> str:
+def nx_to_mermaid(graph: "nx.DiGraph") -> str:
     lines = ["```mermaid", "flowchart TD"]
 
     for source, target in graph.edges():

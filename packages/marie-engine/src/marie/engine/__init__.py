@@ -1,4 +1,9 @@
-from marie.engine.base import EngineLM
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from marie.engine.base import EngineLM
 
 # Supported LLM providers
 # Note: Claude is accessed via 'openai' provider with LiteLLM base_url
@@ -40,6 +45,14 @@ __MULTIMODAL_MODELS__ = [
     MODEL_NAME_MAP["pixtral_12b"],
     MODEL_NAME_MAP["llava_mistral_7b"],
 ]
+
+
+def __getattr__(name: str) -> type[EngineLM]:
+    if name == "EngineLM":
+        from marie.engine.base import EngineLM
+
+        return EngineLM
+    raise AttributeError(name)
 
 
 def check_if_multimodal(engine_name: str):

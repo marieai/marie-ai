@@ -56,6 +56,13 @@ uv sync --locked --extra cu130 --group dev
 uv run --locked --extra cu130 python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 ```
 
+The repository setup script wraps that synchronization and can create or resume
+the selected environment in one command:
+
+```shell
+scripts/setup-py312-torch212-cu130.sh venv
+```
+
 Keep `--extra cu130` on CUDA `uv run` commands. A plain `uv run` does not select optional extras, so it does not enforce the CUDA/ML package pins. `--locked` also prevents the command from changing the committed dependency resolution.
 
 ## Clean Virtual Environments
@@ -249,8 +256,8 @@ If you already have a build environment, prep it once and then build every wheel
 export MARIE_VENV_BASE=~/environments
 export MARIE_TORCH_ENV_NAME=marie-ai-pytorch-2-12
 
-# one-time environment prep
-scripts/setup-py312-torch212-cu130.sh venv       # Python 3.12 venv + build tools, symlinks .venv to it
+# one-time native build environment prep
+scripts/setup-py312-torch212-cu130.sh base-venv  # Python 3.12 venv + build tools, symlinks .venv to it
 scripts/setup-py312-torch212-cu130.sh torch      # torch 2.12.1 / torchvision 0.27.1 (cu130)
 scripts/setup-py312-torch212-cu130.sh app-deps   # Marie editable install + test/runtime helpers
 

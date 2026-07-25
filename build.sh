@@ -205,6 +205,7 @@ execute_post_commit_hook() {
 # Stage a lightweight build context to avoid scanning the full repo (model_zoo alone is 81GB+).
 # Only the directories/files referenced by the Dockerfile are copied.
 stage_build_context() {
+    local profile_key=$1
     local context_dir
     context_dir=$(mktemp -d "${TMPDIR:-/tmp}/marie-build-ctx.XXXXXX")
 
@@ -217,9 +218,17 @@ stage_build_context() {
     cp -a hubble/         "$context_dir/hubble/"         2>/dev/null || true
     cp -a daemon/         "$context_dir/daemon/"         2>/dev/null || true
     cp -a docarray/       "$context_dir/docarray/"       2>/dev/null || true
-    cp -a wheels/         "$context_dir/wheels/"
     cp -a patches/        "$context_dir/patches/"
     cp -a packages/       "$context_dir/packages/"
+
+    mkdir -p "$context_dir/wheels"
+    if [[ "$profile_key" == "marie-gateway-cpu" ]]; then
+        cp wheels/etcd3-0.12.0-py2.py3-none-any.whl "$context_dir/wheels/"
+        mkdir -p "$context_dir/requirements/uv"
+        cp requirements/uv/marie-gateway-cpu.lock.txt "$context_dir/requirements/uv/"
+    else
+        cp -a wheels/. "$context_dir/wheels/"
+    fi
 
     # Individual files
     cp pyproject.toml     "$context_dir/"
@@ -236,6 +245,7 @@ stage_build_context() {
 build_image() {
     local dockerfile_path=$1
     local full_image_name=$2
+    local profile_key=$3
 
     if [[ ! -f "$dockerfile_path" ]]; then
         log_error "Dockerfile not found at: $dockerfile_path"
@@ -247,9 +257,9 @@ build_image() {
     log_info "Version: $VERSION"
     log_info "Python installer: uv"
 
-    # Stage a clean build context (~300MB instead of scanning 86GB)
+    # Stage only the files needed by the selected profile.
     local build_context
-    build_context=$(stage_build_context)
+    build_context=$(stage_build_context "$profile_key")
     trap "rm -rf '$build_context'" EXIT
 
     log_info "Contents of build context:"
@@ -305,7 +315,7 @@ build_single_profile() {
     log_info "Building profile: $profile_key (Version: $VERSION)"
     parse_profile_config "$profile_key"
 
-    if build_image "$DOCKERFILE_PATH" "$FULL_IMAGE_NAME"; then
+    if build_image "$DOCKERFILE_PATH" "$FULL_IMAGE_NAME" "$profile_key"; then
         verify_image "$FULL_IMAGE_NAME"
         return $?
     else

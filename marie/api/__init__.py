@@ -1,12 +1,12 @@
+from __future__ import annotations
+
 import hashlib
 import io
 import os
 import zipfile
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-import cv2
 import filetype
-import numpy as np
 from docarray import DocList
 
 from marie.api.docs import AssetKeyDoc
@@ -19,8 +19,10 @@ from marie.utils.format_registry import (
     IMAGE_FORMATS,
     MIME_TO_FORMAT,
 )
-from marie.utils.image_utils import ensure_max_page_size
 from marie.utils.utils import FileSystem, ensure_exists
+
+if TYPE_CHECKING:
+    import numpy as np
 
 logger = default_logger
 
@@ -104,8 +106,14 @@ def _detect_zip_container(data: bytes) -> str | None:
     return MIME_TO_FORMAT.get(mime)
 
 
-def store_temp_file(message_bytes, queue_id, file_type, store_raw) -> tuple[str, str]:
-    """Store temp file from decoded payload message."""
+def store_temp_file(
+    message_bytes: bytes, queue_id: str, file_type: str, store_raw: bool
+) -> tuple[str, str]:
+    """Store encoded payload bytes without requiring an image codec.
+
+    ``store_raw`` remains part of the API for callers that distinguish payload
+    sources; encoded bytes are preserved in both modes.
+    """
     m = hashlib.sha256()
     m.update(message_bytes)
     file_digest = m.hexdigest()
@@ -115,16 +123,8 @@ def store_temp_file(message_bytes, queue_id, file_type, store_raw) -> tuple[str,
 
     tmp_file = f"{upload_dir}/{file_digest}.{ext}"
 
-    # Non-image formats must always be stored raw
-    if store_raw or file_type not in IMAGE_FORMATS:
-        with open(tmp_file, "wb") as tmp:
-            tmp.write(message_bytes)
-    else:
-        # TODO : This does not handle multipage tiffs
-        # convert to numpy array as the message has been passed from base64
-        npimg = np.frombuffer(message_bytes, np.uint8)
-        img = cv2.imdecode(npimg, cv2.IMREAD_UNCHANGED)
-        cv2.imwrite(tmp_file, img)
+    with open(tmp_file, "wb") as tmp:
+        tmp.write(message_bytes)
 
     return tmp_file, file_digest
 
@@ -435,6 +435,8 @@ def get_frames_from_docs(
     Raises:
         ValueError: If no documents are found in the input, or if multiple documents are provided.
     """
+    from marie.utils.image_utils import ensure_max_page_size
+
     if len(docs) == 0:
         raise ValueError("Expected single document. No documents found")
     if len(docs) > 1:

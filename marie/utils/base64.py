@@ -1,11 +1,16 @@
-import base64
+from __future__ import annotations
 
-import cv2
-import numpy as np
+import base64
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 def encodeToBase64(img: np.ndarray) -> str:
     """encode image to base64"""
+    import cv2
+
     retval, buffer = cv2.imencode('.png', img)
     png_as_text = base64.b64encode(buffer).decode()
     return png_as_text

@@ -1,12 +1,13 @@
 import base64
 import json
 
-import cv2
 import numpy as np
 
 
 def encodeimg2b64(img: np.ndarray) -> str:
     """encode image to base64"""
+    import cv2
+
     retval, buffer = cv2.imencode(".png", img)
     png_as_text = base64.b64encode(buffer).decode()
     return png_as_text
@@ -32,7 +33,6 @@ class NumpyEncoder(json.JSONEncoder):
                 np.uint64,
             ),
         ):
-
             return int(obj)
 
         elif isinstance(obj, (np.float16, np.float32, np.float64)):

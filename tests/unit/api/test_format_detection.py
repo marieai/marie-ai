@@ -1,9 +1,11 @@
 import io
 import zipfile
+from pathlib import Path
 
 import pytest
+from pytest import MonkeyPatch
 
-from marie.api import _detect_type_from_bytes
+from marie.api import _detect_type_from_bytes, store_temp_file
 
 
 def _zip_bytes(files):
@@ -53,3 +55,20 @@ def test_rejects_oversized_zip_mimetype_member():
 
     with pytest.raises(ValueError, match="Could not detect"):
         _detect_type_from_bytes(data)
+
+
+def test_store_temp_file_preserves_encoded_image_bytes(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    encoded_jpeg = b"\xff\xd8\xff\xe0encoded-jpeg\xff\xd9"
+    monkeypatch.setattr("marie.api.ensure_exists", lambda _: str(tmp_path))
+
+    temp_file, _ = store_temp_file(
+        encoded_jpeg,
+        queue_id="test-queue",
+        file_type="jpeg",
+        store_raw=False,
+    )
+
+    assert temp_file.endswith(".jpg")
+    assert Path(temp_file).read_bytes() == encoded_jpeg
