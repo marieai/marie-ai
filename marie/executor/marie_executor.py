@@ -144,8 +144,6 @@ class MarieExecutor(Executor, StorageMixin):
             )
             self.logger.info(f"GPU monitor not running ({why})")
 
-    # ---------------------- Setup ----------------------
-
     def _setup_llm_tracking(self, llm_tracking_config: dict) -> None:
         """
         Configure LLM tracking for this executor process.
@@ -197,8 +195,6 @@ class MarieExecutor(Executor, StorageMixin):
         self.logger.info(f"storage_enabled  = {self.storage_enabled}")
         self.logger.info(f"asset_tracking_enabled  = {self.asset_tracking_enabled}")
 
-    # ---------------------- Status / markers ----------------------
-
     def _set_last_status(
         self,
         *,
@@ -245,8 +241,6 @@ class MarieExecutor(Executor, StorageMixin):
         except Exception:
             self.logger.exception("Failed to write GPU fault marker")
 
-    # ---------------------- Termination ----------------------
-
     def _terminate_process(self, reason: str, exc: Optional[BaseException] = None):
         """
         Stop this worker so supervisor/docker can restart it.
@@ -273,8 +267,6 @@ class MarieExecutor(Executor, StorageMixin):
 
         raise CUDARuntimeTerminated
 
-    # ---------------------- NVML lifecycle ----------------------
-
     def _nvml_init(self) -> Tuple[bool, str]:
         """Ensure NVML is initialized once; return (ready, detail)."""
         if not self._nvml_available:
@@ -298,8 +290,6 @@ class MarieExecutor(Executor, StorageMixin):
             pass
         finally:
             self._nvml_ready = False
-
-    # ---------------------- Probes ----------------------
 
     def _nvml_probe_once(self) -> Tuple[bool, str]:
         """Return (healthy, detail). Conservative: any exception => unhealthy."""
@@ -371,8 +361,6 @@ class MarieExecutor(Executor, StorageMixin):
                 pass
             return False, f"Torch CUDA probe failed: {e.__class__.__name__}: {e}"
 
-    # -------- unified health check (used by dry_run + monitor) --------
-
     def _health_check_once(
         self,
         *,
@@ -388,12 +376,10 @@ class MarieExecutor(Executor, StorageMixin):
         if not self._gpu_monitor_enabled:
             return True, "GPU monitor disabled; health checks skipped", "skipped"
 
-        # 1) NVML first
         ok, detail = self._nvml_probe_once()
         if not ok:
             return False, detail, "nvml"
 
-        # 2) Torch (forced or periodic)
         run_torch = False
         if self._torch_check_enabled:
             if force_torch:
@@ -408,13 +394,9 @@ class MarieExecutor(Executor, StorageMixin):
             tok, tdetail = self._torch_probe_once()
             if not tok:
                 return False, tdetail, "torch"
-            # both OK
             return True, f"{detail}; {tdetail}", "combined"
 
-        # NVML only, OK
         return True, detail, "nvml"
-
-    # ---------------------- Monitor bootstrap & loop ----------------------
 
     def _maybe_start_gpu_monitor(self):
         if not self._gpu_monitor_enabled or self._gpu_monitor_task:
@@ -502,8 +484,6 @@ class MarieExecutor(Executor, StorageMixin):
                 self._nvml_shutdown()
             except Exception:
                 pass
-
-    # ---------------------- Endpoints ----------------------
 
     @requests(on="/")
     async def default_endpoint(
