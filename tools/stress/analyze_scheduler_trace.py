@@ -66,6 +66,9 @@ EVENTS = (
     "executor_callback_invoked",
     "executor_slot_released",
     "executor_slot_release_failed",
+    "executor_slot_release_retry_succeeded",
+    "executor_slot_release_retry_deferred",
+    "executor_slot_release_retry_failed",
     "executor_success_recorded",
     "executor_failed_recorded",
     "job_run_attempt_started",
@@ -1468,6 +1471,8 @@ def _print_trace_coverage(rows: list[dict[str, Any]]) -> None:
         f"callback={events.get('executor_callback_invoked', 0)} "
         f"slot_released={events.get('executor_slot_released', 0)} "
         f"slot_release_failed={events.get('executor_slot_release_failed', 0)} "
+        f"slot_release_recovered="
+        f"{events.get('executor_slot_release_retry_succeeded', 0)} "
         f"terminal={executor_terminal}"
     )
 
@@ -1908,10 +1913,41 @@ def _print_findings(
 
     slot_release_failures = events.get("executor_slot_release_failed", 0)
     if slot_release_failures:
-        findings.append(
-            f"Executor slot release failed for {slot_release_failures} terminal jobs; "
-            "capacity remains unavailable until lease expiry or reconciliation."
+        failed_jobs = {
+            row.get("job_id")
+            for row in rows
+            if row.get("event") == "executor_slot_release_failed" and row.get("job_id")
+        }
+        recovered_jobs = {
+            row.get("job_id")
+            for row in rows
+            if row.get("event") == "executor_slot_release_retry_succeeded"
+            and row.get("job_id")
+        }
+        pending_jobs = failed_jobs - recovered_jobs
+        failures_without_job_id = max(0, slot_release_failures - len(failed_jobs))
+        pending_count = len(pending_jobs) + failures_without_job_id
+        reasons = Counter(
+            str(row.get("release_reason") or "unknown")
+            for row in rows
+            if row.get("event") == "executor_slot_release_failed"
         )
+        reason_text = ", ".join(
+            f"{reason}={count}" for reason, count in sorted(reasons.items())
+        )
+        if pending_count:
+            suffix = f" Reasons: {reason_text}." if reason_text else ""
+            findings.append(
+                f"Executor slot release remains pending for {pending_count} terminal jobs "
+                f"({slot_release_failures} initial failures, "
+                f"{len(failed_jobs & recovered_jobs)} recovered); capacity remains "
+                f"unavailable until retry, lease expiry, or reconciliation.{suffix}"
+            )
+        else:
+            findings.append(
+                f"All {slot_release_failures} transient executor slot release failures "
+                "recovered on retry."
+            )
 
     started = events.get("control_flow_started", 0)
     completed = events.get("control_flow_completed", 0)

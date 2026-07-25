@@ -42,7 +42,7 @@ from marie.serve.executors import BaseExecutor, __dry_run_endpoint__
 from marie.serve.instrumentation import MetricsTimer
 from marie.serve.networking.utils import host_is_local
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
-from marie.state.semaphore_store import SemaphoreStore
+from marie.state.semaphore_store import SemaphoreReleaseResult, SemaphoreStore
 from marie.state.state_store import DesiredStore, StatusStore
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
@@ -97,6 +97,24 @@ def _status_lease_timings(etcd_config: EtcdConfig) -> Tuple[int, float]:
     else:
         heartbeat_time = max(1.0, heartbeat_time)
     return lease_time, min(heartbeat_time, max(1.0, 0.5 * lease_time))
+
+
+def _semaphore_release_trace_fields(
+    result: SemaphoreReleaseResult | bool,
+) -> dict[str, Any]:
+    released = bool(result)
+    return {
+        "released": released,
+        "release_reason": getattr(
+            result,
+            "reason",
+            "released" if released else "release_failed",
+        ),
+        "release_attempts": getattr(result, "attempts", 1),
+        "release_retryable": getattr(result, "retryable", False),
+        "holder_absent": getattr(result, "holder_absent", False),
+        "counter_reconciled": getattr(result, "counter_reconciled", None),
+    }
 
 
 # GB:MOD
@@ -1594,18 +1612,19 @@ class WorkerRequestHandler:
             deployment=self._deployment,
             terminal_status=JobStatus.FAILED.value,
         )
-        slot_released = self._sem_untrack(job_id, release=True)
+        release_result = self._sem_untrack(job_id, release=True)
+        release_fields = _semaphore_release_trace_fields(release_result)
         scheduler_trace(
             (
                 "executor_slot_released"
-                if slot_released
+                if release_fields["released"]
                 else "executor_slot_release_failed"
             ),
             job_id=job_id,
             dag_id=dag_id,
             deployment=self._deployment,
             terminal_status=JobStatus.FAILED.value,
-            released=slot_released,
+            **release_fields,
         )
 
         if job_id is not None and self._job_info_client is not None:
@@ -1783,18 +1802,19 @@ class WorkerRequestHandler:
             deployment=self._deployment,
             terminal_status=JobStatus.SUCCEEDED.value,
         )
-        slot_released = self._sem_untrack(job_id, release=True)
+        release_result = self._sem_untrack(job_id, release=True)
+        release_fields = _semaphore_release_trace_fields(release_result)
         scheduler_trace(
             (
                 "executor_slot_released"
-                if slot_released
+                if release_fields["released"]
                 else "executor_slot_release_failed"
             ),
             job_id=job_id,
             dag_id=dag_id,
             deployment=self._deployment,
             terminal_status=JobStatus.SUCCEEDED.value,
-            released=slot_released,
+            **release_fields,
         )
 
         if job_id is not None and self._job_info_client is not None:
@@ -2388,42 +2408,72 @@ class WorkerRequestHandler:
                 )
                 return False
 
-    def _sem_untrack(self, job_id: str, release: bool = True) -> bool:
+    def _sem_release_ticket(
+        self,
+        job_id: str,
+        meta: dict[str, Any],
+    ) -> SemaphoreReleaseResult:
+        slot = meta["slot"]
+        owner = meta.get("owner") or job_id
+        run_attempt_id = meta.get("run_attempt_id")
+
+        try:
+            result = self._semaphore.release_owned_result(
+                slot,
+                job_id,
+                owner=owner,
+                run_attempt_id=run_attempt_id,
+            )
+            self.logger.info(
+                f"[sem] release ticket {job_id}@{slot} -> "
+                f"{result.success} ({result.reason}, attempts={result.attempts})"
+            )
+            return result
+        except Exception as error:
+            self.logger.error(
+                f"[sem] release failed for {job_id}@{slot}: {error}",
+                exc_info=True,
+            )
+            return SemaphoreReleaseResult(
+                success=False,
+                reason="etcd_error",
+                attempts=0,
+                retryable=True,
+            )
+
+    def _sem_untrack(
+        self,
+        job_id: str,
+        release: bool = True,
+    ) -> SemaphoreReleaseResult:
         with self._sem_ticket_lock:
-            meta = self._active_sem_tickets.pop(job_id, None)
+            meta = self._active_sem_tickets.get(job_id)
             if not meta:
                 self.logger.warning(
                     f"[sem] untrack called for {job_id} but no active ticket found "
                     f"(active tickets: {list(self._active_sem_tickets.keys())})"
                 )
-                return False
+                return SemaphoreReleaseResult(
+                    success=False,
+                    reason="not_tracked",
+                    attempts=0,
+                )
             if not release:
+                self._active_sem_tickets.pop(job_id, None)
                 self.logger.debug(
                     f"[sem] untrack {job_id} without release (release=False)"
                 )
-                return True
+                return SemaphoreReleaseResult(
+                    success=True,
+                    reason="untracked",
+                    attempts=0,
+                )
 
-            slot = meta["slot"]
-            owner = meta.get("owner") or job_id
-            run_attempt_id = meta.get("run_attempt_id")
-
-            try:
-                self.logger.info(
-                    f"[sem] releasing ticket {job_id}@{slot} (owner={owner})"
-                )
-                released = self._semaphore.release_owned(
-                    slot,
-                    job_id,
-                    owner=owner,
-                    run_attempt_id=run_attempt_id,
-                )
-                self.logger.info(f"[sem] released ticket {job_id}@{slot} -> {released}")
-                return bool(released)
-            except Exception as e:
-                self.logger.error(
-                    f"[sem] release failed for {job_id}@{slot}: {e}", exc_info=True
-                )
-                return False
+            meta["release_pending"] = True
+            result = self._sem_release_ticket(job_id, meta)
+            if result.success or not result.retryable:
+                self._active_sem_tickets.pop(job_id, None)
+            return result
 
     def _sem_untrack_all(self, release: bool = True) -> None:
         with self._sem_ticket_lock:
@@ -2442,6 +2492,27 @@ class WorkerRequestHandler:
             with self._sem_ticket_lock:
                 meta = self._active_sem_tickets.get(jid)
                 if meta is None:
+                    continue
+
+                if meta.get("release_pending"):
+                    result = self._sem_release_ticket(jid, meta)
+                    if result.success or not result.retryable:
+                        self._active_sem_tickets.pop(jid, None)
+                    scheduler_trace(
+                        (
+                            "executor_slot_release_retry_succeeded"
+                            if result.success
+                            else (
+                                "executor_slot_release_retry_deferred"
+                                if result.retryable
+                                else "executor_slot_release_retry_failed"
+                            )
+                        ),
+                        job_id=jid,
+                        deployment=self._deployment,
+                        slot_type=meta["slot"],
+                        **_semaphore_release_trace_fields(result),
+                    )
                     continue
 
                 ttl = max(5, int(meta.get("ttl") or self._sem_default_ttl))

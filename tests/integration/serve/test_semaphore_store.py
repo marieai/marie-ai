@@ -1,10 +1,29 @@
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable
 
 import pytest
 
 from marie.serve.discovery.etcd_client import EtcdClient
 from marie.state.semaphore_store import SemaphoreHolder, SemaphoreStore
+
+
+class _TransactionProxy:
+    def __init__(
+        self,
+        transaction: Any,
+        commit: Callable[[Any], tuple[bool, Any]],
+    ) -> None:
+        self._transaction = transaction
+        self._commit = commit
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._transaction, name)
+
+    def commit(self) -> tuple[bool, Any]:
+        return self._commit(self._transaction)
 
 
 @pytest.fixture(scope="function")
@@ -79,16 +98,156 @@ def test_reserve_success_and_release(sema: SemaphoreStore):
     assert sema.available_slot_count(slot) == 1
 
 
+def test_attempt_bound_holder_rejects_stale_renew_and_release(
+    sema: SemaphoreStore,
+) -> None:
+    slot = _slot()
+    ticket = _ticket()
+    sema.set_capacity(slot, 1)
+    assert sema.reserve(
+        slot,
+        ticket,
+        node="scheduler",
+        owner=ticket,
+        run_attempt_id="attempt-1",
+    )
+
+    holder = sema.get_holder(slot, ticket)
+    assert holder is not None
+    assert holder.run_attempt_id == "attempt-1"
+    assert not sema.renew(
+        slot,
+        ticket,
+        owner=ticket,
+        run_attempt_id="attempt-2",
+    )
+    stale_release = sema.release_owned_result(
+        slot,
+        ticket,
+        owner=ticket,
+        run_attempt_id="attempt-2",
+    )
+    assert not stale_release
+    assert stale_release.reason == "attempt_mismatch"
+    assert sema.release_owned(
+        slot,
+        ticket,
+        owner=ticket,
+        run_attempt_id="attempt-1",
+    )
+
+
+def test_concurrent_owned_releases_retry_counter_contention(
+    sema: SemaphoreStore,
+) -> None:
+    slot = _slot()
+    tickets = [_ticket(), _ticket()]
+    sema.set_capacity(slot, 2)
+    for ticket in tickets:
+        assert sema.reserve(slot, ticket, node="scheduler", owner=ticket)
+
+    real_txn = sema.etcd.txn
+    commit_barrier = threading.Barrier(2)
+    commit_lock = threading.Lock()
+    commit_count = 0
+
+    def contended_commit(transaction: Any) -> tuple[bool, Any]:
+        nonlocal commit_count
+        with commit_lock:
+            commit_count += 1
+            synchronize = commit_count <= 2
+        if synchronize:
+            commit_barrier.wait(timeout=2.0)
+        return transaction.commit()
+
+    def contended_txn() -> _TransactionProxy:
+        return _TransactionProxy(real_txn(), contended_commit)
+
+    sema.etcd.txn = contended_txn
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(
+                    lambda ticket: sema.release_owned_result(
+                        slot,
+                        ticket,
+                        owner=ticket,
+                    ),
+                    tickets,
+                )
+            )
+    finally:
+        sema.etcd.txn = real_txn
+
+    assert all(result.success for result in results)
+    assert max(result.attempts for result in results) >= 2
+    assert sema.read_count(slot) == 0
+    assert sema.list_holders(slot) == {}
+
+
+def test_absent_holder_release_reconciles_stale_counter(
+    sema: SemaphoreStore,
+) -> None:
+    slot = _slot()
+    ticket = _ticket()
+    sema.set_capacity(slot, 1)
+    assert sema.reserve(slot, ticket, node="scheduler", owner=ticket)
+
+    sema.etcd.delete(f"semaphores/{slot}/holders/{ticket}")
+    assert sema.read_count(slot) == 1
+
+    result = sema.release_owned_result(slot, ticket, owner=ticket)
+
+    assert result.success
+    assert result.reason == "already_absent"
+    assert result.holder_absent
+    assert result.counter_reconciled
+    assert sema.read_count(slot) == 0
+
+
+def test_reconcile_retries_counter_contention(sema: SemaphoreStore) -> None:
+    slot = _slot()
+    sema.set_capacity(slot, 2)
+    assert sema.reserve(slot, "t1", node="scheduler")
+    sema.etcd.put(f"semaphores/{slot}/count", "2")
+
+    real_txn = sema.etcd.txn
+    failed_commits = 0
+
+    def contended_commit(transaction: Any) -> tuple[bool, Any]:
+        nonlocal failed_commits
+        failed_commits += 1
+        if failed_commits <= 2:
+            return False, []
+        return transaction.commit()
+
+    def contended_txn() -> _TransactionProxy:
+        return _TransactionProxy(real_txn(), contended_commit)
+
+    sema.etcd.txn = contended_txn
+    try:
+        assert sema.reconcile(slot) == 1
+    finally:
+        sema.etcd.txn = real_txn
+
+    assert failed_commits == 3
+    assert sema.read_count(slot) == 1
+
+
 def test_reserve_many_reserves_available_tickets(sema: SemaphoreStore):
     slot = _slot()
     sema.set_capacity(slot, 3)
 
     tickets = [_ticket() for _ in range(3)]
+    run_attempt_ids = {
+        ticket: f"attempt-{index}" for index, ticket in enumerate(tickets)
+    }
     reserved = sema.reserve_many(
         slot,
         tickets,
         node="scheduler",
         owner_by_ticket={ticket: ticket for ticket in tickets},
+        run_attempt_id_by_ticket=run_attempt_ids,
     )
 
     assert reserved == set(tickets)
@@ -98,6 +257,7 @@ def test_reserve_many_reserves_available_tickets(sema: SemaphoreStore):
     assert set(holders) == set(tickets)
     for ticket in tickets:
         assert holders[ticket].owner == ticket
+        assert holders[ticket].run_attempt_id == run_attempt_ids[ticket]
 
 
 def test_reserve_many_caps_at_available_capacity(sema: SemaphoreStore):

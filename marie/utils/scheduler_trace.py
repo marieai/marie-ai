@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import atexit
 import json
 import os
+import queue
 import threading
 import time
 from datetime import datetime, timezone
@@ -10,9 +12,16 @@ from typing import Any
 
 from marie.utils.types import to_bool
 
-_LOCK = threading.Lock()
 _DEFAULT_PATH = "/tmp/marie-scheduler-trace.jsonl"
 _DEFAULT_PROFILE = "compact"
+_TRACE_BATCH_SIZE = 256
+_TRACE_FLUSH_SECONDS = 0.05
+_TRACE_QUEUE: queue.Queue[tuple[str, str] | None] = queue.Queue()
+_TRACE_START_LOCK = threading.Lock()
+_TRACE_THREAD: threading.Thread | None = None
+_TRACE_PID = os.getpid()
+_TRACE_FD: int | None = None
+_TRACE_FD_PATH: str | None = None
 
 _SENSITIVE_FIELDS = {
     "api_key",
@@ -87,6 +96,130 @@ def _compact_fields(event: str, fields: dict[str, Any]) -> dict[str, Any] | None
     }
 
 
+def _close_trace_fd() -> None:
+    global _TRACE_FD, _TRACE_FD_PATH
+
+    trace_fd = _TRACE_FD
+    _TRACE_FD = None
+    _TRACE_FD_PATH = None
+    if trace_fd is not None:
+        try:
+            os.close(trace_fd)
+        except OSError:
+            pass
+
+
+def _write_trace_batch(batch: list[tuple[str, str]]) -> None:
+    global _TRACE_FD, _TRACE_FD_PATH
+
+    try:
+        index = 0
+        while index < len(batch):
+            path = batch[index][0]
+            lines: list[str] = []
+            while index < len(batch) and batch[index][0] == path:
+                lines.append(batch[index][1])
+                index += 1
+            try:
+                if _TRACE_FD is None or _TRACE_FD_PATH != path:
+                    _close_trace_fd()
+                    trace_path = Path(path).expanduser()
+                    trace_path.parent.mkdir(parents=True, exist_ok=True)
+                    _TRACE_FD = os.open(
+                        trace_path,
+                        os.O_APPEND | os.O_CREAT | os.O_WRONLY,
+                        0o666,
+                    )
+                    _TRACE_FD_PATH = path
+                payload = "".join(lines).encode("utf-8")
+                view = memoryview(payload)
+                while view:
+                    written = os.write(_TRACE_FD, view)
+                    view = view[written:]
+            except OSError:
+                _close_trace_fd()
+    finally:
+        for _ in batch:
+            _TRACE_QUEUE.task_done()
+
+
+def _trace_writer() -> None:
+    stopping = False
+    while not stopping:
+        item = _TRACE_QUEUE.get()
+        if item is None:
+            _TRACE_QUEUE.task_done()
+            break
+
+        batch = [item]
+        deadline = time.monotonic() + _TRACE_FLUSH_SECONDS
+        while len(batch) < _TRACE_BATCH_SIZE:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                item = _TRACE_QUEUE.get(timeout=remaining)
+            except queue.Empty:
+                break
+            if item is None:
+                _TRACE_QUEUE.task_done()
+                stopping = True
+                break
+            batch.append(item)
+        _write_trace_batch(batch)
+
+    _close_trace_fd()
+
+
+def _reset_trace_writer() -> None:
+    global _TRACE_PID, _TRACE_QUEUE, _TRACE_START_LOCK, _TRACE_THREAD
+
+    _close_trace_fd()
+    _TRACE_PID = os.getpid()
+    _TRACE_QUEUE = queue.Queue()
+    _TRACE_START_LOCK = threading.Lock()
+    _TRACE_THREAD = None
+
+
+def _ensure_trace_writer() -> None:
+    global _TRACE_THREAD
+
+    if _TRACE_PID != os.getpid():
+        _reset_trace_writer()
+    if _TRACE_THREAD is not None and _TRACE_THREAD.is_alive():
+        return
+    with _TRACE_START_LOCK:
+        if _TRACE_THREAD is not None and _TRACE_THREAD.is_alive():
+            return
+        _TRACE_THREAD = threading.Thread(
+            target=_trace_writer,
+            name="scheduler-trace-writer",
+            daemon=True,
+        )
+        _TRACE_THREAD.start()
+
+
+def flush_scheduler_trace(*, close: bool = False) -> None:
+    """Flush queued scheduler trace records to disk."""
+    if _TRACE_PID != os.getpid():
+        _reset_trace_writer()
+    if _TRACE_THREAD is not None:
+        _TRACE_QUEUE.join()
+    if close:
+        _close_trace_fd()
+
+
+def _shutdown_trace_writer() -> None:
+    if _TRACE_PID != os.getpid():
+        return
+    thread = _TRACE_THREAD
+    if thread is None or not thread.is_alive():
+        return
+    _TRACE_QUEUE.join()
+    _TRACE_QUEUE.put(None)
+    thread.join(timeout=1.0)
+
+
 def scheduler_trace(event: str, **fields: Any) -> None:
     if not to_bool(os.getenv("MARIE_SCHEDULER_TRACE_ENABLED"), default=False):
         return
@@ -113,13 +246,10 @@ def scheduler_trace(event: str, **fields: Any) -> None:
         **fields,
     }
     line = json.dumps(payload, default=str, separators=(",", ":")) + "\n"
+    _ensure_trace_writer()
+    _TRACE_QUEUE.put((path, line))
 
-    try:
-        with _LOCK:
-            trace_path = Path(path).expanduser()
-            trace_path.parent.mkdir(parents=True, exist_ok=True)
-            with trace_path.open("a", encoding="utf-8") as fp:
-                fp.write(line)
-    except OSError:
-        # Debug tracing must never affect scheduler or executor progress.
-        return
+
+atexit.register(_shutdown_trace_writer)
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_trace_writer)

@@ -37,6 +37,7 @@ class PostgreSQLSchedulerConfig:
     hard_sla_policy: str
     invalid_hard_sla_policy: str | None
     sla_warning_top_n: int
+    priority_refresh_enabled: bool
     priority_refresh_interval: int
     priority_refresh_interval_seconds: float
     priority_refresh_timeout_seconds: float
@@ -124,6 +125,9 @@ class PostgreSQLSchedulerConfig:
                 hard_sla_policy=hard_sla_policy,
                 invalid_hard_sla_policy=invalid_hard_sla_policy,
                 sla_warning_top_n=int(config.get('sla_warning_top_n', 5)),
+                priority_refresh_enabled=bool(
+                    config.get('priority_refresh_enabled', False)
+                ),
                 priority_refresh_interval=int(
                     config.get('priority_refresh_interval', 10)
                 ),

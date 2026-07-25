@@ -20,7 +20,7 @@ services:
     image: ghcr.io/ferretdb/postgres-documentdb:17-0.103.0
     command: >
       postgres
-      -c max_connections=200
+      -c max_connections=500
       -c shared_preload_libraries=pg_stat_statements,pg_cron,pg_documentdb_core,pg_documentdb
       -c pg_stat_statements.track=all
       -c pg_stat_statements.max=10000

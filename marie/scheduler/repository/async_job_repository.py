@@ -661,21 +661,36 @@ class AsyncJobRepository:
         owner: str,
         run_ttl_seconds: int,
         gateway_instance_id: str | None = None,
+        run_attempt_ids: Dict[str, str] | None = None,
     ) -> dict[str, str]:
         if not job_ids:
             return {}
+        if run_attempt_ids is None:
+            placeholders = "%s::uuid[], %s, %s::interval, %s"
+            params = (
+                job_ids,
+                owner,
+                f"{run_ttl_seconds} seconds",
+                gateway_instance_id,
+            )
+        else:
+            placeholders = "%s::uuid[], %s::uuid[], %s, %s::interval, %s"
+            params = (
+                job_ids,
+                [run_attempt_ids[job_id] for job_id in job_ids],
+                owner,
+                f"{run_ttl_seconds} seconds",
+                gateway_instance_id,
+            )
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
                 SELECT job_id, run_attempt_id
                 FROM {DEFAULT_SCHEMA}.activate_from_lease(
-                    %s::uuid[], %s, %s::interval, %s
+                    {placeholders}
                 )
                 """,
-                job_ids,
-                owner,
-                f"{run_ttl_seconds} seconds",
-                gateway_instance_id,
+                *params,
             )
         return {str(row[0]): str(row[1]) for row in rows}
 
@@ -1581,7 +1596,7 @@ class AsyncJobRepository:
                 SELECT pg_get_functiondef(p.oid)
                 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                 WHERE n.nspname = %s AND p.proname = 'activate_from_lease'
-                  AND p.pronargs = 4
+                  AND p.pronargs = 5
                 ORDER BY p.oid DESC LIMIT 1
                 """,
                 schema,
@@ -1593,6 +1608,7 @@ class AsyncJobRepository:
                 or "INSERT INTO" not in activation
                 or ".job_attempt" not in activation
                 or "_gateway_instance_id" not in activation
+                or "_run_attempt_ids" not in activation
             ):
                 raise RuntimeFailToStart(
                     f"{schema}.activate_from_lease is not attempt-audited"

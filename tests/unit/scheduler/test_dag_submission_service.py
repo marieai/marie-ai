@@ -109,6 +109,27 @@ async def test_submission_worker_accounts_for_successful_persistence() -> None:
 
 
 @pytest.mark.asyncio
+async def test_submission_worker_allows_disabled_processed_callback() -> None:
+    running = [True]
+    service = build_service(running=running)
+    service._submission_processed_callback = None
+    service.persist = AsyncMock(return_value='job-1')
+
+    await service.submit(work_item('job-1'))
+    worker = asyncio.create_task(service.run_worker(0))
+    async with asyncio.timeout(1):
+        while service.submission_count == 0:
+            await asyncio.sleep(0)
+
+    running[0] = False
+    worker.cancel()
+    await worker
+
+    assert service.submission_count == 1
+    assert service.pending_count == 0
+
+
+@pytest.mark.asyncio
 async def test_submission_worker_publishes_scheduled_after_persistence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

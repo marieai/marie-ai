@@ -95,7 +95,33 @@ def test_findings_report_executor_slot_release_failures(capsys) -> None:
     )
 
     output = capsys.readouterr().out
-    assert "Executor slot release failed for 2 terminal jobs" in output
+    assert "Executor slot release remains pending for 2 terminal jobs" in output
+
+
+def test_findings_distinguish_recovered_slot_releases(capsys) -> None:
+    rows = [
+        trace_row(
+            "executor_slot_release_failed",
+            1.0,
+            job_id="job-1",
+            release_reason="counter_contention",
+        ),
+        trace_row(
+            "executor_slot_release_retry_succeeded",
+            2.0,
+            job_id="job-1",
+            release_reason="released",
+        ),
+    ]
+    _print_findings(
+        {"gateway_dispatch_start": (0, None, None)},
+        [],
+        Counter(row["event"] for row in rows),
+        rows,
+    )
+
+    output = capsys.readouterr().out
+    assert "All 1 transient executor slot release failures recovered" in output
 
 
 def test_terminal_feedback_reports_resolution_and_next_candidate(capsys) -> None:

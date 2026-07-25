@@ -22,12 +22,75 @@ fi
 
 cd "${repo_root}"
 
+declare -A pytest_totals=(
+  [passed]=0
+  [failed]=0
+  [skipped]=0
+  [xfailed]=0
+  [xpassed]=0
+  [errors]=0
+  [deselected]=0
+  [warnings]=0
+)
+suite_count=0
+summary_dir=$(mktemp -d)
+trap 'rm -rf -- "${summary_dir}"' EXIT
+
 run_suite() {
   local name=$1
   shift
   echo
   echo "==> ${name}"
-  "${python_bin}" -m pytest -q "$@"
+
+  local suite_log="${summary_dir}/suite-${suite_count}.log"
+  set +e
+  "${python_bin}" -m pytest -q "$@" 2>&1 | tee "${suite_log}"
+  local pipeline_status=("${PIPESTATUS[@]}")
+  set -e
+
+  if ((pipeline_status[0] != 0)); then
+    return "${pipeline_status[0]}"
+  fi
+  if ((pipeline_status[1] != 0)); then
+    return "${pipeline_status[1]}"
+  fi
+
+  local summary_line
+  summary_line=$(rg -N '[0-9]+ (passed|failed|skipped|xfailed|xpassed|errors?|deselected|warnings?).* in [0-9.]+s' "${suite_log}" | tail -n 1 || true)
+  if [[ -z "${summary_line}" ]]; then
+    echo "Unable to read pytest summary for: ${name}" >&2
+    return 1
+  fi
+
+  local count outcome
+  while read -r count outcome; do
+    case "${outcome}" in
+      error | errors) outcome=errors ;;
+      warning | warnings) outcome=warnings ;;
+    esac
+    pytest_totals["${outcome}"]=$((pytest_totals["${outcome}"] + count))
+  done < <(printf '%s\n' "${summary_line}" | rg -o '[0-9]+ (passed|failed|skipped|xfailed|xpassed|errors?|deselected|warnings?)')
+
+  suite_count=$((suite_count + 1))
+}
+
+print_summary() {
+  echo
+  echo "==> Verification totals"
+  echo "Pytest suites: ${suite_count} passed"
+
+  printf 'Pytest totals:'
+  local separator=' '
+  local outcome count
+  for outcome in passed xfailed skipped xpassed failed errors deselected warnings; do
+    count=${pytest_totals["${outcome}"]}
+    if ((count > 0)); then
+      printf '%s%s %s' "${separator}" "${count}" "${outcome}"
+      separator=', '
+    fi
+  done
+  printf '\n'
+  echo "Legacy PostgreSQL driver scan: passed"
 }
 
 run_suite "Scheduler units, SLA configuration, and database pool" \
@@ -103,5 +166,6 @@ if rg -n "psycopg2|asyncpg" \
 fi
 
 echo "No psycopg2 or asyncpg references found."
+print_summary
 echo
 echo "Scheduler and etcd verification passed."

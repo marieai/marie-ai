@@ -441,7 +441,7 @@ class JobManager:
 
             # Monitor the job in the background so we can detect errors without
             # requiring a client to poll.
-            self.logger.info(f"Started job with submission_id: {submission_id}")
+            self.logger.debug(f"Started job with submission_id: {submission_id}")
             run_background_task(
                 self._monitor_job(submission_id, job_supervisor=supervisor)
             )

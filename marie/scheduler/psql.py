@@ -331,6 +331,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 "falling back to 'track_only'"
             )
         self.sla_warning_top_n = scheduler_config.sla_warning_top_n
+        self.priority_refresh_enabled = scheduler_config.priority_refresh_enabled
         self.priority_refresh_interval = scheduler_config.priority_refresh_interval
         self.priority_refresh_interval_seconds = (
             scheduler_config.priority_refresh_interval_seconds
@@ -347,6 +348,8 @@ class PostgreSQLJobScheduler(JobScheduler):
         self._priority_refresh_running = False
         self._next_priority_refresh_at = (
             time.monotonic() + self.priority_refresh_interval_seconds
+            if self.priority_refresh_enabled
+            else float('inf')
         )
 
         self.frontier_batch_size = scheduler_config.frontier_batch_size
@@ -401,7 +404,9 @@ class PostgreSQLJobScheduler(JobScheduler):
             known_queues=self.known_queues,
             notify_callback=self.notify_event,
             is_running=lambda: self.running,
-            submission_processed_callback=self._handle_priority_refresh,
+            submission_processed_callback=(
+                self._handle_priority_refresh if self.priority_refresh_enabled else None
+            ),
             logger=self.logger,
             queue_size=self.scheduler_config.submission_queue_size,
             initial_submission_count=initial_submission_count,
@@ -915,17 +920,19 @@ class PostgreSQLJobScheduler(JobScheduler):
         )
         await self.dag_service.start_sync()
 
-        self._priority_refresh_event.clear()
+        if self.priority_refresh_enabled:
+            self._priority_refresh_event.clear()
         self.running = True
         for worker_id in range(self.job_event_worker_count):
             self.runtime.create_task(
                 self.job_event_processor.run_worker(worker_id),
                 name=f"scheduler-job-event-{worker_id}",
             )
-        self.runtime.create_task(
-            self._priority_refresh_loop(),
-            name="scheduler-priority-refresh",
-        )
+        if self.priority_refresh_enabled:
+            self.runtime.create_task(
+                self._priority_refresh_loop(),
+                name="scheduler-priority-refresh",
+            )
         self.runtime.create_task(self._sync(), name="scheduler-sync")
         self.runtime.create_task(
             self._renew_run_leases(), name="scheduler-run-lease-renewal"
@@ -963,7 +970,10 @@ class PostgreSQLJobScheduler(JobScheduler):
 
         if self.running:
             try:
-                if time.monotonic() >= self._next_priority_refresh_at:
+                if (
+                    self.priority_refresh_enabled
+                    and time.monotonic() >= self._next_priority_refresh_at
+                ):
                     scheduler_trace(
                         "scheduler_priority_refresh_due",
                         source="scheduler_loop",
@@ -1249,7 +1259,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                     job_ids=[wi.id for _, wi in limited_planned],
                 )
                 if len(limited_planned) < len(planned):
-                    self.logger.info(
+                    self.logger.debug(
                         f"[WORK_DIST] Trimmed planner selection from {len(planned)} "
                         f"to {len(limited_planned)} based on live slot capacity. "
                         f"Slots: {pick_slots}"
@@ -1314,7 +1324,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 leased_ids: set[str] = set()
                 for job_name, ids in ids_by_job_name.items():
                     try:
-                        self.logger.info(
+                        self.logger.debug(
                             f'[WORK_DIST] Attempting DB lease for job={job_name}, count={len(ids)}'
                         )
                         got = await self._lease_jobs_db(job_name, ids)
@@ -1326,9 +1336,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                             leased=len(got),
                             job_ids=list(got),
                         )
-                        self.logger.info(
-                            f'[WORK_DIST] DB lease result for job={job_name}: leased {len(got)}/{len(ids)}'
-                        )
+
                         if len(got) < len(ids):
                             missing_ids = set(ids) - set(got)
                             self.logger.warning(
@@ -1437,8 +1445,9 @@ class PostgreSQLJobScheduler(JobScheduler):
                     reservable_jobs_by_executor[exe].append(wi)
 
                 for slot_type, jobs in reservable_jobs_by_executor.items():
+                    run_attempt_ids = {wi.id: str(_uuid.uuid4()) for wi in jobs}
                     reservation_results = await self._reserve_semaphore_slots(
-                        slot_type, jobs
+                        slot_type, jobs, run_attempt_ids
                     )
                     reserved_jobs: list[WorkInfo] = []
                     for wi in jobs:
@@ -1520,8 +1529,12 @@ class PostgreSQLJobScheduler(JobScheduler):
                         continue
 
                     try:
+                        reserved_attempt_ids = {
+                            wi.id: run_attempt_ids[wi.id] for wi in reserved_jobs
+                        }
                         attempts = await self._activate_from_lease_db(
-                            [wi.id for wi in reserved_jobs]
+                            [wi.id for wi in reserved_jobs],
+                            reserved_attempt_ids,
                         )
                     except Exception as error:
                         attempts = {}
@@ -1549,6 +1562,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                                     slot_type,
                                     wi.id,
                                     owner=owner,
+                                    run_attempt_id=run_attempt_ids[wi.id],
                                 )
                             except Exception as release_error:
                                 self.logger.warning(
@@ -1565,23 +1579,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                             run_attempt_id=run_attempt_id,
                             **self._ha_trace_fields(),
                         )
-                        attempt_bound = await asyncio.to_thread(
-                            self._semaphore_store.bind_run_attempt,
-                            slot_type,
-                            wi.id,
-                            owner=owner,
-                            run_attempt_id=run_attempt_id,
-                        )
-                        if not attempt_bound:
-                            await self._handle_dispatch_failure(
-                                wi,
-                                slot_type,
-                                owner,
-                                RuntimeError("failed to bind semaphore run attempt"),
-                                run_owner=self.lease_owner,
-                                run_attempt_id=run_attempt_id,
-                            )
-                            continue
                         enqueue_tasks.append(
                             {
                                 "task": asyncio.create_task(
@@ -1687,10 +1684,12 @@ class PostgreSQLJobScheduler(JobScheduler):
             active_started_at: float | None = None
             try:
                 if not drain_ready:
-                    priority_due_in = max(
-                        0.0, self._next_priority_refresh_at - time.monotonic()
-                    )
-                    effective_wait_time = min(wait_time, priority_due_in)
+                    effective_wait_time = wait_time
+                    if self.priority_refresh_enabled:
+                        priority_due_in = max(
+                            0.0, self._next_priority_refresh_at - time.monotonic()
+                        )
+                        effective_wait_time = min(wait_time, priority_due_in)
                     self.logger.debug(
                         f"Polling : {effective_wait_time:.2f}s — "
                         f"Queue size: {self._event_queue.qsize()} — "
@@ -2157,6 +2156,8 @@ class PostgreSQLJobScheduler(JobScheduler):
         return await self.submission_service.submit(work_info, overwrite)
 
     async def _handle_priority_refresh(self, submission_count: int) -> None:
+        if not self.priority_refresh_enabled:
+            return
         refresh_interval = self.priority_refresh_interval
         if submission_count % refresh_interval == 0:
             now = time.monotonic()
@@ -2176,6 +2177,8 @@ class PostgreSQLJobScheduler(JobScheduler):
 
     def _request_priority_refresh(self, source: str) -> None:
         """Queue at most one additional priority refresh."""
+        if not self.priority_refresh_enabled:
+            return
         already_pending = self._priority_refresh_event.is_set()
         self._priority_refresh_source = source
         self._priority_refresh_event.set()
@@ -2894,30 +2897,37 @@ class PostgreSQLJobScheduler(JobScheduler):
         if not job_info.status.is_terminal() or work_item.state == job_info_state:
             return False
 
-        self.logger.info(
-            f"State mismatch for job {job_id}: "
-            f"WorkState={work_item.state}, JobInfoState={job_info_state}. Updating."
-        )
-
-        synchronize = False
-        remaining_time = None
         now = datetime.now(tz=timezone.utc)
-
+        terminal_age_seconds = None
         if job_info.end_time is not None:
             timestamp_ms = job_info.end_time
             end_time = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
-            remaining_time = end_time - now
+            terminal_age_seconds = (now - end_time).total_seconds()
 
-            if end_time < now - timedelta(seconds=min_sync_interval_seconds):
-                synchronize = True
-
-        if not synchronize:
-            seconds = remaining_time.total_seconds() if remaining_time else "unknown"
+        if (
+            terminal_age_seconds is None
+            or terminal_age_seconds < min_sync_interval_seconds
+        ):
+            age = (
+                f"{terminal_age_seconds:.3f}"
+                if terminal_age_seconds is not None
+                else "unknown"
+            )
             self.logger.info(
-                f"Job has not ended more than {min_sync_interval_seconds} seconds ago, skipping sync. "
-                f"{job_id}: {seconds} seconds since end."
+                f"Terminal state mismatch detected for job {job_id}: "
+                f"WorkState={work_item.state}, JobInfoState={job_info_state}, "
+                f"terminal_age_seconds={age}, "
+                f"repair_grace_seconds={min_sync_interval_seconds}; "
+                "deferring repair."
             )
             return False
+
+        self.logger.info(
+            f"Repairing terminal state mismatch for job {job_id}: "
+            f"WorkState={work_item.state}, JobInfoState={job_info_state}, "
+            f"terminal_age_seconds={terminal_age_seconds:.3f}, "
+            f"repair_grace_seconds={min_sync_interval_seconds}."
+        )
 
         return await self.attempt_lifecycle_service.transition_terminal(
             job_id,
@@ -3074,7 +3084,9 @@ class PostgreSQLJobScheduler(JobScheduler):
             job_name=job_name,
         )
 
-    async def _activate_from_lease_db(self, ids: list[str]) -> dict[str, str]:
+    async def _activate_from_lease_db(
+        self, ids: list[str], run_attempt_ids: dict[str, str]
+    ) -> dict[str, str]:
         """
         Promote leased jobs to active in DB once dispatch is acknowledged.
         """
@@ -3086,6 +3098,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             owner=self.lease_owner,
             run_ttl_seconds=self.run_ttl_seconds,
             gateway_instance_id=self.gateway_instance_id,
+            run_attempt_ids=run_attempt_ids,
         )
 
     async def _extend_run_lease_db(
@@ -3114,7 +3127,10 @@ class PostgreSQLJobScheduler(JobScheduler):
         return await self.repository.release_lease(job_ids=ids)
 
     async def _reserve_semaphore_slots_serial(
-        self, executor: str, jobs: list[WorkInfo]
+        self,
+        executor: str,
+        jobs: list[WorkInfo],
+        run_attempt_ids: dict[str, str],
     ) -> dict[str, SemaphoreReservationStatus]:
         results: dict[str, SemaphoreReservationStatus] = {}
         for wi in jobs:
@@ -3126,6 +3142,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                     node='',
                     ttl=self._sem_default_ttl,
                     owner=wi.id,
+                    run_attempt_id=run_attempt_ids[wi.id],
                 )
             except Exception as error:
                 scheduler_trace(
@@ -3167,7 +3184,10 @@ class PostgreSQLJobScheduler(JobScheduler):
         return SemaphoreReservationStatus.CONTENTION
 
     async def _reserve_semaphore_slots(
-        self, executor: str, jobs: list[WorkInfo]
+        self,
+        executor: str,
+        jobs: list[WorkInfo],
+        run_attempt_ids: dict[str, str],
     ) -> dict[str, SemaphoreReservationStatus]:
         if not jobs:
             return {}
@@ -3190,6 +3210,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 node='',
                 ttl=self._sem_default_ttl,
                 owner_by_ticket={wi.id: wi.id for wi in jobs},
+                run_attempt_id_by_ticket=run_attempt_ids,
             )
         except Exception as exc:
             fallback_used = True
@@ -3198,7 +3219,9 @@ class PostgreSQLJobScheduler(JobScheduler):
                 f"[WORK_DIST] Batch semaphore reserve failed for executor={executor}; falling back to serial reserve: {exc}",
                 exc_info=True,
             )
-            results = await self._reserve_semaphore_slots_serial(executor, jobs)
+            results = await self._reserve_semaphore_slots_serial(
+                executor, jobs, run_attempt_ids
+            )
         else:
             results = {
                 job_id: SemaphoreReservationStatus.RESERVED for job_id in reserved

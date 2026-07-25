@@ -122,6 +122,26 @@ ETCD discovery and capacity faults remain owned by the ETCD recovery runner. Ref
 timeline artifact from a reliability scenario instead of adding another ETCD
 injector.
 
+## Reproduce The Dispatch Confirmation Race
+
+Run the deterministic unit reproducer before changing dispatch lifecycle code:
+
+```bash
+./stress-test.sh reproduce-dispatch-race
+```
+
+This target needs no PostgreSQL service or live gateway. It freezes one race
+signature: confirmation times out, detached work succeeds late, the boolean
+enqueue result becomes `dispatch_error="False"`, and failure cleanup loses its
+terminal transition to the late success.
+
+The same test module contains seven strict expected-failure contract cases for
+the corrected lifecycle. They use distinct job and run-attempt identifiers and
+cover pre-detach timeout, post-detach unknown delivery, late admission, safe
+pre-RPC rejection, no replicas, post-RPC send failure, and recovery fencing.
+Remove each expected-failure marker only when the slice implementing that
+behavior connects the case to production code and makes its assertions pass.
+
 ## Required Privileges
 
 Grant only the control needed by the selected target:
@@ -196,3 +216,5 @@ Run the focused unit suite without any service mutation:
 ```bash
 pytest tests/unit/tools/stress/test_scheduler_reliability_runner.py
 ```
+
+hjfruye473rsw98hh   98rr itgfhgt tyytyy5t ytuyi6t5yoiu ioio 8677y7776577767676

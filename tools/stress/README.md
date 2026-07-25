@@ -6,6 +6,36 @@ For the complete Docker-backed PostgreSQL, database-correctness, and live
 gateway qualification workflow, see
 [Scheduler Correctness and Gateway Qualification Runbook](scheduler-correctness-and-gateway-runbook.md).
 
+For the production-rate mock qualification that submits 25,000 DAGs in 30
+minutes while preserving the 64-active-DAG production limit, see
+[50K DAGs/Hour Mock Gateway Qualification](gateway-50kph-mock-qualification.md).
+
+## Reproduce The Dispatch-Confirmation Race
+
+Run the focused reproducer before changing scheduler behavior:
+
+```bash
+./stress-test.sh reproduce-dispatch-race
+```
+
+The test uses the production `PostgreSQLJobScheduler.enqueue`, dispatch-failure,
+and `AttemptLifecycleService` paths. It holds only the external job-manager and
+repository boundaries so a supervisor confirms after the dispatch deadline and
+the job becomes terminal while the dispatch loop's batch barrier is still open.
+A passing test means it reproduced all of the current symptoms:
+
+- dispatch confirmation times out
+- `enqueue` returns `False`
+- failure metadata degrades to `dispatch_error: "False"`
+- fenced cleanup is rejected because the attempt is already terminal
+
+Run the original live load separately. Supply the API key through the process
+environment; do not store it in this script or a tracked config:
+
+```bash
+GATEWAY_API_KEY='<test-key>' ./stress-test.sh gateway-e2e
+```
+
 ## Tools
 
 ### 1. `gateway_e2e_stresser.py`

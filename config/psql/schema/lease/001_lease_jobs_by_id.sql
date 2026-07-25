@@ -4,7 +4,10 @@ CREATE OR REPLACE FUNCTION {schema}.lease_jobs_by_id(
   _owner text     DEFAULT COALESCE(inet_client_addr()::text, 'unknown'),
   _name  text     DEFAULT NULL           -- when provided, restrict to this job.name
 )
-RETURNS uuid[] LANGUAGE sql AS
+RETURNS uuid[]
+LANGUAGE sql
+SET jit = off
+AS
 $$
   WITH requested(id, ord) AS (
     SELECT *

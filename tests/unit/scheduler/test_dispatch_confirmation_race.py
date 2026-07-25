@@ -167,10 +167,17 @@ class LateConfirmingJobManager:
 
 class RecordingSemaphoreStore:
     def __init__(self) -> None:
-        self.releases: list[tuple[str, str, str]] = []
+        self.releases: list[tuple[str, str, str, str | None]] = []
 
-    def release_owned(self, executor: str, job_id: str, *, owner: str) -> bool:
-        self.releases.append((executor, job_id, owner))
+    def release_owned(
+        self,
+        executor: str,
+        job_id: str,
+        *,
+        owner: str,
+        run_attempt_id: str | None = None,
+    ) -> bool:
+        self.releases.append((executor, job_id, owner, run_attempt_id))
         return True
 
 
@@ -277,7 +284,7 @@ async def test_late_confirmation_reproduces_false_dispatch_cleanup_race() -> Non
     assert repository.terminal_audits[0]['accepted'] is False
     assert repository.terminal_audits[0]['reject_reason'] == 'db_update_zero_rows'
     assert semaphore_store.releases == [
-        ('patient_indexing_executor', work_item.id, work_item.id)
+        ('patient_indexing_executor', work_item.id, work_item.id, run_attempt_id)
     ]
     scheduler.logger.error.assert_any_call(
         f'Timeout waiting for dispatch confirmation for job {work_item.id}'

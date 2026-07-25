@@ -50,6 +50,7 @@ def _scheduler_for_start() -> PostgreSQLJobScheduler:
     scheduler._lifecycle_lock = asyncio.Lock()
     scheduler._fetch_event = asyncio.Event()
     scheduler._priority_refresh_event = asyncio.Event()
+    scheduler.priority_refresh_enabled = False
     scheduler.known_queues = set()
     scheduler.max_workers = 1
     scheduler.job_event_worker_count = 2
@@ -87,6 +88,7 @@ def _scheduler_for_start() -> PostgreSQLJobScheduler:
     scheduler._setup_event_subscriptions = MagicMock()
     scheduler._remove_event_subscriptions = MagicMock()
     scheduler.notify_event = AsyncMock(return_value=True)
+    scheduler._renew_active_run_leases = AsyncMock()
 
     async def close_resources() -> None:
         scheduler._resources_closed = True
@@ -114,6 +116,7 @@ async def test_start_tasks_observe_running_after_suspending_dependency_start() -
     )
     scheduler._priority_refresh_loop = observe_running
     scheduler._sync = observe_running
+    scheduler._renew_run_leases = observe_running
     scheduler._poll = observe_running
     scheduler._PostgreSQLJobScheduler__monitor_deployment_updates = observe_running
     scheduler.submission_service.run_worker = observe_worker
@@ -138,6 +141,7 @@ async def test_start_rolls_back_partial_startup(failure_stage: str) -> None:
 
     scheduler._priority_refresh_loop = wait_forever
     scheduler._sync = wait_forever
+    scheduler._renew_run_leases = wait_forever
     scheduler._poll = wait_forever
     scheduler._PostgreSQLJobScheduler__monitor_deployment_updates = wait_forever
     scheduler.submission_service.run_worker = wait_forever_worker

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import time
 from dataclasses import asdict, dataclass
 from typing import Dict, Optional, Set
@@ -58,6 +59,21 @@ class SemaphoreHolder:
         )
 
 
+@dataclass(frozen=True)
+class SemaphoreReleaseResult:
+    """Outcome of an ownership-fenced semaphore release."""
+
+    success: bool
+    reason: str
+    attempts: int
+    retryable: bool = False
+    holder_absent: bool = False
+    counter_reconciled: bool | None = None
+
+    def __bool__(self) -> bool:
+        return self.success
+
+
 def _cap_key(slot_type: str) -> str:
     return f"capacity/{slot_type}"
 
@@ -88,6 +104,11 @@ def _decode_count(raw) -> Optional[int]:
         return int(s.strip())
     except Exception:
         return None
+
+
+def _retry_after_contention(attempt: int) -> None:
+    ceiling = min(0.05, 0.002 * (2**attempt))
+    time.sleep(random.uniform(ceiling * 0.5, ceiling))
 
 
 class SemaphoreStore(BaseStore):
@@ -277,6 +298,7 @@ class SemaphoreStore(BaseStore):
         node: str,
         ttl: Optional[int] = None,
         owner: Optional[str] = None,
+        run_attempt_id: Optional[str] = None,
     ) -> bool:
         """
         Atomically try to reserve one slot. Returns True on success, False otherwise.
@@ -325,6 +347,7 @@ class SemaphoreStore(BaseStore):
             created_at=_now_iso(),
             owner=owner or f"{node}:{ticket_id}",  # default identity
             renewed_at=None,
+            run_attempt_id=run_attempt_id,
         )
 
         t.put(cnt_k, str(new_count))
@@ -341,6 +364,7 @@ class SemaphoreStore(BaseStore):
         node: str,
         ttl: Optional[int] = None,
         owner_by_ticket: Optional[Dict[str, str]] = None,
+        run_attempt_id_by_ticket: Optional[Dict[str, str]] = None,
         max_retries: int = 3,
         max_batch_size: int = 32,
     ) -> Set[str]:
@@ -364,6 +388,7 @@ class SemaphoreStore(BaseStore):
                     node=node,
                     ttl_seconds=ttl_seconds,
                     owner_by_ticket=owner_by_ticket,
+                    run_attempt_id_by_ticket=run_attempt_id_by_ticket,
                     max_retries=retries,
                 )
             )
@@ -377,6 +402,7 @@ class SemaphoreStore(BaseStore):
         node: str,
         ttl_seconds: int,
         owner_by_ticket: Optional[Dict[str, str]],
+        run_attempt_id_by_ticket: Optional[Dict[str, str]],
         max_retries: int,
     ) -> Set[str]:
         cap_k = _cap_key(slot_type)
@@ -424,6 +450,7 @@ class SemaphoreStore(BaseStore):
                     owner=(owner_by_ticket or {}).get(ticket_id)
                     or f"{node}:{ticket_id}",
                     renewed_at=None,
+                    run_attempt_id=(run_attempt_id_by_ticket or {}).get(ticket_id),
                 )
                 tx.put(
                     _holder_key(slot_type, ticket_id),
@@ -445,6 +472,7 @@ class SemaphoreStore(BaseStore):
                 node=node,
                 ttl=ttl_seconds,
                 owner=(owner_by_ticket or {}).get(ticket_id),
+                run_attempt_id=(run_attempt_id_by_ticket or {}).get(ticket_id),
             ):
                 reserved.add(ticket_id)
         return reserved
@@ -614,73 +642,119 @@ class SemaphoreStore(BaseStore):
         *,
         owner: str,
         run_attempt_id: Optional[str] = None,
-        max_retries: int = 5,
+        max_retries: int = 12,
     ) -> bool:
-        """
-        Release only if the holder is owned by `owner`. Prevents accidental releases.
+        """Release an owned ticket and report whether capacity was restored."""
 
-        Handles missing counter gracefully to prevent holder leaks:
-        - If counter exists: verify ownership, decrement counter, and delete holder
-        - If counter missing but holder exists: verify ownership, delete holder, and initialize counter to 0
+        return bool(
+            self.release_owned_result(
+                slot_type,
+                ticket_id,
+                owner=owner,
+                run_attempt_id=run_attempt_id,
+                max_retries=max_retries,
+            )
+        )
 
-        Uses CAS with automatic retry on contention to prevent holder leaks under high load.
-        """
-        import time
+    def release_owned_result(
+        self,
+        slot_type: str,
+        ticket_id: str,
+        *,
+        owner: str,
+        run_attempt_id: Optional[str] = None,
+        max_retries: int = 12,
+    ) -> SemaphoreReleaseResult:
+        """Release an owned ticket with retry and reconciliation details."""
 
         h_k = _holder_key(slot_type, ticket_id)
         cnt_k = _count_key(slot_type)
+        retries = max(1, int(max_retries))
 
-        for attempt in range(max_retries):
-            h_raw, h_meta = self._get_holder_raw(slot_type, ticket_id)
+        for attempt in range(retries):
+            attempts = attempt + 1
+            h_raw, _h_meta = self._get_holder_raw(slot_type, ticket_id)
             if h_raw is None:
-                # Holder doesn't exist
-                return (
-                    True if attempt > 0 else False
-                )  # True if deleted during retry, False if never existed
+                _count, reconciled, reconcile_attempts = self._reconcile_count(
+                    slot_type,
+                    max_retries=retries,
+                )
+                if reconciled:
+                    return SemaphoreReleaseResult(
+                        success=True,
+                        reason="already_absent",
+                        attempts=attempts,
+                        holder_absent=True,
+                        counter_reconciled=True,
+                    )
+                return SemaphoreReleaseResult(
+                    success=False,
+                    reason="reconcile_contention",
+                    attempts=attempts + reconcile_attempts,
+                    retryable=True,
+                    holder_absent=True,
+                    counter_reconciled=False,
+                )
 
             try:
                 holder = SemaphoreHolder.from_json(h_raw)
             except Exception:
-                return False
+                return SemaphoreReleaseResult(
+                    success=False,
+                    reason="malformed_holder",
+                    attempts=attempts,
+                )
 
-            # Verify ownership
             if holder.owner and holder.owner != owner:
-                return False  # Not the owner, reject release (don't retry)
+                return SemaphoreReleaseResult(
+                    success=False,
+                    reason="owner_mismatch",
+                    attempts=attempts,
+                )
             if (
                 holder.run_attempt_id is not None
                 and holder.run_attempt_id != run_attempt_id
             ):
-                return False
+                return SemaphoreReleaseResult(
+                    success=False,
+                    reason="attempt_mismatch",
+                    attempts=attempts,
+                )
 
             cnt_raw = self._get_raw(cnt_k)
 
-            # Handle missing counter case - prevent holder leak
             if cnt_raw is None:
-                # Counter missing but holder exists and ownership verified
-                # Delete holder and set count to 0 atomically
-                t = self.etcd.txn()
-                t.if_missing(cnt_k)  # Verify counter still missing
-                t.if_value(h_k, "==", h_raw)  # Holder unchanged (CAS)
-                t.put(cnt_k, "0")  # Initialize counter to 0
-                t.delete(h_k)
-
-                ok, _resp = t.commit()
-                if ok:
-                    return True
-                # CAS failed - retry with backoff
-                if attempt < max_retries - 1:
-                    time.sleep(
-                        0.001 * (2**attempt)
-                    )  # Exponential backoff: 1ms, 2ms, 4ms, 8ms, 16ms
+                _count, reconciled, reconcile_attempts = self._reconcile_count(
+                    slot_type,
+                    max_retries=retries,
+                )
+                if not reconciled:
+                    return SemaphoreReleaseResult(
+                        success=False,
+                        reason="reconcile_contention",
+                        attempts=attempts + reconcile_attempts,
+                        retryable=True,
+                        counter_reconciled=False,
+                    )
                 continue
 
-            # Normal case: counter exists
             old_count = _decode_count(cnt_raw)
             if old_count is None:
-                old_count = 0
+                _count, reconciled, reconcile_attempts = self._reconcile_count(
+                    slot_type,
+                    max_retries=retries,
+                )
+                if not reconciled:
+                    return SemaphoreReleaseResult(
+                        success=False,
+                        reason="reconcile_contention",
+                        attempts=attempts + reconcile_attempts,
+                        retryable=True,
+                        counter_reconciled=False,
+                    )
+                continue
             new_count = max(0, old_count - 1)
 
-            # CAS on both: holder value and count value
             t = self.etcd.txn()
             t.if_value(cnt_k, "==", cnt_raw)
             t.if_value(h_k, "==", h_raw)
@@ -689,13 +763,20 @@ class SemaphoreStore(BaseStore):
 
             ok, _resp = t.commit()
             if ok:
-                return True
-            # CAS failed - retry with backoff
-            if attempt < max_retries - 1:
-                time.sleep(0.001 * (2**attempt))
-            continue
+                return SemaphoreReleaseResult(
+                    success=True,
+                    reason="released",
+                    attempts=attempts,
+                )
+            if attempt < retries - 1:
+                _retry_after_contention(attempt)
 
-        return False  # All retries exhausted
+        return SemaphoreReleaseResult(
+            success=False,
+            reason="counter_contention",
+            attempts=retries,
+            retryable=True,
+        )
 
     # ---------- Multi-slot helpers (for summaries & audits) ----------
 
@@ -879,29 +960,48 @@ class SemaphoreStore(BaseStore):
 
         return out
 
-    def reconcile(self, slot_type: str) -> int:
+    def reconcile(self, slot_type: str, *, max_retries: int = 8) -> int:
+        count, _reconciled, _attempts = self._reconcile_count(
+            slot_type,
+            max_retries=max_retries,
+        )
+        return count
+
+    def _reconcile_count(
+        self,
+        slot_type: str,
+        *,
+        max_retries: int,
+    ) -> tuple[int, bool, int]:
         cnt_k = _count_key(slot_type)
-        # Read the counter BEFORE scanning holders: any reserve()/release()
-        # that commits after this read changes the counter atomically, so the
-        # CAS below fails instead of clobbering fresh state with a stale scan.
-        cnt_raw = self._get_raw(cnt_k)
-        cur = _decode_count(cnt_raw)
+        retries = max(1, int(max_retries))
 
-        prefix = _holders_prefix(slot_type)
-        results = self._scan_prefix(self.etcd._mangle_key(prefix))
-        live = sum(1 for _v, _m in results)
+        for attempt in range(retries):
+            attempts = attempt + 1
+            cnt_raw = self._get_raw(cnt_k)
+            current = _decode_count(cnt_raw)
+            results = self._scan_prefix(
+                self.etcd._mangle_key(_holders_prefix(slot_type))
+            )
+            live = sum(1 for _value, _metadata in results)
 
-        if cur is not None and cur == live:
-            return cur
+            if current is not None and current == live:
+                return current, True, attempts
 
-        t = self.etcd.txn()
-        if cnt_raw is None:
-            t.if_missing(cnt_k)
-        else:
-            t.if_value(cnt_k, "==", cnt_raw)
-        t.put(cnt_k, str(live))
-        ok, _resp = t.commit()
-        return live if ok else (cur if cur is not None else 0)
+            transaction = self.etcd.txn()
+            if cnt_raw is None:
+                transaction.if_missing(cnt_k)
+            else:
+                transaction.if_value(cnt_k, "==", cnt_raw)
+            transaction.put(cnt_k, str(live))
+            committed, _response = transaction.commit()
+            if committed:
+                return live, True, attempts
+            if attempt < retries - 1:
+                _retry_after_contention(attempt)
+
+        current = _decode_count(self._get_raw(cnt_k))
+        return (current if current is not None else 0), False, retries
 
     def get_holder(self, slot_type: str, ticket_id: str) -> Optional[SemaphoreHolder]:
         raw, _meta = self._get_holder_raw(slot_type, ticket_id)
@@ -932,7 +1032,9 @@ class SemaphoreStore(BaseStore):
               "before_count": int,
               "after_count": int,
               "deleted_orphans": int,
-              "malformed_holders": int
+              "malformed_holders": int,
+              "counter_reconciled": bool,
+              "reconcile_attempts": int
           }, ...}
         """
         summary: Dict[str, dict] = {}
@@ -944,7 +1046,6 @@ class SemaphoreStore(BaseStore):
 
             # 1) Scan holders and detect orphans
             orphan_keys: list[str] = []
-            live_keys: list[str] = []
             malformed = 0
 
             scan_iter = self._scan_prefix(mangled_prefix)
@@ -960,8 +1061,6 @@ class SemaphoreStore(BaseStore):
                 lease_id = getattr(meta, "lease_id", 0) or getattr(meta, "lease", 0)
                 if not lease_id:
                     orphan_keys.append(key)
-                else:
-                    live_keys.append(key)
 
             # 2) Delete orphan holder keys (best-effort) — no counter math here;
             # we'll recompute and CAS the counter in step (4)
@@ -976,42 +1075,29 @@ class SemaphoreStore(BaseStore):
                         # ignore individual delete failures
                         pass
 
-            # Read current counter BEFORE the rescan (same CAS-ordering rationale
-            # as reconcile()): a concurrent reserve/release invalidates the CAS.
             cnt_k = _count_key(st)
             cnt_raw = self._get_raw(cnt_k)
             before_count = _decode_count(cnt_raw)
             after_count = before_count if before_count is not None else -1
 
-            # 3) Recompute live holder count after orphan cleanup
-            #    If we deleted orphans, we can avoid a second scan by using live_keys
-            #    but live_keys might include keys that concurrently disappeared; a cheap
-            #    re-scan ensures correctness.
-            live_count = 0
-            rescan_iter = self._scan_prefix(mangled_prefix)
-            for _v, _m in rescan_iter:
-                live_count += 1
-
-            # 4) CAS-fix /count to the live holders
-            if fix_counters and before_count != live_count:
-                t = self.etcd.txn()
-                if cnt_raw is None:
-                    t.if_missing(cnt_k)
-                else:
-                    t.if_value(cnt_k, "==", cnt_raw)
-                t.put(cnt_k, str(live_count))
-                ok, _ = t.commit()
-                after_count = (
-                    live_count
-                    if ok
-                    else (before_count if before_count is not None else -1)
+            if fix_counters:
+                after_count, counter_reconciled, reconcile_attempts = (
+                    self._reconcile_count(st, max_retries=8)
                 )
+            else:
+                live_count = sum(
+                    1 for _value, _metadata in self._scan_prefix(mangled_prefix)
+                )
+                counter_reconciled = before_count == live_count
+                reconcile_attempts = 0
 
             summary[st] = {
                 "before_count": before_count if before_count is not None else -1,
                 "after_count": after_count,
                 "deleted_orphans": deleted_orphans,
                 "malformed_holders": malformed,
+                "counter_reconciled": counter_reconciled,
+                "reconcile_attempts": reconcile_attempts,
             }
 
         return summary

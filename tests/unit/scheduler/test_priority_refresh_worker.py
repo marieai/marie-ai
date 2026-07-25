@@ -15,6 +15,7 @@ from marie.scheduler.state import WorkState
 def build_scheduler() -> PostgreSQLJobScheduler:
     scheduler = PostgreSQLJobScheduler.__new__(PostgreSQLJobScheduler)
     scheduler.running = True
+    scheduler.priority_refresh_enabled = True
     scheduler._priority_refresh_event = asyncio.Event()
     scheduler._priority_refresh_source = "startup"
     scheduler._priority_refresh_running = False

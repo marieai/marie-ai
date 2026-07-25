@@ -2780,9 +2780,11 @@ class MarieServerGateway(CompositeServer):
                         fix_counters=True,
                     )
                     if first_pass:
-                        self.logger.info(f"[sem] boot reconcile summary: {summary}")
+                        self.logger.debug(f"[sem] boot reconcile summary: {summary}")
                     else:
-                        self.logger.info(f"[sem] periodic reconcile summary: {summary}")
+                        self.logger.debug(
+                            f"[sem] periodic reconcile summary: {summary}"
+                        )
                 except Exception as e:
                     self.logger.warning(f"[sem] reconcile_all failed (non-fatal): {e}")
                 finally:

@@ -113,7 +113,13 @@ class RecordingSemaphoreStore:
     def __init__(self):
         self.release_calls: list[tuple[str, str, str]] = []
 
-    def release_owned(self, executor: str, ticket_id: str, owner: str):
+    def release_owned(
+        self,
+        executor: str,
+        ticket_id: str,
+        owner: str,
+        run_attempt_id: str | None = None,
+    ) -> bool:
         self.release_calls.append((executor, ticket_id, owner))
         return True
 
@@ -165,6 +171,7 @@ def build_scheduler(
     scheduler.lease_owner = "test-scheduler"
     scheduler.gateway_instance_id = "test-gateway"
     scheduler.run_ttl_seconds = 60
+    scheduler.priority_refresh_enabled = True
     scheduler._priority_refresh_event = asyncio.Event()
     scheduler._priority_refresh_source = "test"
     scheduler._priority_refresh_running = False
@@ -1110,6 +1117,7 @@ async def test_scheduler_start_initializes_notifications_before_admission(
     scheduler.running = False
     scheduler._resources_closed = False
     scheduler._priority_refresh_event = asyncio.Event()
+    scheduler.priority_refresh_enabled = False
     scheduler._setup_event_subscriptions = lambda: None
     scheduler.runtime = SchedulerRuntime(scheduler.logger)
 
@@ -1120,11 +1128,16 @@ async def test_scheduler_start_initializes_notifications_before_admission(
     async def noop():
         return None
 
+    async def initial_run_lease_renewal():
+        order.append("initial_run_lease_renewal")
+
     scheduler.job_event_worker_count = 1
     scheduler.job_event_processor = SimpleNamespace(
         run_worker=lambda _worker_id: noop()
     )
     scheduler.notify_event = notify_event
+    scheduler._renew_active_run_leases = initial_run_lease_renewal
+    scheduler._renew_run_leases = noop
     scheduler._sync = noop
     scheduler._poll = noop
     scheduler._PostgreSQLJobScheduler__monitor_deployment_updates = noop
@@ -1134,6 +1147,9 @@ async def test_scheduler_start_initializes_notifications_before_admission(
     await scheduler.start()
 
     assert order.index("notification_start") < order.index("admission_start")
+    assert order.index("initial_run_lease_renewal") < order.index(
+        "maintenance_start"
+    )
     assert order[-1] == "notify_event"
 
 

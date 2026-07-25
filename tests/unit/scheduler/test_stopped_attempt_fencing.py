@@ -209,6 +209,74 @@ async def test_storage_sync_rejects_stale_stopped_attempt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_storage_sync_defers_recent_terminal_mismatch() -> None:
+    work_item = build_work_item()
+    scheduler = build_scheduler(work_item, set())
+    transition_terminal = AsyncMock(return_value=True)
+    scheduler.attempt_lifecycle_service.transition_terminal = transition_terminal
+    job_info = JobInfo(
+        status=JobStatus.STOPPED,
+        entrypoint="extract",
+        end_time=int(
+            (datetime.now(timezone.utc) - timedelta(seconds=5)).timestamp() * 1000
+        ),
+        run_owner="owner-b",
+        run_attempt_id=ATTEMPT_B,
+    )
+
+    synchronized = await scheduler._sync_terminal_job_state(
+        JOB_ID,
+        work_item,
+        job_info,
+        min_sync_interval_seconds=300,
+    )
+
+    assert synchronized is False
+    transition_terminal.assert_not_awaited()
+    message = scheduler.logger.info.call_args.args[0]
+    assert message.startswith("Terminal state mismatch detected")
+    assert "repair_grace_seconds=300" in message
+    terminal_age = float(
+        message.split("terminal_age_seconds=", 1)[1].split(",", 1)[0]
+    )
+    assert 5 <= terminal_age < 10
+
+
+@pytest.mark.asyncio
+async def test_storage_sync_logs_repair_after_terminal_grace() -> None:
+    work_item = build_work_item()
+    scheduler = build_scheduler(work_item, set())
+    transition_terminal = AsyncMock(return_value=True)
+    scheduler.attempt_lifecycle_service.transition_terminal = transition_terminal
+    job_info = JobInfo(
+        status=JobStatus.STOPPED,
+        entrypoint="extract",
+        end_time=int(
+            (datetime.now(timezone.utc) - timedelta(seconds=301)).timestamp() * 1000
+        ),
+        run_owner="owner-b",
+        run_attempt_id=ATTEMPT_B,
+    )
+
+    synchronized = await scheduler._sync_terminal_job_state(
+        JOB_ID,
+        work_item,
+        job_info,
+        min_sync_interval_seconds=300,
+    )
+
+    assert synchronized is True
+    transition_terminal.assert_awaited_once()
+    message = scheduler.logger.info.call_args.args[0]
+    assert message.startswith("Repairing terminal state mismatch")
+    assert "repair_grace_seconds=300" in message
+    terminal_age = float(
+        message.split("terminal_age_seconds=", 1)[1].split(",", 1)[0]
+    )
+    assert terminal_age >= 300
+
+
+@pytest.mark.asyncio
 async def test_operator_cancellation_uses_separate_job_scoped_path() -> None:
     work_item = build_work_item()
     scheduler = build_scheduler(work_item, set())

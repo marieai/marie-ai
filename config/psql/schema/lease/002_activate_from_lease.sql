@@ -1,15 +1,21 @@
 CREATE OR REPLACE FUNCTION {schema}.activate_from_lease(
   _ids                 uuid[],
+  _run_attempt_ids     uuid[],
   _run_owner           text,
   _run_ttl             interval,
   _gateway_instance_id text
 )
 RETURNS TABLE(job_id uuid, run_attempt_id uuid) LANGUAGE sql AS
 $$
-  WITH ok AS (
-    SELECT j.id
+  WITH requested AS (
+    SELECT input.job_id, input.run_attempt_id
+    FROM unnest(_ids, _run_attempt_ids) AS input(job_id, run_attempt_id)
+    WHERE cardinality(_ids) = cardinality(_run_attempt_ids)
+      AND input.run_attempt_id IS NOT NULL
+  ), ok AS (
+    SELECT j.id, requested.run_attempt_id
     FROM {schema}.job j
-    JOIN unnest(_ids) u(id) ON u.id = j.id
+    JOIN requested ON requested.job_id = j.id
     WHERE j.lease_expires_at IS NOT NULL
       AND j.lease_expires_at > now()
       AND j.lease_owner = _run_owner
@@ -19,7 +25,7 @@ $$
         retry_count           = CASE WHEN j.started_on IS NOT NULL THEN j.retry_count + 1 ELSE j.retry_count END,
         started_on            = COALESCE(j.started_on, now()),
         run_owner             = _run_owner,
-        run_attempt_id        = gen_random_uuid(),
+        run_attempt_id        = ok.run_attempt_id,
         run_lease_expires_at  = now() + _run_ttl,
         -- clear the acquisition lease
         lease_owner           = NULL,
@@ -70,6 +76,29 @@ $$
   FROM activated
   JOIN audited
     ON audited.audited_attempt_id = activated.run_attempt_id;
+$$;
+
+-- Preserve DB-generated attempts for control-flow nodes and rolling gateways.
+CREATE OR REPLACE FUNCTION {schema}.activate_from_lease(
+  _ids                 uuid[],
+  _run_owner           text,
+  _run_ttl             interval,
+  _gateway_instance_id text
+)
+RETURNS TABLE(job_id uuid, run_attempt_id uuid) LANGUAGE sql AS
+$$
+  SELECT activated.job_id, activated.run_attempt_id
+  FROM {schema}.activate_from_lease(
+    _ids,
+    ARRAY(
+      SELECT gen_random_uuid()
+      FROM unnest(_ids) WITH ORDINALITY AS requested(job_id, position)
+      ORDER BY requested.position
+    ),
+    _run_owner,
+    _run_ttl,
+    _gateway_instance_id
+  ) AS activated;
 $$;
 
 -- Preserve the uuid[] result expected by gateways during rolling upgrades.

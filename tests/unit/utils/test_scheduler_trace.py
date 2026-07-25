@@ -1,6 +1,11 @@
 import json
 
-from marie.utils.scheduler_trace import scheduler_trace
+import marie.utils.scheduler_trace as scheduler_trace_module
+from marie.utils.scheduler_trace import flush_scheduler_trace, scheduler_trace
+
+
+def flush_trace() -> None:
+    flush_scheduler_trace(close=True)
 
 
 def test_scheduler_trace_disabled_does_not_create_file(monkeypatch, tmp_path):
@@ -9,6 +14,7 @@ def test_scheduler_trace_disabled_does_not_create_file(monkeypatch, tmp_path):
     monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PATH", str(trace_path))
 
     scheduler_trace("ignored", job_id="job-1")
+    flush_trace()
 
     assert not trace_path.exists()
 
@@ -20,6 +26,7 @@ def test_scheduler_trace_writes_jsonl_when_enabled(monkeypatch, tmp_path):
     monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PROFILE", "full")
 
     scheduler_trace("job_started", job_id="job-1", elapsed_ms=12.5)
+    flush_trace()
 
     rows = [json.loads(line) for line in trace_path.read_text().splitlines()]
     assert len(rows) == 1
@@ -44,6 +51,7 @@ def test_scheduler_trace_full_profile_drops_sensitive_fields(monkeypatch, tmp_pa
         project_id="secret-project-id",
         ref_id="document-1",
     )
+    flush_trace()
 
     row = json.loads(trace_path.read_text().strip())
     assert row["job_id"] == "job-1"
@@ -58,6 +66,7 @@ def test_scheduler_trace_bad_path_is_best_effort(monkeypatch, tmp_path):
     monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PROFILE", "full")
 
     scheduler_trace("bad_path_is_ignored", job_id="job-1")
+    flush_trace()
 
 
 def test_scheduler_trace_compact_writes_allowed_events(monkeypatch, tmp_path):
@@ -74,6 +83,7 @@ def test_scheduler_trace_compact_writes_allowed_events(monkeypatch, tmp_path):
         ref_id="ref-1",
         planner="extract",
     )
+    flush_trace()
 
     rows = [json.loads(line) for line in trace_path.read_text().splitlines()]
     assert len(rows) == 1
@@ -92,6 +102,7 @@ def test_scheduler_trace_compact_drops_noisy_events(monkeypatch, tmp_path):
     monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PROFILE", "compact")
 
     scheduler_trace("control_flow_started", job_id="job-1")
+    flush_trace()
 
     assert not trace_path.exists()
 
@@ -107,6 +118,7 @@ def test_scheduler_trace_compact_keeps_full_batch_job_ids(monkeypatch, tmp_path)
         count=2,
         job_ids=["job-1", "job-2"],
     )
+    flush_trace()
 
     row = json.loads(trace_path.read_text().strip())
     assert row["event"] == "dispatch_batch_start"
@@ -126,6 +138,7 @@ def test_scheduler_trace_compact_writes_scheduler_counters(monkeypatch, tmp_path
         job_id="job-1",
         run_attempt_id="attempt-1",
     )
+    flush_trace()
 
     row = json.loads(trace_path.read_text().strip())
     assert row["event"] == "terminal_event_stale_attempt_total"
@@ -146,8 +159,31 @@ def test_scheduler_trace_compact_writes_priority_refresh_completion(
         refresh_id=8,
         elapsed_ms=12.5,
     )
+    flush_trace()
 
     row = json.loads(trace_path.read_text().strip())
     assert row["event"] == "scheduler_priority_refresh_completed"
     assert row["refresh_id"] == 8
     assert row["elapsed_ms"] == 12.5
+
+
+def test_scheduler_trace_reuses_writer_file_descriptor(monkeypatch, tmp_path):
+    trace_path = tmp_path / "scheduler-trace.jsonl"
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_ENABLED", "true")
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PATH", str(trace_path))
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PROFILE", "full")
+    real_open = scheduler_trace_module.os.open
+    opened_paths: list[str] = []
+
+    def recording_open(path, flags, mode=0o777):
+        opened_paths.append(str(path))
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(scheduler_trace_module.os, "open", recording_open)
+
+    scheduler_trace("first", job_id="job-1")
+    scheduler_trace("second", job_id="job-2")
+    flush_trace()
+
+    assert opened_paths == [str(trace_path)]
+    assert len(trace_path.read_text().splitlines()) == 2

@@ -28,7 +28,7 @@ class DagSubmissionService:
         known_queues: set[str],
         notify_callback: Callable[[], Awaitable[bool]],
         is_running: Callable[[], bool],
-        submission_processed_callback: Callable[[int], Awaitable[None]],
+        submission_processed_callback: Callable[[int], Awaitable[None]] | None,
         logger: MarieLogger,
         queue_size: int,
         initial_submission_count: int = 0,
@@ -131,7 +131,8 @@ class DagSubmissionService:
                     )
                     await self._send_scheduled_toast(request.work_info)
                     self.submission_count += 1
-                    await self._submission_processed_callback(self.submission_count)
+                    if self._submission_processed_callback is not None:
+                        await self._submission_processed_callback(self.submission_count)
                     if request.wait_for_result and not request.result_future.done():
                         request.result_future.set_result(result)
                     self.logger.debug(

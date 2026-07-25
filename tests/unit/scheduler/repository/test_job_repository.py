@@ -561,7 +561,11 @@ async def test_activate_from_lease_returns_attempts_in_one_database_call() -> No
     repository = build_repository(connection)
 
     attempts = await repository.activate_from_lease(
-        [job_id], "owner", 60, gateway_instance_id="gateway-1"
+        [job_id],
+        "owner",
+        60,
+        gateway_instance_id="gateway-1",
+        run_attempt_ids={job_id: attempt_id},
     )
 
     assert attempts == {job_id: attempt_id}
@@ -569,7 +573,14 @@ async def test_activate_from_lease_returns_attempts_in_one_database_call() -> No
     method, query, params = connection.calls[0]
     assert method == "fetch"
     assert "SELECT job_id, run_attempt_id" in query
-    assert params == ([job_id], "owner", "60 seconds", "gateway-1")
+    assert "%s::uuid[], %s::uuid[]" in query
+    assert params == (
+        [job_id],
+        [attempt_id],
+        "owner",
+        "60 seconds",
+        "gateway-1",
+    )
 
 
 @pytest.mark.asyncio
@@ -592,17 +603,39 @@ def test_activate_from_lease_sql_owns_attempt_audit_atomically() -> None:
         project_root / "config/psql/schema/lease/002_activate_from_lease.sql"
     ).read_text()
 
-    core, compatibility_wrapper = sql.split(
-        "CREATE OR REPLACE FUNCTION {schema}.activate_from_lease(", maxsplit=2
-    )[1:]
+    functions = sql.split("CREATE OR REPLACE FUNCTION {schema}.activate_from_lease(")[
+        1:
+    ]
+    assert len(functions) == 3
+    core, table_wrapper, array_wrapper = functions
+    assert "_run_attempt_ids     uuid[]" in core
     assert "_gateway_instance_id text" in core
     assert "RETURNS TABLE(job_id uuid, run_attempt_id uuid)" in core
     assert "UPDATE {schema}.job" in core
+    assert "run_attempt_id        = ok.run_attempt_id" in core
     assert "INSERT INTO {schema}.job_attempt" in core
     assert "FROM activated" in core
     assert "JOIN audited" in core
-    assert "RETURNS uuid[]" in compatibility_wrapper
-    assert "FROM {schema}.activate_from_lease(" in compatibility_wrapper
+    assert "gen_random_uuid()" in table_wrapper
+    assert "FROM {schema}.activate_from_lease(" in table_wrapper
+    assert "RETURNS uuid[]" in array_wrapper
+    assert "FROM {schema}.activate_from_lease(" in array_wrapper
+
+
+def test_run_lease_renewal_and_recovery_share_attempt_fence() -> None:
+    project_root = Path(__file__).parents[4]
+    extension_sql = (
+        project_root / "config/psql/schema/lease/003_extend_run_lease.sql"
+    ).read_text()
+    recovery_sql = (
+        project_root / "config/psql/schema/lease/010_claim_expired_run_leases.sql"
+    ).read_text()
+
+    assert "j.state = 'active'" in extension_sql
+    assert "j.run_owner = _run_owner" in extension_sql
+    assert "j.run_attempt_id = _run_attempt_id" in extension_sql
+    assert "j.run_lease_expires_at <= now()" in recovery_sql
+    assert "FOR UPDATE OF j SKIP LOCKED" in recovery_sql
 
 
 @pytest.mark.asyncio
@@ -615,7 +648,8 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
             True,
             (
                 "run_attempt_id lease_owner = _run_owner INSERT INTO "
-                "marie_scheduler.job_attempt _gateway_instance_id"
+                "marie_scheduler.job_attempt _gateway_instance_id "
+                "_run_attempt_ids"
             ),
             "_run_attempt_id",
         ],
@@ -632,7 +666,7 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
     )
 
     _, activation_query, _ = connection.calls[4]
-    assert "p.pronargs = 4" in activation_query
+    assert "p.pronargs = 5" in activation_query
     assert all(
         "scheduler_attempt_invariant_checks" not in query
         for _, query, _ in connection.calls
@@ -785,6 +819,25 @@ async def test_extend_run_lease_passes_attempt_identity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_defer_leased_job_releases_acquisition_lease_with_delay() -> None:
+    job_id = "00000000-0000-0000-0000-000000000001"
+    connection = FakeConnection(fetchrow=[(job_id,)])
+    repository = build_repository(connection)
+
+    deferred = await repository.defer_leased_job(
+        job_id=job_id,
+        owner="scheduler-1",
+        delay_seconds=1.5,
+    )
+
+    assert deferred is True
+    _, query, params = connection.calls[0]
+    assert "start_after = NOW() + %s::interval" in query
+    assert "lease_owner = %s" in query
+    assert params == ("1.5 seconds", job_id, "scheduler-1")
+
+
+@pytest.mark.asyncio
 async def test_recover_expired_run_leases_applies_python_policy(monkeypatch) -> None:
     now = datetime.now(timezone.utc)
     job_id = "00000000-0000-0000-0000-000000000001"
@@ -819,3 +872,8 @@ async def test_recover_expired_run_leases_applies_python_policy(monkeypatch) -> 
     assert recovered[0].id == job_id
     assert recovered[0].recovered_state == "retry"
     assert connection.transactions[0].error is None
+    _, update_query, _ = connection.calls[1]
+    assert "state = 'active'" in update_query
+    assert "run_owner = %s" in update_query
+    assert "run_attempt_id = %s::uuid" in update_query
+    assert "run_lease_expires_at <= now()" in update_query
