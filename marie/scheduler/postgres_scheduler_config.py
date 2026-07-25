@@ -44,6 +44,7 @@ class PostgreSQLSchedulerConfig:
     frontier_batch_size: int
     lease_ttl_seconds: int
     run_ttl_seconds: int
+    run_lease_renewal_interval_seconds: float
     gateway_instance_id: str | None
 
     @classmethod
@@ -88,6 +89,11 @@ class PostgreSQLSchedulerConfig:
             hard_sla_policy = 'track_only'
 
         try:
+            run_ttl_seconds = int(config.get('run_ttl_seconds', 60))
+            renewal_interval = config.get('run_lease_renewal_interval_seconds')
+            if renewal_interval is None:
+                renewal_interval = min(20.0, run_ttl_seconds / 3.0)
+
             settings = cls(
                 queue_names=normalized_queues,
                 scheduler_mode=str(config.get('scheduler_mode', 'parallel')),
@@ -133,7 +139,8 @@ class PostgreSQLSchedulerConfig:
                 ),
                 frontier_batch_size=int(dag_config.get('frontier_batch_size', 1000)),
                 lease_ttl_seconds=int(config.get('lease_ttl_seconds', 5)),
-                run_ttl_seconds=int(config.get('run_ttl_seconds', 60)),
+                run_ttl_seconds=run_ttl_seconds,
+                run_lease_renewal_interval_seconds=float(renewal_interval),
                 gateway_instance_id=(
                     str(config['gateway_instance_id'])
                     if config.get('gateway_instance_id')
@@ -175,3 +182,12 @@ class PostgreSQLSchedulerConfig:
             )
         if self.lease_ttl_seconds <= 0 or self.run_ttl_seconds <= 0:
             raise BadConfigSource('lease and run TTL values must be greater than zero')
+        if self.run_lease_renewal_interval_seconds <= 0:
+            raise BadConfigSource(
+                'run_lease_renewal_interval_seconds must be greater than zero'
+            )
+        if self.run_lease_renewal_interval_seconds > self.run_ttl_seconds / 3:
+            raise BadConfigSource(
+                'run_lease_renewal_interval_seconds must not exceed one-third '
+                'of run_ttl_seconds'
+            )

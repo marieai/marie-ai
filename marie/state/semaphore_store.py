@@ -41,6 +41,7 @@ class SemaphoreHolder:
     # optional owner (worker identity) and renewal timestamp for observability
     owner: Optional[str] = None
     renewed_at: Optional[str] = None
+    run_attempt_id: Optional[str] = None
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "SemaphoreHolder":
@@ -53,6 +54,7 @@ class SemaphoreHolder:
             created_at=data.get("created_at") or _now_iso(),
             owner=data.get("owner"),
             renewed_at=data.get("renewed_at"),
+            run_attempt_id=data.get("run_attempt_id"),
         )
 
 
@@ -95,7 +97,7 @@ class SemaphoreStore(BaseStore):
     Layout:
       capacity/<slot_type>                 -> {"limit": N, "owner": "...", "source": "...", "updated_at": "..."}
       semaphores/<slot_type>/count         -> "current_int"
-      semaphores/<slot_type>/holders/<id>  -> {"ticket_id","node","ttl","created_at","owner","renewed_at"} (with lease)
+      semaphores/<slot_type>/holders/<id>  -> holder identity and lease metadata
 
     reserve():
       1) read cap & count; if count >= cap -> fast-fail
@@ -453,6 +455,7 @@ class SemaphoreStore(BaseStore):
         ticket_id: str,
         *,
         owner: Optional[str] = None,
+        run_attempt_id: Optional[str] = None,
         ttl: Optional[int] = None,
         update_ttl_field: bool = True,
     ) -> bool:
@@ -477,6 +480,11 @@ class SemaphoreStore(BaseStore):
         if owner is not None and holder.owner and holder.owner != owner:
             # Do not renew someone else's ticket
             return False
+        if (
+            holder.run_attempt_id is not None
+            and holder.run_attempt_id != run_attempt_id
+        ):
+            return False
 
         # refresh timestamps / ttl metadata we store (lease TTL is enforced by etcd)
         if update_ttl_field and ttl:
@@ -490,6 +498,39 @@ class SemaphoreStore(BaseStore):
         t.if_value(h_k, "==", raw)
         t.put(h_k, json.dumps(asdict(holder)), lease=lease.id)
         ok, _resp = t.commit()
+        return bool(ok)
+
+    def bind_run_attempt(
+        self,
+        slot_type: str,
+        ticket_id: str,
+        *,
+        owner: str,
+        run_attempt_id: str,
+    ) -> bool:
+        h_k = _holder_key(slot_type, ticket_id)
+        raw, meta = self._get_holder_raw(slot_type, ticket_id)
+        if raw is None or meta is None or not meta.lease_id:
+            return False
+
+        try:
+            holder = SemaphoreHolder.from_json(raw)
+        except Exception:
+            return False
+        if holder.owner and holder.owner != owner:
+            return False
+        if holder.run_attempt_id not in (None, run_attempt_id):
+            return False
+
+        holder.run_attempt_id = run_attempt_id
+        transaction = self.etcd.txn()
+        transaction.if_value(h_k, "==", raw)
+        transaction.put(
+            h_k,
+            json.dumps(asdict(holder)),
+            lease=meta.lease_id,
+        )
+        ok, _response = transaction.commit()
         return bool(ok)
 
     def release(
@@ -567,7 +608,13 @@ class SemaphoreStore(BaseStore):
         return False  # All retries exhausted
 
     def release_owned(
-        self, slot_type: str, ticket_id: str, *, owner: str, max_retries: int = 5
+        self,
+        slot_type: str,
+        ticket_id: str,
+        *,
+        owner: str,
+        run_attempt_id: Optional[str] = None,
+        max_retries: int = 5,
     ) -> bool:
         """
         Release only if the holder is owned by `owner`. Prevents accidental releases.
@@ -599,6 +646,11 @@ class SemaphoreStore(BaseStore):
             # Verify ownership
             if holder.owner and holder.owner != owner:
                 return False  # Not the owner, reject release (don't retry)
+            if (
+                holder.run_attempt_id is not None
+                and holder.run_attempt_id != run_attempt_id
+            ):
+                return False
 
             cnt_raw = self._get_raw(cnt_k)
 

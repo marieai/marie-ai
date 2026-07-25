@@ -1,4 +1,5 @@
 import asyncio
+import random
 import socket
 import time
 import traceback
@@ -7,6 +8,7 @@ from asyncio import Queue
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from math import inf
 from typing import Any, Dict, List
 
@@ -97,6 +99,14 @@ class DispatchCycleResult:
 
     scheduled: bool
     wait_interval: float | None = None
+
+
+class SemaphoreReservationStatus(str, Enum):
+    RESERVED = "reserved"
+    CAPACITY_FULL = "capacity_full"
+    TICKET_EXISTS = "ticket_exists"
+    CONTENTION = "contention"
+    STORE_ERROR = "store_error"
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +352,9 @@ class PostgreSQLJobScheduler(JobScheduler):
         self.frontier_batch_size = scheduler_config.frontier_batch_size
         self.lease_ttl_seconds = scheduler_config.lease_ttl_seconds
         self.run_ttl_seconds = scheduler_config.run_ttl_seconds
+        self.run_lease_renewal_interval_seconds = (
+            scheduler_config.run_lease_renewal_interval_seconds
+        )
         # unique, stable lease owner for this scheduler instance
         self.lease_owner: str = f"{socket.gethostname()}:{_uuid.uuid4()}"
         self.gateway_instance_id = (
@@ -351,7 +364,10 @@ class PostgreSQLJobScheduler(JobScheduler):
         self.attempt_lifecycle_service = self._build_attempt_lifecycle_service()
         self.logger.info(
             f"Lease config: lease_ttl_seconds={self.lease_ttl_seconds}, "
-            f"run_ttl_seconds={self.run_ttl_seconds}, owner='{self.lease_owner}', "
+            f"run_ttl_seconds={self.run_ttl_seconds}, "
+            "run_lease_renewal_interval_seconds="
+            f"{self.run_lease_renewal_interval_seconds}, "
+            f"owner='{self.lease_owner}', "
             f"gateway_instance_id='{self.gateway_instance_id}'"
         )
 
@@ -362,6 +378,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         self._sem_default_ttl = 30
         self._sem_owner_prefix = f"{socket.gethostname()}"
         self._sem_owner_prefix = ""
+        self._ticket_collision_counts: dict[str, int] = {}
 
         self.capacity_manager = SlotCapacityManager(
             semaphore_store=self._semaphore_store,
@@ -703,24 +720,42 @@ class PostgreSQLJobScheduler(JobScheduler):
         tasks: list[asyncio.Task[ControlFlowExecutionOutcome]] = []
         reconciled_count = 0
 
-        for wi in control_flow_jobs:
-            taken_wis = await self.frontier.take([wi.id], lease_ttl=lease_ttl)
-            if not taken_wis:
-                self.logger.warning(
-                    f"[WORK_DIST] Failed to take control flow node {wi.id} from frontier"
-                )
-                continue
+        requested_ids = [wi.id for wi in control_flow_jobs]
+        taken_wis = await self.frontier.take(requested_ids, lease_ttl=lease_ttl)
+        taken_ids = {wi.id for wi in taken_wis}
+        missing_ids = [job_id for job_id in requested_ids if job_id not in taken_ids]
+        if missing_ids:
+            self.logger.warning(
+                "[WORK_DIST] Failed to take %d/%d control flow nodes from frontier: %s",
+                len(missing_ids),
+                len(requested_ids),
+                missing_ids[:10],
+            )
 
+        jobs_by_name: dict[str, list[WorkInfo]] = defaultdict(list)
+        for wi in taken_wis:
+            jobs_by_name[wi.name].append(wi)
+
+        for job_name, jobs in jobs_by_name.items():
+            job_ids = [wi.id for wi in jobs]
             try:
-                leased_ids = await self._lease_jobs_db(wi.name, [wi.id])
+                leased_ids = await self._lease_jobs_db(job_name, job_ids)
             except Exception as e:
                 self.logger.error(
-                    f"[WORK_DIST] Error leasing control flow node {wi.id}: {e}"
+                    f"[WORK_DIST] Error leasing {len(job_ids)} control flow nodes "
+                    f"for job name {job_name}: {e}"
                 )
-                await self.frontier.release_lease_local(wi.id)
+                for wi in jobs:
+                    await self.frontier.release_lease_local(wi.id)
                 continue
 
-            if not leased_ids:
+            for wi in jobs:
+                if wi.id in leased_ids:
+                    tasks.append(
+                        asyncio.create_task(self.control_flow_service.process_node(wi))
+                    )
+                    continue
+
                 db_wi = await self.repository.get_job_by_id(wi.id)
                 db_state = db_wi.state if db_wi else None
                 self.logger.warning(
@@ -743,11 +778,6 @@ class PostgreSQLJobScheduler(JobScheduler):
 
                 reconciled = await self._reconcile_control_flow_lease_miss(wi, db_wi)
                 reconciled_count += int(reconciled)
-                continue
-
-            tasks.append(
-                asyncio.create_task(self.control_flow_service.process_node(wi))
-            )
 
         if not tasks:
             return ControlFlowBatchResult(reconciled=reconciled_count)
@@ -878,6 +908,7 @@ class PostgreSQLJobScheduler(JobScheduler):
 
         await self.dag_service.start_admission()
 
+        await self._renew_active_run_leases()
         await self.maintenance_service.start()
         self.logger.info(
             f"Started MaintenanceService (interval: {self.maintenance_service.maintenance_interval}s)"
@@ -896,6 +927,9 @@ class PostgreSQLJobScheduler(JobScheduler):
             name="scheduler-priority-refresh",
         )
         self.runtime.create_task(self._sync(), name="scheduler-sync")
+        self.runtime.create_task(
+            self._renew_run_leases(), name="scheduler-run-lease-renewal"
+        )
 
         # self._heartbeat_task = asyncio.create_task(
         #     self._heartbeat_loop(self.heartbeat_config)
@@ -1403,23 +1437,71 @@ class PostgreSQLJobScheduler(JobScheduler):
                     reservable_jobs_by_executor[exe].append(wi)
 
                 for slot_type, jobs in reservable_jobs_by_executor.items():
-                    reserved_ids = await self._reserve_semaphore_slots(slot_type, jobs)
+                    reservation_results = await self._reserve_semaphore_slots(
+                        slot_type, jobs
+                    )
                     reserved_jobs: list[WorkInfo] = []
                     for wi in jobs:
                         owner = wi.id
-                        if wi.id not in reserved_ids:
+                        reservation_status = reservation_results.get(
+                            wi.id, SemaphoreReservationStatus.CONTENTION
+                        )
+                        if (
+                            reservation_status
+                            != SemaphoreReservationStatus.TICKET_EXISTS
+                        ):
+                            self._ticket_collision_counts.pop(wi.id, None)
+                        if reservation_status != SemaphoreReservationStatus.RESERVED:
                             scheduler_trace(
                                 "slot_unavailable",
                                 job_id=wi.id,
                                 dag_id=wi.dag_id,
                                 executor=slot_type,
+                                reason=reservation_status.value,
                                 slots_by_executor=dict(slots_by_executor),
                             )
                             self.logger.warning(
-                                f"[WORK_DIST] NO semaphore capacity for executor={slot_type}; releasing lease for job={wi.id}. "
+                                f"[WORK_DIST] Semaphore reservation rejected for "
+                                f"executor={slot_type}, job={wi.id}, "
+                                f"reason={reservation_status.value}; "
                                 f"slots_by_executor={slots_by_executor}"
                             )
-                            await self._release_lease_db([wi.id])
+                            if (
+                                reservation_status
+                                == SemaphoreReservationStatus.TICKET_EXISTS
+                            ):
+                                collision_count = (
+                                    self._ticket_collision_counts.get(wi.id, 0) + 1
+                                )
+                                self._ticket_collision_counts[wi.id] = collision_count
+                                base_delay = min(
+                                    30.0, 2.0 ** min(collision_count - 1, 5)
+                                )
+                                delay_seconds = min(
+                                    30.0, base_delay * random.uniform(0.8, 1.2)
+                                )
+
+                                deferred = await self.repository.defer_leased_job(
+                                    job_id=wi.id,
+                                    owner=self.lease_owner,
+                                    delay_seconds=delay_seconds,
+                                )
+                                if deferred:
+                                    wi.start_after = datetime.now(
+                                        timezone.utc
+                                    ) + timedelta(seconds=delay_seconds)
+                                    scheduler_trace(
+                                        "slot_ticket_conflict_deferred",
+                                        job_id=wi.id,
+                                        dag_id=wi.dag_id,
+                                        executor=slot_type,
+                                        delay_seconds=delay_seconds,
+                                        collision_count=collision_count,
+                                    )
+                                else:
+                                    await self._release_lease_db([wi.id])
+                            else:
+                                await self._release_lease_db([wi.id])
                             await self.frontier.release_lease_local(wi.id)
                             continue
 
@@ -1483,6 +1565,23 @@ class PostgreSQLJobScheduler(JobScheduler):
                             run_attempt_id=run_attempt_id,
                             **self._ha_trace_fields(),
                         )
+                        attempt_bound = await asyncio.to_thread(
+                            self._semaphore_store.bind_run_attempt,
+                            slot_type,
+                            wi.id,
+                            owner=owner,
+                            run_attempt_id=run_attempt_id,
+                        )
+                        if not attempt_bound:
+                            await self._handle_dispatch_failure(
+                                wi,
+                                slot_type,
+                                owner,
+                                RuntimeError("failed to bind semaphore run attempt"),
+                                run_owner=self.lease_owner,
+                                run_attempt_id=run_attempt_id,
+                            )
+                            continue
                         enqueue_tasks.append(
                             {
                                 "task": asyncio.create_task(
@@ -2649,42 +2748,6 @@ class PostgreSQLJobScheduler(JobScheduler):
 
                     if job_info.status == JobStatus.RUNNING:
                         sync_running += 1
-                        run_owner = job_info.run_owner
-                        run_attempt_id = job_info.run_attempt_id
-                        if not run_owner or not run_attempt_id:
-                            scheduler_trace(
-                                "run_lease_extend_rejected",
-                                job_id=job_id,
-                                dag_id=work_item.dag_id,
-                                status=job_info.status.value,
-                                reason="sync_missing_attempt",
-                            )
-                            continue
-
-                        extended = await self._extend_run_lease_db(
-                            [job_id],
-                            run_owner=run_owner,
-                            run_attempt_id=run_attempt_id,
-                        )
-                        if job_id not in extended:
-                            scheduler_trace(
-                                "run_lease_extend_rejected",
-                                job_id=job_id,
-                                dag_id=work_item.dag_id,
-                                status=job_info.status.value,
-                                run_owner=run_owner,
-                                run_attempt_id=run_attempt_id,
-                                reason="sync_db_update_zero_rows",
-                            )
-                            self._scheduler_counter(
-                                RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL,
-                                job_id=job_id,
-                                dag_id=work_item.dag_id,
-                                status=job_info.status.value,
-                                run_owner=run_owner,
-                                run_attempt_id=run_attempt_id,
-                                source="storage_sync",
-                            )
                         continue
 
                     sync_terminal += 1
@@ -2708,6 +2771,116 @@ class PostgreSQLJobScheduler(JobScheduler):
             except (Exception, psycopg.Error) as error:
                 self.logger.error(f"Error syncing jobs: {error}")
                 self.logger.error(traceback.format_exc())
+
+    async def _renew_run_leases(self) -> None:
+        while self.running:
+            started = time.monotonic()
+            try:
+                await self._renew_active_run_leases()
+            except Exception as error:
+                self.logger.error(
+                    f"Error renewing active run leases: {error}", exc_info=True
+                )
+            elapsed = time.monotonic() - started
+            await asyncio.sleep(
+                max(0.0, self.run_lease_renewal_interval_seconds - elapsed)
+            )
+
+    async def _renew_active_run_leases(self) -> None:
+        started = time.perf_counter()
+        active_jobs = await self.list_jobs(state=[WorkState.ACTIVE.value])
+        if not active_jobs:
+            return
+
+        job_info_client = self.job_manager.job_info_client()
+        concurrency = asyncio.Semaphore(16)
+
+        async def renew(job_id: str, work_item: WorkInfo) -> str:
+            async with concurrency:
+                job_info = await job_info_client.get_info(job_id)
+                if job_info is None:
+                    return "missing_job_info"
+                if job_info.status != JobStatus.RUNNING:
+                    return "not_running"
+
+                run_owner = work_item.run_owner
+                run_attempt_id = work_item.run_attempt_id
+                if not run_owner or not run_attempt_id:
+                    return "missing_identity"
+                if (
+                    job_info.run_owner != run_owner
+                    or job_info.run_attempt_id != run_attempt_id
+                ):
+                    scheduler_trace(
+                        "run_lease_extend_rejected",
+                        job_id=job_id,
+                        dag_id=work_item.dag_id,
+                        status=job_info.status.value,
+                        run_owner=job_info.run_owner,
+                        run_attempt_id=job_info.run_attempt_id,
+                        reason="renewal_attempt_mismatch",
+                        **self._ha_trace_fields(),
+                    )
+                    return "attempt_mismatch"
+
+                extended = await self._extend_run_lease_db(
+                    [job_id],
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                )
+                if job_id in extended:
+                    scheduler_trace(
+                        "run_lease_extended",
+                        job_id=job_id,
+                        dag_id=work_item.dag_id,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                        source="renewal_loop",
+                        **self._ha_trace_fields(),
+                    )
+                    return "extended"
+
+                self._scheduler_counter(
+                    RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL,
+                    job_id=job_id,
+                    dag_id=work_item.dag_id,
+                    status=job_info.status.value,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    source="renewal_loop",
+                )
+                return "rejected"
+
+        results = await asyncio.gather(
+            *(renew(job_id, work_item) for job_id, work_item in active_jobs.items()),
+            return_exceptions=True,
+        )
+        outcomes: Counter[str] = Counter()
+        for result in results:
+            if isinstance(result, BaseException):
+                outcomes["error"] += 1
+                self.logger.error(
+                    f"Run lease renewal failed for one active job: {result}"
+                )
+            else:
+                outcomes[result] += 1
+        scheduler_trace(
+            "run_lease_renewal_pass",
+            active=len(active_jobs),
+            attempted=(
+                outcomes["extended"]
+                + outcomes["rejected"]
+                + outcomes["attempt_mismatch"]
+            ),
+            extended=outcomes["extended"],
+            rejected=outcomes["rejected"] + outcomes["attempt_mismatch"],
+            missing_identity=outcomes["missing_identity"],
+            missing_job_info=outcomes["missing_job_info"],
+            not_running=outcomes["not_running"],
+            errors=outcomes["error"],
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            **self._ha_trace_fields(),
+        )
 
     async def _sync_terminal_job_state(
         self,
@@ -2863,6 +3036,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 executor,
                 wi.id,
                 owner=owner,
+                run_attempt_id=run_attempt_id,
             )
             self.logger.debug(
                 f"[sem] release on dispatch-fail {wi.id}@{executor} -> {released}"
@@ -2941,8 +3115,8 @@ class PostgreSQLJobScheduler(JobScheduler):
 
     async def _reserve_semaphore_slots_serial(
         self, executor: str, jobs: list[WorkInfo]
-    ) -> set[str]:
-        reserved: set[str] = set()
+    ) -> dict[str, SemaphoreReservationStatus]:
+        results: dict[str, SemaphoreReservationStatus] = {}
         for wi in jobs:
             try:
                 ok = await asyncio.to_thread(
@@ -2966,16 +3140,37 @@ class PostgreSQLJobScheduler(JobScheduler):
                     f"[WORK_DIST] Semaphore reserve ERROR for job={wi.id}, executor={executor}: {error}",
                     exc_info=True,
                 )
+                results[wi.id] = SemaphoreReservationStatus.STORE_ERROR
                 continue
             if ok:
-                reserved.add(wi.id)
-        return reserved
+                results[wi.id] = SemaphoreReservationStatus.RESERVED
+            else:
+                results[wi.id] = await self._classify_reservation_miss(executor, wi.id)
+        return results
+
+    async def _classify_reservation_miss(
+        self, executor: str, job_id: str
+    ) -> SemaphoreReservationStatus:
+        try:
+            holder = await asyncio.to_thread(
+                self._semaphore_store.get_holder, executor, job_id
+            )
+            if holder is not None:
+                return SemaphoreReservationStatus.TICKET_EXISTS
+            available = await asyncio.to_thread(
+                self._semaphore_store.available_slot_count, executor
+            )
+        except Exception:
+            return SemaphoreReservationStatus.STORE_ERROR
+        if available <= 0:
+            return SemaphoreReservationStatus.CAPACITY_FULL
+        return SemaphoreReservationStatus.CONTENTION
 
     async def _reserve_semaphore_slots(
         self, executor: str, jobs: list[WorkInfo]
-    ) -> set[str]:
+    ) -> dict[str, SemaphoreReservationStatus]:
         if not jobs:
-            return set()
+            return {}
 
         job_ids = [wi.id for wi in jobs]
         started = time.perf_counter()
@@ -3003,19 +3198,31 @@ class PostgreSQLJobScheduler(JobScheduler):
                 f"[WORK_DIST] Batch semaphore reserve failed for executor={executor}; falling back to serial reserve: {exc}",
                 exc_info=True,
             )
-            reserved = await self._reserve_semaphore_slots_serial(executor, jobs)
+            results = await self._reserve_semaphore_slots_serial(executor, jobs)
+        else:
+            results = {
+                job_id: SemaphoreReservationStatus.RESERVED for job_id in reserved
+            }
+            for wi in jobs:
+                if wi.id not in results:
+                    results[wi.id] = await self._classify_reservation_miss(
+                        executor, wi.id
+                    )
 
         scheduler_trace(
             "semaphore_reserve_batch_done",
             executor=executor,
             requested=len(job_ids),
-            reserved=len(reserved),
+            reserved=sum(
+                status == SemaphoreReservationStatus.RESERVED
+                for status in results.values()
+            ),
             fallback_used=fallback_used,
             error=error,
             elapsed_ms=(time.perf_counter() - started) * 1000.0,
-            job_ids=list(reserved),
+            outcomes={job_id: status.value for job_id, status in results.items()},
         )
-        return set(reserved)
+        return results
 
     async def hydrate_single_dag_from_db(self, dag_id: str) -> bool:
         """

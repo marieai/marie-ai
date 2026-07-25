@@ -630,6 +630,31 @@ class AsyncJobRepository:
             rows = await conn.fetch(query, job_ids)
         return {str(row[0]) for row in rows}
 
+    async def defer_leased_job(
+        self,
+        *,
+        job_id: str,
+        owner: str,
+        delay_seconds: float,
+    ) -> bool:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                UPDATE {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                SET start_after = NOW() + %s::interval,
+                    lease_owner = NULL,
+                    lease_expires_at = NULL
+                WHERE id = %s::uuid
+                  AND state IN ('created', 'retry')
+                  AND lease_owner = %s
+                RETURNING id
+                """,
+                f"{delay_seconds} seconds",
+                job_id,
+                owner,
+            )
+        return row is not None
+
     async def activate_from_lease(
         self,
         job_ids: List[str],

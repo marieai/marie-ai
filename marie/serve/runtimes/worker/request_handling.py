@@ -1691,31 +1691,46 @@ class WorkerRequestHandler:
         )
 
         try:
-            # Busy: claim with SERVING semantics immediately
             await asyncio.to_thread(self._set_deployment_status, self._worker_state)
-
-            # Reserve a slot for this deployment and start renewal
-            try:
-                slot_type = (
-                    self._deployment
-                )  # capacity bucket; can be executor type if you prefer
-                self._sem_track(job_id, slot_type, ttl=self._sem_default_ttl)
-                scheduler_trace(
-                    "executor_slot_tracked",
-                    job_id=job_id,
-                    dag_id=dag_id,
-                    deployment=self._deployment,
-                    slot_type=slot_type,
-                    ttl_seconds=self._sem_default_ttl,
-                )
-            except Exception as e:
-                self.logger.error(f"[sem] failed to track ticket for {job_id}: {e}")
-                raise e
-
-        except Exception as set_status_exc:
+        except Exception as set_status_error:
             self.logger.error(
-                f"Failed to set SERVING during _record_started_job: {set_status_exc}"
+                f"Failed to set SERVING during _record_started_job: {set_status_error}"
             )
+
+        slot_type = self._deployment
+        run_owner = params.get("run_owner") if params else None
+        run_attempt_id = params.get("run_attempt_id") if params else None
+        scheduler_managed = bool(run_owner or run_attempt_id)
+        if scheduler_managed and (not run_owner or not run_attempt_id):
+            raise RuntimeError(
+                f"Incomplete durable run identity for job {job_id}: "
+                f"run_owner={run_owner}, run_attempt_id={run_attempt_id}"
+            )
+        tracked = self._sem_track(
+            job_id,
+            slot_type,
+            run_attempt_id=run_attempt_id,
+            ttl=self._sem_default_ttl,
+        )
+        if scheduler_managed and not tracked:
+            raise RuntimeError(
+                f"Semaphore ticket rejected for job {job_id}, "
+                f"run_attempt_id={run_attempt_id}"
+            )
+        if not scheduler_managed and not tracked:
+            self.logger.warning(
+                f"[sem] legacy request is running without tracked capacity: {job_id}"
+            )
+        scheduler_trace(
+            "executor_slot_tracking_result",
+            job_id=job_id,
+            dag_id=dag_id,
+            deployment=self._deployment,
+            slot_type=slot_type,
+            ttl_seconds=self._sem_default_ttl,
+            run_attempt_id=run_attempt_id,
+            tracked=tracked,
+        )
 
         if job_id is not None and self._job_info_client is not None:
             try:
@@ -2279,14 +2294,22 @@ class WorkerRequestHandler:
         if self._status_hb_thread and self._status_hb_thread.is_alive():
             self._status_hb_thread.join(timeout=2.0)
 
-    def _sem_track(self, job_id: str, slot_type: str, ttl: int | None = None) -> None:
+    def _sem_track(
+        self,
+        job_id: str,
+        slot_type: str,
+        *,
+        run_attempt_id: str | None,
+        ttl: int | None = None,
+    ) -> bool:
         """
-        Adopt an existing ticket from the JobSupervisor (preferred) by renewing it.
-        If renew fails (e.g. supervisor crashed before reserving), try a one-time reserve.
-        Never double-reserve a ticket that already exists.
+        Adopt the scheduler's ticket for a durable run attempt. Legacy requests
+        without attempt identity retain the previous renew-or-reserve behavior.
         """
         if not job_id or not slot_type:
-            return
+            return False
+        if run_attempt_id is None:
+            return self._sem_track_legacy(job_id, slot_type, ttl=ttl)
 
         ttl = int(ttl or self._sem_default_ttl)
         owner = job_id  # must match supervisor's owner / scheduler
@@ -2294,44 +2317,76 @@ class WorkerRequestHandler:
         with self._sem_ticket_lock:
             try:
                 ok = self._semaphore.renew(
-                    slot_type, job_id, owner=owner, ttl=ttl, update_ttl_field=True
+                    slot_type,
+                    job_id,
+                    owner=owner,
+                    run_attempt_id=run_attempt_id,
+                    ttl=ttl,
+                    update_ttl_field=True,
                 )
                 if not ok:
-                    # not present yet? reserve as this worker under the same neutral owner
-                    ok = self._semaphore.reserve(
-                        slot_type=slot_type,
-                        ticket_id=job_id,
-                        node=self._node,  # stored in holder.node, fine to be real node or ''
-                        ttl=ttl,
-                        owner=owner,  # must match job scheduler
-                    )
-                if not ok:
                     self.logger.error(
-                        f"[sem] could not adopt or reserve ticket {job_id}@{slot_type}"
+                        f"[sem] could not adopt ticket {job_id}@{slot_type} "
+                        f"for run_attempt_id={run_attempt_id}"
                     )
-                    return
+                    return False
 
                 self._active_sem_tickets[job_id] = {
                     "slot": slot_type,
                     "ttl": ttl,
                     "last": time.monotonic(),
                     "owner": owner,
+                    "run_attempt_id": run_attempt_id,
                 }
                 self.logger.info(
                     f"[sem] adopted ticket {job_id} for slot '{slot_type}' (ttl={ttl}, owner={owner})"
                 )
+                return True
             except Exception as e:
                 self.logger.error(
                     f"[sem] adopt/track failed for {job_id}@{slot_type}: {e}"
                 )
+                return False
 
-                # Track for the renew loop so a transient etcd failure can recover.
+    def _sem_track_legacy(
+        self, job_id: str, slot_type: str, *, ttl: int | None = None
+    ) -> bool:
+        ttl = int(ttl or self._sem_default_ttl)
+        owner = job_id
+
+        with self._sem_ticket_lock:
+            try:
+                ok = self._semaphore.renew(
+                    slot_type,
+                    job_id,
+                    owner=owner,
+                    ttl=ttl,
+                    update_ttl_field=True,
+                )
+                if not ok:
+                    ok = self._semaphore.reserve(
+                        slot_type=slot_type,
+                        ticket_id=job_id,
+                        node=self._node,
+                        ttl=ttl,
+                        owner=owner,
+                    )
+                if not ok:
+                    return False
+
                 self._active_sem_tickets[job_id] = {
                     "slot": slot_type,
                     "ttl": ttl,
-                    "last": 0.0,
+                    "last": time.monotonic(),
                     "owner": owner,
+                    "run_attempt_id": None,
                 }
+                return True
+            except Exception as error:
+                self.logger.error(
+                    f"[sem] legacy track failed for {job_id}@{slot_type}: {error}"
+                )
+                return False
 
     def _sem_untrack(self, job_id: str, release: bool = True) -> bool:
         with self._sem_ticket_lock:
@@ -2350,19 +2405,18 @@ class WorkerRequestHandler:
 
             slot = meta["slot"]
             owner = meta.get("owner") or job_id
+            run_attempt_id = meta.get("run_attempt_id")
 
             try:
                 self.logger.info(
                     f"[sem] releasing ticket {job_id}@{slot} (owner={owner})"
                 )
-                released = self._semaphore.release_owned(slot, job_id, owner=owner)
-                if not released:
-                    self.logger.warning(
-                        f"[sem] release_owned returned False for {job_id}@{slot}, "
-                        "trying fallback release without owner check"
-                    )
-                    # last resort to avoid leaks (if someone mutated the holder unexpectedly)
-                    released = self._semaphore.release(slot, job_id)
+                released = self._semaphore.release_owned(
+                    slot,
+                    job_id,
+                    owner=owner,
+                    run_attempt_id=run_attempt_id,
+                )
                 self.logger.info(f"[sem] released ticket {job_id}@{slot} -> {released}")
                 return bool(released)
             except Exception as e:
@@ -2397,20 +2451,17 @@ class WorkerRequestHandler:
 
                 slot = meta["slot"]
                 owner = meta.get("owner") or jid
+                run_attempt_id = meta.get("run_attempt_id")
 
                 try:
                     ok = self._semaphore.renew(
-                        slot, jid, owner=owner, ttl=ttl, update_ttl_field=True
+                        slot,
+                        jid,
+                        owner=owner,
+                        run_attempt_id=run_attempt_id,
+                        ttl=ttl,
+                        update_ttl_field=True,
                     )
-                    if not ok:
-                        # if renew failed (e.g., orphaned), try reserve again with same owner
-                        ok = self._semaphore.reserve(
-                            slot_type=slot,
-                            ticket_id=jid,
-                            node=self._node,
-                            ttl=ttl,
-                            owner=owner,
-                        )
                     meta["last"] = now
                     if not ok:
                         self.logger.warning(

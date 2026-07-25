@@ -372,7 +372,7 @@ class JobManager:
         # Wait for `_recover_running_jobs` to run before accepting submissions to
         # avoid duplicate monitoring of the same job.
         await self._recover_running_jobs_event.wait()
-        self.logger.info(
+        self.logger.debug(
             f"Starting job with submission_id: {submission_id} on entrypoint: {entrypoint}"
         )
 
