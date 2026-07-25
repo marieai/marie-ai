@@ -17,9 +17,9 @@ from typing import (
 
 import grpc
 from grpc.aio import AioRpcError
+from marie.engine.circuit_breaker import CircuitBreakerConfig
 
 from marie.constants import __default_endpoint__
-from marie.engine.circuit_breaker import CircuitBreakerConfig
 from marie.enums import PollingType
 from marie.excepts import InternalNetworkError
 from marie.logging_core.logger import MarieLogger
@@ -336,6 +336,10 @@ class GrpcConnectionPool:
         """
         await self._connections.close()
 
+    def get_node_stats(self) -> list[dict]:
+        """Return current load-balancer state for every executor node."""
+        return self._connections.get_node_stats()
+
     async def _handle_aiorpcerror(
         self,
         error: AioRpcError,
@@ -463,6 +467,7 @@ class GrpcConnectionPool:
                     if len(tried_addresses) >= num_replicas:
                         break
                 tried_addresses.add(current_connection.address)
+                connections.incr_usage(current_connection.address)
                 try:
                     async for (
                         resp,
@@ -497,6 +502,8 @@ class GrpcConnectionPool:
                 except Exception as e:
                     yield e, None
                     return
+                finally:
+                    connections.decr_usage(current_connection.address)
 
         return async_generator_wrapper()
 

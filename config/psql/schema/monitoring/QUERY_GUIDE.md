@@ -2,7 +2,9 @@
 
 ## Quick Start
 
-All queries are located in: **`config/psql/schema/monitoring/example_queries.sql`**
+Monitoring queries are located in `config/psql/schema/monitoring`. Aggregated
+dashboard queries are in `example_queries.sql`; focused diagnostics are stored
+as separate files in the same directory.
 
 ### Prerequisites
 1. ✅ Run `config/psql/schema/monitoring/slots_columns.sql` first
@@ -215,6 +217,43 @@ All queries are located in: **`config/psql/schema/monitoring/example_queries.sql
 ---
 
 ## How to Run Queries
+
+### Diagnose a failed scheduler job
+
+`job_failure_analysis.sql` correlates the current scheduler row, worker KV
+history, structured executor exceptions, a stored traceback when present,
+retries, durable attempts, and the source `ref_type`/`ref_id` for one job. It is
+plain PostgreSQL SQL: replace the UUID in its `SET LOCAL
+marie_monitor.job_id` line and execute the entire file in DataGrip, DBeaver,
+pgAdmin, or psql. It does not create persistent database objects or settings.
+
+```bash
+docker exec -i marie-psql-server \
+  psql -U postgres -d postgres -X -P pager=off \
+  < config/psql/schema/monitoring/job_failure_analysis.sql
+```
+
+When running from a deployed configuration tree, replace the input path with
+the corresponding `psql/schema/monitoring/job_failure_analysis.sql` path.
+
+### Inspect outstanding scheduler work
+
+`outstanding_work_analysis.sql` reports state totals by queue and lists bounded
+details for current `created`, `retry`, and `active` jobs. The details classify
+why work remains outstanding and include lease, dependency, KV, executor, and
+last-error context. It also reports recent arrivals so an empty scheduler can be
+distinguished from jobs that arrived and completed or failed quickly.
+
+```bash
+docker exec -i marie-psql-server \
+  psql -U postgres -d postgres -X -P pager=off \
+  -v queue_name=corr -v lookback_minutes=60 -v result_limit=200 \
+  < config/psql/schema/monitoring/outstanding_work_analysis.sql
+```
+
+All variables are optional. Omit `queue_name` to include every queue. The
+arrival lookback defaults to 60 minutes and is capped at 7 days; detailed
+results default to 200 rows and are capped at 1000.
 
 ### Method 1: psql Command Line
 ```bash

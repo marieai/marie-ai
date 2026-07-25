@@ -202,7 +202,7 @@ class JobSupervisor:
             )
 
         # Enqueue job for processing, this will be processed in the background but it guarantees order of execution
-        self.logger.info(f"Job enqueued for submission : {self._job_id}")
+        self.logger.debug(f"Job enqueued for submission : {self._job_id}")
 
         if self.DEFAULT_JOB_TIMEOUT_S > 0:
             try:
@@ -435,7 +435,7 @@ class JobSupervisor:
                 wait_for_ack=0.0,  # no extra wait here
             )
 
-            self.logger.info(
+            self.logger.debug(
                 "Job enqueued in %.2fs for job %s",
                 time.monotonic() - start_time,
                 self._job_id,
@@ -458,7 +458,7 @@ class JobSupervisor:
                         response_code=response.status.code,
                         elapsed_ms=elapsed * 1000.0,
                     )
-                    self.logger.info(
+                    self.logger.debug(
                         f"Job processed successfully in {elapsed:.2f}s for job {self._job_id}"
                     )
 

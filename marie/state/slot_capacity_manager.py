@@ -167,7 +167,8 @@ class SlotCapacityManager:
         v = os.environ.get(self.zero_absent_env, "true").lower()
         return v not in ("0", "false", "no", "n")
 
-    def _slots_per_node(self, executor: str) -> int:
+    def slots_per_node(self, executor: str) -> int:
+        """Return configured slots per node for an executor."""
         # global default
         try:
             base = int(os.environ.get(self.default_slots_per_node_env, "1"))
@@ -199,7 +200,7 @@ class SlotCapacityManager:
                 hp = self._netloc(addr)
                 if hp:
                     unique_hosts.add(hp)
-            slots_per = self._slots_per_node(executor)
+            slots_per = self.slots_per_node(executor)
             slot_type = self.slot_type_resolver(executor)
             targets[slot_type] = max(0, len(unique_hosts) * slots_per)
         return targets

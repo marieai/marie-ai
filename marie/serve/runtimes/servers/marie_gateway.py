@@ -315,6 +315,12 @@ class MarieServerGateway(CompositeServer):
         self._gateway_request_seconds = None
         # Observable gauge observations — updated by refresh, read by OTel callbacks
         self._slot_observations = {"capacity": {}, "used": {}, "available": {}}
+        self._node_observations = {
+            "active_requests": {},
+            "slot_capacity": {},
+            "accepting_traffic": {},
+            "selection_count": {},
+        }
         if self.meter:
             self._gateway_request_seconds = self.meter.create_histogram(
                 name="marie_gateway_request_seconds",
@@ -357,6 +363,70 @@ class MarieServerGateway(CompositeServer):
                 ],
                 description="Available slots per executor",
                 unit="{slots}",
+            )
+            self.meter.create_observable_gauge(
+                name="marie_executor_node_inflight_requests",
+                callbacks=[
+                    lambda _: [
+                        Observation(
+                            value,
+                            {"executor": key[0], "address": key[1]},
+                        )
+                        for key, value in self._node_observations[
+                            "active_requests"
+                        ].items()
+                    ]
+                ],
+                description="In-flight gateway requests per executor node",
+                unit="{requests}",
+            )
+            self.meter.create_observable_gauge(
+                name="marie_executor_node_slot_capacity",
+                callbacks=[
+                    lambda _: [
+                        Observation(
+                            value,
+                            {"executor": key[0], "address": key[1]},
+                        )
+                        for key, value in self._node_observations[
+                            "slot_capacity"
+                        ].items()
+                    ]
+                ],
+                description="Configured slot capacity per executor node",
+                unit="{slots}",
+            )
+            self.meter.create_observable_gauge(
+                name="marie_executor_node_accepting_traffic",
+                callbacks=[
+                    lambda _: [
+                        Observation(
+                            value,
+                            {"executor": key[0], "address": key[1]},
+                        )
+                        for key, value in self._node_observations[
+                            "accepting_traffic"
+                        ].items()
+                    ]
+                ],
+                description="Whether an executor node can receive routed traffic",
+                unit="{node}",
+            )
+            self.meter.create_observable_gauge(
+                name="marie_executor_node_selection_count",
+                callbacks=[
+                    lambda _: [
+                        Observation(
+                            value,
+                            {"executor": key[0], "address": key[1]},
+                        )
+                        for key, value in self._node_observations[
+                            "selection_count"
+                        ].items()
+                    ]
+                ],
+                description="Gateway selections per executor node",
+                unit="{selections}",
             )
 
         self.desired_map: Dict[tuple[str, str], DesiredDoc] = {}
@@ -911,6 +981,8 @@ class MarieServerGateway(CompositeServer):
                     rows, totals = (
                         self.capacity_manager.compute_summary_rows_and_totals()
                     )
+                    nodes = self._node_capacity_snapshot()
+                    self._set_node_observations(nodes)
 
                     # Convert rows to dict format for easier consumption
                     slots = []
@@ -933,6 +1005,7 @@ class MarieServerGateway(CompositeServer):
                         "result": {
                             "slots": slots,
                             "totals": totals,
+                            "nodes": nodes,
                         },
                     }
                 except Exception as e:
@@ -1620,6 +1693,80 @@ class MarieServerGateway(CompositeServer):
 
         await asyncio.gather(*run_server_tasks)
 
+    def _node_capacity_snapshot(self) -> list[dict[str, Any]]:
+        if not getattr(self, "streamer", None):
+            return []
+
+        gateways_by_node: dict[tuple[str, str], set[str]] = {}
+        for executor, nodes in self.deployment_nodes.items():
+            for node in nodes:
+                address = node.get("address") or ""
+                parsed_address = urlparse(address)
+                normalized_address = parsed_address.netloc or address
+                gateway = node.get("gateway")
+                if normalized_address and gateway:
+                    gateways_by_node.setdefault(
+                        (executor, normalized_address), set()
+                    ).add(gateway)
+
+        snapshot = []
+        for node in self.streamer.get_node_stats():
+            executor = node["executor"]
+            address = node["address"]
+            active_requests = int(node["active_requests"])
+            slot_capacity = self.capacity_manager.slots_per_node(executor)
+            accepting_traffic = bool(node["accepting_traffic"])
+
+            if not accepting_traffic:
+                routing_state = "unavailable"
+            elif slot_capacity <= 0:
+                routing_state = "disabled"
+            elif active_requests >= slot_capacity:
+                routing_state = "saturated"
+            elif active_requests == 0:
+                routing_state = "idle"
+            else:
+                routing_state = "active"
+
+            snapshot.append(
+                {
+                    **node,
+                    "gateways": sorted(
+                        gateways_by_node.get((executor, address), set())
+                    ),
+                    "slot_capacity": slot_capacity,
+                    "slot_available": max(slot_capacity - active_requests, 0),
+                    "utilization_pct": (
+                        round(active_requests * 100 / slot_capacity, 1)
+                        if slot_capacity > 0
+                        else None
+                    ),
+                    "routing_state": routing_state,
+                }
+            )
+
+        return snapshot
+
+    def _set_node_observations(self, nodes: list[dict[str, Any]]) -> None:
+        self._node_observations = {
+            "active_requests": {
+                (node["executor"], node["address"]): node["active_requests"]
+                for node in nodes
+            },
+            "slot_capacity": {
+                (node["executor"], node["address"]): node["slot_capacity"]
+                for node in nodes
+            },
+            "accepting_traffic": {
+                (node["executor"], node["address"]): int(node["accepting_traffic"])
+                for node in nodes
+            },
+            "selection_count": {
+                (node["executor"], node["address"]): node["selection_count"]
+                for node in nodes
+            },
+        }
+
     async def _publish_capacity_event(self) -> None:
         """Publish current capacity state as an event."""
         try:
@@ -1641,6 +1788,9 @@ class MarieServerGateway(CompositeServer):
                 obs["used"]["_total"] = totals["used"]
                 obs["available"]["_total"] = totals["available"]
                 self._slot_observations = obs
+
+            node_stats = self._node_capacity_snapshot()
+            self._set_node_observations(node_stats)
 
             capacity_stats = (rows, totals)
             self.logger.debug(f"Publishing capacity stats: {capacity_stats}")

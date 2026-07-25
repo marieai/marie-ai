@@ -3,12 +3,12 @@ import threading
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 from marie.engine.circuit_breaker import CircuitBreakerConfig
+
 from marie.logging_core.logger import MarieLogger
 from marie.serve.networking.instrumentation import _NetworkingHistograms
 from marie.serve.networking.replica_list import _ReplicaList
 
 if TYPE_CHECKING:  # pragma: no cover
-
     from grpc.aio._interceptor import ClientInterceptor
     from opentelemetry.instrumentation.grpc._client import (
         OpenTelemetryClientInterceptor,
@@ -90,6 +90,59 @@ class _ConnectionPoolMap:
                         self._get_connection_list(deployment, "shards", shard_id)
                     )
             return replicas
+
+    def get_node_stats(self) -> list[dict]:
+        with self._lock:
+            replica_lists = [
+                (deployment, entity_type, entity_id, replica_list)
+                for deployment, entity_types in self._deployments.items()
+                for entity_type, entities in entity_types.items()
+                for entity_id, replica_list in entities.items()
+            ]
+
+        stats = []
+        for deployment, entity_type, entity_id, replica_list in replica_lists:
+            load_balancer = replica_list.get_load_balancer()
+            active_counts = load_balancer.get_active_counter()
+            selection_counts = load_balancer.get_selection_counts()
+            accepting_traffic = {
+                address: load_balancer.is_connection_available(address)
+                for address in active_counts
+            }
+            circuit_stats = load_balancer.get_circuit_breaker_stats() or {}
+            circuit_breaker_enabled = load_balancer.has_circuit_breaker()
+
+            for address, active_requests in active_counts.items():
+                circuit = circuit_stats.get(address, {})
+                stats.append(
+                    {
+                        "executor": deployment,
+                        "address": address,
+                        "role": entity_type.rstrip("s"),
+                        "entity_id": entity_id,
+                        "active_requests": active_requests,
+                        "selection_count": selection_counts.get(address, 0),
+                        "accepting_traffic": accepting_traffic[address],
+                        "circuit_state": (
+                            circuit.get("state", "closed")
+                            if circuit_breaker_enabled
+                            else "disabled"
+                        ),
+                        "consecutive_failures": circuit.get("consecutive_failures", 0),
+                        "total_failures": circuit.get("total_failures", 0),
+                        "total_successes": circuit.get("total_successes", 0),
+                    }
+                )
+
+        return sorted(
+            stats,
+            key=lambda item: (
+                item["executor"],
+                item["role"],
+                item["entity_id"],
+                item["address"],
+            ),
+        )
 
     async def close(self):
         # Close all connections to all replicas

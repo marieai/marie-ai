@@ -22,7 +22,7 @@
     <option name="ADD_SOURCE_ROOTS" value="false" />
     <option name="DEBUG_JUST_MY_CODE" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-    <option name="RUN_TOOL" value="" />
+    <option name="RUN_TOOL" value="true" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/marie/__main__.py" />
     <option name="PARAMETERS" value="server --start --uses /mnt/data/marie-ai/config/service/marie-dev-job.yml" />
     <option name="SHOW_COMMAND_LINE" value="false" />

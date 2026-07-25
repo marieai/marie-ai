@@ -134,9 +134,11 @@ RUN apt-get update -o APT::Update::Error-Mode=any && \
         ca-certificates \
         curl \
         build-essential \
+        cuda-nvcc-13-0 \
         git \
         graphviz \
         imagemagick \
+        libcurand-dev-13-0 \
         libgl1 \
         libglib2.0-0 \
         libjemalloc2 \
@@ -148,6 +150,9 @@ RUN apt-get update -o APT::Update::Error-Mode=any && \
         python3.12 \
         python3.12-dev \
         tzdata && \
+    test -x /usr/local/cuda/bin/nvcc && \
+    test -f /usr/local/cuda/include/curand.h && \
+    /usr/local/cuda/bin/nvcc --version && \
     ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
     rm -rf /var/lib/apt/lists/*

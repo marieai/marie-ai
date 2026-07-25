@@ -1145,13 +1145,12 @@ class PostgreSQLJobScheduler(JobScheduler):
                     f"[WORK_DIST] Fetched {len(candidates_wi)} candidates from frontier. "
                 )
 
-                # Build (entrypoint, wi) tuples for planner input (only regular jobs)
                 planner_candidates: list[tuple[str, WorkInfo]] = []
                 for wi in regular_candidates:
                     ep = wi.data.get("metadata", {}).get("on", "")
                     planner_candidates.append((ep, wi))
 
-                self.logger.info(
+                self.logger.debug(
                     f"[WORK_DIST] Built {len(planner_candidates)} planner candidates from {len(regular_candidates)} regular jobs "
                     f"(+{control_flow_completed_total} completed, {control_flow_reconciled_total} reconciled "
                     f"of {control_flow_seen_total} control flow nodes; outcomes={control_flow_outcome_counts} "
@@ -1507,7 +1506,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                         count=len(enqueue_tasks),
                         job_ids=[item["wi"].id for item in enqueue_tasks],
                     )
-                    self.logger.info(
+                    self.logger.debug(
                         f"[WORK_DIST] Dispatching {len(enqueue_tasks)} jobs via _activate_and_enqueue_job..."
                     )
                     results = await asyncio.gather(
@@ -1522,7 +1521,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                             if isinstance(result, Exception) or not result
                         ),
                     )
-                    self.logger.info(
+                    self.logger.debug(
                         f"[WORK_DIST] Dispatch completed. Processing {len(results)} results..."
                     )
                     for i, result in enumerate(results):
@@ -1533,7 +1532,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                         run_attempt_id = enqueue_tasks[i]["run_attempt_id"]
 
                         if isinstance(result, Exception) or not result:
-                            # dispatch failed → release lease & requeue
                             self.logger.error(
                                 f"[WORK_DIST] Dispatch FAILED for job={wi.id}, executor={exe}: {result}",
                                 exc_info=(
@@ -1554,9 +1552,9 @@ class PostgreSQLJobScheduler(JobScheduler):
                         scheduled_any = True
 
                 if jobs_scheduled_this_cycle:
-                    self.logger.info("Scheduling summary for this cycle:")
+                    self.logger.debug("Scheduling summary for this cycle:")
                     for exe, cnt in sorted(jobs_scheduled_this_cycle.items()):
-                        self.logger.info(f"  - {exe}: {cnt} scheduled")
+                        self.logger.debug(f"  - {exe}: {cnt} scheduled")
 
                 return DispatchCycleResult(scheduled=scheduled_any)
             finally:
@@ -1842,7 +1840,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         :param work_info: The information about the work item to be processed.
         :return: True if successfully dispatched and confirmed, False otherwise.
         """
-        self.logger.info(f"Attempting to dispatch work item: {work_info.id}")
+        self.logger.debug(f"Attempting to dispatch work item: {work_info.id}")
         confirmation_event = asyncio.Event()
         submission_id = work_info.id
         entrypoint = work_info.data.get("metadata", {}).get("on")

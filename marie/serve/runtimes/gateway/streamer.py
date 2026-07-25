@@ -383,6 +383,10 @@ class GatewayStreamer:
         await self._streamer.wait_floating_requests_end()
         await self._connection_pool.close()
 
+    def get_node_stats(self) -> list[dict]:
+        """Return current routing state for every executor node."""
+        return self._connection_pool.get_node_stats()
+
     Call = rpc_stream
 
     async def process_single_data(

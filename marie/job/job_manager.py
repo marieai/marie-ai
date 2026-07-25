@@ -187,7 +187,7 @@ class JobManager:
                     )
                     if job_status == JobStatus.SUCCEEDED:
                         is_alive = False
-                        self.logger.info(f"Job succeeded : {job_id}")
+                        self.logger.debug(f"Job succeeded : {job_id}")
                         break
                     elif job_status == JobStatus.FAILED:
                         is_alive = False

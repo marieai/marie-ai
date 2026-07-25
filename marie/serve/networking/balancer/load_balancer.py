@@ -220,6 +220,10 @@ class LoadBalancer(abc.ABC):
         with self._lock:
             return dict(self.active_counter)
 
+    def get_selection_counts(self) -> dict[str, int]:
+        """Return cumulative selections by address when tracked."""
+        return {}
+
     def connection_count(self) -> int:
         """
         Get the number of connections

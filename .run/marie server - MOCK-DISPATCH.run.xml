@@ -1,10 +1,12 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="marie server - MOCK-DISPATCH" type="PythonConfigurationType" factoryName="Python" folderName="Executors" singleton="false">
+    <output_file path="$USER_HOME$/tmp/executor-mock.log" is_save="true" />
     <module name="marie-ai@1" />
-    <option name="ENV_FILES" value="$USER_HOME$/tmp/executor-mock.log" />
+    <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
     <envs>
+      <env name="PYTHONUNBUFFERED" value="1" />
       <env name="COLUMNS" value="180" />
       <env name="CUDA_VISIBLE_DEVICES" value="0" />
       <env name="GRPC_VERBOSITY" value="debug" />
@@ -15,12 +17,11 @@
       <env name="MARIE_DEBUG" value="0" />
       <env name="MARIE_DEBUG_PORT" value="5678" />
       <env name="MARIE_DEFAULT_MOUNT" value="/mnt/data/marie-ai" />
-      <env name="OPENAI_API_BASE" value="http://0.0.0.0:4000" />
-      <env name="OPENAI_API_KEY" value="EMPTY" />
-      <env name="PYTHONUNBUFFERED" value="1" />
       <env name="MARIE_SCHEDULER_TRACE_ENABLED" value="true" />
       <env name="MARIE_SCHEDULER_TRACE_PATH" value="~/tmp/marie-scheduler-trace.jsonl" />
       <env name="MARIE_SCHEDULER_TRACE_PROFILE" value="full" />
+      <env name="OPENAI_API_BASE" value="http://0.0.0.0:4000" />
+      <env name="OPENAI_API_KEY" value="EMPTY" />
     </envs>
     <option name="SDK_HOME" value="" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/" />

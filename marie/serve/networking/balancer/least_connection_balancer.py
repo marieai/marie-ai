@@ -106,7 +106,8 @@ class LeastConnectionsLoadBalancer(LoadBalancer):
             else:
                 # advance counter safely
                 self._rr_counter = (self._rr_counter + 1) % len(min_use_connections)
-                self.selection_counter[connection.address] += 1
+                with self._lock:
+                    self.selection_counter[connection.address] += 1
                 self.print_selection_stats()
 
         # Handle retry outside the lock to avoid blocking during await
@@ -123,15 +124,16 @@ class LeastConnectionsLoadBalancer(LoadBalancer):
         """
         # Clean up selection_counter for removed addresses
         new_addresses = {c.address for c in connections if c is not None}
-        addresses_to_remove = [
-            addr for addr in self.selection_counter if addr not in new_addresses
-        ]
-        for addr in addresses_to_remove:
-            del self.selection_counter[addr]
-            if self.debug_loging_enabled:
-                self._logger.debug(
-                    f"Cleaned up selection_counter for removed address: {addr}"
-                )
+        with self._lock:
+            addresses_to_remove = [
+                addr for addr in self.selection_counter if addr not in new_addresses
+            ]
+            for addr in addresses_to_remove:
+                del self.selection_counter[addr]
+                if self.debug_loging_enabled:
+                    self._logger.debug(
+                        f"Cleaned up selection_counter for removed address: {addr}"
+                    )
 
         # Call parent implementation
         super().update_connections(connections)
@@ -145,10 +147,16 @@ class LeastConnectionsLoadBalancer(LoadBalancer):
 
     def print_selection_stats(self):
         self._logger.debug(f"Connection selection stats for {self._deployment_name}:")
-        for address, count in self.selection_counter.items():
+        for address, count in self.get_selection_counts().items():
             self._logger.debug(f"  {address}: selected {count} times")
+
+    def get_selection_counts(self) -> dict[str, int]:
+        """Return cumulative least-connection selections by address."""
+        with self._lock:
+            return dict(self.selection_counter)
 
     def close(self):
         """Close the load balancer and clean up resources."""
         self._rr_counter = 0
-        self.selection_counter.clear()
+        with self._lock:
+            self.selection_counter.clear()

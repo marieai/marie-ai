@@ -70,7 +70,7 @@ async def _mark_job_status(
         )
         return disabled_return_value
 
-    logger.info(f"Executing mark_request_as_{status_suffix} : {job_id} : {timestamp}")
+    logger.debug(f"Executing mark_request_as_{status_suffix} : {job_id} : {timestamp}")
     event = f"{event_name}.{status_suffix}"
     try:
         await Toast.notify(

@@ -689,7 +689,7 @@ class DAGManagementService:
             self._job_cache.pop(dag_job.id, None)
 
         removed = self.active_dags.pop(dag_id, None) is not None
-        self.logger.info(
+        self.logger.debug(
             f"Evicted DAG {dag_id} from memory ({reason}); "
             f"removed={removed}, finalize_stats={stats}"
         )

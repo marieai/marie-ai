@@ -5,11 +5,11 @@ from functools import wraps
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple, Union
 
 from docarray import DocList
+from marie.instrumentation.context import using_attributes
 
 from marie.api import AssetKeyDoc, parse_payload_to_docs
 from marie.constants import __default_endpoint__
 from marie.excepts import ExecutorError, InternalNetworkError
-from marie.instrumentation.context import using_attributes
 from marie.job.common import JobInfo, JobStatus
 from marie.job.job_distributor import DocumentArray, JobDistributor, SendCb
 from marie.logging_core.logger import MarieLogger
@@ -208,7 +208,7 @@ class GatewayJobDistributor(JobDistributor):
         request.data.docs = DocList[AssetKeyDoc]([asset_doc])
 
         session_id = self._resolve_session_id(submission_id, job_info)
-        self.logger.info(
+        self.logger.debug(
             f"[{submission_id}] Publishing job via single-send (session={session_id})"
         )
         with using_attributes(session_id=session_id):
