@@ -50,8 +50,9 @@ from the Marie AI checkout, not from marie-assistant/analysis.
 Steps:
   env                 Print resolved paths and versions.
   worktree            Verify the current checkout/worktree.
-  venv                Create the Python 3.12 venv and base build tools, and
-                      symlink .venv in the checkout to it.
+  venv                Create or update a runnable Python 3.12 / cu130 environment
+                      from uv.lock, and symlink .venv in the checkout to it.
+  base-venv           Create only the venv and base build tools for native builds.
   torch               Install torch 2.12.1 / torchvision 0.27.1 from cu130.
   app-deps            Install Marie editable dependencies and test/runtime helpers.
   cuda-toolkit         Install/activate CUDA 13 nvcc package and symlinks.
@@ -101,6 +102,15 @@ log() {
 }
 
 resolve_environment() {
+  if [[ -z "${MARIE_TORCH_VENV}" && -z "${MARIE_TORCH_ENV_NAME}" && -L "${MARIE_TORCH_WORKTREE}/.venv" ]]; then
+    local linked_venv
+    linked_venv="$(readlink -f "${MARIE_TORCH_WORKTREE}/.venv")"
+    if [[ -x "${linked_venv}/bin/python" ]]; then
+      MARIE_TORCH_VENV="${linked_venv}"
+      MARIE_TORCH_ENV_NAME="$(basename "${linked_venv}")"
+    fi
+  fi
+
   if [[ -z "${MARIE_TORCH_VENV}" ]]; then
     if [[ -z "${MARIE_TORCH_ENV_NAME}" ]]; then
       local default_name
@@ -345,7 +355,7 @@ test -f \"${FAIRSEQ_PATCH}\"
 test -f \"${FAISS_PATCH}\""
 }
 
-step_venv() {
+step_base_venv() {
   run_cmd venv "mkdir -p \"$(dirname "${MARIE_TORCH_VENV}")\"
 test ! -e \"${MARIE_TORCH_VENV}\"
 command -v uv
@@ -362,6 +372,26 @@ if [[ -L .venv || ! -e .venv ]]; then
 else
   echo \"skipping .venv symlink: ${MARIE_TORCH_WORKTREE}/.venv is a real directory\" >&2
 fi"
+}
+
+step_venv() {
+  if [[ -x "${MARIE_TORCH_VENV}/bin/python" ]]; then
+    log "using existing environment: ${MARIE_TORCH_VENV}"
+  else
+    guard_new_environment venv
+    step_base_venv
+  fi
+
+  step_install_wheels
+  run_venv verify-venv "python - <<'PY'
+import torch
+import torchvision
+
+print('torch', torch.__version__)
+print('torchvision', torchvision.__version__)
+print('torch cuda', torch.version.cuda)
+print('cuda available', torch.cuda.is_available())
+PY"
 }
 
 step_torch() {
@@ -811,7 +841,7 @@ PY"
 run_all() {
   step_env
   step_worktree
-  step_venv
+  step_base_venv
   step_torch
   step_app_deps
   step_cuda_toolkit
@@ -858,13 +888,14 @@ main() {
   write_invocation "${step}"
 
   case "${step}" in
-    venv|all) guard_new_environment "${step}" ;;
+    base-venv|all) guard_new_environment "${step}" ;;
   esac
 
   case "${step}" in
     env) step_env ;;
     worktree) step_worktree ;;
     venv) step_venv ;;
+    base-venv) step_base_venv ;;
     torch) step_torch ;;
     app-deps) step_app_deps ;;
     cuda-toolkit) step_cuda_toolkit ;;
