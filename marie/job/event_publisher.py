@@ -1,6 +1,8 @@
 import asyncio
 import inspect
 import time
+import zlib
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, List, Optional, TypeVar, Union
 
@@ -12,17 +14,15 @@ T = TypeVar("T")
 
 class EventPublisher:
     """
-    EventPublisher with async event queue (global ordering)
+    EventPublisher with bounded, keyed async queues.
 
-    - Events are published into a FIFO queue (bounded to provide backpressure).
-    - A single dispatcher consumes the queue in strict order.
-    - Each event is delivered to all subscribers before the next event is processed.
-    - Guarantees global ordering across all events and subscribers (by default).
+    Events for one job are handled in order by the same worker. Unrelated jobs
+    can be delivered concurrently by different workers.
 
     Notes:
         - Sync subscribers run on a dedicated, bounded thread pool (not the default loop executor).
-        - A slow subscriber can still delay, but timeouts prevent indefinite stalls.
-        - Start the dispatcher via constructor (creates task) and stop via stop().
+        - Queue capacity is divided across workers to provide bounded backpressure.
+        - Start the workers via constructor (creates tasks) and stop via stop().
     """
 
     def __init__(
@@ -33,6 +33,7 @@ class EventPublisher:
         max_thread_workers: int = 4,
         warn_qsize_threshold: int = 256,
         publish_blocking: bool = False,
+        worker_count: int = 8,
     ):
         """
         :param max_queue_size: Bounded size for event queue.
@@ -40,13 +41,26 @@ class EventPublisher:
         :param max_thread_workers: Bounded pool size for sync subscribers.
         :param warn_qsize_threshold: Emit a warning when queue size reaches this value.
         :param publish_blocking: If True, publish() will await a queue slot; otherwise it drops when full.
+        :param worker_count: Number of keyed publisher workers.
         """
+        if worker_count <= 0:
+            raise ValueError("worker_count must be greater than zero")
+        if max_queue_size < worker_count:
+            raise ValueError("max_queue_size must be at least worker_count")
+
         self._subscribers: Dict[str, List[Callable[[str, T], None]]] = {}
-        self._queue: asyncio.Queue[tuple[str, T, float]] = asyncio.Queue(
-            maxsize=max_queue_size
+        base_size, extra_slots = divmod(max_queue_size, worker_count)
+        self._queues = tuple(
+            asyncio.Queue[tuple[str, T, float]](
+                maxsize=base_size + (1 if worker_id < extra_slots else 0)
+            )
+            for worker_id in range(worker_count)
         )
-        self._dispatcher_task: asyncio.Task | None = None
+        self.worker_count = worker_count
+        self.queue_capacity = max_queue_size
+        self._worker_tasks: list[asyncio.Task] = []
         self._stopped = asyncio.Event()
+        self._dequeue_times: deque[float] = deque()
 
         self._subscriber_timeout_s = max(0.0, float(subscriber_timeout_s))
         self._warn_qsize_threshold = max(0, int(warn_qsize_threshold))
@@ -59,15 +73,28 @@ class EventPublisher:
 
         self.start()
 
+    @property
+    def queue_size(self) -> int:
+        return sum(queue.qsize() for queue in self._queues)
+
+    @property
+    def queue_sizes(self) -> tuple[int, ...]:
+        return tuple(queue.qsize() for queue in self._queues)
+
+    async def join(self) -> None:
+        await asyncio.gather(*(queue.join() for queue in self._queues))
+
     def subscribe(
         self, event_type: Union[str, List[str]], subscriber: Callable[[str, T], None]
-    ):
+    ) -> None:
         if isinstance(event_type, str):
             event_type = [event_type]
         for et in event_type:
             self._subscribers.setdefault(et, []).append(subscriber)
 
-    def unsubscribe(self, event_type: str, subscriber: Callable[[str, T], None]):
+    def unsubscribe(
+        self, event_type: str, subscriber: Callable[[str, T], None]
+    ) -> None:
         if event_type in self._subscribers:
             self._subscribers[event_type].remove(subscriber)
             if not self._subscribers[event_type]:
@@ -75,7 +102,7 @@ class EventPublisher:
 
     async def publish(
         self, event_type: str, message: T, timeout_s: Optional[float] = None
-    ):
+    ) -> None:
         """
         Enqueue a message for dispatching.
 
@@ -92,15 +119,16 @@ class EventPublisher:
             "subscriber_count": len(self._subscribers.get(event_type, [])),
         }
         trace_job_event = isinstance(job_id, str) and bool(job_id)
+        worker_id = self._worker_for(job_id, event_type)
+        queue = self._queues[worker_id]
 
-        # Backpressure handling
         if self._publish_blocking:
             if timeout_s is None:
-                await self._queue.put((event_type, message, enqueued_at))
+                await queue.put((event_type, message, enqueued_at))
             else:
                 try:
                     await asyncio.wait_for(
-                        self._queue.put((event_type, message, enqueued_at)),
+                        queue.put((event_type, message, enqueued_at)),
                         timeout=timeout_s,
                     )
                 except asyncio.TimeoutError:
@@ -109,7 +137,10 @@ class EventPublisher:
                             "job_status_event_dropped",
                             **trace_fields,
                             reason="publish_timeout",
-                            queue_size=self._queue.qsize(),
+                            worker_id=worker_id,
+                            worker_queue_size=queue.qsize(),
+                            queue_size=self.queue_size,
+                            queue_capacity=self.queue_capacity,
                             elapsed_ms=(time.perf_counter() - publish_started) * 1000.0,
                         )
                     logger.error(
@@ -118,14 +149,17 @@ class EventPublisher:
                     return
         else:
             try:
-                self._queue.put_nowait((event_type, message, enqueued_at))
+                queue.put_nowait((event_type, message, enqueued_at))
             except asyncio.QueueFull:
                 if trace_job_event:
                     scheduler_trace(
                         "job_status_event_dropped",
                         **trace_fields,
                         reason="queue_full",
-                        queue_size=self._queue.qsize(),
+                        worker_id=worker_id,
+                        worker_queue_size=queue.qsize(),
+                        queue_size=self.queue_size,
+                        queue_capacity=self.queue_capacity,
                         elapsed_ms=(time.perf_counter() - publish_started) * 1000.0,
                     )
                 return
@@ -134,28 +168,26 @@ class EventPublisher:
             scheduler_trace(
                 "job_status_event_enqueued",
                 **trace_fields,
-                queue_size=self._queue.qsize(),
+                worker_id=worker_id,
+                worker_queue_size=queue.qsize(),
+                queue_size=self.queue_size,
+                queue_capacity=self.queue_capacity,
                 elapsed_ms=(time.perf_counter() - publish_started) * 1000.0,
             )
 
-        # Soft visibility into pressure
-        try:
-            qsz = self._queue.qsize()
-            if self._warn_qsize_threshold and qsz >= self._warn_qsize_threshold:
-                logger.warning(f"EventPublisher queue high-water mark: size={qsz}")
-        except Exception:
-            pass
+        queue_size = self.queue_size
+        if self._warn_qsize_threshold and queue_size >= self._warn_qsize_threshold:
+            logger.warning(f"EventPublisher queue high-water mark: size={queue_size}")
 
-    async def _dispatcher(self):
-        """
-        Dispatcher consumes events in strict FIFO order.
-        It processes all subscribers for an event concurrently, but applies per-subscriber timeouts.
-        """
+    async def _worker(self, worker_id: int) -> None:
         loop = asyncio.get_running_loop()
+        queue = self._queues[worker_id]
 
         while not self._stopped.is_set():
+            queued_event: tuple[str, T, float] | None = None
             try:
-                event_type, message, enqueued_at = await self._queue.get()
+                queued_event = await queue.get()
+                event_type, message, enqueued_at = queued_event
                 dispatch_started = time.perf_counter()
                 subscriber_count = len(self._subscribers.get(event_type, []))
                 job_id = message.get("job_id") if isinstance(message, dict) else None
@@ -169,40 +201,31 @@ class EventPublisher:
                     scheduler_trace(
                         "job_status_event_dequeued",
                         **trace_fields,
-                        queue_size=self._queue.qsize(),
+                        worker_id=worker_id,
+                        worker_queue_size=queue.qsize(),
+                        queue_size=self.queue_size,
+                        queue_capacity=self.queue_capacity,
                         queue_wait_ms=(dispatch_started - enqueued_at) * 1000.0,
+                        dequeue_rate_per_second=self._record_dequeue(dispatch_started),
                     )
                 timeout_count = 0
                 error_count = 0
+                delivery_started = time.perf_counter()
                 if event_type in self._subscribers:
-                    # Build tasks for all subscribers
                     subscriber_tasks = []
                     for subscriber in list(self._subscribers[event_type]):
                         try:
                             if inspect.iscoroutinefunction(subscriber):
-                                coro = subscriber(event_type, message)
-                                # Wrap with timeout if configured
-                                if self._subscriber_timeout_s > 0:
-                                    task = asyncio.create_task(
-                                        asyncio.wait_for(
-                                            coro, timeout=self._subscriber_timeout_s
-                                        )
-                                    )
-                                else:
-                                    task = asyncio.create_task(coro)
+                                delivery = subscriber(event_type, message)
                             else:
-                                fut = loop.run_in_executor(
+                                delivery = loop.run_in_executor(
                                     self._executor, subscriber, event_type, message
                                 )
-                                if self._subscriber_timeout_s > 0:
-                                    task = asyncio.create_task(
-                                        asyncio.wait_for(
-                                            fut, timeout=self._subscriber_timeout_s
-                                        )
-                                    )
-                                else:
-                                    task = asyncio.create_task(fut)
-                            subscriber_tasks.append(task)
+                            if self._subscriber_timeout_s > 0:
+                                delivery = asyncio.wait_for(
+                                    delivery, timeout=self._subscriber_timeout_s
+                                )
+                            subscriber_tasks.append(asyncio.ensure_future(delivery))
                         except Exception as e:
                             logger.error(f"Subscriber creation error: {e}")
 
@@ -219,37 +242,60 @@ class EventPublisher:
                                 error_count += 1
                                 logger.error(f"EventPublisher: subscriber error: {r}")
 
+                subscriber_delivery_ms = (
+                    time.perf_counter() - delivery_started
+                ) * 1000.0
                 if trace_job_event:
                     scheduler_trace(
                         "job_status_event_dispatch_completed",
                         **trace_fields,
-                        queue_size=self._queue.qsize(),
+                        worker_id=worker_id,
+                        worker_queue_size=queue.qsize(),
+                        queue_size=self.queue_size,
+                        queue_capacity=self.queue_capacity,
                         timeout_count=timeout_count,
                         error_count=error_count,
+                        subscriber_delivery_ms=subscriber_delivery_ms,
                         elapsed_ms=(time.perf_counter() - dispatch_started) * 1000.0,
                     )
-                self._queue.task_done()
             except asyncio.CancelledError:
-                break
+                raise
             except Exception as e:
                 logger.error(f"EventPublisher dispatcher error: {e}")
+            finally:
+                if queued_event is not None:
+                    queue.task_done()
 
-    def start(self):
-        if self._dispatcher_task is None:
-            self._dispatcher_task = asyncio.create_task(self._dispatcher())
+    def _worker_for(self, job_id: object, event_type: str) -> int:
+        routing_key = job_id if isinstance(job_id, str) and job_id else str(event_type)
+        return zlib.crc32(routing_key.encode("utf-8")) % self.worker_count
 
-    async def stop(self):
+    def _record_dequeue(self, now: float) -> float:
+        self._dequeue_times.append(now)
+        cutoff = now - 1.0
+        while self._dequeue_times and self._dequeue_times[0] < cutoff:
+            self._dequeue_times.popleft()
+        return float(len(self._dequeue_times))
+
+    def start(self) -> None:
+        if self._worker_tasks:
+            return
+        self._worker_tasks = [
+            asyncio.create_task(
+                self._worker(worker_id), name=f"event-publisher-{worker_id}"
+            )
+            for worker_id in range(self.worker_count)
+        ]
+
+    async def stop(self) -> None:
         """
-        Stop the dispatcher gracefully (best effort).
-        Note: Pending events in the queue are not drained on stop.
+        Stop publisher workers. Pending events are not drained.
         """
         self._stopped.set()
-        if self._dispatcher_task:
-            self._dispatcher_task.cancel()
-            try:
-                await self._dispatcher_task
-            except asyncio.CancelledError:
-                pass
-            self._dispatcher_task = None
+        for task in self._worker_tasks:
+            task.cancel()
+        if self._worker_tasks:
+            await asyncio.gather(*self._worker_tasks, return_exceptions=True)
+            self._worker_tasks.clear()
 
         self._executor.shutdown(wait=False)

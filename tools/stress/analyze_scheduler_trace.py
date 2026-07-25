@@ -1526,6 +1526,28 @@ def _print_terminal_handoff_report(
     print("\nTerminal Status Event Handoff")
     for label, key in handoff_keys:
         _print_distribution(label, _numeric_values(summaries, key))
+    _print_count_distribution(
+        "status publisher total queue depth",
+        _numeric_event_field(rows, "job_status_event_enqueued", "queue_size"),
+    )
+    _print_count_distribution(
+        "status publisher worker queue depth",
+        _numeric_event_field(rows, "job_status_event_enqueued", "worker_queue_size"),
+    )
+    _print_count_distribution(
+        "status publisher dequeue rate per second",
+        _numeric_event_field(
+            rows, "job_status_event_dequeued", "dequeue_rate_per_second"
+        ),
+    )
+    _print_distribution(
+        "status publisher subscriber delivery",
+        _numeric_event_field(
+            rows,
+            "job_status_event_dispatch_completed",
+            "subscriber_delivery_ms",
+        ),
+    )
     _print_distribution(
         "configured monitor poll sleep",
         _numeric_event_field(rows, "job_monitor_sleep_started", "wait_ms"),

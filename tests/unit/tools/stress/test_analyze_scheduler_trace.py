@@ -157,7 +157,9 @@ def test_terminal_feedback_reports_resolution_and_next_candidate(capsys) -> None
     assert "terminal to DAG-resolution start: count=1" in output
     assert "DAG resolution: count=1" in output
     assert "scheduler wake to next global candidate snapshot: count=2" in output
-    assert "terminal scheduler wakes: queued=1 coalesced=1 coalesced_pct=50.0%" in output
+    assert (
+        "terminal scheduler wakes: queued=1 coalesced=1 coalesced_pct=50.0%" in output
+    )
 
 
 def test_dispatch_capacity_excludes_unrelated_executors(capsys) -> None:
@@ -299,6 +301,8 @@ def test_terminal_handoff_uses_gateway_process_and_terminal_status(capsys) -> No
             job_id="job-1",
             pid=11,
             status="SUCCEEDED",
+            queue_size=3,
+            worker_queue_size=2,
         ),
         trace_row(
             "job_status_event_dequeued",
@@ -306,6 +310,7 @@ def test_terminal_handoff_uses_gateway_process_and_terminal_status(capsys) -> No
             job_id="job-1",
             pid=11,
             status="SUCCEEDED",
+            dequeue_rate_per_second=42.0,
         ),
         trace_row(
             "scheduler_job_event_enqueued",
@@ -320,6 +325,7 @@ def test_terminal_handoff_uses_gateway_process_and_terminal_status(capsys) -> No
             job_id="job-1",
             pid=11,
             status="SUCCEEDED",
+            subscriber_delivery_ms=12.0,
         ),
         trace_row(
             "scheduler_job_event_dequeued",
@@ -370,4 +376,8 @@ def test_terminal_handoff_uses_gateway_process_and_terminal_status(capsys) -> No
     output = capsys.readouterr().out
     assert "slot release to durable terminal acceptance: count=1" in output
     assert "executor terminal to supervisor send-task completion: count=1" in output
+    assert "status publisher total queue depth: count=1" in output
+    assert "status publisher worker queue depth: count=1" in output
+    assert "status publisher dequeue rate per second: count=1" in output
+    assert "status publisher subscriber delivery: count=1" in output
     assert "configured monitor poll sleep: count=1" in output
