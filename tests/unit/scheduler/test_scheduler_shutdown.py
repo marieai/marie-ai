@@ -10,6 +10,7 @@ from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.psql import PostgreSQLJobScheduler, _PendingDispatch
 from marie.scheduler.repository import JobRepository
 from marie.scheduler.services import SchedulerRuntime
+from marie.serve.runtimes.servers.cluster_state import ClusterState
 
 
 async def _wait_forever() -> None:
@@ -96,6 +97,8 @@ def _scheduler_for_start() -> PostgreSQLJobScheduler:
     scheduler._remove_event_subscriptions = MagicMock()
     scheduler.notify_event = AsyncMock(return_value=True)
     scheduler._renew_active_run_leases = AsyncMock()
+    scheduler._semaphore_store = MagicMock()
+    scheduler._semaphore_store.reconcile_all.return_value = {}
 
     async def close_resources() -> None:
         scheduler._resources_closed = True
@@ -133,6 +136,36 @@ async def test_start_tasks_observe_running_after_suspending_dependency_start() -
     await asyncio.sleep(0)
 
     assert observed_running == [True] * 7
+    scheduler._semaphore_store.reconcile_all.assert_called_once_with(
+        delete_orphan_holders=True,
+        fix_counters=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_deployment_update_requests_durable_admission(monkeypatch) -> None:
+    scheduler = _scheduler_for_start()
+    scheduler.running = True
+    scheduler.dag_service.request_admission = AsyncMock()
+    deployment_update = asyncio.Event()
+    monkeypatch.setattr(ClusterState, "deployment_update_event", deployment_update)
+
+    monitor = asyncio.create_task(
+        scheduler._PostgreSQLJobScheduler__monitor_deployment_updates()
+    )
+    await asyncio.sleep(0)
+    deployment_update.set()
+    deployment_update.clear()
+    async with asyncio.timeout(1):
+        while scheduler.dag_service.request_admission.await_count == 0:
+            await asyncio.sleep(0)
+    monitor.cancel()
+    await monitor
+
+    scheduler.dag_service.request_admission.assert_awaited_once_with(
+        "deployment_update"
+    )
+    scheduler.notify_event.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

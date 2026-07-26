@@ -62,9 +62,7 @@ class FakeRepository:
             (limit, sla_interval_seconds, tuple(excluded_dag_ids))
         )
         rows = [
-            row
-            for row in self._hydratable_dags
-            if str(row[0]) not in excluded_dag_ids
+            row for row in self._hydratable_dags if str(row[0]) not in excluded_dag_ids
         ]
         return rows[:limit]
 
@@ -467,6 +465,36 @@ async def test_admission_worker_uses_durable_candidate_function_and_stops() -> N
 
 
 @pytest.mark.asyncio
+async def test_admission_worker_retries_capacity_deferred_candidates(
+    monkeypatch,
+) -> None:
+    service, _, _ = make_service({"mock_executor_a": 0})
+    monkeypatch.setattr(
+        "marie.scheduler.services.dag_management_service.ADMISSION_RETRY_MIN_SECONDS",
+        0.01,
+    )
+    service.admit_durable_candidates = AsyncMock(
+        side_effect=[
+            {"candidates": 1, "admitted": 0, "deferred": 1, "skipped": 0},
+            {"candidates": 0, "admitted": 0, "deferred": 0, "skipped": 0},
+        ]
+    )
+
+    await service.start_admission()
+    async with asyncio.timeout(1):
+        while service.admit_durable_candidates.await_count < 2:
+            await asyncio.sleep(0)
+    await service.stop_admission()
+
+    assert service.admit_durable_candidates.await_args_list[0].kwargs == {
+        "source": "startup"
+    }
+    assert service.admit_durable_candidates.await_args_list[1].kwargs == {
+        "source": "deferred_retry"
+    }
+
+
+@pytest.mark.asyncio
 async def test_hydrated_dag_with_only_unavailable_mock_ready_work_is_not_admitted():
     repo = FakeRepository(priorities={}, hydratable_dags=[])
     service, frontier, active_dags = make_service(
@@ -543,9 +571,7 @@ async def test_durable_admission_hydrates_only_the_overscan_window():
             for dag_id in dag_ids
         },
     )
-    service, _, _ = make_service(
-        {"mock_executor_a": 1}, max_active_dags=1, repo=repo
-    )
+    service, _, _ = make_service({"mock_executor_a": 1}, max_active_dags=1, repo=repo)
 
     result = await service.admit_durable_candidates(source="test")
 

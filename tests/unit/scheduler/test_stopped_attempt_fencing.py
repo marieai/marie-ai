@@ -25,6 +25,7 @@ def build_work_item() -> SimpleNamespace:
         id=JOB_ID,
         dag_id="00000000-0000-0000-0000-000000000010",
         name="extract",
+        data={"metadata": {"on": "extract://default"}},
         state=WorkState.ACTIVE,
         run_owner="owner-b",
         run_attempt_id=ATTEMPT_B,
@@ -47,8 +48,13 @@ def build_scheduler(
     scheduler._job_cache = {}
     scheduler.frontier = SimpleNamespace(on_job_cancelled=AsyncMock())
     scheduler._scheduler_counter = MagicMock()
+    scheduler._semaphore_store = MagicMock()
+    scheduler._semaphore_store.renew.return_value = True
     scheduler._ha_trace_fields = MagicMock(return_value={})
-    scheduler.dag_service = SimpleNamespace(resolve_dag_status_with_retry=AsyncMock())
+    scheduler.dag_service = SimpleNamespace(
+        resolve_dag_status_with_retry=AsyncMock(),
+        request_admission=AsyncMock(),
+    )
     scheduler.notify_event = AsyncMock()
     scheduler.lease_owner = "scheduler"
     scheduler.gateway_instance_id = "gateway"
@@ -237,9 +243,7 @@ async def test_storage_sync_defers_recent_terminal_mismatch() -> None:
     message = scheduler.logger.info.call_args.args[0]
     assert message.startswith("Terminal state mismatch detected")
     assert "repair_grace_seconds=300" in message
-    terminal_age = float(
-        message.split("terminal_age_seconds=", 1)[1].split(",", 1)[0]
-    )
+    terminal_age = float(message.split("terminal_age_seconds=", 1)[1].split(",", 1)[0])
     assert 5 <= terminal_age < 10
 
 
@@ -303,9 +307,7 @@ async def test_storage_sync_logs_repair_after_terminal_grace() -> None:
     message = scheduler.logger.info.call_args.args[0]
     assert message.startswith("Repairing terminal state mismatch")
     assert "repair_grace_seconds=300" in message
-    terminal_age = float(
-        message.split("terminal_age_seconds=", 1)[1].split(",", 1)[0]
-    )
+    terminal_age = float(message.split("terminal_age_seconds=", 1)[1].split(",", 1)[0])
     assert terminal_age >= 300
 
 
@@ -323,9 +325,7 @@ async def test_pending_job_renews_matching_run_lease() -> None:
     )
     scheduler.list_jobs = AsyncMock(return_value={JOB_ID: work_item})
     scheduler.job_manager = SimpleNamespace(
-        job_info_client=MagicMock(
-            return_value=SimpleNamespace(get_info=get_info)
-        )
+        job_info_client=MagicMock(return_value=SimpleNamespace(get_info=get_info))
     )
     scheduler._extend_run_lease_db = AsyncMock(return_value={JOB_ID})
 
@@ -334,6 +334,12 @@ async def test_pending_job_renews_matching_run_lease() -> None:
     scheduler._extend_run_lease_db.assert_awaited_once_with(
         [JOB_ID],
         run_owner=work_item.run_owner,
+        run_attempt_id=work_item.run_attempt_id,
+    )
+    scheduler._semaphore_store.renew.assert_called_once_with(
+        "extract",
+        JOB_ID,
+        owner=JOB_ID,
         run_attempt_id=work_item.run_attempt_id,
     )
 

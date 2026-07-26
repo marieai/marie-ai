@@ -16,6 +16,8 @@ from marie.scheduler.util import executor_name, is_control_flow_entrypoint
 from marie.utils.scheduler_trace import scheduler_trace
 
 ADMISSION_OVERSCAN = 4
+ADMISSION_RETRY_MIN_SECONDS = 1.0
+ADMISSION_RETRY_MAX_SECONDS = 5.0
 
 
 class DAGManagementService:
@@ -203,11 +205,28 @@ class DAGManagementService:
                 await self._admission_event.wait()
                 self._admission_event.clear()
                 source = self._admission_source
+                retry_delay = ADMISSION_RETRY_MIN_SECONDS
 
                 while self._admission_running:
                     result = await self.admit_durable_candidates(source=source)
                     if result["admitted"] == 0:
-                        break
+                        if result["deferred"] == 0:
+                            break
+                        try:
+                            await asyncio.wait_for(
+                                self._admission_event.wait(), timeout=retry_delay
+                            )
+                        except asyncio.TimeoutError:
+                            source = "deferred_retry"
+                            retry_delay = min(
+                                retry_delay * 2, ADMISSION_RETRY_MAX_SECONDS
+                            )
+                        else:
+                            self._admission_event.clear()
+                            source = self._admission_source
+                            retry_delay = ADMISSION_RETRY_MIN_SECONDS
+                        continue
+                    retry_delay = ADMISSION_RETRY_MIN_SECONDS
                     if (
                         self.max_active_dags > 0
                         and len(self.active_dags) >= self.max_active_dags

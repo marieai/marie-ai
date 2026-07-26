@@ -4,6 +4,7 @@ import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -817,6 +818,48 @@ async def test_recovered_failure_updates_frontier_and_dag_failure_path(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_recovered_retry_hydrates_missing_dag_before_frontier_retry() -> None:
+    dag_id = "dag-recovered-retry"
+    retry_job = build_work_item("job-recovered-retry", dag_id)
+    retry_job.state = WorkState.RETRY
+    frontier = RecordingFrontier()
+    repository = RecordingRepository(dag_state="active")
+    repository.get_job_by_id = AsyncMock(return_value=retry_job)
+    scheduler = build_scheduler(repository, frontier)
+    hydrated: list[str] = []
+
+    async def hydrate(dag_to_hydrate: str) -> bool:
+        hydrated.append(dag_to_hydrate)
+        scheduler.active_dags[dag_to_hydrate] = object()
+        await frontier.add_dag(None, [retry_job])
+        return True
+
+    scheduler.hydrate_single_dag_from_db = hydrate
+
+    await scheduler._reconcile_recovered_run_leases(
+        [
+            RecoveredRunLease(
+                id=retry_job.id,
+                name=retry_job.name,
+                previous_state=WorkState.ACTIVE.value,
+                recovered_state="retry",
+                dag_id=dag_id,
+                retry_count=1,
+                retry_limit=retry_job.retry_limit,
+                start_after=retry_job.start_after,
+                previous_run_owner="dead-scheduler",
+                previous_run_attempt_id="06a0ac88-5326-7f90-8000-111111111111",
+            )
+        ]
+    )
+
+    assert hydrated == [dag_id]
+    assert retry_job.id in frontier.jobs_by_id
+    assert frontier.jobs_by_id[retry_job.id].state == WorkState.RETRY
+    assert not scheduler.dag_service._admission_event.is_set()
+
+
+@pytest.mark.asyncio
 async def test_late_success_for_old_run_attempt_updates_zero_rows(monkeypatch):
     work_item = build_work_item("job-late-success", "dag-late-success")
     work_item.state = WorkState.ACTIVE
@@ -1098,6 +1141,13 @@ async def test_scheduler_start_initializes_notifications_before_admission(
         async def start_sync(self):
             order.append("dag_sync_start")
 
+    class SemaphoreStore:
+        def reconcile_all(self, *, delete_orphan_holders, fix_counters):
+            assert delete_orphan_holders is True
+            assert fix_counters is True
+            order.append("semaphore_reconcile")
+            return {}
+
     class DummyTask:
         def __init__(self, coro):
             self._coro = coro
@@ -1119,6 +1169,7 @@ async def test_scheduler_start_initializes_notifications_before_admission(
     scheduler.notification_service = NotificationService()
     scheduler.maintenance_service = MaintenanceService()
     scheduler.dag_service = DagService()
+    scheduler._semaphore_store = SemaphoreStore()
     scheduler.max_workers = 0
     scheduler._lifecycle_lock = asyncio.Lock()
     scheduler.running = False
@@ -1154,9 +1205,8 @@ async def test_scheduler_start_initializes_notifications_before_admission(
     await scheduler.start()
 
     assert order.index("notification_start") < order.index("admission_start")
-    assert order.index("initial_run_lease_renewal") < order.index(
-        "maintenance_start"
-    )
+    assert order.index("semaphore_reconcile") < order.index("admission_start")
+    assert order.index("initial_run_lease_renewal") < order.index("maintenance_start")
     assert order[-1] == "notify_event"
 
 

@@ -1,3 +1,4 @@
+import asyncio
 from unittest import mock
 
 import pytest
@@ -12,7 +13,9 @@ from marie.serve.runtimes.servers.marie_gateway import (
     STATUS_DEGRADED_LIVE_MISSING,
     STATUS_DEGRADED_REASON,
     STATUS_DEGRADED_SINCE,
+    EventKind,
     MarieServerGateway,
+    StateEvent,
 )
 from marie.state.state_store import DesiredDoc, StatusDoc
 
@@ -187,6 +190,226 @@ def test_live_status_miss_marks_degraded_instead_of_gc():
         == "gateway_status_degraded_live_node"
         for _, _, kwargs in gateway.logger.records
     )
+
+
+def test_degraded_registration_is_excluded_from_routing():
+    gateway = _gateway(
+        DesiredDoc(
+            phase="SCHEDULED",
+            epoch=10,
+            params={},
+            updated_at="2026-05-14T17:02:00Z",
+        )
+    )
+    gateway.deployment_nodes = {
+        "extract_executor": [
+            {"address": "grpc://node-a:5000"},
+            {"address": "grpc://node-b:5000"},
+        ]
+    }
+    gateway.desired_map = {
+        ("node-a:5000", "extract_executor"): DesiredDoc(
+            phase="SCHEDULED",
+            epoch=10,
+            params={},
+            updated_at="2026-05-14T17:02:00Z",
+        ),
+        ("node-b:5000", "extract_executor"): DesiredDoc(
+            phase="SCHEDULED",
+            epoch=20,
+            params={STATUS_DEGRADED_SINCE: "2026-05-14T17:03:00Z"},
+            updated_at="2026-05-14T17:03:00Z",
+        ),
+    }
+    gateway.status_map = {
+        ("node-a:5000", "extract_executor"): StatusDoc(
+            status_code=HealthCheckResponse.SERVING,
+            status_name="SERVING",
+            owner="worker-a",
+            epoch=10,
+            updated_at="2026-05-14T17:03:00Z",
+            heartbeat_at="2026-05-14T17:03:00Z",
+            details=None,
+        )
+    }
+
+    assert gateway._address_is_registered("node-b:5000", "extract_executor")
+    assert gateway._address_is_live("node-a:5000", "extract_executor")
+    assert not gateway._address_is_live("node-b:5000", "extract_executor")
+    assert gateway._routable_deployment_nodes() == {
+        "extract_executor": [{"address": "grpc://node-a:5000"}]
+    }
+
+
+def test_deployment_projection_uses_each_address_status():
+    gateway = _gateway(
+        DesiredDoc(
+            phase="SCHEDULED",
+            epoch=10,
+            params={},
+            updated_at="2026-05-14T17:02:00Z",
+        )
+    )
+    gateway.deployment_nodes = {
+        "extract_executor": [
+            {"address": "grpc://node-a:5000"},
+            {"address": "grpc://node-b:5000"},
+        ]
+    }
+    gateway.desired_map = {}
+    gateway.status_map = {
+        ("node-a:5000", "extract_executor"): StatusDoc(
+            status_code=HealthCheckResponse.SERVING,
+            status_name="SERVING",
+            owner="worker-a",
+            epoch=10,
+            updated_at="2026-05-14T17:03:00Z",
+            heartbeat_at="2026-05-14T17:03:00Z",
+            details=None,
+        ),
+        ("node-b:5000", "extract_executor"): StatusDoc(
+            status_code=HealthCheckResponse.NOT_SERVING,
+            status_name="NOT_SERVING",
+            owner="worker-b",
+            epoch=11,
+            updated_at="2026-05-14T17:03:00Z",
+            heartbeat_at="2026-05-14T17:03:00Z",
+            details=None,
+        ),
+    }
+
+    with mock.patch(
+        "marie.serve.runtimes.servers.marie_gateway.available_slots_by_executor",
+        return_value={},
+    ):
+        gateway._rebuild_deployments_projection()
+
+    assert gateway.deployments["node-a:5000"]["status"] == "SERVING"
+    assert gateway.deployments["node-b:5000"]["status"] == "NOT_SERVING"
+
+
+@pytest.mark.asyncio
+async def test_quarantine_and_recovery_refresh_routing_and_capacity():
+    gateway = _gateway(
+        DesiredDoc(
+            phase="SCHEDULED",
+            epoch=10,
+            params={},
+            updated_at="2026-05-14T17:02:00Z",
+        )
+    )
+    gateway.deployment_nodes = {
+        "extract_executor": [{"address": "grpc://node:1"}]
+    }
+    gateway.desired_map = {
+        ("node:1", "extract_executor"): DesiredDoc(
+            phase="SCHEDULED",
+            epoch=10,
+            params={},
+            updated_at="2026-05-14T17:02:00Z",
+        )
+    }
+    gateway.state_events_queue = asyncio.Queue()
+    gateway._rebuild_deployments_projection = mock.Mock()
+    gateway._schedule_rebuild = mock.Mock()
+    gateway._publish_capacity_event = mock.AsyncMock()
+    processor = asyncio.create_task(gateway.process_state_events())
+
+    await gateway.state_events_queue.put(
+        StateEvent(
+            kind=EventKind.DESIRED,
+            node="node:1",
+            deployment="extract_executor",
+            ev_type="put",
+            value={
+                "node:1": {
+                    "extract_executor": {
+                        "phase": "SCHEDULED",
+                        "epoch": 10,
+                        "params": {
+                            STATUS_DEGRADED_SINCE: "2026-05-14T17:03:00Z"
+                        },
+                        "updated_at": "2026-05-14T17:03:00Z",
+                    }
+                }
+            },
+            key="deployments/node:1/extract_executor/desired",
+        )
+    )
+    await asyncio.wait_for(gateway.state_events_queue.join(), timeout=1)
+
+    gateway._schedule_rebuild.assert_called_once_with(True)
+    gateway._publish_capacity_event.assert_awaited_once()
+
+    gateway._schedule_rebuild.reset_mock()
+    gateway._publish_capacity_event.reset_mock()
+    await gateway.state_events_queue.put(
+        StateEvent(
+            kind=EventKind.DESIRED,
+            node="node:1",
+            deployment="extract_executor",
+            ev_type="put",
+            value={
+                "node:1": {
+                    "extract_executor": {
+                        "phase": "SCHEDULED",
+                        "epoch": 10,
+                        "params": {},
+                        "updated_at": "2026-05-14T17:04:00Z",
+                    }
+                }
+            },
+            key="deployments/node:1/extract_executor/desired",
+        )
+    )
+    await asyncio.wait_for(gateway.state_events_queue.join(), timeout=1)
+
+    gateway._schedule_rebuild.assert_called_once_with(True)
+    gateway._publish_capacity_event.assert_awaited_once()
+
+    processor.cancel()
+    await asyncio.gather(processor, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_gateway_streamer_receives_only_routable_nodes():
+    gateway = _gateway(
+        DesiredDoc(
+            phase="SCHEDULED",
+            epoch=10,
+            params={},
+            updated_at="2026-05-14T17:02:00Z",
+        )
+    )
+    gateway.deployment_nodes = {
+        "extract_executor": [
+            {"address": "grpc://node-a:5000"},
+            {"address": "grpc://node-b:5000"},
+        ]
+    }
+    gateway.desired_map = {
+        ("node-b:5000", "extract_executor"): DesiredDoc(
+            phase="SCHEDULED",
+            epoch=20,
+            params={STATUS_DEGRADED_SINCE: "2026-05-14T17:03:00Z"},
+            updated_at="2026-05-14T17:03:00Z",
+        )
+    }
+    gateway.deployments = {}
+    gateway._can_update_incrementally = mock.Mock(return_value=True)
+    gateway._apply_incremental_updates = mock.AsyncMock()
+    gateway.streamer = mock.Mock()
+    gateway.streamer.topology_graph.all_nodes = []
+    gateway.distributor = mock.Mock()
+
+    await gateway.update_gateway_streamer()
+
+    gateway._apply_incremental_updates.assert_awaited_once_with(
+        {"extract_executor": ["node-a:5000"]}
+    )
+    assert gateway.distributor.deployment_nodes == {
+        "extract_executor": [{"address": "grpc://node-a:5000"}]
+    }
 
 
 def test_reset_miss_metadata_removes_only_reconcile_metadata():

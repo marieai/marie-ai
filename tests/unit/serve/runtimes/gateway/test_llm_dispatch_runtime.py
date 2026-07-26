@@ -2,7 +2,6 @@ import asyncio
 from unittest import mock
 
 import pytest
-
 from marie.engine.llm_queue.config import (
     DEFAULT_LLM_QUEUE_POOL_ID,
     DEFAULT_MAX_INLINE_PAYLOAD_BYTES,
@@ -16,6 +15,7 @@ from marie.engine.llm_queue.scheduler_config import (
     StaticSchedulerConfigSource,
     scheduler_config_from_mapping,
 )
+
 from marie.excepts import RuntimeFailToStart
 from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (
     GatewayLlmDispatchRuntime,
@@ -654,9 +654,17 @@ async def test_gateway_background_shutdown_is_idempotent():
         async def stop(self):
             self.calls += 1
 
+    class _SyncStopper:
+        def __init__(self):
+            self.calls = 0
+
+        def shutdown(self):
+            self.calls += 1
+
     gateway = object.__new__(MarieServerGateway)
     gateway.logger = _Logger()
     gateway.job_scheduler = _AsyncStopper()
+    gateway.job_manager = _SyncStopper()
     gateway.grpc_broker = _AsyncStopper()
     gateway.llm_dispatch_runtime = _AsyncStopper()
     gateway._background_services_shutdown = False
@@ -666,5 +674,6 @@ async def test_gateway_background_shutdown_is_idempotent():
     await gateway._shutdown_background_services()
 
     assert gateway.job_scheduler.calls == 1
+    assert gateway.job_manager.calls == 1
     assert gateway.grpc_broker.calls == 1
     assert gateway.llm_dispatch_runtime.calls == 1

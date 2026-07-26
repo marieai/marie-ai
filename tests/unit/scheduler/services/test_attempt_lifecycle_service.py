@@ -36,7 +36,10 @@ def build_service(*, work_state: WorkState = WorkState.ACTIVE) -> SimpleNamespac
         on_job_failed=AsyncMock(),
         on_job_cancelled=AsyncMock(),
     )
-    dag_service = SimpleNamespace(resolve_dag_status_with_retry=AsyncMock())
+    dag_service = SimpleNamespace(
+        resolve_dag_status_with_retry=AsyncMock(),
+        request_admission=AsyncMock(),
+    )
     control_flow_service = SimpleNamespace(
         commit_guardrail_route_if_needed=AsyncMock(return_value=None),
         handle_successful_job_completion=AsyncMock(),
@@ -105,6 +108,9 @@ async def test_success_uses_the_same_fenced_transition_for_each_source(
         context.work_item,
         source=source,
     )
+    context.dag_service.request_admission.assert_awaited_once_with(
+        "executor_capacity_released"
+    )
     context.notify.assert_awaited_once_with()
     audit = context.repository.record_job_attempt_terminal.await_args.kwargs
     assert audit["source"] == source
@@ -145,6 +151,9 @@ async def test_retry_reconciles_memory_and_wakes_without_resolving_dag(
     context.frontier.on_job_retry.assert_awaited_once_with(JOB_ID, context.work_item)
     context.frontier.on_job_failed.assert_not_awaited()
     context.dag_service.resolve_dag_status_with_retry.assert_not_awaited()
+    context.dag_service.request_admission.assert_awaited_once_with(
+        "executor_capacity_released"
+    )
     context.notify.assert_awaited_once_with()
 
 
@@ -170,6 +179,7 @@ async def test_stale_attempt_is_audited_and_does_not_change_memory(
     assert context.job_cache == {}
     context.control_flow_service.handle_successful_job_completion.assert_not_awaited()
     context.dag_service.resolve_dag_status_with_retry.assert_not_awaited()
+    context.dag_service.request_admission.assert_not_awaited()
     context.notify.assert_not_awaited()
     audit = context.repository.record_job_attempt_terminal.await_args.kwargs
     assert audit["accepted"] is False
@@ -205,6 +215,9 @@ async def test_stopped_attempt_clears_attempt_identity_after_commit() -> None:
     assert context.work_item.run_attempt_id is None
     context.frontier.on_job_cancelled.assert_awaited_once_with(JOB_ID)
     context.dag_service.resolve_dag_status_with_retry.assert_awaited_once()
+    context.dag_service.request_admission.assert_awaited_once_with(
+        "executor_capacity_released"
+    )
     context.notify.assert_awaited_once_with()
 
 

@@ -1712,7 +1712,7 @@ class MarieServerGateway(CompositeServer):
             return []
 
         gateways_by_node: dict[tuple[str, str], set[str]] = {}
-        for executor, nodes in self.deployment_nodes.items():
+        for executor, nodes in self._routable_deployment_nodes().items():
             for node in nodes:
                 address = node.get("address") or ""
                 parsed_address = urlparse(address)
@@ -1785,7 +1785,7 @@ class MarieServerGateway(CompositeServer):
         """Publish current capacity state as an event."""
         try:
             rows, totals, summary = self.capacity_manager.refresh_from_nodes(
-                self.deployment_nodes
+                self._routable_deployment_nodes()
             )
             self.logger.info(summary)
 
@@ -2081,7 +2081,7 @@ class MarieServerGateway(CompositeServer):
     async def _refresh_discovery_projection(self, update_gateway: bool) -> None:
         async with self._streamer_update_lock:
             self.logger.debug("Rebuilding deployments projection...")
-            ClusterState.deployment_nodes = self.deployment_nodes
+            ClusterState.deployment_nodes = self._routable_deployment_nodes()
             self._rebuild_deployments_projection()
             if update_gateway:
                 await self.update_gateway_streamer()
@@ -2212,6 +2212,7 @@ class MarieServerGateway(CompositeServer):
         while True:
             ev: StateEvent = await self.state_events_queue.get()
             try:
+                routing_nodes_before = self._routable_deployment_nodes()
                 if ev.kind == EventKind.DESIRED:
                     if ev.ev_type == "delete":
                         self.desired_map.pop((ev.node, ev.deployment), None)
@@ -2240,7 +2241,9 @@ class MarieServerGateway(CompositeServer):
 
                 # Keep legacy projections in sync
                 self._rebuild_deployments_projection()
-                # self._schedule_rebuild(False)
+                if routing_nodes_before != self._routable_deployment_nodes():
+                    self._schedule_rebuild(True)
+                    await self._publish_capacity_event()
                 error_counter = 0
 
             except Exception as ex:
@@ -2473,7 +2476,8 @@ class MarieServerGateway(CompositeServer):
         #     "extract_executor": ["end-gateway"]
         # }
 
-        executors_ = sorted(self.deployment_nodes)
+        routing_nodes = self._routable_deployment_nodes()
+        executors_ = sorted(routing_nodes)
         graph_description = {
             "start-gateway": executors_,
         }
@@ -2484,7 +2488,7 @@ class MarieServerGateway(CompositeServer):
 
         deployments_metadata = {"deployment0": {"key": "value"}}
         deployments_addresses = {}
-        for i, (executor, nodes) in enumerate(self.deployment_nodes.items()):
+        for executor, nodes in routing_nodes.items():
             connections = []
             for node in nodes:
                 address = node["address"]
@@ -2511,7 +2515,7 @@ class MarieServerGateway(CompositeServer):
         self._last_graph_description = graph_description
         self._last_deployments_addresses = deployments_addresses
 
-        self.distributor.deployment_nodes = self.deployment_nodes
+        self.distributor.deployment_nodes = routing_nodes
 
         self.logger.debug(f'topology_graph : {self.streamer.topology_graph}')
         self.logger.debug("-----------------------------")
@@ -2522,7 +2526,7 @@ class MarieServerGateway(CompositeServer):
 
         # FIXME : this was a bad idea, we need to use the same deployment
         ClusterState.deployments = self.deployments
-        ClusterState.deployment_nodes = self.deployment_nodes
+        ClusterState.deployment_nodes = routing_nodes
 
     def _can_update_incrementally(self, new_graph: dict) -> bool:
         """
@@ -2693,18 +2697,65 @@ class MarieServerGateway(CompositeServer):
         except Exception as e:
             self.logger.error(f"status_changed error for {ev_key}: {e}")
 
-    def _address_is_live(self, node: str) -> bool:
-        # node is "host:port"
-        # check against what your discovery currently sees
-        for _, nodes in self.deployment_nodes.items():
+    def _address_is_registered(self, node: str, depl: str) -> bool:
+        for registered_depl, nodes in self.deployment_nodes.items():
+            if registered_depl != depl:
+                continue
             for n in nodes:
-                # n["address"] is like "grpc://host:port" or "host:port"
-                addr = n.get("address") or ""
-                if "://" in addr:
-                    addr = addr.split("://", 1)[1]
-                if addr == node:
+                if _netloc(n.get("address") or "") == node:
                     return True
         return False
+
+    def _desired_params(
+        self,
+        node: str,
+        depl: str,
+        desired: Optional[DesiredDoc] = None,
+    ) -> Dict[str, Any]:
+        doc = desired if desired is not None else self.desired_map.get((node, depl))
+        if isinstance(doc, DesiredDoc):
+            return doc.params or {}
+        if isinstance(doc, dict):
+            params = doc.get("params")
+            return params if isinstance(params, dict) else {}
+        return {}
+
+    def _address_is_live(
+        self,
+        node: str,
+        depl: str,
+        desired: Optional[DesiredDoc] = None,
+        status: Optional[StatusDoc] = None,
+    ) -> bool:
+        if not self._address_is_registered(node, depl):
+            return False
+        if self._desired_params(node, depl, desired).get(STATUS_DEGRADED_SINCE):
+            return False
+
+        status_doc = status or self.status_map.get((node, depl))
+        if status_doc is None:
+            return False
+
+        desired_doc = desired or self.desired_map.get((node, depl))
+        desired_epoch = getattr(desired_doc, "epoch", None)
+        status_epoch = getattr(status_doc, "epoch", None)
+        if isinstance(desired_doc, dict):
+            desired_epoch = desired_doc.get("epoch")
+        if isinstance(status_doc, dict):
+            status_epoch = status_doc.get("epoch")
+        return desired_epoch is None or status_epoch == desired_epoch
+
+    def _routable_deployment_nodes(self) -> Dict[str, list[dict[str, Any]]]:
+        routable: Dict[str, list[dict[str, Any]]] = {}
+        for executor, nodes in self.deployment_nodes.items():
+            routable[executor] = [
+                node
+                for node in nodes
+                if not self._desired_params(
+                    _netloc(node.get("address") or ""), executor
+                ).get(STATUS_DEGRADED_SINCE)
+            ]
+        return routable
 
     def _incr_miss_and_maybe_gc(
         self,
@@ -2728,7 +2779,8 @@ class MarieServerGateway(CompositeServer):
         misses = int(params.get("misses", 0))
         missing_since = str(params.get("missing_since") or updated.updated_at)
         too_old = is_stale(missing_since, MAX_AGE_S)
-        node_live = self._address_is_live(node)
+        node_registered = self._address_is_registered(node, depl)
+        node_live = self._address_is_live(node, depl, updated)
         log_extra = {
             **(bump_context or {}),
             "event_type": (
@@ -2742,6 +2794,7 @@ class MarieServerGateway(CompositeServer):
             "misses": misses,
             "missing_since": missing_since,
             "node_live": node_live,
+            "node_registered": node_registered,
             "too_old": too_old,
             "degraded_live_node": bool(params.get(STATUS_DEGRADED_SINCE)),
         }
@@ -2751,7 +2804,7 @@ class MarieServerGateway(CompositeServer):
         )
 
         if misses >= MAX_MISSES or too_old:
-            if node_live:
+            if node_registered:
                 if not params.get(STATUS_DEGRADED_SINCE):
 
                     def mark_degraded(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -2766,7 +2819,7 @@ class MarieServerGateway(CompositeServer):
                         degraded_doc.params if degraded_doc else {}
                     ) or {}
                     self.logger.warning(
-                        "Status degraded for live node; suppressing epoch bumps",
+                        "Status degraded for registered node; quarantining from routing",
                         extra={
                             **log_extra,
                             "event_type": "gateway_status_degraded_live_node",
@@ -2780,7 +2833,6 @@ class MarieServerGateway(CompositeServer):
                         },
                     )
                 return False
-            # only GC if the address is not currently live; this avoids killing an actually active worker that’s lagging
             self.logger.warning(
                 f"GC misses={misses}, too_old={too_old}. Deleting desired+status subtree : {node}/{depl}",
                 extra={
@@ -2808,7 +2860,8 @@ class MarieServerGateway(CompositeServer):
         reason: str = "status_missing",
     ) -> bool:
         suppressed = bool(
-            self._address_is_live(node) and (d.params or {}).get(STATUS_DEGRADED_SINCE)
+            self._address_is_registered(node, depl)
+            and (d.params or {}).get(STATUS_DEGRADED_SINCE)
         )
         if suppressed:
             params = d.params or {}
@@ -2822,7 +2875,8 @@ class MarieServerGateway(CompositeServer):
                     "desired_epoch": d.epoch,
                     "status_epoch": st.epoch if st else None,
                     "misses": int(params.get("misses", 0)),
-                    "node_live": True,
+                    "node_live": False,
+                    "node_registered": True,
                     "degraded_live_node": True,
                     "status_degraded_since": params.get(STATUS_DEGRADED_SINCE),
                     "status_degraded_reason": params.get(STATUS_DEGRADED_REASON),
@@ -2845,7 +2899,8 @@ class MarieServerGateway(CompositeServer):
             "desired_epoch": d.epoch,
             "status_epoch": st.epoch if st else None,
             "misses": int(params.get("misses", 0)),
-            "node_live": self._address_is_live(node),
+            "node_live": self._address_is_live(node, depl, d, st),
+            "node_registered": self._address_is_registered(node, depl),
             "degraded_live_node": bool(params.get(STATUS_DEGRADED_SINCE)),
             "status_degraded_since": params.get(STATUS_DEGRADED_SINCE),
             "status_degraded_reason": params.get(STATUS_DEGRADED_REASON),
@@ -2888,7 +2943,8 @@ class MarieServerGateway(CompositeServer):
                     "deployment": depl,
                     "desired_epoch": updated.epoch,
                     "misses": int(before_params.get("misses", 0)),
-                    "node_live": self._address_is_live(node),
+                    "node_live": self._address_is_live(node, depl, updated),
+                    "node_registered": self._address_is_registered(node, depl),
                     "degraded_live_node": bool(
                         before_params.get(STATUS_DEGRADED_SINCE)
                     ),
@@ -2985,21 +3041,6 @@ class MarieServerGateway(CompositeServer):
             finally:
                 await asyncio.sleep(interval_s)
 
-    def _choose_status_name(self, docs: list[StatusDoc]) -> str:
-        """
-        SERVING > NOT_SERVING > SERVICE_UNKNOWN > UNKNOWN
-        """
-        if not docs:
-            return "SERVICE_UNKNOWN"
-        names = {d.status_name for d in docs if d}
-        if "SERVING" in names:
-            return "SERVING"
-        if "NOT_SERVING" in names:
-            return "NOT_SERVING"
-        if "SERVICE_UNKNOWN" in names:
-            return "SERVICE_UNKNOWN"
-        return "UNKNOWN"
-
     def _rebuild_deployments_projection(self) -> None:
         """
         Recreate self.deployments with the legacy format:
@@ -3008,15 +3049,8 @@ class MarieServerGateway(CompositeServer):
                              'executor': '<executor>',
                              'status': '<STATUS_NAME>' } }
         """
-        # Index status docs by deployment/executor name
-        by_depl: dict[str, list[StatusDoc]] = {}
-        for (_, depl), st in self.status_map.items():
-            by_depl.setdefault(depl, []).append(st)
-
         new_deployments: dict[str, dict] = {}
         for executor, nodes in self.deployment_nodes.items():
-            # One status per executor (all addresses for that executor get same status)
-            status_name = self._choose_status_name(by_depl.get(executor, []))
             # Many nodes share same address but different endpoints; we want 1 entry per address.
             seen_addrs = set()
             for n in nodes:
@@ -3025,6 +3059,16 @@ class MarieServerGateway(CompositeServer):
                 if not hostport or hostport in seen_addrs:
                     continue
                 seen_addrs.add(hostport)
+
+                status = self.status_map.get((hostport, executor))
+                if self._desired_params(hostport, executor).get(STATUS_DEGRADED_SINCE):
+                    status_name = "SERVICE_UNKNOWN"
+                elif isinstance(status, StatusDoc):
+                    status_name = status.status_name
+                elif isinstance(status, dict):
+                    status_name = str(status.get("status_name") or "SERVICE_UNKNOWN")
+                else:
+                    status_name = "SERVICE_UNKNOWN"
 
                 new_deployments[hostport] = {
                     "prefix": "deployments/status",  # keep this literal to match expectations

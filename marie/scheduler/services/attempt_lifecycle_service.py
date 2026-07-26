@@ -304,6 +304,7 @@ class AttemptLifecycleService:
                 elapsed_ms=(time.perf_counter() - resolution_started) * 1000.0,
             )
         wake_started = time.perf_counter()
+        await self.dag_service.request_admission("executor_capacity_released")
         wake_queued = await self._notify_callback()
         scheduler_trace(
             'terminal_scheduler_wake_completed',

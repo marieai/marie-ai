@@ -64,6 +64,7 @@ from marie.scheduler.util import (
     adjust_backoff,
     available_slots_by_executor,
     convert_job_status_to_work_state,
+    executor_name,
     frontier_candidate_window,
     frontier_slot_filter,
     is_control_flow_entrypoint,
@@ -930,6 +931,13 @@ class PostgreSQLJobScheduler(JobScheduler):
         except Exception as e:
             self.logger.error(f"Unexpected error starting NotificationService: {e}")
             raise RuntimeFailToStart(f"NotificationService failed to start: {e}") from e
+
+        reconcile_summary = await asyncio.to_thread(
+            self._semaphore_store.reconcile_all,
+            delete_orphan_holders=True,
+            fix_counters=True,
+        )
+        self.logger.info(f"[sem] startup reconciliation: {reconcile_summary}")
 
         await self.dag_service.start_admission()
 
@@ -2646,6 +2654,7 @@ class PostgreSQLJobScheduler(JobScheduler):
     async def _reconcile_recovered_run_leases(
         self, recovered: list[RecoveredRunLease]
     ) -> None:
+        admission_required = False
         for recovery in recovered:
             work_item = await self.repository.get_job_by_id(recovery.id)
             if work_item is None:
@@ -2675,6 +2684,13 @@ class PostgreSQLJobScheduler(JobScheduler):
                     previous_run_attempt_id=recovery.previous_run_attempt_id,
                     reason_code=recovery.reason_code,
                 )
+                if recovery.id not in self.frontier.jobs_by_id:
+                    dag_id = recovery.dag_id or work_item.dag_id
+                    if dag_id:
+                        await self.hydrate_single_dag_from_db(dag_id)
+                if recovery.id not in self.frontier.jobs_by_id:
+                    admission_required = True
+                    continue
                 await self.frontier.on_job_retry(
                     recovery.id, work_item, start_after=recovery.start_after
                 )
@@ -2694,6 +2710,9 @@ class PostgreSQLJobScheduler(JobScheduler):
                 work_item,
                 source="run_lease_recovery",
             )
+
+        if admission_required:
+            await self.dag_service.request_admission("run_lease_recovery")
 
     async def maintenance(self):
         """
@@ -2968,6 +2987,37 @@ class PostgreSQLJobScheduler(JobScheduler):
                     )
                     return "attempt_mismatch"
 
+                if job_info.status == JobStatus.PENDING:
+                    metadata = (
+                        work_item.data.get("metadata", {})
+                        if isinstance(work_item.data, dict)
+                        else {}
+                    )
+                    entrypoint = (
+                        metadata.get("on", "") if isinstance(metadata, dict) else ""
+                    )
+                    if not entrypoint:
+                        return "missing_entrypoint"
+                    semaphore_renewed = await asyncio.to_thread(
+                        self._semaphore_store.renew,
+                        executor_name(entrypoint),
+                        job_id,
+                        owner=job_id,
+                        run_attempt_id=run_attempt_id,
+                    )
+                    if not semaphore_renewed:
+                        scheduler_trace(
+                            "scheduler_semaphore_renew_rejected",
+                            job_id=job_id,
+                            dag_id=work_item.dag_id,
+                            status=job_info.status.value,
+                            run_owner=run_owner,
+                            run_attempt_id=run_attempt_id,
+                            reason="pending_ticket_missing_or_stale",
+                            **self._ha_trace_fields(),
+                        )
+                        return "semaphore_rejected"
+
                 extended = await self._extend_run_lease_db(
                     [job_id],
                     run_owner=run_owner,
@@ -3022,6 +3072,8 @@ class PostgreSQLJobScheduler(JobScheduler):
             missing_identity=outcomes["missing_identity"],
             missing_job_info=outcomes["missing_job_info"],
             not_running=outcomes["not_running"],
+            missing_entrypoint=outcomes["missing_entrypoint"],
+            semaphore_rejected=outcomes["semaphore_rejected"],
             errors=outcomes["error"],
             elapsed_ms=(time.perf_counter() - started) * 1000.0,
             **self._ha_trace_fields(),
@@ -3416,6 +3468,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 self.logger.debug(
                     "Deployment update event received, notifying scheduler."
                 )
+                await self.dag_service.request_admission("deployment_update")
                 await self.notify_event()
             except asyncio.CancelledError:
                 self.logger.warning("Deployment update monitor task cancelled.")
