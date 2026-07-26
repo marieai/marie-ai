@@ -22,6 +22,7 @@ def test_node_capacity_snapshot_classifies_live_router_load() -> None:
     }
     gateway.desired_map = {}
     gateway.status_map = {}
+    gateway._service_readiness = {}
     gateway.capacity_manager = Mock()
     gateway.capacity_manager.slots_per_node.return_value = 2
     gateway.streamer = Mock()

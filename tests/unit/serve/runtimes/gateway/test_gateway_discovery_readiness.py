@@ -23,6 +23,7 @@ def _gateway(worker_count: int = 2) -> MarieServerGateway:
     gateway.service_events_queue = asyncio.Queue()
     gateway.ready_event = asyncio.Event()
     gateway.deployment_nodes = {}
+    gateway.desired_map = {}
     gateway.logger = Mock()
     gateway._rebuild_task = None
     gateway._rebuild_requested = False
@@ -246,6 +247,50 @@ async def test_unready_registration_is_exposed_with_retry_details():
 
     processor.cancel()
     await asyncio.gather(processor, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_readiness_failure_withdraws_gateway_routes_until_recovery():
+    gateway = _gateway()
+    gateway.ready_event.set()
+    gateway.deployment_nodes = {
+        "corr_indexing_executor": [
+            {
+                "address": "grpc://172.20.10.67:49788",
+                "gateway": "172.20.10.67:52562",
+            }
+        ]
+    }
+    event = _event(
+        "gateway/marie/172.20.10.67:52562",
+        "corr_indexing_executor",
+    )
+    readiness = gateway._service_readiness_entry(event)
+    readiness.update({"ready": True, "state": "ready"})
+    gateway.gateway_server_online = AsyncMock(side_effect=[None, False])
+    gateway._schedule_service_retry = Mock()
+    gateway._schedule_rebuild = Mock()
+    queue = asyncio.Queue()
+    worker = asyncio.create_task(gateway._service_event_worker(queue, max_errors=5))
+
+    await queue.put(event)
+    await asyncio.wait_for(queue.join(), timeout=1)
+
+    assert gateway._routable_deployment_nodes() == {"corr_indexing_executor": []}
+    gateway._schedule_rebuild.assert_called_once_with(True)
+    gateway._publish_capacity_event.assert_awaited_once()
+
+    gateway._schedule_rebuild.reset_mock()
+    gateway._publish_capacity_event.reset_mock()
+    await queue.put(event)
+    await asyncio.wait_for(queue.join(), timeout=1)
+
+    assert gateway._routable_deployment_nodes() == gateway.deployment_nodes
+    gateway._schedule_rebuild.assert_called_once_with(True)
+    gateway._publish_capacity_event.assert_awaited_once()
+
+    worker.cancel()
+    await asyncio.gather(worker, return_exceptions=True)
 
 
 @pytest.mark.asyncio

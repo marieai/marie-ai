@@ -2155,6 +2155,7 @@ class MarieServerGateway(CompositeServer):
         while True:
             event: ServiceEvent = await queue.get()
             readiness = None
+            routing_nodes_before = self._routable_deployment_nodes()
             try:
                 if event.ev_type == "put":
                     readiness = self._service_readiness_entry(event)
@@ -2196,7 +2197,9 @@ class MarieServerGateway(CompositeServer):
                     self.logger.warning(f"Unknown service ev_type: {event.ev_type}")
                     changed = False
 
-                if changed and self.ready_event.is_set():
+                if self.ready_event.is_set() and (
+                    changed or routing_nodes_before != self._routable_deployment_nodes()
+                ):
                     self._schedule_rebuild(True)
                     await self._publish_capacity_event()
                 error_count = 0
@@ -2213,6 +2216,12 @@ class MarieServerGateway(CompositeServer):
                             "last_error": str(ex),
                         }
                     )
+                if (
+                    self.ready_event.is_set()
+                    and routing_nodes_before != self._routable_deployment_nodes()
+                ):
+                    self._schedule_rebuild(True)
+                    await self._publish_capacity_event()
                 self.logger.error(f"Service event error: {ex}", exc_info=True)
                 error_count += 1
                 if error_count >= max_errors:
@@ -2877,14 +2886,22 @@ class MarieServerGateway(CompositeServer):
         return desired_epoch is None or status_epoch == desired_epoch
 
     def _routable_deployment_nodes(self) -> Dict[str, list[dict[str, Any]]]:
+        unready_gateways = {
+            entry["address"]
+            for entry in self._service_readiness.values()
+            if not entry["ready"]
+        }
         routable: Dict[str, list[dict[str, Any]]] = {}
         for executor, nodes in self.deployment_nodes.items():
             routable[executor] = [
                 node
                 for node in nodes
-                if not self._desired_params(
-                    _netloc(node.get("address") or ""), executor
-                ).get(STATUS_DEGRADED_SINCE)
+                if (
+                    _netloc(node.get("gateway") or "") not in unready_gateways
+                    and not self._desired_params(
+                        _netloc(node.get("address") or ""), executor
+                    ).get(STATUS_DEGRADED_SINCE)
+                )
             ]
         return routable
 

@@ -103,6 +103,7 @@ def _gateway(doc: DesiredDoc):
     gateway.desired_map = {("node:1", "extract_executor"): {}}
     gateway.status_map = {("node:1", "extract_executor"): {}}
     gateway.deployment_nodes = {}
+    gateway._service_readiness = {}
     gateway.logger = _Logger()
     return gateway
 
@@ -122,12 +123,15 @@ def test_status_miss_sets_and_preserves_missing_since():
         stale_calls.append((ts, timeout))
         return False
 
-    with mock.patch(
-        "marie.serve.runtimes.servers.marie_gateway._now_iso",
-        side_effect=["2026-05-14T17:00:00Z", "2026-05-14T17:01:00Z"],
-    ), mock.patch(
-        "marie.serve.runtimes.servers.marie_gateway.is_stale",
-        side_effect=is_stale,
+    with (
+        mock.patch(
+            "marie.serve.runtimes.servers.marie_gateway._now_iso",
+            side_effect=["2026-05-14T17:00:00Z", "2026-05-14T17:01:00Z"],
+        ),
+        mock.patch(
+            "marie.serve.runtimes.servers.marie_gateway.is_stale",
+            side_effect=is_stale,
+        ),
     ):
         assert gateway._incr_miss_and_maybe_gc("node:1", "extract_executor") is False
         assert gateway._incr_miss_and_maybe_gc("node:1", "extract_executor") is False
@@ -186,8 +190,7 @@ def test_live_status_miss_marks_degraded_instead_of_gc():
     assert params[STATUS_DEGRADED_REASON] == STATUS_DEGRADED_LIVE_MISSING
     assert gateway.etcd_client.deleted_prefixes == []
     assert any(
-        kwargs.get("extra", {}).get("event_type")
-        == "gateway_status_degraded_live_node"
+        kwargs.get("extra", {}).get("event_type") == "gateway_status_degraded_live_node"
         for _, _, kwargs in gateway.logger.records
     )
 
@@ -298,9 +301,7 @@ async def test_quarantine_and_recovery_refresh_routing_and_capacity():
             updated_at="2026-05-14T17:02:00Z",
         )
     )
-    gateway.deployment_nodes = {
-        "extract_executor": [{"address": "grpc://node:1"}]
-    }
+    gateway.deployment_nodes = {"extract_executor": [{"address": "grpc://node:1"}]}
     gateway.desired_map = {
         ("node:1", "extract_executor"): DesiredDoc(
             phase="SCHEDULED",
@@ -326,9 +327,7 @@ async def test_quarantine_and_recovery_refresh_routing_and_capacity():
                     "extract_executor": {
                         "phase": "SCHEDULED",
                         "epoch": 10,
-                        "params": {
-                            STATUS_DEGRADED_SINCE: "2026-05-14T17:03:00Z"
-                        },
+                        "params": {STATUS_DEGRADED_SINCE: "2026-05-14T17:03:00Z"},
                         "updated_at": "2026-05-14T17:03:00Z",
                     }
                 }
@@ -468,12 +467,15 @@ async def test_healthy_reconcile_resets_miss_metadata():
     async def stop_after_one_sleep(_interval):
         raise RuntimeError("stop-loop")
 
-    with mock.patch(
-        "marie.serve.runtimes.servers.marie_gateway.is_stale",
-        return_value=False,
-    ), mock.patch(
-        "marie.serve.runtimes.servers.marie_gateway.asyncio.sleep",
-        side_effect=stop_after_one_sleep,
+    with (
+        mock.patch(
+            "marie.serve.runtimes.servers.marie_gateway.is_stale",
+            return_value=False,
+        ),
+        mock.patch(
+            "marie.serve.runtimes.servers.marie_gateway.asyncio.sleep",
+            side_effect=stop_after_one_sleep,
+        ),
     ):
         with pytest.raises(RuntimeError, match="stop-loop"):
             await gateway._reconcile_loop(interval_s=0)
@@ -503,12 +505,15 @@ async def test_degraded_live_missing_status_suppresses_future_bumps():
     async def stop_after_one_sleep(_interval):
         raise RuntimeError("stop-loop")
 
-    with mock.patch(
-        "marie.serve.runtimes.servers.marie_gateway.is_stale",
-        return_value=True,
-    ), mock.patch(
-        "marie.serve.runtimes.servers.marie_gateway.asyncio.sleep",
-        side_effect=stop_after_one_sleep,
+    with (
+        mock.patch(
+            "marie.serve.runtimes.servers.marie_gateway.is_stale",
+            return_value=True,
+        ),
+        mock.patch(
+            "marie.serve.runtimes.servers.marie_gateway.asyncio.sleep",
+            side_effect=stop_after_one_sleep,
+        ),
     ):
         with pytest.raises(RuntimeError, match="stop-loop"):
             await gateway._reconcile_loop(interval_s=0)
@@ -542,12 +547,15 @@ async def test_epoch_mismatch_waits_during_claim_window():
     async def stop_after_one_sleep(_interval):
         raise RuntimeError("stop-loop")
 
-    with mock.patch(
-        "marie.serve.runtimes.servers.marie_gateway.is_stale",
-        return_value=False,
-    ), mock.patch(
-        "marie.serve.runtimes.servers.marie_gateway.asyncio.sleep",
-        side_effect=stop_after_one_sleep,
+    with (
+        mock.patch(
+            "marie.serve.runtimes.servers.marie_gateway.is_stale",
+            return_value=False,
+        ),
+        mock.patch(
+            "marie.serve.runtimes.servers.marie_gateway.asyncio.sleep",
+            side_effect=stop_after_one_sleep,
+        ),
     ):
         with pytest.raises(RuntimeError, match="stop-loop"):
             await gateway._reconcile_loop(interval_s=0)
@@ -581,15 +589,19 @@ async def test_epoch_mismatch_after_claim_timeout_bumps_and_records_miss():
     async def stop_after_one_sleep(_interval):
         raise RuntimeError("stop-loop")
 
-    with mock.patch(
-        "marie.serve.runtimes.servers.marie_gateway.is_stale",
-        side_effect=[True, False],
-    ), mock.patch(
-        "marie.serve.runtimes.servers.marie_gateway._now_iso",
-        return_value="2026-05-14T17:04:00Z",
-    ), mock.patch(
-        "marie.serve.runtimes.servers.marie_gateway.asyncio.sleep",
-        side_effect=stop_after_one_sleep,
+    with (
+        mock.patch(
+            "marie.serve.runtimes.servers.marie_gateway.is_stale",
+            side_effect=[True, False],
+        ),
+        mock.patch(
+            "marie.serve.runtimes.servers.marie_gateway._now_iso",
+            return_value="2026-05-14T17:04:00Z",
+        ),
+        mock.patch(
+            "marie.serve.runtimes.servers.marie_gateway.asyncio.sleep",
+            side_effect=stop_after_one_sleep,
+        ),
     ):
         with pytest.raises(RuntimeError, match="stop-loop"):
             await gateway._reconcile_loop(interval_s=0)
@@ -603,8 +615,7 @@ async def test_epoch_mismatch_after_claim_timeout_bumps_and_records_miss():
         kwargs["extra"]
         for level, _, kwargs in gateway.logger.records
         if level == "warning"
-        and kwargs.get("extra", {}).get("event_type")
-        == "gateway_status_reconcile_bump"
+        and kwargs.get("extra", {}).get("event_type") == "gateway_status_reconcile_bump"
     ]
     assert bump_logs
     assert bump_logs[-1]["desired_epoch"] == 10

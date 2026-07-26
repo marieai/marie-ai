@@ -12,6 +12,7 @@ and verification utilities.
 | Python and CUDA environment | `setup-py312-torch212-cu130.sh` |
 | Wheels and packaging | `fetch-wheels.sh`, `build-wasm-compilers.sh`, `repackage_tool.py`, `repackage_llama_index.py` |
 | Containers and local services | `build-container.sh`, `start_documentdb.sh`, `setup-s3-users.sh`, `hyperdx-init-user.sh` |
+| Host diagnostics | `check-port-health.sh` |
 | Releases and versions | `release.sh`, `get-versions.sh`, `get-last-release-note.py`, `prepend_version_json.py`, `update-version.sh` |
 | Developer utilities | `devbot.sh`, `update-autocomplete-cli.py` |
 
@@ -91,4 +92,3 @@ After (marie.core)
 from marie.core.base.llms.types import ChatMessage
 from marie.core.callbacks import CallbackManager
 ```
-
