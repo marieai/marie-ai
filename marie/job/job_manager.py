@@ -98,9 +98,17 @@ class JobManager:
             max_workers=desired_state_worker_count,
             max_pending=desired_state_max_pending,
         )
-        self._job_info_client = JobInfoStorageClientProxy(self.event_publisher, storage)
+        self._job_info_client = JobInfoStorageClientProxy(
+            self.event_publisher,
+            storage,
+            terminal_event_callback=self._publish_terminal_event,
+        )
         self.monitored_jobs = set()
         self._active_tasks = set()
+        self._terminal_notifications: dict[str, JobStatus] = {}
+        self._terminal_wake_events: dict[str, asyncio.Event] = {}
+        self._published_terminal_events: dict[str, tuple[JobStatus, Optional[str]]] = {}
+        self._active_run_attempts: dict[str, Optional[str]] = {}
 
         try:
             self.event_logger = get_event_logger()
@@ -109,6 +117,127 @@ class JobManager:
 
         self._recover_running_jobs_event = asyncio.Event()
         run_background_task(self._recover_running_jobs())
+
+    async def handle_job_status_notification(self, payload: Dict[str, Any]) -> None:
+        """Publish a committed terminal job status received from PostgreSQL."""
+        job_id = payload.get('job_id')
+        raw_status = payload.get('status')
+        if not isinstance(job_id, str) or not job_id or not isinstance(raw_status, str):
+            self.logger.warning(
+                'Ignoring invalid terminal job notification: %s', payload
+            )
+            return
+
+        try:
+            status = JobStatus(raw_status)
+        except ValueError:
+            self.logger.warning(
+                'Ignoring terminal job notification status: %s', raw_status
+            )
+            return
+        if not status.is_terminal():
+            self.logger.warning('Ignoring non-terminal job notification: %s', status)
+            return
+
+        run_owner = payload.get('run_owner')
+        run_attempt_id = payload.get('run_attempt_id')
+        run_owner = run_owner if isinstance(run_owner, str) else None
+        run_attempt_id = run_attempt_id if isinstance(run_attempt_id, str) else None
+        expected_attempt = self._active_run_attempts.get(job_id)
+        if job_id in self._active_run_attempts and expected_attempt != run_attempt_id:
+            scheduler_trace(
+                'job_terminal_event_publish_skipped',
+                job_id=job_id,
+                status=status.value,
+                run_attempt_id=run_attempt_id,
+                source='postgres_notify',
+                reason='stale_run_attempt',
+                expected_run_attempt_id=expected_attempt,
+            )
+            return
+        scheduler_trace(
+            'job_terminal_notification_received',
+            job_id=job_id,
+            status=status.value,
+            run_owner=run_owner,
+            run_attempt_id=run_attempt_id,
+        )
+
+        self._terminal_notifications[job_id] = status
+        self._terminal_wake_events.setdefault(job_id, asyncio.Event()).set()
+        await self._publish_terminal_event(
+            job_id,
+            status,
+            run_owner,
+            run_attempt_id,
+            'postgres_notify',
+        )
+
+    async def _publish_terminal_event(
+        self,
+        job_id: str,
+        status: JobStatus,
+        run_owner: Optional[str],
+        run_attempt_id: Optional[str],
+        source: str,
+    ) -> bool:
+        signature = (status, run_attempt_id)
+        if self._published_terminal_events.get(job_id) == signature:
+            scheduler_trace(
+                'job_terminal_event_publish_skipped',
+                job_id=job_id,
+                status=status.value,
+                run_attempt_id=run_attempt_id,
+                source=source,
+                reason='duplicate',
+            )
+            return False
+
+        self._published_terminal_events[job_id] = signature
+        published = False
+        try:
+            await self.event_publisher.publish(
+                status,
+                {
+                    'job_id': job_id,
+                    'status': status,
+                    'message': f'Job {job_id} completed with status {status}.',
+                    'jobinfo_replace_kwargs': False,
+                    'run_owner': run_owner,
+                    'run_attempt_id': run_attempt_id,
+                    'source': source,
+                },
+            )
+            published = True
+        finally:
+            if (
+                not published
+                and self._published_terminal_events.get(job_id) == signature
+            ):
+                self._published_terminal_events.pop(job_id, None)
+
+        scheduler_trace(
+            'job_terminal_event_published',
+            job_id=job_id,
+            status=status.value,
+            run_attempt_id=run_attempt_id,
+            source=source,
+        )
+        asyncio.get_running_loop().call_later(
+            60.0,
+            self._forget_terminal_publication,
+            job_id,
+            signature,
+        )
+        return True
+
+    def _forget_terminal_publication(
+        self, job_id: str, signature: tuple[JobStatus, Optional[str]]
+    ) -> None:
+        if self._published_terminal_events.get(job_id) == signature:
+            self._published_terminal_events.pop(job_id, None)
+        if self._active_run_attempts.get(job_id) == signature[1]:
+            self._active_run_attempts.pop(job_id, None)
 
     async def _recover_running_jobs(self):
         """Recovers all running jobs from the status client.
@@ -147,10 +276,14 @@ class JobManager:
             return
 
         self.monitored_jobs.add(job_id)
+        wake_event = self._terminal_wake_events.setdefault(job_id, asyncio.Event())
         try:
             await self._monitor_job_internal(job_id, job_supervisor)
         finally:
             self.monitored_jobs.remove(job_id)
+            if self._terminal_wake_events.get(job_id) is wake_event:
+                self._terminal_wake_events.pop(job_id, None)
+            self._terminal_notifications.pop(job_id, None)
 
     async def _monitor_job_internal(
         self, job_id: str, job_supervisor: Optional[ActorHandle] = None
@@ -172,8 +305,11 @@ class JobManager:
 
         while is_alive:
             try:
-                # TODO : this puts quite a bit of load on the DB maybe we can add LISTEN/NOTIFY or use ETCD Watches
-                job_status = await self._job_info_client.get_status(job_id)
+                job_status = self._terminal_notifications.pop(job_id, None)
+                observation_source = 'postgres_notify'
+                if job_status is None:
+                    observation_source = 'postgres_poll'
+                    job_status = await self._job_info_client.get_status(job_id)
                 if job_status is None:
                     self.logger.warning(
                         f"Job {job_id} does not exist in the job info client."
@@ -185,6 +321,7 @@ class JobManager:
                     job_id=job_id,
                     status=job_status.value,
                     terminal=job_status.is_terminal(),
+                    source=observation_source,
                 )
                 self.logger.debug(f"Monitored job status: {job_id} : {job_status}")
 
@@ -193,15 +330,16 @@ class JobManager:
                         "job_monitor_terminal_observed",
                         job_id=job_id,
                         status=job_status.value,
+                        source=observation_source,
                     )
+                    is_alive = False
                     if job_status == JobStatus.SUCCEEDED:
-                        is_alive = False
                         self.logger.debug(f"Job succeeded : {job_id}")
-                        break
                     elif job_status == JobStatus.FAILED:
-                        is_alive = False
                         self.logger.warning(f"Job failed : {job_id}")
-                        break
+                    else:
+                        self.logger.info(f"Job stopped : {job_id}")
+                    break
 
                 if job_status == JobStatus.PENDING:
                     # Compare the current time with the job start time.
@@ -286,7 +424,19 @@ class JobManager:
                     jitter=jitter,
                     wait_ms=wait_time * 1000.0,
                 )
-                await asyncio.sleep(wait_time)
+                wake_event = self._terminal_wake_events.get(job_id)
+                if wake_event is None:
+                    await asyncio.sleep(wait_time)
+                else:
+                    try:
+                        await asyncio.wait_for(wake_event.wait(), timeout=wait_time)
+                    except asyncio.TimeoutError:
+                        pass
+                    else:
+                        scheduler_trace(
+                            'job_monitor_woken_by_notification',
+                            job_id=job_id,
+                        )
             except Exception as e:
                 is_alive = False
                 job_status = await self._job_info_client.get_status(job_id)
@@ -374,6 +524,9 @@ class JobManager:
         """
         if submission_id is None:
             submission_id = generate_job_id()
+        self._published_terminal_events.pop(submission_id, None)
+        self._terminal_notifications.pop(submission_id, None)
+        self._active_run_attempts[submission_id] = run_attempt_id
 
         entrypoint_num_cpus = 1
         entrypoint_num_gpus = 1
@@ -431,6 +584,7 @@ class JobManager:
                 etcd_client=self._etcd_client,
                 desired_state_executor=self._desired_state_executor,
                 confirmation_event=confirmation_event,
+                terminal_event_callback=self._publish_terminal_event,
             )
 
             task = asyncio.create_task(

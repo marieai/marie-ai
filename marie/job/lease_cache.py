@@ -1,3 +1,4 @@
+import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -10,9 +11,10 @@ class LeaseCache:
         self.ttl: int = int(ttl)
         self.margin: float = float(margin)
         self.logger = logger
-        self._cache: Dict[str, Tuple[Any, float]] = (
-            {}
-        )  # cache_key -> (lease, expiry_ts)
+        self._cache: Dict[
+            str, Tuple[Any, float]
+        ] = {}  # cache_key -> (lease, expiry_ts)
+        self._lock = threading.RLock()
 
     def _log_renewal(
         self,
@@ -53,62 +55,73 @@ class LeaseCache:
                 pass
         return None
 
+    @staticmethod
+    def _is_missing_lease_error(error: Exception) -> bool:
+        message = str(error).lower()
+        return "lease not found" in message or "requested lease not found" in message
+
     def get_or_refresh(self, cache_key: str, ttl: Optional[int] = None) -> etcd3.Lease:
-        """
-        Get a live lease, refreshing the cached lease before returning it.
-        TTL can be overridden per call; falls back to the default from the constructor.
+        """Return a live cached lease, refreshing it only near expiry.
+
+        TTL can be overridden per call; it falls back to the constructor default.
 
         :param cache_key: Cache bucket key (e.g., "<addr>/<deployment>")
         :param ttl: Optional override TTL for this fetch/refresh
         :return: A lease object
         """
-        lease: Optional[etcd3.Lease]
-        exp: float
-        lease, exp = self._cache.get(cache_key, (None, 0.0))  # type: ignore[assignment]
-        now = time.monotonic()
+        with self._lock:
+            lease: Optional[etcd3.Lease]
+            exp: float
+            lease, exp = self._cache.get(cache_key, (None, 0.0))  # type: ignore[assignment]
+            now = time.monotonic()
+            effective_ttl = int(ttl) if ttl and ttl > 0 else self.ttl
 
-        effective_ttl = int(ttl) if ttl and ttl > 0 else self.ttl
+            if lease is not None and now < (exp - self.margin):
+                return lease
 
-        if lease is not None and now < (exp - self.margin):
-            try:
-                refreshed_ttl = self._ttl_from_refresh(lease.refresh())
-                if refreshed_ttl is None:
-                    refreshed_ttl = int(getattr(lease, "remaining_ttl", 0) or 0)
-                if refreshed_ttl > 0:
-                    self._cache[cache_key] = (lease, now + refreshed_ttl)
+            if lease is not None:
+                try:
+                    refreshed_ttl = self._ttl_from_refresh(lease.refresh())
+                    if refreshed_ttl is None:
+                        refreshed_ttl = int(getattr(lease, "remaining_ttl", 0) or 0)
+                    if refreshed_ttl > 0:
+                        self._cache[cache_key] = (lease, now + refreshed_ttl)
+                        self._log_renewal(
+                            "debug",
+                            cache_key,
+                            lease,
+                            refreshed_ttl,
+                            "refreshed",
+                        )
+                        return lease
                     self._log_renewal(
-                        "debug",
+                        "warning",
                         cache_key,
                         lease,
                         refreshed_ttl,
-                        "refreshed",
+                        "expired",
                     )
-                    return lease
-                self._log_renewal(
-                    "warning",
-                    cache_key,
-                    lease,
-                    refreshed_ttl,
-                    "expired",
-                )
-            except Exception as e:
-                self._log_renewal(
-                    "warning",
-                    cache_key,
-                    lease,
-                    getattr(lease, "remaining_ttl", None),
-                    "refresh_failed",
-                    e,
-                )
-                self.invalidate(cache_key)
+                except Exception as error:
+                    self._log_renewal(
+                        "warning",
+                        cache_key,
+                        lease,
+                        None,
+                        "refresh_failed",
+                        error,
+                    )
+                    if not self._is_missing_lease_error(error):
+                        raise
+                self._cache.pop(cache_key, None)
 
-        new_lease = self.etcd.lease(effective_ttl)
-        self._cache[cache_key] = (new_lease, now + effective_ttl)
-        self._log_renewal("debug", cache_key, new_lease, effective_ttl, "created")
-        return new_lease
+            new_lease = self.etcd.lease(effective_ttl)
+            self._cache[cache_key] = (new_lease, now + effective_ttl)
+            self._log_renewal("debug", cache_key, new_lease, effective_ttl, "created")
+            return new_lease
 
-    def invalidate(self, cache_key):
-        self._cache.pop(cache_key, None)
+    def invalidate(self, cache_key: str) -> None:
+        with self._lock:
+            self._cache.pop(cache_key, None)
 
 
 def put_with_cached_lease(etcd, lease_cache, key, val, cache_key):

@@ -242,7 +242,7 @@ class WorkerRequestHandler:
         self._status_lease_cache = LeaseCache(
             self._etcd_client,
             ttl=self._lease_time,
-            margin=1.0,
+            margin=self._heartbeat_time,
             logger=self.logger,
         )
         self._desired_store = DesiredStore(self._etcd_client)
@@ -1667,6 +1667,13 @@ class WorkerRequestHandler:
                 if metadata_attributes:
                     request_attributes.update(metadata_attributes)
 
+                scheduler_trace(
+                    "executor_terminal_status_write_started",
+                    job_id=job_id,
+                    dag_id=dag_id,
+                    deployment=self._deployment,
+                    status=JobStatus.FAILED.value,
+                )
                 await self._job_info_client.put_status(
                     job_id,
                     JobStatus.FAILED,
@@ -1823,6 +1830,13 @@ class WorkerRequestHandler:
                 if metadata_attributes:
                     request_attributes.update(metadata_attributes)
 
+                scheduler_trace(
+                    "executor_terminal_status_write_started",
+                    job_id=job_id,
+                    dag_id=dag_id,
+                    deployment=self._deployment,
+                    status=JobStatus.SUCCEEDED.value,
+                )
                 await self._job_info_client.put_status(
                     job_id,
                     JobStatus.SUCCEEDED,
@@ -2336,13 +2350,11 @@ class WorkerRequestHandler:
 
         with self._sem_ticket_lock:
             try:
-                ok = self._semaphore.renew(
+                ok = self._semaphore.validate_holder(
                     slot_type,
                     job_id,
                     owner=owner,
                     run_attempt_id=run_attempt_id,
-                    ttl=ttl,
-                    update_ttl_field=True,
                 )
                 if not ok:
                     self.logger.error(
@@ -2380,8 +2392,6 @@ class WorkerRequestHandler:
                     slot_type,
                     job_id,
                     owner=owner,
-                    ttl=ttl,
-                    update_ttl_field=True,
                 )
                 if not ok:
                     ok = self._semaphore.reserve(
@@ -2530,8 +2540,6 @@ class WorkerRequestHandler:
                         jid,
                         owner=owner,
                         run_attempt_id=run_attempt_id,
-                        ttl=ttl,
-                        update_ttl_field=True,
                     )
                     meta["last"] = now
                     if not ok:

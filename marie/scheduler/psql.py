@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 
 import psycopg
 
+from marie.constants import JOB_STATUS_NOTIFICATION_CHANNEL
 from marie.excepts import BadConfigSource, RuntimeFailToStart
 from marie.job.common import JobInfo, JobStatus
 from marie.job.job_manager import JobManager
@@ -308,6 +309,10 @@ class PostgreSQLJobScheduler(JobScheduler):
         # Register handler for DAG state changes (delegate to DAGManagementService)
         self.notification_service.register_handler(
             channel='dag_state_changed', handler=self.dag_service.handle_state_change
+        )
+        self.notification_service.register_handler(
+            channel=JOB_STATUS_NOTIFICATION_CHANNEL,
+            handler=self.job_manager.handle_job_status_notification,
         )
 
         # Initialize MaintenanceService for periodic cleanup tasks
@@ -2003,6 +2008,10 @@ class PostgreSQLJobScheduler(JobScheduler):
         )
         self.notification_service.register_handler(
             channel='dag_state_changed', handler=self.dag_service.handle_state_change
+        )
+        self.notification_service.register_handler(
+            channel=JOB_STATUS_NOTIFICATION_CHANNEL,
+            handler=self.job_manager.handle_job_status_notification,
         )
         self.maintenance_service = MaintenanceService(
             repository=self.repository,

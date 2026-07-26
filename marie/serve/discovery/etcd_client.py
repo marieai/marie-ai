@@ -1371,6 +1371,11 @@ class EtcdClient(object):
         return self.client.lease(ttl, lease_id=lease_id)
 
     @reconn_reauth_adaptor
+    def refresh_lease(self, lease_id: int) -> list[Any]:
+        """Keep an existing lease alive and return the server responses."""
+        return list(self.client.refresh_lease(lease_id))
+
+    @reconn_reauth_adaptor
     def delete(self, key: str):
         scope_prefix = ""
         mangled_key = self._mangle_key(f"{_slash(scope_prefix)}{key}")

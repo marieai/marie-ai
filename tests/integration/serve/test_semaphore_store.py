@@ -115,6 +115,18 @@ def test_attempt_bound_holder_rejects_stale_renew_and_release(
     holder = sema.get_holder(slot, ticket)
     assert holder is not None
     assert holder.run_attempt_id == "attempt-1"
+    assert sema.validate_holder(
+        slot,
+        ticket,
+        owner=ticket,
+        run_attempt_id="attempt-1",
+    )
+    assert not sema.validate_holder(
+        slot,
+        ticket,
+        owner=ticket,
+        run_attempt_id="attempt-2",
+    )
     assert not sema.renew(
         slot,
         ticket,
@@ -135,6 +147,30 @@ def test_attempt_bound_holder_rejects_stale_renew_and_release(
         owner=ticket,
         run_attempt_id="attempt-1",
     )
+
+
+def test_renew_keeps_existing_holder_lease(sema: SemaphoreStore) -> None:
+    slot = _slot()
+    ticket = _ticket()
+    sema.set_capacity(slot, 1)
+    assert sema.reserve(
+        slot,
+        ticket,
+        node="scheduler",
+        owner=ticket,
+        run_attempt_id="attempt-1",
+    )
+    _raw_before, meta_before = sema._get_holder_raw(slot, ticket)
+
+    assert sema.renew(
+        slot,
+        ticket,
+        owner=ticket,
+        run_attempt_id="attempt-1",
+    )
+
+    _raw_after, meta_after = sema._get_holder_raw(slot, ticket)
+    assert meta_before.lease_id == meta_after.lease_id
 
 
 def test_concurrent_owned_releases_retry_counter_contention(

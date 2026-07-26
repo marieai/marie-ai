@@ -158,3 +158,52 @@ async def test_finalize_traces_send_completion_before_terminal_event_enqueue(
     assert events[1][1]["status"] == "SUCCEEDED"
     assert events[1][1]["terminal"] is True
     event_publisher.publish.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_finalize_uses_terminal_event_callback() -> None:
+    send_task = asyncio.get_running_loop().create_future()
+    send_task.set_result(
+        SimpleNamespace(status=SimpleNamespace(code=jina_pb2.StatusProto.SUCCESS))
+    )
+    job_info_client = SimpleNamespace(
+        get_status=AsyncMock(return_value=JobStatus.SUCCEEDED),
+        get_info=AsyncMock(
+            return_value=SimpleNamespace(
+                run_owner="owner-1", run_attempt_id="attempt-1"
+            )
+        ),
+    )
+    job_distributor = SimpleNamespace(send_nowait=AsyncMock(return_value=send_task))
+    event_publisher = SimpleNamespace(publish=AsyncMock())
+    terminal_event_callback = AsyncMock(return_value=False)
+    supervisor = JobSupervisor(
+        job_id="test-job-id",
+        job_info_client=job_info_client,
+        job_distributor=job_distributor,
+        event_publisher=event_publisher,
+        etcd_client=Mock(),
+        desired_state_executor=SimpleNamespace(schedule_new_epoch=AsyncMock()),
+        confirmation_event=asyncio.Event(),
+        terminal_event_callback=terminal_event_callback,
+    )
+
+    await supervisor._submit_job_in_background(
+        JobInfo(
+            status=JobStatus.PENDING,
+            entrypoint="mock_executor_a:///document/extract",
+        )
+    )
+    for _ in range(10):
+        if terminal_event_callback.await_count:
+            break
+        await asyncio.sleep(0)
+
+    terminal_event_callback.assert_awaited_once_with(
+        "test-job-id",
+        JobStatus.SUCCEEDED,
+        "owner-1",
+        "attempt-1",
+        "supervisor_finalize",
+    )
+    event_publisher.publish.assert_not_awaited()

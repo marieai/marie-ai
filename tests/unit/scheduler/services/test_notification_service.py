@@ -1,5 +1,6 @@
 import asyncio
 
+import psycopg
 import pytest
 
 import marie.scheduler.services.notification_service as notification_service_module
@@ -117,6 +118,34 @@ async def test_notification_listener_reconnects_after_runtime_failure(
     assert sleep_calls == [service._reconnect_base_delay]
     assert service.connected is False
     assert service._ever_connected is True
+
+
+@pytest.mark.asyncio
+async def test_next_notification_preserves_all_notifications_from_receive_batch(config):
+    notifications = [
+        psycopg.Notify("job_terminal", '{"job_id":"1"}', 1),
+        psycopg.Notify("job_terminal", '{"job_id":"2"}', 1),
+        psycopg.Notify("job_terminal", '{"job_id":"3"}', 1),
+    ]
+
+    class BurstConnection(FakeConnection):
+        def __init__(self):
+            super().__init__()
+            self.notifies_calls = 0
+
+        async def notifies(self, **_kwargs):
+            self.notifies_calls += 1
+            for notification in notifications:
+                yield notification
+
+    service = NotificationService(config)
+    connection = BurstConnection()
+    service._listen_connection = connection
+
+    received = [await service._next_notification() for _ in notifications]
+
+    assert received == notifications
+    assert connection.notifies_calls == 1
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,7 @@
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+
+import pytest
 
 from marie.job.lease_cache import LeaseCache
 
@@ -47,12 +50,27 @@ class FakeLogger:
         self.records.append(("warning", args, kwargs))
 
 
-def test_get_or_refresh_renews_cached_lease():
+def test_get_or_refresh_returns_comfortably_valid_cached_lease():
+    etcd = FakeEtcd(refresh_ttl=9)
+    cache = LeaseCache(etcd, ttl=10, margin=1.0)
+
+    first = cache.get_or_refresh("node/depl")
+    second = cache.get_or_refresh("node/depl")
+
+    assert second is first
+    assert first.refresh_calls == 0
+    assert len(etcd.leases) == 1
+
+
+def test_get_or_refresh_renews_cached_lease_near_expiry(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("marie.job.lease_cache.time.monotonic", lambda: now[0])
     etcd = FakeEtcd(refresh_ttl=9)
     logger = FakeLogger()
     cache = LeaseCache(etcd, ttl=10, margin=1.0, logger=logger)
 
     first = cache.get_or_refresh("node/depl")
+    now[0] = 109.0
     second = cache.get_or_refresh("node/depl")
 
     assert second is first
@@ -67,11 +85,14 @@ def test_get_or_refresh_renews_cached_lease():
     }
 
 
-def test_get_or_refresh_replaces_zero_ttl_lease():
+def test_get_or_refresh_replaces_zero_ttl_lease(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("marie.job.lease_cache.time.monotonic", lambda: now[0])
     etcd = FakeEtcd(refresh_ttl=0)
     cache = LeaseCache(etcd, ttl=10, margin=1.0)
 
     first = cache.get_or_refresh("node/depl")
+    now[0] = 109.0
     second = cache.get_or_refresh("node/depl")
 
     assert second is not first
@@ -79,14 +100,43 @@ def test_get_or_refresh_replaces_zero_ttl_lease():
     assert len(etcd.leases) == 2
 
 
-def test_get_or_refresh_replaces_missing_lease():
+def test_get_or_refresh_replaces_missing_lease(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("marie.job.lease_cache.time.monotonic", lambda: now[0])
     etcd = FakeEtcd(refresh_error=RuntimeError("requested lease not found"))
     cache = LeaseCache(etcd, ttl=10, margin=1.0)
 
     first = cache.get_or_refresh("node/depl")
+    now[0] = 109.0
     etcd.refresh_error = None
     second = cache.get_or_refresh("node/depl")
 
     assert second is not first
     assert second.id == 2
     assert len(etcd.leases) == 2
+
+
+def test_get_or_refresh_does_not_replace_lease_after_transient_error(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("marie.job.lease_cache.time.monotonic", lambda: now[0])
+    etcd = FakeEtcd(refresh_error=RuntimeError("temporarily unavailable"))
+    cache = LeaseCache(etcd, ttl=10, margin=1.0)
+
+    cache.get_or_refresh("node/depl")
+    now[0] = 109.0
+
+    with pytest.raises(RuntimeError, match="temporarily unavailable"):
+        cache.get_or_refresh("node/depl")
+
+    assert len(etcd.leases) == 1
+
+
+def test_get_or_refresh_grants_one_lease_under_concurrency():
+    etcd = FakeEtcd()
+    cache = LeaseCache(etcd, ttl=10, margin=1.0)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        leases = list(executor.map(cache.get_or_refresh, ["node/depl"] * 32))
+
+    assert len(etcd.leases) == 1
+    assert all(lease is leases[0] for lease in leases)

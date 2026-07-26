@@ -1,13 +1,55 @@
+import asyncio
+import json
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
-import asyncio
 
 import psycopg
 from uuid_extensions import uuid7str
+
+from marie.constants import (
+    JOB_INFO_KEY_PREFIX,
+    JOB_STATUS_NOTIFICATION_CHANNEL,
+    KV_NAMESPACE_JOB,
+)
 from marie.helper import get_or_reuse_loop
 from marie.logging_core.logger import MarieLogger
 from marie.storage.database.postgres import PostgresqlMixin
 from marie.storage.kv.storage_client import StorageArea
+from marie.utils.scheduler_trace import scheduler_trace
+
+
+_TERMINAL_JOB_STATUSES = frozenset({'FAILED', 'STOPPED', 'SUCCEEDED'})
+
+
+def _terminal_job_notification(
+    namespace: str, key: str, value: str
+) -> dict[str, str | None] | None:
+    if namespace != KV_NAMESPACE_JOB.decode() or not key.startswith(
+        JOB_INFO_KEY_PREFIX
+    ):
+        return None
+
+    try:
+        job_info = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(job_info, dict):
+        return None
+
+    status = job_info.get('status')
+    job_id = key[len(JOB_INFO_KEY_PREFIX) :]
+    if status not in _TERMINAL_JOB_STATUSES or not job_id:
+        return None
+
+    run_owner = job_info.get('run_owner')
+    run_attempt_id = job_info.get('run_attempt_id')
+    return {
+        'job_id': job_id,
+        'status': status,
+        'run_owner': run_owner if isinstance(run_owner, str) else None,
+        'run_attempt_id': (run_attempt_id if isinstance(run_attempt_id, str) else None),
+    }
 
 
 class PostgreSQLKV(PostgresqlMixin, StorageArea):
@@ -157,6 +199,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             ns = namespace.decode()
             k = key.decode()
             v = value.decode()
+            terminal_notification = _terminal_job_notification(ns, k, v)
 
             insert_q = f"""
                 INSERT INTO {self.qualified_table} (id, namespace, key, value, shard, created_at, updated_at)
@@ -177,12 +220,38 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             try:
                 conn = self._get_connection()
                 cursor = self._execute_sql_gracefully(
-                    insert_q, data=tuple(params), return_cursor=True, connection=conn
+                    insert_q,
+                    data=tuple(params),
+                    return_cursor=True,
+                    connection=conn,
+                    commit=terminal_notification is None,
                 )
 
                 if cursor is None:
                     return 0
-                return cursor.rowcount
+                rowcount = cursor.rowcount
+                if terminal_notification is not None:
+                    self._close_cursor(cursor)
+                    cursor = None
+                    notify_started = time.perf_counter()
+                    scheduler_trace(
+                        'job_terminal_notification_emit_started',
+                        **terminal_notification,
+                    )
+                    self._execute_sql_gracefully(
+                        'SELECT pg_notify(%s, %s)',
+                        data=(
+                            JOB_STATUS_NOTIFICATION_CHANNEL,
+                            json.dumps(terminal_notification),
+                        ),
+                        connection=conn,
+                    )
+                    scheduler_trace(
+                        'job_terminal_notification_emitted',
+                        **terminal_notification,
+                        elapsed_ms=(time.perf_counter() - notify_started) * 1000.0,
+                    )
+                return rowcount
             finally:
                 self._close_cursor(cursor)
                 self._close_connection(conn)

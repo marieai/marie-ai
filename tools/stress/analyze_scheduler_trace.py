@@ -53,6 +53,12 @@ EVENTS = (
     "job_monitor_status_observed",
     "job_monitor_terminal_observed",
     "job_monitor_sleep_started",
+    "job_monitor_woken_by_notification",
+    "job_terminal_notification_emit_started",
+    "job_terminal_notification_emitted",
+    "job_terminal_notification_received",
+    "job_terminal_event_published",
+    "job_terminal_event_publish_skipped",
     "job_status_event_enqueued",
     "job_status_event_dropped",
     "job_status_event_dequeued",
@@ -70,6 +76,7 @@ EVENTS = (
     "executor_slot_release_retry_succeeded",
     "executor_slot_release_retry_deferred",
     "executor_slot_release_retry_failed",
+    "executor_terminal_status_write_started",
     "executor_success_recorded",
     "executor_failed_recorded",
     "job_run_attempt_started",
@@ -165,6 +172,22 @@ REPORT_LATENCIES = (
     (
         "executor-terminal->monitor-observed",
         "executor_terminal_to_monitor_observed",
+    ),
+    (
+        "terminal-write->notification-received",
+        "terminal_write_to_notification_received",
+    ),
+    (
+        "notification-emit->notification-received",
+        "notification_emit_to_received",
+    ),
+    (
+        "notification-received->event-enqueue",
+        "notification_received_to_event_enqueue",
+    ),
+    (
+        "notification-received->monitor-observed",
+        "notification_received_to_monitor_observed",
     ),
     (
         "supervisor-send-complete->status-read",
@@ -467,8 +490,6 @@ def summarize_job(
         terminal_event = "executor_success_recorded"
     elif "executor_failed_recorded" in by_event:
         terminal_event = "executor_failed_recorded"
-    elif "job_terminal_attempt_accepted" in by_event:
-        terminal_event = "job_terminal_attempt_accepted"
 
     dispatch_start = by_event.get("gateway_dispatch_start")
     accepted_at = _first(
@@ -511,6 +532,25 @@ def summarize_job(
     monitor_terminal_observed = _first_event_row(
         rows,
         "job_monitor_terminal_observed",
+        pid=scheduler_pid,
+        status=accepted_status,
+        terminal_only=accepted_status is None,
+    )
+    terminal_status_write_started = _first_event_row(
+        rows,
+        "executor_terminal_status_write_started",
+        status=accepted_status,
+        terminal_only=accepted_status is None,
+    )
+    terminal_notification_emit_started = _first_event_row(
+        rows,
+        "job_terminal_notification_emit_started",
+        status=accepted_status,
+        terminal_only=accepted_status is None,
+    )
+    terminal_notification_received = _first_event_row(
+        rows,
+        "job_terminal_notification_received",
         pid=scheduler_pid,
         status=accepted_status,
         terminal_only=accepted_status is None,
@@ -685,6 +725,22 @@ def summarize_job(
         ),
         "executor_terminal_to_monitor_observed": _milliseconds(
             executor_terminal_at,
+            _row_time(monitor_terminal_observed),
+        ),
+        "terminal_write_to_notification_received": _milliseconds(
+            _row_time(terminal_status_write_started),
+            _row_time(terminal_notification_received),
+        ),
+        "notification_emit_to_received": _milliseconds(
+            _row_time(terminal_notification_emit_started),
+            _row_time(terminal_notification_received),
+        ),
+        "notification_received_to_event_enqueue": _milliseconds(
+            _row_time(terminal_notification_received),
+            _row_time(status_event_enqueued),
+        ),
+        "notification_received_to_monitor_observed": _milliseconds(
+            _row_time(terminal_notification_received),
             _row_time(monitor_terminal_observed),
         ),
         "supervisor_send_complete_to_status_read": _milliseconds(
@@ -1496,6 +1552,16 @@ def _print_trace_coverage(rows: list[dict[str, Any]]) -> None:
         f"status_read={events.get('job_supervisor_terminal_status_read', 0)}"
     )
     print(
+        "terminal notifications: "
+        f"write_started={events.get('executor_terminal_status_write_started', 0)} "
+        f"emit_started={events.get('job_terminal_notification_emit_started', 0)} "
+        f"emitted={events.get('job_terminal_notification_emitted', 0)} "
+        f"received={events.get('job_terminal_notification_received', 0)} "
+        f"event_published={events.get('job_terminal_event_published', 0)} "
+        f"duplicates={events.get('job_terminal_event_publish_skipped', 0)} "
+        f"monitor_wakes={events.get('job_monitor_woken_by_notification', 0)}"
+    )
+    print(
         "internal status publisher: "
         f"enqueued={event_bus.get('job_status_event_enqueued', 0)} "
         f"dequeued={event_bus.get('job_status_event_dequeued', 0)} "
@@ -1537,6 +1603,22 @@ def _print_terminal_handoff_report(
         (
             "executor terminal to monitor observation",
             "executor_terminal_to_monitor_observed",
+        ),
+        (
+            "terminal status write to notification receipt",
+            "terminal_write_to_notification_received",
+        ),
+        (
+            "notification emit to notification receipt",
+            "notification_emit_to_received",
+        ),
+        (
+            "notification receipt to event enqueue",
+            "notification_received_to_event_enqueue",
+        ),
+        (
+            "notification receipt to monitor observation",
+            "notification_received_to_monitor_observed",
         ),
         (
             "supervisor send-task completion to status read",
@@ -2050,6 +2132,14 @@ def _print_findings(
         (
             "executor terminal to supervisor send-task completion",
             "executor_terminal_to_supervisor_send_complete",
+        ),
+        (
+            "terminal status write to notification receipt",
+            "terminal_write_to_notification_received",
+        ),
+        (
+            "notification receipt to event enqueue",
+            "notification_received_to_event_enqueue",
         ),
         (
             "supervisor send-task completion to status read",

@@ -126,8 +126,7 @@ class SemaphoreStore(BaseStore):
          then: put count+1 and put holder (with lease)
 
     renew():
-      TX compare: holder value unchanged (CAS), then re-put same holder (updated renewed_at/ttl)
-      with a *new* lease so TTL is extended. Optional owner check enforced.
+      validate the holder identity and keep its existing lease alive.
 
     release():
       TX compare: count unchanged AND holder exists -> delete holder, put count-1
@@ -487,17 +486,15 @@ class SemaphoreStore(BaseStore):
         ttl: Optional[int] = None,
         update_ttl_field: bool = True,
     ) -> bool:
-        """
-        Renew a holder by re-binding it under a fresh lease.
+        """Keep the holder's attached lease alive.
 
         Safety:
-          - CAS on current holder value (prevents hijack).
-          - Optional owner check (recommended): if provided, must match stored owner.
-          - Does NOT touch the counter (used stays the same).
+          - The holder must still exist under an attached lease.
+          - Optional owner and run-attempt checks prevent stale workers from renewing it.
+          - The holder and counter are not rewritten.
         """
-        h_k = _holder_key(slot_type, ticket_id)
         raw, meta = self._get_holder_raw(slot_type, ticket_id)
-        if raw is None:
+        if raw is None or meta is None or not meta.lease_id:
             return False
 
         try:
@@ -513,20 +510,37 @@ class SemaphoreStore(BaseStore):
             and holder.run_attempt_id != run_attempt_id
         ):
             return False
+        if update_ttl_field and ttl is not None and int(ttl) != holder.ttl:
+            return False
 
-        # refresh timestamps / ttl metadata we store (lease TTL is enforced by etcd)
-        if update_ttl_field and ttl:
-            holder.ttl = int(ttl)
-        holder.renewed_at = _now_iso()
+        responses = self.etcd.refresh_lease(meta.lease_id)
+        if not responses:
+            return False
+        response = responses[0]
+        refreshed_ttl = getattr(response, "TTL", getattr(response, "ttl", 0))
+        return int(refreshed_ttl or 0) > 0
 
-        # Re-put with CAS on the exact previous value and a *new* lease
-        lease = self.etcd.lease(ttl or holder.ttl or self.default_lease_ttl)
-        t = self.etcd.txn()
-        # Using value equality CAS (safer across servers than mod_revision for some etcd/python clients)
-        t.if_value(h_k, "==", raw)
-        t.put(h_k, json.dumps(asdict(holder)), lease=lease.id)
-        ok, _resp = t.commit()
-        return bool(ok)
+    def validate_holder(
+        self,
+        slot_type: str,
+        ticket_id: str,
+        *,
+        owner: str,
+        run_attempt_id: str,
+    ) -> bool:
+        """Verify that a live holder belongs to the expected run attempt."""
+        raw, meta = self._get_holder_raw(slot_type, ticket_id)
+        if raw is None or meta is None or not meta.lease_id:
+            return False
+        try:
+            holder = SemaphoreHolder.from_json(raw)
+        except Exception:
+            return False
+        return (
+            holder.ticket_id == ticket_id
+            and holder.owner == owner
+            and holder.run_attempt_id == run_attempt_id
+        )
 
     def bind_run_attempt(
         self,

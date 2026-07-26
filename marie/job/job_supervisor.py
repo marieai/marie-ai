@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from typing import Dict, List, Optional, Union
 from urllib.parse import urlparse
 
@@ -23,6 +24,10 @@ from marie.state.state_store import StatusStore
 from marie.types_core.request.data import DataRequest
 from marie.utils.scheduler_trace import scheduler_trace
 
+TerminalEventCallback = Callable[
+    [str, JobStatus, Optional[str], Optional[str], str], Awaitable[bool]
+]
+
 
 class JobSupervisor:
     """
@@ -44,6 +49,7 @@ class JobSupervisor:
         etcd_client: EtcdClient,
         desired_state_executor: DesiredStateExecutor,
         confirmation_event: asyncio.Event,
+        terminal_event_callback: Optional[TerminalEventCallback] = None,
     ):
         self.logger = MarieLogger(self.__class__.__name__)
         self._job_id = job_id
@@ -54,6 +60,7 @@ class JobSupervisor:
         self._desired_state_executor = desired_state_executor
         self.request_info = None
         self.confirmation_event = confirmation_event  # we need to make sure that this is per job confirmation event
+        self._terminal_event_callback = terminal_event_callback
         self._active_tasks = set()
         self._loop = get_or_reuse_loop()
         self._current_job_epoch: Optional[int] = None
@@ -492,23 +499,30 @@ class JobSupervisor:
                             current_info = await self._job_info_client.get_info(
                                 self._job_id
                             )
-                            await self._event_publisher.publish(
-                                current_status,
-                                {
-                                    "job_id": self._job_id,
-                                    "status": current_status,
-                                    "message": f"Job {self._job_id} already completed with status {current_status}.",
-                                    "jobinfo_replace_kwargs": False,
-                                    "run_owner": (
-                                        current_info.run_owner if current_info else None
-                                    ),
-                                    "run_attempt_id": (
-                                        current_info.run_attempt_id
-                                        if current_info
-                                        else None
-                                    ),
-                                },
+                            run_owner = current_info.run_owner if current_info else None
+                            run_attempt_id = (
+                                current_info.run_attempt_id if current_info else None
                             )
+                            if self._terminal_event_callback is not None:
+                                await self._terminal_event_callback(
+                                    self._job_id,
+                                    current_status,
+                                    run_owner,
+                                    run_attempt_id,
+                                    'supervisor_finalize',
+                                )
+                            else:
+                                await self._event_publisher.publish(
+                                    current_status,
+                                    {
+                                        "job_id": self._job_id,
+                                        "status": current_status,
+                                        "message": f"Job {self._job_id} already completed with status {current_status}.",
+                                        "jobinfo_replace_kwargs": False,
+                                        "run_owner": run_owner,
+                                        "run_attempt_id": run_attempt_id,
+                                    },
+                                )
                         else:
                             await self._job_info_client.put_status(
                                 self._job_id, JobStatus.SUCCEEDED

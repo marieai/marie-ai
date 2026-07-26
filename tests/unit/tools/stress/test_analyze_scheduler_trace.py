@@ -422,3 +422,108 @@ def test_terminal_handoff_uses_gateway_process_and_terminal_status(capsys) -> No
     assert "status publisher dequeue rate per second: count=1" in output
     assert "status publisher subscriber delivery: count=1" in output
     assert "configured monitor poll sleep: count=1" in output
+
+
+def test_terminal_handoff_omits_executor_latency_without_executor_events(
+    capsys,
+) -> None:
+    rows = [
+        trace_row(
+            "job_supervisor_send_task_completed",
+            1.0,
+            job_id="job-1",
+            pid=11,
+        ),
+        trace_row(
+            "job_monitor_terminal_observed",
+            1.1,
+            job_id="job-1",
+            pid=11,
+            status="SUCCEEDED",
+        ),
+        trace_row(
+            "job_terminal_attempt_accepted",
+            1.2,
+            job_id="job-1",
+            pid=11,
+            status="SUCCEEDED",
+        ),
+    ]
+
+    summary = summarize_job("job-1", rows, {})
+
+    assert summary["executor_terminal_to_supervisor_send_complete"] is None
+    assert summary["executor_terminal_to_monitor_observed"] is None
+    assert summary["terminal"] == "-"
+
+    _print_terminal_handoff_report(rows, [summary])
+
+    output = capsys.readouterr().out
+    assert "executor terminal to supervisor send-task completion" not in output
+    assert "executor terminal to monitor observation" not in output
+
+
+def test_terminal_notification_fast_path_latency(capsys) -> None:
+    rows = [
+        trace_row(
+            "executor_terminal_status_write_started",
+            1.0,
+            job_id="job-1",
+            pid=22,
+            status="SUCCEEDED",
+        ),
+        trace_row(
+            "job_terminal_notification_emit_started",
+            1.1,
+            job_id="job-1",
+            pid=22,
+            status="SUCCEEDED",
+        ),
+        trace_row(
+            "job_terminal_notification_received",
+            1.15,
+            job_id="job-1",
+            pid=11,
+            status="SUCCEEDED",
+        ),
+        trace_row(
+            "job_status_event_enqueued",
+            1.16,
+            job_id="job-1",
+            pid=11,
+            status="SUCCEEDED",
+        ),
+        trace_row(
+            "job_monitor_terminal_observed",
+            1.17,
+            job_id="job-1",
+            pid=11,
+            status="SUCCEEDED",
+        ),
+        trace_row(
+            "executor_success_recorded",
+            1.2,
+            job_id="job-1",
+            pid=22,
+        ),
+        trace_row(
+            "job_terminal_attempt_accepted",
+            1.5,
+            job_id="job-1",
+            pid=11,
+            status="SUCCEEDED",
+        ),
+    ]
+
+    summary = summarize_job("job-1", rows, {})
+
+    assert round(summary["terminal_write_to_notification_received"]) == 150
+    assert round(summary["notification_emit_to_received"]) == 50
+    assert round(summary["notification_received_to_event_enqueue"]) == 10
+    assert round(summary["notification_received_to_monitor_observed"]) == 20
+
+    _print_terminal_handoff_report(rows, [summary])
+
+    output = capsys.readouterr().out
+    assert "terminal status write to notification receipt: count=1" in output
+    assert "notification receipt to event enqueue: count=1" in output

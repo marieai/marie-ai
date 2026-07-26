@@ -15,8 +15,15 @@ class RenewalReleaseRaceSemaphore:
         self.allow_renew = threading.Event()
         self.release_called = threading.Event()
         self.reserve_calls = 0
+        self.renew_calls = 0
+        self.validate_calls = 0
+
+    def validate_holder(self, *_args, **_kwargs) -> bool:
+        self.validate_calls += 1
+        return self.holder_exists
 
     def renew(self, *_args, **_kwargs) -> bool:
+        self.renew_calls += 1
         self.renew_started.set()
         assert self.allow_renew.wait(timeout=2.0)
         return self.holder_exists
@@ -152,7 +159,32 @@ def test_worker_does_not_recreate_missing_attempt_ticket() -> None:
 
     assert tracked is False
     assert semaphore.reserve_calls == 0
+    assert semaphore.renew_calls == 0
+    assert semaphore.validate_calls == 1
     assert handler._active_sem_tickets == {}
+
+
+def test_worker_adopts_existing_attempt_ticket_without_renewing() -> None:
+    semaphore = RenewalReleaseRaceSemaphore()
+    handler = object.__new__(WorkerRequestHandler)
+    handler.logger = MagicMock()
+    handler._semaphore = semaphore
+    handler._node = "worker-1"
+    handler._sem_default_ttl = 30
+    handler._sem_ticket_lock = threading.Lock()
+    handler._active_sem_tickets = {}
+
+    tracked = handler._sem_track(
+        "job-1",
+        "mock_executor_a",
+        run_attempt_id="attempt-1",
+    )
+
+    assert tracked is True
+    assert semaphore.validate_calls == 1
+    assert semaphore.renew_calls == 0
+    assert semaphore.reserve_calls == 0
+    assert handler._active_sem_tickets["job-1"]["run_attempt_id"] == "attempt-1"
 
 
 def test_legacy_worker_request_can_reserve_missing_ticket() -> None:

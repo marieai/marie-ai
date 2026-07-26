@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, replace
 from enum import Enum
 from typing import Any, Dict, Optional, Union
 
-from marie.constants import KV_NAMESPACE_JOB
+from marie.constants import JOB_INFO_KEY_PREFIX, KV_NAMESPACE_JOB
 from marie.storage.kv.storage_client import StorageArea
 
 JOB_ID_METADATA_KEY = "job_submission_id"
@@ -173,7 +173,7 @@ class JobInfoStorageClient:
 
     # Please keep this format in sync with JobDataKey()
     # in src/ray/gcs/gcs_server/gcs_job_manager.h.
-    JOB_DATA_KEY_PREFIX = f"{INTERNAL_NAMESPACE_PREFIX}/job_info_"
+    JOB_DATA_KEY_PREFIX = JOB_INFO_KEY_PREFIX
     JOB_DATA_KEY = f"{JOB_DATA_KEY_PREFIX}{{job_id}}"
 
     def __init__(self, storage: StorageArea):
@@ -277,9 +277,9 @@ class JobInfoStorageClient:
         ]
         job_ids = []
         for job_id_with_prefix in job_ids_with_prefixes:
-            assert job_id_with_prefix.startswith(
-                self.JOB_DATA_KEY_PREFIX
-            ), "Unexpected format for internal_kv key for Job submission"
+            assert job_id_with_prefix.startswith(self.JOB_DATA_KEY_PREFIX), (
+                "Unexpected format for internal_kv key for Job submission"
+            )
             job_ids.append(job_id_with_prefix[len(self.JOB_DATA_KEY_PREFIX) :])
 
         async def get_job_info(job_id: str):

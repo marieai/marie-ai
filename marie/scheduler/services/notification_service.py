@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from collections import deque
 from typing import Any, Callable, Dict, Optional
 
 import psycopg
@@ -32,6 +33,7 @@ class NotificationService:
         # Dedicated connection for LISTEN operations (cannot use pool)
         self._listen_connection: Optional[psycopg.AsyncConnection] = None
         self._listener_task: Optional[asyncio.Task] = None
+        self._pending_notifications: deque[psycopg.Notify] = deque()
 
         # Map of channel names to handler callbacks
         self._handlers: Dict[str, Callable] = {}
@@ -271,13 +273,17 @@ class NotificationService:
             await self._close_connection()
 
     async def _next_notification(self) -> Optional[psycopg.Notify]:
+        if self._pending_notifications:
+            return self._pending_notifications.popleft()
         if self._listen_connection is None or self._listen_connection.closed:
             raise RuntimeError("LISTEN connection is closed")
         async for notify in self._listen_connection.notifies(
             timeout=self._select_timeout,
             stop_after=1,
         ):
-            return notify
+            self._pending_notifications.append(notify)
+        if self._pending_notifications:
+            return self._pending_notifications.popleft()
         return None
 
     async def send_notification(self, channel: str, payload: Dict[str, Any]) -> bool:

@@ -8,6 +8,8 @@ KV_NAMESPACE_DASHBOARD = b"dashboard"
 KV_NAMESPACE_SESSION = b"session"
 KV_NAMESPACE_TRACING = b"tracing"
 KV_NAMESPACE_JOB = b"job"
+JOB_INFO_KEY_PREFIX = "marie_internal/job_info_"
+JOB_STATUS_NOTIFICATION_CHANNEL = "marie_job_status_changed"
 
 __windows__ = _sys.platform == "win32"
 __uptime__ = _datetime.datetime.now().isoformat()
