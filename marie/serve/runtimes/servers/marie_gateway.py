@@ -10,7 +10,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, AsyncGenerator, AsyncIterator, Dict, Optional
+from typing import Any, AsyncGenerator, AsyncIterator, Dict, Literal, Optional
 from urllib.parse import urlparse
 
 import grpc
@@ -552,6 +552,7 @@ class MarieServerGateway(CompositeServer):
         self._streamer_update_lock = asyncio.Lock()
         self._service_retry_tasks: dict[str, asyncio.Task] = {}
         self._service_retry_attempts: dict[str, int] = {}
+        self._service_readiness: dict[str, dict[str, Any]] = {}
         self._debounce_s = 0.05
 
         def _extend_rest_function(app: 'FastAPI'):
@@ -1026,6 +1027,21 @@ class MarieServerGateway(CompositeServer):
                         "status": "error",
                         "result": f"Failed to get capacity info: {str(e)}",
                     }
+
+            @app.get(
+                path="/api/discovery/readiness",
+                summary="Get service discovery readiness",
+                tags=["Operations"],
+            )
+            async def get_discovery_readiness(
+                state: Optional[
+                    Literal["ready", "checking", "retrying", "error", "unready"]
+                ] = Query(default=None),
+            ):
+                return {
+                    "status": "OK",
+                    "result": self._discovery_readiness_snapshot(state),
+                }
 
             # Query Planner Management Endpoints
             @app.get(
@@ -2138,19 +2154,43 @@ class MarieServerGateway(CompositeServer):
         error_count = 0
         while True:
             event: ServiceEvent = await queue.get()
+            readiness = None
             try:
                 if event.ev_type == "put":
+                    readiness = self._service_readiness_entry(event)
+                    readiness["state"] = "checking"
                     result = await self.gateway_server_online(
                         event.service, event.value
                     )
                     if result is None:
+                        readiness.update(
+                            {
+                                "ready": False,
+                                "state": "unready",
+                                "last_checked_at": _now_iso(),
+                                "last_error": "gRPC health check did not return SERVING",
+                            }
+                        )
                         self._schedule_service_retry(event)
                         changed = False
                     else:
+                        checked_at = _now_iso()
+                        readiness.update(
+                            {
+                                "ready": True,
+                                "state": "ready",
+                                "retry_attempt": 0,
+                                "last_checked_at": checked_at,
+                                "last_ready_at": checked_at,
+                                "next_retry_at": None,
+                                "last_error": None,
+                            }
+                        )
                         self._cancel_service_retry(event.key)
                         changed = result
                 elif event.ev_type == "delete":
                     self._cancel_service_retry(event.key)
+                    self._service_readiness.pop(event.key, None)
                     changed = await self.gateway_server_offline(event.key, event.value)
                 else:
                     self.logger.warning(f"Unknown service ev_type: {event.ev_type}")
@@ -2163,6 +2203,16 @@ class MarieServerGateway(CompositeServer):
             except asyncio.CancelledError:
                 raise
             except Exception as ex:
+                if readiness is not None:
+                    readiness.update(
+                        {
+                            "ready": False,
+                            "state": "error",
+                            "last_checked_at": _now_iso(),
+                            "next_retry_at": None,
+                            "last_error": str(ex),
+                        }
+                    )
                 self.logger.error(f"Service event error: {ex}", exc_info=True)
                 error_count += 1
                 if error_count >= max_errors:
@@ -2183,6 +2233,21 @@ class MarieServerGateway(CompositeServer):
         self._service_retry_attempts[event.key] = attempt
         delay = min(5 * (2 ** min(attempt - 1, 4)), 60)
         delay += (abs(hash(event.key)) % 1000) / 1000
+        next_retry_at = (
+            (datetime.now(timezone.utc) + timedelta(seconds=delay))
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
+        readiness = self._service_readiness_entry(event)
+        readiness.update(
+            {
+                "ready": False,
+                "state": "retrying",
+                "retry_attempt": attempt,
+                "next_retry_at": next_retry_at,
+            }
+        )
 
         async def _retry() -> None:
             try:
@@ -2200,6 +2265,72 @@ class MarieServerGateway(CompositeServer):
             delay,
         )
         self._service_retry_tasks[event.key] = asyncio.create_task(_retry())
+
+    def _service_readiness_entry(self, event: ServiceEvent) -> dict[str, Any]:
+        entry = self._service_readiness.get(event.key)
+        if entry is not None:
+            return entry
+
+        json_address = JsonAddress.from_value(event.value)
+        address = _netloc(json_address._addr)
+        metadata = json.loads(json_address._metadata)
+        parsed_address = urlparse(f"//{address}")
+        entry = {
+            "key": event.key,
+            "service": event.service,
+            "address": address,
+            "host": parsed_address.hostname,
+            "port": parsed_address.port,
+            "registered": True,
+            "ready": False,
+            "state": "checking",
+            "retry_attempt": self._service_retry_attempts.get(event.key, 0),
+            "probe_attempt_limit": 3,
+            "first_seen_at": _now_iso(),
+            "last_checked_at": None,
+            "last_ready_at": None,
+            "next_retry_at": None,
+            "last_error": None,
+            "executors": sorted(metadata),
+        }
+        self._service_readiness[event.key] = entry
+        return entry
+
+    def _discovery_readiness_snapshot(
+        self,
+        state: Optional[str] = None,
+    ) -> dict[str, Any]:
+        gateways = [dict(entry) for entry in self._service_readiness.values()]
+        ready_count = sum(1 for entry in gateways if entry["ready"])
+        summary = {
+            "registered": len(gateways),
+            "ready": ready_count,
+            "unready": len(gateways) - ready_count,
+            "checking": sum(1 for entry in gateways if entry["state"] == "checking"),
+            "retrying": sum(1 for entry in gateways if entry["state"] == "retrying"),
+            "error": sum(1 for entry in gateways if entry["state"] == "error"),
+        }
+
+        if state == "unready":
+            gateways = [entry for entry in gateways if not entry["ready"]]
+        elif state is not None:
+            gateways = [entry for entry in gateways if entry["state"] == state]
+
+        if not self.ready_event.is_set():
+            readiness = "initializing"
+        elif summary["unready"]:
+            readiness = "degraded"
+        else:
+            readiness = "ready"
+
+        gateways.sort(key=lambda entry: (entry["address"], entry["key"]))
+        return {
+            "readiness": readiness,
+            "control_plane_ready": self.ready_event.is_set(),
+            "observed_at": _now_iso(),
+            "summary": summary,
+            "gateways": gateways,
+        }
 
     def _cancel_service_retry(self, key: str) -> None:
         retry_task = self._service_retry_tasks.pop(key, None)

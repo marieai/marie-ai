@@ -1,9 +1,11 @@
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from marie.serve.discovery import JsonAddress
 from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (  # noqa: F401
     GatewayLlmDispatchRuntime,
 )
@@ -27,6 +29,7 @@ def _gateway(worker_count: int = 2) -> MarieServerGateway:
     gateway._streamer_update_lock = asyncio.Lock()
     gateway._service_retry_tasks = {}
     gateway._service_retry_attempts = {}
+    gateway._service_readiness = {}
     gateway._debounce_s = 0
     gateway._rebuild_deployments_projection = Mock()
     gateway.update_gateway_streamer = AsyncMock()
@@ -36,13 +39,24 @@ def _gateway(worker_count: int = 2) -> MarieServerGateway:
 
 
 def _event(key: str, name: str) -> ServiceEvent:
+    address = key.rsplit("/", 1)[-1]
     return ServiceEvent(
         kind=EventKind.SERVICE,
         service="gateway/marie",
         ev_type="put",
-        value={"name": name},
+        value={
+            key: JsonAddress(
+                address,
+                metadata=f'{{"{name}":["{address}"]}}',
+            ).add_value()
+        },
         key=key,
     )
+
+
+def _event_executor(value: dict) -> str:
+    metadata = JsonAddress.from_value(value)._metadata
+    return next(iter(json.loads(metadata)))
 
 
 def _snapshot_complete() -> ServiceEvent:
@@ -105,7 +119,7 @@ async def test_initial_snapshot_does_not_wait_for_registration_probes():
     fast_processed = asyncio.Event()
 
     async def gateway_server_online(_service, value):
-        if value["name"] == "slow":
+        if _event_executor(value) == "slow":
             await slow_release.wait()
         else:
             fast_processed.set()
@@ -169,6 +183,115 @@ async def test_unready_registration_retries_without_blocking_snapshot():
 
 
 @pytest.mark.asyncio
+async def test_unready_registration_is_exposed_with_retry_details():
+    gateway = _gateway()
+    gateway.ready_event.set()
+    gateway.gateway_server_online = AsyncMock(return_value=None)
+    processor = asyncio.create_task(gateway.process_service_events())
+    event = _event(
+        "gateway/marie/172.20.10.67:62177",
+        "corr_indexing_executor",
+    )
+
+    await gateway.service_events_queue.put(event)
+    for _ in range(20):
+        entry = gateway._service_readiness.get(event.key)
+        if entry and entry["state"] == "retrying":
+            break
+        await asyncio.sleep(0)
+
+    snapshot = gateway._discovery_readiness_snapshot("unready")
+
+    assert snapshot["readiness"] == "degraded"
+    assert snapshot["summary"] == {
+        "registered": 1,
+        "ready": 0,
+        "unready": 1,
+        "checking": 0,
+        "retrying": 1,
+        "error": 0,
+    }
+    entry = snapshot["gateways"][0]
+    assert {
+        key: entry[key]
+        for key in (
+            "key",
+            "address",
+            "host",
+            "port",
+            "registered",
+            "ready",
+            "state",
+            "retry_attempt",
+            "probe_attempt_limit",
+            "last_error",
+            "executors",
+        )
+    } == {
+        "key": event.key,
+        "address": "172.20.10.67:62177",
+        "host": "172.20.10.67",
+        "port": 62177,
+        "registered": True,
+        "ready": False,
+        "state": "retrying",
+        "retry_attempt": 1,
+        "probe_attempt_limit": 3,
+        "last_error": "gRPC health check did not return SERVING",
+        "executors": ["corr_indexing_executor"],
+    }
+    assert entry["first_seen_at"] is not None
+    assert entry["last_checked_at"] is not None
+    assert entry["next_retry_at"] is not None
+
+    processor.cancel()
+    await asyncio.gather(processor, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_ready_registration_is_removed_after_discovery_delete():
+    gateway = _gateway()
+    gateway.ready_event.set()
+    gateway.gateway_server_online = AsyncMock(return_value=True)
+    processor = asyncio.create_task(gateway.process_service_events())
+    event = _event("gateway/marie/172.20.10.67:62177", "corr_indexing_executor")
+
+    await gateway.service_events_queue.put(event)
+    for _ in range(20):
+        entry = gateway._service_readiness.get(event.key)
+        if entry and entry["state"] == "ready":
+            break
+        await asyncio.sleep(0)
+
+    ready_snapshot = gateway._discovery_readiness_snapshot("ready")
+    assert ready_snapshot["readiness"] == "ready"
+    assert ready_snapshot["summary"]["ready"] == 1
+    assert ready_snapshot["gateways"][0]["last_ready_at"] is not None
+
+    await gateway.service_events_queue.put(
+        ServiceEvent(
+            kind=EventKind.SERVICE,
+            service=event.service,
+            ev_type="delete",
+            value=None,
+            key=event.key,
+        )
+    )
+    for _ in range(20):
+        if event.key not in gateway._service_readiness:
+            break
+        await asyncio.sleep(0)
+
+    removed_snapshot = gateway._discovery_readiness_snapshot()
+    assert removed_snapshot["readiness"] == "ready"
+    assert removed_snapshot["summary"]["registered"] == 0
+    assert removed_snapshot["gateways"] == []
+
+    processor.cancel()
+    await asyncio.gather(processor, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_events_for_same_registration_remain_ordered():
     gateway = _gateway()
     first_release = asyncio.Event()
@@ -176,8 +299,9 @@ async def test_events_for_same_registration_remain_ordered():
     order = []
 
     async def gateway_server_online(_service, value):
-        order.append(value["name"])
-        if value["name"] == "first":
+        name = _event_executor(value)
+        order.append(name)
+        if name == "first":
             await first_release.wait()
         else:
             second_started.set()
