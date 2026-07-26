@@ -86,6 +86,47 @@ def test_trace_coverage_reports_deferred_frontier_admission(capsys) -> None:
     assert "active_limit=1 executor_capacity=1" in output
 
 
+def test_dispatch_confirmation_pipeline_is_reported(capsys) -> None:
+    rows = [
+        trace_row("gateway_dispatch_start", 1.0, job_id="job-1"),
+        trace_row(
+            "dispatch_batch_start",
+            1.0,
+            count=1,
+            job_ids=["job-1"],
+        ),
+        trace_row(
+            "dispatch_batch_launched",
+            1.01,
+            count=1,
+            pending=3,
+            limit=256,
+        ),
+        trace_row(
+            "dispatch_confirmation_settled",
+            1.2,
+            job_id="job-1",
+            outcome="confirmed",
+            elapsed_ms=190.0,
+        ),
+    ]
+    rate_stats = {
+        "gateway_submit_received": (0, None, None),
+        "gateway_dispatch_start": (1, None, None),
+        "executor_success_recorded": (0, None, None),
+        "executor_failed_recorded": (0, None, None),
+    }
+
+    _print_trace_coverage(rows)
+    _print_dispatch_efficiency_report(rows, [], rate_stats)
+
+    output = capsys.readouterr().out
+    assert "dispatch confirmations: launched=1 settled=1 backpressure=0" in output
+    assert "pending dispatch confirmations: count=1" in output
+    assert "dispatch confirmation settlement: count=1" in output
+    assert "dispatch confirmation outcomes: confirmed=1" in output
+
+
 def test_findings_report_executor_slot_release_failures(capsys) -> None:
     _print_findings(
         {"gateway_dispatch_start": (0, None, None)},

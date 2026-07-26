@@ -1,5 +1,6 @@
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict
 
 import pytest
@@ -72,6 +73,29 @@ def test_desired_schedule_new_epoch_creation_and_increment(desired_store: Desire
     assert second.phase == "SCHEDULED"
     assert second.params.get("a") == 1
     assert second.params.get("b") == 2
+
+
+@pytest.mark.slow
+def test_desired_schedule_new_epoch_dispatch_fanout(desired_store: DesiredStore):
+    pairs = [_mk_ids() for _ in range(70)]
+    for ids in pairs:
+        desired_store.schedule_new_epoch(ids["node"], ids["depl"])
+
+    started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        futures = [
+            executor.submit(
+                desired_store.schedule_new_epoch,
+                ids["node"],
+                ids["depl"],
+                {"job_id": f"job-{index}"},
+            )
+            for index, ids in enumerate(pairs)
+        ]
+        results = [future.result() for future in futures]
+
+    assert time.perf_counter() - started < 3.0
+    assert [doc.epoch for doc in results] == [2] * len(pairs)
 
 
 def test_desired_bump_epoch(desired_store: DesiredStore):

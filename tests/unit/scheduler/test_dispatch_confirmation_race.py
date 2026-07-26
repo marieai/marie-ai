@@ -10,6 +10,7 @@ import pytest
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.psql import PostgreSQLJobScheduler
+from marie.scheduler.services import SchedulerRuntime
 from marie.scheduler.services.attempt_lifecycle_service import AttemptLifecycleService
 from marie.scheduler.state import WorkState
 
@@ -119,6 +120,8 @@ class RaceRepository:
     def __init__(self) -> None:
         self.job_state = WorkState.ACTIVE
         self.dispatch_results: list[dict[str, Any]] = []
+        self.dispatch_result_started = asyncio.Event()
+        self.dispatch_result_release: asyncio.Event | None = None
         self.fail_calls: list[dict[str, Any]] = []
         self.terminal_audits: list[dict[str, Any]] = []
 
@@ -127,6 +130,9 @@ class RaceRepository:
 
     async def record_job_attempt_dispatch_result(self, **fields: Any) -> None:
         self.dispatch_results.append(fields)
+        self.dispatch_result_started.set()
+        if self.dispatch_result_release is not None:
+            await self.dispatch_result_release.wait()
 
     async def fail_job(self, **fields: Any) -> tuple[int, None]:
         self.fail_calls.append(fields)
@@ -163,6 +169,18 @@ class LateConfirmingJobManager:
         confirmation_event.set()
         self.repository.job_state = WorkState.COMPLETED
         self.completed.set()
+
+
+class ImmediateConfirmingJobManager:
+    async def submit_job(
+        self,
+        *,
+        submission_id: str,
+        confirmation_event: asyncio.Event,
+        **_fields: Any,
+    ) -> str:
+        confirmation_event.set()
+        return submission_id
 
 
 class RecordingSemaphoreStore:
@@ -219,9 +237,12 @@ async def test_late_confirmation_reproduces_false_dispatch_cleanup_race() -> Non
     scheduler.frontier = frontier
     scheduler._semaphore_store = semaphore_store
     scheduler.lease_ttl_seconds = 1
+    scheduler.run_ttl_seconds = 1
     scheduler.lease_owner = 'reproducer-scheduler'
     scheduler.gateway_instance_id = 'reproducer-gateway'
     scheduler.notify_event = AsyncMock(return_value=True)
+    scheduler.runtime = SchedulerRuntime(scheduler.logger)
+    scheduler._attempt_audit_semaphore = asyncio.Semaphore(2)
 
     counters: list[tuple[str, dict[str, Any]]] = []
     scheduler.attempt_lifecycle_service = AttemptLifecycleService(
@@ -294,6 +315,35 @@ async def test_late_confirmation_reproduces_false_dispatch_cleanup_race() -> Non
         f'run_attempt_id={run_attempt_id}'
     )
     assert counters[0][0] == 'terminal_event_stale_attempt_total'
+
+
+@pytest.mark.asyncio
+async def test_dispatch_confirmation_does_not_wait_for_attempt_audit() -> None:
+    repository = RaceRepository()
+    repository.dispatch_result_release = asyncio.Event()
+    scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.logger = MagicMock()
+    scheduler.repository = repository
+    scheduler.job_manager = ImmediateConfirmingJobManager()
+    scheduler.run_ttl_seconds = 1
+    scheduler.lease_owner = 'reproducer-scheduler'
+    scheduler.gateway_instance_id = 'reproducer-gateway'
+    scheduler.runtime = SchedulerRuntime(scheduler.logger)
+    scheduler._attempt_audit_semaphore = asyncio.Semaphore(2)
+
+    enqueue_task = asyncio.create_task(
+        scheduler.enqueue(
+            build_work_item(),
+            run_owner=scheduler.lease_owner,
+            run_attempt_id='e72e442c-a836-45a4-b66d-a4a460c3b04e',
+        )
+    )
+
+    await repository.dispatch_result_started.wait()
+    assert await asyncio.wait_for(enqueue_task, timeout=0.1) is True
+
+    repository.dispatch_result_release.set()
+    await asyncio.gather(*scheduler.runtime.tasks())
 
 
 TARGET_CONTRACT_PENDING = pytest.mark.xfail(

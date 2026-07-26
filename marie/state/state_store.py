@@ -243,12 +243,10 @@ class DesiredStore(BaseStore):
             )
             if self.etcd.put_if_absent(k, json.dumps(asdict(doc))):
                 return doc
-            # raced; fall through
-
-        for _ in range(8):
             val, meta = self.etcd.get(k, metadata=True, serializable=False)
+
+        for attempt in range(8):
             if val is None:
-                # create again in case it was deleted
                 doc = DesiredDoc(
                     phase="SCHEDULED",
                     epoch=1,
@@ -257,21 +255,22 @@ class DesiredStore(BaseStore):
                 )
                 if self.etcd.put_if_absent(k, json.dumps(asdict(doc))):
                     return doc
+            else:
+                cur = DesiredDoc.from_json(val)
+                cur.epoch += 1
+                cur.phase = "SCHEDULED"
+                if params:
+                    cur.params = {**(cur.params or {}), **params}
+                cur.updated_at = _now_iso()
+
+                if self.etcd.update_if_unchanged(
+                    k, json.dumps(asdict(cur)), meta.mod_revision
+                ):
+                    return cur
+
+            if attempt < 7:
                 time.sleep(0.01)
-                continue
-
-            cur = DesiredDoc.from_json(val)
-            cur.epoch += 1
-            cur.phase = "SCHEDULED"
-            if params:
-                cur.params = {**(cur.params or {}), **params}
-            cur.updated_at = _now_iso()
-
-            if self.etcd.update_if_unchanged(
-                k, json.dumps(asdict(cur)), meta.mod_revision
-            ):
-                return cur
-            time.sleep(0.01)
+                val, meta = self.etcd.get(k, metadata=True, serializable=False)
         raise RuntimeError(f"DesiredStore.schedule_new_epoch CAS failed for {k}")
 
     def _create(

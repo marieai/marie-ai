@@ -12,6 +12,7 @@ def test_scheduler_config_parses_runtime_defaults() -> None:
     assert config.submission_queue_size == 1000
     assert config.job_event_worker_count == 8
     assert config.job_event_queue_size == 1024
+    assert config.dispatch_confirmation_max_in_flight == 256
     assert config.priority_refresh_enabled is False
     assert config.priority_refresh_interval == 10
     assert config.max_concurrent_dags == 16
@@ -59,6 +60,10 @@ def test_scheduler_config_rejects_unimplemented_expire_policy() -> None:
         ({'priority_refresh_interval': 0}, 'priority_refresh_interval'),
         ({'submission_queue_size': 0}, 'submission_queue_size'),
         ({'job_event_worker_count': 0}, 'job_event_worker_count'),
+        (
+            {'dispatch_confirmation_max_in_flight': 0},
+            'dispatch_confirmation_max_in_flight',
+        ),
         (
             {'job_event_worker_count': 4, 'job_event_queue_size': 3},
             'job_event_queue_size',

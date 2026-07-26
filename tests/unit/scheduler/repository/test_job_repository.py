@@ -144,6 +144,23 @@ async def test_repository_initializes_pool_in_autocommit_mode() -> None:
 
 
 @pytest.mark.asyncio
+async def test_release_expired_leases_uses_bounded_batch() -> None:
+    connection = FakeConnection(fetchval=[17])
+    repository = build_repository(connection)
+
+    released = await repository.release_expired_leases(limit=250)
+
+    assert released == 17
+    assert connection.calls == [
+        (
+            "fetchval",
+            "SELECT marie_scheduler.release_expired_leases(%s)",
+            (250,),
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_create_tables_includes_gateway_runtime_tables() -> None:
     connection = FakeConnection(fetchval=[True, True])
     repository = build_repository(connection)
@@ -168,7 +185,13 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
         in schema_query
     )
     assert "VALUES ('default')" in schema_query
-    assert "VALUES ('72')" in schema_query
+    assert "VALUES ('73')" in schema_query
+    assert "job_expired_acquisition_lease_idx" in schema_query
+    assert "job_expired_run_lease_idx" in schema_query
+    assert "FOR UPDATE OF j SKIP LOCKED" in schema_query
+    assert "'refresh_job_durations'" in schema_query
+    assert "'refresh_dag_durations'" in schema_query
+    assert "cron.schedule(" not in schema_query
 
 
 @pytest.mark.asyncio
@@ -595,6 +618,42 @@ async def test_activate_from_lease_returns_empty_mapping() -> None:
         == {}
     )
     assert len(connection.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_result_preserves_terminal_attempt_state() -> None:
+    connection = FakeConnection()
+    repository = build_repository(connection)
+
+    await repository.record_job_attempt_dispatch_result(
+        run_attempt_id="00000000-0000-0000-0000-000000000003",
+        confirmed=True,
+    )
+
+    method, query, _ = connection.calls[0]
+    assert method == "execute"
+    assert "WHEN terminal_at IS NOT NULL OR recovery_at IS NOT NULL" in query
+
+
+@pytest.mark.asyncio
+async def test_dispatch_start_does_not_regress_attempt_state() -> None:
+    connection = FakeConnection()
+    repository = build_repository(connection)
+
+    await repository.record_job_attempt_dispatch_started(
+        job_id="00000000-0000-0000-0000-000000000001",
+        job_name="extract",
+        dag_id="00000000-0000-0000-0000-000000000002",
+        run_owner="scheduler-1",
+        run_attempt_id="00000000-0000-0000-0000-000000000003",
+        scheduler_lease_owner="scheduler-1",
+        gateway_instance_id="gateway-1",
+        executor="extractor",
+    )
+
+    method, query, _ = connection.calls[0]
+    assert method == "execute"
+    assert "WHEN job_attempt.attempt_state = 'activated'" in query
 
 
 def test_activate_from_lease_sql_owns_attempt_audit_atomically() -> None:

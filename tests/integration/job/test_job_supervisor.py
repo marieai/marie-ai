@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -10,12 +11,16 @@ from marie.types_core.request.data import DataRequest
 
 
 def make_supervisor(confirmation_event: asyncio.Event) -> JobSupervisor:
+    desired_state_executor = SimpleNamespace(
+        schedule_new_epoch=AsyncMock(return_value=SimpleNamespace(epoch=1))
+    )
     return JobSupervisor(
         job_id="test-job-id",
         job_info_client=Mock(),
         job_distributor=Mock(),
         event_publisher=Mock(),
         etcd_client=Mock(),
+        desired_state_executor=desired_state_executor,
         confirmation_event=confirmation_event,
     )
 
@@ -25,7 +30,7 @@ async def test_pre_send_callback_confirms_before_desired_store_write():
     confirmation_event = asyncio.Event()
     supervisor = make_supervisor(confirmation_event)
     supervisor._loop = asyncio.get_running_loop()
-    supervisor._desired_store.schedule_new_epoch = Mock(
+    supervisor._desired_state_executor.schedule_new_epoch = AsyncMock(
         side_effect=RuntimeError("desired store unavailable")
     )
 

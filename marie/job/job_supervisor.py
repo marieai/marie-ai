@@ -10,6 +10,7 @@ from grpc.aio import AioRpcError
 
 from marie.helper import get_or_reuse_loop
 from marie.job.common import ActorHandle, JobInfo, JobInfoStorageClient, JobStatus
+from marie.job.desired_state_executor import DesiredStateExecutor
 from marie.job.event_publisher import EventPublisher
 from marie.job.job_distributor import JobDistributor
 from marie.logging_core.logger import MarieLogger
@@ -18,7 +19,7 @@ from marie.serve.discovery.etcd_client import EtcdClient
 from marie.serve.networking import _NetworkingHistograms
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
-from marie.state.state_store import DesiredStore, StatusStore
+from marie.state.state_store import StatusStore
 from marie.types_core.request.data import DataRequest
 from marie.utils.scheduler_trace import scheduler_trace
 
@@ -41,6 +42,7 @@ class JobSupervisor:
         job_distributor: JobDistributor,
         event_publisher: EventPublisher,
         etcd_client: EtcdClient,
+        desired_state_executor: DesiredStateExecutor,
         confirmation_event: asyncio.Event,
     ):
         self.logger = MarieLogger(self.__class__.__name__)
@@ -49,6 +51,7 @@ class JobSupervisor:
         self._job_distributor = job_distributor
         self._event_publisher = event_publisher
         self._etcd_client = etcd_client
+        self._desired_state_executor = desired_state_executor
         self.request_info = None
         self.confirmation_event = confirmation_event  # we need to make sure that this is per job confirmation event
         self._active_tasks = set()
@@ -56,7 +59,6 @@ class JobSupervisor:
         self._current_job_epoch: Optional[int] = None
 
         # K8s-style desired/status split
-        self._desired_store = DesiredStore(self._etcd_client)
         self._status_store = StatusStore(self._etcd_client)
 
     async def ping(self) -> bool:
@@ -230,22 +232,21 @@ class JobSupervisor:
             # task.add_done_callback(lambda t: self._active_tasks.discard(t))
 
     def _signal_confirmation_threadsafe(self) -> None:
-        """
-        Signal the asyncio.Event from any thread safely and as early as possible.
-        """
+        """Signal confirmation directly on its loop or safely across threads."""
         if not self.confirmation_event:
             return
+
         loop = self._loop
-        if loop and loop.is_running():
-            loop.call_soon_threadsafe(self.confirmation_event.set)
-        else:
-            self.logger.warning(
-                "No running event loop found, signaling confirmation directly."
-            )
-            try:
-                self.confirmation_event.set()
-            except Exception as e:
-                self.logger.warning(f"Failed to signal confirmation (no loop): {e}")
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop is loop or not loop or not loop.is_running():
+            self.confirmation_event.set()
+            return
+
+        loop.call_soon_threadsafe(self.confirmation_event.set)
 
     def _await_worker_ack(
         self, node: str, deployment: str, epoch: int, timeout_s: float = 5.0
@@ -321,8 +322,8 @@ class JobSupervisor:
             deployment = ctx["deployment"]
             node = self._netloc(node_addr)
             params = {"job_id": self._job_id}
-            desired = await self._loop.run_in_executor(
-                None, self._desired_store.schedule_new_epoch, node, deployment, params
+            desired = await self._desired_state_executor.schedule_new_epoch(
+                node, deployment, params
             )
             self._current_job_epoch = desired.epoch if desired else None
             scheduler_trace(
@@ -423,7 +424,7 @@ class JobSupervisor:
 
             send_callbacks = (
                 self.pre_send_callback,
-                self.after_send_callback,
+                None,
                 self.failure_callback,
             )
 

@@ -465,7 +465,7 @@ def _complete_jobs_query(
       WHERE name = '{name}'
         AND id IN (SELECT UNNEST({ids_string}::uuid[]))
         AND {state_condition}
-      RETURNING *
+      RETURNING 1
     )
     SELECT COUNT(*) FROM results
     """

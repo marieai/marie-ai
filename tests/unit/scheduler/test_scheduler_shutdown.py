@@ -7,7 +7,7 @@ import pytest
 from marie.job.common import JobStatus
 from marie.scheduler.dag_topology_cache import DagTopologyCache
 from marie.scheduler.job_lock import AsyncJobLock
-from marie.scheduler.psql import PostgreSQLJobScheduler
+from marie.scheduler.psql import PostgreSQLJobScheduler, _PendingDispatch
 from marie.scheduler.repository import JobRepository
 from marie.scheduler.services import SchedulerRuntime
 
@@ -35,6 +35,12 @@ def _scheduler_for_stop() -> PostgreSQLJobScheduler:
         stop_sync=AsyncMock(),
     )
     scheduler.runtime = SchedulerRuntime(scheduler.logger)
+    scheduler.dispatch_confirmation_max_in_flight = 256
+    scheduler._pending_dispatches = {}
+    scheduler._semaphore_store = MagicMock()
+    scheduler._activate_and_enqueue_job = AsyncMock(return_value=True)
+    scheduler._handle_dispatch_failure = AsyncMock()
+    scheduler.notify_event = AsyncMock(return_value=True)
     scheduler.submission_service = SimpleNamespace(abort_pending=MagicMock())
     scheduler.job_event_processor = SimpleNamespace(
         abort_pending=MagicMock(return_value=0)
@@ -85,6 +91,7 @@ def _scheduler_for_start() -> PostgreSQLJobScheduler:
         abort_pending=MagicMock(return_value=0),
     )
     scheduler.runtime = SchedulerRuntime(scheduler.logger)
+    scheduler._pending_dispatches = {}
     scheduler._setup_event_subscriptions = MagicMock()
     scheduler._remove_event_subscriptions = MagicMock()
     scheduler.notify_event = AsyncMock(return_value=True)
@@ -207,6 +214,81 @@ async def test_stop_cancels_poll_and_workers_before_returning() -> None:
     assert scheduler.runtime.tasks() == []
     scheduler.submission_service.abort_pending.assert_called_once_with()
     scheduler.job_event_processor.abort_pending.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_stop_drains_pending_dispatch_before_runtime_shutdown() -> None:
+    scheduler = _scheduler_for_stop()
+    confirmation_started = asyncio.Event()
+    release_confirmation = asyncio.Event()
+
+    async def wait_for_confirmation(*_args: object, **_kwargs: object) -> bool:
+        confirmation_started.set()
+        await release_confirmation.wait()
+        return True
+
+    async def close_resources() -> None:
+        scheduler._resources_closed = True
+
+    scheduler._activate_and_enqueue_job = AsyncMock(side_effect=wait_for_confirmation)
+    scheduler._close_runtime_resources = AsyncMock(side_effect=close_resources)
+    work_item = SimpleNamespace(id="job-1", dag_id="dag-1")
+    scheduler._start_pending_dispatch(
+        _PendingDispatch(
+            work_info=work_item,
+            executor="extract",
+            semaphore_owner=work_item.id,
+            run_owner="scheduler-1",
+            run_attempt_id="attempt-1",
+        )
+    )
+    await confirmation_started.wait()
+
+    stop_task = asyncio.create_task(scheduler.stop(timeout=0.2))
+    await asyncio.sleep(0)
+
+    assert not stop_task.done()
+    release_confirmation.set()
+    await stop_task
+
+    assert scheduler._pending_dispatches == {}
+    scheduler._handle_dispatch_failure.assert_not_awaited()
+    scheduler._close_runtime_resources.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_stop_keeps_unresolved_dispatch_attempt_fenced() -> None:
+    scheduler = _scheduler_for_stop()
+    confirmation_started = asyncio.Event()
+
+    async def wait_for_confirmation(*_args: object, **_kwargs: object) -> bool:
+        confirmation_started.set()
+        await asyncio.Event().wait()
+        return True
+
+    async def close_resources() -> None:
+        scheduler._resources_closed = True
+
+    scheduler._activate_and_enqueue_job = AsyncMock(side_effect=wait_for_confirmation)
+    scheduler._close_runtime_resources = AsyncMock(side_effect=close_resources)
+    work_item = SimpleNamespace(id="job-1", dag_id="dag-1")
+    scheduler._start_pending_dispatch(
+        _PendingDispatch(
+            work_info=work_item,
+            executor="extract",
+            semaphore_owner=work_item.id,
+            run_owner="scheduler-1",
+            run_attempt_id="attempt-1",
+        )
+    )
+    await confirmation_started.wait()
+
+    await scheduler.stop(timeout=0.01)
+
+    assert scheduler._pending_dispatches == {}
+    scheduler._handle_dispatch_failure.assert_not_awaited()
+    scheduler._semaphore_store.release_owned.assert_not_called()
+    scheduler._close_runtime_resources.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

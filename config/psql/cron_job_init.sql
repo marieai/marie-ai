@@ -1,31 +1,9 @@
--- This script initializes cron jobs for the Marie Scheduler to refresh DAG and job durations.
--- It needs to be run after the Marie Scheduler has been installed.
-
--- We USE SELECT instead of CALL to ensure compatibility with the function definition.
-
-SELECT cron.schedule(
-    'refresh_dag_durations',
-    '*/1 * * * *',  -- every 1 minute
-    $$SELECT marie_scheduler.refresh_dag_durations();$$
-);
-
-
-SELECT cron.schedule(
-    'refresh_job_durations',
-    '*/1 * * * *',  -- adjust to */0.5 with external loop if sub-minute needed
-    $$SELECT marie_scheduler.refresh_job_durations();$$
-);
-
-
+-- started_on and completed_on are the duration source of truth. These refresh
+-- jobs lock scheduler rows and must not run on the dispatch database.
 SELECT cron.unschedule(jobid)
 FROM cron.job
-WHERE jobname = 'refresh_job_priority';
-
-
--- =========================================================
---  Maintenance Jobs
--- =========================================================
-
--- SELECT cron.schedule('0 3 * * *', $$SELECT marie_scheduler.daily_maintenance();$$);
--- SELECT cron.schedule('*/10 * * * *', $$VACUUM (ANALYZE, VERBOSE) job;$$);
--- SELECT cron.schedule('15 */1 * * *', $$SELECT marie_scheduler.reindex_hot_indexes();$$);
+WHERE jobname IN (
+    'refresh_job_priority',
+    'refresh_job_durations',
+    'refresh_dag_durations'
+);

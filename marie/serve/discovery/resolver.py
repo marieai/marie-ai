@@ -20,6 +20,7 @@ class WatchState:
     service_name: str
     watch_id: Optional[int]
     callback: Callable[[str, Event], None]
+    initial_snapshot_callback: Optional[Callable[[str, int], None]] = None
     notify_on_start: bool = True
     max_retries: int = 3
     last_revision: Optional[int] = None
@@ -170,7 +171,14 @@ class EtcdServiceResolver(ServiceResolver):
         for service_name, wrapped_cb in watches_to_reconcile:
             try:
                 # Fire initial events via the wrapped callback (so health/rev updates apply)
-                self._fire_initial_events(service_name, wrapped_cb)
+                event_count = self._fire_initial_events(service_name, wrapped_cb)
+                watch_state = self._watch_states.get(service_name)
+                if (
+                    event_count is not None
+                    and watch_state is not None
+                    and watch_state.initial_snapshot_callback is not None
+                ):
+                    watch_state.initial_snapshot_callback(service_name, event_count)
             except Exception as e:
                 logger.error(
                     f"Failed to fire initial events for {service_name} during reconnection: {e}",
@@ -312,6 +320,7 @@ class EtcdServiceResolver(ServiceResolver):
         event_callback: Callable[[str, Event], None],
         notify_on_start: bool = True,
         max_retries: int = 3,
+        initial_snapshot_callback: Optional[Callable[[str, int], None]] = None,
     ):
         """Watch service event."""
         logger.info(f"Watching service : {service_name} for changes.")
@@ -322,6 +331,7 @@ class EtcdServiceResolver(ServiceResolver):
                 service_name=service_name,
                 watch_id=None,
                 callback=event_callback,
+                initial_snapshot_callback=initial_snapshot_callback,
                 notify_on_start=notify_on_start,
                 max_retries=max_retries,
             )
@@ -362,7 +372,9 @@ class EtcdServiceResolver(ServiceResolver):
         if notify_on_start:
             # Fire initial events via the wrapped callback, not the raw callback
             try:
-                self._fire_initial_events(service_name, wrapped_cb)
+                event_count = self._fire_initial_events(service_name, wrapped_cb)
+                if event_count is not None and initial_snapshot_callback is not None:
+                    initial_snapshot_callback(service_name, event_count)
             except Exception:
                 logger.error(
                     f"Failed to dispatch initial events for {service_name}",
@@ -371,7 +383,7 @@ class EtcdServiceResolver(ServiceResolver):
 
     def _fire_initial_events(
         self, service_name: str, event_callback: Callable[[str, Event], None]
-    ):
+    ) -> Optional[int]:
         """Fire initial events for current state of the service via a provided callback."""
         try:
             resolved = self._etcd_client.get_prefix(service_name)
@@ -390,10 +402,13 @@ class EtcdServiceResolver(ServiceResolver):
                     # The wrapped callback already logs/updates state
                     pass
 
+            return len(events_to_fire)
+
         except Exception:
             logger.error(
                 f"Failed to fire initial events for {service_name}", exc_info=True
             )
+            return None
 
     def stop_watch_service(self, service_name: str = None) -> None:
         """Stop watching services."""
@@ -649,7 +664,12 @@ class EtcdServiceResolver(ServiceResolver):
 
             # Use wrapped callback for reconciliation so state/health is updated consistently
             wrapped_cb = self._make_safe_callback(service_name, watch_state)
-            self._fire_initial_events(service_name, wrapped_cb)
+            event_count = self._fire_initial_events(service_name, wrapped_cb)
+            if (
+                event_count is not None
+                and watch_state.initial_snapshot_callback is not None
+            ):
+                watch_state.initial_snapshot_callback(service_name, event_count)
 
             if max_rev is not None:
                 with watch_state._state_lock:

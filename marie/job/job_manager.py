@@ -8,6 +8,7 @@ from uuid_extensions import uuid7str
 
 from marie._core.utils import run_background_task
 from marie.job.common import ActorHandle, JobInfo, JobInfoStorageClient, JobStatus
+from marie.job.desired_state_executor import DesiredStateExecutor
 from marie.job.event_publisher import EventPublisher
 from marie.job.job_distributor import JobDistributor
 from marie.job.job_log_storage_client import JobLogStorageClient
@@ -19,6 +20,7 @@ from marie.job.scheduling_strategies import (
 )
 from marie.logging_core.logger import MarieLogger
 from marie.serve.discovery.etcd_client import EtcdClient
+from marie.state.state_store import DesiredStore
 from marie.storage.kv.storage_client import StorageArea
 from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.utils import get_exception_traceback
@@ -77,6 +79,8 @@ class JobManager:
         storage: StorageArea,
         job_distributor: JobDistributor,
         etcd_client: EtcdClient,
+        desired_state_worker_count: int = 16,
+        desired_state_max_pending: int = 128,
     ):
         if etcd_client is None:
             raise Exception("EtcdClient is not configured")
@@ -89,6 +93,11 @@ class JobManager:
         )
         self._log_client = JobLogStorageClient()
         self._etcd_client = etcd_client
+        self._desired_state_executor = DesiredStateExecutor(
+            DesiredStore(etcd_client),
+            max_workers=desired_state_worker_count,
+            max_pending=desired_state_max_pending,
+        )
         self._job_info_client = JobInfoStorageClientProxy(self.event_publisher, storage)
         self.monitored_jobs = set()
         self._active_tasks = set()
@@ -420,6 +429,7 @@ class JobManager:
                 job_distributor=self._job_distributor,
                 event_publisher=self.event_publisher,
                 etcd_client=self._etcd_client,
+                desired_state_executor=self._desired_state_executor,
                 confirmation_event=confirmation_event,
             )
 
@@ -459,6 +469,9 @@ class JobManager:
             )
 
         return submission_id
+
+    def shutdown(self) -> None:
+        self._desired_state_executor.shutdown()
 
     def stop_job(self, job_id) -> bool:
         """Request a job to exit, fire and forget.

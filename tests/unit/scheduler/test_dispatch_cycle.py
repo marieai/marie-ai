@@ -11,8 +11,9 @@ from marie.scheduler.psql import (
     DispatchCycleResult,
     PostgreSQLJobScheduler,
     SemaphoreReservationStatus,
+    _PendingDispatch,
 )
-from marie.scheduler.services import ControlFlowExecutionOutcome
+from marie.scheduler.services import ControlFlowExecutionOutcome, SchedulerRuntime
 from marie.scheduler.state import WorkState
 
 
@@ -23,6 +24,9 @@ def build_scheduler() -> PostgreSQLJobScheduler:
     scheduler.frontier_batch_size = 100
     scheduler.max_concurrent_dags = 16
     scheduler.lease_ttl_seconds = 5
+    scheduler.dispatch_confirmation_max_in_flight = 256
+    scheduler._pending_dispatches = {}
+    scheduler.runtime = SchedulerRuntime(scheduler.logger)
     scheduler.active_dags = {}
     scheduler.priority_refresh_enabled = False
     scheduler._next_priority_refresh_at = float("inf")
@@ -65,6 +69,13 @@ def build_scheduler() -> PostgreSQLJobScheduler:
     scheduler.get_dag_by_id = AsyncMock(return_value=None)
     scheduler.notify_event = AsyncMock(return_value=True)
     return scheduler
+
+
+async def settle_dispatches(scheduler: PostgreSQLJobScheduler) -> None:
+    tasks = list(scheduler._pending_dispatches.values())
+    if tasks:
+        await asyncio.gather(*tasks)
+        await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
@@ -135,6 +146,7 @@ async def test_dispatch_cycle_returns_short_poll_without_waiting(
     monkeypatch.setattr(scheduler_psql, "available_slots_by_executor", lambda _sem: {})
 
     result = await scheduler.run_dispatch_cycle(cycle_index=1)
+    await settle_dispatches(scheduler)
 
     assert result == DispatchCycleResult(
         scheduled=False,
@@ -183,6 +195,7 @@ async def test_dispatch_cycle_plans_leases_activates_and_dispatches_once(
     scheduler.frontier.dag_remaining_counts.return_value = {work_item.dag_id: 1}
 
     result = await scheduler.run_dispatch_cycle(cycle_index=1)
+    await settle_dispatches(scheduler)
 
     assert result == DispatchCycleResult(scheduled=True)
     scheduler.execution_planner.plan.assert_called_once_with(
@@ -207,8 +220,151 @@ async def test_dispatch_cycle_plans_leases_activates_and_dispatches_once(
         run_attempt_id="attempt-1",
     )
     scheduler._semaphore_store.bind_run_attempt.assert_not_called()
-    scheduler.notify_event.assert_not_awaited()
+    scheduler.notify_event.assert_awaited_once_with()
     scheduler._wait_for_dispatch_wake.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_cycle_does_not_wait_for_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = build_scheduler()
+    work_item = SimpleNamespace(
+        id="job-1",
+        dag_id="dag-1",
+        name="extract",
+        data={"metadata": {"on": "extract://default"}},
+        state=WorkState.CREATED,
+    )
+    confirmation_started = asyncio.Event()
+    release_confirmation = asyncio.Event()
+
+    async def wait_for_confirmation(*_args: object, **_kwargs: object) -> bool:
+        confirmation_started.set()
+        await release_confirmation.wait()
+        return True
+
+    scheduler._activate_and_enqueue_job = AsyncMock(side_effect=wait_for_confirmation)
+    scheduler.active_dags[work_item.dag_id] = object()
+    scheduler.frontier.peek_ready.return_value = [work_item]
+    scheduler.frontier.take.return_value = [work_item]
+    scheduler.execution_planner.plan.return_value = [("extract://default", work_item)]
+    scheduler._lease_jobs_db.return_value = {work_item.id}
+    scheduler._reserve_semaphore_slots.return_value = {
+        work_item.id: SemaphoreReservationStatus.RESERVED
+    }
+    scheduler._activate_from_lease_db.return_value = {work_item.id: "attempt-1"}
+    monkeypatch.setattr(
+        scheduler_psql,
+        "_uuid",
+        SimpleNamespace(uuid4=lambda: "attempt-1"),
+    )
+    monkeypatch.setattr(
+        scheduler_psql,
+        "available_slots_by_executor",
+        lambda _sem: {"extract": 1},
+    )
+    monkeypatch.setattr(scheduler_psql, "debug_candidates_and_plan", AsyncMock())
+
+    result = await asyncio.wait_for(
+        scheduler.run_dispatch_cycle(cycle_index=1), timeout=0.1
+    )
+    await asyncio.wait_for(confirmation_started.wait(), timeout=0.1)
+
+    assert result == DispatchCycleResult(scheduled=True)
+    assert list(scheduler._pending_dispatches) == ["attempt-1"]
+    scheduler._handle_dispatch_failure.assert_not_awaited()
+    scheduler._semaphore_store.release_owned.assert_not_called()
+
+    release_confirmation.set()
+    await settle_dispatches(scheduler)
+
+    assert scheduler._pending_dispatches == {}
+    scheduler.notify_event.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_cycle_applies_confirmation_backpressure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = build_scheduler()
+    scheduler.dispatch_confirmation_max_in_flight = 1
+    work_item = SimpleNamespace(
+        id="job-1",
+        dag_id="dag-1",
+        name="extract",
+        data={"metadata": {"on": "extract://default"}},
+        state=WorkState.CREATED,
+    )
+    confirmation_started = asyncio.Event()
+    release_confirmation = asyncio.Event()
+
+    async def wait_for_confirmation(*_args: object, **_kwargs: object) -> bool:
+        confirmation_started.set()
+        await release_confirmation.wait()
+        return True
+
+    scheduler._activate_and_enqueue_job = AsyncMock(side_effect=wait_for_confirmation)
+    scheduler.active_dags[work_item.dag_id] = object()
+    scheduler.frontier.peek_ready.return_value = [work_item]
+    scheduler.frontier.take.return_value = [work_item]
+    scheduler.execution_planner.plan.return_value = [("extract://default", work_item)]
+    scheduler._lease_jobs_db.return_value = {work_item.id}
+    scheduler._reserve_semaphore_slots.return_value = {
+        work_item.id: SemaphoreReservationStatus.RESERVED
+    }
+    scheduler._activate_from_lease_db.return_value = {work_item.id: "attempt-1"}
+    monkeypatch.setattr(
+        scheduler_psql,
+        "_uuid",
+        SimpleNamespace(uuid4=lambda: "attempt-1"),
+    )
+    monkeypatch.setattr(
+        scheduler_psql,
+        "available_slots_by_executor",
+        lambda _sem: {"extract": 1},
+    )
+    monkeypatch.setattr(scheduler_psql, "debug_candidates_and_plan", AsyncMock())
+
+    first = await scheduler.run_dispatch_cycle(cycle_index=1)
+    await asyncio.wait_for(confirmation_started.wait(), timeout=0.1)
+    second = await scheduler.run_dispatch_cycle(cycle_index=2)
+
+    assert first == DispatchCycleResult(scheduled=True)
+    assert second.scheduled is False
+    assert len(scheduler._pending_dispatches) == 1
+    assert scheduler._activate_and_enqueue_job.await_count == 1
+    assert scheduler._activate_from_lease_db.await_count == 1
+
+    release_confirmation.set()
+    await settle_dispatches(scheduler)
+
+
+@pytest.mark.asyncio
+async def test_pending_dispatch_failure_settles_exact_attempt() -> None:
+    scheduler = build_scheduler()
+    scheduler._activate_and_enqueue_job.return_value = False
+    work_item = SimpleNamespace(id="job-1", dag_id="dag-1")
+    pending = _PendingDispatch(
+        work_info=work_item,
+        executor="extract",
+        semaphore_owner=work_item.id,
+        run_owner="scheduler-1",
+        run_attempt_id="attempt-1",
+    )
+
+    scheduler._start_pending_dispatch(pending)
+    await settle_dispatches(scheduler)
+
+    scheduler._handle_dispatch_failure.assert_awaited_once_with(
+        work_item,
+        "extract",
+        work_item.id,
+        False,
+        run_owner="scheduler-1",
+        run_attempt_id="attempt-1",
+    )
+    assert scheduler._pending_dispatches == {}
 
 
 @pytest.mark.asyncio
@@ -257,6 +413,7 @@ async def test_dispatch_cycle_reconciles_partial_database_lease(
     monkeypatch.setattr(scheduler_psql, "debug_candidates_and_plan", AsyncMock())
 
     result = await scheduler.run_dispatch_cycle(cycle_index=1)
+    await settle_dispatches(scheduler)
 
     assert result == DispatchCycleResult(scheduled=True)
     scheduler._lease_jobs_db.assert_awaited_once_with(

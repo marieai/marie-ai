@@ -44,7 +44,7 @@ from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
 
 DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
-SCHEDULER_SCHEMA_VERSION = 72
+SCHEDULER_SCHEMA_VERSION = 73
 
 
 class _GuardrailRouteConflict(RuntimeError):
@@ -421,10 +421,10 @@ class AsyncJobRepository:
             )
         return [(str(row[0]), row[1]) for row in rows]
 
-    async def release_expired_leases(self) -> int:
+    async def release_expired_leases(self, limit: int = 1000) -> int:
         async with self._pool.acquire() as conn:
             value = await conn.fetchval(
-                f"SELECT {DEFAULT_SCHEMA}.release_expired_leases()"
+                f"SELECT {DEFAULT_SCHEMA}.release_expired_leases(%s)", limit
             )
         return int(value or 0)
 
@@ -723,7 +723,11 @@ class AsyncJobRepository:
                         job_attempt.gateway_instance_id
                     ),
                     scheduler_lease_owner = EXCLUDED.scheduler_lease_owner,
-                    attempt_state = 'dispatching',
+                    attempt_state = CASE
+                        WHEN job_attempt.attempt_state = 'activated'
+                        THEN 'dispatching'
+                        ELSE job_attempt.attempt_state
+                    END,
                     dispatch_started_at = COALESCE(
                         job_attempt.dispatch_started_at, NOW()
                     ),
@@ -750,7 +754,11 @@ class AsyncJobRepository:
             await conn.execute(
                 f"""
                 UPDATE {DEFAULT_SCHEMA}.job_attempt
-                SET attempt_state = %s,
+                SET attempt_state = CASE
+                        WHEN terminal_at IS NOT NULL OR recovery_at IS NOT NULL
+                        THEN attempt_state
+                        ELSE %s
+                    END,
                     dispatch_confirmed_at = CASE
                         WHEN %s THEN COALESCE(dispatch_confirmed_at, NOW())
                         ELSE dispatch_confirmed_at

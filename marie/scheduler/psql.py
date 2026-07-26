@@ -6,6 +6,7 @@ import traceback
 import uuid as _uuid
 from asyncio import Queue
 from collections import Counter, defaultdict
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -99,6 +100,15 @@ class DispatchCycleResult:
 
     scheduled: bool
     wait_interval: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingDispatch:
+    work_info: WorkInfo
+    executor: str
+    semaphore_owner: str
+    run_owner: str
+    run_attempt_id: str
 
 
 class SemaphoreReservationStatus(str, Enum):
@@ -235,6 +245,11 @@ class PostgreSQLJobScheduler(JobScheduler):
 
         self.job_manager = job_manager
         self.job_event_worker_count = scheduler_config.job_event_worker_count
+        self.dispatch_confirmation_max_in_flight = (
+            scheduler_config.dispatch_confirmation_max_in_flight
+        )
+        self._pending_dispatches: dict[str, asyncio.Task[None]] = {}
+        self._attempt_audit_semaphore = asyncio.Semaphore(2)
         self.job_event_processor = SchedulerJobEventProcessor(
             handler=self._handle_job_event,
             logger=self.logger,
@@ -1014,6 +1029,18 @@ class PostgreSQLJobScheduler(JobScheduler):
                 slots_by_executor = available_slots_by_executor(
                     self._semaphore_store
                 ).copy()
+                dispatch_capacity = max(
+                    0,
+                    self.dispatch_confirmation_max_in_flight
+                    - len(self._pending_dispatches),
+                )
+                if dispatch_capacity == 0:
+                    scheduler_trace(
+                        "dispatch_confirmation_backpressure",
+                        pending=len(self._pending_dispatches),
+                        limit=self.dispatch_confirmation_max_in_flight,
+                    )
+                    slots_by_executor = {executor: 0 for executor in slots_by_executor}
 
                 no_executor_slots = not any(slots_by_executor.values())
                 self.logger.debug(f"[WORK_DIST] Available slots: {slots_by_executor}")
@@ -1251,17 +1278,24 @@ class PostgreSQLJobScheduler(JobScheduler):
                 limited_planned = limit_planned_jobs_to_available_slots(
                     planned, pick_slots
                 )
+                limited_planned = limited_planned[:dispatch_capacity]
                 scheduler_trace(
                     "planner_selected",
                     planned=len(planned),
                     limited=len(limited_planned),
                     slots=dict(pick_slots),
+                    dispatch_capacity=dispatch_capacity,
+                    pending_dispatches=len(self._pending_dispatches),
+                    dispatch_confirmation_limit=(
+                        self.dispatch_confirmation_max_in_flight
+                    ),
                     job_ids=[wi.id for _, wi in limited_planned],
                 )
                 if len(limited_planned) < len(planned):
                     self.logger.debug(
                         f"[WORK_DIST] Trimmed planner selection from {len(planned)} "
-                        f"to {len(limited_planned)} based on live slot capacity. "
+                        f"to {len(limited_planned)} based on live slot and "
+                        f"dispatch-confirmation capacity. "
                         f"Slots: {pick_slots}"
                     )
                 planned = limited_planned
@@ -1380,7 +1414,7 @@ class PostgreSQLJobScheduler(JobScheduler):
 
                 #  PROCESS LEASED JOBS
                 jobs_scheduled_this_cycle = defaultdict(int)
-                enqueue_tasks = []
+                pending_dispatches: list[_PendingDispatch] = []
                 reservable_jobs_by_executor: dict[str, list[WorkInfo]] = defaultdict(
                     list
                 )
@@ -1579,73 +1613,35 @@ class PostgreSQLJobScheduler(JobScheduler):
                             run_attempt_id=run_attempt_id,
                             **self._ha_trace_fields(),
                         )
-                        enqueue_tasks.append(
-                            {
-                                "task": asyncio.create_task(
-                                    self._activate_and_enqueue_job(
-                                        wi,
-                                        run_owner=self.lease_owner,
-                                        run_attempt_id=run_attempt_id,
-                                    )
-                                ),
-                                "wi": wi,
-                                "exe": slot_type,
-                                "owner": owner,
-                                "run_owner": self.lease_owner,
-                                "run_attempt_id": run_attempt_id,
-                            }
-                        )
-
-                if enqueue_tasks:
-                    scheduler_trace(
-                        "dispatch_batch_start",
-                        count=len(enqueue_tasks),
-                        job_ids=[item["wi"].id for item in enqueue_tasks],
-                    )
-                    self.logger.debug(
-                        f"[WORK_DIST] Dispatching {len(enqueue_tasks)} jobs via _activate_and_enqueue_job..."
-                    )
-                    results = await asyncio.gather(
-                        *[t["task"] for t in enqueue_tasks], return_exceptions=True
-                    )
-                    scheduler_trace(
-                        "dispatch_batch_complete",
-                        count=len(results),
-                        failures=sum(
-                            1
-                            for result in results
-                            if isinstance(result, Exception) or not result
-                        ),
-                    )
-                    self.logger.debug(
-                        f"[WORK_DIST] Dispatch completed. Processing {len(results)} results..."
-                    )
-                    for i, result in enumerate(results):
-                        wi = enqueue_tasks[i]["wi"]
-                        exe = enqueue_tasks[i]["exe"]
-                        owner = enqueue_tasks[i]["owner"]
-                        run_owner = enqueue_tasks[i]["run_owner"]
-                        run_attempt_id = enqueue_tasks[i]["run_attempt_id"]
-
-                        if isinstance(result, Exception) or not result:
-                            self.logger.error(
-                                f"[WORK_DIST] Dispatch FAILED for job={wi.id}, executor={exe}: {result}",
-                                exc_info=(
-                                    True if isinstance(result, Exception) else False
-                                ),
-                            )
-                            await self._handle_dispatch_failure(
-                                wi,
-                                exe,
-                                owner,
-                                result,
-                                run_owner=run_owner,
+                        pending_dispatches.append(
+                            _PendingDispatch(
+                                work_info=wi,
+                                executor=slot_type,
+                                semaphore_owner=owner,
+                                run_owner=self.lease_owner,
                                 run_attempt_id=run_attempt_id,
                             )
-                            continue
+                        )
 
-                        jobs_scheduled_this_cycle[exe] += 1
-                        scheduled_any = True
+                if pending_dispatches:
+                    scheduler_trace(
+                        "dispatch_batch_start",
+                        count=len(pending_dispatches),
+                        job_ids=[item.work_info.id for item in pending_dispatches],
+                    )
+                    self.logger.debug(
+                        f"[WORK_DIST] Launching {len(pending_dispatches)} dispatch confirmations"
+                    )
+                    for pending in pending_dispatches:
+                        self._start_pending_dispatch(pending)
+                        jobs_scheduled_this_cycle[pending.executor] += 1
+                    scheduled_any = True
+                    scheduler_trace(
+                        "dispatch_batch_launched",
+                        count=len(pending_dispatches),
+                        pending=len(self._pending_dispatches),
+                        limit=self.dispatch_confirmation_max_in_flight,
+                    )
 
                 if jobs_scheduled_this_cycle:
                     self.logger.debug("Scheduling summary for this cycle:")
@@ -1660,6 +1656,92 @@ class PostgreSQLJobScheduler(JobScheduler):
                         self.logger.debug(f"Frontier heap compacted: removed={removed}")
 
         return DispatchCycleResult(scheduled=False)
+
+    def _start_pending_dispatch(self, pending: _PendingDispatch) -> None:
+        if len(self._pending_dispatches) >= self.dispatch_confirmation_max_in_flight:
+            raise RuntimeError("Dispatch confirmation capacity exhausted")
+
+        task = asyncio.create_task(
+            self._settle_pending_dispatch(pending, time.perf_counter()),
+            name=f"scheduler-dispatch-{pending.run_attempt_id}",
+        )
+        self._pending_dispatches[pending.run_attempt_id] = task
+        self.runtime.track_event_task(task)
+        task.add_done_callback(
+            lambda done, attempt_id=pending.run_attempt_id: (
+                self._discard_pending_dispatch(attempt_id, done)
+            )
+        )
+
+    def _discard_pending_dispatch(
+        self, run_attempt_id: str, task: asyncio.Task[None]
+    ) -> None:
+        if self._pending_dispatches.get(run_attempt_id) is task:
+            self._pending_dispatches.pop(run_attempt_id, None)
+        self.runtime.discard_event_task(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            self.logger.error(
+                "Dispatch settlement task failed for run_attempt_id=%s: %s",
+                run_attempt_id,
+                error,
+            )
+
+    async def _settle_pending_dispatch(
+        self, pending: _PendingDispatch, launched_at: float
+    ) -> None:
+        wi = pending.work_info
+        try:
+            result = await self._activate_and_enqueue_job(
+                wi,
+                run_owner=pending.run_owner,
+                run_attempt_id=pending.run_attempt_id,
+            )
+        except asyncio.CancelledError:
+            scheduler_trace(
+                "dispatch_confirmation_settled",
+                job_id=wi.id,
+                dag_id=wi.dag_id,
+                executor=pending.executor,
+                run_attempt_id=pending.run_attempt_id,
+                outcome="cancelled",
+                elapsed_ms=(time.perf_counter() - launched_at) * 1000.0,
+            )
+            raise
+        except Exception as error:
+            result = error
+
+        if isinstance(result, Exception) or not result:
+            self.logger.error(
+                f"[WORK_DIST] Dispatch FAILED for job={wi.id}, "
+                f"executor={pending.executor}: {result}",
+                exc_info=isinstance(result, Exception),
+            )
+            await self._handle_dispatch_failure(
+                wi,
+                pending.executor,
+                pending.semaphore_owner,
+                result,
+                run_owner=pending.run_owner,
+                run_attempt_id=pending.run_attempt_id,
+            )
+            outcome = "failed"
+        else:
+            outcome = "confirmed"
+
+        scheduler_trace(
+            "dispatch_confirmation_settled",
+            job_id=wi.id,
+            dag_id=wi.dag_id,
+            executor=pending.executor,
+            run_attempt_id=pending.run_attempt_id,
+            outcome=outcome,
+            elapsed_ms=(time.perf_counter() - launched_at) * 1000.0,
+        )
+        if self.running:
+            await self.notify_event()
 
     async def _poll(self) -> None:
         """Wait for scheduler wakes and run dispatch cycles until stopped."""
@@ -1832,6 +1914,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         self.running = False
         self._fetch_event.set()
         self._remove_event_subscriptions()
+        await self._drain_pending_dispatches(timeout)
         await self.runtime.stop(
             {
                 'scheduler-notification-stop': self.notification_service.stop(),
@@ -1852,6 +1935,29 @@ class PostgreSQLJobScheduler(JobScheduler):
             )
 
         await self._close_runtime_resources()
+
+    async def _drain_pending_dispatches(self, timeout: float) -> None:
+        tasks = [task for task in self._pending_dispatches.values() if not task.done()]
+        if not tasks:
+            return
+
+        scheduler_trace(
+            "dispatch_confirmation_shutdown_drain_start",
+            pending=len(tasks),
+            timeout_seconds=max(0.0, timeout),
+        )
+        _, pending = await asyncio.wait(tasks, timeout=max(0.0, timeout))
+        scheduler_trace(
+            "dispatch_confirmation_shutdown_drain_done",
+            completed=len(tasks) - len(pending),
+            pending=len(pending),
+        )
+        if pending:
+            self.logger.warning(
+                "Scheduler shutdown left %s dispatch confirmation(s) unresolved; "
+                "durable attempt recovery will reconcile them",
+                len(pending),
+            )
 
     async def _close_runtime_resources(self) -> None:
         if self._resources_closed:
@@ -1962,8 +2068,8 @@ class PostgreSQLJobScheduler(JobScheduler):
             dispatch_started = time.perf_counter()
             executor = entrypoint.split("://", 1)[0]
             if run_owner and run_attempt_id:
-                try:
-                    await self.repository.record_job_attempt_dispatch_started(
+                self._record_attempt_audit_later(
+                    lambda: self.repository.record_job_attempt_dispatch_started(
                         job_id=submission_id,
                         job_name=work_info.name,
                         dag_id=str(work_info.dag_id),
@@ -1972,11 +2078,10 @@ class PostgreSQLJobScheduler(JobScheduler):
                         scheduler_lease_owner=self.lease_owner,
                         gateway_instance_id=self.gateway_instance_id,
                         executor=executor,
-                    )
-                except Exception as audit_error:
-                    self.logger.warning(
-                        f"Failed to record dispatch start for attempt {run_attempt_id}: {audit_error}"
-                    )
+                    ),
+                    run_attempt_id=run_attempt_id,
+                    action="dispatch start",
+                )
             scheduler_trace(
                 "gateway_dispatch_start",
                 job_id=submission_id,
@@ -2029,7 +2134,7 @@ class PostgreSQLJobScheduler(JobScheduler):
 
                 # Wait for the supervisor's pre-send admission signal. Executor receipt and
                 # worker acknowledgement are traced independently by the supervisor/runtime.
-                # The timeout covers submit + admission and must stay inside the lease TTL.
+                # The timeout covers submit + admission and must stay inside the run lease TTL.
                 await confirmation_event.wait()
                 scheduler_trace(
                     "gateway_dispatch_confirmed",
@@ -2041,19 +2146,14 @@ class PostgreSQLJobScheduler(JobScheduler):
                     run_attempt_id=run_attempt_id,
                     **self._ha_trace_fields(),
                 )
-                if run_attempt_id:
-                    try:
-                        await self.repository.record_job_attempt_dispatch_result(
-                            run_attempt_id=run_attempt_id,
-                            confirmed=True,
-                        )
-                    except Exception as audit_error:
-                        self.logger.warning(
-                            f"Failed to record dispatch confirmation for attempt {run_attempt_id}: {audit_error}"
-                        )
 
-            dispatch_timeout = max(0.1, float(self.lease_ttl_seconds) - 1.0)
+            dispatch_timeout = max(0.1, float(self.run_ttl_seconds) - 1.0)
             await asyncio.wait_for(_submit_and_confirm(), timeout=dispatch_timeout)
+            if run_attempt_id:
+                self._record_dispatch_result_later(
+                    run_attempt_id=run_attempt_id,
+                    confirmed=True,
+                )
             self.logger.debug(f"Dispatch confirmed for job: {submission_id}")
             return True
 
@@ -2063,22 +2163,17 @@ class PostgreSQLJobScheduler(JobScheduler):
                 job_id=submission_id,
                 dag_id=work_info.dag_id,
                 entrypoint=entrypoint,
-                timeout_seconds=max(0.1, float(self.lease_ttl_seconds) - 1.0),
+                timeout_seconds=max(0.1, float(self.run_ttl_seconds) - 1.0),
                 run_owner=run_owner,
                 run_attempt_id=run_attempt_id,
                 **self._ha_trace_fields(),
             )
             if run_attempt_id:
-                try:
-                    await self.repository.record_job_attempt_dispatch_result(
-                        run_attempt_id=run_attempt_id,
-                        confirmed=False,
-                        error="dispatch_timeout",
-                    )
-                except Exception as audit_error:
-                    self.logger.warning(
-                        f"Failed to record dispatch timeout for attempt {run_attempt_id}: {audit_error}"
-                    )
+                self._record_dispatch_result_later(
+                    run_attempt_id=run_attempt_id,
+                    confirmed=False,
+                    error="dispatch_timeout",
+                )
             self.logger.error(
                 f"Timeout waiting for dispatch confirmation for job {submission_id}"
             )
@@ -2095,20 +2190,58 @@ class PostgreSQLJobScheduler(JobScheduler):
                 **self._ha_trace_fields(),
             )
             if run_attempt_id:
-                try:
-                    await self.repository.record_job_attempt_dispatch_result(
-                        run_attempt_id=run_attempt_id,
-                        confirmed=False,
-                        error=repr(e),
-                    )
-                except Exception as audit_error:
-                    self.logger.warning(
-                        f"Failed to record dispatch failure for attempt {run_attempt_id}: {audit_error}"
-                    )
+                self._record_dispatch_result_later(
+                    run_attempt_id=run_attempt_id,
+                    confirmed=False,
+                    error=repr(e),
+                )
             self.logger.error(
                 f"Failed to dispatch job {submission_id}: {e}", exc_info=True
             )
             return False
+
+    def _record_dispatch_result_later(
+        self,
+        *,
+        run_attempt_id: str,
+        confirmed: bool,
+        error: str | None = None,
+    ) -> None:
+        self._record_attempt_audit_later(
+            lambda: self.repository.record_job_attempt_dispatch_result(
+                run_attempt_id=run_attempt_id,
+                confirmed=confirmed,
+                error=error,
+            ),
+            run_attempt_id=run_attempt_id,
+            action="dispatch result",
+        )
+
+    def _record_attempt_audit_later(
+        self,
+        record: Callable[[], Awaitable[None]],
+        *,
+        run_attempt_id: str,
+        action: str,
+    ) -> None:
+        async def run() -> None:
+            try:
+                async with self._attempt_audit_semaphore:
+                    await record()
+            except Exception as audit_error:
+                self.logger.warning(
+                    "Failed to record %s for attempt %s: %s",
+                    action,
+                    run_attempt_id,
+                    audit_error,
+                )
+
+        task = asyncio.create_task(
+            run(),
+            name=f"attempt-audit-{run_attempt_id}-{action.replace(' ', '-')}",
+        )
+        self.runtime.track_event_task(task)
+        task.add_done_callback(self.runtime.discard_event_task)
 
     async def get_job(self, job_id: str) -> Optional[WorkInfo]:
         """
@@ -2803,7 +2936,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 job_info = await job_info_client.get_info(job_id)
                 if job_info is None:
                     return "missing_job_info"
-                if job_info.status != JobStatus.RUNNING:
+                if job_info.status not in (JobStatus.PENDING, JobStatus.RUNNING):
                     return "not_running"
 
                 run_owner = work_item.run_owner
@@ -2904,6 +3037,10 @@ class PostgreSQLJobScheduler(JobScheduler):
             end_time = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
             terminal_age_seconds = (now - end_time).total_seconds()
 
+        current_work_item = await self.repository.get_job_by_id(job_id)
+        if current_work_item is None or current_work_item.state != WorkState.ACTIVE:
+            return False
+
         if (
             terminal_age_seconds is None
             or terminal_age_seconds < min_sync_interval_seconds
@@ -2915,7 +3052,8 @@ class PostgreSQLJobScheduler(JobScheduler):
             )
             self.logger.info(
                 f"Terminal state mismatch detected for job {job_id}: "
-                f"WorkState={work_item.state}, JobInfoState={job_info_state}, "
+                f"WorkState={current_work_item.state}, "
+                f"JobInfoState={job_info_state}, "
                 f"terminal_age_seconds={age}, "
                 f"repair_grace_seconds={min_sync_interval_seconds}; "
                 "deferring repair."
@@ -2924,14 +3062,14 @@ class PostgreSQLJobScheduler(JobScheduler):
 
         self.logger.info(
             f"Repairing terminal state mismatch for job {job_id}: "
-            f"WorkState={work_item.state}, JobInfoState={job_info_state}, "
+            f"WorkState={current_work_item.state}, JobInfoState={job_info_state}, "
             f"terminal_age_seconds={terminal_age_seconds:.3f}, "
             f"repair_grace_seconds={min_sync_interval_seconds}."
         )
 
         return await self.attempt_lifecycle_service.transition_terminal(
             job_id,
-            work_item,
+            current_work_item,
             job_info.status,
             run_owner=job_info.run_owner,
             run_attempt_id=job_info.run_attempt_id,

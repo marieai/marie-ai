@@ -11,14 +11,43 @@ from marie.types_core.request.data import DataRequest
 
 
 def make_supervisor(confirmation_event: asyncio.Event) -> JobSupervisor:
+    desired_state_executor = SimpleNamespace(
+        schedule_new_epoch=AsyncMock(return_value=SimpleNamespace(epoch=1))
+    )
     return JobSupervisor(
         job_id="test-job-id",
         job_info_client=Mock(),
         job_distributor=Mock(),
         event_publisher=Mock(),
         etcd_client=Mock(),
+        desired_state_executor=desired_state_executor,
         confirmation_event=confirmation_event,
     )
+
+
+@pytest.mark.asyncio
+async def test_confirmation_is_signaled_immediately_on_owning_loop() -> None:
+    confirmation_event = asyncio.Event()
+    supervisor = make_supervisor(confirmation_event)
+    supervisor._loop = asyncio.get_running_loop()
+
+    supervisor._signal_confirmation_threadsafe()
+
+    assert confirmation_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_confirmation_uses_threadsafe_signal_for_foreign_loop() -> None:
+    confirmation_event = asyncio.Event()
+    supervisor = make_supervisor(confirmation_event)
+    foreign_loop = Mock()
+    foreign_loop.is_running.return_value = True
+    supervisor._loop = foreign_loop
+
+    supervisor._signal_confirmation_threadsafe()
+
+    assert not confirmation_event.is_set()
+    foreign_loop.call_soon_threadsafe.assert_called_once_with(confirmation_event.set)
 
 
 @pytest.mark.asyncio
@@ -26,7 +55,7 @@ async def test_pre_send_traces_admission_and_desired_state(monkeypatch) -> None:
     confirmation_event = asyncio.Event()
     supervisor = make_supervisor(confirmation_event)
     supervisor._loop = asyncio.get_running_loop()
-    supervisor._desired_store.schedule_new_epoch = Mock(
+    supervisor._desired_state_executor.schedule_new_epoch = AsyncMock(
         return_value=SimpleNamespace(epoch=7)
     )
     events: list[tuple[str, dict]] = []
@@ -102,6 +131,7 @@ async def test_finalize_traces_send_completion_before_terminal_event_enqueue(
         job_distributor=job_distributor,
         event_publisher=event_publisher,
         etcd_client=Mock(),
+        desired_state_executor=SimpleNamespace(schedule_new_epoch=AsyncMock()),
         confirmation_event=confirmation_event,
     )
     events: list[tuple[str, dict]] = []

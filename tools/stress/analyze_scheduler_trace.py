@@ -39,6 +39,7 @@ EVENTS = (
     "gateway_dispatch_start",
     "gateway_dispatch_submitted",
     "gateway_dispatch_confirmed",
+    "dispatch_confirmation_settled",
     "job_supervisor_pre_send_started",
     "job_supervisor_dispatch_admitted",
     "job_supervisor_desired_state_written",
@@ -1228,6 +1229,15 @@ def _print_dispatch_efficiency_report(
     candidate_appearances, first_candidate_wait = _candidate_selection_attempts(rows)
     dispatch_batch_sizes = _numeric_event_field(rows, "dispatch_batch_start", "count")
     dispatch_batch_intervals = _event_intervals_ms(rows, "dispatch_batch_start")
+    dispatch_pending = _numeric_event_field(rows, "dispatch_batch_launched", "pending")
+    dispatch_settlement = _numeric_event_field(
+        rows, "dispatch_confirmation_settled", "elapsed_ms"
+    )
+    dispatch_outcomes = Counter(
+        str(row.get("outcome", "unknown"))
+        for row in rows
+        if row.get("event") == "dispatch_confirmation_settled"
+    )
     workload_executors = _workload_executors(rows)
     free_slots, compatible_slots = _candidate_slot_capacity(rows, workload_executors)
     max_observed_slots = _max_observed_free_slots(rows, workload_executors)
@@ -1282,6 +1292,16 @@ def _print_dispatch_efficiency_report(
         "dispatch batch interval",
         dispatch_batch_intervals,
     )
+    _print_count_distribution("pending dispatch confirmations", dispatch_pending)
+    _print_distribution("dispatch confirmation settlement", dispatch_settlement)
+    if dispatch_outcomes:
+        print(
+            "dispatch confirmation outcomes: "
+            + " ".join(
+                f"{outcome}={count}"
+                for outcome, count in sorted(dispatch_outcomes.items())
+            )
+        )
     _print_count_distribution("workload free slots at candidate", free_slots)
     _print_count_distribution("ready-compatible slots at candidate", compatible_slots)
     free_slot_avg = _avg(free_slots)
@@ -1426,6 +1446,31 @@ def _print_trace_coverage(rows: list[dict[str, Any]]) -> None:
         f"terminal_handler={scheduler_terminal_received} "
         f"durable_terminal={events.get('job_terminal_attempt_accepted', 0)}"
     )
+    confirmation_outcomes = Counter(
+        str(row.get("outcome", "unknown"))
+        for row in rows
+        if row.get("event") == "dispatch_confirmation_settled"
+    )
+    launched_confirmations = int(
+        sum(_numeric_event_field(rows, "dispatch_batch_launched", "count"))
+    )
+    if launched_confirmations or confirmation_outcomes:
+        print(
+            "dispatch confirmations: "
+            f"launched={launched_confirmations} "
+            f"settled={sum(confirmation_outcomes.values())} "
+            f"backpressure={events.get('dispatch_confirmation_backpressure', 0)}"
+            + (
+                " ("
+                + " ".join(
+                    f"{outcome}={count}"
+                    for outcome, count in sorted(confirmation_outcomes.items())
+                )
+                + ")"
+                if confirmation_outcomes
+                else ""
+            )
+        )
     deferred_reasons = Counter(
         str(row.get("reason", "unknown"))
         for row in rows

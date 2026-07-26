@@ -111,6 +111,8 @@ MAX_AGE_S = 30 * 60  # hard age cap (30 min)
 STATUS_DEGRADED_SINCE = "status_degraded_since"
 STATUS_DEGRADED_REASON = "status_degraded_reason"
 STATUS_DEGRADED_LIVE_MISSING = "live_node_missing_status"
+SERVICE_SNAPSHOT_COMPLETE = "snapshot_complete"
+DEFAULT_SERVICE_EVENT_WORKERS = 32
 
 
 class EventKind(str, Enum):
@@ -123,7 +125,7 @@ class EventKind(str, Enum):
 class ServiceEvent:
     kind: EventKind  # EventKind.SERVICE
     service: str  # resolver’s service name
-    ev_type: str  # "put" | "delete"
+    ev_type: str  # "put" | "delete" | "snapshot_complete"
     value: dict | None
     key: str  # raw key (so you can log/debug)
 
@@ -518,14 +520,20 @@ class MarieServerGateway(CompositeServer):
         self._background_services_shutdown = False
         self._background_services_lock = asyncio.Lock()
 
-        job_manager = JobManager(
+        self.job_manager = JobManager(
             storage=storage,
             job_distributor=self.distributor,
             etcd_client=self.etcd_client,
+            desired_state_worker_count=int(
+                job_scheduler_kwargs.get("desired_state_worker_count", 16)
+            ),
+            desired_state_max_pending=int(
+                job_scheduler_kwargs.get("desired_state_max_pending", 128)
+            ),
         )
         self.job_scheduler = PostgreSQLJobScheduler(
             config=job_scheduler_kwargs,
-            job_manager=job_manager,
+            job_manager=self.job_manager,
             gateway_ready_event=self.ready_event,
         )
 
@@ -540,6 +548,10 @@ class MarieServerGateway(CompositeServer):
         self.resolver = None
 
         self._rebuild_task: asyncio.Task | None = None
+        self._rebuild_requested = False
+        self._streamer_update_lock = asyncio.Lock()
+        self._service_retry_tasks: dict[str, asyncio.Task] = {}
+        self._service_retry_attempts: dict[str, int] = {}
         self._debounce_s = 0.05
 
         def _extend_rest_function(app: 'FastAPI'):
@@ -1648,6 +1660,8 @@ class MarieServerGateway(CompositeServer):
             except Exception as exc:
                 self.logger.error("Failed stopping job scheduler: %s", exc)
 
+            self.job_manager.shutdown()
+
             if self.grpc_broker:
                 try:
                     await self.grpc_broker.stop()
@@ -1880,21 +1894,15 @@ class MarieServerGateway(CompositeServer):
             await asyncio.sleep(interval_s)
 
     async def wait_and_start_scheduler(self, timeout: int = 5):
-        """Waits for the service discovery to start and then starts the job scheduler."""
-        self.logger.info(f"Waiting for ready_event with a timeout of {timeout} seconds")
+        """Start the scheduler after the discovery watch and initial enumeration."""
+        self.logger.info("Waiting for initial service discovery enumeration")
 
-        for remaining in range(timeout, 0, -1):
-            if self.ready_event.is_set():
-                self.logger.info(
-                    f"ready_event set, starting job scheduler early (time remaining: {remaining}s)"
-                )
-                break
-            self.logger.info(f"Time remaining: {remaining} seconds")
-            await asyncio.sleep(1)
-        else:
-            if not self.ready_event.is_set():
+        while not self.ready_event.is_set():
+            try:
+                await asyncio.wait_for(self.ready_event.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
                 self.logger.warning(
-                    "Timeout waiting for ready_event, starting scheduler anyway"
+                    "Initial service discovery is still in progress; scheduler remains paused"
                 )
 
         await self.job_scheduler.start()
@@ -1944,7 +1952,10 @@ class MarieServerGateway(CompositeServer):
 
                 # watch services
                 self.resolver.watch_service(
-                    service_name, self._on_service_event, notify_on_start=True
+                    service_name,
+                    self._on_service_event,
+                    notify_on_start=True,
+                    initial_snapshot_callback=self._on_service_snapshot_complete,
                 )
 
                 # watch node status changes
@@ -1999,6 +2010,23 @@ class MarieServerGateway(CompositeServer):
         )
         asyncio.run_coroutine_threadsafe(self.service_events_queue.put(se), self._loop)
 
+    def _on_service_snapshot_complete(self, service: str, event_count: int) -> None:
+        self.logger.info(
+            "Initial service snapshot enumerated: service=%s events=%d",
+            service,
+            event_count,
+        )
+        event = ServiceEvent(
+            kind=EventKind.SERVICE,
+            service=service,
+            ev_type=SERVICE_SNAPSHOT_COMPLETE,
+            value=None,
+            key=service,
+        )
+        asyncio.run_coroutine_threadsafe(
+            self.service_events_queue.put(event), self._loop
+        )
+
     def _on_state_event(self, service: str, event) -> None:
         key = event.key
         if _is_desired_key(key):
@@ -2027,30 +2055,19 @@ class MarieServerGateway(CompositeServer):
         asyncio.run_coroutine_threadsafe(self.state_events_queue.put(se), self._loop)
 
     def _schedule_rebuild(self, update_gateway: bool = True) -> None:
-        """
-        Schedule a rebuild of the deployments projection with debouncing.
-        Cancels any pending rebuild task and schedules a fresh one.
-        :raises asyncio.CancelledError: Raised if the task is canceled during execution.
-        """
-
-        # Cancel any pending rebuild and schedule a fresh one
+        """Coalesce discovery changes without cancelling an active update."""
+        self._rebuild_requested = True
         if self._rebuild_task and not self._rebuild_task.done():
-            self.logger.info("Rebuilding deployments canceled...")
-            self._rebuild_task.cancel()
+            return
 
         async def _rebuilder():
             try:
-                await asyncio.sleep(self._debounce_s)  # coalesce bursts
-                # THIS IS THE CRITICAL SECTION AND IT IS MESSYYY
-                self.logger.debug("Rebuilding deployments projection...")
-                ClusterState.deployment_nodes = self.deployment_nodes
-                self._rebuild_deployments_projection()
-
-                if update_gateway:
-                    await self.update_gateway_streamer()
-                self.ready_event.set()
+                while self._rebuild_requested:
+                    await asyncio.sleep(self._debounce_s)
+                    self._rebuild_requested = False
+                    await self._refresh_discovery_projection(update_gateway)
             except asyncio.CancelledError:
-                pass
+                raise
             except Exception as ex:
                 if _is_known_connection_error(ex):
                     self.logger.debug(
@@ -2061,30 +2078,134 @@ class MarieServerGateway(CompositeServer):
 
         self._rebuild_task = asyncio.create_task(_rebuilder())
 
-    async def process_service_events(self, max_errors=5) -> None:
-        error_counter = 0
-        while True:
-            ev: ServiceEvent = await self.service_events_queue.get()
-            try:
-                if ev.ev_type == "put":
-                    await self.gateway_server_online(ev.service, ev.value)
-                elif ev.ev_type == "delete":
-                    await self.gateway_server_offline(ev.key, ev.value)
-                else:
-                    self.logger.warning(f"Unknown service ev_type: {ev.ev_type}")
+    async def _refresh_discovery_projection(self, update_gateway: bool) -> None:
+        async with self._streamer_update_lock:
+            self.logger.debug("Rebuilding deployments projection...")
+            ClusterState.deployment_nodes = self.deployment_nodes
+            self._rebuild_deployments_projection()
+            if update_gateway:
+                await self.update_gateway_streamer()
 
-                self._schedule_rebuild(True)
-                await self._publish_capacity_event()
-                error_counter = 0
+    async def process_service_events(self, max_errors=5) -> None:
+        configured_workers = int(
+            getattr(self, "args", {}).get(
+                "discovery_event_worker_count", DEFAULT_SERVICE_EVENT_WORKERS
+            )
+        )
+        worker_count = max(1, min(configured_workers, 64))
+        self.logger.info(
+            "Starting service discovery event workers: count=%d", worker_count
+        )
+        worker_queues = [asyncio.Queue(maxsize=64) for _ in range(worker_count)]
+        workers = [
+            asyncio.create_task(
+                self._service_event_worker(queue, max_errors),
+                name=f"gateway-service-event-{index}",
+            )
+            for index, queue in enumerate(worker_queues)
+        ]
+
+        try:
+            while True:
+                event: ServiceEvent = await self.service_events_queue.get()
+                try:
+                    if event.ev_type == SERVICE_SNAPSHOT_COMPLETE:
+                        await self._refresh_discovery_projection(True)
+                        await self._publish_capacity_event()
+                        if not self.ready_event.is_set():
+                            self.ready_event.set()
+                            self.logger.info(
+                                "Initial service discovery enumerated; gateway control plane is ready"
+                            )
+                        continue
+
+                    worker_index = hash(event.key) % worker_count
+                    await worker_queues[worker_index].put(event)
+                finally:
+                    self.service_events_queue.task_done()
+        finally:
+            for worker in workers:
+                worker.cancel()
+            retry_tasks = list(self._service_retry_tasks.values())
+            for retry_task in retry_tasks:
+                retry_task.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
+            await asyncio.gather(*retry_tasks, return_exceptions=True)
+
+    async def _service_event_worker(
+        self, queue: asyncio.Queue, max_errors: int
+    ) -> None:
+        error_count = 0
+        while True:
+            event: ServiceEvent = await queue.get()
+            try:
+                if event.ev_type == "put":
+                    result = await self.gateway_server_online(
+                        event.service, event.value
+                    )
+                    if result is None:
+                        self._schedule_service_retry(event)
+                        changed = False
+                    else:
+                        self._cancel_service_retry(event.key)
+                        changed = result
+                elif event.ev_type == "delete":
+                    self._cancel_service_retry(event.key)
+                    changed = await self.gateway_server_offline(event.key, event.value)
+                else:
+                    self.logger.warning(f"Unknown service ev_type: {event.ev_type}")
+                    changed = False
+
+                if changed and self.ready_event.is_set():
+                    self._schedule_rebuild(True)
+                    await self._publish_capacity_event()
+                error_count = 0
+            except asyncio.CancelledError:
+                raise
             except Exception as ex:
                 self.logger.error(f"Service event error: {ex}", exc_info=True)
-                error_counter += 1
-                if error_counter >= max_errors:
-                    self.logger.error(f"Service loop reached max errors: {max_errors}")
-                    break
+                error_count += 1
+                if error_count >= max_errors:
+                    self.logger.error(
+                        f"Service worker reached {max_errors} consecutive errors"
+                    )
+                    error_count = 0
                 await asyncio.sleep(1)
             finally:
-                self.service_events_queue.task_done()
+                queue.task_done()
+
+    def _schedule_service_retry(self, event: ServiceEvent) -> None:
+        existing = self._service_retry_tasks.get(event.key)
+        if existing is not None and not existing.done():
+            existing.cancel()
+
+        attempt = self._service_retry_attempts.get(event.key, 0) + 1
+        self._service_retry_attempts[event.key] = attempt
+        delay = min(5 * (2 ** min(attempt - 1, 4)), 60)
+        delay += (abs(hash(event.key)) % 1000) / 1000
+
+        async def _retry() -> None:
+            try:
+                await asyncio.sleep(delay)
+                await self.service_events_queue.put(event)
+            finally:
+                current = self._service_retry_tasks.get(event.key)
+                if current is asyncio.current_task():
+                    self._service_retry_tasks.pop(event.key, None)
+
+        self.logger.info(
+            "Scheduling service readiness retry: key=%s attempt=%d delay=%.1fs",
+            event.key,
+            attempt,
+            delay,
+        )
+        self._service_retry_tasks[event.key] = asyncio.create_task(_retry())
+
+    def _cancel_service_retry(self, key: str) -> None:
+        retry_task = self._service_retry_tasks.pop(key, None)
+        if retry_task is not None and not retry_task.done():
+            retry_task.cancel()
+        self._service_retry_attempts.pop(key, None)
 
     async def process_state_events(self, max_errors=10) -> None:
         error_counter = 0
@@ -2214,13 +2335,15 @@ class MarieServerGateway(CompositeServer):
             "status": status,
         }
 
-    async def gateway_server_online(self, service: str, event_value: dict[str, Any]):
+    async def gateway_server_online(
+        self, service: str, event_value: dict[str, Any]
+    ) -> bool | None:
         """
         Handle the event when a gateway server comes online.
 
         :param service: The name of the service that is available.
         :param event_value: The value of the event that triggered the method.
-        :return: None
+        :return: Whether discovery changed, or ``None`` when the gateway is not ready.
 
         This method is used to handle the event when a gateway server comes online. It checks if the gateway server is ready and then discovers all executors from the gateway. It updates the gateway streamer with the discovered nodes.
 
@@ -2249,9 +2372,9 @@ class MarieServerGateway(CompositeServer):
 
         if is_ready is False:
             self.logger.warning(
-                f"Gateway is not ready at {ctrl_address} after {max_tries}, will retry on next event"
+                f"Gateway is not ready at {ctrl_address} after {max_tries} attempts"
             )
-            return
+            return None
 
         self.logger.info(f"Gateway is ready at {ctrl_address}")
         # discover all executors from the gateway
@@ -2264,6 +2387,7 @@ class MarieServerGateway(CompositeServer):
         channel_options = None
         timeout = 1
 
+        changed = False
         for executor, deployment_addresses in metadata.items():
             for deployment_address in deployment_addresses:
                 endpoints = []
@@ -2321,6 +2445,7 @@ class MarieServerGateway(CompositeServer):
                         )
                         continue
                     self.deployment_nodes[executor].append(deployment_details)
+                    changed = True
                     self.logger.debug(
                         f"Discovered endpoint: {executor} : {deployment_details}"
                     )
@@ -2331,6 +2456,8 @@ class MarieServerGateway(CompositeServer):
             )
             for node in nodes:
                 self.logger.debug(f"\tNode : {node}")
+
+        return changed
 
     async def update_gateway_streamer(self):
         """Update the gateway streamer with the discovered executors."""
@@ -2346,7 +2473,7 @@ class MarieServerGateway(CompositeServer):
         #     "extract_executor": ["end-gateway"]
         # }
 
-        executors_ = list(self.deployment_nodes.keys())
+        executors_ = sorted(self.deployment_nodes)
         graph_description = {
             "start-gateway": executors_,
         }
@@ -2365,7 +2492,7 @@ class MarieServerGateway(CompositeServer):
                 port = parsed_address.port
                 host = parsed_address.hostname
                 connections.append(f"{host}:{port}")
-            deployments_addresses[executor] = list(set(connections))
+            deployments_addresses[executor] = sorted(set(connections))
 
         self.logger.info(f"graph_description: {graph_description}")
         self.logger.info(f"deployments_addresses: {deployments_addresses}")
@@ -2427,6 +2554,11 @@ class MarieServerGateway(CompositeServer):
         """
         # Update existing deployments
         for deployment, addresses in new_addresses.items():
+            previous = set(
+                getattr(self, "_last_deployments_addresses", {}).get(deployment, [])
+            )
+            if previous == set(addresses):
+                continue
             await self.streamer.update_executor_addresses(deployment, addresses)
 
         # Handle removed deployments
@@ -2452,13 +2584,7 @@ class MarieServerGateway(CompositeServer):
         :param deployments_addresses: Deployment addresses mapping
         :param deployments_metadata: Deployment metadata
         """
-        # Close old streamer if exists
-        if hasattr(self, "streamer") and self.streamer is not None:
-            try:
-                await self.streamer.close()
-            except Exception as e:
-                self.logger.warning(f"Error closing old streamer: {e}")
-
+        old_streamer = getattr(self, "streamer", None)
         streamer = GatewayStreamer(
             graph_representation=graph_description,
             executor_addresses=deployments_addresses,
@@ -2474,7 +2600,13 @@ class MarieServerGateway(CompositeServer):
         self.streamer = streamer
         self.distributor.streamer = streamer
 
-    async def gateway_server_offline(self, service_key: str, ev_value):
+        if old_streamer is not None:
+            try:
+                await old_streamer.close()
+            except Exception as e:
+                self.logger.warning(f"Error closing old streamer: {e}")
+
+    async def gateway_server_offline(self, service_key: str, ev_value) -> bool:
         """
         Handle the event when a gateway server goes offline.
 
@@ -2501,6 +2633,8 @@ class MarieServerGateway(CompositeServer):
             )
         else:
             self.logger.debug(f"No nodes found for offline gateway {ctrl_address}")
+
+        return removed_count > 0
 
     async def deployment_changed(self, ev_key: str, ev_type: str, ev_value: dict):
         self.logger.info(f"Deployment changed : {ev_key}, {ev_type}, {ev_value}")

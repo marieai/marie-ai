@@ -394,7 +394,9 @@ class Flow(
 
                 from marie.runtime import Flow
 
-                f = Flow().add(uses='jinahub+docker://SimpleIndexer')  # create Flow and add Executor
+                f = Flow().add(
+                    uses='jinahub+docker://SimpleIndexer'
+                )  # create Flow and add Executor
                 with f:
                     f.bock()  # serve Flow
 
@@ -404,7 +406,9 @@ class Flow(
 
                 from marie.runtime import Flow
 
-                f = Flow().add(uses='jinahub+docker://SimpleIndexer')  # create Flow and add Executor
+                f = Flow().add(
+                    uses='jinahub+docker://SimpleIndexer'
+                )  # create Flow and add Executor
                 f.save_config('flow.yml')  # save YAML config file
                 f = Flow.load_config('flow.yml')  # load Flow from YAML config
                 with f:
@@ -1263,10 +1267,8 @@ class Flow(
         )
 
         if deployment is None:
-
             # set the kwargs inherit from `Flow(kwargs1=..., kwargs2=)`
             for key, value in op_flow._common_kwargs.items():
-
                 # do not inherit from all the argument from the flow and respect EXECUTOR_ARGS_BLACKLIST
                 if key not in kwargs and key not in EXECUTOR_ARGS_BLACKLIST:
                     kwargs[key] = value
@@ -1800,8 +1802,10 @@ class Flow(
             op_flow._deployment_nodes[GATEWAY_NAME].args.graph_description = json.dumps(
                 op_flow._get_graph_representation()
             )
-            op_flow._deployment_nodes[GATEWAY_NAME].args.deployments_addresses = (
-                json.dumps(op_flow._get_deployments_addresses())
+            op_flow._deployment_nodes[
+                GATEWAY_NAME
+            ].args.deployments_addresses = json.dumps(
+                op_flow._get_deployments_addresses()
             )
 
             op_flow._deployment_nodes[GATEWAY_NAME].update_pod_args()
@@ -1916,7 +1920,6 @@ class Flow(
         import warnings
 
         with warnings.catch_warnings():
-
             results = {}
             results_lock = threading.Lock()
 
@@ -1929,8 +1932,16 @@ class Flow(
                         with results_lock:
                             results[_deployment_name] = 'done'
                 except Exception as ex:
-                    results[_deployment_name] = repr(ex)
-                    raise ex
+                    failure = repr(ex)
+                    with results_lock:
+                        results[_deployment_name] = failure
+                    self.logger.error(
+                        "Deployment %r failed readiness: %s",
+                        _deployment_name,
+                        failure,
+                        exc_info=True,
+                    )
+                    raise
 
             def _wait_ready(_deployment_name, _deployment):
                 try:
@@ -1941,8 +1952,15 @@ class Flow(
                         with results_lock:
                             results[_deployment_name] = 'done'
                 except Exception as ex:
+                    failure = repr(ex)
                     with results_lock:
-                        results[_deployment_name] = repr(ex)
+                        results[_deployment_name] = failure
+                    self.logger.error(
+                        "Deployment %r failed readiness: %s",
+                        _deployment_name,
+                        failure,
+                        exc_info=True,
+                    )
 
             def _polling_status(num_tasks_to_wait):
                 progress = Progress(
@@ -2010,10 +2028,8 @@ class Flow(
                 )
                 try:
                     for task in done:
-                        try:
-                            task.result()  # This raises an exception if the task had an exception
-                        except Exception as e:
-                            self.logger.error(f"An exception occurred: {str(e)}")
+                        if not task.cancelled():
+                            task.exception()
                 finally:
                     for task in pending:
                         task.cancel()
@@ -2060,10 +2076,16 @@ class Flow(
             for t in wait_ready_threads:
                 t.join()
 
-            error_deployments = [k for k, v in results.items() if v != 'done']
-            if error_deployments:
+            failed_deployments = {
+                k: v for k, v in results.items() if v not in {'done', 'pending'}
+            }
+            pending_deployments = [k for k, v in results.items() if v == 'pending']
+            if failed_deployments or pending_deployments:
                 self.logger.error(
-                    f'Flow is aborted due to {error_deployments} can not be started.'
+                    "Flow startup failed. Failed deployments: %s; "
+                    "pending or cancelled deployments: %s",
+                    failed_deployments,
+                    pending_deployments,
                 )
                 self.close()
                 raise RuntimeFailToStart
@@ -2151,9 +2173,7 @@ class Flow(
       "tertiaryBorderColor": "none",
       "lineColor": "#a6d8da"
       }
-}}%%'''.replace(
-                '\n', ''
-            ),
+}}%%'''.replace('\n', ''),
             'flowchart LR;',
         ]
 
@@ -2446,7 +2466,6 @@ class Flow(
             )
         )
         if ProtocolType.HTTP.to_string().lower() in [p.lower() for p in _protocols]:
-
             http_ext_table = self._init_table()
 
             _protocol = ProtocolType.HTTP.to_string()
@@ -2502,9 +2521,7 @@ class Flow(
             monitor_ext_table = self._init_table()
 
             for name, deployment in self:
-
                 if deployment.args.monitoring:
-
                     for replica in deployment.pod_args['pods'][0]:
                         _address = [
                             f'[link=http://localhost:{replica.port_monitoring}]Local[/]',
@@ -2588,7 +2605,6 @@ class Flow(
                 watch_files_list.append(config_loaded)
 
             if watch_changes and len(watch_files_list) > 0:
-
                 with ImportExtensions(
                     required=True,
                     logger=self.logger,
@@ -2852,7 +2868,6 @@ class Flow(
         k8s_namespace = k8s_namespace or self.args.name or 'default'
 
         for node, v in self._deployment_nodes.items():
-
             if node == 'gateway' and not include_gateway:
                 continue
 

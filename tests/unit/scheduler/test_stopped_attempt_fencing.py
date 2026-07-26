@@ -38,6 +38,7 @@ def build_scheduler(
     scheduler.logger = MagicMock()
     scheduler.get_job = AsyncMock(return_value=work_item)
     scheduler.repository = SimpleNamespace(
+        get_job_by_id=AsyncMock(return_value=work_item),
         cancel_job=AsyncMock(return_value=1),
         cancel_job_attempt=AsyncMock(return_value=cancelled_ids),
         record_job_attempt_terminal=AsyncMock(),
@@ -243,6 +244,38 @@ async def test_storage_sync_defers_recent_terminal_mismatch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_storage_sync_ignores_stale_active_snapshot() -> None:
+    work_item = build_work_item()
+    scheduler = build_scheduler(work_item, set())
+    current_work_item = build_work_item()
+    current_work_item.state = WorkState.COMPLETED
+    scheduler.repository.get_job_by_id.return_value = current_work_item
+    transition_terminal = AsyncMock(return_value=True)
+    scheduler.attempt_lifecycle_service.transition_terminal = transition_terminal
+    job_info = JobInfo(
+        status=JobStatus.SUCCEEDED,
+        entrypoint="extract",
+        end_time=int(
+            (datetime.now(timezone.utc) - timedelta(seconds=301)).timestamp() * 1000
+        ),
+        run_owner="owner-b",
+        run_attempt_id=ATTEMPT_B,
+    )
+
+    synchronized = await scheduler._sync_terminal_job_state(
+        JOB_ID,
+        work_item,
+        job_info,
+        min_sync_interval_seconds=300,
+    )
+
+    assert synchronized is False
+    scheduler.repository.get_job_by_id.assert_awaited_once_with(JOB_ID)
+    transition_terminal.assert_not_awaited()
+    scheduler.logger.info.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_storage_sync_logs_repair_after_terminal_grace() -> None:
     work_item = build_work_item()
     scheduler = build_scheduler(work_item, set())
@@ -274,6 +307,61 @@ async def test_storage_sync_logs_repair_after_terminal_grace() -> None:
         message.split("terminal_age_seconds=", 1)[1].split(",", 1)[0]
     )
     assert terminal_age >= 300
+
+
+@pytest.mark.asyncio
+async def test_pending_job_renews_matching_run_lease() -> None:
+    work_item = build_work_item()
+    scheduler = build_scheduler(work_item, set())
+    get_info = AsyncMock(
+        return_value=JobInfo(
+            status=JobStatus.PENDING,
+            entrypoint="extract",
+            run_owner=work_item.run_owner,
+            run_attempt_id=work_item.run_attempt_id,
+        )
+    )
+    scheduler.list_jobs = AsyncMock(return_value={JOB_ID: work_item})
+    scheduler.job_manager = SimpleNamespace(
+        job_info_client=MagicMock(
+            return_value=SimpleNamespace(get_info=get_info)
+        )
+    )
+    scheduler._extend_run_lease_db = AsyncMock(return_value={JOB_ID})
+
+    await scheduler._renew_active_run_leases()
+
+    scheduler._extend_run_lease_db.assert_awaited_once_with(
+        [JOB_ID],
+        run_owner=work_item.run_owner,
+        run_attempt_id=work_item.run_attempt_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_terminal_job_does_not_renew_run_lease() -> None:
+    work_item = build_work_item()
+    scheduler = build_scheduler(work_item, set())
+    scheduler.list_jobs = AsyncMock(return_value={JOB_ID: work_item})
+    scheduler.job_manager = SimpleNamespace(
+        job_info_client=MagicMock(
+            return_value=SimpleNamespace(
+                get_info=AsyncMock(
+                    return_value=JobInfo(
+                        status=JobStatus.SUCCEEDED,
+                        entrypoint="extract",
+                        run_owner=work_item.run_owner,
+                        run_attempt_id=work_item.run_attempt_id,
+                    )
+                )
+            )
+        )
+    )
+    scheduler._extend_run_lease_db = AsyncMock(return_value={JOB_ID})
+
+    await scheduler._renew_active_run_leases()
+
+    scheduler._extend_run_lease_db.assert_not_awaited()
 
 
 @pytest.mark.asyncio

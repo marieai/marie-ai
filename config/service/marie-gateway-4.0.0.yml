@@ -70,6 +70,7 @@ with:
   discovery_heartbeat_sec: 1.5
   discovery_timeout_sec: 10
   discovery_retry_times : 5
+  discovery_event_worker_count: 32
 
 #  discovery_ca_cert: "/path/to/ca.crt"
 #  discovery_cert_key: "/path/to/client.key"
@@ -97,6 +98,9 @@ with:
     submission_queue_size: 100000
     job_event_worker_count: 8
     job_event_queue_size: 1024
+    dispatch_confirmation_max_in_flight: 256
+    desired_state_worker_count: 16
+    desired_state_max_pending: 128
     priority_refresh_enabled: false
     run_lease_renewal_interval_seconds: 20
     max_pool_size: 5

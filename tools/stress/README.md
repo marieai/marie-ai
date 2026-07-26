@@ -38,6 +38,112 @@ GATEWAY_API_KEY='<test-key>' ./stress-test.sh gateway-e2e
 
 ## Tools
 
+### Executor connectivity verification
+
+Use `verify_executor_connectivity.py` when the gateway reports an executor as
+possibly down even though its process is running. Run the probe inside the
+gateway container, or in the same network namespace, so it exercises the same
+route as the failing request.
+
+Probe the exact address from the gateway error for five minutes:
+
+```bash
+.venv/bin/python tools/stress/verify_executor_connectivity.py \
+  --deployment corr_indexing_executor \
+  --address 172.20.10.49:53267 \
+  --count 300 \
+  --interval 1 \
+  --timeout 2 \
+  --jsonl ~/tmp/corr-indexing-connectivity.jsonl
+```
+
+To put multiple requests in flight on the same reused gRPC channel, set
+`--concurrency`. `--count` remains the total number of probes per endpoint, and
+`--interval` is the delay between completed batches:
+
+```bash
+.venv/bin/python tools/stress/verify_executor_connectivity.py \
+  --address 127.0.0.1:65151 \
+  --count 300 \
+  --concurrency 25 \
+  --interval 0 \
+  --timeout 2 \
+  --jsonl /tmp/local-connectivity.jsonl
+```
+
+Add the gateway's etcd settings to compare that address with the live service
+registration before and after the probe:
+
+```bash
+.venv/bin/python tools/stress/verify_executor_connectivity.py \
+  --deployment corr_indexing_executor \
+  --address 172.20.10.49:53267 \
+  --discovery-host "${ETCD_HOST}" \
+  --discovery-port 2379 \
+  --discovery-namespace marie \
+  --discovery-service-name gateway/marie \
+  --count 300 \
+  --interval 1 \
+  --timeout 2 \
+  --jsonl ~/tmp/corr-indexing-connectivity.jsonl
+```
+
+Omit `--address` to probe every address currently registered for the named
+deployment. The tool keeps one gRPC channel per address across samples, matching
+the gateway's channel-reuse behavior. Each sample independently checks raw TCP,
+the named `JinaSingleDataRequestRPC` health status, and Marie endpoint discovery.
+
+Interpret the result by failure boundary:
+
+- address absent from etcd: the gateway is routing with stale discovery state
+- TCP failure: the advertised port is not reachable from the gateway
+- TCP success plus gRPC `UNAVAILABLE` or reset: the host is up, but that gRPC
+  endpoint is closing connections, restarting, or no longer owns the port
+- health success plus endpoint-discovery failure: a gRPC server is listening,
+  but it is not a complete Marie executor data-plane endpoint
+- intermittent failure on the reused channel: investigate executor restarts,
+  port re-registration, connection draining, and gateway channel replacement
+
+The command exits `0` only when every sample passes and discovery remains
+stable. Probe failures or registration changes return `1`; invalid arguments or
+an etcd lookup failure return `2`.
+
+### Executor data-plane stress
+
+Use `stress_executor_data_plane.py` to exercise the exact
+`JinaSingleDataRequestRPC/process_single_data` hop used between the gateway and
+an executor. In `both` mode it interleaves real endpoint requests with the
+`_jina_dry_run_` ping used by `JobSupervisor`, under one combined concurrency
+limit. Data requests reuse one channel. By default each ping creates a fresh
+channel and performs service reflection, matching the disabled
+`JobSupervisor.ping()` implementation.
+
+The data request executes the configured endpoint and may perform real work.
+Use an existing test asset and executor parameters:
+
+```bash
+.venv/bin/python tools/stress/stress_executor_data_plane.py \
+  --address 172.20.10.49:53267 \
+  --deployment corr_indexing_executor \
+  --endpoint /document/index \
+  --asset-key s3://marie/stress/sample.tif \
+  --parameters-file /tmp/corr-indexing-parameters.json \
+  --mode both \
+  --count 300 \
+  --concurrency 25 \
+  --ping-channel fresh \
+  --interval 0 \
+  --timeout 300 \
+  --jsonl /tmp/corr-indexing-data-plane.jsonl
+```
+
+In `both` mode, `--count 300` sends 300 data requests and 300 pings. Use
+`--mode ping` without `--asset-key` to isolate the dry-run path, or `--mode data`
+to exercise only `/document/index`. Compare `--ping-channel fresh` with
+`--ping-channel shared` to isolate connection churn. Each JSONL row records the
+request type, channel mode, failure phase, request ID, gRPC code and details,
+executor response status, and latency.
+
 ### 1. `gateway_e2e_stresser.py`
 
 End-to-end scheduler stress harness for real document jobs.

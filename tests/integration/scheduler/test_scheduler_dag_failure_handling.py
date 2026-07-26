@@ -672,6 +672,9 @@ async def test_handle_dispatch_failure_marks_job_failed_and_resolves_dag():
 async def test_sync_terminal_job_state_succeeded_unblocks_children_and_notifies():
     dag_id = "dag-sync"
     parent = build_work_item("job-parent", dag_id)
+    parent.state = WorkState.ACTIVE
+    parent.run_owner = "test-scheduler"
+    parent.run_attempt_id = "06a0ac88-5326-7f90-8000-0274669de089"
     child = build_work_item("job-child", dag_id)
     child.dependencies = [parent.id]
     child.job_level = 1
@@ -684,6 +687,9 @@ async def test_sync_terminal_job_state_succeeded_unblocks_children_and_notifies(
 
     complete_calls: list[dict] = []
     resolve_calls: list[tuple[str, str]] = []
+
+    async def get_job_by_id(job_id: str) -> WorkInfo | None:
+        return parent if job_id == parent.id else None
 
     async def fake_complete(
         job_id: str,
@@ -705,6 +711,7 @@ async def test_sync_terminal_job_state_succeeded_unblocks_children_and_notifies(
         resolve_calls.append((job_id, wi.dag_id))
         return False
 
+    repository.get_job_by_id = get_job_by_id
     repository.complete_job = fake_complete
     scheduler.dag_service.resolve_dag_status_with_retry = fake_resolve_dag_status
     old_end = int(
