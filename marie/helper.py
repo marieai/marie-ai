@@ -216,9 +216,9 @@ def get_readable_size(num_bytes: Union[int, float]) -> str:
     elif num_bytes < 1024**2:
         return f"{num_bytes / 1024:.1f} KB"
     elif num_bytes < 1024**3:
-        return f"{num_bytes / (1024 ** 2):.1f} MB"
+        return f"{num_bytes / (1024**2):.1f} MB"
     else:
-        return f"{num_bytes / (1024 ** 3):.1f} GB"
+        return f"{num_bytes / (1024**3):.1f} GB"
 
 
 def batch_iterator(
@@ -318,7 +318,10 @@ def countdown(t: int, reason: str = "I am blocking this thread") -> None:
         .. highlight:: python
         .. code-block:: python
             countdown(
-                10, reason=colored('re-fetch access token', 'cyan', attrs=['bold', 'reverse'])
+                10,
+                reason=colored(
+                    're-fetch access token', 'cyan', attrs=['bold', 'reverse']
+                ),
             )
 
     :param t: Countdown time.
@@ -953,11 +956,11 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
         __jcloud_version__ = "not-available"
 
     from marie._version import __docarray_version__, __proto_version__, __version__
+    from marie.build_info import get_build_info
     from marie.constants import __marie_env__, __unset_msg__, __uptime__
     from marie.logging_core.predefined import default_logger
 
     try:
-
         info = {
             "marie": __version__,
             "docarray": __docarray_version__,
@@ -981,6 +984,9 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
             "internal": "marieai"
             in os.getenv("GITHUB_ACTION_REPOSITORY", __unset_msg__),
         }
+        info.update(
+            {key.replace("_", "-"): value for key, value in get_build_info().items()}
+        )
 
         env_info = {k: os.getenv(k, __unset_msg__) for k in __marie_env__}
         full_version = info, env_info

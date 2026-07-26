@@ -193,6 +193,9 @@ Tracker = "https://github.com/marieai/marie-ai/issues"
 include-package-data = true
 zip-safe = false
 
+[tool.setuptools.package-data]
+marie = ["build_info.json"]
+
 [tool.setuptools.dynamic]
 version = { attr = "marie._version.__version__" }
 

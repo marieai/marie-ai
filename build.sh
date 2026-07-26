@@ -232,6 +232,7 @@ stage_build_context() {
 
     # Individual files
     cp pyproject.toml     "$context_dir/"
+    cp setup.py           "$context_dir/"
     cp uv.lock            "$context_dir/"
     cp README.md          "$context_dir/"                2>/dev/null || true
     cp MANIFEST.in        "$context_dir/"                2>/dev/null || true
@@ -272,7 +273,9 @@ build_image() {
         --cpuset-cpus="0-$CPU_COUNT" \
         --build-arg VCS_REF=$(git rev-parse HEAD) \
         --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+        --build-arg BUILD_NUMBER="${MARIE_BUILD_NUMBER:-${GITHUB_RUN_NUMBER:-unknown}}" \
         --build-arg MARIE_VERSION="$VERSION" \
+        --build-arg IMAGE_NAME="$full_image_name" \
         --build-arg TARGETPLATFORM=linux/amd64 \
         -f "$dockerfile_path" \
         -t "$full_image_name"

@@ -28,6 +28,7 @@ def _get_run_args(print_args: bool = True):
             warn_unknown_args(unknown)
 
         if args.cli not in silent_print and print_args:
+            from marie.build_info import format_build_identity
             from marie.constants import __resources_path__
 
             p = parser._actions[-1].choices[sys.argv[1]]
@@ -62,6 +63,7 @@ def _get_run_args(print_args: bool = True):
 
             if "JINA_LOG_NO_COLOR" not in os.environ:
                 print(f"\n{logo_str}\n")
+            print(format_build_identity(args.cli))
             console.print(param_str)
         return args
     else:

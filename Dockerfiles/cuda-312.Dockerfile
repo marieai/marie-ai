@@ -116,9 +116,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu24.04
 
 ARG TZ="Etc/UTC"
-ARG VCS_REF
-ARG BUILD_DATE
-ARG MARIE_VERSION
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+ARG BUILD_NUMBER=unknown
+ARG MARIE_VERSION=unknown
+ARG IMAGE_NAME=unknown
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TERM=xterm-256color \
@@ -163,6 +165,16 @@ ENV LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libjemalloc.so.2"
 # Copy the finished python virtual environment from build-image
 COPY --from=build-image /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
+
+RUN /opt/venv/bin/python -c 'import sys; from marie.build_info import write_build_info; write_build_info(sys.argv[1], version=sys.argv[2], git_commit=sys.argv[3], build_time=sys.argv[4], build_number=sys.argv[5], image=sys.argv[6])' \
+        /etc/marie-ai/build-info.json \
+        "${MARIE_VERSION}" \
+        "${VCS_REF}" \
+        "${BUILD_DATE}" \
+        "${BUILD_NUMBER}" \
+        "${IMAGE_NAME}"
+
+ENV MARIE_BUILD_INFO_PATH="/etc/marie-ai/build-info.json"
 
 COPY ./im-policy.xml /etc/ImageMagick-6/policy.xml
 

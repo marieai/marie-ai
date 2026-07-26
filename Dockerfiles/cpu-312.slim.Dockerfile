@@ -12,7 +12,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /src
 
-COPY pyproject.toml README.md MANIFEST.in ./
+COPY pyproject.toml README.md MANIFEST.in setup.py ./
 COPY requirements/uv/marie-gateway-cpu.lock.txt requirements/uv/
 COPY marie/_version.py marie/_version.py
 COPY wheels/etcd3-0.12.0-py2.py3-none-any.whl wheels/
@@ -55,9 +55,11 @@ FROM ${PYTHON_IMAGE}
 COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /bin/uv
 
 ARG TZ="Etc/UTC"
-ARG VCS_REF
-ARG BUILD_DATE
-ARG MARIE_VERSION
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+ARG BUILD_NUMBER=unknown
+ARG MARIE_VERSION=unknown
+ARG IMAGE_NAME=unknown
 
 ENV TERM=xterm-256color \
     LANG=C.UTF-8 \
@@ -77,6 +79,16 @@ RUN apt-get update -o APT::Update::Error-Mode=any && \
 ENV LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libjemalloc.so.2"
 
 COPY --from=build-image /opt/venv /opt/venv
+
+RUN /opt/venv/bin/python -c 'import sys; from marie.build_info import write_build_info; write_build_info(sys.argv[1], version=sys.argv[2], git_commit=sys.argv[3], build_time=sys.argv[4], build_number=sys.argv[5], image=sys.argv[6])' \
+        /etc/marie-ai/build-info.json \
+        "${MARIE_VERSION}" \
+        "${VCS_REF}" \
+        "${BUILD_DATE}" \
+        "${BUILD_NUMBER}" \
+        "${IMAGE_NAME}"
+
+ENV MARIE_BUILD_INFO_PATH="/etc/marie-ai/build-info.json"
 
 WORKDIR /marie
 
