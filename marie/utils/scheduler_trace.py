@@ -47,6 +47,8 @@ _COMPACT_EVENTS = {
     "executor_failed_recorded",
     "candidate_built",
     "planner_selected",
+    "scheduler_control_flow_peek_completed",
+    "scheduler_selection_completed",
     "dispatch_batch_start",
     "dispatch_batch_complete",
     "job_run_attempt_started",

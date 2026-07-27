@@ -185,7 +185,7 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
         in schema_query
     )
     assert "VALUES ('default')" in schema_query
-    assert "VALUES ('74')" in schema_query
+    assert "VALUES ('75')" in schema_query
     assert "job_expired_acquisition_lease_idx" in schema_query
     assert "job_expired_run_lease_idx" in schema_query
     assert "FOR UPDATE OF j SKIP LOCKED" in schema_query
@@ -430,19 +430,6 @@ async def test_load_hydratable_jobs_uses_database_function_contract() -> None:
     assert "JOIN marie_scheduler.dag" not in query
     assert "NOT EXISTS" not in query
     assert params == ([dag_id],)
-
-
-@pytest.mark.asyncio
-async def test_discover_hydratable_dags_uses_database_function_contract() -> None:
-    connection = FakeConnection(fetch=[[]])
-    repository = build_repository(connection)
-
-    assert await repository.discover_hydratable_dags(limit=10) == []
-
-    _, query, params = connection.calls[0]
-    assert "FROM marie_scheduler.hydrate_frontier_dags()" in query
-    assert "NOT EXISTS" not in query
-    assert params == (10,)
 
 
 @pytest.mark.asyncio

@@ -1393,51 +1393,6 @@ async def test_submission_priority_refresh_request_wakes_when_due():
     assert scheduler.notify_calls == []
 
 
-def test_limit_planned_jobs_to_available_slots_keeps_order_and_caps_per_executor():
-    dag_id = "dag-limit"
-    now = datetime.now(timezone.utc)
-
-    def make_job(job_id: str, endpoint: str) -> tuple[str, WorkInfo]:
-        return (
-            endpoint,
-            WorkInfo(
-                id=job_id,
-                dag_id=dag_id,
-                name="extract",
-                priority=0,
-                data={"metadata": {"on": endpoint}},
-                state=WorkState.CREATED,
-                retry_limit=1,
-                retry_delay=0,
-                retry_backoff=False,
-                start_after=now,
-                expire_in_seconds=3600,
-                keep_until=now + timedelta(days=1),
-                dependencies=[],
-                job_level=1,
-            ),
-        )
-
-    planned = [
-        make_job("extract-1", "extract_executor://document/extract"),
-        make_job("extract-2", "extract_executor://document/extract"),
-        make_job("parser-1", "annotator_parser://document/parse"),
-        make_job("parser-2", "annotator_parser://document/parse"),
-        make_job("parser-3", "annotator_parser://document/parse"),
-    ]
-
-    limited = scheduler_psql.limit_planned_jobs_to_available_slots(
-        planned,
-        {"extract_executor": 1, "annotator_parser": 2},
-    )
-
-    assert [wi.id for _, wi in limited] == [
-        "extract-1",
-        "parser-1",
-        "parser-2",
-    ]
-
-
 def test_regular_candidates_cover_available_slots_requires_enough_per_executor():
     dag_id = "dag-coverage"
     now = datetime.now(timezone.utc)

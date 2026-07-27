@@ -1,4 +1,6 @@
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (  # noqa: F401
     GatewayLlmDispatchRuntime,
@@ -84,3 +86,58 @@ def test_node_observations_use_executor_and_address_labels() -> None:
         "accepting_traffic": {key: 0},
         "selection_count": {key: 12},
     }
+
+
+@pytest.mark.asyncio
+async def test_capacity_event_logs_slot_table_every_ten_seconds(
+    monkeypatch,
+) -> None:
+    gateway = object.__new__(MarieServerGateway)
+    rows = [("executor", 40, 40, 25, 15, 25, "")]
+    totals = {
+        "capacity": 40,
+        "used": 25,
+        "available": 15,
+        "holder_count": 25,
+    }
+    gateway.capacity_manager = Mock()
+    gateway.capacity_manager.refresh_from_nodes.return_value = (
+        rows,
+        totals,
+        "full capacity table",
+    )
+    gateway._routable_deployment_nodes = Mock(return_value={})
+    gateway._node_capacity_snapshot = Mock(return_value=[])
+    gateway._set_node_observations = Mock()
+    gateway._slot_observations = {"capacity": {}, "used": {}, "available": {}}
+    gateway._last_capacity_info_log_at = 0.0
+    gateway.logger = Mock()
+
+    now = [10.0]
+    monkeypatch.setattr(
+        "marie.serve.runtimes.servers.marie_gateway.time.monotonic",
+        lambda: now[0],
+    )
+    notify = AsyncMock()
+    monkeypatch.setattr(
+        "marie.serve.runtimes.servers.marie_gateway.Toast.notify", notify
+    )
+
+    await gateway._publish_capacity_event()
+    now[0] = 15.0
+    await gateway._publish_capacity_event()
+    now[0] = 20.0
+    await gateway._publish_capacity_event()
+
+    assert gateway.logger.info.call_args_list == [
+        (("full capacity table",), {}),
+        (("full capacity table",), {}),
+    ]
+    assert (
+        sum(
+            call.args == ("full capacity table",)
+            for call in gateway.logger.debug.call_args_list
+        )
+        == 1
+    )
+    assert notify.await_count == 3

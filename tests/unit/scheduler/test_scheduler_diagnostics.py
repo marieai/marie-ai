@@ -23,7 +23,7 @@ async def test_diagnostics_collects_component_owned_runtime_state() -> None:
         event_queue=asyncio.Queue(),
         active_dags={'dag-1': SimpleNamespace(status='active')},
         known_queues={'extract'},
-        execution_planner=object(),
+        scheduling_engine=object(),
         gateway_instance_id='gateway-1',
         lease_owner='scheduler-1',
         max_concurrent_dags=16,
@@ -46,6 +46,9 @@ async def test_diagnostics_collects_component_owned_runtime_state() -> None:
     assert snapshot['queues']['event_queue_size'] == 0
     assert snapshot['active_dags']['dag-1']['status'] == 'active'
     assert snapshot['sla_monitoring'] == {'warning_top_n': 5}
+    assert snapshot['execution_planning'] == {
+        'scheduling_engine_available': True
+    }
     assert 'scheduler_mode' not in snapshot['scheduler_info']
     assert snapshot['job_state_counts'] == {'created': 2}
     assert snapshot['dag_state_counts'] == {'active': 1}

@@ -113,6 +113,7 @@ STATUS_DEGRADED_REASON = "status_degraded_reason"
 STATUS_DEGRADED_LIVE_MISSING = "live_node_missing_status"
 SERVICE_SNAPSHOT_COMPLETE = "snapshot_complete"
 DEFAULT_SERVICE_EVENT_WORKERS = 32
+CAPACITY_INFO_LOG_INTERVAL_SECONDS = 10.0
 
 
 class EventKind(str, Enum):
@@ -323,6 +324,7 @@ class MarieServerGateway(CompositeServer):
             "accepting_traffic": {},
             "selection_count": {},
         }
+        self._last_capacity_info_log_at = 0.0
         if self.meter:
             self._gateway_request_seconds = self.meter.create_histogram(
                 name="marie_gateway_request_seconds",
@@ -1822,7 +1824,15 @@ class MarieServerGateway(CompositeServer):
             rows, totals, summary = self.capacity_manager.refresh_from_nodes(
                 self._routable_deployment_nodes()
             )
-            self.logger.info(summary)
+            now = time.monotonic()
+            if (
+                now - self._last_capacity_info_log_at
+                >= CAPACITY_INFO_LOG_INTERVAL_SECONDS
+            ):
+                self.logger.info(summary)
+                self._last_capacity_info_log_at = now
+            else:
+                self.logger.debug(summary)
 
             # Update observable gauge observations (read by OTel callbacks)
             # rows: [(slot, capacity, target, used, available, holders, notes), ...]

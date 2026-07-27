@@ -126,6 +126,33 @@ def test_scheduler_trace_compact_keeps_full_batch_job_ids(monkeypatch, tmp_path)
     assert row["job_ids"] == ["job-1", "job-2"]
 
 
+def test_scheduler_trace_compact_keeps_selection_timings(monkeypatch, tmp_path):
+    trace_path = tmp_path / "scheduler-trace.jsonl"
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_ENABLED", "true")
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PATH", str(trace_path))
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PROFILE", "compact")
+
+    scheduler_trace(
+        "scheduler_selection_completed",
+        outcome="completed",
+        elapsed_ms=12.5,
+        capture_ms=8.0,
+        rank_ms=2.0,
+        cap_ms=1.0,
+        take_ms=1.5,
+        ready_heap_entries=20,
+        stale_heap_entries=3,
+        job_ids=["job-1"],
+    )
+    flush_trace()
+
+    row = json.loads(trace_path.read_text().strip())
+    assert row["event"] == "scheduler_selection_completed"
+    assert row["capture_ms"] == 8.0
+    assert row["ready_heap_entries"] == 20
+    assert row["stale_heap_entries"] == 3
+
+
 def test_scheduler_trace_compact_writes_scheduler_counters(monkeypatch, tmp_path):
     trace_path = tmp_path / "scheduler-trace.jsonl"
     monkeypatch.setenv("MARIE_SCHEDULER_TRACE_ENABLED", "true")

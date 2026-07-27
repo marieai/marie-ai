@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from math import inf
+from math import ceil
 from typing import Any, Dict, List, Optional
 
 import psycopg
@@ -30,7 +30,7 @@ from marie.query_planner.base import (
 )
 from marie.query_planner.builtin import register_all_known_planners
 from marie.scheduler.dag_topology_cache import DagTopologyCache
-from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
+from marie.scheduler.in_memory_scheduling_engine import InMemorySchedulingEngine
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.job_scheduler import JobScheduler
 from marie.scheduler.memory_frontier import MemoryFrontier
@@ -139,41 +139,6 @@ class PriorityRefreshResult:
     @property
     def succeeded(self) -> bool:
         return self.error is None
-
-
-def limit_planned_jobs_to_available_slots(
-    planned: List[tuple[str, WorkInfo]],
-    slots_by_executor: Dict[str, int],
-) -> List[tuple[str, WorkInfo]]:
-    """
-    Keep planner order, but never select more regular jobs than the current
-    executor-slot snapshot can actually run.
-
-    This avoids taking and DB-leasing a large tail of jobs that will be
-    immediately released once we discover there is no remaining capacity for
-    their executor.
-    """
-    if not planned:
-        return []
-
-    remaining = {
-        executor: max(0, int(count)) for executor, count in slots_by_executor.items()
-    }
-    selected: List[tuple[str, WorkInfo]] = []
-
-    for entrypoint, wi in planned:
-        executor = entrypoint.split("://", 1)[0]
-        if executor == "noop":
-            selected.append((entrypoint, wi))
-            continue
-
-        if remaining.get(executor, 0) <= 0:
-            continue
-
-        remaining[executor] -= 1
-        selected.append((entrypoint, wi))
-
-    return selected
 
 
 def regular_candidates_cover_available_slots(
@@ -307,8 +272,9 @@ class PostgreSQLJobScheduler(JobScheduler):
             maintenance_interval=self._maintenance_interval,
         )
 
-        self.execution_planner = GlobalPriorityExecutionPlanner(
-            sla_priority_interval_seconds=self.sla_priority_interval_seconds
+        self.scheduling_engine = InMemorySchedulingEngine(
+            self.frontier,
+            sla_priority_interval_seconds=self.sla_priority_interval_seconds,
         )
         self.logger.info(
             "SLA priority interval configured to %ss",
@@ -378,7 +344,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             # Optional mapping if slot types differ from executor names:
             # slot_type_resolver=lambda executor: {"extract_executor": "ocr.gpu"}.get(executor, executor),
         )
-        self.cycle_log_every = 10
+        self.cycle_log_interval_seconds = 10.0
         self.submission_service = self._build_submission_service()
         self.diagnostics = self._build_diagnostics()
 
@@ -408,7 +374,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             event_queue=self._event_queue,
             active_dags=self.active_dags,
             known_queues=self.known_queues,
-            execution_planner=self.execution_planner,
+            scheduling_engine=self.scheduling_engine,
             gateway_instance_id=self.gateway_instance_id,
             lease_owner=self.lease_owner,
             max_concurrent_dags=self.max_concurrent_dags,
@@ -970,17 +936,16 @@ class PostgreSQLJobScheduler(JobScheduler):
                 no_executor_slots = not any(slots_by_executor.values())
                 self.logger.debug(f"[WORK_DIST] Available slots: {slots_by_executor}")
 
-                # Fetch candidates from frontier.  Even when no executor slots
+                # Fetch candidates from frontier. Even when no executor slots
                 # are available we must still peek so that control flow nodes
-                # (NOOP/BRANCH/SWITCH) — which do NOT consume slots can be
-                # dispatched.  Skipping the peek previously caused a deadlock
-                # where noops starved while all executor slots were occupied.
+                # (NOOP/BRANCH/SWITCH) -- which do not consume slots -- can be
+                # dispatched. Skipping the peek causes a deadlock where control
+                # flow starves while all executor slots are occupied.
                 candidate_window = frontier_candidate_window(
                     batch_size, slots_by_executor
                 )
                 slot_filter = frontier_slot_filter(slots_by_executor)
 
-                candidates_wi: list[WorkInfo] = []
                 regular_candidates: list[WorkInfo] = []
                 control_flow_seen_total = 0
                 control_flow_outcomes: Counter[ControlFlowExecutionOutcome] = Counter()
@@ -997,21 +962,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                 def schedulable_slot_filter(wi: WorkInfo) -> bool:
                     return dag_admission_filter(wi) and slot_filter(wi)
 
-                def regular_slot_filter(wi: WorkInfo) -> bool:
-                    ep = wi.data.get("metadata", {}).get("on", "")
-                    return (
-                        bool(ep)
-                        and not is_control_flow_entrypoint(ep)
-                        and schedulable_slot_filter(wi)
-                    )
-
-                if not no_executor_slots:
-                    regular_candidates = await self.frontier.peek_ready(
-                        candidate_window,
-                        filter_fn=regular_slot_filter,
-                    )
-                    candidates_wi = regular_candidates
-
                 for drain_pass in range(CONTROL_FLOW_DRAIN_MAX_PASSES):
                     if regular_candidates_cover_available_slots(
                         regular_candidates, slots_by_executor
@@ -1019,19 +969,28 @@ class PostgreSQLJobScheduler(JobScheduler):
                         break
 
                     control_flow_drain_passes = drain_pass + 1
-                    candidates_wi = await self.frontier.peek_ready(
+                    peek_started = time.perf_counter()
+                    visible_jobs = await self.frontier.peek_ready(
                         candidate_window,
                         filter_fn=schedulable_slot_filter,
                     )
+                    scheduler_trace(
+                        "scheduler_control_flow_peek_completed",
+                        elapsed_ms=(time.perf_counter() - peek_started) * 1000.0,
+                        drain_pass=control_flow_drain_passes,
+                        candidate_window=candidate_window,
+                        visible_jobs=len(visible_jobs),
+                        no_executor_slots=no_executor_slots,
+                    )
 
-                    if not candidates_wi:
+                    if not visible_jobs:
                         no_ready_candidates = True
                         break
 
                     control_flow_jobs: list[WorkInfo] = []
                     current_regular_candidates: list[WorkInfo] = []
 
-                    for wi in candidates_wi:
+                    for wi in visible_jobs:
                         ep = wi.data.get("metadata", {}).get("on", "")
                         if not ep:
                             self.logger.error(
@@ -1081,18 +1040,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                         control_flow_reconciled_total += batch_result.reconciled
                         scheduled_any = scheduled_any or batch_result.made_progress
 
-                    if not no_executor_slots and not regular_candidates:
-                        regular_candidates = await self.frontier.peek_ready(
-                            candidate_window,
-                            filter_fn=regular_slot_filter,
-                        )
-                        if regular_candidates:
-                            candidates_wi = regular_candidates
-                            if regular_candidates_cover_available_slots(
-                                regular_candidates, slots_by_executor
-                            ):
-                                break
-
                     if not control_flow_jobs:
                         break
 
@@ -1110,6 +1057,17 @@ class PostgreSQLJobScheduler(JobScheduler):
                         control_flow_outcomes.items(), key=lambda item: item[0].value
                     )
                 }
+
+                selection = await self.scheduling_engine.select_ready(
+                    slots_by_executor=slots_by_executor.copy(),
+                    batch_size=batch_size,
+                    dispatch_capacity=dispatch_capacity,
+                    lease_ttl=lease_ttl,
+                    resident_dag_ids=set(self.active_dags),
+                    max_resident_dags=max_concurrent_dags,
+                )
+                candidate_window = selection.candidate_window
+                regular_candidates = list(selection.candidates)
 
                 if (
                     no_ready_candidates
@@ -1138,24 +1096,19 @@ class PostgreSQLJobScheduler(JobScheduler):
                     )
 
                 self.logger.debug(
-                    f"[WORK_DIST] Fetched {len(candidates_wi)} candidates from frontier. "
+                    f"[WORK_DIST] Fetched {len(regular_candidates)} candidates from frontier. "
                 )
 
-                planner_candidates: list[tuple[str, WorkInfo]] = []
-                for wi in regular_candidates:
-                    ep = wi.data.get("metadata", {}).get("on", "")
-                    planner_candidates.append((ep, wi))
-
                 self.logger.debug(
-                    f"[WORK_DIST] Built {len(planner_candidates)} planner candidates from {len(regular_candidates)} regular jobs "
+                    f"[WORK_DIST] Built {len(regular_candidates)} planner candidates "
                     f"(+{control_flow_completed_total} completed, {control_flow_reconciled_total} reconciled "
                     f"of {control_flow_seen_total} control flow nodes; outcomes={control_flow_outcome_counts} "
                     f"over {control_flow_drain_passes} drain pass(es)). "
-                    f"Executors needed: {set(ep for ep, _ in planner_candidates)}"
+                    f"Executors needed: {set(ep for ep, _ in selection.ranked)}"
                 )
                 scheduler_trace(
                     "candidate_built",
-                    candidates=len(planner_candidates),
+                    candidates=len(regular_candidates),
                     regular_jobs=len(regular_candidates),
                     control_flow_jobs=control_flow_completed_total,
                     control_flow_completed=control_flow_completed_total,
@@ -1164,17 +1117,20 @@ class PostgreSQLJobScheduler(JobScheduler):
                     control_flow_seen=control_flow_seen_total,
                     control_flow_drain_passes=control_flow_drain_passes,
                     executors=sorted(
-                        {ep.split("://", 1)[0] for ep, _ in planner_candidates}
+                        {ep.split("://", 1)[0] for ep, _ in selection.ranked}
                     ),
-                    slots_by_executor=dict(slots_by_executor),
+                    slots_by_executor=dict(selection.slots_by_executor),
                     active_dags=len(self.active_dags),
                     max_concurrent_dags=max_concurrent_dags,
-                    job_ids=[wi.id for _, wi in planner_candidates],
+                    job_ids=list(selection.candidate_ids),
+                    capture_limit=candidate_window,
+                    capture_eligible_by_executor=dict(selection.eligible_by_executor),
+                    capture_selected_by_executor=dict(selection.captured_by_executor),
+                    capture_eligible_by_dag=dict(selection.eligible_by_dag),
+                    capture_selected_by_dag=dict(selection.captured_by_dag),
                 )
 
-                # If no regular jobs to plan (either all were control flow or
-                # no executor slots were available), skip the planner.
-                if not planner_candidates:
+                if not regular_candidates:
                     self.logger.debug(
                         f"[WORK_DIST] No regular jobs to plan ({control_flow_completed_total} completed, "
                         f"{control_flow_reconciled_total} reconciled of {control_flow_seen_total} "
@@ -1186,55 +1142,44 @@ class PostgreSQLJobScheduler(JobScheduler):
                         wait_interval=0.0 if scheduled_any else None,
                     )
 
-                # Give the planner: candidates + a COPY of slots + active_dags
-                pick_slots = slots_by_executor.copy()
-                dag_remaining = self.frontier.dag_remaining_counts()
-                planned: list[tuple[str, WorkInfo]] = self.execution_planner.plan(
-                    planner_candidates,
+                pick_slots = dict(selection.slots_by_executor)
+                await debug_candidates_and_plan(
+                    regular_candidates,
+                    list(selection.ranked),
                     pick_slots,
                     self.active_dags,
-                    exclude_blocked=True,
-                    dag_remaining=dag_remaining,
+                    self.frontier,
                 )
-
-                await debug_candidates_and_plan(
-                    candidates_wi, planned, pick_slots, self.active_dags, self.frontier
-                )
-                limited_planned = limit_planned_jobs_to_available_slots(
-                    planned, pick_slots
-                )
-                limited_planned = limited_planned[:dispatch_capacity]
                 scheduler_trace(
                     "planner_selected",
-                    planned=len(planned),
-                    limited=len(limited_planned),
+                    planned=len(selection.ranked),
+                    limited=len(selection.requested),
                     slots=dict(pick_slots),
                     dispatch_capacity=dispatch_capacity,
                     pending_dispatches=len(self._pending_dispatches),
                     dispatch_confirmation_limit=(
                         self.dispatch_confirmation_max_in_flight
                     ),
-                    job_ids=[wi.id for _, wi in limited_planned],
+                    job_ids=list(selection.requested_ids),
                 )
-                if len(limited_planned) < len(planned):
+                if len(selection.requested) < len(selection.ranked):
                     self.logger.debug(
-                        f"[WORK_DIST] Trimmed planner selection from {len(planned)} "
-                        f"to {len(limited_planned)} based on live slot and "
+                        f"[WORK_DIST] Trimmed planner selection from {len(selection.ranked)} "
+                        f"to {len(selection.requested)} based on live slot and "
                         f"dispatch-confirmation capacity. "
                         f"Slots: {pick_slots}"
                     )
-                planned = limited_planned
+                planned = list(selection.requested)
                 if not planned:
-                    # Group candidates by executor for detailed analysis
                     candidates_by_executor = defaultdict(list)
-                    for ep, wi in planner_candidates:
+                    for ep, wi in selection.ranked:
                         exe = ep.split("://", 1)[0]
                         candidates_by_executor[exe].append(wi.id)
 
                     active_dag_count = len(self.active_dags)
                     self.logger.debug(
                         f"[WORK_DIST] Planner returned NO picks. Short sleep. "
-                        f"Candidates count: {len(planner_candidates)} | "
+                        f"Candidates count: {len(regular_candidates)} | "
                         f"Candidates by executor: {dict(candidates_by_executor)} | "
                         f"Available slots: {pick_slots} | "
                         f"Active DAGs: {active_dag_count}/{max_concurrent_dags}"
@@ -1249,14 +1194,9 @@ class PostgreSQLJobScheduler(JobScheduler):
                     f"Job IDs: {[wi.id for _, wi in planned[:10]]}"
                 )
 
-                # TAKE + SOFT-LEASE
-                selected_ids = [wi.id for _, wi in planned]
-                selected_wis: List[WorkInfo] = await self.frontier.take(
-                    selected_ids, lease_ttl=lease_ttl
-                )
-
+                selected_wis = list(selection.selected)
                 taken = len(selected_wis)
-                requested = len(selected_ids)
+                requested = len(selection.requested)
                 scheduler_trace(
                     "frontier_taken",
                     requested=requested,
@@ -1264,19 +1204,18 @@ class PostgreSQLJobScheduler(JobScheduler):
                     job_ids=[wi.id for wi in selected_wis],
                 )
                 if taken != requested:
-                    taken_ids = {wi.id for wi in selected_wis}
-                    missing = list(set(selected_ids) - taken_ids)
+                    selected_ids = {wi.id for wi in selected_wis}
+                    missing = [
+                        job_id
+                        for job_id in selection.requested_ids
+                        if job_id not in selected_ids
+                    ]
                     self.logger.warning(
                         f"[WORK_DIST] Not all jobs taken from frontier: taken={taken}/{requested}. "
                         f"Missing IDs: {missing[:10]}{'...' if len(missing) > 10 else ''}"
                     )
-                else:
-                    self.logger.info(
-                        f"[WORK_DIST] Successfully took {taken} jobs from frontier for soft-lease"
-                    )
 
                 ids_by_job_name: dict[str, list[str]] = defaultdict(list)
-
                 for wi in selected_wis:
                     ids_by_job_name[wi.name].append(wi.id)
 
@@ -1327,27 +1266,15 @@ class PostgreSQLJobScheduler(JobScheduler):
                         wait_interval=SHORT_POLL_INTERVAL,
                     )
 
-                self.logger.info(
-                    f"[WORK_DIST] Successfully leased {len(leased_ids)} jobs in DB. "
-                    f"Processing leased jobs now..."
-                )
-
-                # only process those that we leased in DB
                 leased_jobs: list[tuple[str, WorkInfo]] = ordered_leased_jobs(
                     planned, leased_ids
                 )
-
-                #  PROCESS LEASED JOBS
                 jobs_scheduled_this_cycle = defaultdict(int)
                 pending_dispatches: list[_PendingDispatch] = []
                 reservable_jobs_by_executor: dict[str, list[WorkInfo]] = defaultdict(
                     list
                 )
                 slots_before_by_job: dict[str, int] = {}
-
-                self.logger.debug(
-                    f"[WORK_DIST] Processing {len(leased_jobs)} leased jobs..."
-                )
 
                 for entrypoint, wi in leased_jobs:
                     dag_id = wi.dag_id
@@ -1676,15 +1603,9 @@ class PostgreSQLJobScheduler(JobScheduler):
         idle_streak = 0
         cycle_index = 0
         drain_ready = False
-        cycle_stats = {
-            "count": 0,
-            "sum_total": 0.0,
-            "sum_active": 0.0,
-            "min_total": inf,
-            "max_total": 0.0,
-            "min_active": inf,
-            "max_active": 0.0,
-        }
+        cycle_stats_started_at = time.perf_counter()
+        cycle_total_samples: list[float] = []
+        cycle_active_samples: list[float] = []
 
         while self.running:
             cycle_started_at = time.perf_counter()
@@ -1743,44 +1664,34 @@ class PostgreSQLJobScheduler(JobScheduler):
                 active_seconds = (
                     cycle_ended_at - active_started_at if active_started_at else 0.0
                 )
-                cycle_stats["count"] += 1
-                cycle_stats["sum_total"] += total_seconds
-                cycle_stats["sum_active"] += active_seconds
-                cycle_stats["min_total"] = min(cycle_stats["min_total"], total_seconds)
-                cycle_stats["max_total"] = max(cycle_stats["max_total"], total_seconds)
-                cycle_stats["min_active"] = min(
-                    cycle_stats["min_active"], active_seconds
-                )
-                cycle_stats["max_active"] = max(
-                    cycle_stats["max_active"], active_seconds
-                )
+                cycle_total_samples.append(total_seconds)
+                cycle_active_samples.append(active_seconds)
 
                 cycle_index += 1
-                if cycle_index % self.cycle_log_every == 0:
-                    avg_total = cycle_stats["sum_total"] / cycle_stats["count"]
-                    avg_active = cycle_stats["sum_active"] / cycle_stats["count"]
+                stats_window_seconds = cycle_ended_at - cycle_stats_started_at
+                if stats_window_seconds >= self.cycle_log_interval_seconds:
+                    p95_index = ceil(len(cycle_total_samples) * 0.95) - 1
+                    sorted_total = sorted(cycle_total_samples)
+                    sorted_active = sorted(cycle_active_samples)
                     self.logger.info(
-                        "[poll] Cycle stats (last %d): total=%.1f ms (avg %.1f–%.1f) | "
-                        "active=%.1f ms (avg %.1f–%.1f) | wait=%.1fs | idle_streak=%d",
-                        cycle_stats["count"],
-                        avg_total * 1000,
-                        cycle_stats["min_total"] * 1000,
-                        cycle_stats["max_total"] * 1000,
-                        avg_active * 1000,
-                        cycle_stats["min_active"] * 1000,
-                        cycle_stats["max_active"] * 1000,
+                        "[poll] Cycle stats (%.1fs, %d cycles): "
+                        "total_ms(avg/p95/max)=%.1f/%.1f/%.1f | "
+                        "active_ms(avg/p95/max)=%.1f/%.1f/%.1f | "
+                        "wait=%.1fs | idle_streak=%d",
+                        stats_window_seconds,
+                        len(cycle_total_samples),
+                        sum(cycle_total_samples) / len(cycle_total_samples) * 1000,
+                        sorted_total[p95_index] * 1000,
+                        sorted_total[-1] * 1000,
+                        sum(cycle_active_samples) / len(cycle_active_samples) * 1000,
+                        sorted_active[p95_index] * 1000,
+                        sorted_active[-1] * 1000,
                         wait_time,
                         idle_streak,
                     )
-                    cycle_stats = {
-                        "count": 0,
-                        "sum_total": 0.0,
-                        "sum_active": 0.0,
-                        "min_total": inf,
-                        "max_total": 0.0,
-                        "min_active": inf,
-                        "max_active": 0.0,
-                    }
+                    cycle_stats_started_at = cycle_ended_at
+                    cycle_total_samples.clear()
+                    cycle_active_samples.clear()
 
     async def _activate_and_enqueue_job(
         self, wi: WorkInfo, *, run_owner: str, run_attempt_id: str
@@ -3233,3 +3144,9 @@ class PostgreSQLJobScheduler(JobScheduler):
                     f"Error in deployment update monitor: {e}", exc_info=True
                 )
                 await asyncio.sleep(5)
+
+    def stop_job(self, job_id: str) -> bool:
+        raise NotImplementedError
+
+    async def delete_job(self, job_id: str) -> None:
+        raise NotImplementedError

@@ -44,7 +44,7 @@ from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
 
 DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
-SCHEDULER_SCHEMA_VERSION = 74
+SCHEDULER_SCHEMA_VERSION = 75
 
 
 class _GuardrailRouteConflict(RuntimeError):
@@ -363,19 +363,6 @@ class AsyncJobRepository:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(query, job_ids)
         return {str(row[0]): int(row[1]) for row in rows}
-
-    async def discover_hydratable_dags(self, limit: int = 0) -> List[Tuple[str, Dict]]:
-        limit_sql = " LIMIT %s" if limit > 0 else ""
-        params = (limit,) if limit > 0 else ()
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                f"""
-                SELECT dag_id, serialized_dag
-                FROM {DEFAULT_SCHEMA}.hydrate_frontier_dags(){limit_sql}
-                """,
-                *params,
-            )
-        return [(str(row[0]), row[1]) for row in rows]
 
     async def discover_admission_candidates(
         self,

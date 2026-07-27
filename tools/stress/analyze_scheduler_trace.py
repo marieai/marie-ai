@@ -25,6 +25,13 @@ EVENTS = (
     "dag_frontier_added",
     "dag_frontier_deferred",
     "dag_admission_decision",
+    "scheduler_selection_started",
+    "scheduler_selection_capture_completed",
+    "scheduler_selection_rank_completed",
+    "scheduler_selection_cap_completed",
+    "scheduler_selection_take_completed",
+    "scheduler_selection_completed",
+    "scheduler_control_flow_peek_completed",
     "candidate_built",
     "planner_selected",
     "frontier_taken",
@@ -148,8 +155,9 @@ REPORT_LATENCIES = (
     ("legacy-submit-queue", "submit_queue_wait"),
     ("dag-persist", "dag_persist"),
     ("frontier->candidate", "frontier_to_candidate"),
-    ("candidate->planned", "candidate_to_planned"),
-    ("planned->taken", "planned_to_taken"),
+    ("in-memory-selection", "in_memory_selection"),
+    ("legacy-candidate->planned", "candidate_to_planned"),
+    ("legacy-planned->taken", "planned_to_taken"),
     ("taken->db-lease", "taken_to_db_lease"),
     ("db-lease->slot", "db_lease_to_slot"),
     ("slot->active", "slot_to_active"),
@@ -214,7 +222,15 @@ REPORT_LATENCIES = (
     ("DAG-resolution->scheduler-wake", "dag_resolution_to_wake"),
 )
 
-SCHEDULER_DISPATCH_PATH = (
+CURRENT_SCHEDULER_DISPATCH_PATH = (
+    "in_memory_selection",
+    "taken_to_db_lease",
+    "db_lease_to_slot",
+    "slot_to_active",
+    "activate_to_dispatch",
+)
+
+LEGACY_SCHEDULER_DISPATCH_PATH = (
     "candidate_to_planned",
     "planned_to_taken",
     "taken_to_db_lease",
@@ -229,8 +245,12 @@ EXECUTOR_HANDOFF_PATH = (
 )
 
 DISPATCH_BOTTLENECK_STAGES = (
-    ("candidate->planned", "candidate_to_planned"),
-    ("planned->taken", "planned_to_taken"),
+    ("selection-capture", "selection_capture"),
+    ("selection-rank", "selection_rank"),
+    ("selection-cap", "selection_cap"),
+    ("selection-take", "selection_take"),
+    ("legacy-candidate->planned", "candidate_to_planned"),
+    ("legacy-planned->taken", "planned_to_taken"),
     ("taken->db-lease", "taken_to_db_lease"),
     ("db-lease->slot", "db_lease_to_slot"),
     ("slot->active", "slot_to_active"),
@@ -395,6 +415,13 @@ def _row_time(row: dict[str, Any] | None) -> float | None:
         return None
     ts = row.get("ts_unix")
     return float(ts) if isinstance(ts, (int, float)) else None
+
+
+def _row_number(row: dict[str, Any] | None, field: str) -> float | None:
+    if row is None:
+        return None
+    value = row.get(field)
+    return float(value) if isinstance(value, (int, float)) else None
 
 
 def _fmt(value: float | None) -> str:
@@ -611,6 +638,19 @@ def summarize_job(
     executor_terminal_at = (
         by_event.get(terminal_event) if terminal_event is not None else None
     )
+    selection_completed = _first_event_row(rows, "scheduler_selection_completed")
+    has_selection_phases = selection_completed is not None
+    candidate_visible_at = _first(
+        by_event,
+        "scheduler_selection_capture_completed",
+        "candidate_built",
+    )
+    taken_at = _first(
+        by_event,
+        "scheduler_selection_take_completed",
+        "scheduler_selection_completed",
+        "frontier_taken",
+    )
 
     return {
         "job_id": job_id,
@@ -657,18 +697,27 @@ def summarize_job(
         ),
         "frontier_to_candidate": _milliseconds(
             dag_events.get("dag_frontier_added"),
-            by_event.get("candidate_built"),
+            candidate_visible_at,
         ),
-        "candidate_to_planned": _milliseconds(
+        "in_memory_selection": _row_number(selection_completed, "elapsed_ms"),
+        "selection_capture": _row_number(selection_completed, "capture_ms"),
+        "selection_rank": _row_number(selection_completed, "rank_ms"),
+        "selection_cap": _row_number(selection_completed, "cap_ms"),
+        "selection_take": _row_number(selection_completed, "take_ms"),
+        "candidate_to_planned": None
+        if has_selection_phases
+        else _milliseconds(
             by_event.get("candidate_built"),
             by_event.get("planner_selected"),
         ),
-        "planned_to_taken": _milliseconds(
+        "planned_to_taken": None
+        if has_selection_phases
+        else _milliseconds(
             by_event.get("planner_selected"),
             by_event.get("frontier_taken"),
         ),
         "taken_to_db_lease": _milliseconds(
-            by_event.get("frontier_taken"),
+            taken_at,
             by_event.get("db_leased"),
         ),
         "db_lease_to_slot": _milliseconds(
@@ -868,6 +917,22 @@ def _summed_latency_values(
             total += float(value)
         else:
             values.append(total)
+    return values
+
+
+def _scheduler_dispatch_path_values(
+    summaries: list[dict[str, Any]],
+) -> list[float]:
+    values: list[float] = []
+    for item in summaries:
+        keys = (
+            CURRENT_SCHEDULER_DISPATCH_PATH
+            if isinstance(item.get("in_memory_selection"), (int, float))
+            else LEGACY_SCHEDULER_DISPATCH_PATH
+        )
+        stages = [item.get(key) for key in keys]
+        if all(isinstance(value, (int, float)) for value in stages):
+            values.append(sum(float(value) for value in stages))
     return values
 
 
@@ -1289,7 +1354,7 @@ def _print_dispatch_efficiency_report(
     submit_rate = rate_stats["gateway_submit_received"][1]
     dispatch_rate = rate_stats["gateway_dispatch_start"][1]
     success_rate = rate_stats["executor_success_recorded"][1]
-    scheduler_path = _summed_latency_values(summaries, SCHEDULER_DISPATCH_PATH)
+    scheduler_path = _scheduler_dispatch_path_values(summaries)
     handoff_path = _summed_latency_values(summaries, EXECUTOR_HANDOFF_PATH)
     dispatch_confirm = _numeric_values(summaries, "dispatch_to_confirm")
     callback_release = _numeric_values(summaries, "callback_to_slot_release")
@@ -1715,6 +1780,16 @@ def _print_terminal_feedback_report(
     if not terminal_count:
         return
 
+    has_selection_start = any(
+        row.get("event") == "scheduler_selection_started" for row in rows
+    )
+    next_selection_event = (
+        "scheduler_selection_started" if has_selection_start else "candidate_built"
+    )
+    next_selection_label = (
+        "selection start" if has_selection_start else "global candidate snapshot"
+    )
+
     print("\nTerminal Feedback")
     wake_results = Counter(
         bool(row["wake_queued"])
@@ -1744,19 +1819,19 @@ def _print_terminal_feedback_report(
         _numeric_values(summaries, "dag_resolution_to_wake"),
     )
     _print_distribution(
-        "terminal to next global candidate snapshot",
+        f"terminal to next {next_selection_label}",
         _next_event_delays_ms(
             rows,
             "job_terminal_attempt_accepted",
-            "candidate_built",
+            next_selection_event,
         ),
     )
     _print_distribution(
-        "scheduler wake to next global candidate snapshot",
+        f"scheduler wake to next {next_selection_label}",
         _next_event_delays_ms(
             rows,
             "terminal_scheduler_wake_completed",
-            "candidate_built",
+            next_selection_event,
         ),
     )
 
@@ -1778,6 +1853,60 @@ def _print_latency_report(summaries: list[dict[str, Any]]) -> None:
             f"{_fmt(_percentile(values, 0.99))} "
             f"{_fmt(max(values))}"
         )
+
+
+def _selection_metric(rows: list[dict[str, Any]], field: str) -> list[float]:
+    return [
+        float(row[field])
+        for row in rows
+        if row.get("event") == "scheduler_selection_completed"
+        and row.get("outcome") == "completed"
+        and isinstance(row.get(field), (int, float))
+    ]
+
+
+def _print_selection_report(rows: list[dict[str, Any]]) -> None:
+    selection_total = _selection_metric(rows, "elapsed_ms")
+    control_flow_peek = _numeric_event_field(
+        rows,
+        "scheduler_control_flow_peek_completed",
+        "elapsed_ms",
+    )
+    if not selection_total and not control_flow_peek:
+        return
+
+    print("\nIn-Memory Selection")
+    _print_distribution("selection total", selection_total)
+    _print_distribution("frontier capture", _selection_metric(rows, "capture_ms"))
+    _print_distribution("planner rank", _selection_metric(rows, "rank_ms"))
+    _print_distribution("capacity cap", _selection_metric(rows, "cap_ms"))
+    _print_distribution("frontier take", _selection_metric(rows, "take_ms"))
+    _print_distribution("control-flow frontier peek", control_flow_peek)
+
+    ready_heap = _selection_metric(rows, "ready_heap_entries")
+    ready_set = _selection_metric(rows, "ready_set_entries")
+    stale_heap = _selection_metric(rows, "stale_heap_entries")
+    _print_count_distribution("ready heap entries", ready_heap)
+    _print_count_distribution("ready set entries", ready_set)
+    _print_count_distribution("stale heap entries", stale_heap)
+
+    stale_share = [
+        stale * 100.0 / heap for heap, stale in zip(ready_heap, stale_heap) if heap > 0
+    ]
+    if stale_share:
+        print(
+            "stale heap share: "
+            f"count={len(stale_share)} "
+            f"avg={_avg(stale_share):.1f}% "
+            f"p50={_percentile(stale_share, 0.50):.1f}% "
+            f"p95={_percentile(stale_share, 0.95):.1f}% "
+            f"max={max(stale_share):.1f}%"
+        )
+    print(
+        "frontier full scans: "
+        f"control_flow_peek={len(control_flow_peek)} "
+        f"selection_capture={len(selection_total)}"
+    )
 
 
 def _print_pressure_report(rows: list[dict[str, Any]]) -> None:
@@ -2133,17 +2262,32 @@ def _print_findings(
         )
 
     candidate_to_planned = _numeric_values(summaries, "candidate_to_planned")
+    selection_total = _selection_metric(rows, "elapsed_ms")
     dispatch_to_executor = _numeric_values(summaries, "dispatch_to_executor")
     service = _numeric_values(summaries, "executor_service")
-    candidate_appearances, _ = _candidate_selection_attempts(rows)
+    candidate_appearances, first_candidate_wait = _candidate_selection_attempts(rows)
+    if selection_total and (_percentile(selection_total, 0.95) or 0) > 1000:
+        findings.append(
+            "In-memory selection is a scheduler-side tail "
+            f"(selection p95={_fmt(_percentile(selection_total, 0.95))})."
+        )
     if candidate_to_planned and (_percentile(candidate_to_planned, 0.95) or 0) > 1000:
         findings.append(
-            "Selection wait is the dominant scheduler-side tail "
-            f"(candidate->planned p95={_fmt(_percentile(candidate_to_planned, 0.95))})."
+            "Legacy candidate-to-planned wait is a scheduler-side tail "
+            f"(p95={_fmt(_percentile(candidate_to_planned, 0.95))})."
+        )
+    if (
+        not candidate_to_planned
+        and first_candidate_wait
+        and (_percentile(first_candidate_wait, 0.95) or 0) > 1000
+    ):
+        findings.append(
+            "Candidate visibility to selection is a scheduler-side tail "
+            f"(p95={_fmt(_percentile(first_candidate_wait, 0.95))})."
         )
     if candidate_appearances and (_percentile(candidate_appearances, 0.50) or 0) > 1:
         findings.append(
-            "candidate->planned includes repeated candidate snapshots before selection "
+            "Candidates appear in repeated snapshots before selection "
             f"(candidate appearances p50={_percentile(candidate_appearances, 0.50):.0f})."
         )
     if dispatch_to_executor and (_percentile(dispatch_to_executor, 0.95) or 0) > 500:
@@ -2439,6 +2583,7 @@ def print_report(
     )
 
     _print_dispatch_efficiency_report(rows, summaries, rates)
+    _print_selection_report(rows)
     _print_pressure_report(rows)
     _print_slot_idle_report(rows)
     _print_admission_report(rows)
@@ -2474,6 +2619,11 @@ def main() -> int:
             "persisted_to_frontier",
             "frontier_to_dispatch",
             "frontier_to_candidate",
+            "in_memory_selection",
+            "selection_capture",
+            "selection_rank",
+            "selection_cap",
+            "selection_take",
             "candidate_to_planned",
             "planned_to_taken",
             "taken_to_db_lease",
@@ -2537,8 +2687,10 @@ def main() -> int:
         "job_id dag_id gateway->dispatch accepted->dispatch notified->dispatch "
         "gateway->persist-start gateway->durable legacy-submit-queue "
         "legacy-dequeue->persist-start dag-persist persisted->frontier "
-        "frontier->dispatch frontier->candidate candidate->planned "
-        "planned->taken taken->db-lease db-lease->slot slot->active "
+        "frontier->dispatch frontier->candidate in-memory-selection "
+        "selection-capture selection-rank selection-cap selection-take "
+        "legacy-candidate->planned legacy-planned->taken taken->db-lease "
+        "db-lease->slot slot->active "
         "active->dispatch attempt->dispatch dispatch->supervisor-pre-send "
         "supervisor-pre-send->admission admission->desired-state "
         "supervisor-response->worker-ack dispatch->admission dispatch->executor "
@@ -2569,6 +2721,11 @@ def main() -> int:
             f"{_fmt(item['persisted_to_frontier'])} "
             f"{_fmt(item['frontier_to_dispatch'])} "
             f"{_fmt(item['frontier_to_candidate'])} "
+            f"{_fmt(item['in_memory_selection'])} "
+            f"{_fmt(item['selection_capture'])} "
+            f"{_fmt(item['selection_rank'])} "
+            f"{_fmt(item['selection_cap'])} "
+            f"{_fmt(item['selection_take'])} "
             f"{_fmt(item['candidate_to_planned'])} "
             f"{_fmt(item['planned_to_taken'])} "
             f"{_fmt(item['taken_to_db_lease'])} "

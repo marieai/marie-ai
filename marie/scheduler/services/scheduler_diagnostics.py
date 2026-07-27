@@ -21,7 +21,7 @@ class SchedulerDiagnostics:
         event_queue: asyncio.Queue[Any],
         active_dags: dict[str, Any],
         known_queues: set[str],
-        execution_planner: Any,
+        scheduling_engine: Any,
         gateway_instance_id: str,
         lease_owner: str,
         max_concurrent_dags: int,
@@ -36,7 +36,7 @@ class SchedulerDiagnostics:
         self.event_queue = event_queue
         self.active_dags = active_dags
         self.known_queues = known_queues
-        self.execution_planner = execution_planner
+        self.scheduling_engine = scheduling_engine
         self.gateway_instance_id = gateway_instance_id
         self.lease_owner = lease_owner
         self.max_concurrent_dags = max_concurrent_dags
@@ -87,7 +87,7 @@ class SchedulerDiagnostics:
                 'event_queue_size': self.event_queue.qsize(),
             },
             'execution_planning': {
-                'execution_planner_available': self.execution_planner is not None,
+                'scheduling_engine_available': self.scheduling_engine is not None,
             },
             'sla_monitoring': {
                 'warning_top_n': self.sla_warning_top_n,

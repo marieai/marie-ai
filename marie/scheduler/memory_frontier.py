@@ -14,7 +14,7 @@ from marie.scheduler.sla import (
     summarize_sla_work_items,
 )
 from marie.scheduler.state import WorkState, is_terminal_state
-from marie.scheduler.util import is_control_flow_entrypoint
+from marie.scheduler.util import executor_name, is_control_flow_entrypoint
 
 DEFAULT_RETRY_DELAY_SECONDS = 2
 _COOPERATIVE_BATCH_SIZE = 256
@@ -27,6 +27,78 @@ class ReadyEntry(NamedTuple):
     seq: int  # FIFO tie-breaker
     ver: int  # version to invalidate stale entries
     jid: str  # job id
+
+
+class ReadyCapture(NamedTuple):
+    """Bounded ready capture and coverage counts for one selection cycle."""
+
+    jobs: list[WorkInfo]
+    dag_remaining: dict[str, int]
+    eligible_by_executor: dict[str, int]
+    captured_by_executor: dict[str, int]
+    eligible_by_dag: dict[str, int]
+    captured_by_dag: dict[str, int]
+    ready_heap_entries: int
+    ready_set_entries: int
+    stale_heap_entries: int
+
+
+_ReverseReadyEntry = tuple[int, int, int, int, float, int, ReadyEntry]
+
+
+def _offer_bounded(
+    heap: list[_ReverseReadyEntry], entry: ReadyEntry, limit: int
+) -> None:
+    if limit <= 0:
+        return
+
+    reverse_entry = (
+        -entry.key[0],
+        -entry.key[1],
+        -entry.key[2],
+        -entry.key[3],
+        -entry.added_at,
+        -entry.seq,
+        entry,
+    )
+    if len(heap) < limit:
+        heapq.heappush(heap, reverse_entry)
+    elif entry < heap[0][-1]:
+        heapq.heapreplace(heap, reverse_entry)
+
+
+def _allocate_capture_quotas(weights: dict[str, int], budget: int) -> dict[str, int]:
+    positive = {key: weight for key, weight in weights.items() if weight > 0}
+    if not positive or budget <= 0:
+        return {}
+
+    if budget < len(positive):
+        keys = sorted(positive, key=lambda key: (-positive[key], key))[:budget]
+        return {key: 1 for key in keys}
+
+    total_weight = sum(positive.values())
+    quotas = {
+        key: max(1, budget * weight // total_weight) for key, weight in positive.items()
+    }
+    used = sum(quotas.values())
+
+    if used > budget:
+        for key in sorted(quotas, key=lambda item: (quotas[item], item), reverse=True):
+            while used > budget and quotas[key] > 1:
+                quotas[key] -= 1
+                used -= 1
+
+    remainders = sorted(
+        positive,
+        key=lambda key: (-(budget * positive[key] % total_weight), key),
+    )
+    for key in remainders:
+        if used >= budget:
+            break
+        quotas[key] += 1
+        used += 1
+
+    return quotas
 
 
 class MemoryFrontier:
@@ -505,6 +577,118 @@ class MemoryFrontier:
                 await self.compact_ready_heap(max_scan=len(self._ready_heap))
             return [self.jobs_by_id[e.jid] for e in top]
 
+    async def capture_ready(
+        self,
+        max_n: int,
+        slots_by_executor: dict[str, int],
+        *,
+        filter_fn: Optional[Callable[[WorkInfo], bool]] = None,
+    ) -> ReadyCapture:
+        """Build a bounded ready set with executor and DAG coverage."""
+        async with self._lock:
+            dag_remaining = self._dag_remaining_counts_locked()
+            ready_heap_entries = len(self._ready_heap)
+            ready_set_entries = len(self._ready_set)
+            if max_n <= 0 or not self._ready_heap:
+                return ReadyCapture(
+                    [],
+                    dag_remaining,
+                    {},
+                    {},
+                    {},
+                    {},
+                    ready_heap_entries,
+                    ready_set_entries,
+                    0,
+                )
+
+            runnable_slots = {
+                executor: max(0, int(count))
+                for executor, count in slots_by_executor.items()
+                if count > 0
+            }
+            executor_budget = min(max_n, 4 * sum(runnable_slots.values()))
+            executor_quotas = _allocate_capture_quotas(runnable_slots, executor_budget)
+
+            remaining_budget = max_n - sum(executor_quotas.values())
+            dag_budget = min(64, remaining_budget)
+            dag_quotas = _allocate_capture_quotas(
+                {dag_id: 1 for dag_id in self.dag_nodes}, dag_budget
+            )
+
+            global_heap: list[_ReverseReadyEntry] = []
+            executor_heaps: dict[str, list[_ReverseReadyEntry]] = {
+                executor: [] for executor in executor_quotas
+            }
+            dag_heaps: dict[str, list[_ReverseReadyEntry]] = {
+                dag_id: [] for dag_id in dag_quotas
+            }
+            eligible_by_executor: dict[str, int] = defaultdict(int)
+            eligible_by_dag: dict[str, int] = defaultdict(int)
+            stale_seen = 0
+            seen: set[str] = set()
+
+            for entry in self._ready_heap:
+                if not self._entry_is_current(entry) or (
+                    entry.jid not in self._ready_set
+                ):
+                    stale_seen += 1
+                    continue
+                if entry.jid in seen or not self._still_ready(entry.jid):
+                    continue
+
+                wi = self.jobs_by_id.get(entry.jid)
+                if wi is None or (filter_fn and not filter_fn(wi)):
+                    continue
+
+                seen.add(entry.jid)
+                executor = executor_name(self._entrypoint(wi))
+                eligible_by_executor[executor] += 1
+                eligible_by_dag[wi.dag_id] += 1
+
+                _offer_bounded(global_heap, entry, max_n)
+                if executor in executor_heaps:
+                    _offer_bounded(
+                        executor_heaps[executor], entry, executor_quotas[executor]
+                    )
+                if wi.dag_id in dag_heaps:
+                    _offer_bounded(dag_heaps[wi.dag_id], entry, dag_quotas[wi.dag_id])
+
+            captured_entries: dict[str, ReadyEntry] = {}
+            for heap in (*executor_heaps.values(), *dag_heaps.values()):
+                for reverse_entry in heap:
+                    entry = reverse_entry[-1]
+                    captured_entries[entry.jid] = entry
+
+            for reverse_entry in sorted(global_heap, key=lambda item: item[-1]):
+                if len(captured_entries) >= max_n:
+                    break
+                entry = reverse_entry[-1]
+                captured_entries.setdefault(entry.jid, entry)
+
+            selected_entries = sorted(captured_entries.values())
+            jobs = [self.jobs_by_id[entry.jid] for entry in selected_entries]
+            captured_by_executor: dict[str, int] = defaultdict(int)
+            captured_by_dag: dict[str, int] = defaultdict(int)
+            for wi in jobs:
+                captured_by_executor[executor_name(self._entrypoint(wi))] += 1
+                captured_by_dag[wi.dag_id] += 1
+
+            if stale_seen > 1024:
+                await self.compact_ready_heap(max_scan=len(self._ready_heap))
+
+            return ReadyCapture(
+                jobs,
+                dag_remaining,
+                dict(eligible_by_executor),
+                dict(captured_by_executor),
+                dict(eligible_by_dag),
+                dict(captured_by_dag),
+                ready_heap_entries,
+                ready_set_entries,
+                stale_seen,
+            )
+
     async def take(
         self,
         ids: Iterable[str],
@@ -780,8 +964,7 @@ class MemoryFrontier:
 
         return out
 
-    def dag_remaining_counts(self) -> dict[str, int]:
-        """Return {dag_id: count_of_non_terminal_jobs} for every tracked DAG."""
+    def _dag_remaining_counts_locked(self) -> dict[str, int]:
         counts: dict[str, int] = {}
         for dag_id, node_ids in self.dag_nodes.items():
             remaining = 0
@@ -791,6 +974,10 @@ class MemoryFrontier:
                     remaining += 1
             counts[dag_id] = remaining
         return counts
+
+    def dag_remaining_counts(self) -> dict[str, int]:
+        """Return {dag_id: count_of_non_terminal_jobs} for every tracked DAG."""
+        return self._dag_remaining_counts_locked()
 
     async def finalize_dag(self, dag_id: str) -> dict[str, int]:
         """

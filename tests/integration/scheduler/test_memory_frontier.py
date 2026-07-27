@@ -5,6 +5,8 @@ from types import SimpleNamespace as NS
 import pytest
 
 import marie.scheduler.memory_frontier as memory_frontier_module
+from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
+from marie.scheduler.in_memory_scheduling_engine import InMemorySchedulingEngine
 from marie.scheduler.memory_frontier import MemoryFrontier
 
 
@@ -120,6 +122,159 @@ async def test_zero_priority_is_stable_in_frontier(frontier: MemoryFrontier):
 
     out = await frontier.peek_ready(3)
     assert [wi.id for wi in out] == ["Z2", "Z3", "Z1"]
+
+
+@pytest.mark.asyncio
+async def test_capture_ready_covers_runnable_executors_outside_global_prefix(
+    frontier: MemoryFrontier,
+):
+    dominant = [
+        wi_factory(
+            f"A{i}",
+            priority=100,
+            executor="executor_a://default",
+        )
+        for i in range(4)
+    ]
+    other_executor = wi_factory(
+        "B0",
+        priority=0,
+        executor="executor_b://default",
+    )
+    await add_ready_jobs(frontier, *dominant, other_executor)
+
+    global_prefix = await frontier.peek_ready(4)
+    capture = await frontier.capture_ready(
+        4,
+        {"executor_a": 1, "executor_b": 1},
+    )
+
+    assert [wi.id for wi in global_prefix] == ["A0", "A1", "A2", "A3"]
+    assert "B0" in {wi.id for wi in capture.jobs}
+    assert len(capture.jobs) == 4
+    assert capture.eligible_by_executor == {"executor_a": 4, "executor_b": 1}
+    assert capture.captured_by_executor["executor_b"] == 1
+    assert capture.ready_heap_entries == 5
+    assert capture.ready_set_entries == 5
+    assert capture.stale_heap_entries == 0
+
+
+@pytest.mark.asyncio
+async def test_capture_ready_reports_stale_heap_entries(frontier: MemoryFrontier):
+    current = wi_factory("current", executor="executor_a://default")
+    stale = wi_factory("stale", executor="executor_a://default")
+    await add_ready_jobs(frontier, current, stale)
+    frontier._remove_from_ready_set(stale.id)
+
+    capture = await frontier.capture_ready(4, {"executor_a": 1})
+
+    assert [wi.id for wi in capture.jobs] == [current.id]
+    assert capture.ready_heap_entries == 2
+    assert capture.ready_set_entries == 1
+    assert capture.stale_heap_entries == 1
+
+
+@pytest.mark.asyncio
+async def test_capture_ready_lets_planner_fill_skewed_executor_capacity(
+    frontier: MemoryFrontier,
+):
+    dominant = [
+        wi_factory(
+            f"A{i}",
+            priority=100,
+            executor="executor_a://default",
+        )
+        for i in range(72)
+    ]
+    other_executor = wi_factory(
+        "B0",
+        priority=0,
+        executor="executor_b://default",
+    )
+    await add_ready_jobs(frontier, *dominant, other_executor)
+
+    slots = {"executor_a": 1, "executor_b": 1}
+    global_prefix = await frontier.peek_ready(72)
+    engine = InMemorySchedulingEngine(
+        frontier,
+        sla_priority_interval_seconds=60,
+    )
+    selection = await engine.select_ready(
+        slots_by_executor=slots,
+        batch_size=4,
+        dispatch_capacity=2,
+        lease_ttl=5,
+        resident_dag_ids={"D1"},
+        max_resident_dags=16,
+    )
+
+    assert {wi.data["metadata"]["on"] for wi in global_prefix} == {
+        "executor_a://default"
+    }
+    assert [wi.id for wi in selection.selected] == ["A0", "B0"]
+
+
+@pytest.mark.asyncio
+async def test_capture_ready_covers_resident_dags_outside_global_prefix(
+    frontier: MemoryFrontier,
+):
+    dominant = [
+        wi_factory(
+            f"D1-{i}",
+            dag_id="D1",
+            job_level=10,
+            executor="executor_a://default",
+        )
+        for i in range(8)
+    ]
+    other_dag = wi_factory(
+        "D2-0",
+        dag_id="D2",
+        job_level=0,
+        executor="executor_a://default",
+    )
+    await add_ready_jobs(frontier, *dominant, other_dag)
+
+    global_prefix = await frontier.peek_ready(8)
+    capture = await frontier.capture_ready(8, {"executor_a": 1})
+
+    assert {wi.dag_id for wi in global_prefix} == {"D1"}
+    assert "D2-0" in {wi.id for wi in capture.jobs}
+    assert len(capture.jobs) == 8
+    assert capture.eligible_by_dag == {"D1": 8, "D2": 1}
+    assert capture.captured_by_dag["D2"] == 1
+    assert capture.dag_remaining == {"D1": 8, "D2": 1}
+
+    planner = GlobalPriorityExecutionPlanner()
+    planned = planner.plan(
+        [(wi.data["metadata"]["on"], wi) for wi in capture.jobs],
+        {"executor_a": 1},
+        {"D1", "D2"},
+        exclude_blocked=True,
+        dag_remaining=capture.dag_remaining,
+    )
+    assert planned[0][1].id == "D2-0"
+
+
+@pytest.mark.asyncio
+async def test_capture_ready_preserves_global_prefix_without_skew(
+    frontier: MemoryFrontier,
+):
+    jobs = [
+        wi_factory(
+            f"J{i}",
+            priority=i % 5,
+            job_level=i % 7,
+            executor="executor_a://default",
+        )
+        for i in range(100)
+    ]
+    await add_ready_jobs(frontier, *jobs)
+
+    global_prefix = await frontier.peek_ready(80)
+    capture = await frontier.capture_ready(80, {"executor_a": 1})
+
+    assert [wi.id for wi in capture.jobs] == [wi.id for wi in global_prefix]
 
 
 @pytest.mark.asyncio
@@ -835,6 +990,14 @@ async def run_frontier_stress_test(job_count: int, thresholds: dict):
         assert top_100[i].priority >= top_100[i + 1].priority, f"Priority ordering violated at {i}"
 
     start = time.monotonic()
+    capture = await frontier.capture_ready(100, {"exe": 25})
+    capture_time = time.monotonic() - start
+    assert len(capture.jobs) == 100
+    assert capture_time < thresholds["capture"], (
+        f"Capturing 100 jobs took {capture_time:.2f}s"
+    )
+
+    start = time.monotonic()
     await frontier.refresh_ready_ordering()
     refresh_time = time.monotonic() - start
     assert refresh_time < thresholds["refresh"], f"Refresh took {refresh_time:.2f}s"
@@ -865,6 +1028,7 @@ async def test_large_frontier_stress_10k_jobs_with_mixed_slas():
     await run_frontier_stress_test(10_000, {
         "add": 5.0,
         "peek": 1.0,
+        "capture": 1.0,
         "refresh": 2.0,
         "select": 1.0,
     })
@@ -876,6 +1040,7 @@ async def test_large_frontier_stress_100k_jobs_with_mixed_slas():
     frontier = await run_frontier_stress_test(100_000, {
         "add": 30.0,
         "peek": 2.0,
+        "capture": 3.0,
         "refresh": 15.0,
         "select": 2.0,
         "select_count": 100,

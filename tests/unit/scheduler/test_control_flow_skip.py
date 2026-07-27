@@ -93,7 +93,8 @@ def test_exclusive_skip_closure_handles_nested_branch() -> None:
 def test_frontier_hydration_treats_skipped_parents_as_satisfied() -> None:
     project_root = Path(__file__).parents[3]
     sql = (
-        project_root / "config/psql/schema/lease/009_hydrate_frontier_jobs.sql"
+        project_root / "config/psql/schema/lease/016_hydrate_frontier_jobs.sql"
     ).read_text()
 
     assert "p.state NOT IN ('completed','failed','cancelled','skipped')" in sql
+    assert "'expire_in_seconds', EXTRACT(EPOCH FROM j.expire_in)::integer" in sql

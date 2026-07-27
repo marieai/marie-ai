@@ -47,10 +47,6 @@ class FakeRepository:
                 return serialized_dag, rows
         return None, []
 
-    async def discover_hydratable_dags(self, limit=0):
-        rows = list(self._hydratable_dags)
-        return rows[:limit] if limit > 0 else rows
-
     async def discover_admission_candidates(
         self,
         *,
@@ -169,33 +165,6 @@ async def test_hydrate_single_dag_preserves_sla_fields():
     assert dag_id in active_dags
     assert frontier.jobs_by_id["job-sla-single"].soft_sla == soft_sla
     assert frontier.jobs_by_id["job-sla-single"].hard_sla == hard_sla
-
-
-@pytest.mark.asyncio
-async def test_hydrate_bulk_preserves_sla_fields():
-    now = datetime.now(timezone.utc)
-    soft_sla = now + timedelta(seconds=15)
-    hard_sla = now + timedelta(seconds=45)
-    dag_id = "dag-sla-bulk"
-    job = make_wi(
-        "job-sla-bulk",
-        dag_id,
-        "annotator_llm://default",
-        soft_sla=soft_sla,
-        hard_sla=hard_sla,
-    )
-    repo = FakeRepository(
-        priorities={},
-        hydratable_dags=[(dag_id, {"nodes": []})],
-        hydratable_jobs={dag_id: [serialize_wi(job)]},
-    )
-    service, frontier, active_dags = make_service({"annotator_llm": 1}, repo=repo)
-
-    await service.hydrate_bulk(dag_batch_size=10, itersize=10, log_every_seconds=60.0)
-
-    assert dag_id in active_dags
-    assert frontier.jobs_by_id["job-sla-bulk"].soft_sla == soft_sla
-    assert frontier.jobs_by_id["job-sla-bulk"].hard_sla == hard_sla
 
 
 @pytest.mark.asyncio
@@ -508,7 +477,7 @@ async def test_hydrated_dag_with_only_unavailable_mock_ready_work_is_not_admitte
     ]
 
     admitted, reason = await service._admit_hydrated_dag(
-        dag_id, QueryPlan(nodes=[]), nodes, source="hydrate_bulk"
+        dag_id, QueryPlan(nodes=[]), nodes, source="test"
     )
 
     assert admitted is False
@@ -594,7 +563,7 @@ async def test_hydrated_dag_with_ready_annotator_llm_work_is_admitted():
     ]
 
     admitted, reason = await service._admit_hydrated_dag(
-        dag_id, QueryPlan(nodes=[]), nodes, source="hydrate_bulk"
+        dag_id, QueryPlan(nodes=[]), nodes, source="test"
     )
 
     assert admitted is True
@@ -618,7 +587,7 @@ async def test_hydrated_dag_with_control_flow_path_to_runnable_work_is_admitted(
     ]
 
     admitted, reason = await service._admit_hydrated_dag(
-        dag_id, QueryPlan(nodes=[]), nodes, source="hydrate_bulk"
+        dag_id, QueryPlan(nodes=[]), nodes, source="test"
     )
 
     assert admitted is True
@@ -641,7 +610,7 @@ async def test_hydrated_dag_with_only_control_flow_work_is_admitted():
     ]
 
     admitted, reason = await service._admit_hydrated_dag(
-        dag_id, QueryPlan(nodes=[]), nodes, source="hydrate_bulk"
+        dag_id, QueryPlan(nodes=[]), nodes, source="test"
     )
 
     assert admitted is True
@@ -665,7 +634,7 @@ async def test_hydrated_dag_is_not_admitted_when_database_activation_fails():
     nodes = [make_wi("job-1", dag_id, "annotator_llm://default", deps=[])]
 
     admitted, reason = await service._admit_hydrated_dag(
-        dag_id, QueryPlan(nodes=[]), nodes, source="hydrate_bulk"
+        dag_id, QueryPlan(nodes=[]), nodes, source="test"
     )
 
     assert admitted is False
@@ -673,66 +642,3 @@ async def test_hydrated_dag_is_not_admitted_when_database_activation_fails():
     assert repo.marked_active_dags == [dag_id]
     assert dag_id not in active_dags
     assert dag_id not in frontier.dag_nodes
-
-
-@pytest.mark.asyncio
-async def test_hydrate_bulk_skips_incompatible_dags_and_admits_later_compatible_ones():
-    dag_rows = [
-        ("dag-mock-1", {"nodes": []}),
-        ("dag-mock-2", {"nodes": []}),
-        ("dag-llm-1", {"nodes": []}),
-        ("dag-parser-1", {"nodes": []}),
-    ]
-    hydratable_jobs = {
-        "dag-mock-1": [
-            serialize_wi(make_wi("mock-root-1", "dag-mock-1", "noop://noop", deps=[])),
-            serialize_wi(
-                make_wi(
-                    "mock-real-1",
-                    "dag-mock-1",
-                    "mock_executor_a://document/process",
-                    deps=["mock-root-1"],
-                )
-            ),
-        ],
-        "dag-mock-2": [
-            serialize_wi(make_wi("mock-root-2", "dag-mock-2", "noop://noop", deps=[])),
-            serialize_wi(
-                make_wi(
-                    "mock-real-2",
-                    "dag-mock-2",
-                    "mock_executor_b://document/process",
-                    deps=["mock-root-2"],
-                )
-            ),
-        ],
-        "dag-llm-1": [
-            serialize_wi(
-                make_wi("llm-job", "dag-llm-1", "annotator_llm://default", deps=[])
-            )
-        ],
-        "dag-parser-1": [
-            serialize_wi(
-                make_wi(
-                    "parser-job", "dag-parser-1", "annotator_parser://default", deps=[]
-                )
-            )
-        ],
-    }
-    repo = FakeRepository(
-        priorities={},
-        hydratable_dags=dag_rows,
-        hydratable_jobs=hydratable_jobs,
-    )
-    service, frontier, active_dags = make_service(
-        {"annotator_llm": 1, "annotator_parser": 1},
-        max_active_dags=2,
-        repo=repo,
-    )
-
-    await service.hydrate_bulk(dag_batch_size=10, itersize=10, log_every_seconds=60.0)
-
-    assert set(active_dags.keys()) == {"dag-llm-1", "dag-parser-1"}
-    assert "dag-mock-1" not in active_dags
-    assert "dag-mock-2" not in active_dags
-    assert set(frontier.dag_nodes.keys()) == {"dag-llm-1", "dag-parser-1"}

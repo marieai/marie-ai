@@ -111,12 +111,13 @@ parallel `schema-v*` or environment-specific schema directories.
 
 Deployed SQL history is immutable. When a function must replace a definition
 from an earlier artifact, add a new forward SQL file instead of editing the old
-file. Schema version 74 gives each logical function its own final artifact:
+file. Schema version 75 gives each logical function its own final artifact:
 
 - `lease/012_job_update_trigger_function.sql`
 - `lease/013_resolve_dag_state.sql`
 - `lease/014_release_expired_leases.sql`
 - `lease/015_activate_from_lease.sql` for the overload family
+- `lease/016_hydrate_frontier_jobs.sql`
 
 Tests and reviews should use those files as the current contracts. The earlier
 definitions remain only because existing deployments may already have applied

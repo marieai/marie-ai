@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import marie.scheduler.psql as scheduler_psql
+from marie.scheduler.in_memory_scheduling_engine import InMemorySelection
 from marie.scheduler.psql import (
     SLOT_POLL_INTERVAL,
     ControlFlowBatchResult,
@@ -15,6 +16,35 @@ from marie.scheduler.psql import (
 )
 from marie.scheduler.services import ControlFlowExecutionOutcome, SchedulerRuntime
 from marie.scheduler.state import WorkState
+
+
+def selection_result(
+    candidates: list[SimpleNamespace] | None = None,
+    *,
+    ranked: list[tuple[str, SimpleNamespace]] | None = None,
+    requested: list[tuple[str, SimpleNamespace]] | None = None,
+    selected: list[SimpleNamespace] | None = None,
+    slots: dict[str, int] | None = None,
+) -> InMemorySelection:
+    candidates = candidates or []
+    if ranked is None:
+        ranked = [(wi.data.get("metadata", {}).get("on", ""), wi) for wi in candidates]
+    if requested is None:
+        requested = ranked
+    if selected is None:
+        selected = [wi for _, wi in requested]
+    return InMemorySelection(
+        candidates=tuple(candidates),
+        ranked=tuple(ranked),
+        requested=tuple(requested),
+        selected=tuple(selected),
+        candidate_window=100,
+        slots_by_executor=tuple(sorted((slots or {}).items())),
+        eligible_by_executor=(),
+        captured_by_executor=(),
+        eligible_by_dag=(),
+        captured_by_dag=(),
+    )
 
 
 def build_scheduler() -> PostgreSQLJobScheduler:
@@ -46,19 +76,21 @@ def build_scheduler() -> PostgreSQLJobScheduler:
     scheduler._ticket_collision_counts = {}
     scheduler.lease_owner = "scheduler-1"
     scheduler.gateway_instance_id = "gateway-1"
-    scheduler.cycle_log_every = 100
+    scheduler.cycle_log_interval_seconds = 10.0
     scheduler._request_priority_refresh = MagicMock()
     scheduler._wait_for_dispatch_wake = AsyncMock(return_value=False)
-    scheduler.frontier = SimpleNamespace(
+    frontier = SimpleNamespace(
         reap_expired_soft_leases=AsyncMock(return_value=0),
         peek_ready=AsyncMock(return_value=[]),
         summary=MagicMock(return_value={}),
-        dag_remaining_counts=MagicMock(return_value={}),
         take=AsyncMock(return_value=[]),
         release_lease_local=AsyncMock(),
         compact_ready_heap=AsyncMock(return_value=0),
     )
-    scheduler.execution_planner = SimpleNamespace(plan=MagicMock(return_value=[]))
+    scheduler.frontier = frontier
+    scheduler.scheduling_engine = SimpleNamespace(
+        select_ready=AsyncMock(return_value=selection_result())
+    )
     scheduler.dag_service = SimpleNamespace(admit_dag=AsyncMock(return_value=True))
     scheduler._lease_jobs_db = AsyncMock(return_value=set())
     scheduler._release_lease_db = AsyncMock()
@@ -171,8 +203,9 @@ async def test_dispatch_cycle_plans_leases_activates_and_dispatches_once(
     )
     scheduler.active_dags[work_item.dag_id] = object()
     scheduler.frontier.peek_ready.return_value = [work_item]
-    scheduler.frontier.take.return_value = [work_item]
-    scheduler.execution_planner.plan.return_value = [("extract://default", work_item)]
+    scheduler.scheduling_engine.select_ready.return_value = selection_result(
+        [work_item], slots={"extract": 1}
+    )
     scheduler._lease_jobs_db.return_value = {work_item.id}
     scheduler._reserve_semaphore_slots.return_value = {
         work_item.id: SemaphoreReservationStatus.RESERVED
@@ -193,21 +226,19 @@ async def test_dispatch_cycle_plans_leases_activates_and_dispatches_once(
         "debug_candidates_and_plan",
         AsyncMock(),
     )
-    scheduler.frontier.dag_remaining_counts.return_value = {work_item.dag_id: 1}
-
     result = await scheduler.run_dispatch_cycle(cycle_index=1)
     await settle_dispatches(scheduler)
 
     assert result == DispatchCycleResult(scheduled=True)
-    scheduler.execution_planner.plan.assert_called_once_with(
-        [("extract://default", work_item)],
-        {"extract": 1},
-        scheduler.active_dags,
-        exclude_blocked=True,
-        dag_remaining={work_item.dag_id: 1},
+    scheduler.frontier.peek_ready.assert_awaited_once()
+    scheduler.scheduling_engine.select_ready.assert_awaited_once_with(
+        slots_by_executor={"extract": 1},
+        batch_size=100,
+        dispatch_capacity=256,
+        lease_ttl=5,
+        resident_dag_ids={work_item.dag_id},
+        max_resident_dags=16,
     )
-    scheduler.frontier.dag_remaining_counts.assert_called_once_with()
-    scheduler.frontier.take.assert_awaited_once_with([work_item.id], lease_ttl=5)
     scheduler._lease_jobs_db.assert_awaited_once_with("extract", [work_item.id])
     scheduler._reserve_semaphore_slots.assert_awaited_once_with(
         "extract", [work_item], {work_item.id: "attempt-1"}
@@ -248,8 +279,9 @@ async def test_dispatch_cycle_does_not_wait_for_confirmation(
     scheduler._activate_and_enqueue_job = AsyncMock(side_effect=wait_for_confirmation)
     scheduler.active_dags[work_item.dag_id] = object()
     scheduler.frontier.peek_ready.return_value = [work_item]
-    scheduler.frontier.take.return_value = [work_item]
-    scheduler.execution_planner.plan.return_value = [("extract://default", work_item)]
+    scheduler.scheduling_engine.select_ready.return_value = selection_result(
+        [work_item], slots={"extract": 1}
+    )
     scheduler._lease_jobs_db.return_value = {work_item.id}
     scheduler._reserve_semaphore_slots.return_value = {
         work_item.id: SemaphoreReservationStatus.RESERVED
@@ -308,8 +340,10 @@ async def test_dispatch_cycle_applies_confirmation_backpressure(
     scheduler._activate_and_enqueue_job = AsyncMock(side_effect=wait_for_confirmation)
     scheduler.active_dags[work_item.dag_id] = object()
     scheduler.frontier.peek_ready.return_value = [work_item]
-    scheduler.frontier.take.return_value = [work_item]
-    scheduler.execution_planner.plan.return_value = [("extract://default", work_item)]
+    scheduler.scheduling_engine.select_ready.side_effect = [
+        selection_result([work_item], slots={"extract": 1}),
+        selection_result(),
+    ]
     scheduler._lease_jobs_db.return_value = {work_item.id}
     scheduler._reserve_semaphore_slots.return_value = {
         work_item.id: SemaphoreReservationStatus.RESERVED
@@ -390,11 +424,9 @@ async def test_dispatch_cycle_reconciles_partial_database_lease(
     selected = [leased, missing]
     scheduler.active_dags[leased.dag_id] = object()
     scheduler.frontier.peek_ready.return_value = selected
-    scheduler.frontier.take.return_value = selected
-    scheduler.execution_planner.plan.return_value = [
-        ("extract://default", leased),
-        ("extract://default", missing),
-    ]
+    scheduler.scheduling_engine.select_ready.return_value = selection_result(
+        selected, slots={"extract": 2}
+    )
     scheduler._lease_jobs_db.return_value = {leased.id}
     scheduler._reconcile_db_lease_shortfall.return_value = 1
     scheduler._reserve_semaphore_slots.return_value = {
@@ -450,8 +482,9 @@ async def test_dispatch_cycle_releases_resources_when_database_activation_fails(
     )
     scheduler.active_dags[work_item.dag_id] = object()
     scheduler.frontier.peek_ready.return_value = [work_item]
-    scheduler.frontier.take.return_value = [work_item]
-    scheduler.execution_planner.plan.return_value = [("extract://default", work_item)]
+    scheduler.scheduling_engine.select_ready.return_value = selection_result(
+        [work_item], slots={"extract": 1}
+    )
     scheduler._lease_jobs_db.return_value = {work_item.id}
     scheduler._reserve_semaphore_slots.return_value = {
         work_item.id: SemaphoreReservationStatus.RESERVED
@@ -506,12 +539,12 @@ async def test_dispatch_cycle_preserves_control_flow_progress(
     )
     scheduler.active_dags[regular.dag_id] = object()
     scheduler.frontier.peek_ready.side_effect = [
-        [regular],
         [control_flow, regular],
         [regular],
     ]
-    scheduler.frontier.take.return_value = [regular]
-    scheduler.execution_planner.plan.return_value = [("extract://default", regular)]
+    scheduler.scheduling_engine.select_ready.return_value = selection_result(
+        [regular], slots={"extract": 2}
+    )
     scheduler._process_control_flow_candidates = AsyncMock(
         return_value=ControlFlowBatchResult(
             outcomes=(ControlFlowExecutionOutcome.COMPLETED,)
@@ -539,6 +572,49 @@ async def test_dispatch_cycle_preserves_control_flow_progress(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_cycle_drains_control_flow_with_zero_executor_slots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = build_scheduler()
+    control_flow = SimpleNamespace(
+        id="noop-1",
+        dag_id="dag-1",
+        name="extract",
+        data={"metadata": {"on": "noop://default"}},
+        state=WorkState.CREATED,
+    )
+    scheduler.active_dags[control_flow.dag_id] = object()
+    scheduler.frontier.peek_ready.side_effect = [[control_flow], []]
+    scheduler._process_control_flow_candidates = AsyncMock(
+        return_value=ControlFlowBatchResult(
+            outcomes=(ControlFlowExecutionOutcome.COMPLETED,)
+        )
+    )
+    monkeypatch.setattr(
+        scheduler_psql,
+        "available_slots_by_executor",
+        lambda _sem: {"extract": 0},
+    )
+
+    result = await scheduler.run_dispatch_cycle(cycle_index=1)
+
+    assert result == DispatchCycleResult(scheduled=True, wait_interval=0.0)
+    scheduler._process_control_flow_candidates.assert_awaited_once_with(
+        [control_flow], 5
+    )
+    first_peek = scheduler.frontier.peek_ready.await_args_list[0]
+    assert first_peek.kwargs["filter_fn"](control_flow) is True
+    scheduler.scheduling_engine.select_ready.assert_awaited_once_with(
+        slots_by_executor={"extract": 0},
+        batch_size=100,
+        dispatch_capacity=256,
+        lease_ttl=5,
+        resident_dag_ids={control_flow.dag_id},
+        max_resident_dags=16,
+    )
+
+
+@pytest.mark.asyncio
 async def test_dispatch_cycle_defers_existing_ticket_without_hot_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -553,8 +629,9 @@ async def test_dispatch_cycle_defers_existing_ticket_without_hot_loop(
     )
     scheduler.active_dags[work_item.dag_id] = object()
     scheduler.frontier.peek_ready.return_value = [work_item]
-    scheduler.frontier.take.return_value = [work_item]
-    scheduler.execution_planner.plan.return_value = [("extract://default", work_item)]
+    scheduler.scheduling_engine.select_ready.return_value = selection_result(
+        [work_item], slots={"extract": 1}
+    )
     scheduler._lease_jobs_db.return_value = {work_item.id}
     scheduler._reserve_semaphore_slots.return_value = {
         work_item.id: SemaphoreReservationStatus.TICKET_EXISTS
@@ -593,8 +670,9 @@ async def test_ticket_collision_delay_backs_off_and_is_bounded(
     )
     scheduler.active_dags[work_item.dag_id] = object()
     scheduler.frontier.peek_ready.return_value = [work_item]
-    scheduler.frontier.take.return_value = [work_item]
-    scheduler.execution_planner.plan.return_value = [("extract://default", work_item)]
+    scheduler.scheduling_engine.select_ready.return_value = selection_result(
+        [work_item], slots={"extract": 1}
+    )
     scheduler._lease_jobs_db.return_value = {work_item.id}
     scheduler._reserve_semaphore_slots.return_value = {
         work_item.id: SemaphoreReservationStatus.TICKET_EXISTS
@@ -630,9 +708,7 @@ async def test_dispatch_cycle_does_not_count_control_flow_failure_as_progress(
     )
     scheduler.active_dags[control_flow.dag_id] = object()
     scheduler.frontier.peek_ready.side_effect = [
-        [],
         [control_flow],
-        [],
         [],
     ]
     scheduler._process_control_flow_candidates = AsyncMock(
@@ -787,11 +863,17 @@ async def test_dispatch_cycle_compacts_on_cadence_before_early_return(
         scheduler._paused = True
     elif exit_path in {"no_planner_picks", "no_database_leases"}:
         scheduler.frontier.peek_ready.return_value = [work_item]
+        scheduler.scheduling_engine.select_ready.return_value = selection_result(
+            [work_item],
+            ranked=[],
+            requested=[],
+            selected=[],
+            slots={"extract": 1},
+        )
         if exit_path == "no_database_leases":
-            scheduler.execution_planner.plan.return_value = [
-                ("extract://default", work_item)
-            ]
-            scheduler.frontier.take.return_value = [work_item]
+            scheduler.scheduling_engine.select_ready.return_value = selection_result(
+                [work_item], slots={"extract": 1}
+            )
 
     await scheduler.run_dispatch_cycle(cycle_index=20)
 
@@ -867,3 +949,40 @@ async def test_poll_drains_scheduled_cycles_before_waiting_again() -> None:
         2,
     ]
     assert scheduler._fetch_counter == 3
+
+
+@pytest.mark.asyncio
+async def test_poll_logs_cycle_percentiles_on_elapsed_cadence(monkeypatch) -> None:
+    scheduler = build_scheduler()
+    scheduler.cycle_log_interval_seconds = 1.0
+    results = [
+        DispatchCycleResult(scheduled=False),
+        DispatchCycleResult(scheduled=False),
+    ]
+
+    async def run_dispatch_cycle(_cycle_index: int) -> DispatchCycleResult:
+        result = results.pop(0)
+        if not results:
+            scheduler.running = False
+        return result
+
+    scheduler.run_dispatch_cycle = AsyncMock(side_effect=run_dispatch_cycle)
+    perf_counter_values = iter((0.0, 0.0, 0.1, 0.5, 0.5, 0.6, 1.1))
+    monkeypatch.setattr(
+        scheduler_psql.time,
+        "perf_counter",
+        lambda: next(perf_counter_values),
+    )
+
+    await scheduler._poll()
+
+    message, *values = scheduler.logger.info.call_args_list[-1].args
+    assert message == (
+        "[poll] Cycle stats (%.1fs, %d cycles): "
+        "total_ms(avg/p95/max)=%.1f/%.1f/%.1f | "
+        "active_ms(avg/p95/max)=%.1f/%.1f/%.1f | "
+        "wait=%.1fs | idle_streak=%d"
+    )
+    assert values[:8] == pytest.approx(
+        [1.1, 2, 550.0, 600.0, 600.0, 450.0, 500.0, 500.0]
+    )

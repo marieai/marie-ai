@@ -7,6 +7,7 @@ from tools.stress.analyze_scheduler_trace import (
     _print_findings,
     _print_latency_report,
     _print_priority_refresh_report,
+    _print_selection_report,
     _print_terminal_feedback_report,
     _print_terminal_handoff_report,
     _print_trace_coverage,
@@ -36,6 +37,80 @@ def test_summary_reports_direct_durable_submission_latency() -> None:
     assert round(summary["gateway_to_persist_start"]) == 20
     assert round(summary["gateway_to_persisted"]) == 50
     assert summary["submit_queue_wait"] is None
+
+
+def test_summary_prefers_measured_selection_phases() -> None:
+    rows = [
+        trace_row(
+            "scheduler_selection_capture_completed",
+            1.01,
+            job_ids=["job-1"],
+        ),
+        trace_row(
+            "scheduler_selection_take_completed",
+            1.04,
+            job_ids=["job-1"],
+        ),
+        trace_row(
+            "scheduler_selection_completed",
+            1.05,
+            job_ids=["job-1"],
+            outcome="completed",
+            elapsed_ms=50.0,
+            capture_ms=20.0,
+            rank_ms=15.0,
+            cap_ms=5.0,
+            take_ms=10.0,
+        ),
+        trace_row("candidate_built", 1.06, job_ids=["job-1"]),
+        trace_row("planner_selected", 1.07, job_ids=["job-1"]),
+        trace_row("frontier_taken", 1.08, job_ids=["job-1"]),
+        trace_row("db_leased", 1.14, job_id="job-1"),
+    ]
+
+    summary = summarize_job("job-1", rows, {})
+
+    assert summary["in_memory_selection"] == 50.0
+    assert summary["selection_capture"] == 20.0
+    assert summary["selection_rank"] == 15.0
+    assert summary["selection_cap"] == 5.0
+    assert summary["selection_take"] == 10.0
+    assert summary["candidate_to_planned"] is None
+    assert summary["planned_to_taken"] is None
+    assert round(summary["taken_to_db_lease"]) == 100
+
+
+def test_selection_report_exposes_phase_and_heap_measurements(capsys) -> None:
+    rows = [
+        trace_row(
+            "scheduler_control_flow_peek_completed",
+            1.0,
+            elapsed_ms=4.0,
+        ),
+        trace_row(
+            "scheduler_selection_completed",
+            1.1,
+            outcome="completed",
+            elapsed_ms=10.0,
+            capture_ms=6.0,
+            rank_ms=2.0,
+            cap_ms=1.0,
+            take_ms=1.0,
+            ready_heap_entries=20,
+            ready_set_entries=15,
+            stale_heap_entries=5,
+        ),
+    ]
+
+    _print_selection_report(rows)
+
+    output = capsys.readouterr().out
+    assert "In-Memory Selection" in output
+    assert "frontier capture: count=1" in output
+    assert "control-flow frontier peek: count=1" in output
+    assert "ready heap entries: count=1" in output
+    assert "stale heap share: count=1 avg=25.0%" in output
+    assert "frontier full scans: control_flow_peek=1 selection_capture=1" in output
 
 
 def test_priority_refresh_completed_is_a_terminal_event(capsys) -> None:

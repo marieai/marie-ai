@@ -448,6 +448,11 @@ class DAGManagementService:
             if nodes is not None:
                 await self.frontier.add_dag(dag, nodes)
             self.active_dags[dag_id] = dag
+            active_limit = self.max_active_dags or "unbounded"
+            self.logger.info(
+                f"[dag] started dag_id={dag_id} source={source} "
+                f"active_dags={len(self.active_dags)}/{active_limit}"
+            )
             return True, "admitted"
 
     async def hydrate_single_dag(self, dag_id: str) -> bool:
@@ -507,169 +512,6 @@ class DAGManagementService:
             self.logger.error(f"Failed to hydrate DAG {dag_id}: {e}")
             traceback.print_exc()
             return False
-
-    async def hydrate_bulk(
-        self,
-        dag_batch_size: int = 1000,
-        itersize: int = 5000,
-        log_every_seconds: float = 2.0,
-    ) -> None:
-        """
-        Rebuild MemoryFrontier from DB in two phases with progress & timing logs:
-          1) Stream DAGs that still have unfinished work (created/retry).
-          2) In batches of DAG IDs, stream their unfinished jobs with already-filtered deps.
-          3) Add once per DAG: self.frontier.add_dag(dag, nodes)
-
-        :param dag_batch_size: Number of DAGs to process in each batch
-        :param itersize: Cursor iteration size for streaming
-        :param log_every_seconds: How often to log progress
-        """
-
-        t0 = time.monotonic()
-        self.logger.info("Hydrate: phase 1 (DAG discovery) started...")
-
-        dag_rows = await self.repository.discover_hydratable_dags()
-        discover_elapsed = time.monotonic() - t0
-        self.logger.info(
-            f"Hydrate: phase 1 complete — discovered {len(dag_rows)} DAG(s) in {discover_elapsed:.2f}s "
-            f"({(len(dag_rows) / discover_elapsed if discover_elapsed > 0 else 0):.1f} DAGs/sec)."
-        )
-
-        # Build map of dag_id -> QueryPlan
-        dags: dict[str, QueryPlan] = {}
-        dag_ids_ordered: list[str] = []
-        parse_skipped = 0
-        for dag_id, dag_def in dag_rows:
-            if not dag_def:
-                parse_skipped += 1
-                self.logger.warning(
-                    f"Hydrate: DAG {dag_id} has no serialized_dag; skipping."
-                )
-                continue
-            try:
-                dags[str(dag_id)] = QueryPlan(**dag_def)
-                dag_ids_ordered.append(str(dag_id))
-            except Exception as e:
-                parse_skipped += 1
-                self.logger.error(f"Hydrate: unable to parse DAG {dag_id}: {e}")
-
-        if not dags:
-            total_elapsed = time.monotonic() - t0
-            self.logger.info(
-                f"Hydrate: no DAGs to hydrate (skipped {parse_skipped}). Done in {total_elapsed:.2f}s."
-            )
-            if self._notify_callback:
-                await self._notify_callback()
-            return
-
-        self.logger.info(
-            f"Hydrate: {len(dags)} DAG(s) ready for job loading "
-            f"(skipped {parse_skipped}, total discovered {len(dag_rows)})."
-        )
-
-        def _chunks(seq, n):
-            for i in range(0, len(seq), n):
-                yield seq[i : i + n]
-
-        self.logger.info(
-            f"Hydrate: phase 2 (job loading) — {len(dag_ids_ordered)} DAG(s), "
-            f"batch size {dag_batch_size}, cursor itersize {itersize}."
-        )
-
-        buckets: dict[str, list[WorkInfo]] = defaultdict(list)
-
-        # Progress counters
-        total_dags = len(dag_ids_ordered)
-        processed_dags = 0
-        processed_jobs = 0
-        last_log_t = time.monotonic()
-        phase2_start = last_log_t
-
-        # For batch-level logging
-        batch_idx = 0
-        for batch in _chunks(dag_ids_ordered, dag_batch_size):
-            batch_idx += 1
-            b_start = time.monotonic()
-
-            rows = await self.repository.load_hydratable_jobs(batch)
-
-            for dag_id, j in rows:
-                dag_id = str(dag_id)
-                if dag_id not in dags:
-                    continue
-                try:
-                    buckets[dag_id].append(self._work_info_from_hydrated_job(dag_id, j))
-                    processed_jobs += 1
-                except Exception as e:
-                    self.logger.error(
-                        f"Hydrate: failed to build WorkInfo for DAG {dag_id}: {e}"
-                    )
-
-            processed_dags += len(batch)
-
-            # Per-batch timing
-            b_elapsed = time.monotonic() - b_start
-            self.logger.info(
-                f"Hydrate: batch {batch_idx} — {len(batch)} DAG(s), "
-                f"{len(rows)} job(s) in {b_elapsed:.2f}s"
-            )
-
-            # Progress logging
-            now = time.monotonic()
-            if now - last_log_t >= log_every_seconds:
-                pct = (processed_dags / total_dags) * 100 if total_dags else 0
-                elapsed_so_far = now - phase2_start
-                self.logger.info(
-                    f"Hydrate: progress {processed_dags}/{total_dags} DAGs ({pct:.1f}%), "
-                    f"{processed_jobs} jobs, {elapsed_so_far:.2f}s"
-                )
-                last_log_t = now
-
-        # Phase 3: add DAGs to frontier
-        self.logger.info(f"Hydrate: phase 3 (add to frontier) — {len(buckets)} DAG(s)")
-        added = 0
-        skipped = 0
-        deferred_limit = 0
-        deferred_capacity = 0
-        stale_candidates = 0
-        for dag_id in dag_ids_ordered:
-            if dag_id not in buckets:
-                skipped += 1
-                continue
-            nodes = buckets[dag_id]
-            if not nodes:
-                skipped += 1
-                continue
-            try:
-                admitted, reason = await self._admit_hydrated_dag(
-                    dag_id, dags[dag_id], nodes, source="hydrate_bulk"
-                )
-                if admitted:
-                    added += 1
-                elif reason == "active_limit":
-                    deferred_limit += 1
-                elif reason == "executor_capacity":
-                    deferred_capacity += 1
-                elif reason == "stale_terminal_state":
-                    stale_candidates += 1
-                else:
-                    skipped += 1
-            except Exception as e:
-                self.logger.error(f"Hydrate: frontier.add_dag failed for {dag_id}: {e}")
-                skipped += 1
-
-        total_elapsed = time.monotonic() - t0
-        self.logger.info(
-            f"Hydrate: complete — {added} DAG(s) added to frontier, "
-            f"{deferred_limit} deferred by active DAG limit, "
-            f"{deferred_capacity} deferred by executor capacity, "
-            f"{stale_candidates} stale candidate(s), {skipped} skipped, "
-            f"{processed_jobs} job(s) total. "
-            f"Total time: {total_elapsed:.2f}s."
-        )
-
-        if self._notify_callback:
-            await self._notify_callback()
 
     async def get_dag(self, dag_id: str) -> Optional[QueryPlan]:
         """
@@ -901,6 +743,12 @@ class DAGManagementService:
                 await self.request_admission("dag_terminal")
                 if self._terminal_event_callback:
                     await self._terminal_event_callback(dag_state, work_info)
+                active_limit = self.max_active_dags or "unbounded"
+                self.logger.info(
+                    f"[dag] terminal dag_id={dag_id} state={dag_state} "
+                    f"resolved_by_job={job_id} "
+                    f"active_dags={len(self.active_dags)}/{active_limit}"
+                )
                 return True
             except Exception:
                 self._terminal_dag_states.pop(dag_id, None)
