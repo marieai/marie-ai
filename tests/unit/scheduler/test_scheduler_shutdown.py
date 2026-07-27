@@ -23,7 +23,6 @@ def _scheduler_for_stop() -> PostgreSQLJobScheduler:
     scheduler.running = True
     scheduler._resources_closed = False
     scheduler._lifecycle_lock = asyncio.Lock()
-    scheduler._fetch_event = asyncio.Event()
     scheduler._event_subscriptions_active = True
     scheduler.job_manager = SimpleNamespace(
         event_publisher=SimpleNamespace(unsubscribe=MagicMock())
@@ -55,7 +54,6 @@ def _scheduler_for_start() -> PostgreSQLJobScheduler:
     scheduler.running = False
     scheduler._resources_closed = False
     scheduler._lifecycle_lock = asyncio.Lock()
-    scheduler._fetch_event = asyncio.Event()
     scheduler._priority_refresh_event = asyncio.Event()
     scheduler.priority_refresh_enabled = False
     scheduler.known_queues = set()

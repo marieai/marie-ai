@@ -21,6 +21,7 @@ def build_scheduler() -> PostgreSQLJobScheduler:
     scheduler = object.__new__(PostgreSQLJobScheduler)
     scheduler.logger = MagicMock()
     scheduler.running = True
+    scheduler._fetch_counter = 0
     scheduler.frontier_batch_size = 100
     scheduler.max_concurrent_dags = 16
     scheduler.lease_ttl_seconds = 5
@@ -831,6 +832,7 @@ async def test_poll_uses_cycle_wait_interval_for_the_next_wake() -> None:
         0,
         1,
     ]
+    assert scheduler._fetch_counter == 2
 
 
 @pytest.mark.asyncio
@@ -864,3 +866,4 @@ async def test_poll_drains_scheduled_cycles_before_waiting_again() -> None:
         1,
         2,
     ]
+    assert scheduler._fetch_counter == 3

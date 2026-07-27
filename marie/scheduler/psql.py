@@ -86,7 +86,6 @@ MIN_POLL_PERIOD = 0.250
 MAX_POLL_PERIOD = 8
 CONTROL_FLOW_DRAIN_MAX_PASSES = 8
 
-MONITORING_POLL_PERIOD = 5.0  # 5s
 SYNC_POLL_PERIOD = 60.0  # 60s — safety net, not primary dispatch path
 
 DEFAULT_SCHEMA = "marie_scheduler"
@@ -207,7 +206,6 @@ def regular_candidates_cover_available_slots(
 
 
 class PostgreSQLJobScheduler(JobScheduler):
-    _mapper_warnings_shown = set()
     """A PostgreSQL-based job scheduler."""
 
     def __init__(
@@ -225,7 +223,6 @@ class PostgreSQLJobScheduler(JobScheduler):
         scheduler_config = self.validate_config(config)
         self.scheduler_config = scheduler_config
         self.config = config  # Store config for listener setup
-        self._fetch_event = asyncio.Event()
         self._fetch_counter = 0
         self._debounced_notify = False
 
@@ -235,7 +232,6 @@ class PostgreSQLJobScheduler(JobScheduler):
         self._lifecycle_lock = asyncio.Lock()
         self._event_subscriptions_active = False
         self.runtime = SchedulerRuntime(self.logger)
-        self._listen_connection = None
         self._scheduler_counters = defaultdict(int)
         self.scheduler_mode = scheduler_config.scheduler_mode
 
@@ -276,7 +272,6 @@ class PostgreSQLJobScheduler(JobScheduler):
         )
         self.active_dags = {}
         self._job_cache: dict[str, WorkInfo] = {}
-        self._job_cache_max_size = 5000
         self._dag_admission_lock = asyncio.Lock()
 
         self.max_concurrent_dags = scheduler_config.max_concurrent_dags
@@ -400,8 +395,6 @@ class PostgreSQLJobScheduler(JobScheduler):
             self.job_manager._etcd_client, default_lease_ttl=30
         )
         self._sem_default_ttl = 30
-        self._sem_owner_prefix = f"{socket.gethostname()}"
-        self._sem_owner_prefix = ""
         self._ticket_collision_counts: dict[str, int] = {}
 
         self.capacity_manager = SlotCapacityManager(
@@ -1796,6 +1789,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                         wait_time = MIN_POLL_PERIOD
 
                 active_started_at = time.perf_counter()
+                self._fetch_counter += 1
                 result = await self.run_dispatch_cycle(cycle_index)
                 drain_ready = result.scheduled
                 idle_streak = 0 if result.scheduled else idle_streak + 1
@@ -1925,7 +1919,6 @@ class PostgreSQLJobScheduler(JobScheduler):
     async def _stop_locked(self, timeout: float) -> None:
         self.logger.info("Stopping job scheduling agent")
         self.running = False
-        self._fetch_event.set()
         self._remove_event_subscriptions()
         await self._drain_pending_dispatches(timeout)
         await self.runtime.stop(
@@ -2261,26 +2254,14 @@ class PostgreSQLJobScheduler(JobScheduler):
         task.add_done_callback(self.runtime.discard_event_task)
 
     async def get_job(self, job_id: str) -> Optional[WorkInfo]:
-        """
-        Get a job by its ID from cache or database.
-        :param job_id: The ID of the job to retrieve.
-        """
-        # Fast path - check cache first
-        if job_id in self._job_cache:
-            # Move to end to signify it's recently used (LRU)
-            self._job_cache[job_id] = self._job_cache.pop(job_id)
-            return self._job_cache[job_id]
+        """Get a job from the active projection or PostgreSQL."""
+        cached = self._job_cache.get(job_id)
+        if cached is not None:
+            return cached
 
-        # Cache miss - fetch from repository
         work_item = await self.repository.get_job_by_id(job_id)
-
-        # Update cache if found
         if work_item:
             self._job_cache[job_id] = work_item
-            # Evict oldest if cache is over size
-            if len(self._job_cache) > self._job_cache_max_size:
-                self._job_cache.pop(next(iter(self._job_cache)))
-
         return work_item
 
     async def list_jobs(
@@ -2649,7 +2630,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                 started_on=started_on,
                 completed_on=completed_on,
             )
-            # self._job_cache.pop(job_id, None)
 
     async def _reconcile_recovered_run_leases(
         self, recovered: list[RecoveredRunLease]
@@ -2772,52 +2752,6 @@ class PostgreSQLJobScheduler(JobScheduler):
             self.job_manager.event_publisher.unsubscribe(status, self.handle_job_event)
         self._event_subscriptions_active = False
 
-    def record_to_work_info(self, record: Any) -> WorkInfo:
-        """
-        Convert a record to a WorkInfo object.
-        :param record:
-        :return:
-        """
-        return WorkInfo(
-            id=str(record[0]),
-            name=record[1],
-            priority=record[2],
-            state=WorkState(record[3]) if record[3] else None,
-            retry_limit=record[4],
-            start_after=record[5],
-            expire_in_seconds=0,  # record[6], # FIXME this is wrong type
-            data=record[7],
-            retry_delay=record[8],
-            retry_backoff=record[9],
-            keep_until=record[10],
-            dag_id=str(record[11]) if record[11] is not None else None,
-            job_level=record[12],
-        )
-
-    async def _monitor(self):
-        """
-        Background monitoring loop that updates the monitor timestamp.
-        Delegates to JobRepository.
-        """
-        wait_time = MONITORING_POLL_PERIOD
-        while self.running:
-            self.logger.debug(f"Polling jobs status : {wait_time}")
-            await asyncio.sleep(wait_time)
-
-            try:
-                # Delegate to repository to update monitor time
-                monitored_on = await self.repository.update_monitor_time(
-                    monitor_state_interval_seconds=int(MONITORING_POLL_PERIOD)
-                )
-
-                if monitored_on is None:
-                    self.logger.error("Error setting monitor time")
-                    continue
-            except Exception as e:
-                logger.error(f"Error monitoring jobs: {e}")
-                traceback.print_exc()
-                # TODO: emit error event
-
     async def complete(
         self,
         job_id: str,
@@ -2846,7 +2780,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                 run_owner=run_owner,
                 run_attempt_id=run_attempt_id,
             )
-            # self._job_cache.pop(job_id, None) # invalidate cache
             return count
 
     async def fail(
@@ -2875,7 +2808,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                 run_owner=run_owner,
                 run_attempt_id=run_attempt_id,
             )
-            # self._job_cache.pop(job_id, None) # invalidate cache
             return final_state
 
     async def _sync(self):
