@@ -6,7 +6,6 @@ from typing import Any
 
 from marie.excepts import BadConfigSource
 from marie.query_planner.model import QueryPlannersConf
-from marie.scheduler.models import HeartbeatConfig
 
 _HARD_SLA_POLICIES = {
     'track_only',
@@ -34,7 +33,6 @@ class PostgreSQLSchedulerConfig:
     maintenance_interval: int
     query_planners: QueryPlannersConf
     dag_cache_size: int
-    heartbeat: HeartbeatConfig
     hard_sla_policy: str
     invalid_hard_sla_policy: str | None
     sla_warning_top_n: int
@@ -76,9 +74,11 @@ class PostgreSQLSchedulerConfig:
         query_planners_config = config.get('query_planners', {})
         if not isinstance(query_planners_config, Mapping):
             raise BadConfigSource('query_planners must be a mapping')
-        heartbeat_config = config.get('heartbeat', {})
-        if not isinstance(heartbeat_config, Mapping):
-            raise BadConfigSource('heartbeat must be a mapping')
+        if 'heartbeat' in config:
+            raise BadConfigSource(
+                'scheduler heartbeat configuration is no longer supported; '
+                'use /api/debug and scheduler traces for diagnostics'
+            )
 
         hard_sla_policy = str(config.get('hard_sla_policy', 'track_only')).lower()
         if hard_sla_policy == 'expire_unfinished':
@@ -125,7 +125,6 @@ class PostgreSQLSchedulerConfig:
                 maintenance_interval=int(config.get('maintenance_interval', 60)),
                 query_planners=QueryPlannersConf.from_dict(dict(query_planners_config)),
                 dag_cache_size=int(dag_config.get('dag_cache_size', 5000)),
-                heartbeat=HeartbeatConfig.from_dict(dict(heartbeat_config)),
                 hard_sla_policy=hard_sla_policy,
                 invalid_hard_sla_policy=invalid_hard_sla_policy,
                 sla_warning_top_n=int(config.get('sla_warning_top_n', 5)),

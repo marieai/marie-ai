@@ -72,38 +72,14 @@ gateway:
 | `dag_cache_size` | `5000` | Maximum cached DAG entries |
 | `frontier_batch_size` | `1000` | Candidate jobs per poll cycle |
 
-## Heartbeat and monitoring
+## Scheduler diagnostics
 
-Configure scheduler health monitoring:
+Use `GET /api/debug` for scheduler runtime diagnostics. The response includes
+scheduler state, queue depth, state counts, active DAGs, dispatch counters, and
+the frontier summary. Scheduler phase transitions and rejected stale attempts
+are also emitted through structured scheduler traces.
 
-```yaml
-gateway:
-  with:
-    heartbeat:
-      interval: 5.0
-      window_minutes: 10
-      trend_points: 12
-      recent_window_minutes: 1
-      max_retries: 3
-      error_backoff: 5.0
-      enable_trend_arrows: true
-      enable_per_queue_stats: true
-      enable_executor_stats: true
-      log_active_dags: false
-```
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `interval` | `5.0` | Heartbeat loop interval (seconds) |
-| `window_minutes` | `10` | Rolling throughput window |
-| `trend_points` | `12` | Data points for trend calculation |
-| `recent_window_minutes` | `1` | Recent throughput window |
-| `max_retries` | `3` | Max retries for heartbeat operations |
-| `error_backoff` | `5.0` | Backoff time after errors |
-| `enable_trend_arrows` | `true` | Show trend indicators in logs |
-| `enable_per_queue_stats` | `true` | Log per-queue statistics |
-| `enable_executor_stats` | `true` | Log executor slot information |
-| `log_active_dags` | `false` | Log active DAG IDs (debug) |
+The retired scheduler `heartbeat:` configuration is not supported.
 
 ## Queue configuration
 
@@ -261,13 +237,6 @@ gateway:
       dag_cache_size: 10000
       frontier_batch_size: 2000
 
-    # Heartbeat
-    heartbeat:
-      interval: 5.0
-      window_minutes: 10
-      enable_per_queue_stats: true
-      enable_executor_stats: true
-
 executors:
   - name: extract
     uses: ExtractExecutor
@@ -284,9 +253,6 @@ For maximum job throughput:
 dag_manager:
   max_concurrent_dags: 64
   frontier_batch_size: 5000
-
-heartbeat:
-  interval: 2.0
 ```
 
 ### Low latency
@@ -297,9 +263,6 @@ For minimal job latency:
 dag_manager:
   min_concurrent_dags: 4
   frontier_batch_size: 100
-
-heartbeat:
-  interval: 1.0
 ```
 
 ### Resource constrained

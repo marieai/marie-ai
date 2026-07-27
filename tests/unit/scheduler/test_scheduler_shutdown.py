@@ -29,7 +29,6 @@ def _scheduler_for_stop() -> PostgreSQLJobScheduler:
     )
     scheduler.notification_service = SimpleNamespace(stop=AsyncMock())
     scheduler.maintenance_service = SimpleNamespace(stop=AsyncMock())
-    scheduler.heartbeat = SimpleNamespace(stop=AsyncMock())
     scheduler.dag_service = SimpleNamespace(
         stop_admission=AsyncMock(),
         stop_sync=AsyncMock(),
@@ -74,7 +73,6 @@ def _scheduler_for_start() -> PostgreSQLJobScheduler:
         start=AsyncMock(),
         stop=AsyncMock(),
     )
-    scheduler.heartbeat = SimpleNamespace(stop=AsyncMock())
     scheduler.dag_service = SimpleNamespace(
         start_admission=AsyncMock(),
         stop_admission=AsyncMock(),
@@ -200,7 +198,6 @@ async def test_start_rolls_back_partial_startup(failure_stage: str) -> None:
         assert scheduler._resources_closed is True
         scheduler.notification_service.stop.assert_awaited_once_with()
         scheduler.maintenance_service.stop.assert_awaited_once_with()
-        scheduler.heartbeat.stop.assert_awaited_once_with()
         scheduler.dag_service.stop_admission.assert_awaited_once_with()
         scheduler.dag_service.stop_sync.assert_awaited_once_with()
         scheduler.submission_service.abort_pending.assert_called_once_with()
@@ -238,7 +235,6 @@ async def test_stop_cancels_poll_and_workers_before_returning() -> None:
     assert event_task.cancelled()
     scheduler.notification_service.stop.assert_awaited_once()
     scheduler.maintenance_service.stop.assert_awaited_once()
-    scheduler.heartbeat.stop.assert_awaited_once()
     scheduler.dag_service.stop_admission.assert_awaited_once()
     scheduler.dag_service.stop_sync.assert_awaited_once()
     scheduler._close_runtime_resources.assert_awaited_once()

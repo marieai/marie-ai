@@ -80,11 +80,12 @@ job = WorkInfo(
 
 ### SLA monitoring
 
-The scheduler tracks SLA compliance through heartbeat metrics:
+The scheduler incorporates SLA urgency into frontier ordering and exposes the
+current SLA summary through `GET /api/debug`:
 
 - Jobs approaching `soft_sla` may be prioritized
-- Jobs exceeding `hard_sla` may transition to `EXPIRED`
-- SLA metrics are available through the monitoring endpoints
+- Hard-SLA misses are reported through scheduler diagnostics and traces
+- SLA counts and urgent jobs are available in the frontier summary
 
 ## Retry policies
 

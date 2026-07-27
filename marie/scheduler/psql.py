@@ -45,7 +45,6 @@ from marie.scheduler.planner_util import (
 )
 from marie.scheduler.postgres_scheduler_config import PostgreSQLSchedulerConfig
 from marie.scheduler.repository import JobRepository
-from marie.scheduler.scheduler_heartbeat import SchedulerHeartbeat
 from marie.scheduler.services import (
     TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
     AttemptLifecycleService,
@@ -331,11 +330,6 @@ class PostgreSQLJobScheduler(JobScheduler):
 
         self._topology_cache = DagTopologyCache(maxsize=scheduler_config.dag_cache_size)
 
-        self.heartbeat_config = scheduler_config.heartbeat
-        self.logger.info(f"Heartbeat configuration: {self.heartbeat_config}")
-        self.heartbeat = SchedulerHeartbeat(
-            self, self.heartbeat_config, self.repository, self.logger
-        )
         self._resources_closed = False
 
         self._start_time = datetime.now(timezone.utc)
@@ -958,14 +952,6 @@ class PostgreSQLJobScheduler(JobScheduler):
         self.runtime.create_task(
             self._renew_run_leases(), name="scheduler-run-lease-renewal"
         )
-
-        # self._heartbeat_task = asyncio.create_task(
-        #     self._heartbeat_loop(self.heartbeat_config)
-        # )
-
-        # TODO : Heartbeat currently disabled
-        self.logger.warning("Heartbeat is currently disabled")
-        # await self.heartbeat.start()
 
         self.runtime.create_task(self._poll(), name="scheduler-poll")
         self.runtime.create_task(
@@ -1925,7 +1911,6 @@ class PostgreSQLJobScheduler(JobScheduler):
             {
                 'scheduler-notification-stop': self.notification_service.stop(),
                 'scheduler-maintenance-stop': self.maintenance_service.stop(),
-                'scheduler-heartbeat-stop': self.heartbeat.stop(),
                 'scheduler-dag-sync-stop': self.dag_service.stop_sync(),
                 'scheduler-dag-admission-stop': self.dag_service.stop_admission(),
             },
@@ -2026,9 +2011,6 @@ class PostgreSQLJobScheduler(JobScheduler):
             initial_submission_count=submission_count
         )
         self.diagnostics = self._build_diagnostics()
-        self.heartbeat = SchedulerHeartbeat(
-            self, self.heartbeat_config, self.repository, self.logger
-        )
         self._resources_closed = False
 
     async def debug_info(self) -> Dict[str, Any]:
