@@ -661,7 +661,6 @@ def analyze(
     gateway_metrics_available = isinstance(gateway_debug, dict)
     scheduler_info = nested_get(gateway_debug, ["scheduler_info"], {}) or {}
     counters = nested_get(gateway_debug, ["counters"], {}) or {}
-    queue_status = nested_get(gateway_debug, ["queue_status"], {}) or {}
     frontier_summary = (
         nested_get(gateway_debug, ["frontier_summary"], {})
         or nested_get(gateway_debug, ["frontier", "summary"], {})
@@ -690,16 +689,6 @@ def analyze(
     )
     fetch_counter = (
         int(counters.get("fetch_counter") or 0) if gateway_metrics_available else None
-    )
-    pending_requests = (
-        int(counters.get("pending_requests") or 0)
-        if gateway_metrics_available
-        else None
-    )
-    active_workers = (
-        int(nested_get(queue_status, ["workers", "active"], 0) or 0)
-        if gateway_metrics_available
-        else None
     )
 
     dag_classification = db_data.get("dag_classification") or []
@@ -811,20 +800,6 @@ def analyze(
                     "detail": "Gateway reports in-memory DAGs while DB shows no active DAGs",
                 }
             )
-
-    if (
-        active_workers is not None
-        and pending_requests is not None
-        and active_workers == 0
-        and pending_requests > 0
-    ):
-        findings.append(
-            {
-                "issue": "submission_workers_idle",
-                "severity": "warning",
-                "detail": f"No active submission workers but {pending_requests} pending requests are queued",
-            }
-        )
 
     severity_rank = {"critical": 0, "warning": 1, "info": 2}
     findings.sort(

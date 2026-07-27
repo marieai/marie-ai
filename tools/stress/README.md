@@ -249,13 +249,15 @@ The trace is disabled by default and is best-effort: write failures never block
 job scheduling. The default profile is `compact`, which is meant for long
 endurance runs and keeps submit, dispatch, terminal, batch, priority-refresh,
 DAG-sync, and pool-pressure signals. Use `MARIE_SCHEDULER_TRACE_PROFILE=full`
-for short bottleneck investigations that need scheduler submission queue
-enqueue/dequeue, DAG persistence, frontier insertion, planner selection,
+for short bottleneck investigations that need request receipt, DAG persistence,
+frontier insertion, planner selection,
 frontier and DB leasing, semaphore reservation, supervisor dispatch admission,
 executor request receipt, RUNNING/SUCCEEDED/FAILED status writes, callbacks, and
-slot release. The full profile splits end-to-end latency into submission queue
-wait, DAG persistence, frontier wait, dispatch wait, executor service time, and
-terminal status/slot-release delay. Frontier wait is further split into
+slot release. The full profile splits end-to-end latency into durable submission,
+frontier wait, dispatch wait, executor service time, and terminal
+status/slot-release delay. The analyzer still reports submission queue wait when
+reading legacy traces that contain the retired enqueue/dequeue events. Frontier
+wait is further split into
 candidate visibility, planner selection, frontier take, DB lease, semaphore
 reservation, and activation. Planner and frontier phases are emitted as batch
 events with `job_ids`; the analyzer expands them per job without writing one

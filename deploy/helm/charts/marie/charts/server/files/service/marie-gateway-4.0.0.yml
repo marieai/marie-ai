@@ -94,7 +94,6 @@ with:
     # Job Scheduler
   job_scheduler_kwargs:
     <<: *psql_connection_shared
-    max_workers: 2
     max_pool_size: 5
     max_connections: 5
     queue_names: [extract,classify,transform,load, gen5_extract] # Queue names for the job scheduler to monitor

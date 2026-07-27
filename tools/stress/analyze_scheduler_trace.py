@@ -144,7 +144,8 @@ RATE_EVENTS = (
 
 REPORT_LATENCIES = (
     ("gateway->dispatch", "gateway_to_dispatch"),
-    ("submit-queue", "submit_queue_wait"),
+    ("durable-submit", "gateway_to_persisted"),
+    ("legacy-submit-queue", "submit_queue_wait"),
     ("dag-persist", "dag_persist"),
     ("frontier->candidate", "frontier_to_candidate"),
     ("candidate->planned", "candidate_to_planned"),
@@ -246,6 +247,8 @@ DISPATCH_BOTTLENECK_STAGES = (
 )
 
 DAG_LATENCIES = {
+    "gateway_to_persist_start",
+    "gateway_to_persisted",
     "submit_queue_wait",
     "submit_worker_to_persist_start",
     "dag_persist",
@@ -623,6 +626,14 @@ def summarize_job(
         "notified_to_dispatch": _milliseconds(
             notified_at,
             dispatch_start,
+        ),
+        "gateway_to_persist_start": _milliseconds(
+            dag_events.get("gateway_submit_received"),
+            dag_events.get("dag_persist_start"),
+        ),
+        "gateway_to_persisted": _milliseconds(
+            dag_events.get("gateway_submit_received"),
+            dag_events.get("dag_persisted"),
         ),
         "submit_queue_wait": _milliseconds(
             dag_events.get("scheduler_submission_enqueued"),
@@ -2321,7 +2332,7 @@ def _print_findings(
         )
         if refresh_due > refresh_terminal:
             findings.append(
-                "Priority refresh appears to block the submission worker "
+                "Priority refresh appears to block the scheduler "
                 f"(due={refresh_due}, terminal={refresh_terminal})."
             )
         elif refresh_started > refresh_terminal:
@@ -2455,6 +2466,8 @@ def main() -> int:
             "gateway_to_dispatch",
             "accepted_to_dispatch",
             "notified_to_dispatch",
+            "gateway_to_persist_start",
+            "gateway_to_persisted",
             "submit_queue_wait",
             "submit_worker_to_persist_start",
             "dag_persist",
@@ -2522,7 +2535,8 @@ def main() -> int:
 
     print(
         "job_id dag_id gateway->dispatch accepted->dispatch notified->dispatch "
-        "submit-queue dequeue->persist-start dag-persist persisted->frontier "
+        "gateway->persist-start gateway->durable legacy-submit-queue "
+        "legacy-dequeue->persist-start dag-persist persisted->frontier "
         "frontier->dispatch frontier->candidate candidate->planned "
         "planned->taken taken->db-lease db-lease->slot slot->active "
         "active->dispatch attempt->dispatch dispatch->supervisor-pre-send "
@@ -2547,6 +2561,8 @@ def main() -> int:
             f"{_fmt(item['gateway_to_dispatch'])} "
             f"{_fmt(item['accepted_to_dispatch'])} "
             f"{_fmt(item['notified_to_dispatch'])} "
+            f"{_fmt(item['gateway_to_persist_start'])} "
+            f"{_fmt(item['gateway_to_persisted'])} "
             f"{_fmt(item['submit_queue_wait'])} "
             f"{_fmt(item['submit_worker_to_persist_start'])} "
             f"{_fmt(item['dag_persist'])} "

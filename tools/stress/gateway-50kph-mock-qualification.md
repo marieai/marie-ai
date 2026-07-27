@@ -92,7 +92,7 @@ types before it submits the first DAG.
 ## Enable Full Scheduler Tracing
 
 Use full tracing for this diagnostic qualification so the artifacts retain the
-submission queue, DAG persistence, frontier, planner, database lease, semaphore,
+durable submission, frontier, planner, database lease, semaphore,
 dispatch admission, executor receipt, callback, terminal-status, and slot-release
 stages needed to investigate a stall. Full tracing can produce millions of
 records at this scale, so use a new trace file on a filesystem with sufficient

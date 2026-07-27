@@ -177,7 +177,6 @@ with:
 
   job_scheduler_kwargs:
     <<: *psql_connection_shared
-    max_workers: 2
     desired_state_worker_count: 16
     desired_state_max_pending: 128
     max_pool_size: 5

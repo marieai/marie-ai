@@ -43,12 +43,15 @@ gateway:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `queue_names` | Required | List of queue names to monitor |
-| `max_workers` | `5` | Number of scheduler polling workers |
 | `job_event_worker_count` | `8` | Keyed publisher workers; events for one job always use one worker |
 | `job_event_queue_size` | `1024` | Total bounded publisher capacity; job-event producers block when it is full |
 | `lease_ttl_seconds` | `5` | Job lease timeout |
 | `run_ttl_seconds` | `60` | Active job execution timeout |
 | `maintenance_interval` | `60` | Maintenance task frequency (seconds) |
+
+The submission call returns only after the DAG and its jobs commit to
+PostgreSQL. Ingress concurrency is therefore bounded by the gateway and
+database connection limits rather than a scheduler-local submission queue.
 
 ## DAG manager settings
 
@@ -210,7 +213,6 @@ gateway:
       password: ${POSTGRES_PASSWORD}
       database: ${POSTGRES_DB:-marie}
       queue_names: [extract]
-      max_workers: 10
       job_event_worker_count: 8
       job_event_queue_size: 1024
       lease_ttl_seconds: 5
@@ -269,7 +271,6 @@ For limited resources:
 
 ```yaml
 job_scheduler_kwargs:
-  max_workers: 3
   dag_manager:
     max_concurrent_dags: 8
     dag_cache_size: 1000

@@ -1179,18 +1179,8 @@ def test_build_debug_snapshot_extracts_scheduler_fields() -> None:
                 "active_dags_count": 7,
                 "max_concurrent_dags": 32,
             },
-            "counters": {
-                "fetch_counter": 11,
-                "pending_requests": 2,
-            },
-            "queues": {
-                "request_queue_size": 5,
-                "event_queue_size": 1,
-            },
-            "queue_status": {
-                "queue_size": 5,
-                "workers": {"total": 10, "active": 4, "utilization": "40.0%"},
-            },
+            "counters": {"fetch_counter": 11},
+            "queues": {"event_queue_size": 1},
             "llm_dispatch": {
                 "contract_version": "v2",
                 "registered_dispatchers": 2,
@@ -1205,13 +1195,7 @@ def test_build_debug_snapshot_extracts_scheduler_fields() -> None:
     assert snapshot.active_dags_count == 7
     assert snapshot.max_concurrent_dags == 32
     assert snapshot.fetch_counter == 11
-    assert snapshot.pending_requests == 2
-    assert snapshot.request_queue_size == 5
     assert snapshot.event_queue_size == 1
-    assert snapshot.queue_status == {
-        "queue_size": 5,
-        "workers": {"total": 10, "active": 4, "utilization": "40.0%"},
-    }
     assert snapshot.llm_dispatch_registered_dispatchers == 2
     assert snapshot.llm_dispatch_running_dispatchers == 1
 
@@ -1259,9 +1243,8 @@ async def test_capture_debug_snapshot_records_gateway_debug_state() -> None:
                         "active_dags_count": 3,
                         "max_concurrent_dags": 16,
                     },
-                    "counters": {"fetch_counter": 9, "pending_requests": 1},
-                    "queues": {"request_queue_size": 2, "event_queue_size": 0},
-                    "queue_status": {"queue_size": 2},
+                    "counters": {"fetch_counter": 9},
+                    "queues": {"event_queue_size": 0},
                     "llm_dispatch": {
                         "registered_dispatchers": 1,
                         "running_dispatchers": 1,
@@ -1279,8 +1262,7 @@ async def test_capture_debug_snapshot_records_gateway_debug_state() -> None:
     assert snapshot.ok is True
     assert snapshot.active_dags_count == 3
     assert snapshot.fetch_counter == 9
-    assert snapshot.request_queue_size == 2
-    assert snapshot.queue_status == {"queue_size": 2}
+    assert snapshot.event_queue_size == 0
     assert snapshot.llm_dispatch_registered_dispatchers == 1
     assert snapshot.llm_dispatch_running_dispatchers == 1
     assert stresser._http_session.last_url == "http://localhost:51000/api/debug"
@@ -1327,8 +1309,7 @@ def test_write_json_report_includes_debug_samples(tmp_path: Path) -> None:
                     "max_concurrent_dags": 16,
                 },
                 "counters": {"fetch_counter": 12},
-                "queues": {"request_queue_size": 0, "event_queue_size": 0},
-                "queue_status": {"queue_size": 0},
+                "queues": {"event_queue_size": 0},
                 "llm_dispatch": {
                     "registered_dispatchers": 1,
                     "running_dispatchers": 1,
@@ -1578,9 +1559,7 @@ async def test_preflight_allows_queue_created_during_submission(
         "attempts": 1,
         "final": stresser._preflight_attempts[-1]["interpretation"],
     }
-    assert (
-        stresser._preflight_result["final"]["queue_known_before_submission"] is False
-    )
+    assert stresser._preflight_result["final"]["queue_known_before_submission"] is False
     assert len(stresser._preflight_attempts) == 1
     assert VALID_FAKE_API_KEY not in json.dumps(stresser.build_report_payload())
 

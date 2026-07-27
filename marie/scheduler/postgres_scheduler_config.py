@@ -23,7 +23,6 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         'maintenance_interval',
         'max_connections',
         'max_pool_size',
-        'max_workers',
         'min_connections',
         'min_pool_size',
         'options',
@@ -44,7 +43,6 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         'schema',
         'sla_priority_interval_seconds',
         'sla_warning_top_n',
-        'submission_queue_size',
         'username',
         "default_table",  # always injected via the <<: *psql_conf_shared
     }
@@ -68,8 +66,6 @@ class PostgreSQLSchedulerConfig:
     """Validated runtime settings for the PostgreSQL scheduler."""
 
     queue_names: frozenset[str]
-    max_workers: int
-    submission_queue_size: int
     job_event_worker_count: int
     job_event_queue_size: int
     dispatch_confirmation_max_in_flight: int
@@ -140,8 +136,6 @@ class PostgreSQLSchedulerConfig:
 
             settings = cls(
                 queue_names=normalized_queues,
-                max_workers=int(config.get('max_workers', 5)),
-                submission_queue_size=int(config.get('submission_queue_size', 1000)),
                 job_event_worker_count=int(config.get('job_event_worker_count', 8)),
                 job_event_queue_size=int(config.get('job_event_queue_size', 1024)),
                 dispatch_confirmation_max_in_flight=int(
@@ -202,10 +196,6 @@ class PostgreSQLSchedulerConfig:
         return settings
 
     def _validate_ranges(self) -> None:
-        if self.max_workers < 0:
-            raise BadConfigSource('max_workers must be zero or greater')
-        if self.submission_queue_size <= 0:
-            raise BadConfigSource('submission_queue_size must be greater than zero')
         if self.job_event_worker_count <= 0:
             raise BadConfigSource('job_event_worker_count must be greater than zero')
         if self.job_event_queue_size < self.job_event_worker_count:

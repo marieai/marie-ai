@@ -64,11 +64,11 @@ in the Message Bus `jobid` field.
 
 `accepted` and `scheduled` describe different boundaries:
 
-- `accepted` means the gateway placed the submission on its local scheduler
-  submission queue. It is optional, disabled by default, and does not prove
-  PostgreSQL persistence.
-- `scheduled` means the scheduler worker completed persistence and admission.
-  Persistence or admission failure produces no `scheduled` event.
+- `accepted` is an optional gateway notification emitted only after the DAG and
+  its jobs commit to PostgreSQL. It is disabled by default.
+- `scheduled` is the scheduler notification for the same durable-commit
+  boundary. An admission wake is best effort after commit; periodic scheduler
+  polling remains the repair path if that wake fails.
 
 Enable the optional acceptance event before starting the gateway:
 
@@ -76,32 +76,33 @@ Enable the optional acceptance event before starting the gateway:
 export MARIE_GATEWAY_PUBLISH_ACCEPTED_EVENT=true
 ```
 
-The flag does not alter the response, make the local submission queue durable,
-or change the meaning of `scheduled`.
+The flag does not alter the durable acknowledgement boundary or change the
+meaning of `scheduled`.
 
 ```mermaid
 sequenceDiagram
     participant C as Caller
     participant G as Gateway
-    participant S as Scheduler worker
+    participant S as Scheduler
     participant DB as PostgreSQL
     participant MB as Message Bus
 
     C->>G: Submit without job_id
     G->>G: Generate UUIDv7 jobid
-    G->>S: Queue WorkInfo(jobid)
+    G->>S: Persist WorkInfo(jobid)
+    S->>DB: Persist DAG and jobs
+    DB-->>S: Commit succeeds
+    S->>MB: scheduled(jobid)
+    S-->>G: Return durable jobid
     opt MARIE_GATEWAY_PUBLISH_ACCEPTED_EVENT=true
         G->>MB: accepted(jobid)
     end
     G-->>C: Return jobid
-    S->>DB: Persist DAG and jobs
-    DB-->>S: Commit succeeds
-    S->>MB: scheduled(jobid)
 ```
 
 The diagram shows state ownership, not guaranteed observation order. HTTP and
-the Message Bus are independent transports, and the scheduler worker runs
-concurrently with the gateway response.
+the Message Bus are independent transports, so lifecycle notifications can be
+observed before the HTTP response reaches the caller.
 
 ### Gateway event order
 

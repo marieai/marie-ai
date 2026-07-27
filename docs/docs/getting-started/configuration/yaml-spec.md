@@ -213,7 +213,6 @@ gateway:
 gateway:
   with:
     job_scheduler_kwargs:
-      max_workers: 10
       job_event_worker_count: 8
       job_event_queue_size: 1024
       lease_ttl_seconds: 5
@@ -454,7 +453,6 @@ gateway:
       username: ${{ ENV.POSTGRES_USER | default: marie }}
       password: ${{ ENV.POSTGRES_PASSWORD }}
       database: ${{ ENV.POSTGRES_DB | default: marie }}
-      max_workers: 10
       dag_manager:
         max_concurrent_dags: 32
         frontier_batch_size: 2000

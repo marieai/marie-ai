@@ -13,8 +13,6 @@ def test_scheduler_config_parses_runtime_defaults() -> None:
     config = PostgreSQLSchedulerConfig.from_dict({'queue_names': ['extract']})
 
     assert config.queue_names == frozenset({'extract'})
-    assert config.max_workers == 5
-    assert config.submission_queue_size == 1000
     assert config.job_event_worker_count == 8
     assert config.job_event_queue_size == 1024
     assert config.dispatch_confirmation_max_in_flight == 256
@@ -58,11 +56,12 @@ def test_scheduler_config_accepts_consumed_bundle_keys() -> None:
 @pytest.mark.parametrize(
     'key',
     [
-        'default_table',
         'distributed_scheduler',
         'hard_sla_policy',
+        'max_workers',
         'max_wokers',
         'scheduler_mode',
+        'submission_queue_size',
     ],
 )
 def test_scheduler_config_rejects_unknown_top_level_keys(key: str) -> None:
@@ -129,7 +128,6 @@ def test_scheduler_config_can_enable_priority_refresh() -> None:
     ('override', 'message'),
     [
         ({'priority_refresh_interval': 0}, 'priority_refresh_interval'),
-        ({'submission_queue_size': 0}, 'submission_queue_size'),
         ({'job_event_worker_count': 0}, 'job_event_worker_count'),
         (
             {'dispatch_confirmation_max_in_flight': 0},

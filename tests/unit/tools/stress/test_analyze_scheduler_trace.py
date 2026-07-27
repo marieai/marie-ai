@@ -21,6 +21,23 @@ def trace_row(event: str, ts: float, **fields) -> dict:
     return {"event": event, "ts_unix": ts, **fields}
 
 
+def test_summary_reports_direct_durable_submission_latency() -> None:
+    dag_events = {
+        "gateway_submit_received": 1.0,
+        "dag_persist_start": 1.02,
+        "dag_persisted": 1.05,
+    }
+    summary = summarize_job(
+        "job-1",
+        [trace_row("dag_persisted", 1.05, job_id="job-1", dag_id="dag-1")],
+        {"dag-1": dag_events},
+    )
+
+    assert round(summary["gateway_to_persist_start"]) == 20
+    assert round(summary["gateway_to_persisted"]) == 50
+    assert summary["submit_queue_wait"] is None
+
+
 def test_priority_refresh_completed_is_a_terminal_event(capsys) -> None:
     rows = [
         trace_row("scheduler_priority_refresh_due", 1.0, refresh_id=8),

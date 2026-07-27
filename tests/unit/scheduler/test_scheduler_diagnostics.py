@@ -15,18 +15,11 @@ async def test_diagnostics_collects_component_owned_runtime_state() -> None:
         count_dag_states=AsyncMock(return_value={'active': 1}),
     )
     frontier = SimpleNamespace(summary=MagicMock(return_value={'totals': {'jobs': 2}}))
-    submission = SimpleNamespace(
-        submission_count=7,
-        pending_count=1,
-        queue_size=1,
-        status=MagicMock(return_value={'queue_size': 1}),
-    )
-    runtime = SimpleNamespace(tasks=MagicMock(return_value=[]))
+    submission = SimpleNamespace(submission_count=7)
     diagnostics = SchedulerDiagnostics(
         repository=repository,
         frontier=frontier,
         submission_service=submission,
-        runtime=runtime,
         event_queue=asyncio.Queue(),
         active_dags={'dag-1': SimpleNamespace(status='active')},
         known_queues={'extract'},
@@ -49,12 +42,10 @@ async def test_diagnostics_collects_component_owned_runtime_state() -> None:
     assert snapshot['counters'] == {
         'fetch_counter': 3,
         'submission_count': 7,
-        'pending_requests': 1,
     }
-    assert snapshot['queues']['request_queue_size'] == 1
+    assert snapshot['queues']['event_queue_size'] == 0
     assert snapshot['active_dags']['dag-1']['status'] == 'active'
     assert snapshot['sla_monitoring'] == {'warning_top_n': 5}
     assert 'scheduler_mode' not in snapshot['scheduler_info']
     assert snapshot['job_state_counts'] == {'created': 2}
     assert snapshot['dag_state_counts'] == {'active': 1}
-    runtime.tasks.assert_called_once_with(prefix='scheduler-submission-')

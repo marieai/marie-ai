@@ -1404,6 +1404,7 @@ class MarieServerGateway(CompositeServer):
         retry = DEFAULT_RETRY_POLICY
         event_name = submission_model.name
 
+        scheduler_owns_failure_notification = False
         try:
             priority = self._parse_priority(metadata.get("priority", 0))
             soft_sla, hard_sla = self._normalize_slas(
@@ -1472,6 +1473,7 @@ class MarieServerGateway(CompositeServer):
                 hard_sla=hard_sla.isoformat() if hard_sla else None,
                 gateway_instance_id=self.gateway_instance_id,
             )
+            scheduler_owns_failure_notification = True
             job_id = await self.job_scheduler.submit_job(work_info)
             scheduler_trace(
                 "gateway_submit_accepted",
@@ -1499,24 +1501,30 @@ class MarieServerGateway(CompositeServer):
             }
             self.logger.info(f"Job submitted with id {job_id}")
             if publish_accepted_event:
-                published = await mark_as_accepted(
-                    api_key=api_key,
-                    job_id=job_id,
-                    event_name=event_name,
-                    job_tag=ref_type,
-                    status="OK",
-                    timestamp=current_milli_time(),
-                    payload=metadata,
-                )
-                scheduler_trace(
-                    "gateway_submit_accepted_notified",
-                    dag_id=job_id,
-                    event_name=event_name,
-                    ref_id=ref_id,
-                    ref_type=ref_type,
-                    published=published,
-                    gateway_instance_id=self.gateway_instance_id,
-                )
+                try:
+                    published = await mark_as_accepted(
+                        api_key=api_key,
+                        job_id=job_id,
+                        event_name=event_name,
+                        job_tag=ref_type,
+                        status="OK",
+                        timestamp=current_milli_time(),
+                        payload=metadata,
+                    )
+                    scheduler_trace(
+                        "gateway_submit_accepted_notified",
+                        dag_id=job_id,
+                        event_name=event_name,
+                        ref_id=ref_id,
+                        ref_type=ref_type,
+                        published=published,
+                        gateway_instance_id=self.gateway_instance_id,
+                    )
+                except Exception as notification_error:
+                    self.logger.error(
+                        f"Failed to publish accepted event for durable job "
+                        f"{job_id}: {notification_error}"
+                    )
 
             return response
         except BaseException as ex:
@@ -1531,6 +1539,8 @@ class MarieServerGateway(CompositeServer):
             response = self.error_response(
                 f"Failed to submit job. {ex}", ex, silence_exceptions
             )
+            if scheduler_owns_failure_notification:
+                return response
             try:
                 exc_msg = response.parameters.get("exception", "Unknown error")
                 job_key = f"failed/{ref_type}/{ref_id}"

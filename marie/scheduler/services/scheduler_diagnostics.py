@@ -7,7 +7,6 @@ from typing import Any
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.repository import JobRepository
 from marie.scheduler.services.dag_submission_service import DagSubmissionService
-from marie.scheduler.services.scheduler_runtime import SchedulerRuntime
 
 
 class SchedulerDiagnostics:
@@ -19,7 +18,6 @@ class SchedulerDiagnostics:
         repository: JobRepository,
         frontier: MemoryFrontier,
         submission_service: DagSubmissionService,
-        runtime: SchedulerRuntime,
         event_queue: asyncio.Queue[Any],
         active_dags: dict[str, Any],
         known_queues: set[str],
@@ -35,7 +33,6 @@ class SchedulerDiagnostics:
         self.repository = repository
         self.frontier = frontier
         self.submission_service = submission_service
-        self.runtime = runtime
         self.event_queue = event_queue
         self.active_dags = active_dags
         self.known_queues = known_queues
@@ -85,10 +82,8 @@ class SchedulerDiagnostics:
             'counters': {
                 'fetch_counter': fetch_counter,
                 'submission_count': self.submission_service.submission_count,
-                'pending_requests': self.submission_service.pending_count,
             },
             'queues': {
-                'request_queue_size': self.submission_service.queue_size,
                 'event_queue_size': self.event_queue.qsize(),
             },
             'execution_planning': {
@@ -97,9 +92,6 @@ class SchedulerDiagnostics:
             'sla_monitoring': {
                 'warning_top_n': self.sla_warning_top_n,
             },
-            'queue_status': self.submission_service.status(
-                self.runtime.tasks(prefix='scheduler-submission-')
-            ),
             'job_state_counts': self._job_state_counts,
             'dag_state_counts': self._dag_state_counts,
         }

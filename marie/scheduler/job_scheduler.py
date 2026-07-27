@@ -1,17 +1,8 @@
 import abc
-import asyncio
-from typing import Any, Dict, NamedTuple, Optional
+from typing import Any, Dict, Optional
 
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.state import WorkState
-
-
-class JobSubmissionRequest(NamedTuple):
-    work_info: WorkInfo
-    overwrite: bool
-    request_id: str
-    result_future: asyncio.Future
-    wait_for_result: bool = False
 
 
 class JobScheduler(abc.ABC):
@@ -71,7 +62,7 @@ class JobScheduler(abc.ABC):
         """Inserts a new work item into the scheduler.
         :param work_info: The work item to insert.
         :param overwrite: Whether to overwrite the work item if it already exists.
-        :return: True if the work item was inserted, False if it was not.
+        :return: The durable job identifier after the insertion commits.
         """
         ...
 

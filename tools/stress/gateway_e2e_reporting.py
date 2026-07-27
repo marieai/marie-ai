@@ -427,7 +427,6 @@ def _render_live_report_html(payload: Dict[str, Any], refresh_seconds: float) ->
                 ["Scheduler Paused", latest_debug_sample.get("scheduler_paused")],
                 ["Active DAGs", latest_debug_sample.get("active_dags_count")],
                 ["Fetch Counter", latest_debug_sample.get("fetch_counter")],
-                ["Request Queue", latest_debug_sample.get("request_queue_size")],
                 ["Event Queue", latest_debug_sample.get("event_queue_size")],
                 [
                     "LLM Dispatchers",
@@ -767,7 +766,6 @@ def _render_final_report_html(payload: Dict[str, Any]) -> str:
             "OK",
             "Status Code",
             "Active DAGs",
-            "Request Queue",
             "Event Queue",
             "Dispatchers",
             "Error",
@@ -779,7 +777,6 @@ def _render_final_report_html(payload: Dict[str, Any]) -> str:
                 sample.get("ok"),
                 sample.get("status_code"),
                 sample.get("active_dags_count"),
-                sample.get("request_queue_size"),
                 sample.get("event_queue_size"),
                 (
                     f"{sample.get('llm_dispatch_running_dispatchers')}/"

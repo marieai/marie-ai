@@ -234,7 +234,6 @@ class PostgreSQLJobScheduler(JobScheduler):
         self._event_queue = Queue()
         self._status_update_lock = AsyncJobLock()
 
-        self.max_workers = scheduler_config.max_workers
         self.logger.info(f"Queue names to monitor: {self.known_queues}")
 
         self.job_manager = job_manager
@@ -398,7 +397,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                 self._handle_priority_refresh if self.priority_refresh_enabled else None
             ),
             logger=self.logger,
-            queue_size=self.scheduler_config.submission_queue_size,
             initial_submission_count=initial_submission_count,
         )
 
@@ -407,7 +405,6 @@ class PostgreSQLJobScheduler(JobScheduler):
             repository=self.repository,
             frontier=self.frontier,
             submission_service=self.submission_service,
-            runtime=self.runtime,
             event_queue=self._event_queue,
             active_dags=self.active_dags,
             known_queues=self.known_queues,
@@ -462,13 +459,8 @@ class PostgreSQLJobScheduler(JobScheduler):
         return PostgreSQLSchedulerConfig.from_dict(config)
 
     def _scheduler_counter(self, name: str, **fields: Any) -> None:
-        counters = getattr(self, "_scheduler_counters", None)
-        if counters is None:
-            counters = defaultdict(int)
-            self._scheduler_counters = counters
-
-        counters[name] += 1
-        scheduler_trace(name, count=counters[name], **fields)
+        self._scheduler_counters[name] += 1
+        scheduler_trace(name, count=self._scheduler_counters[name], **fields)
 
     async def handle_job_event(self, event_type: str, message: Any) -> None:
         """Apply a job event delivered by JobManager's keyed publisher."""
@@ -908,12 +900,6 @@ class PostgreSQLJobScheduler(JobScheduler):
             name="scheduler-deployment-monitor",
         )
 
-        for worker_id in range(self.max_workers):
-            self.runtime.create_task(
-                self.submission_service.run_worker(worker_id),
-                name=f"scheduler-submission-{worker_id}",
-            )
-
         await self.notify_event()
 
     async def run_dispatch_cycle(self, cycle_index: int) -> DispatchCycleResult:
@@ -935,8 +921,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                         source="scheduler_loop",
                         submission_count=self.submission_service.submission_count,
                         refresh_interval_seconds=self.priority_refresh_interval_seconds,
-                        request_queue_size=self.submission_service.queue_size,
-                        pending_requests=self.submission_service.pending_count,
                     )
                     self._request_priority_refresh(source="scheduler_loop")
 
@@ -1866,8 +1850,6 @@ class PostgreSQLJobScheduler(JobScheduler):
             },
             timeout=timeout,
         )
-        self.submission_service.abort_pending()
-
         await self._close_runtime_resources()
 
     async def _drain_pending_dispatches(self, timeout: float) -> None:
@@ -2208,7 +2190,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         return {work_item.id: work_item for work_item in work_items}
 
     async def submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> str:
-        """Queue a DAG submission for background persistence."""
+        """Persist a DAG before acknowledging its submission."""
         return await self.submission_service.submit(work_info, overwrite)
 
     async def _handle_priority_refresh(self, submission_count: int) -> None:
@@ -2219,17 +2201,11 @@ class PostgreSQLJobScheduler(JobScheduler):
             now = time.monotonic()
             due_in = self._next_priority_refresh_at - now
             if due_in <= 0:
-                self._request_priority_refresh(source='submission_worker')
+                self._request_priority_refresh(source='submission')
             self.logger.info(
                 f'Requested job priority refresh after {submission_count} submissions '
                 f'(interval: {refresh_interval}, due_in={max(0.0, due_in):.3f}s)'
             )
-
-    def get_queue_status(self) -> dict:
-        """Return submission queue and worker status."""
-        return self.submission_service.status(
-            self.runtime.tasks(prefix='scheduler-submission-')
-        )
 
     def _request_priority_refresh(self, source: str) -> None:
         """Queue at most one additional priority refresh."""
@@ -2247,8 +2223,6 @@ class PostgreSQLJobScheduler(JobScheduler):
             coalesced=already_pending,
             refresh_running=self._priority_refresh_running,
             submission_count=self.submission_service.submission_count,
-            request_queue_size=self.submission_service.queue_size,
-            pending_requests=self.submission_service.pending_count,
         )
 
     async def _priority_refresh_loop(self) -> None:
@@ -2272,8 +2246,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                             refresh_id=result.refresh_id,
                             submission_count=self.submission_service.submission_count,
                             refresh_interval_seconds=self.priority_refresh_interval_seconds,
-                            request_queue_size=self.submission_service.queue_size,
-                            pending_requests=self.submission_service.pending_count,
                             elapsed_ms=(time.perf_counter() - refresh_started) * 1000.0,
                         )
                     else:
@@ -2319,8 +2291,6 @@ class PostgreSQLJobScheduler(JobScheduler):
             refresh_id=refresh_id,
             submission_count=self.submission_service.submission_count,
             hydrate_missing_limit=self.priority_refresh_hydrate_limit,
-            request_queue_size=self.submission_service.queue_size,
-            pending_requests=self.submission_service.pending_count,
         )
         try:
             phase_started = time.perf_counter()
@@ -2433,13 +2403,6 @@ class PostgreSQLJobScheduler(JobScheduler):
             )
 
     async def mark_as_active(self, work_info: WorkInfo) -> bool:
-        """
-        Mark a job as active.
-        Delegates to JobRepository.
-
-        :param work_info: WorkInfo containing job ID and name
-        :return: True if successful, False otherwise
-        """
         self.logger.debug(f"Marking as active : {work_info.id}")
         count = await self.repository.mark_jobs_as_active(
             job_ids=[work_info.id], job_name=work_info.name
@@ -2451,18 +2414,6 @@ class PostgreSQLJobScheduler(JobScheduler):
     ) -> bool:
         """Validate a submission against the configured existing-work policy."""
         return await self.submission_service.is_valid_submission(work_info, policy)
-
-    def stop_job(self, job_id: str) -> bool:
-        """Request a job to exit, fire and forget.
-        Returns whether or not the job was running.
-        """
-        raise NotImplementedError
-
-    async def delete_job(self, job_id: str):
-        """Deletes the job with the given job_id."""
-        ...
-
-        raise NotImplementedError
 
     async def cancel_job(self, job_id: str, work_item: WorkInfo) -> int:
         """
@@ -2478,21 +2429,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                 queue_name=work_item.name,
                 schema=DEFAULT_SCHEMA,
             )
-
-    async def resume_job(self, job_id: str) -> None:
-        """
-        Resume a job by its ID.
-        Delegates to JobRepository.
-
-        :param job_id: The ID of the job to resume
-        """
-        # TODO: This queue name is a placeholder - should be determined from job metadata
-        queue_name = "extract"
-        await self.repository.resume_job(
-            job_id=job_id,
-            queue_name=queue_name,
-            schema=DEFAULT_SCHEMA,
-        )
 
     async def put_status(
         self,

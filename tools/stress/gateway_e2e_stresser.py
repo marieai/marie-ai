@@ -823,11 +823,7 @@ class DebugSnapshot:
     active_dags_count: Optional[int] = None
     max_concurrent_dags: Optional[int] = None
     fetch_counter: Optional[int] = None
-    pending_requests: Optional[int] = None
-    request_queue_size: Optional[int] = None
     event_queue_size: Optional[int] = None
-    queue_status: Optional[Dict[str, Any]] = None
-    queue_status_error: Optional[str] = None
     llm_dispatch: Optional[Dict[str, Any]] = None
     llm_dispatch_registered_dispatchers: Optional[int] = None
     llm_dispatch_running_dispatchers: Optional[int] = None
@@ -856,7 +852,6 @@ def _build_debug_snapshot(
     scheduler_info = normalized_payload.get("scheduler_info")
     counters = normalized_payload.get("counters")
     queues = normalized_payload.get("queues")
-    queue_status = normalized_payload.get("queue_status")
     llm_dispatch = normalized_payload.get("llm_dispatch")
 
     if not isinstance(scheduler_info, dict):
@@ -865,8 +860,6 @@ def _build_debug_snapshot(
         counters = {}
     if not isinstance(queues, dict):
         queues = {}
-    if not isinstance(queue_status, dict):
-        queue_status = None
     if not isinstance(llm_dispatch, dict):
         llm_dispatch = None
 
@@ -898,25 +891,9 @@ def _build_debug_snapshot(
             if counters.get("fetch_counter") is not None
             else None
         ),
-        pending_requests=(
-            int(counters.get("pending_requests"))
-            if counters.get("pending_requests") is not None
-            else None
-        ),
-        request_queue_size=(
-            int(queues.get("request_queue_size"))
-            if queues.get("request_queue_size") is not None
-            else None
-        ),
         event_queue_size=(
             int(queues.get("event_queue_size"))
             if queues.get("event_queue_size") is not None
-            else None
-        ),
-        queue_status=queue_status,
-        queue_status_error=(
-            str(normalized_payload.get("queue_status_error"))
-            if normalized_payload.get("queue_status_error") is not None
             else None
         ),
         llm_dispatch=llm_dispatch,
@@ -1607,7 +1584,6 @@ class GatewayE2EStresser:
                     "scheduler_paused": latest_debug_sample.scheduler_paused,
                     "active_dags_count": latest_debug_sample.active_dags_count,
                     "fetch_counter": latest_debug_sample.fetch_counter,
-                    "request_queue_size": latest_debug_sample.request_queue_size,
                     "event_queue_size": latest_debug_sample.event_queue_size,
                     "llm_dispatch_registered_dispatchers": latest_debug_sample.llm_dispatch_registered_dispatchers,
                     "llm_dispatch_running_dispatchers": latest_debug_sample.llm_dispatch_running_dispatchers,
@@ -3364,7 +3340,6 @@ class GatewayE2EStresser:
             print(f"Failed samples: {error_count}")
             if last_ok is not None:
                 print(f"Last active DAG count: {last_ok.active_dags_count}")
-                print(f"Last request queue size: {last_ok.request_queue_size}")
                 print(f"Last fetch counter: {last_ok.fetch_counter}")
                 print(
                     "Last LLM dispatchers: "
@@ -3411,11 +3386,7 @@ class GatewayE2EStresser:
                 "active_dags_count": sample.active_dags_count,
                 "max_concurrent_dags": sample.max_concurrent_dags,
                 "fetch_counter": sample.fetch_counter,
-                "pending_requests": sample.pending_requests,
-                "request_queue_size": sample.request_queue_size,
                 "event_queue_size": sample.event_queue_size,
-                "queue_status": sample.queue_status,
-                "queue_status_error": sample.queue_status_error,
                 "llm_dispatch": sample.llm_dispatch,
                 "llm_dispatch_registered_dispatchers": sample.llm_dispatch_registered_dispatchers,
                 "llm_dispatch_running_dispatchers": sample.llm_dispatch_running_dispatchers,

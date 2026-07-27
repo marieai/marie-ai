@@ -95,6 +95,45 @@ async def test_gateway_can_publish_optional_accepted_event(
 
 
 @pytest.mark.asyncio
+async def test_gateway_keeps_durable_success_when_accepted_event_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway, submitted = build_gateway()
+    monkeypatch.setenv('MARIE_GATEWAY_PUBLISH_ACCEPTED_EVENT', 'true')
+    monkeypatch.setattr(
+        gateway_module,
+        'mark_as_accepted',
+        AsyncMock(side_effect=RuntimeError('toast unavailable')),
+    )
+
+    response = await gateway.handle_job_submit_command(submission_message())
+
+    assert response.parameters['status'] == 'ok'
+    assert response.parameters['job_id'] == submitted[0].id
+    gateway.logger.error.assert_called_once_with(
+        f'Failed to publish accepted event for durable job '
+        f'{submitted[0].id}: toast unavailable'
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateway_does_not_duplicate_delegated_submission_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway, _ = build_gateway()
+    gateway.job_scheduler.submit_job = AsyncMock(
+        side_effect=RuntimeError('database unavailable')
+    )
+    failed = AsyncMock(return_value=True)
+    monkeypatch.setattr(gateway_module, 'mark_as_failed', failed)
+
+    response = await gateway.handle_job_submit_command(submission_message())
+
+    assert response.parameters['status'] == 'error'
+    failed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_gateway_rejects_invalid_accepted_event_flag_before_submission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

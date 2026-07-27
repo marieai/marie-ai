@@ -1171,7 +1171,6 @@ async def test_scheduler_start_initializes_notifications_before_admission(
     scheduler.maintenance_service = MaintenanceService()
     scheduler.dag_service = DagService()
     scheduler._semaphore_store = SemaphoreStore()
-    scheduler.max_workers = 0
     scheduler._lifecycle_lock = asyncio.Lock()
     scheduler.running = False
     scheduler._resources_closed = False
