@@ -185,7 +185,7 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
         in schema_query
     )
     assert "VALUES ('default')" in schema_query
-    assert "VALUES ('73')" in schema_query
+    assert "VALUES ('74')" in schema_query
     assert "job_expired_acquisition_lease_idx" in schema_query
     assert "job_expired_run_lease_idx" in schema_query
     assert "FOR UPDATE OF j SKIP LOCKED" in schema_query
@@ -659,7 +659,8 @@ async def test_dispatch_start_does_not_regress_attempt_state() -> None:
 def test_activate_from_lease_sql_owns_attempt_audit_atomically() -> None:
     project_root = Path(__file__).parents[4]
     sql = (
-        project_root / "config/psql/schema/lease/002_activate_from_lease.sql"
+        project_root
+        / "config/psql/schema/lease/015_activate_from_lease.sql"
     ).read_text()
 
     functions = sql.split("CREATE OR REPLACE FUNCTION {schema}.activate_from_lease(")[

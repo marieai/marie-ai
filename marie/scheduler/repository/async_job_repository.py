@@ -44,7 +44,7 @@ from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
 
 DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
-SCHEDULER_SCHEMA_VERSION = 73
+SCHEDULER_SCHEMA_VERSION = 74
 
 
 class _GuardrailRouteConflict(RuntimeError):

@@ -22,7 +22,7 @@ def test_complete_job_only_returns_count_input() -> None:
 def test_expired_lease_release_is_bounded_and_lock_safe() -> None:
     sql = (
         PROJECT_ROOT
-        / "config/psql/schema/lease/011_release_expired_leases_bounded.sql"
+        / "config/psql/schema/lease/014_release_expired_leases.sql"
     ).read_text()
 
     assert "_max_rows integer DEFAULT 1000" in sql
