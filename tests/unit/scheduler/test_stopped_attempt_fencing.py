@@ -316,6 +316,7 @@ async def test_storage_sync_logs_repair_after_terminal_grace() -> None:
 async def test_pending_job_renews_matching_run_lease() -> None:
     work_item = build_work_item()
     scheduler = build_scheduler(work_item, set())
+    scheduler.lease_owner = work_item.run_owner
     get_info = AsyncMock(
         return_value=JobInfo(
             status=JobStatus.PENDING,
@@ -349,6 +350,7 @@ async def test_pending_job_renews_matching_run_lease() -> None:
 async def test_terminal_job_does_not_renew_run_lease() -> None:
     work_item = build_work_item()
     scheduler = build_scheduler(work_item, set())
+    scheduler.lease_owner = work_item.run_owner
     scheduler.list_jobs = AsyncMock(return_value={JOB_ID: work_item})
     scheduler.job_manager = SimpleNamespace(
         job_info_client=MagicMock(

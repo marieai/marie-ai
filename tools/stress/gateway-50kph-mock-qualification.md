@@ -86,8 +86,11 @@ metadata, which is the normal per-request parameter path used by
 executor configuration.
 
 Restart the gateway and mock executor topology after changing replica counts.
-The stresser's preflight must observe positive capacity for all eight executor
-types before it submits the first DAG.
+The stresser records capacity for all eight executor types, but missing, full,
+or offline executors do not block submission. For a valid qualification run,
+confirm from the preflight snapshot that the intended topology came online;
+terminal-completion and SLA gates still fail if queued work cannot drain in
+time.
 
 ## Enable Full Scheduler Tracing
 
@@ -183,9 +186,9 @@ the PostgreSQL correctness verifier. `--terminal-timeout 3600` permits up to one
 additional hour for that drain; needing a material drain period is itself a
 throughput failure even when every DAG eventually completes.
 
-During preflight, the stresser prints the first unmet readiness condition,
-prints again immediately if the condition changes, and repeats an unchanged
-condition at most once every 10 seconds until the deadline.
+During preflight, the stresser retries an unavailable gateway debug endpoint
+until the deadline. Missing, zero-capacity, or full executors produce a warning
+and remain visible in the report, but submission starts immediately.
 
 ## Monitor the Trial
 

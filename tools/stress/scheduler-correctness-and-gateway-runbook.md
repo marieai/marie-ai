@@ -331,8 +331,12 @@ curl -fsS \
 
 Before submission, confirm:
 
-- `mock_executor_a` through `mock_executor_h` are present
-- every required executor has positive configured and available capacity
+- the gateway debug endpoint is available
+- the capacity snapshot identifies any missing, zero-capacity, or full executors
+
+Executor readiness is diagnostic and does not block submission. Jobs may queue
+before executors are online; the configured SLA, completion, and open-job gates
+still determine whether the run passes.
 
 `known_queues` is a diagnostic snapshot, not a readiness requirement. The
 scheduler creates a missing queue during submission and then adds it to

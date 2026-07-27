@@ -2627,16 +2627,27 @@ class PostgreSQLJobScheduler(JobScheduler):
 
         async def renew(job_id: str, work_item: WorkInfo) -> str:
             async with concurrency:
+                run_owner = work_item.run_owner
+                run_attempt_id = work_item.run_attempt_id
+                if not run_owner or not run_attempt_id:
+                    return "missing_identity"
+                if run_owner != self.lease_owner:
+                    scheduler_trace(
+                        "run_lease_extend_rejected",
+                        job_id=job_id,
+                        dag_id=work_item.dag_id,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                        reason="foreign_owner",
+                        **self._ha_trace_fields(),
+                    )
+                    return "foreign_owner"
+
                 job_info = await job_info_client.get_info(job_id)
                 if job_info is None:
                     return "missing_job_info"
                 if job_info.status not in (JobStatus.PENDING, JobStatus.RUNNING):
                     return "not_running"
-
-                run_owner = work_item.run_owner
-                run_attempt_id = work_item.run_attempt_id
-                if not run_owner or not run_attempt_id:
-                    return "missing_identity"
                 if (
                     job_info.run_owner != run_owner
                     or job_info.run_attempt_id != run_attempt_id
@@ -2740,6 +2751,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             not_running=outcomes["not_running"],
             missing_entrypoint=outcomes["missing_entrypoint"],
             semaphore_rejected=outcomes["semaphore_rejected"],
+            foreign_owner=outcomes["foreign_owner"],
             errors=outcomes["error"],
             elapsed_ms=(time.perf_counter() - started) * 1000.0,
             **self._ha_trace_fields(),

@@ -54,6 +54,27 @@ async def test_dedicated_loop_renews_matching_running_attempt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_dedicated_loop_does_not_renew_foreign_attempt() -> None:
+    work_item = SimpleNamespace(
+        id="job-1",
+        dag_id="dag-1",
+        run_owner="scheduler-old",
+        run_attempt_id="attempt-1",
+    )
+    get_info = AsyncMock()
+    scheduler = build_scheduler(work_item, SimpleNamespace())
+    scheduler.job_manager = SimpleNamespace(
+        job_info_client=lambda: SimpleNamespace(get_info=get_info)
+    )
+
+    await scheduler._renew_active_run_leases()
+
+    get_info.assert_not_awaited()
+    scheduler._semaphore_store.renew.assert_not_called()
+    scheduler._extend_run_lease_db.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_pending_attempt_renews_ticket_before_run_lease() -> None:
     work_item = SimpleNamespace(
         id="job-1",

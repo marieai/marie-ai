@@ -540,7 +540,22 @@ def _render_final_report_html(payload: Dict[str, Any]) -> str:
             ],
             ["Known Queues Before Submission", preflight_final.get("known_queues")],
             ["Required Executors", preflight_final.get("required_executors")],
+            [
+                "Executor Readiness Required",
+                preflight_final.get("executor_readiness_required"),
+            ],
+            ["Capacity Observed", preflight_final.get("capacity_observed")],
             ["Matched Slots", preflight_final.get("matched_slots")],
+            ["Missing Executors", preflight_final.get("missing_executors")],
+            [
+                "Zero Capacity Executors",
+                preflight_final.get("zero_capacity_executors"),
+            ],
+            [
+                "No Free Slot Executors",
+                preflight_final.get("zero_available_executors"),
+            ],
+            ["Capacity Error", preflight_final.get("capacity_error")],
             ["Error", preflight_result.get("error")],
         ],
     )
@@ -553,6 +568,7 @@ def _render_final_report_html(payload: Dict[str, Any]) -> str:
             "Debug Snapshot",
             "Capacity Status",
             "Capacity Snapshot",
+            "Capacity Error",
             "Ready",
             "Reason",
         ],
@@ -564,6 +580,7 @@ def _render_final_report_html(payload: Dict[str, Any]) -> str:
                 (attempt.get("debug") or {}).get("payload"),
                 (attempt.get("capacity") or {}).get("status_code"),
                 (attempt.get("capacity") or {}).get("payload"),
+                (attempt.get("capacity") or {}).get("error"),
                 (attempt.get("interpretation") or {}).get("ready"),
                 (attempt.get("interpretation") or {}).get("reason"),
             ]

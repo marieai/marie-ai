@@ -178,7 +178,7 @@ Use it when the goal is to test:
 - **SLA verification**: stamps `soft_sla` / `hard_sla` onto each request and reports compliance
 - **Mock executor failure injection**: stamps `failure_rate`, `failure_mode`, and deterministic `force_fail` controls for mock-executor runs
 - **AIMock fault profile integration**: can switch the mock backend into `normal`, `timeout`, `error`, or randomized `chaos`
-- **Dispatch-readiness preflight**: proves the scheduler monitors the target queue and every required executor has positive configured and available capacity before the first submission
+- **Gateway preflight**: verifies the gateway debug endpoint before submission and records executor capacity as non-blocking diagnostics
 - **Run correlation**: stamps deterministic request/ref IDs, `stress_run_id`, logical index, queue, planner, and executor identities
 - **Reliability gates**: validates submission acceptance, terminal completion, event loss, lifecycle order, duplicate terminals, and conflicting outcomes
 - **Bounded endurance reporting**: optionally streams terminal job records to JSONL while retaining only configured job, event, and latency samples in memory
@@ -189,11 +189,14 @@ Use it when the goal is to test:
 Real runs perform `/api/debug` and `/api/capacity` preflight by default. Supply
 each executor used by the selected query plan with repeated
 `--required-executor` options. Executor identities can also be inferred from
-`on: executor://endpoint` values in the request metadata template. A missing
-queue, missing executor, zero configured capacity, zero initially available
-capacity, or unavailable endpoint stops the command before it uploads or
-submits work. `--skip-preflight` is intended only for payload dry-runs and
-diagnostic cases where dispatch readiness is deliberately outside the test.
+`on: executor://endpoint` values in the request metadata template. The gateway
+debug endpoint must be available, but a missing executor, zero configured
+capacity, no initially available slots, or an unavailable capacity endpoint is
+recorded without blocking submission. This allows the scheduler to accept and
+queue work before executors are online. SLA, terminal-completion, and open-job
+gates determine whether that queued work becomes runnable in time.
+`--skip-preflight` is intended only for payload dry-runs and diagnostic cases
+where even gateway availability is deliberately outside the test.
 
 `--run-id` makes request IDs, ref IDs, and template UUIDs deterministic. The
 command generates a unique run ID when it is omitted. Reuse an explicit run ID
@@ -1052,9 +1055,9 @@ python tools/stress/gateway_e2e_stresser.py \
 | `--job-name` | Gateway submit name / scheduler queue name |
 | `--planner` | Planner to place in metadata |
 | `--run-id` / `--seed` | Correlated run identity and optional deterministic-ID seed |
-| `--required-executor` | Required capacity slot; repeat for every executor used by the plan |
-| `--skip-preflight` | Disable the default gateway and executor readiness preflight |
-| `--preflight-deadline` / `--preflight-interval` | Bound preflight retry duration and cadence |
+| `--required-executor` | Capacity slot to record and include in run metadata; repeat for every executor used by the plan |
+| `--skip-preflight` | Disable the default gateway check and capacity snapshot |
+| `--preflight-deadline` / `--preflight-interval` | Bound gateway preflight retry duration and cadence |
 | `--llm-pool-id` | Fixed LLM dispatch pool ID to place in `metadata.pool_id`, for example `document-small` |
 | `--llm-pool-cycle` | Comma-separated LLM dispatch pool IDs to cycle through `metadata.pool_id` by generated job index |
 | `--purge-annotators` | Comma-separated annotator names to purge before annotation, for example `mock-llm` |

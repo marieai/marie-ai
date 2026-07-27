@@ -1504,21 +1504,21 @@ def test_preflight_parsers_accept_wrapped_and_unwrapped_payloads() -> None:
 
 
 @pytest.mark.parametrize(
-    ("slots", "expected_reason"),
+    ("slots", "expected_diagnostics"),
     [
-        ([], "executor_missing"),
+        ([], {"missing_executors": ["mock-executor"]}),
         (
             [{"name": "mock-executor", "capacity": 0, "available": 0}],
-            "zero_capacity",
+            {"zero_capacity_executors": ["mock-executor"]},
         ),
         (
             [{"name": "mock-executor", "capacity": 2, "available": 0}],
-            "zero_available_capacity",
+            {"zero_available_executors": ["mock-executor"]},
         ),
     ],
 )
-def test_preflight_distinguishes_executor_readiness_failures(
-    slots: list[dict[str, Any]], expected_reason: str
+def test_preflight_records_executor_readiness_without_blocking(
+    slots: list[dict[str, Any]], expected_diagnostics: dict[str, list[str]]
 ) -> None:
     stresser = make_gateway_correctness_stresser(preflight_enabled=True)
 
@@ -1526,8 +1526,11 @@ def test_preflight_distinguishes_executor_readiness_failures(
         {"scheduler_info": {"known_queues": []}}, {"slots": slots}
     )
 
-    assert interpretation["ready"] is False
-    assert interpretation["reason"] == expected_reason
+    assert interpretation["ready"] is True
+    assert interpretation["reason"] is None
+    assert interpretation["executor_readiness_required"] is False
+    for field, value in expected_diagnostics.items():
+        assert interpretation[field] == value
 
 
 @pytest.mark.asyncio
@@ -1565,7 +1568,7 @@ async def test_preflight_allows_queue_created_during_submission(
 
 
 @pytest.mark.asyncio
-async def test_preflight_reports_what_it_is_waiting_for(
+async def test_preflight_proceeds_when_executor_has_no_available_capacity(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1574,33 +1577,58 @@ async def test_preflight_reports_what_it_is_waiting_for(
         preflight_deadline=0.2,
         preflight_interval=0.001,
     )
-    capacity_attempt = 0
 
     async def fetch(path: str) -> tuple[int, dict[str, Any]]:
-        nonlocal capacity_attempt
         if path == "/api/debug":
             return 200, {"scheduler_info": {"known_queues": []}}
-        capacity_attempt += 1
-        capacity = 0 if capacity_attempt == 1 else 2
         return 200, {
             "slots": [
                 {
                     "name": "mock-executor",
-                    "capacity": capacity,
-                    "available": capacity,
+                    "capacity": 4,
+                    "available": 0,
                 }
             ]
         }
 
     monkeypatch.setattr(stresser, "_fetch_gateway_json", fetch)
 
-    with caplog.at_level(logging.INFO, logger="GatewayE2EStresser"):
+    with caplog.at_level(logging.WARNING, logger="GatewayE2EStresser"):
         await stresser._run_preflight()
 
-    assert "Gateway preflight waiting (attempt=1" in caplog.text
-    assert "Required executors have zero configured capacity" in caplog.text
+    assert "Gateway preflight proceeding without executor-readiness gate" in caplog.text
+    assert "no free slots" in caplog.text
     assert "mock-executor" in caplog.text
-    assert "Gateway preflight passed after 2 attempts" in caplog.text
+    assert stresser._preflight_result is not None
+    assert stresser._preflight_result["passed"] is True
+    assert stresser._preflight_result["attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_preflight_proceeds_when_capacity_endpoint_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stresser = make_gateway_correctness_stresser(
+        preflight_enabled=True,
+        preflight_deadline=0.2,
+        preflight_interval=0.001,
+    )
+
+    async def fetch(path: str) -> tuple[int, dict[str, Any]]:
+        if path == "/api/debug":
+            return 200, {"scheduler_info": {"known_queues": []}}
+        raise OSError("capacity endpoint unavailable")
+
+    monkeypatch.setattr(stresser, "_fetch_gateway_json", fetch)
+
+    await stresser._run_preflight()
+
+    assert stresser._preflight_result is not None
+    assert stresser._preflight_result["passed"] is True
+    assert stresser._preflight_result["attempts"] == 1
+    final = stresser._preflight_result["final"]
+    assert final["capacity_observed"] is False
+    assert final["capacity_error"] == "capacity endpoint unavailable"
 
 
 @pytest.mark.asyncio
@@ -1611,7 +1639,7 @@ async def test_failed_preflight_never_starts_submission(
     submission_started = False
 
     async def fail_preflight() -> None:
-        raise PreflightError("executor_missing", "executor is unavailable")
+        raise PreflightError("endpoint_unavailable", "gateway is unavailable")
 
     def setup_storage() -> None:
         nonlocal submission_started
@@ -1620,7 +1648,7 @@ async def test_failed_preflight_never_starts_submission(
     monkeypatch.setattr(stresser, "_run_preflight", fail_preflight)
     monkeypatch.setattr(stresser, "_setup_storage", setup_storage)
 
-    with pytest.raises(PreflightError, match="executor is unavailable"):
+    with pytest.raises(PreflightError, match="gateway is unavailable"):
         await stresser.run()
 
     assert submission_started is False

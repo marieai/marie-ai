@@ -141,12 +141,7 @@ MARIE_GENERATED_ARTIFACT_DIRS = {
 
 MOCK_FAILURE_MODES = ("exception", "timeout", "random")
 REDACTED_SECRET = "<redacted>"
-PREFLIGHT_FAILURE_REASONS = (
-    "endpoint_unavailable",
-    "executor_missing",
-    "zero_capacity",
-    "zero_available_capacity",
-)
+PREFLIGHT_FAILURE_REASONS = ("endpoint_unavailable",)
 PREFLIGHT_LOG_INTERVAL_SECONDS = 10.0
 
 
@@ -1924,58 +1919,50 @@ class GatewayE2EStresser:
     def _interpret_preflight(
         self,
         debug_payload: Dict[str, Any],
-        capacity_payload: Dict[str, Any],
+        capacity_payload: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
         known_queues = _extract_known_queues(debug_payload)
-        slots = _extract_capacity_slots(capacity_payload)
+        slots = (
+            _extract_capacity_slots(capacity_payload)
+            if capacity_payload is not None
+            else {}
+        )
         interpretation: Dict[str, Any] = {
-            "ready": False,
+            "ready": True,
             "reason": None,
             "target_queue": self.queue_name,
             "known_queues": known_queues,
             "queue_known_before_submission": self.queue_name in known_queues,
             "required_executors": list(self.required_executors),
+            "executor_readiness_required": False,
+            "capacity_observed": capacity_payload is not None,
             "matched_slots": {},
             "missing_executors": [],
             "zero_capacity_executors": [],
             "zero_available_executors": [],
         }
-        if not self.required_executors:
-            interpretation["reason"] = "executor_missing"
-            interpretation["missing_executors"] = [
-                "<no executor inferred; use --required-executor>"
-            ]
+        if capacity_payload is None:
             return interpretation
 
         missing = [name for name in self.required_executors if name not in slots]
-        if missing:
-            interpretation["reason"] = "executor_missing"
-            interpretation["missing_executors"] = missing
-            return interpretation
-
-        matched_slots = {name: slots[name] for name in self.required_executors}
+        interpretation["missing_executors"] = missing
+        matched_slots = {
+            name: slots[name] for name in self.required_executors if name in slots
+        }
         interpretation["matched_slots"] = matched_slots
         zero_capacity = [
             name
             for name, slot in matched_slots.items()
             if float(slot.get("capacity", 0.0)) <= 0.0
         ]
-        if zero_capacity:
-            interpretation["reason"] = "zero_capacity"
-            interpretation["zero_capacity_executors"] = zero_capacity
-            return interpretation
-
+        interpretation["zero_capacity_executors"] = zero_capacity
         zero_available = [
             name
             for name, slot in matched_slots.items()
-            if float(slot.get("available", 0.0)) <= 0.0
+            if float(slot.get("capacity", 0.0)) > 0.0
+            and float(slot.get("available", 0.0)) <= 0.0
         ]
-        if zero_available:
-            interpretation["reason"] = "zero_available_capacity"
-            interpretation["zero_available_executors"] = zero_available
-            return interpretation
-
-        interpretation["ready"] = True
+        interpretation["zero_available_executors"] = zero_available
         return interpretation
 
     async def _run_preflight(self) -> None:
@@ -2010,36 +1997,6 @@ class GatewayE2EStresser:
                     "status_code": debug_status,
                     "payload": _sanitize_report_value(debug_payload, self.api_key),
                 }
-                capacity_status, capacity_payload = await self._fetch_gateway_json(
-                    "/api/capacity"
-                )
-                attempt["capacity"] = {
-                    "status_code": capacity_status,
-                    "payload": _sanitize_report_value(capacity_payload, self.api_key),
-                }
-                interpretation = self._interpret_preflight(
-                    debug_payload, capacity_payload
-                )
-                attempt["interpretation"] = interpretation
-                last_reason = str(
-                    interpretation.get("reason") or "endpoint_unavailable"
-                )
-                last_message = self._preflight_failure_message(interpretation)
-                if interpretation["ready"]:
-                    self._preflight_attempts.append(attempt)
-                    self._preflight_result = {
-                        "enabled": True,
-                        "passed": True,
-                        "reason": None,
-                        "attempts": attempt_number,
-                        "final": interpretation,
-                    }
-                    if attempt_number > 1:
-                        self._logger.info(
-                            "Gateway preflight passed after %d attempts",
-                            attempt_number,
-                        )
-                    return
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -2050,6 +2007,65 @@ class GatewayE2EStresser:
                     "reason": last_reason,
                     "error": str(exc),
                 }
+            else:
+                capacity_payload: Optional[Dict[str, Any]] = None
+                capacity_error: Optional[str] = None
+                try:
+                    capacity_status, capacity_payload = await self._fetch_gateway_json(
+                        "/api/capacity"
+                    )
+                    attempt["capacity"] = {
+                        "status_code": capacity_status,
+                        "payload": _sanitize_report_value(
+                            capacity_payload, self.api_key
+                        ),
+                    }
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    capacity_error = str(exc)
+                    attempt["capacity"] = {"error": capacity_error}
+
+                interpretation = self._interpret_preflight(
+                    debug_payload, capacity_payload
+                )
+                if capacity_error is not None:
+                    interpretation["capacity_error"] = capacity_error
+                attempt["interpretation"] = interpretation
+                self._preflight_attempts.append(attempt)
+                self._preflight_result = {
+                    "enabled": True,
+                    "passed": True,
+                    "reason": None,
+                    "attempts": attempt_number,
+                    "final": interpretation,
+                }
+
+                executor_warnings = []
+                if capacity_error is not None:
+                    executor_warnings.append(
+                        f"capacity snapshot unavailable: {capacity_error}"
+                    )
+                for field, label in (
+                    ("missing_executors", "missing"),
+                    ("zero_capacity_executors", "zero capacity"),
+                    ("zero_available_executors", "no free slots"),
+                ):
+                    names = interpretation[field]
+                    if names:
+                        executor_warnings.append(f"{label}: {names}")
+                if executor_warnings:
+                    self._logger.warning(
+                        "Gateway preflight proceeding without executor-readiness "
+                        "gate: %s",
+                        "; ".join(executor_warnings),
+                    )
+                if attempt_number > 1:
+                    self._logger.info(
+                        "Gateway preflight passed after %d attempts",
+                        attempt_number,
+                    )
+                return
 
             self._preflight_attempts.append(attempt)
             now = time.monotonic()
@@ -2096,25 +2112,6 @@ class GatewayE2EStresser:
             }
         except Exception as exc:
             self._post_drain_capacity = {"ok": False, "error": str(exc)}
-
-    def _preflight_failure_message(self, interpretation: Dict[str, Any]) -> str:
-        reason = interpretation.get("reason")
-        if reason == "executor_missing":
-            return (
-                "Required executor capacity slots are missing: "
-                f"{interpretation.get('missing_executors', [])}"
-            )
-        if reason == "zero_capacity":
-            return (
-                "Required executors have zero configured capacity: "
-                f"{interpretation.get('zero_capacity_executors', [])}"
-            )
-        if reason == "zero_available_capacity":
-            return (
-                "Required executors have no initially available capacity: "
-                f"{interpretation.get('zero_available_executors', [])}"
-            )
-        return "Gateway preflight endpoints are unavailable"
 
     async def _debug_sampler(self) -> None:
         while self.metrics.end_time is None:
@@ -3927,14 +3924,15 @@ Examples:
         action="append",
         default=None,
         help=(
-            "Executor capacity slot required by preflight; repeat for multiple "
-            "executors. Values are also inferred from metadata 'on' targets."
+            "Executor capacity slot to include in preflight diagnostics and run "
+            "metadata; repeat for multiple executors. Values are also inferred "
+            "from metadata 'on' targets."
         ),
     )
     parser.add_argument(
         "--skip-preflight",
         action="store_true",
-        help="Skip /api/debug and /api/capacity dispatch-readiness checks",
+        help="Skip the /api/debug gateway check and /api/capacity snapshot",
     )
     parser.add_argument(
         "--preflight-deadline",
