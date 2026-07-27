@@ -81,6 +81,8 @@ class JobManager:
         etcd_client: EtcdClient,
         desired_state_worker_count: int = 16,
         desired_state_max_pending: int = 128,
+        job_event_worker_count: int = 8,
+        job_event_queue_size: int = 1024,
     ):
         if etcd_client is None:
             raise Exception("EtcdClient is not configured")
@@ -88,8 +90,10 @@ class JobManager:
         self.logger = MarieLogger(self.__class__.__name__)
         self._job_distributor = job_distributor
         self.event_publisher = EventPublisher(
+            max_queue_size=job_event_queue_size,
             publish_blocking=True,
             subscriber_timeout_s=0,
+            worker_count=job_event_worker_count,
         )
         self._log_client = JobLogStorageClient()
         self._etcd_client = etcd_client
@@ -624,8 +628,11 @@ class JobManager:
 
         return submission_id
 
-    def shutdown(self) -> None:
-        self._desired_state_executor.shutdown()
+    async def shutdown(self) -> None:
+        try:
+            await self.event_publisher.stop()
+        finally:
+            self._desired_state_executor.shutdown()
 
     def stop_job(self, job_id) -> bool:
         """Request a job to exit, fire and forget.

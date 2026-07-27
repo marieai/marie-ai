@@ -98,6 +98,7 @@ with:
     max_workers: 2
     # Absorb large ingress bursts; submitters backpressure when this fills.
     submission_queue_size: 100000
+    # One keyed publisher preserves per-job order and blocks producers when full.
     job_event_worker_count: 8
     job_event_queue_size: 1024
     dispatch_confirmation_max_in_flight: 256

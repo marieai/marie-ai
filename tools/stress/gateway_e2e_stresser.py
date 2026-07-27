@@ -147,6 +147,7 @@ PREFLIGHT_FAILURE_REASONS = (
     "zero_capacity",
     "zero_available_capacity",
 )
+PREFLIGHT_LOG_INTERVAL_SECONDS = 10.0
 
 
 def _parse_duration_seconds(duration_str: str) -> float:
@@ -2014,6 +2015,8 @@ class GatewayE2EStresser:
         attempt_number = 0
         last_reason = "endpoint_unavailable"
         last_message = "Preflight endpoints were unavailable"
+        last_logged_message: Optional[str] = None
+        next_log_at = 0.0
         while True:
             attempt_number += 1
             attempt: Dict[str, Any] = {
@@ -2055,6 +2058,11 @@ class GatewayE2EStresser:
                         "attempts": attempt_number,
                         "final": interpretation,
                     }
+                    if attempt_number > 1:
+                        self._logger.info(
+                            "Gateway preflight passed after %d attempts",
+                            attempt_number,
+                        )
                     return
             except asyncio.CancelledError:
                 raise
@@ -2068,7 +2076,8 @@ class GatewayE2EStresser:
                 }
 
             self._preflight_attempts.append(attempt)
-            remaining = deadline - time.monotonic()
+            now = time.monotonic()
+            remaining = deadline - now
             if remaining <= 0:
                 self._preflight_result = {
                     "enabled": True,
@@ -2078,6 +2087,15 @@ class GatewayE2EStresser:
                     "error": last_message,
                 }
                 raise PreflightError(last_reason, last_message)
+            if last_message != last_logged_message or now >= next_log_at:
+                self._logger.warning(
+                    "Gateway preflight waiting (attempt=%d, remaining=%.1fs): %s",
+                    attempt_number,
+                    remaining,
+                    last_message,
+                )
+                last_logged_message = last_message
+                next_log_at = now + PREFLIGHT_LOG_INTERVAL_SECONDS
             await asyncio.sleep(min(self.preflight_interval, remaining))
 
     async def _capture_post_drain_capacity(self) -> None:

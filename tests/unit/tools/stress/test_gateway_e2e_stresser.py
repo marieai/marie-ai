@@ -1586,6 +1586,45 @@ async def test_preflight_allows_queue_created_during_submission(
 
 
 @pytest.mark.asyncio
+async def test_preflight_reports_what_it_is_waiting_for(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stresser = make_gateway_correctness_stresser(
+        preflight_enabled=True,
+        preflight_deadline=0.2,
+        preflight_interval=0.001,
+    )
+    capacity_attempt = 0
+
+    async def fetch(path: str) -> tuple[int, dict[str, Any]]:
+        nonlocal capacity_attempt
+        if path == "/api/debug":
+            return 200, {"scheduler_info": {"known_queues": []}}
+        capacity_attempt += 1
+        capacity = 0 if capacity_attempt == 1 else 2
+        return 200, {
+            "slots": [
+                {
+                    "name": "mock-executor",
+                    "capacity": capacity,
+                    "available": capacity,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(stresser, "_fetch_gateway_json", fetch)
+
+    with caplog.at_level(logging.INFO, logger="GatewayE2EStresser"):
+        await stresser._run_preflight()
+
+    assert "Gateway preflight waiting (attempt=1" in caplog.text
+    assert "Required executors have zero configured capacity" in caplog.text
+    assert "mock-executor" in caplog.text
+    assert "Gateway preflight passed after 2 attempts" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_failed_preflight_never_starts_submission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

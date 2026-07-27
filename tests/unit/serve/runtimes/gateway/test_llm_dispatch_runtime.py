@@ -17,6 +17,8 @@ from marie.engine.llm_queue.scheduler_config import (
 )
 
 from marie.excepts import RuntimeFailToStart
+from marie.job.common import JobStatus
+from marie.job.event_publisher import EventPublisher
 from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (
     GatewayLlmDispatchRuntime,
     _build_dispatcher,
@@ -648,25 +650,26 @@ async def test_gateway_background_runtime_start_calls_llm_dispatch_runtime():
 @pytest.mark.asyncio
 async def test_gateway_background_shutdown_is_idempotent():
     class _AsyncStopper:
-        def __init__(self):
+        def __init__(self, name: str, calls: list[str]) -> None:
+            self.name = name
+            self.order = calls
             self.calls = 0
 
-        async def stop(self):
+        async def stop(self) -> None:
             self.calls += 1
+            self.order.append(self.name)
 
-    class _SyncStopper:
-        def __init__(self):
-            self.calls = 0
-
-        def shutdown(self):
+        async def shutdown(self) -> None:
             self.calls += 1
+            self.order.append(self.name)
 
+    order: list[str] = []
     gateway = object.__new__(MarieServerGateway)
     gateway.logger = _Logger()
-    gateway.job_scheduler = _AsyncStopper()
-    gateway.job_manager = _SyncStopper()
-    gateway.grpc_broker = _AsyncStopper()
-    gateway.llm_dispatch_runtime = _AsyncStopper()
+    gateway.job_scheduler = _AsyncStopper("scheduler", order)
+    gateway.job_manager = _AsyncStopper("job-manager", order)
+    gateway.grpc_broker = _AsyncStopper("broker", order)
+    gateway.llm_dispatch_runtime = _AsyncStopper("llm", order)
     gateway._background_services_shutdown = False
     gateway._background_services_lock = asyncio.Lock()
 
@@ -677,3 +680,56 @@ async def test_gateway_background_shutdown_is_idempotent():
     assert gateway.job_manager.calls == 1
     assert gateway.grpc_broker.calls == 1
     assert gateway.llm_dispatch_runtime.calls == 1
+    assert order == ["scheduler", "job-manager", "broker", "llm"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_shutdown_drains_pending_job_events_before_unsubscribe():
+    release = asyncio.Event()
+    received: list[int] = []
+    publisher = EventPublisher(
+        max_queue_size=4,
+        worker_count=1,
+        publish_blocking=True,
+        subscriber_timeout_s=0,
+    )
+
+    async def lifecycle_handler(_event_type: str, message: dict) -> None:
+        await release.wait()
+        received.append(message["sequence"])
+
+    publisher.subscribe(JobStatus.SUCCEEDED, lifecycle_handler)
+
+    class _JobManager:
+        async def shutdown(self) -> None:
+            await publisher.stop()
+
+    class _Scheduler:
+        async def stop(self) -> None:
+            await publisher.join()
+            publisher.unsubscribe(JobStatus.SUCCEEDED, lifecycle_handler)
+
+    class _Stopper:
+        async def stop(self) -> None:
+            return None
+
+    gateway = object.__new__(MarieServerGateway)
+    gateway.logger = _Logger()
+    gateway.job_manager = _JobManager()
+    gateway.job_scheduler = _Scheduler()
+    gateway.grpc_broker = None
+    gateway.llm_dispatch_runtime = _Stopper()
+    gateway._background_services_shutdown = False
+    gateway._background_services_lock = asyncio.Lock()
+
+    await publisher.publish(JobStatus.SUCCEEDED, {"job_id": "job-1", "sequence": 1})
+    await publisher.publish(JobStatus.SUCCEEDED, {"job_id": "job-1", "sequence": 2})
+    shutdown = asyncio.create_task(gateway._shutdown_background_services())
+    await asyncio.sleep(0)
+
+    assert not shutdown.done()
+
+    release.set()
+    await asyncio.wait_for(shutdown, timeout=1)
+
+    assert received == [1, 2]

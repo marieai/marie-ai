@@ -44,6 +44,8 @@ gateway:
 |--------|---------|-------------|
 | `queue_names` | Required | List of queue names to monitor |
 | `max_workers` | `5` | Number of scheduler polling workers |
+| `job_event_worker_count` | `8` | Keyed publisher workers; events for one job always use one worker |
+| `job_event_queue_size` | `1024` | Total bounded publisher capacity; job-event producers block when it is full |
 | `lease_ttl_seconds` | `5` | Job lease timeout |
 | `run_ttl_seconds` | `60` | Active job execution timeout |
 | `maintenance_interval` | `60` | Maintenance task frequency (seconds) |
@@ -209,6 +211,8 @@ gateway:
       database: ${POSTGRES_DB:-marie}
       queue_names: [extract]
       max_workers: 10
+      job_event_worker_count: 8
+      job_event_queue_size: 1024
       lease_ttl_seconds: 5
       run_ttl_seconds: 120
       dag_manager:

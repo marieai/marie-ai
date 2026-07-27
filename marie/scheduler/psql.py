@@ -54,7 +54,6 @@ from marie.scheduler.services import (
     MaintenanceService,
     NotificationService,
     SchedulerDiagnostics,
-    SchedulerJobEventProcessor,
     SchedulerRuntime,
 )
 from marie.scheduler.state import WorkState
@@ -239,19 +238,11 @@ class PostgreSQLJobScheduler(JobScheduler):
         self.logger.info(f"Queue names to monitor: {self.known_queues}")
 
         self.job_manager = job_manager
-        self.job_event_worker_count = scheduler_config.job_event_worker_count
         self.dispatch_confirmation_max_in_flight = (
             scheduler_config.dispatch_confirmation_max_in_flight
         )
         self._pending_dispatches: dict[str, asyncio.Task[None]] = {}
         self._attempt_audit_semaphore = asyncio.Semaphore(2)
-        self.job_event_processor = SchedulerJobEventProcessor(
-            handler=self._handle_job_event,
-            logger=self.logger,
-            worker_count=self.job_event_worker_count,
-            queue_size=scheduler_config.job_event_queue_size,
-        )
-        self._setup_event_subscriptions()
         self._db_pool = AsyncPostgresConnectionPool()
         self.repository = JobRepository(
             config,
@@ -479,28 +470,8 @@ class PostgreSQLJobScheduler(JobScheduler):
         counters[name] += 1
         scheduler_trace(name, count=counters[name], **fields)
 
-    async def handle_job_event(self, event_type: str, message: Any):
-        """Queue a job event while the scheduler is accepting work."""
-        if not self.running:
-            return
-
-        task = asyncio.current_task()
-        if task is not None:
-            self.runtime.track_event_task(task)
-        try:
-            await self.job_event_processor.enqueue(event_type, message)
-        finally:
-            if task is not None:
-                self.runtime.discard_event_task(task)
-
-    async def _handle_job_event(self, event_type: str, message: Any):
-        """
-        Handles a job event.
-
-        :param event_type: The type of the event.
-        :param message: The message associated with the event.
-        """
-
+    async def handle_job_event(self, event_type: str, message: Any) -> None:
+        """Apply a job event delivered by JobManager's keyed publisher."""
         self.logger.debug(f"received message: {event_type} > {message}")
 
         if not isinstance(message, dict) or "job_id" not in message:
@@ -508,94 +479,88 @@ class PostgreSQLJobScheduler(JobScheduler):
             return
 
         job_id = message.get("job_id")
-        try:
-            status = JobStatus(event_type)
-            scheduler_trace(
-                "scheduler_job_event_received",
-                job_id=job_id,
-                status=status.value,
+        status = JobStatus(event_type)
+        scheduler_trace(
+            "scheduler_job_event_received",
+            job_id=job_id,
+            status=status.value,
+        )
+        work_item: Optional[WorkInfo] = await self.get_job(job_id)
+
+        if work_item is None:
+            raise ValueError(f"WorkItem not found: {job_id}")
+
+        run_owner = message.get("run_owner")
+        run_attempt_id = message.get("run_attempt_id")
+
+        if status == JobStatus.PENDING:
+            self.logger.debug(f"Job pending : {job_id}")
+        elif status.is_terminal():
+            replace_kwargs = message.get("jobinfo_replace_kwargs")
+            runtime_env = (
+                replace_kwargs.get("runtime_env")
+                if isinstance(replace_kwargs, dict)
+                else None
             )
-            work_item: Optional[WorkInfo] = await self.get_job(job_id)
-
-            if work_item is None:
-                self.logger.error(f"WorkItem not found: {job_id}")
-                raise ValueError(f"WorkItem not found: {job_id}")
-
-            run_owner = message.get("run_owner")
-            run_attempt_id = message.get("run_attempt_id")
-
-            if status == JobStatus.PENDING:
-                self.logger.debug(f"Job pending : {job_id}")
-            elif status.is_terminal():
-                replace_kwargs = message.get("jobinfo_replace_kwargs")
-                runtime_env = (
-                    replace_kwargs.get("runtime_env")
-                    if isinstance(replace_kwargs, dict)
-                    else None
+            await self.attempt_lifecycle_service.transition_terminal(
+                job_id,
+                work_item,
+                status,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                source="job_event",
+                message=message.get("message"),
+                runtime_env=runtime_env,
+            )
+        elif status == JobStatus.RUNNING:
+            if not run_owner or not run_attempt_id:
+                scheduler_trace(
+                    "run_lease_extend_rejected",
+                    job_id=job_id,
+                    dag_id=work_item.dag_id,
+                    status=status.value,
+                    reason="missing_attempt",
+                    **self._ha_trace_fields(),
                 )
-                await self.attempt_lifecycle_service.transition_terminal(
-                    job_id,
-                    work_item,
-                    status,
+                self.logger.warning(
+                    f"Ignoring running job event without run attempt: job_id={job_id}"
+                )
+                return
+
+            extended = await self._extend_run_lease_db(
+                [job_id], run_owner=run_owner, run_attempt_id=run_attempt_id
+            )
+            if job_id not in extended:
+                scheduler_trace(
+                    "run_lease_extend_rejected",
+                    job_id=job_id,
+                    dag_id=work_item.dag_id,
+                    status=status.value,
+                    run_owner=run_owner,
+                    run_attempt_id=run_attempt_id,
+                    reason="db_update_zero_rows",
+                    **self._ha_trace_fields(),
+                )
+                self._scheduler_counter(
+                    RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL,
+                    job_id=job_id,
+                    dag_id=work_item.dag_id,
+                    status=status.value,
                     run_owner=run_owner,
                     run_attempt_id=run_attempt_id,
                     source="job_event",
-                    message=message.get("message"),
-                    runtime_env=runtime_env,
                 )
-            elif status == JobStatus.RUNNING:
-                if not run_owner or not run_attempt_id:
-                    scheduler_trace(
-                        "run_lease_extend_rejected",
-                        job_id=job_id,
-                        dag_id=work_item.dag_id,
-                        status=status.value,
-                        reason="missing_attempt",
-                        **self._ha_trace_fields(),
-                    )
-                    self.logger.warning(
-                        f"Ignoring running job event without run attempt: job_id={job_id}"
-                    )
-                    return
+                return
 
-                extended = await self._extend_run_lease_db(
-                    [job_id], run_owner=run_owner, run_attempt_id=run_attempt_id
-                )
-                if job_id not in extended:
-                    scheduler_trace(
-                        "run_lease_extend_rejected",
-                        job_id=job_id,
-                        dag_id=work_item.dag_id,
-                        status=status.value,
-                        run_owner=run_owner,
-                        run_attempt_id=run_attempt_id,
-                        reason="db_update_zero_rows",
-                        **self._ha_trace_fields(),
-                    )
-                    self._scheduler_counter(
-                        RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL,
-                        job_id=job_id,
-                        dag_id=work_item.dag_id,
-                        status=status.value,
-                        run_owner=run_owner,
-                        run_attempt_id=run_attempt_id,
-                        source="job_event",
-                    )
-                    return
-
-                work_state = convert_job_status_to_work_state(status)
-                work_item.state = work_state
-                work_item.run_owner = run_owner
-                work_item.run_attempt_id = run_attempt_id
-                self._job_cache[job_id] = work_item
-                await self.frontier.update_job_state(job_id, work_state)
-                self.logger.debug(f"Job running : {job_id}")
-            else:
-                self.logger.error(f"Unhandled job status: {status}")
-        except Exception as e:
-            self.logger.error(
-                f"Error handling job event {event_type} for job {job_id}: {e}"
-            )
+            work_state = convert_job_status_to_work_state(status)
+            work_item.state = work_state
+            work_item.run_owner = run_owner
+            work_item.run_attempt_id = run_attempt_id
+            self._job_cache[job_id] = work_item
+            await self.frontier.update_job_state(job_id, work_state)
+            self.logger.debug(f"Job running : {job_id}")
+        else:
+            self.logger.error(f"Unhandled job status: {status}")
 
     async def _reconcile_control_flow_lease_miss(
         self, wi: WorkInfo, db_wi: WorkInfo | None
@@ -858,9 +823,9 @@ class PostgreSQLJobScheduler(JobScheduler):
                 return
             if self._resources_closed:
                 await self._reopen_runtime_resources()
-            self._setup_event_subscriptions()
             try:
                 await self._start_locked()
+                self._setup_event_subscriptions()
             except BaseException:
                 try:
                     await self._stop_locked(timeout=2.0)
@@ -927,11 +892,6 @@ class PostgreSQLJobScheduler(JobScheduler):
         if self.priority_refresh_enabled:
             self._priority_refresh_event.clear()
         self.running = True
-        for worker_id in range(self.job_event_worker_count):
-            self.runtime.create_task(
-                self.job_event_processor.run_worker(worker_id),
-                name=f"scheduler-job-event-{worker_id}",
-            )
         if self.priority_refresh_enabled:
             self.runtime.create_task(
                 self._priority_refresh_loop(),
@@ -1894,8 +1854,9 @@ class PostgreSQLJobScheduler(JobScheduler):
     async def _stop_locked(self, timeout: float) -> None:
         self.logger.info("Stopping job scheduling agent")
         self.running = False
-        self._remove_event_subscriptions()
         await self._drain_pending_dispatches(timeout)
+        await self.job_manager.event_publisher.join()
+        self._remove_event_subscriptions()
         await self.runtime.stop(
             {
                 'scheduler-notification-stop': self.notification_service.stop(),
@@ -1906,13 +1867,6 @@ class PostgreSQLJobScheduler(JobScheduler):
             timeout=timeout,
         )
         self.submission_service.abort_pending()
-        aborted_job_events = self.job_event_processor.abort_pending()
-        if aborted_job_events:
-            self.logger.warning(
-                'Discarded %s queued job event(s) during scheduler shutdown; '
-                'durable state reconciliation will recover them',
-                aborted_job_events,
-            )
 
         await self._close_runtime_resources()
 

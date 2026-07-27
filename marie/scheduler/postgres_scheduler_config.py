@@ -46,6 +46,7 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         'sla_warning_top_n',
         'submission_queue_size',
         'username',
+        "default_table",  # always injected via the <<: *psql_conf_shared
     }
 )
 

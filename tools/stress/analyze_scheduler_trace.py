@@ -195,7 +195,8 @@ REPORT_LATENCIES = (
     ),
     ("status-read->event-enqueue", "status_read_to_event_enqueue"),
     ("event-bus-queue", "event_queue_wait"),
-    ("event-bus->scheduler-queue", "event_dequeue_to_scheduler_enqueue"),
+    ("event->durable-terminal", "event_to_durable_terminal"),
+    ("event-bus->scheduler-handler", "event_dequeue_to_scheduler_enqueue"),
     ("scheduler-event-queue", "scheduler_event_queue_wait"),
     ("scheduler-dequeue->handler", "scheduler_event_dequeue_to_handler"),
     (
@@ -755,6 +756,10 @@ def summarize_job(
             _row_time(status_event_enqueued),
             _row_time(status_event_dequeued),
         ),
+        "event_to_durable_terminal": _milliseconds(
+            _row_time(status_event_enqueued),
+            _row_time(accepted_terminal_row),
+        ),
         "event_dequeue_to_scheduler_enqueue": _milliseconds(
             _row_time(status_event_dequeued),
             _row_time(scheduler_event_enqueued or scheduler_event_received),
@@ -764,7 +769,7 @@ def summarize_job(
             _row_time(scheduler_event_dequeued),
         ),
         "scheduler_event_dequeue_to_handler": _milliseconds(
-            _row_time(scheduler_event_dequeued),
+            _row_time(scheduler_event_dequeued or status_event_dequeued),
             _row_time(scheduler_event_received),
         ),
         "scheduler_handler_to_terminal": _milliseconds(
@@ -1568,13 +1573,23 @@ def _print_trace_coverage(rows: list[dict[str, Any]]) -> None:
         f"dispatched={event_bus.get('job_status_event_dispatch_completed', 0)} "
         f"dropped={event_bus.get('job_status_event_dropped', 0)}"
     )
-    print(
-        "scheduler event processor: "
-        f"enqueued={events.get('scheduler_job_event_enqueued', 0)} "
-        f"dequeued={events.get('scheduler_job_event_dequeued', 0)} "
-        f"processed={events.get('scheduler_job_event_processed', 0)} "
-        f"failed={events.get('scheduler_job_event_failed', 0)}"
+    legacy_scheduler_events = sum(
+        events.get(event, 0)
+        for event in (
+            "scheduler_job_event_enqueued",
+            "scheduler_job_event_dequeued",
+            "scheduler_job_event_processed",
+            "scheduler_job_event_failed",
+        )
     )
+    if legacy_scheduler_events:
+        print(
+            "legacy scheduler event processor: "
+            f"enqueued={events.get('scheduler_job_event_enqueued', 0)} "
+            f"dequeued={events.get('scheduler_job_event_dequeued', 0)} "
+            f"processed={events.get('scheduler_job_event_processed', 0)} "
+            f"failed={events.get('scheduler_job_event_failed', 0)}"
+        )
     print(
         "executor: "
         f"received={events.get('executor_request_received', 0)} "
@@ -1626,8 +1641,9 @@ def _print_terminal_handoff_report(
         ),
         ("status read to event enqueue", "status_read_to_event_enqueue"),
         ("status event-bus queue wait", "event_queue_wait"),
+        ("status event to durable terminal", "event_to_durable_terminal"),
         (
-            "event-bus dequeue to scheduler enqueue",
+            "event-bus dequeue to scheduler handler",
             "event_dequeue_to_scheduler_enqueue",
         ),
         (
@@ -2462,6 +2478,7 @@ def main() -> int:
             "supervisor_send_complete_to_status_read",
             "status_read_to_event_enqueue",
             "event_queue_wait",
+            "event_to_durable_terminal",
             "event_dequeue_to_scheduler_enqueue",
             "scheduler_event_queue_wait",
             "scheduler_event_dequeue_to_handler",

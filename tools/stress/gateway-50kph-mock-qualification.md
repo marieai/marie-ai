@@ -122,7 +122,7 @@ cd ~/dev/marieai/marie-ai
 : "${GATEWAY_API_KEY:?Export GATEWAY_API_KEY first}"
 
 MARIE_STRESS_RUN_ID="scheduler-50kph-$(date -u +%Y%m%dT%H%M%SZ)"
-MARIE_STRESS_REPORT_DIR="~/tmp/${MARIE_STRESS_RUN_ID}"
+MARIE_STRESS_REPORT_DIR="${HOME}/tmp/${MARIE_STRESS_RUN_ID}"
 
 mkdir -p "${MARIE_STRESS_REPORT_DIR}"
 
@@ -152,6 +152,7 @@ mkdir -p "${MARIE_STRESS_REPORT_DIR}"
   --min-soft-sla-compliance-pct 95 \
   --min-hard-sla-compliance-pct 99 \
   --preflight-deadline 120 \
+  --preflight-interval 1 \
   --terminal-timeout 3600 \
   --min-submission-acceptance-pct 100 \
   --min-terminal-completion-pct 100 \
@@ -181,6 +182,10 @@ can continue after the submission window while it drains accepted work and runs
 the PostgreSQL correctness verifier. `--terminal-timeout 3600` permits up to one
 additional hour for that drain; needing a material drain period is itself a
 throughput failure even when every DAG eventually completes.
+
+During preflight, the stresser prints the first unmet readiness condition,
+prints again immediately if the condition changes, and repeats an unchanged
+condition at most once every 10 seconds until the deadline.
 
 ## Monitor the Trial
 

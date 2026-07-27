@@ -530,6 +530,12 @@ class MarieServerGateway(CompositeServer):
             desired_state_max_pending=int(
                 job_scheduler_kwargs.get("desired_state_max_pending", 128)
             ),
+            job_event_worker_count=int(
+                job_scheduler_kwargs.get("job_event_worker_count", 8)
+            ),
+            job_event_queue_size=int(
+                job_scheduler_kwargs.get("job_event_queue_size", 1024)
+            ),
         )
         self.job_scheduler = PostgreSQLJobScheduler(
             config=job_scheduler_kwargs,
@@ -1676,7 +1682,10 @@ class MarieServerGateway(CompositeServer):
             except Exception as exc:
                 self.logger.error("Failed stopping job scheduler: %s", exc)
 
-            self.job_manager.shutdown()
+            try:
+                await self.job_manager.shutdown()
+            except Exception as exc:
+                self.logger.error("Failed stopping job manager: %s", exc)
 
             if self.grpc_broker:
                 try:

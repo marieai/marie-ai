@@ -37,6 +37,7 @@ def build_scheduler(
 ) -> PostgreSQLJobScheduler:
     scheduler = object.__new__(PostgreSQLJobScheduler)
     scheduler.logger = MagicMock()
+    scheduler.running = True
     scheduler.get_job = AsyncMock(return_value=work_item)
     scheduler.repository = SimpleNamespace(
         get_job_by_id=AsyncMock(return_value=work_item),
@@ -78,7 +79,7 @@ async def test_stopped_event_requires_attempt_identity() -> None:
     work_item = build_work_item()
     scheduler = build_scheduler(work_item, {JOB_ID})
 
-    await scheduler._handle_job_event(JobStatus.STOPPED.value, {"job_id": JOB_ID})
+    await scheduler.handle_job_event(JobStatus.STOPPED.value, {"job_id": JOB_ID})
 
     scheduler.repository.cancel_job_attempt.assert_not_awaited()
     assert work_item.state == WorkState.ACTIVE
@@ -97,7 +98,7 @@ async def test_job_event_trace_records_scheduler_handler_entry(monkeypatch) -> N
         lambda event, **fields: events.append((event, fields)),
     )
 
-    await scheduler._handle_job_event(JobStatus.STOPPED.value, {"job_id": JOB_ID})
+    await scheduler.handle_job_event(JobStatus.STOPPED.value, {"job_id": JOB_ID})
 
     assert events[0] == (
         "scheduler_job_event_received",
@@ -110,7 +111,7 @@ async def test_stale_stopped_event_does_not_cancel_current_attempt() -> None:
     work_item = build_work_item()
     scheduler = build_scheduler(work_item, set())
 
-    await scheduler._handle_job_event(
+    await scheduler.handle_job_event(
         JobStatus.STOPPED.value,
         {
             "job_id": JOB_ID,
@@ -144,7 +145,7 @@ async def test_current_stopped_event_cancels_after_committed_match() -> None:
     work_item = build_work_item()
     scheduler = build_scheduler(work_item, {JOB_ID})
 
-    await scheduler._handle_job_event(
+    await scheduler.handle_job_event(
         JobStatus.STOPPED.value,
         {
             "job_id": JOB_ID,
@@ -172,20 +173,20 @@ async def test_stopped_event_database_failure_leaves_memory_unchanged() -> None:
     scheduler = build_scheduler(work_item, set())
     scheduler.repository.cancel_job_attempt.side_effect = RuntimeError("database down")
 
-    await scheduler._handle_job_event(
-        JobStatus.STOPPED.value,
-        {
-            "job_id": JOB_ID,
-            "run_owner": "owner-b",
-            "run_attempt_id": ATTEMPT_B,
-        },
-    )
+    with pytest.raises(RuntimeError, match="database down"):
+        await scheduler.handle_job_event(
+            JobStatus.STOPPED.value,
+            {
+                "job_id": JOB_ID,
+                "run_owner": "owner-b",
+                "run_attempt_id": ATTEMPT_B,
+            },
+        )
 
     assert work_item.state == WorkState.ACTIVE
     assert scheduler._job_cache == {}
     scheduler.frontier.on_job_cancelled.assert_not_awaited()
     scheduler.dag_service.resolve_dag_status_with_retry.assert_not_awaited()
-    scheduler.logger.error.assert_called_once()
 
 
 @pytest.mark.asyncio

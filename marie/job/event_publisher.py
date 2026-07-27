@@ -60,6 +60,11 @@ class EventPublisher:
         self.queue_capacity = max_queue_size
         self._worker_tasks: list[asyncio.Task] = []
         self._stopped = asyncio.Event()
+        self._accepting = True
+        self._active_publishes = 0
+        self._publishes_done = asyncio.Event()
+        self._publishes_done.set()
+        self._stop_lock = asyncio.Lock()
         self._dequeue_times: deque[float] = deque()
 
         self._subscriber_timeout_s = max(0.0, float(subscriber_timeout_s))
@@ -80,6 +85,14 @@ class EventPublisher:
     @property
     def queue_sizes(self) -> tuple[int, ...]:
         return tuple(queue.qsize() for queue in self._queues)
+
+    @property
+    def publish_blocking(self) -> bool:
+        return self._publish_blocking
+
+    @property
+    def subscriber_timeout_s(self) -> float:
+        return self._subscriber_timeout_s
 
     async def join(self) -> None:
         await asyncio.gather(*(queue.join() for queue in self._queues))
@@ -110,74 +123,88 @@ class EventPublisher:
         :param message: Payload.
         :param timeout_s: Optional max time to wait for a queue slot when publish_blocking=True.
         """
-        publish_started = time.perf_counter()
-        enqueued_at = time.perf_counter()
-        job_id = message.get("job_id") if isinstance(message, dict) else None
-        trace_fields = {
-            "job_id": job_id,
-            "status": str(event_type),
-            "subscriber_count": len(self._subscribers.get(event_type, [])),
-        }
-        trace_job_event = isinstance(job_id, str) and bool(job_id)
-        worker_id = self._worker_for(job_id, event_type)
-        queue = self._queues[worker_id]
+        if not self._accepting:
+            raise RuntimeError("EventPublisher is stopped")
 
-        if self._publish_blocking:
-            if timeout_s is None:
-                await queue.put((event_type, message, enqueued_at))
+        self._active_publishes += 1
+        self._publishes_done.clear()
+        try:
+            publish_started = time.perf_counter()
+            enqueued_at = time.perf_counter()
+            job_id = message.get("job_id") if isinstance(message, dict) else None
+            trace_fields = {
+                "job_id": job_id,
+                "status": str(event_type),
+                "subscriber_count": len(self._subscribers.get(event_type, [])),
+            }
+            trace_job_event = isinstance(job_id, str) and bool(job_id)
+            worker_id = self._worker_for(job_id, event_type)
+            queue = self._queues[worker_id]
+            queued_message = dict(message) if isinstance(message, dict) else message
+
+            if self._publish_blocking:
+                if timeout_s is None:
+                    await queue.put((event_type, queued_message, enqueued_at))
+                else:
+                    try:
+                        await asyncio.wait_for(
+                            queue.put((event_type, queued_message, enqueued_at)),
+                            timeout=timeout_s,
+                        )
+                    except asyncio.TimeoutError:
+                        if trace_job_event:
+                            scheduler_trace(
+                                "job_status_event_dropped",
+                                **trace_fields,
+                                reason="publish_timeout",
+                                worker_id=worker_id,
+                                worker_queue_size=queue.qsize(),
+                                queue_size=self.queue_size,
+                                queue_capacity=self.queue_capacity,
+                                elapsed_ms=(time.perf_counter() - publish_started)
+                                * 1000.0,
+                            )
+                        logger.error(
+                            f"EventPublisher: publish timeout for event '{event_type}'"
+                        )
+                        return
             else:
                 try:
-                    await asyncio.wait_for(
-                        queue.put((event_type, message, enqueued_at)),
-                        timeout=timeout_s,
-                    )
-                except asyncio.TimeoutError:
+                    queue.put_nowait((event_type, queued_message, enqueued_at))
+                except asyncio.QueueFull:
                     if trace_job_event:
                         scheduler_trace(
                             "job_status_event_dropped",
                             **trace_fields,
-                            reason="publish_timeout",
+                            reason="queue_full",
                             worker_id=worker_id,
                             worker_queue_size=queue.qsize(),
                             queue_size=self.queue_size,
                             queue_capacity=self.queue_capacity,
                             elapsed_ms=(time.perf_counter() - publish_started) * 1000.0,
                         )
-                    logger.error(
-                        f"EventPublisher: publish timeout for event '{event_type}'"
-                    )
                     return
-        else:
-            try:
-                queue.put_nowait((event_type, message, enqueued_at))
-            except asyncio.QueueFull:
-                if trace_job_event:
-                    scheduler_trace(
-                        "job_status_event_dropped",
-                        **trace_fields,
-                        reason="queue_full",
-                        worker_id=worker_id,
-                        worker_queue_size=queue.qsize(),
-                        queue_size=self.queue_size,
-                        queue_capacity=self.queue_capacity,
-                        elapsed_ms=(time.perf_counter() - publish_started) * 1000.0,
-                    )
-                return
 
-        if trace_job_event:
-            scheduler_trace(
-                "job_status_event_enqueued",
-                **trace_fields,
-                worker_id=worker_id,
-                worker_queue_size=queue.qsize(),
-                queue_size=self.queue_size,
-                queue_capacity=self.queue_capacity,
-                elapsed_ms=(time.perf_counter() - publish_started) * 1000.0,
-            )
+            if trace_job_event:
+                scheduler_trace(
+                    "job_status_event_enqueued",
+                    **trace_fields,
+                    worker_id=worker_id,
+                    worker_queue_size=queue.qsize(),
+                    queue_size=self.queue_size,
+                    queue_capacity=self.queue_capacity,
+                    elapsed_ms=(time.perf_counter() - publish_started) * 1000.0,
+                )
 
-        queue_size = self.queue_size
-        if self._warn_qsize_threshold and queue_size >= self._warn_qsize_threshold:
-            logger.warning(f"EventPublisher queue high-water mark: size={queue_size}")
+            queue_size = self.queue_size
+            if self._warn_qsize_threshold and queue_size >= self._warn_qsize_threshold:
+                logger.warning(
+                    f"EventPublisher queue high-water mark: size={queue_size}"
+                )
+        finally:
+            self._active_publishes -= 1
+            if self._active_publishes == 0:
+                self._publishes_done.set()
 
     async def _worker(self, worker_id: int) -> None:
         loop = asyncio.get_running_loop()
@@ -237,10 +264,16 @@ class EventPublisher:
                         for r in results:
                             if isinstance(r, asyncio.TimeoutError):
                                 timeout_count += 1
-                                logger.warning("EventPublisher: subscriber timed out")
+                                logger.warning(
+                                    "EventPublisher: subscriber timed out for "
+                                    f"event '{event_type}', job_id={job_id}"
+                                )
                             elif isinstance(r, Exception):
                                 error_count += 1
-                                logger.error(f"EventPublisher: subscriber error: {r}")
+                                logger.error(
+                                    "EventPublisher: subscriber error for "
+                                    f"event '{event_type}', job_id={job_id}: {r}"
+                                )
 
                 subscriber_delivery_ms = (
                     time.perf_counter() - delivery_started
@@ -280,6 +313,8 @@ class EventPublisher:
     def start(self) -> None:
         if self._worker_tasks:
             return
+        if self._stopped.is_set():
+            raise RuntimeError("EventPublisher cannot restart after stop")
         self._worker_tasks = [
             asyncio.create_task(
                 self._worker(worker_id), name=f"event-publisher-{worker_id}"
@@ -288,14 +323,19 @@ class EventPublisher:
         ]
 
     async def stop(self) -> None:
-        """
-        Stop publisher workers. Pending events are not drained.
-        """
-        self._stopped.set()
-        for task in self._worker_tasks:
-            task.cancel()
-        if self._worker_tasks:
-            await asyncio.gather(*self._worker_tasks, return_exceptions=True)
-            self._worker_tasks.clear()
+        """Stop accepting events, drain queued work, and stop publisher workers."""
+        async with self._stop_lock:
+            if self._stopped.is_set():
+                return
 
-        self._executor.shutdown(wait=False)
+            self._accepting = False
+            await self._publishes_done.wait()
+            await self.join()
+            self._stopped.set()
+            for task in self._worker_tasks:
+                task.cancel()
+            if self._worker_tasks:
+                await asyncio.gather(*self._worker_tasks, return_exceptions=True)
+                self._worker_tasks.clear()
+
+            self._executor.shutdown(wait=False)

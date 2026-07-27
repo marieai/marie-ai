@@ -5,6 +5,7 @@ from tools.stress.analyze_scheduler_trace import (
     _max_observed_free_slots,
     _print_dispatch_efficiency_report,
     _print_findings,
+    _print_latency_report,
     _print_priority_refresh_report,
     _print_terminal_feedback_report,
     _print_terminal_handoff_report,
@@ -406,6 +407,7 @@ def test_terminal_handoff_uses_gateway_process_and_terminal_status(capsys) -> No
     assert round(summary["supervisor_send_complete_to_status_read"]) == 10
     assert round(summary["status_read_to_event_enqueue"]) == 10
     assert round(summary["event_queue_wait"]) == 100
+    assert round(summary["event_to_durable_terminal"]) == 280
     assert round(summary["event_dequeue_to_scheduler_enqueue"]) == 10
     assert round(summary["scheduler_event_queue_wait"]) == 70
     assert round(summary["scheduler_event_dequeue_to_handler"]) == 10
@@ -422,6 +424,78 @@ def test_terminal_handoff_uses_gateway_process_and_terminal_status(capsys) -> No
     assert "status publisher dequeue rate per second: count=1" in output
     assert "status publisher subscriber delivery: count=1" in output
     assert "configured monitor poll sleep: count=1" in output
+
+
+def test_consolidated_event_path_reports_queue_handler_and_durable_latency() -> None:
+    rows = [
+        trace_row(
+            "job_status_event_enqueued",
+            1.0,
+            job_id="job-1",
+            pid=11,
+            status="SUCCEEDED",
+        ),
+        trace_row(
+            "job_status_event_dequeued",
+            1.1,
+            job_id="job-1",
+            pid=11,
+            status="SUCCEEDED",
+        ),
+        trace_row(
+            "scheduler_job_event_received",
+            1.11,
+            job_id="job-1",
+            pid=11,
+            status="SUCCEEDED",
+        ),
+        trace_row(
+            "job_terminal_attempt_accepted",
+            1.3,
+            job_id="job-1",
+            pid=11,
+            status="SUCCEEDED",
+        ),
+        trace_row(
+            "job_status_event_dispatch_completed",
+            1.35,
+            job_id="job-1",
+            pid=11,
+            status="SUCCEEDED",
+        ),
+    ]
+
+    summary = summarize_job("job-1", rows, {})
+
+    assert round(summary["event_queue_wait"]) == 100
+    assert round(summary["event_dequeue_to_scheduler_enqueue"]) == 10
+    assert summary["scheduler_event_queue_wait"] is None
+    assert round(summary["scheduler_event_dequeue_to_handler"]) == 10
+    assert round(summary["event_to_durable_terminal"]) == 300
+    assert round(summary["scheduler_handler_to_terminal"]) == 190
+    assert round(summary["terminal_to_scheduler_event_processed"]) == 50
+
+
+def test_event_to_durable_terminal_report_includes_tail_percentiles(capsys) -> None:
+    summaries = [{"event_to_durable_terminal": float(value)} for value in range(1, 101)]
+
+    _print_latency_report(summaries)
+
+    row = next(
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("event->durable-terminal ")
+    )
+    assert row.split() == [
+        "event->durable-terminal",
+        "100",
+        "50.5ms",
+        "51.0ms",
+        "90.0ms",
+        "95.0ms",
+        "99.0ms",
+        "100.0ms",
+    ]
 
 
 def test_terminal_handoff_omits_executor_latency_without_executor_events(

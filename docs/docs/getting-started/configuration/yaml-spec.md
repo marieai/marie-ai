@@ -214,6 +214,8 @@ gateway:
   with:
     job_scheduler_kwargs:
       max_workers: 10
+      job_event_worker_count: 8
+      job_event_queue_size: 1024
       lease_ttl_seconds: 5
       run_ttl_seconds: 120
       dag_manager:

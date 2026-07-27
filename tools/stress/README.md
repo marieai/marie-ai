@@ -50,7 +50,7 @@ Probe the exact address from the gateway error for five minutes:
 ```bash
 .venv/bin/python tools/stress/verify_executor_connectivity.py \
   --deployment corr_indexing_executor \
-  --address 172.20.10.49:53267 \
+  --address 127.0.0.1:53267 \
   --count 300 \
   --interval 1 \
   --timeout 2 \
@@ -77,7 +77,7 @@ registration before and after the probe:
 ```bash
 .venv/bin/python tools/stress/verify_executor_connectivity.py \
   --deployment corr_indexing_executor \
-  --address 172.20.10.49:53267 \
+  --address 127.0.0.1:53267 \
   --discovery-host "${ETCD_HOST}" \
   --discovery-port 2379 \
   --discovery-namespace marie \
@@ -123,7 +123,7 @@ Use an existing test asset and executor parameters:
 
 ```bash
 .venv/bin/python tools/stress/stress_executor_data_plane.py \
-  --address 172.20.10.49:53267 \
+  --address 127.0.0.1:53267 \
   --deployment corr_indexing_executor \
   --endpoint /document/index \
   --asset-key s3://marie/stress/sample.tif \
