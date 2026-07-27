@@ -20,11 +20,15 @@ SELECT
     WHEN dep.depends_on_id IS NULL THEN false
     WHEN d2.state IS NULL OR d2.state <> 'completed' THEN true
     ELSE false
-  END AS is_blocked
+  END AS is_blocked,
+
+  dep.depends_on_name
 
 FROM marie_scheduler.job j
 LEFT JOIN marie_scheduler.job_dependencies dep
-  ON dep.job_id = j.id
+  ON dep.job_name = j.name
+ AND dep.job_id = j.id
 LEFT JOIN marie_scheduler.job d2
-  ON d2.id = dep.depends_on_id
+  ON d2.name = dep.depends_on_name
+ AND d2.id = dep.depends_on_id
 ORDER BY j.dag_id, j.job_level, j.id;

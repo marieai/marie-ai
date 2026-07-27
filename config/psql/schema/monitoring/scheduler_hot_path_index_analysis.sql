@@ -4,7 +4,6 @@
 SELECT jobid, jobname, schedule, command, active
 FROM cron.job
 WHERE jobname IN (
-    'refresh_job_priority',
     'refresh_job_durations',
     'refresh_dag_durations'
 )

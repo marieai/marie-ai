@@ -5,7 +5,7 @@
 -- pgAdmin, or psql. The setting is transaction-local and leaves no database
 -- objects or session configuration behind.
 
-BEGIN;
+BEGIN TRANSACTION READ ONLY;
 SET LOCAL marie_monitor.job_id = '00000000-0000-0000-0000-000000000000';
 
 -- Current scheduler and worker-KV state.

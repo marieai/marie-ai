@@ -1,12 +1,19 @@
 -- =========================================================
 -- Marie Scheduler - Monitoring & Analytics Queries
 -- =========================================================
+-- Select and run one bounded query at a time. Do not execute this complete
+-- catalog as a recurring production workload.
+--
 -- These queries use the generated slot columns to analyze
 -- job patterns, capacity needs, SLA compliance, and load distribution.
 --
 -- Prerequisites:
---   - slots_columns.sql has been executed
+--   - config/psql/schema/040_slots_columns.sql has been applied
 --   - Job table has the generated slot/day columns
+--
+-- These are creation-time cohort and SLA analytics. They do not measure
+-- completion throughput or historical concurrency. Use throughput_analysis.sql
+-- for hourly query-plan and task throughput.
 --
 -- IMPORTANT: All data is stored in UTC timezone.
 -- All slot calculations (slot_idx15_*, day_local_*) use UTC.
@@ -32,10 +39,12 @@ SELECT
     COUNT(*) AS total_jobs,
     COUNT(*) FILTER (WHERE state = 'completed') AS completed_jobs,
     COUNT(*) FILTER (WHERE state = 'failed') AS failed_jobs,
-    COUNT(*) FILTER (WHERE state IN ('created', 'active')) AS active_jobs,
+    COUNT(*) FILTER (
+        WHERE state IN ('created', 'retry', 'active')
+    ) AS outstanding_jobs,
     ROUND(100.0 * COUNT(*) FILTER (WHERE state = 'completed') / NULLIF(COUNT(*), 0), 1) AS completion_rate_pct
 FROM marie_scheduler.job
-WHERE day_local_created >= CURRENT_DATE - INTERVAL '7 days'
+WHERE day_local_created >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 7
   AND slot_idx15_created IS NOT NULL
 GROUP BY slot_idx15_created
 ORDER BY slot_idx15_created;
@@ -61,14 +70,14 @@ SELECT
     LPAD(((slot_idx15_created % 4) * 15)::text, 2, '0') AS time_label,
     COUNT(*) AS job_count
 FROM marie_scheduler.job
-WHERE day_local_created >= CURRENT_DATE - INTERVAL '30 days'
+WHERE day_local_created >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 30
   AND slot_idx15_created IS NOT NULL
 GROUP BY day_of_week, day_name, slot_idx15_created
 ORDER BY day_of_week, slot_idx15_created;
 
 
--- 1.3 Hourly Aggregation: Simplified View
--- Purpose: Hourly buckets for simpler visualizations
+-- 1.3 Creation-Hour Cohort: Simplified View
+-- Purpose: Group retained jobs by UTC hour of creation, not completion time
 -- Output: 24 rows (one per hour)
 -- =========================================================
 SELECT
@@ -79,7 +88,7 @@ SELECT
     COUNT(*) FILTER (WHERE state = 'completed') AS completed_count,
     COUNT(*) FILTER (WHERE state = 'failed') AS failed_count
 FROM marie_scheduler.job
-WHERE day_local_created >= CURRENT_DATE - INTERVAL '7 days'
+WHERE day_local_created >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 7
   AND slot_idx15_created IS NOT NULL
 GROUP BY hour
 ORDER BY hour;
@@ -94,10 +103,15 @@ SELECT
     LPAD((slot_idx15_soft / 4)::text, 2, '0') || ':' ||
     LPAD(((slot_idx15_soft % 4) * 15)::text, 2, '0') AS soft_sla_time,
     COUNT(*) AS jobs_with_soft_sla,
-    COUNT(*) FILTER (WHERE now() > soft_sla) AS soft_sla_missed,
-    COUNT(*) FILTER (WHERE state != 'completed' AND now() > soft_sla) AS soft_overdue_pending
+    COUNT(*) FILTER (
+        WHERE completed_on IS NOT NULL AND completed_on > soft_sla
+    ) AS soft_sla_missed,
+    COUNT(*) FILTER (
+        WHERE state IN ('created', 'retry', 'active')
+          AND now() > soft_sla
+    ) AS soft_overdue_pending
 FROM marie_scheduler.job
-WHERE day_local_soft >= CURRENT_DATE - INTERVAL '7 days'
+WHERE day_local_soft >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 7
   AND soft_sla IS NOT NULL
   AND slot_idx15_soft IS NOT NULL
 GROUP BY slot_idx15_soft
@@ -108,11 +122,11 @@ ORDER BY slot_idx15_soft;
 -- 2. CAPACITY PLANNING: Resource Allocation by Time Slot
 -- =========================================================
 
--- 2.1 Peak Load Analysis: Jobs Active by Time Slot
--- Purpose: Identify when system is under most load
--- Output: Time slots ranked by concurrent active jobs
+-- 2.1 Current Workload by Effective Time Slot
+-- Purpose: Group current job states by their effective SLA/creation slot
+-- Output: Current-state cohorts, not historical concurrency
 -- =========================================================
-WITH active_jobs_by_slot AS (
+WITH workload_by_slot AS (
     SELECT
         slot_idx15_effective,
         LPAD((slot_idx15_effective / 4)::text, 2, '0') || ':' ||
@@ -122,8 +136,9 @@ WITH active_jobs_by_slot AS (
         COUNT(*) AS total_workload,
         ROUND(AVG(priority), 2) AS avg_priority
     FROM marie_scheduler.job
-    WHERE day_local_effective >= CURRENT_DATE - INTERVAL '7 days'
+    WHERE day_local_effective >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 7
       AND slot_idx15_effective IS NOT NULL
+      AND state IN ('created', 'retry', 'active')
     GROUP BY slot_idx15_effective
 )
 SELECT
@@ -135,7 +150,7 @@ SELECT
     avg_priority,
     -- Rank by total workload to identify peak periods
     RANK() OVER (ORDER BY total_workload DESC) AS load_rank
-FROM active_jobs_by_slot
+FROM workload_by_slot
 ORDER BY total_workload DESC
 LIMIT 20;
 
@@ -147,13 +162,19 @@ LIMIT 20;
 WITH slot_metrics AS (
     SELECT
         slot_idx15_created,
-        COUNT(*) AS jobs_per_slot,
+        COUNT(*) AS jobs_in_sample,
+        COUNT(DISTINCT day_local_created) AS sample_days,
+        ROUND(
+            COUNT(*)::numeric
+            / NULLIF(COUNT(DISTINCT day_local_created), 0),
+            2
+        ) AS avg_jobs_per_day,
         ROUND(AVG(EXTRACT(EPOCH FROM duration)), 2) AS avg_duration_sec,
         PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM duration)) AS p95_duration_sec,
         COUNT(*) FILTER (WHERE state = 'failed') AS failed_count,
         ROUND(100.0 * COUNT(*) FILTER (WHERE state = 'failed') / NULLIF(COUNT(*), 0), 2) AS failure_rate_pct
     FROM marie_scheduler.job
-    WHERE day_local_created >= CURRENT_DATE - INTERVAL '30 days'
+    WHERE day_local_created >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 30
       AND slot_idx15_created IS NOT NULL
       AND duration IS NOT NULL
     GROUP BY slot_idx15_created
@@ -162,13 +183,14 @@ SELECT
     slot_idx15_created,
     LPAD((slot_idx15_created / 4)::text, 2, '0') || ':' ||
     LPAD(((slot_idx15_created % 4) * 15)::text, 2, '0') AS time_slot,
-    jobs_per_slot,
+    jobs_in_sample,
+    sample_days,
+    avg_jobs_per_day,
     avg_duration_sec,
     p95_duration_sec,
-    -- Recommended workers: jobs per slot * avg duration / 900 seconds (slot duration)
-    CEIL(jobs_per_slot * avg_duration_sec / 900.0) AS recommended_workers,
-    -- Peak capacity: using p95 duration for safety margin
-    CEIL(jobs_per_slot * p95_duration_sec / 900.0) AS peak_capacity_workers,
+    -- Worker equivalents for an average sampled day and 15-minute slot.
+    CEIL(avg_jobs_per_day * avg_duration_sec / 900.0) AS recommended_workers,
+    CEIL(avg_jobs_per_day * p95_duration_sec / 900.0) AS peak_capacity_workers,
     failure_rate_pct,
     CASE
         WHEN failure_rate_pct > 10 THEN 'HIGH_FAILURE'
@@ -179,9 +201,9 @@ FROM slot_metrics
 ORDER BY slot_idx15_created;
 
 
--- 2.3 Resource Utilization Heatmap
--- Purpose: Show how efficiently resources are used throughout the day
--- Output: Utilization percentage by time slot
+-- 2.3 Compute-Demand Heatmap
+-- Purpose: Estimate average worker-equivalent demand by creation slot
+-- Output: Demand, not utilization; utilization requires provisioned capacity
 -- =========================================================
 SELECT
     slot_idx15_created,
@@ -189,11 +211,20 @@ SELECT
     LPAD(((slot_idx15_created % 4) * 15)::text, 2, '0') AS time_slot,
     COUNT(*) AS total_jobs,
     SUM(EXTRACT(EPOCH FROM duration)) AS total_compute_seconds,
-    -- Assuming 900 seconds per slot, calculate utilization
-    ROUND(100.0 * SUM(EXTRACT(EPOCH FROM duration)) / (900.0 * COUNT(DISTINCT day_local_created)), 2) AS utilization_pct,
+    ROUND(
+        SUM(EXTRACT(EPOCH FROM duration))
+        / NULLIF(COUNT(DISTINCT day_local_created), 0),
+        2
+    ) AS avg_compute_seconds_per_day,
+    ROUND(
+        SUM(EXTRACT(EPOCH FROM duration))
+        / NULLIF(COUNT(DISTINCT day_local_created), 0)
+        / 900.0,
+        2
+    ) AS avg_worker_equivalents,
     COUNT(DISTINCT day_local_created) AS sample_days
 FROM marie_scheduler.job
-WHERE day_local_created >= CURRENT_DATE - INTERVAL '30 days'
+WHERE day_local_created >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 30
   AND slot_idx15_created IS NOT NULL
   AND duration IS NOT NULL
   AND state = 'completed'
@@ -209,28 +240,54 @@ ORDER BY slot_idx15_created;
 -- Purpose: Track which time slots have highest SLA miss rates
 -- Output: SLA compliance metrics per 15-min slot
 -- =========================================================
+WITH sla_events AS (
+    SELECT
+        'soft'::text AS sla_type,
+        slot_idx15_soft AS slot_idx15,
+        soft_sla AS deadline,
+        completed_on
+    FROM marie_scheduler.job
+    WHERE day_local_soft >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 7
+      AND soft_sla IS NOT NULL
+
+    UNION ALL
+
+    SELECT
+        'hard',
+        slot_idx15_hard,
+        hard_sla,
+        completed_on
+    FROM marie_scheduler.job
+    WHERE day_local_hard >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 7
+      AND hard_sla IS NOT NULL
+)
 SELECT
-    slot_idx15_soft,
-    LPAD((slot_idx15_soft / 4)::text, 2, '0') || ':' ||
-    LPAD(((slot_idx15_soft % 4) * 15)::text, 2, '0') AS soft_sla_slot,
-    COUNT(*) AS jobs_with_soft_sla,
-    COUNT(*) FILTER (WHERE completed_on IS NOT NULL AND completed_on <= soft_sla) AS met_soft_sla,
-    COUNT(*) FILTER (WHERE completed_on IS NOT NULL AND completed_on > soft_sla) AS missed_soft_sla,
-    COUNT(*) FILTER (WHERE completed_on IS NULL AND now() > soft_sla) AS overdue_soft_sla,
-    ROUND(100.0 * COUNT(*) FILTER (WHERE completed_on IS NOT NULL AND completed_on <= soft_sla) /
-          NULLIF(COUNT(*) FILTER (WHERE completed_on IS NOT NULL), 0), 2) AS soft_sla_compliance_pct,
-    -- Hard SLA metrics
-    COUNT(*) FILTER (WHERE hard_sla IS NOT NULL) AS jobs_with_hard_sla,
-    COUNT(*) FILTER (WHERE completed_on IS NOT NULL AND completed_on <= hard_sla) AS met_hard_sla,
-    COUNT(*) FILTER (WHERE completed_on IS NOT NULL AND completed_on > hard_sla) AS missed_hard_sla,
-    ROUND(100.0 * COUNT(*) FILTER (WHERE completed_on IS NOT NULL AND completed_on <= hard_sla) /
-          NULLIF(COUNT(*) FILTER (WHERE hard_sla IS NOT NULL AND completed_on IS NOT NULL), 0), 2) AS hard_sla_compliance_pct
-FROM marie_scheduler.job
-WHERE day_local_soft >= CURRENT_DATE - INTERVAL '7 days'
-  AND soft_sla IS NOT NULL
-  AND slot_idx15_soft IS NOT NULL
-GROUP BY slot_idx15_soft
-ORDER BY slot_idx15_soft;
+    sla_type,
+    slot_idx15,
+    LPAD((slot_idx15 / 4)::text, 2, '0') || ':' ||
+    LPAD(((slot_idx15 % 4) * 15)::text, 2, '0') AS sla_slot,
+    COUNT(*) AS jobs_with_sla,
+    COUNT(*) FILTER (
+        WHERE completed_on IS NOT NULL AND completed_on <= deadline
+    ) AS met_sla,
+    COUNT(*) FILTER (
+        WHERE completed_on IS NOT NULL AND completed_on > deadline
+    ) AS missed_sla,
+    COUNT(*) FILTER (
+        WHERE completed_on IS NULL AND now() > deadline
+    ) AS overdue_sla,
+    ROUND(
+        100.0 * COUNT(*) FILTER (
+            WHERE completed_on IS NOT NULL AND completed_on <= deadline
+        ) / NULLIF(COUNT(*) FILTER (
+            WHERE completed_on IS NOT NULL
+        ), 0),
+        2
+    ) AS sla_compliance_pct
+FROM sla_events
+WHERE slot_idx15 IS NOT NULL
+GROUP BY sla_type, slot_idx15
+ORDER BY sla_type, slot_idx15;
 
 
 -- 3.2 Real-Time SLA Pressure Dashboard
@@ -243,14 +300,19 @@ WITH current_sla_status AS (
         CASE
             WHEN hard_sla IS NOT NULL AND now() > hard_sla THEN 'HARD_MISSED'
             WHEN soft_sla IS NOT NULL AND now() > soft_sla THEN 'SOFT_MISSED'
-            WHEN hard_sla IS NOT NULL AND now() > hard_sla - INTERVAL '15 minutes' THEN 'HARD_WARNING'
             WHEN soft_sla IS NOT NULL AND now() > soft_sla - INTERVAL '15 minutes' THEN 'SOFT_WARNING'
+            WHEN hard_sla IS NOT NULL AND now() > hard_sla - INTERVAL '15 minutes' THEN 'HARD_WARNING'
             ELSE 'OK'
         END AS sla_status,
-        EXTRACT(EPOCH FROM (COALESCE(hard_sla, soft_sla) - now())) / 60 AS minutes_to_sla
+        EXTRACT(EPOCH FROM (
+            CASE
+                WHEN hard_sla IS NOT NULL AND now() > hard_sla THEN hard_sla
+                WHEN soft_sla IS NOT NULL THEN soft_sla
+                ELSE hard_sla
+            END - now()
+        )) / 60 AS minutes_to_sla
     FROM marie_scheduler.job
-    WHERE state NOT IN ('completed', 'failed', 'cancelled')
-      AND day_local_effective = CURRENT_DATE
+    WHERE state IN ('created', 'retry', 'active')
       AND slot_idx15_effective IS NOT NULL
       AND (soft_sla IS NOT NULL OR hard_sla IS NOT NULL)
 )
@@ -282,11 +344,16 @@ SELECT
     state,
     COUNT(*) AS job_count,
     COUNT(*) FILTER (WHERE completed_on > soft_sla) AS sla_misses,
-    ROUND(AVG(EXTRACT(EPOCH FROM (completed_on - soft_sla))), 2) AS avg_overrun_seconds,
+    ROUND(AVG(
+        CASE
+            WHEN completed_on > soft_sla
+            THEN EXTRACT(EPOCH FROM (completed_on - soft_sla))
+        END
+    ), 2) AS avg_overrun_seconds,
     ROUND(AVG(retry_count), 2) AS avg_retries,
     ROUND(100.0 * COUNT(*) FILTER (WHERE completed_on > soft_sla) / NULLIF(COUNT(*), 0), 2) AS miss_rate_pct
 FROM marie_scheduler.job
-WHERE day_local_soft >= CURRENT_DATE - INTERVAL '7 days'
+WHERE day_local_soft >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 7
   AND soft_sla IS NOT NULL
   AND slot_idx15_soft IS NOT NULL
   AND completed_on IS NOT NULL
@@ -315,7 +382,7 @@ SELECT
     ROUND(100.0 * COUNT(*) FILTER (WHERE state = 'failed') / NULLIF(COUNT(*), 0), 2) AS failure_rate_pct,
     RANK() OVER (ORDER BY COUNT(*) DESC) AS load_rank
 FROM marie_scheduler.job
-WHERE day_local_created >= CURRENT_DATE - INTERVAL '30 days'
+WHERE day_local_created >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 30
   AND slot_idx15_created IS NOT NULL
 GROUP BY slot_idx15_created
 ORDER BY total_jobs DESC
@@ -330,13 +397,13 @@ WITH categorized_slots AS (
     SELECT
         *,
         CASE
-            WHEN (slot_idx15_created / 4) BETWEEN 9 AND 17 THEN 'Business Hours (9AM-5PM)'
+            WHEN (slot_idx15_created / 4) BETWEEN 9 AND 16 THEN 'Business Hours (9AM-5PM)'
             WHEN (slot_idx15_created / 4) BETWEEN 6 AND 8 THEN 'Early Morning (6AM-9AM)'
-            WHEN (slot_idx15_created / 4) BETWEEN 18 AND 22 THEN 'Evening (6PM-10PM)'
+            WHEN (slot_idx15_created / 4) BETWEEN 17 AND 21 THEN 'Evening (5PM-10PM)'
             ELSE 'Night (10PM-6AM)'
         END AS time_category
     FROM marie_scheduler.job
-    WHERE day_local_created >= CURRENT_DATE - INTERVAL '30 days'
+    WHERE day_local_created >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 30
       AND slot_idx15_created IS NOT NULL
 )
 SELECT
@@ -364,7 +431,7 @@ WITH hourly_stats AS (
         ROUND(AVG(EXTRACT(EPOCH FROM duration)), 2) AS avg_duration,
         COUNT(*) FILTER (WHERE state = 'failed') AS failures
     FROM marie_scheduler.job
-    WHERE day_local_created >= CURRENT_DATE - INTERVAL '7 days'
+    WHERE day_local_created >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 7
       AND slot_idx15_created IS NOT NULL
     GROUP BY hour
 )
@@ -398,7 +465,7 @@ SELECT
     COUNT(*) FILTER (WHERE state = 'failed') AS failed,
     ROUND(100.0 * COUNT(*) FILTER (WHERE state = 'completed') / NULLIF(COUNT(*), 0), 2) AS success_rate_pct
 FROM marie_scheduler.job
-WHERE day_local_created >= CURRENT_DATE - INTERVAL '30 days'
+WHERE day_local_created >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 30
   AND slot_idx15_created IS NOT NULL
 GROUP BY day_type, hour
 ORDER BY day_type, hour;
@@ -408,9 +475,9 @@ ORDER BY day_type, hour;
 -- 5. ADVANCED ANALYTICS: Combined Insights
 -- =========================================================
 
--- 5.1 Comprehensive Dashboard View (Current Day)
--- Purpose: Single query for real-time monitoring dashboard
--- Output: Key metrics for current day by time slot
+-- 5.1 Current UTC-Day Effective-Slot Cohorts
+-- Purpose: Summarize jobs whose effective SLA/creation day is today
+-- Output: Current-state cohorts, not completion throughput
 -- =========================================================
 SELECT
     slot_idx15_effective,
@@ -426,12 +493,20 @@ SELECT
     ROUND(AVG(EXTRACT(EPOCH FROM duration)), 2) AS avg_duration_sec,
     ROUND(AVG(priority), 2) AS avg_priority,
     -- SLA metrics
-    COUNT(*) FILTER (WHERE soft_sla IS NOT NULL AND now() > soft_sla AND state NOT IN ('completed', 'failed')) AS soft_overdue,
-    COUNT(*) FILTER (WHERE hard_sla IS NOT NULL AND now() > hard_sla AND state NOT IN ('completed', 'failed')) AS hard_overdue,
+    COUNT(*) FILTER (
+        WHERE soft_sla IS NOT NULL
+          AND now() > soft_sla
+          AND state IN ('created', 'retry', 'active')
+    ) AS soft_overdue,
+    COUNT(*) FILTER (
+        WHERE hard_sla IS NOT NULL
+          AND now() > hard_sla
+          AND state IN ('created', 'retry', 'active')
+    ) AS hard_overdue,
     -- Success rate
     ROUND(100.0 * COUNT(*) FILTER (WHERE state = 'completed') / NULLIF(COUNT(*), 0), 2) AS success_rate_pct
 FROM marie_scheduler.job
-WHERE day_local_effective = CURRENT_DATE
+WHERE day_local_effective = marie_scheduler.day_in_tz(NOW(), 'UTC')
   AND slot_idx15_effective IS NOT NULL
 GROUP BY slot_idx15_effective
 ORDER BY slot_idx15_effective;
@@ -447,7 +522,10 @@ WITH current_week AS (
         COUNT(*) AS jobs,
         COUNT(*) FILTER (WHERE state = 'failed') AS failures
     FROM marie_scheduler.job
-    WHERE day_local_created >= DATE_TRUNC('week', CURRENT_DATE)
+    WHERE day_local_created >= DATE_TRUNC(
+        'week',
+        marie_scheduler.day_in_tz(NOW(), 'UTC')::timestamp
+    )::date
       AND slot_idx15_created IS NOT NULL
     GROUP BY slot_idx15_created
 ),
@@ -457,8 +535,14 @@ previous_week AS (
         COUNT(*) AS jobs,
         COUNT(*) FILTER (WHERE state = 'failed') AS failures
     FROM marie_scheduler.job
-    WHERE day_local_created >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'
-      AND day_local_created < DATE_TRUNC('week', CURRENT_DATE)
+    WHERE day_local_created >= DATE_TRUNC(
+        'week',
+        marie_scheduler.day_in_tz(NOW(), 'UTC')::timestamp
+    )::date - 7
+      AND day_local_created < DATE_TRUNC(
+          'week',
+          marie_scheduler.day_in_tz(NOW(), 'UTC')::timestamp
+      )::date
       AND slot_idx15_created IS NOT NULL
     GROUP BY slot_idx15_created
 )
@@ -512,7 +596,7 @@ FROM (
         COUNT(*) FILTER (WHERE state = 'failed') AS failed_count,
         ROUND(100.0 * COUNT(*) FILTER (WHERE state = 'completed') / NULLIF(COUNT(*), 0), 2) AS success_rate
     FROM marie_scheduler.job
-    WHERE day_local_created >= CURRENT_DATE - INTERVAL '7 days'
+    WHERE day_local_created >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 7
       AND slot_idx15_created IS NOT NULL
     GROUP BY slot_idx15_created
 ) subquery;
@@ -533,7 +617,7 @@ SELECT
     ROUND(AVG(priority), 2) AS avg_priority,
     ROUND(AVG(EXTRACT(EPOCH FROM duration)), 2) AS avg_duration_sec
 FROM marie_scheduler.job
-WHERE day_local_created >= CURRENT_DATE - INTERVAL '7 days'
+WHERE day_local_created >= marie_scheduler.day_in_tz(NOW(), 'UTC') - 7
   AND slot_idx15_created IS NOT NULL
 GROUP BY slot_idx15_created
 ORDER BY slot_idx15_created;
@@ -555,12 +639,13 @@ ORDER BY slot_idx15_created;
 --      WHERE (created_on AT TIME ZONE 'America/Chicago')::date = '2025-01-04'
 --
 -- 3. Date ranges can be adjusted via WHERE clauses:
---    - CURRENT_DATE - INTERVAL '7 days'   (last week in UTC)
---    - CURRENT_DATE - INTERVAL '30 days'  (last month in UTC)
---    - CURRENT_DATE                        (today in UTC)
+--    - day_in_tz(NOW(), 'UTC') - 7   (last week in UTC)
+--    - day_in_tz(NOW(), 'UTC') - 30  (last month in UTC)
+--    - day_in_tz(NOW(), 'UTC')       (today in UTC)
 --
--- 4. Performance: All queries use the composite index on
---    (day_local_effective, slot_idx15_effective) for fast execution.
+-- 4. Performance: Queries on day_local_effective can use the composite
+--    (day_local_effective, slot_idx15_effective) index. Other day/slot
+--    combinations require plan review and may scan queue partitions.
 --
 -- 5. Visualization: JSON and CSV export formats provided for
 --    integration with charting libraries and BI tools.
@@ -569,6 +654,7 @@ ORDER BY slot_idx15_created;
 --    -- Convert slot back to specific timezone for display
 --    SELECT to_char(
 --        (day_local_created + (slot_idx15_created * interval '15 minutes'))
+--          AT TIME ZONE 'UTC'
 --          AT TIME ZONE 'America/Chicago',
 --        'YYYY-MM-DD HH24:MI TZ'
 --    ) AS chicago_time;

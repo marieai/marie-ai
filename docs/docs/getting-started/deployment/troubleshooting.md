@@ -257,6 +257,21 @@ kubectl logs -l app=marie-executor | grep <job-id>
 | `Out of memory` | Document too large | Increase executor memory |
 | `GPU error` | CUDA out of memory | Reduce batch size |
 
+### Executor or host out-of-memory incidents
+
+Use the [production executor OOM troubleshooting runbook](./executor-oom-troubleshooting.md)
+when an executor disappears, Linux kills a Python process, a job fails on
+multiple replicas, or the gateway retains an unready executor address. The
+runbook correlates kernel, container, executor, asset, scheduler, PostgreSQL,
+GPU, and service-discovery evidence.
+
+### Scheduler database investigation
+
+Use the [scheduler SQL troubleshooting guide](./scheduler-sql-troubleshooting.md)
+to inspect queues, job payloads, page selection, worker errors, durable run
+attempts, retry history, expired leases, stuck DAGs, and approved reset
+operations.
+
 ### DAG not progressing
 
 **Symptoms:** DAG stuck, dependent jobs not starting

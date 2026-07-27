@@ -1,446 +1,361 @@
-# Marie Scheduler - Monitoring Query Guide
+# Marie scheduler monitoring queries
 
-## Quick Start
+The files in this directory provide read-only operational diagnostics,
+throughput reports, cohort analytics, and optional monitoring views for the
+PostgreSQL scheduler.
 
-Monitoring queries are located in `config/psql/schema/monitoring`. Aggregated
-dashboard queries are in `example_queries.sql`; focused diagnostics are stored
-as separate files in the same directory.
+Monitoring files are not loaded automatically with the scheduler schema. Core
+tables, generated time-slot columns, and helper functions are created by the
+numbered migrations in `config/psql/schema`.
 
-### Prerequisites
-1. ✅ Run `config/psql/schema/monitoring/slots_columns.sql` first
-2. ✅ Ensure job table has slot/day generated columns
-3. ✅ All timestamps are in America/Chicago timezone (configurable)
+## Query inventory
 
----
+| File | Purpose | Execution model |
+| --- | --- | --- |
+| `throughput_analysis.sql` | Hourly and overall query-plan and task throughput | Installs read-only SQL functions |
+| `submission_lifecycle_analysis.sql` | Locate a gateway submission across DAG, task, attempt, and worker records | One read-only SQL statement |
+| `outstanding_work_analysis.sql` | Queue totals, recent arrivals, leases, blockers, and outstanding jobs | Read-only `psql` script |
+| `job_failure_analysis.sql` | One job's scheduler, worker, error, retry, and attempt timeline | Read-only SQL script |
+| `example_queries.sql` | Creation-time cohorts, SLA analytics, and load distribution | Individual read-only queries |
+| `slots_basis.sql` | Outstanding jobs distributed across generated 15-minute slot bases | Read-only `psql` query |
+| `scheduler_hot_path_index_analysis.sql` | Scheduler maintenance indexes and query plans | Read-only diagnostics with `EXPLAIN ANALYZE` |
+| `dag_chain_debug_view.sql` | Dependency state for every DAG task | Installs a view |
+| `dag_gantt_dependency_status_view.sql` | Dependency execution timing and state | Installs a view |
+| `dag_bucketed_sla_view.sql` | Current SLA buckets by DAG and queue | Installs a view |
 
-## Query Categories
+## Safety
 
-### 📊 1. HEATMAPS (Queries 1.1 - 1.4)
-**Purpose:** Visualize job patterns throughout the day/week
+Use a read-only transaction and bounded execution time for ad hoc production
+queries:
 
-| Query | Description | Output |
-|-------|-------------|--------|
-| **1.1** | Daily Heatmap by 15-min Slot | 96 rows (every 15 min) |
-| **1.2** | Weekly Heatmap (Day × Time) | 7 days × 96 slots matrix |
-| **1.3** | Hourly Aggregation | 24 rows (simplified) |
-| **1.4** | SLA Deadline Heatmap | When SLAs are due |
+```sql
+BEGIN TRANSACTION READ ONLY;
+SET LOCAL statement_timeout = '60s';
+SET LOCAL lock_timeout = '3s';
 
-**Sample Output (Query 1.1):**
-```
- slot | time_label | total_jobs | completed_jobs | failed_jobs | completion_rate_pct
-------+------------+------------+----------------+-------------+--------------------
-    0 | 00:00      |        145 |            142 |           3 |              97.9
-    1 | 00:15      |        132 |            128 |           4 |              97.0
-   48 | 12:00      |       1203 |           1189 |          14 |              98.8
-   72 | 18:00      |        876 |            861 |          15 |              98.3
-```
+-- Run selected queries.
 
-**Use Cases:**
-- 📈 Identify peak creation times
-- 🕐 Plan maintenance windows
-- 
-- 📊 Capacity planning
-- 🎯 Load balancing
-
----
-
-### 🔧 2. CAPACITY PLANNING (Queries 2.1 - 2.3)
-**Purpose:** Resource allocation and capacity requirements
-
-| Query | Description | Key Metrics |
-|-------|-------------|-------------|
-| **2.1** | Peak Load Analysis | Active + pending jobs by slot |
-| **2.2** | Resource Recommendations | Recommended workers per slot |
-| **2.3** | Utilization Heatmap | % utilization throughout day |
-
-**Sample Output (Query 2.2):**
-```
- time_slot | jobs_per_slot | avg_duration_sec | recommended_workers | peak_capacity_workers | health_status
------------+---------------+------------------+--------------------+----------------------+---------------
- 09:00     |           245 |            320.5 |                 87 |                  112 | HEALTHY
- 14:00     |           512 |            285.2 |                162 |                  198 | HEALTHY
- 22:00     |            89 |            412.8 |                 41 |                   56 | MODERATE_FAILURE
+ROLLBACK;
 ```
 
-**Use Cases:**
-- 👷 Determine worker pool size
-- 📊 Identify under/over-provisioned periods
-- 💰 Cost optimization
-- ⚡ Scale-up/scale-down automation
+Do not execute the complete monitoring directory as one migration. The
+throughput file installs functions and the view files install views; the other
+files are reports or diagnostic templates.
 
----
+Scheduler payloads can contain document references and request metadata. Keep
+exports in an access-controlled incident location.
 
-### 🎯 3. SLA TRACKING (Queries 3.1 - 3.3)
-**Purpose:** Monitor SLA compliance and identify issues
+## Submitted job lookup
 
-| Query | Description | Key Metrics |
-|-------|-------------|-------------|
-| **3.1** | SLA Compliance Rate | Met vs missed by time slot |
-| **3.2** | Real-Time SLA Pressure | Current overdue/warning jobs |
-| **3.3** | SLA Miss Reasons | Why SLAs failed by slot |
+Use `submission_lifecycle_analysis.sql` when the gateway logged `Job submitted
+with id ...` but a lookup in `kv_store_worker_history` returned no rows.
 
-**Sample Output (Query 3.1):**
-```
- soft_sla_slot | jobs_with_soft_sla | met_soft_sla | missed_soft_sla | soft_sla_compliance_pct
----------------+--------------------+--------------+-----------------+------------------------
- 09:00         |                145 |          142 |               3 |                   97.9
- 12:00         |                287 |          265 |              22 |                   92.3
- 18:00         |                198 |          184 |              14 |                   92.9
-```
+Replace the UUID in the `target` CTE, then execute the statement in any SQL
+client. It does not use `psql` variables or metacommands. The result combines:
 
-**Sample Output (Query 3.2 - Real-Time Dashboard):**
-```
- time_slot | total_jobs | hard_missed | soft_missed | hard_warning | soft_warning | on_track | avg_minutes_to_deadline
------------+------------+-------------+-------------+--------------+--------------+----------+------------------------
- 14:00     |         23 |           2 |           5 |            3 |            8 |        5 |                    -12.5
- 14:15     |         18 |           0 |           2 |            4 |            6 |        6 |                      8.2
-```
+- the current DAG and DAG history;
+- every current task and scheduler state transition in that DAG;
+- durable activation, dispatch, terminal, and recovery attempts; and
+- current and historical worker status for every generated task ID.
 
-**Use Cases:**
-- 🚨 Alert on SLA violations
-- 📊 Measure service quality
-- 🔍 Root cause analysis
-- 📈 Trend analysis
+The UUID returned by the gateway is the submission/DAG ID. A query planner may
+also reuse it for one task, but worker KV keys are created from task job IDs,
+not from the DAG ID in general. An empty worker-history query therefore does
+not mean the submission is missing.
 
----
+Interpret the first matching layer:
 
-### 📈 4. LOAD DISTRIBUTION (Queries 4.1 - 4.4)
-**Purpose:** Understand traffic patterns and peak periods
+| Result | Meaning |
+| --- | --- |
+| `dag.current` or `job.current` | The submission was durably persisted. Inspect task state and attempts next. |
+| `job.current` with `created` and no `attempt` | The task has not been admitted or activated. Check dependencies, `start_after`, scheduler leadership, and capacity. |
+| `attempt` without `dispatch_started_at` | The task was activated but dispatch did not begin. |
+| `attempt` with dispatch start but no confirmation | Inspect `dispatch_error`, gateway routing, and executor readiness. |
+| Confirmed dispatch without worker records | Inspect the executor request path and worker status-store writes. |
+| `worker.current` or `worker.history` | The executor observed the task; use its task `job_id` for worker-specific investigation. |
+| `not_found` | No durable scheduler or worker layer contains the UUID in this database. |
 
-| Query | Description | Analysis Type |
-|-------|-------------|---------------|
-| **4.1** | Top 10 Peak Load Slots | Ranked busiest periods |
-| **4.2** | Business vs Off-Hours | Workload by time category |
-| **4.3** | 24-Hour Load Profile | Complete daily breakdown |
-| **4.4** | Weekend vs Weekday | Pattern comparison |
+`Job submitted with id ...` currently means the gateway placed the request in
+the scheduler's in-memory submission queue. Persistence happens afterward in a
+background worker. If the report returns `not_found`, first verify the database
+and schema, then search the gateway log for the UUID and these events:
 
-**Sample Output (Query 4.1):**
-```
- time_slot | total_jobs | active_days | avg_jobs_per_day | avg_priority | failed_jobs | failure_rate_pct | load_rank
------------+------------+-------------+------------------+--------------+-------------+------------------+-----------
- 13:45     |       2847 |          30 |            94.90 |        125.3 |          45 |             1.58 |         1
- 09:15     |       2634 |          30 |            87.80 |        118.7 |          38 |             1.44 |         2
- 14:30     |       2512 |          30 |            83.73 |        122.1 |          52 |             2.07 |         3
+```text
+scheduler_submission_enqueued
+scheduler_submission_dequeued
+dag_plan_built
+dag_persist_start
+dag_persisted
+Job submission failed
+Failed to process job
 ```
 
-**Sample Output (Query 4.2 - Business Hours Analysis):**
-```
- time_category                 | total_jobs | pct_of_total | completed | failed | success_rate_pct
--------------------------------+------------+--------------+-----------+--------+-----------------
- Business Hours (9AM-5PM)      |      18542 |        68.45 |     18234 |    308 |            98.34
- Evening (6PM-10PM)            |       5123 |        18.91 |      5002 |    121 |            97.64
- Early Morning (6AM-9AM)       |       2341 |         8.64 |      2298 |     43 |            98.16
- Night (10PM-6AM)              |       1089 |         4.02 |      1063 |     26 |            97.61
-```
+Also inspect `/api/debug` under `result.queue_status` for submission-worker
+count, active workers, queue size, and pending requests. A restart after queue
+acceptance but before persistence can discard an unprocessed request.
 
-**Use Cases:**
-- 📊 Traffic pattern analysis
-- 🕐 Maintenance scheduling
-- 👥 Staffing decisions
-- 📅 Capacity forecasting
+Use this report for incident lookup, not as an unbounded dashboard query. The
+history portions can scan `job_history` and `kv_store_worker_history` on
+installations that do not have lookup indexes for their ID and key columns.
+Keep the read-only transaction timeout in place and review `EXPLAIN` before
+automating it.
 
----
+## Throughput
 
-### 🎨 5. ADVANCED ANALYTICS (Queries 5.1 - 5.2)
-**Purpose:** Combined insights and trend analysis
+Execute `throughput_analysis.sql` once using any PostgreSQL client. It installs
+three `STABLE` SQL functions; it does not depend on `psql` variables or
+metacommands.
 
-| Query | Description | Use Case |
-|-------|-------------|----------|
-| **5.1** | Comprehensive Dashboard | Single query for real-time monitoring |
-| **5.2** | Week-over-Week Trends | Compare current to previous week |
+Call the functions with a bounded lookback in hours:
 
-**Sample Output (Query 5.1 - Dashboard View):**
-```
- time_slot | total_jobs | completed | active | pending | failed | avg_duration_sec | soft_overdue | hard_overdue | success_rate_pct
------------+------------+-----------+--------+---------+--------+------------------+--------------+--------------+-----------------
- 14:00     |         87 |        65 |     12 |       8 |      2 |            285.3 |            3 |            1 |            74.7
- 14:15     |         92 |        71 |     15 |       5 |      1 |            312.8 |            2 |            0 |            77.2
+```sql
+SELECT *
+FROM marie_scheduler.monitor_system_throughput(24, NULL);
+
+SELECT *
+FROM marie_scheduler.monitor_planner_throughput(24, NULL);
+
+SELECT *
+FROM marie_scheduler.monitor_task_throughput(24, NULL);
 ```
 
-**Sample Output (Query 5.2 - Trend Analysis):**
-```
- time_slot | current_week_jobs | previous_week_jobs | jobs_change | jobs_change_pct | trend
------------+-------------------+--------------------+-------------+-----------------+-------------
- 09:00     |               512 |                487 |          25 |            5.13 | ➡️  STABLE
- 14:00     |               689 |                542 |         147 |           27.12 | 📈 INCREASING
- 22:00     |               234 |                412 |        -178 |          -43.20 | 📉 DECREASING
-```
+Filter to one query planner when comparing a specific workflow:
 
----
-
-### 📤 6. EXPORT FORMATS (Queries 6.1 - 6.2)
-**Purpose:** Integration with visualization tools
-
-| Query | Format | Use Case |
-|-------|--------|----------|
-| **6.1** | JSON | Chart.js, D3.js, Grafana |
-| **6.2** | CSV | Excel, Google Sheets, Tableau |
-
-**Sample Output (Query 6.1 - JSON):**
-```json
-[
-  {
-    "slot": 0,
-    "hour": 0,
-    "minute": 0,
-    "label": "00:00",
-    "jobs": 145,
-    "completed": 142,
-    "failed": 3,
-    "success_rate": 97.93
-  },
-  {
-    "slot": 48,
-    "hour": 12,
-    "minute": 0,
-    "label": "12:00",
-    "jobs": 1203,
-    "completed": 1189,
-    "failed": 14,
-    "success_rate": 98.84
-  }
-]
+```sql
+SELECT *
+FROM marie_scheduler.monitor_system_throughput(
+    72,
+    '<query-planner-name>'
+);
 ```
 
----
+The functions provide three levels of detail:
 
-## Common Use Cases
+1. Overall and hourly system throughput.
+2. Window-total and hourly throughput by query planner.
+3. Window-total and hourly throughput by query-plan task and endpoint.
 
-### 🚀 Quick Start: Top 5 Essential Queries
+The measurement units are intentionally different:
 
-1. **Current Day Dashboard** → Query 5.1
-2. **Peak Load Times** → Query 4.1
-3. **SLA Compliance** → Query 3.1
-4. **Resource Requirements** → Query 2.2
-5. **Hourly Heatmap** → Query 1.3
+| Metric | Database source | Meaning |
+| --- | --- | --- |
+| Plans submitted | `dag.created_on` | Query-plan runs accepted by the scheduler |
+| Plans completed | Completed `dag.completed_on` | End-to-end successful query-plan runs |
+| Tasks completed | Completed `job.completed_on` | Successful query-plan task nodes, including control nodes |
+| Executor tasks completed | Completed `job.completed_on` excluding scheduler-local control endpoints | Successful work dispatched to executors |
 
----
+`job.data.metadata.name` is the task name from the query plan.
+`job.data.metadata.on` is the executor endpoint. `dag.planner` is the
+authoritative query-plan name.
 
-## How to Run Queries
+The current clock-hour row is marked `partial`. Compare completed clock hours
+when looking for regressions. The `window_total` row reports rates normalized
+to the elapsed duration of the selected window.
 
-### Diagnose a failed scheduler job
+### Throughput limitations
 
-`job_failure_analysis.sql` correlates the current scheduler row, worker KV
-history, structured executor exceptions, a stored traceback when present,
-retries, durable attempts, and the source `ref_type`/`ref_id` for one job. It is
-plain PostgreSQL SQL: replace the UUID in its `SET LOCAL
-marie_monitor.job_id` line and execute the entire file in DataGrip, DBeaver,
-pgAdmin, or psql. It does not create persistent database objects or settings.
+The throughput report uses current retained `job` and `dag` rows. Therefore:
+
+- It measures final task and plan outcomes, not every retry attempt.
+- A reset that clears `completed_on` removes the earlier terminal event from
+  the current-row report.
+- Retention or archival can remove older rows from a long lookback.
+- Skipped branch nodes are reported separately and are excluded from the task
+  success-rate denominator.
+- Scheduler-local `noop`, branch, switch, and control-merger nodes count as
+  query-plan tasks but not executor-backed tasks.
+
+Use `job_attempt` and `job_history` when attempt-level throughput or replay
+behavior is required.
+
+### Throughput query cost
+
+Hourly completion filters use `completed_on`. Large installations should run
+`EXPLAIN (ANALYZE, BUFFERS)` with a short lookback before scheduling this report
+at a high frequency. The base schema prioritizes scheduler hot-path indexes;
+it does not guarantee a completion-time index on every queue partition.
+
+If the query scans large queue partitions, have the database team evaluate
+per-partition `completed_on` indexes or a separate rollup table. Do not create
+indexes during an incident without reviewing lock duration, disk space, write
+amplification, and the actual query plan.
+
+## Outstanding work
+
+Run with all defaults:
 
 ```bash
-docker exec -i marie-psql-server \
-  psql -U postgres -d postgres -X -P pager=off \
-  < config/psql/schema/monitoring/job_failure_analysis.sql
+psql -X -P pager=off \
+  -f config/psql/schema/monitoring/outstanding_work_analysis.sql
 ```
 
-When running from a deployed configuration tree, replace the input path with
-the corresponding `psql/schema/monitoring/job_failure_analysis.sql` path.
-
-### Inspect outstanding scheduler work
-
-`outstanding_work_analysis.sql` reports state totals by queue and lists bounded
-details for current `created`, `retry`, and `active` jobs. The details classify
-why work remains outstanding and include lease, dependency, KV, executor, and
-last-error context. It also reports recent arrivals so an empty scheduler can be
-distinguished from jobs that arrived and completed or failed quickly.
+Restrict the report to one queue and reduce detailed output:
 
 ```bash
-docker exec -i marie-psql-server \
-  psql -U postgres -d postgres -X -P pager=off \
-  -v queue_name=corr -v lookback_minutes=60 -v result_limit=200 \
-  < config/psql/schema/monitoring/outstanding_work_analysis.sql
+psql -X -P pager=off \
+  -v queue_name='<queue-name>' \
+  -v lookback_minutes=60 \
+  -v result_limit=100 \
+  -f config/psql/schema/monitoring/outstanding_work_analysis.sql
 ```
 
-All variables are optional. Omit `queue_name` to include every queue. The
-arrival lookback defaults to 60 minutes and is capped at 7 days; detailed
-results default to 200 rows and are capped at 1000.
+The report distinguishes:
 
-### Method 1: psql Command Line
+- work waiting for dependencies;
+- work delayed by `start_after`;
+- active work with missing or expired run leases;
+- terminal worker KV state that disagrees with an active scheduler row; and
+- work that is ready but waiting for executor capacity.
+
+The totals operate over retained current rows. On a large installation, filter
+by `queue_name` whenever the incident has a known queue.
+
+## Failed job analysis
+
+Set `marie_monitor.job_id` near the top of `job_failure_analysis.sql`, then run
+the complete file:
+
 ```bash
-# Connect to database
-psql -h localhost -U your_user -d your_database
-
-# Run specific query
-\i config/psql/schema/monitoring/example_queries.sql
-
-# Or copy-paste individual queries
+psql -X -P pager=off \
+  -f config/psql/schema/monitoring/job_failure_analysis.sql
 ```
 
-### Method 2: Python Integration
-```python
-import psycopg
+The report correlates:
 
-conn = psycopg.connect(
-    host="localhost",
-    database="your_database",
-    user="your_user",
-    password="your_password",
-)
+- the current scheduler job and worker KV rows;
+- structured executor exceptions from worker history;
+- scheduler state history;
+- durable dispatch and terminal attempts; and
+- run-owner and gateway fencing information.
 
-# Read query file
-with open('config/psql/schema/monitoring/example_queries.sql', 'r') as f:
-    query = f.read()
+Worker `message` can contain a generic failure description. Prefer the
+structured `runtime_env_json.error` fields when present.
 
-# Extract and run specific query (e.g., Query 1.1)
-# Parse the file to get individual queries...
+The base history tables may have only their primary-key indexes. On a large
+installation, inspect indexes on `job_history(id, history_created_on)` and
+`kv_store_worker_history(namespace, key, change_time)` before using this query
+at dashboard frequency. Add such indexes only through the normal database
+change process after measuring storage and write overhead.
+
+## Creation-time and SLA analytics
+
+`example_queries.sql` contains individually executable examples. Select only
+the query needed for the investigation instead of running the whole file.
+
+These queries use generated UTC columns from
+`config/psql/schema/040_slots_columns.sql`:
+
+```text
+slot_idx15_created     day_local_created
+slot_idx15_soft        day_local_soft
+slot_idx15_hard        day_local_hard
+slot_idx15_effective   day_local_effective
 ```
 
-### Method 3: DBeaver / pgAdmin
-1. Open SQL editor
-2. Load `example_queries.sql`
-3. Select query section
-4. Execute (F5 or Ctrl+Enter)
+They group retained jobs by creation or SLA time. They do not represent actual
+completion throughput or historical concurrency. Use
+`throughput_analysis.sql` for those completion metrics.
 
----
+Inspect the installed generated columns before using the examples:
 
-## Customization Tips
-
-### 📅 Adjust Time Ranges
 ```sql
--- Change from 7 days to 30 days
-WHERE day_local_created >= CURRENT_DATE - INTERVAL '30 days'
-
--- Today only
-WHERE day_local_created = CURRENT_DATE
-
--- Specific date range
-WHERE day_local_created BETWEEN '2025-01-01' AND '2025-01-31'
-```
-
-### 🕐 Change Time Grouping
-```sql
--- 15-minute slots (default)
-GROUP BY slot_idx15_created
-
--- Hourly buckets
-GROUP BY (slot_idx15_created / 4)
-
--- 30-minute buckets
-GROUP BY (slot_idx15_created / 2)
-```
-
-### 🌍 Filter by Job Name
-```sql
--- Add to WHERE clause
-AND name = 'document_processing'
-
--- Pattern matching
-AND name LIKE 'doc_%'
-```
-
-### 📊 Add Custom Metrics
-```sql
--- Add percentiles
-PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM duration)) AS p50_duration,
-PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM duration)) AS p95_duration,
-PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM duration)) AS p99_duration
-```
-
----
-
-## Visualization Examples
-
-### 📊 Using Query Results in Grafana
-
-**Query 1.3 (Hourly Aggregation) → Grafana Time Series:**
-```sql
--- Add timestamp for Grafana
 SELECT
-    CURRENT_DATE + ((slot_idx15_created / 4) * interval '1 hour') AS time,
-    COUNT(*) AS jobs
-FROM marie_scheduler.job
-WHERE day_local_created >= CURRENT_DATE - INTERVAL '7 days'
-  AND slot_idx15_created IS NOT NULL
-GROUP BY slot_idx15_created
-ORDER BY slot_idx15_created;
+    column_name,
+    data_type,
+    is_generated,
+    generation_expression
+FROM information_schema.columns
+WHERE table_schema = 'marie_scheduler'
+  AND table_name = 'job'
+  AND (
+      column_name LIKE 'slot_idx15_%'
+      OR column_name LIKE 'day_local_%'
+  )
+ORDER BY ordinal_position;
 ```
 
-### 📈 Chart.js Integration
+## Slot-basis report
 
-**Query 6.1 (JSON Export) → Chart.js:**
-```javascript
-fetch('/api/heatmap-data')
-  .then(response => response.json())
-  .then(data => {
-    new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: data.map(d => d.label),
-        datasets: [{
-          label: 'Jobs per Time Slot',
-          data: data.map(d => d.jobs),
-          backgroundColor: data.map(d =>
-            d.success_rate > 95 ? 'green' : 'orange'
-          )
-        }]
-      }
-    });
-  });
+`slots_basis.sql` requires a UTC date supplied as a `psql` variable:
+
+```bash
+psql -X -P pager=off \
+  -v target_day='2026-01-15' \
+  -f config/psql/schema/monitoring/slots_basis.sql
 ```
 
----
+It includes the current outstanding states: `created`, `retry`, and `active`.
+It does not create indexes or change scheduler state.
 
-## Performance Notes
+## Optional monitoring views
 
-### ✅ Fast Queries (< 100ms)
-- All queries using slot_idx15_* and day_local_* columns
-- Index on (day_local_effective, slot_idx15_effective) used automatically
-- STORED generated columns = no runtime computation
+Install a view explicitly after the numbered scheduler schema migrations have
+been applied:
 
-### ⚠️ Slower Operations
-- Full table scans without date filters
-- Large date ranges (> 90 days)
-- Queries without slot/day columns
+```bash
+psql -X -v ON_ERROR_STOP=1 \
+  -f config/psql/schema/monitoring/dag_chain_debug_view.sql
+```
 
-### 🚀 Optimization Tips
-1. **Always include date filters**
-2. **Use indexed columns (day_local_*, slot_idx15_*)**
-3. **Limit large aggregations with date ranges**
-4. **Materialize frequently-used results**
+The SLA view requires the `day_in_tz()` and `slot_15m()` helpers from
+`040_slots_columns.sql`. Query installed views with a specific DAG or a bounded
+result set:
 
----
-
-## Troubleshooting
-
-### ❌ Error: Column "slot_idx15_created" does not exist
-**Solution:** Run `slots_columns.sql` first to create generated columns
-
-### ❌ Error: Index not found
-**Solution:** Recreate index:
 ```sql
-CREATE INDEX IF NOT EXISTS job_day_slot_idx
-ON marie_scheduler.job (day_local_effective, slot_idx15_effective);
+SELECT *
+FROM marie_scheduler.dag_chain_debug_view
+WHERE dag_id = '<dag-uuid>'::uuid
+ORDER BY job_level, job_id;
 ```
 
-### ❌ Empty Results
-**Check:**
-1. Date range includes actual data
-2. Timezone is correct for your data
-3. Job table has data in specified range
+The dependency views and SLA view can touch many retained jobs when queried
+without a DAG predicate. They are diagnostic views, not unbounded fleet-wide
+dashboard queries.
 
----
+## Scheduler hot-path analysis
 
-## Next Steps
+`scheduler_hot_path_index_analysis.sql` expects:
 
-1. ✅ Run sample queries to verify setup
-2. 📊 Integrate with your monitoring dashboard
-3. 🎯 Customize date ranges and filters
-4. 📈 Set up scheduled reports
-5. 🚨 Create alerts based on thresholds
+- the `pg_cron` extension and `cron.job` table for schedule inspection; and
+- the `pg_stat_statements` extension for accumulated statement statistics.
 
----
+Its `EXPLAIN ANALYZE` statements execute bounded read-only scheduler scans. Run
+them during a representative but controlled period. Use plain `EXPLAIN` when
+execution cost itself is a concern.
 
-## Additional Resources
+Check optional dependencies first:
 
-- **Schema Documentation:** `SLOTS_COLUMNS_ANALYSIS.md`
-- **Timezone Fixes:** `TIMEZONE_FIXES_SUMMARY.md`
-- **INSERT/UPDATE Verification:** `INSERT_UPDATE_VERIFICATION.md`
+```sql
+SELECT
+    to_regclass('cron.job') AS cron_job,
+    to_regclass('pg_stat_statements') AS stat_statements;
+```
 
----
+## Time zones
 
-## Support
+Scheduler timestamps are `timestamptz`. Generated `day_local_*` and
+`slot_idx15_*` columns currently use UTC despite their historical names.
+Throughput reporting explicitly creates its clock-hour buckets in UTC.
 
-For issues or questions:
-1. Check timezone configuration in `slots_columns.sql`
-2. Verify generated columns exist: `\d marie_scheduler.job`
-3. Review query execution plans: `EXPLAIN ANALYZE <query>`
+Convert timestamps only for display:
+
+```sql
+SELECT completed_on AT TIME ZONE '<display-time-zone>' AS completed_local
+FROM marie_scheduler.job
+WHERE id = '<job-uuid>'::uuid;
+```
+
+Keep filtering and bucketing in UTC unless a business report explicitly
+requires civil-time buckets and has defined daylight-saving behavior.
+
+## Validation checklist
+
+Before promoting a monitoring query into a recurring dashboard:
+
+1. Confirm every referenced table, column, function, and extension exists.
+2. Run with a short lookback and a restrictive queue or planner filter.
+3. Inspect `EXPLAIN (ANALYZE, BUFFERS)` on representative data.
+4. Verify whether the metric counts plans, tasks, executor tasks, or attempts.
+5. Confirm current-hour and retention behavior.
+6. Record the expected time zone.
+7. Set a dashboard timeout and maximum lookback.

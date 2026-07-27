@@ -1,16 +1,15 @@
-DROP VIEW IF EXISTS marie_scheduler.dag_bucketed_sla_view CASCADE;
-
 CREATE OR REPLACE VIEW marie_scheduler.dag_bucketed_sla_view AS
 WITH job_with_sla AS (
   SELECT
     j.*,
     d.name AS dag_name,
-    now() AT TIME ZONE 'America/Chicago' AS now_ts,
-    marie_scheduler.local_day(now() AT TIME ZONE 'America/Chicago', 'America/Chicago') AS now_day_local,
-    marie_scheduler.slot_15m(now() AT TIME ZONE 'America/Chicago', 'America/Chicago')  AS now_slot_idx
+    now() AS now_ts,
+    marie_scheduler.day_in_tz(now(), 'UTC') AS now_day_local,
+    marie_scheduler.slot_15m(now(), 'UTC') AS now_slot_idx
   FROM marie_scheduler.job j
   JOIN marie_scheduler.dag d ON d.id = j.dag_id
-  WHERE j.soft_sla IS NOT NULL OR j.hard_sla IS NOT NULL
+  WHERE (j.soft_sla IS NOT NULL OR j.hard_sla IS NOT NULL)
+    AND d.state IN ('created', 'active')
 ),
 slot_deltas AS (
   SELECT
@@ -68,7 +67,15 @@ bucketed_jobs AS (
       ELSE NULL
     END AS future_bucket_index_hard,
 
-    COALESCE(hard_bucket_index, soft_bucket_index) AS bucket_index
+    CASE
+      WHEN hard_bucket_index IS NOT NULL AND hard_bucket_index < 0
+        THEN hard_bucket_index
+      WHEN soft_bucket_index IS NOT NULL AND soft_bucket_index < 0
+        THEN soft_bucket_index
+      WHEN soft_bucket_index IS NOT NULL
+        THEN soft_bucket_index
+      ELSE hard_bucket_index
+    END AS bucket_index
   FROM slot_deltas
 )
 SELECT
@@ -82,16 +89,18 @@ SELECT
   CASE
     WHEN overdue_type IS NOT NULL THEN
       CONCAT('overdue ', overdue_buckets * 15, '–', (overdue_buckets + 1) * 15, ' min (', overdue_type, ')')
-    WHEN future_bucket_index_hard IS NOT NULL THEN
-      CONCAT('HARD SLA due in ', future_bucket_index_hard * 15, '–', (future_bucket_index_hard + 1) * 15, ' min')
     WHEN future_bucket_index_soft IS NOT NULL THEN
       CONCAT('SOFT SLA due in ', future_bucket_index_soft * 15, '–', (future_bucket_index_soft + 1) * 15, ' min')
+    WHEN future_bucket_index_hard IS NOT NULL THEN
+      CONCAT('HARD SLA due in ', future_bucket_index_hard * 15, '–', (future_bucket_index_hard + 1) * 15, ' min')
     ELSE 'no SLA'
   END AS bucket_label,
 
   COUNT(*) AS total_jobs,
   COUNT(*) FILTER (WHERE state = 'completed') AS completed_jobs,
-  COUNT(*) FILTER (WHERE state <> 'completed') AS outstanding_jobs,
+  COUNT(*) FILTER (
+    WHERE state::text IN ('created', 'retry', 'active')
+  ) AS outstanding_jobs,
   ROUND(
     100.0 * COUNT(*) FILTER (WHERE state = 'completed') / NULLIF(COUNT(*), 0), 1
   ) AS percent_complete
@@ -114,4 +123,3 @@ ORDER BY
   bucket_index,
   dag_id,
   job_name;
-
