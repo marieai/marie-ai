@@ -282,7 +282,6 @@ class AttemptLifecycleService:
         terminal: bool,
     ) -> None:
         if terminal:
-            self._status_update_lock.release(job_id)
             resolution_started = time.perf_counter()
             scheduler_trace(
                 'terminal_dag_resolution_started',
