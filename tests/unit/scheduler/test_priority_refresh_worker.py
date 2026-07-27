@@ -192,6 +192,35 @@ async def test_refresh_job_priorities_returns_typed_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_priority_refresh_reports_hard_sla_misses() -> None:
+    scheduler = build_scheduler()
+    scheduler._priority_refresh_seq = 0
+    scheduler.priority_refresh_hydrate_limit = 100
+    scheduler.sla_warning_top_n = 5
+    scheduler.dag_service = SimpleNamespace(
+        refresh_frontier_priorities=AsyncMock(
+            return_value={"tracked": 1, "fetched": 1, "changed": 0}
+        )
+    )
+    scheduler.frontier = SimpleNamespace(
+        refresh_ready_ordering=AsyncMock(),
+        priority_refresh_summary=AsyncMock(
+            return_value={
+                "totals": {"jobs": 1, "dags": 1, "ready": 1, "blocked": 0},
+                "sla": {"tracked": 1, "hard_missed": 1},
+            }
+        ),
+    )
+
+    result = await scheduler._refresh_job_priorities(source="test")
+
+    assert result == PriorityRefreshResult(refresh_id=1)
+    scheduler.logger.warning.assert_called_once_with(
+        "[SLA] 1 jobs have missed hard SLA; planner ranking continues to prefer them"
+    )
+
+
+@pytest.mark.asyncio
 async def test_ready_order_refresh_cancellation_preserves_heap() -> None:
     frontier = build_frontier()
     original_heap = list(frontier._ready_heap)

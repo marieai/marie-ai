@@ -18,14 +18,17 @@ py_modules:
 
 # Shared configuration
 shared_config:
+  psql_connection: &psql_connection_shared
+    provider: postgresql
+    hostname: ${{ ENV.POSTGRES_HOSTNAME }}
+    port: 5432
+    username: ${{ ENV.POSTGRES_USER }}
+    password: ${{ ENV.POSTGRES_PASSWORD }}
+    database: postgres
+
   storage: &storage
     psql: &psql_conf_shared
-      provider: postgresql
-      hostname: ${{ ENV.POSTGRES_HOSTNAME }}
-      port: 5432
-      username: ${{ ENV.POSTGRES_USER }}
-      password: ${{ ENV.POSTGRES_PASSWORD }}
-      database: postgres
+      <<: *psql_connection_shared
       default_table: shared_docs
 
   message: &message
@@ -91,8 +94,7 @@ with:
 
     # Job Scheduler
   job_scheduler_kwargs:
-    <<: *psql_conf_shared
-    default_table: job_scheduler
+    <<: *psql_connection_shared
     max_workers: 2
     # Absorb large ingress bursts; submitters backpressure when this fills.
     submission_queue_size: 100000
@@ -109,10 +111,7 @@ with:
 
     # DAG Concurrency Management
     dag_manager:
-      strategy: dynamic # fixed or dynamic
-      min_concurrent_dags: 2      # Minimum number of concurrent DAGs (safety floor)
       max_concurrent_dags: 4     # Maximum number of concurrent DAGs (resource ceiling)
-      cache_ttl_seconds: 10       # Cache TTL for capacity calculations
 
     # Planners have to be available in the python path.
     # When running in a container, the planners should be available in the container's python path.

@@ -24,12 +24,10 @@ class SchedulerDiagnostics:
         active_dags: dict[str, Any],
         known_queues: set[str],
         execution_planner: Any,
-        scheduler_mode: str,
         gateway_instance_id: str,
         lease_owner: str,
         max_concurrent_dags: int,
         start_time: datetime,
-        hard_sla_policy: str,
         sla_warning_top_n: int,
         frontier_batch_size: int,
         lease_ttl_seconds: int,
@@ -42,12 +40,10 @@ class SchedulerDiagnostics:
         self.active_dags = active_dags
         self.known_queues = known_queues
         self.execution_planner = execution_planner
-        self.scheduler_mode = scheduler_mode
         self.gateway_instance_id = gateway_instance_id
         self.lease_owner = lease_owner
         self.max_concurrent_dags = max_concurrent_dags
         self.start_time = start_time
-        self.hard_sla_policy = hard_sla_policy
         self.sla_warning_top_n = sla_warning_top_n
         self.frontier_batch_size = frontier_batch_size
         self.lease_ttl_seconds = lease_ttl_seconds
@@ -74,7 +70,6 @@ class SchedulerDiagnostics:
             'scheduler_info': {
                 'running': running,
                 'paused': paused,
-                'scheduler_mode': self.scheduler_mode,
                 'gateway_instance_id': self.gateway_instance_id,
                 'scheduler_lease_owner': self.lease_owner,
                 'max_concurrent_dags': self.max_concurrent_dags,
@@ -99,8 +94,7 @@ class SchedulerDiagnostics:
             'execution_planning': {
                 'execution_planner_available': self.execution_planner is not None,
             },
-            'sla_policy': {
-                'hard_sla_policy': self.hard_sla_policy,
+            'sla_monitoring': {
                 'warning_top_n': self.sla_warning_top_n,
             },
             'queue_status': self.submission_service.status(

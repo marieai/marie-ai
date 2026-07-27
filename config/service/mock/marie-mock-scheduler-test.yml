@@ -7,15 +7,18 @@ version: '1'
 
 # Shared configuration
 shared_config:
+  psql_connection: &psql_connection_shared
+    provider: postgresql
+    hostname: ${{ ENV.POSTGRES_HOSTNAME }}
+    port: 5432
+    username: ${{ ENV.POSTGRES_USER }}
+    password: ${{ ENV.POSTGRES_PASSWORD }}
+    database: postgres
+    schema: marie_scheduler
+
   storage: &storage
     psql: &psql_conf_shared
-      provider: postgresql
-      hostname: ${{ ENV.POSTGRES_HOSTNAME }}
-      port: 5432
-      username: ${{ ENV.POSTGRES_USER }}
-      password: ${{ ENV.POSTGRES_PASSWORD }}
-      database: postgres
-      schema: marie_scheduler
+      <<: *psql_connection_shared
       default_table: shared_docs
 
   message: &message
@@ -173,8 +176,7 @@ with:
         - annotator
 
   job_scheduler_kwargs:
-    <<: *psql_conf_shared
-    default_table: job_scheduler
+    <<: *psql_connection_shared
     max_workers: 2
     desired_state_worker_count: 16
     desired_state_max_pending: 128

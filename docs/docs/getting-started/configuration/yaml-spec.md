@@ -212,23 +212,14 @@ gateway:
 ```yaml
 gateway:
   with:
-    # Distributed scheduling
-    distributed_scheduler: true
-
-    # Worker pool
-    max_workers: 10
-
-    # Lease management
-    lease_ttl_seconds: 5
-    run_ttl_seconds: 120
-
-    # DAG manager
-    dag_manager:
-      min_concurrent_dags: 2
-      max_concurrent_dags: 32
-      cache_ttl_seconds: 10
-      dag_cache_size: 10000
-      frontier_batch_size: 2000
+    job_scheduler_kwargs:
+      max_workers: 10
+      lease_ttl_seconds: 5
+      run_ttl_seconds: 120
+      dag_manager:
+        max_concurrent_dags: 32
+        dag_cache_size: 10000
+        frontier_batch_size: 2000
 ```
 
 ## Executor configuration
@@ -461,6 +452,10 @@ gateway:
       username: ${{ ENV.POSTGRES_USER | default: marie }}
       password: ${{ ENV.POSTGRES_PASSWORD }}
       database: ${{ ENV.POSTGRES_DB | default: marie }}
+      max_workers: 10
+      dag_manager:
+        max_concurrent_dags: 32
+        frontier_batch_size: 2000
 
     kv_store_kwargs:
       provider: postgresql
@@ -473,13 +468,6 @@ gateway:
     discovery_host: ${{ ENV.ETCD_HOST | default: localhost }}
     discovery_port: ${{ ENV.ETCD_PORT | default: 2379 }}
     discovery_service_name: marie
-
-    distributed_scheduler: true
-    max_workers: 10
-
-    dag_manager:
-      max_concurrent_dags: 32
-      frontier_batch_size: 2000
 
     prefetch: 100
 

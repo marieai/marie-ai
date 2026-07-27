@@ -26,7 +26,6 @@ gateway:
     database: postgres
     username: postgres
     password: '123456'
-    default_table: job_scheduler
     max_pool_size: 5
     max_connections: 5
   port:

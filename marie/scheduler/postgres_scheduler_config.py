@@ -7,10 +7,59 @@ from typing import Any
 from marie.excepts import BadConfigSource
 from marie.query_planner.model import QueryPlannersConf
 
-_HARD_SLA_POLICIES = {
-    'track_only',
-    'escalate_only',
-}
+_ALLOWED_CONFIG_KEYS = frozenset(
+    {
+        'application_name',
+        'dag_manager',
+        'database',
+        'desired_state_max_pending',
+        'desired_state_worker_count',
+        'dispatch_confirmation_max_in_flight',
+        'gateway_instance_id',
+        'hostname',
+        'job_event_queue_size',
+        'job_event_worker_count',
+        'lease_ttl_seconds',
+        'maintenance_interval',
+        'max_connections',
+        'max_pool_size',
+        'max_workers',
+        'min_connections',
+        'min_pool_size',
+        'options',
+        'password',
+        'pool_acquire_timeout_seconds',
+        'pool_open_timeout_seconds',
+        'port',
+        'priority_refresh_enabled',
+        'priority_refresh_hydrate_limit',
+        'priority_refresh_interval',
+        'priority_refresh_interval_seconds',
+        'priority_refresh_timeout_seconds',
+        'provider',
+        'query_planners',
+        'queue_names',
+        'run_lease_renewal_interval_seconds',
+        'run_ttl_seconds',
+        'schema',
+        'sla_priority_interval_seconds',
+        'sla_warning_top_n',
+        'submission_queue_size',
+        'username',
+    }
+)
+
+_ALLOWED_DAG_MANAGER_KEYS = frozenset(
+    {
+        'dag_cache_size',
+        'dag_resolution_retry_backoff',
+        'dag_resolution_retry_delay',
+        'dag_resolution_retry_limit',
+        'dag_resolution_retry_max_delay',
+        'frontier_batch_size',
+        'max_concurrent_dags',
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,7 +67,6 @@ class PostgreSQLSchedulerConfig:
     """Validated runtime settings for the PostgreSQL scheduler."""
 
     queue_names: frozenset[str]
-    scheduler_mode: str
     max_workers: int
     submission_queue_size: int
     job_event_worker_count: int
@@ -33,8 +81,6 @@ class PostgreSQLSchedulerConfig:
     maintenance_interval: int
     query_planners: QueryPlannersConf
     dag_cache_size: int
-    hard_sla_policy: str
-    invalid_hard_sla_policy: str | None
     sla_warning_top_n: int
     priority_refresh_enabled: bool
     priority_refresh_interval: int
@@ -49,6 +95,18 @@ class PostgreSQLSchedulerConfig:
 
     @classmethod
     def from_dict(cls, config: Mapping[str, Any]) -> PostgreSQLSchedulerConfig:
+        if 'heartbeat' in config:
+            raise BadConfigSource(
+                'scheduler heartbeat configuration is no longer supported; '
+                'use /api/debug and scheduler traces for diagnostics'
+            )
+
+        unknown_keys = sorted(set(config) - _ALLOWED_CONFIG_KEYS)
+        if unknown_keys:
+            raise BadConfigSource(
+                'Unknown scheduler configuration keys: ' + ', '.join(unknown_keys)
+            )
+
         if 'queue_names' not in config:
             raise BadConfigSource('Missing required config: queue_names')
 
@@ -61,34 +119,17 @@ class PostgreSQLSchedulerConfig:
         if not normalized_queues:
             raise BadConfigSource('Queue names are required for JobScheduler')
 
-        distributed_scheduler = config.get('distributed_scheduler', True)
-        if distributed_scheduler is not True:
-            raise BadConfigSource(
-                'distributed_scheduler=false is no longer supported; '
-                'durable DB leasing is required.'
-            )
-
         dag_config = config.get('dag_manager', {})
         if not isinstance(dag_config, Mapping):
             raise BadConfigSource('dag_manager must be a mapping')
+        unknown_dag_keys = sorted(set(dag_config) - _ALLOWED_DAG_MANAGER_KEYS)
+        if unknown_dag_keys:
+            raise BadConfigSource(
+                'Unknown dag_manager configuration keys: ' + ', '.join(unknown_dag_keys)
+            )
         query_planners_config = config.get('query_planners', {})
         if not isinstance(query_planners_config, Mapping):
             raise BadConfigSource('query_planners must be a mapping')
-        if 'heartbeat' in config:
-            raise BadConfigSource(
-                'scheduler heartbeat configuration is no longer supported; '
-                'use /api/debug and scheduler traces for diagnostics'
-            )
-
-        hard_sla_policy = str(config.get('hard_sla_policy', 'track_only')).lower()
-        if hard_sla_policy == 'expire_unfinished':
-            raise BadConfigSource(
-                'hard_sla_policy=expire_unfinished is not implemented'
-            )
-        invalid_hard_sla_policy = None
-        if hard_sla_policy not in _HARD_SLA_POLICIES:
-            invalid_hard_sla_policy = hard_sla_policy
-            hard_sla_policy = 'track_only'
 
         try:
             run_ttl_seconds = int(config.get('run_ttl_seconds', 60))
@@ -98,7 +139,6 @@ class PostgreSQLSchedulerConfig:
 
             settings = cls(
                 queue_names=normalized_queues,
-                scheduler_mode=str(config.get('scheduler_mode', 'parallel')),
                 max_workers=int(config.get('max_workers', 5)),
                 submission_queue_size=int(config.get('submission_queue_size', 1000)),
                 job_event_worker_count=int(config.get('job_event_worker_count', 8)),
@@ -125,8 +165,6 @@ class PostgreSQLSchedulerConfig:
                 maintenance_interval=int(config.get('maintenance_interval', 60)),
                 query_planners=QueryPlannersConf.from_dict(dict(query_planners_config)),
                 dag_cache_size=int(dag_config.get('dag_cache_size', 5000)),
-                hard_sla_policy=hard_sla_policy,
-                invalid_hard_sla_policy=invalid_hard_sla_policy,
                 sla_warning_top_n=int(config.get('sla_warning_top_n', 5)),
                 priority_refresh_enabled=bool(
                     config.get('priority_refresh_enabled', False)

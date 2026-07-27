@@ -201,11 +201,12 @@ Response:
 
 ## Distributed scheduling
 
-For high-availability deployments, Marie-AI supports distributed scheduling with lease-based coordination.
+Marie-AI always uses lease-based database coordination so multiple gateways can
+schedule safely.
 
 ### Lease management
 
-When `distributed_scheduler=True`, the scheduler uses database-level leases:
+The scheduler uses database-level leases:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -219,14 +220,15 @@ When `distributed_scheduler=True`, the scheduler uses database-level leases:
 3. **Lease expiration**: Expired leases allow job rescheduling
 4. **Conflict resolution**: Database ensures only one scheduler processes each job
 
-### Enabling distributed mode
+### Lease configuration
 
 ```yaml
-scheduler:
-  distributed_scheduler: true
+job_scheduler_kwargs:
   lease_ttl_seconds: 5
   run_ttl_seconds: 60
 ```
+
+The retired `distributed_scheduler` switch is not accepted.
 
 ## Poll intervals
 

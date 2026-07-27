@@ -231,7 +231,6 @@ class PostgreSQLJobScheduler(JobScheduler):
         self._event_subscriptions_active = False
         self.runtime = SchedulerRuntime(self.logger)
         self._scheduler_counters = defaultdict(int)
-        self.scheduler_mode = scheduler_config.scheduler_mode
 
         self._event_queue = Queue()
         self._status_update_lock = AsyncJobLock()
@@ -332,13 +331,6 @@ class PostgreSQLJobScheduler(JobScheduler):
         self._resources_closed = False
 
         self._start_time = datetime.now(timezone.utc)
-        self.hard_sla_policy = scheduler_config.hard_sla_policy
-        if scheduler_config.invalid_hard_sla_policy:
-            self.logger.warning(
-                "Unknown hard_sla_policy="
-                f"'{scheduler_config.invalid_hard_sla_policy}', "
-                "falling back to 'track_only'"
-            )
         self.sla_warning_top_n = scheduler_config.sla_warning_top_n
         self.priority_refresh_enabled = scheduler_config.priority_refresh_enabled
         self.priority_refresh_interval = scheduler_config.priority_refresh_interval
@@ -429,12 +421,10 @@ class PostgreSQLJobScheduler(JobScheduler):
             active_dags=self.active_dags,
             known_queues=self.known_queues,
             execution_planner=self.execution_planner,
-            scheduler_mode=self.scheduler_mode,
             gateway_instance_id=self.gateway_instance_id,
             lease_owner=self.lease_owner,
             max_concurrent_dags=self.max_concurrent_dags,
             start_time=self._start_time,
-            hard_sla_policy=self.hard_sla_policy,
             sla_warning_top_n=self.sla_warning_top_n,
             frontier_batch_size=self.frontier_batch_size,
             lease_ttl_seconds=self.lease_ttl_seconds,
@@ -2475,56 +2465,18 @@ class PostgreSQLJobScheduler(JobScheduler):
             top_urgent = sla_summary.get("top_urgent", [])
             if top_urgent:
                 self.logger.warning(f"[SLA] Top urgent jobs: {top_urgent}")
-
-            phase_started = time.perf_counter()
-            scheduler_trace(
-                "scheduler_priority_refresh_hard_sla_policy_start",
-                source=source,
-                refresh_id=refresh_id,
-                submission_count=self.submission_service.submission_count,
-                hard_missed=sla_summary.get("hard_missed", 0),
-                policy=self.hard_sla_policy,
-            )
-            await self._handle_hard_sla_policy(sla_summary)
-            scheduler_trace(
-                "scheduler_priority_refresh_hard_sla_policy_done",
-                source=source,
-                refresh_id=refresh_id,
-                submission_count=self.submission_service.submission_count,
-                elapsed_ms=(time.perf_counter() - phase_started) * 1000.0,
-                hard_missed=sla_summary.get("hard_missed", 0),
-                policy=self.hard_sla_policy,
-            )
+            hard_missed = int(sla_summary.get("hard_missed", 0))
+            if hard_missed > 0:
+                self.logger.warning(
+                    f"[SLA] {hard_missed} jobs have missed hard SLA; "
+                    "planner ranking continues to prefer them"
+                )
             return PriorityRefreshResult(refresh_id=refresh_id)
         except Exception as e:
             return PriorityRefreshResult(
                 refresh_id=refresh_id,
                 error=str(e),
             )
-
-    async def _handle_hard_sla_policy(self, sla_summary: Dict[str, Any]) -> None:
-        """Current hard-SLA behavior hook for the in-memory scheduler."""
-        hard_missed = int(sla_summary.get("hard_missed", 0))
-        if hard_missed <= 0:
-            return
-
-        if self.hard_sla_policy == "track_only":
-            self.logger.warning(
-                f"[SLA] {hard_missed} jobs have missed hard SLA; policy=track_only"
-            )
-            return
-
-        if self.hard_sla_policy == "escalate_only":
-            self.logger.warning(
-                f"[SLA] {hard_missed} jobs have missed hard SLA; policy=escalate_only "
-                "and planner ranking will continue to prefer them"
-            )
-            return
-
-        self.logger.error(
-            f"[SLA] {hard_missed} jobs have missed hard SLA; policy=expire_unfinished "
-            "is configured but not yet implemented in the in-memory scheduler"
-        )
 
     async def mark_as_active(self, work_info: WorkInfo) -> bool:
         """

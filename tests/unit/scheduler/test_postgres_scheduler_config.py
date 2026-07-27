@@ -1,7 +1,12 @@
+from pathlib import Path
+
 import pytest
 
 from marie.excepts import BadConfigSource
+from marie.jaml import JAML
 from marie.scheduler.postgres_scheduler_config import PostgreSQLSchedulerConfig
+
+REPOSITORY_ROOT = Path(__file__).parents[3]
 
 
 def test_scheduler_config_parses_runtime_defaults() -> None:
@@ -16,21 +21,97 @@ def test_scheduler_config_parses_runtime_defaults() -> None:
     assert config.priority_refresh_enabled is False
     assert config.priority_refresh_interval == 10
     assert config.max_concurrent_dags == 16
-    assert config.hard_sla_policy == 'track_only'
     assert config.run_ttl_seconds == 60
     assert config.run_lease_renewal_interval_seconds == 20
 
 
-def test_scheduler_config_normalizes_unknown_hard_sla_policy() -> None:
+def test_scheduler_config_accepts_consumed_bundle_keys() -> None:
     config = PostgreSQLSchedulerConfig.from_dict(
         {
             'queue_names': ['extract'],
-            'hard_sla_policy': 'unknown',
+            'provider': 'postgresql',
+            'hostname': 'postgres',
+            'port': 5432,
+            'username': 'marie',
+            'password': 'secret',
+            'database': 'marie',
+            'schema': 'marie_scheduler',
+            'application_name': 'gateway',
+            'options': '-c timezone=UTC',
+            'min_pool_size': 1,
+            'max_pool_size': 5,
+            'pool_acquire_timeout_seconds': 30,
+            'pool_open_timeout_seconds': 10,
+            'desired_state_worker_count': 16,
+            'desired_state_max_pending': 128,
+            'dag_manager': {
+                'max_concurrent_dags': 4,
+                'dag_cache_size': 5000,
+                'frontier_batch_size': 1000,
+            },
         }
     )
 
-    assert config.hard_sla_policy == 'track_only'
-    assert config.invalid_hard_sla_policy == 'unknown'
+    assert config.max_concurrent_dags == 4
+
+
+@pytest.mark.parametrize(
+    'key',
+    [
+        'default_table',
+        'distributed_scheduler',
+        'hard_sla_policy',
+        'max_wokers',
+        'scheduler_mode',
+    ],
+)
+def test_scheduler_config_rejects_unknown_top_level_keys(key: str) -> None:
+    with pytest.raises(BadConfigSource, match=rf'Unknown scheduler.*{key}'):
+        PostgreSQLSchedulerConfig.from_dict(
+            {
+                'queue_names': ['extract'],
+                key: True,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    'key',
+    ['cache_ttl_seconds', 'min_concurrent_dags', 'strategy'],
+)
+def test_scheduler_config_rejects_unknown_dag_manager_keys(key: str) -> None:
+    with pytest.raises(BadConfigSource, match=rf'Unknown dag_manager.*{key}'):
+        PostgreSQLSchedulerConfig.from_dict(
+            {
+                'queue_names': ['extract'],
+                'dag_manager': {key: True},
+            }
+        )
+
+
+def test_scheduler_config_preserves_heartbeat_migration_error() -> None:
+    with pytest.raises(BadConfigSource, match='heartbeat.*no longer supported'):
+        PostgreSQLSchedulerConfig.from_dict(
+            {
+                'queue_names': ['extract'],
+                'heartbeat': {},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    'relative_path',
+    [
+        'config/service/marie-gateway-4.0.0.yml',
+        'config/service/mock/marie-mock-scheduler-test.yml',
+        'deploy/helm/charts/marie/charts/server/files/service/marie-gateway-4.0.0.yml',
+    ],
+)
+def test_shipped_scheduler_config_uses_supported_keys(relative_path: str) -> None:
+    with (REPOSITORY_ROOT / relative_path).open() as stream:
+        document = JAML.load_no_tags(stream)
+
+    PostgreSQLSchedulerConfig.from_dict(document['with']['job_scheduler_kwargs'])
 
 
 def test_scheduler_config_can_enable_priority_refresh() -> None:
@@ -42,16 +123,6 @@ def test_scheduler_config_can_enable_priority_refresh() -> None:
     )
 
     assert config.priority_refresh_enabled is True
-
-
-def test_scheduler_config_rejects_unimplemented_expire_policy() -> None:
-    with pytest.raises(BadConfigSource, match="expire_unfinished.*not implemented"):
-        PostgreSQLSchedulerConfig.from_dict(
-            {
-                'queue_names': ['extract'],
-                'hard_sla_policy': 'expire_unfinished',
-            }
-        )
 
 
 @pytest.mark.parametrize(
@@ -68,7 +139,6 @@ def test_scheduler_config_rejects_unimplemented_expire_policy() -> None:
             {'job_event_worker_count': 4, 'job_event_queue_size': 3},
             'job_event_queue_size',
         ),
-        ({'distributed_scheduler': False}, 'distributed_scheduler=false'),
         ({'dag_manager': {'max_concurrent_dags': 0}}, 'max_concurrent_dags'),
         (
             {'run_lease_renewal_interval_seconds': 0},

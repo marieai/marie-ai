@@ -31,12 +31,10 @@ async def test_diagnostics_collects_component_owned_runtime_state() -> None:
         active_dags={'dag-1': SimpleNamespace(status='active')},
         known_queues={'extract'},
         execution_planner=object(),
-        scheduler_mode='parallel',
         gateway_instance_id='gateway-1',
         lease_owner='scheduler-1',
         max_concurrent_dags=16,
         start_time=datetime.now(timezone.utc),
-        hard_sla_policy='track_only',
         sla_warning_top_n=5,
         frontier_batch_size=100,
         lease_ttl_seconds=5,
@@ -55,6 +53,8 @@ async def test_diagnostics_collects_component_owned_runtime_state() -> None:
     }
     assert snapshot['queues']['request_queue_size'] == 1
     assert snapshot['active_dags']['dag-1']['status'] == 'active'
+    assert snapshot['sla_monitoring'] == {'warning_top_n': 5}
+    assert 'scheduler_mode' not in snapshot['scheduler_info']
     assert snapshot['job_state_counts'] == {'created': 2}
     assert snapshot['dag_state_counts'] == {'active': 1}
     runtime.tasks.assert_called_once_with(prefix='scheduler-submission-')

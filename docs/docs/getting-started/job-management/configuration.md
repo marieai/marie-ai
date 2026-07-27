@@ -42,9 +42,8 @@ gateway:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `queue_names` | `["default"]` | List of queue names to monitor |
-| `distributed_scheduler` | `false` | Enable distributed lease management |
-| `max_workers` | `5` | Thread pool size for DB operations |
+| `queue_names` | Required | List of queue names to monitor |
+| `max_workers` | `5` | Number of scheduler polling workers |
 | `lease_ttl_seconds` | `5` | Job lease timeout |
 | `run_ttl_seconds` | `60` | Active job execution timeout |
 | `maintenance_interval` | `60` | Maintenance task frequency (seconds) |
@@ -56,19 +55,16 @@ Configure DAG processing behavior:
 ```yaml
 gateway:
   with:
-    dag_manager:
-      min_concurrent_dags: 1
-      max_concurrent_dags: 16
-      cache_ttl_seconds: 5
-      dag_cache_size: 5000
-      frontier_batch_size: 1000
+    job_scheduler_kwargs:
+      dag_manager:
+        max_concurrent_dags: 16
+        dag_cache_size: 5000
+        frontier_batch_size: 1000
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `min_concurrent_dags` | `1` | Minimum DAGs to process simultaneously |
 | `max_concurrent_dags` | `16` | Maximum DAGs to process simultaneously |
-| `cache_ttl_seconds` | `5` | DAG cache entry lifetime |
 | `dag_cache_size` | `5000` | Maximum cached DAG entries |
 | `frontier_batch_size` | `1000` | Candidate jobs per poll cycle |
 
@@ -79,7 +75,10 @@ scheduler state, queue depth, state counts, active DAGs, dispatch counters, and
 the frontier summary. Scheduler phase transitions and rejected stale attempts
 are also emitted through structured scheduler traces.
 
-The retired scheduler `heartbeat:` configuration is not supported.
+Unknown `job_scheduler_kwargs` and `dag_manager` keys fail startup. Durable
+database leasing is always enabled; the retired `distributed_scheduler`,
+`scheduler_mode`, `hard_sla_policy`, and scheduler `heartbeat` settings are not
+supported.
 
 ## Queue configuration
 
@@ -134,9 +133,8 @@ job_scheduler_kwargs:
   username: marie
   password: ${POSTGRES_PASSWORD}
   database: marie
-  # Pool settings (if supported)
-  pool_size: 10
-  max_overflow: 20
+  min_pool_size: 1
+  max_pool_size: 10
 ```
 
 ## ETCD configuration
@@ -209,6 +207,14 @@ gateway:
       username: ${POSTGRES_USER:-marie}
       password: ${POSTGRES_PASSWORD}
       database: ${POSTGRES_DB:-marie}
+      queue_names: [extract]
+      max_workers: 10
+      lease_ttl_seconds: 5
+      run_ttl_seconds: 120
+      dag_manager:
+        max_concurrent_dags: 32
+        dag_cache_size: 10000
+        frontier_batch_size: 2000
 
     kv_store_kwargs:
       provider: postgresql
@@ -223,20 +229,6 @@ gateway:
     discovery_port: ${ETCD_PORT:-2379}
     discovery_service_name: marie
 
-    # Scheduler settings
-    distributed_scheduler: true
-    max_workers: 10
-    lease_ttl_seconds: 5
-    run_ttl_seconds: 120
-
-    # DAG manager
-    dag_manager:
-      min_concurrent_dags: 2
-      max_concurrent_dags: 32
-      cache_ttl_seconds: 10
-      dag_cache_size: 10000
-      frontier_batch_size: 2000
-
 executors:
   - name: extract
     uses: ExtractExecutor
@@ -250,9 +242,10 @@ executors:
 For maximum job throughput:
 
 ```yaml
-dag_manager:
-  max_concurrent_dags: 64
-  frontier_batch_size: 5000
+job_scheduler_kwargs:
+  dag_manager:
+    max_concurrent_dags: 64
+    frontier_batch_size: 5000
 ```
 
 ### Low latency
@@ -260,9 +253,10 @@ dag_manager:
 For minimal job latency:
 
 ```yaml
-dag_manager:
-  min_concurrent_dags: 4
-  frontier_batch_size: 100
+job_scheduler_kwargs:
+  dag_manager:
+    max_concurrent_dags: 16
+    frontier_batch_size: 100
 ```
 
 ### Resource constrained
@@ -270,12 +264,12 @@ dag_manager:
 For limited resources:
 
 ```yaml
-dag_manager:
-  max_concurrent_dags: 8
-  dag_cache_size: 1000
-  frontier_batch_size: 500
-
-max_workers: 3
+job_scheduler_kwargs:
+  max_workers: 3
+  dag_manager:
+    max_concurrent_dags: 8
+    dag_cache_size: 1000
+    frontier_batch_size: 500
 ```
 
 ## Next steps
