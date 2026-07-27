@@ -58,9 +58,18 @@ _OCR_RASTER_EXTENSIONS = frozenset(
     if canonical in OCR_RASTER_FORMATS and canonical != 'pdf'
 )
 
+_DEFAULT_MAX_RASTER_PAGES = 500
+_DEFAULT_MAX_RASTER_DECODED_BYTES = 8 * 1024**3
+
 
 class UnsupportedOcrInputError(ValueError):
     """Raised when a source cannot be rasterized by Marie OCR."""
+
+
+class DocumentTooLargeError(ValueError):
+    """Raised when decoding a document would exceed configured limits."""
+
+    retryable = False
 
 
 def get_document_type(file_path: str) -> str:
@@ -334,8 +343,7 @@ def _load_document_frames(
     if canonical == 'pdf':
         return _load_pdf_frames(path, pages, dpi=dpi)
 
-    frames = _load_raster_image_frames(path)
-    return _select_frames(frames, pages)
+    return _load_raster_image_frames(path, pages)
 
 
 def _load_pdf_frames(
@@ -361,11 +369,57 @@ def _load_pdf_frames(
     return [_rgb_array(image) for image in images]
 
 
-def _load_raster_image_frames(path: Path) -> list[np.ndarray]:
+def _load_raster_image_frames(
+    path: Path,
+    pages: Sequence[int] | None = None,
+) -> list[np.ndarray]:
     _register_heif()
     with Image.open(path) as image:
-        frames = []
-        for index in range(getattr(image, 'n_frames', 1)):
+        try:
+            frame_count = image.n_frames
+        except AttributeError:
+            frame_count = 1
+        selected = _normalize_pages(pages)
+        indices: Sequence[int] = range(frame_count) if selected is None else selected
+
+        for page in indices:
+            if page >= frame_count:
+                raise IndexError(f'Page index out of range: {page}')
+
+        max_pages = int(
+            os.environ.get(
+                'MARIE_MAX_RASTER_PAGES',
+                str(_DEFAULT_MAX_RASTER_PAGES),
+            )
+        )
+        if max_pages > 0 and len(indices) > max_pages:
+            raise DocumentTooLargeError(
+                f'Raster document has {len(indices)} selected pages; '
+                f'limit is {max_pages}'
+            )
+
+        max_decoded_bytes = int(
+            os.environ.get(
+                'MARIE_MAX_RASTER_DECODED_BYTES',
+                str(_DEFAULT_MAX_RASTER_DECODED_BYTES),
+            )
+        )
+        if max_decoded_bytes > 0:
+            estimated_decoded_bytes = 0
+            for index in indices:
+                image.seek(index)
+                width, height = image.size
+                estimated_decoded_bytes += width * height * 3
+
+            if estimated_decoded_bytes > max_decoded_bytes:
+                raise DocumentTooLargeError(
+                    'Raster document requires approximately '
+                    f'{estimated_decoded_bytes} decoded RGB bytes; '
+                    f'limit is {max_decoded_bytes}'
+                )
+
+        frames: list[np.ndarray] = []
+        for index in indices:
             image.seek(index)
             frames.append(_rgb_array(image))
         return frames
