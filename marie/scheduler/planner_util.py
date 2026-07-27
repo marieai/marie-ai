@@ -1,8 +1,9 @@
 import copy
 import json
+import os
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Tuple
+from typing import Optional, Tuple
 
 from marie.constants import (
     __default_extract_dir__,
@@ -22,7 +23,6 @@ from marie.query_planner.planner import (
     query_planner,
     topological_sort,
 )
-from marie.scheduler.fixtures import *
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import WorkInfo
 from marie.utils.types import to_bool

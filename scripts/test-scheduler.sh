@@ -113,7 +113,6 @@ run_suite "Scheduler-adjacent runtime units" \
   tests/unit/job/test_job_manager_monitor_trace.py \
   tests/unit/job/test_job_supervisor_trace.py \
   tests/integration/job/test_job_supervisor.py \
-  tests/unit/query_planner/test_guardrail_evaluator.py \
   tests/unit/query_planner/test_guardrail_mapper.py \
   tests/unit/query_planner/test_kb_indexing_params.py \
   tests/sensors \

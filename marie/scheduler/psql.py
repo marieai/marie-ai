@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from math import inf
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import psycopg
 
@@ -30,7 +30,6 @@ from marie.query_planner.base import (
 )
 from marie.query_planner.builtin import register_all_known_planners
 from marie.scheduler.dag_topology_cache import DagTopologyCache
-from marie.scheduler.fixtures import *
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.job_scheduler import JobScheduler
