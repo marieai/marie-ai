@@ -316,6 +316,20 @@ build_single_profile() {
     local profile_key=$1
 
     log_info "Building profile: $profile_key (Version: $VERSION)"
+
+    if [[ "$profile_key" == "marie-cuda" ]]; then
+        if ! command -v uv &> /dev/null; then
+            log_error "uv is required to synchronize the CUDA dependency lockfile"
+            return 1
+        fi
+
+        log_info "Synchronizing uv.lock..."
+        if ! uv lock --no-cache; then
+            log_error "Failed to synchronize uv.lock"
+            return 1
+        fi
+    fi
+
     parse_profile_config "$profile_key"
 
     if build_image "$DOCKERFILE_PATH" "$FULL_IMAGE_NAME" "$profile_key"; then
