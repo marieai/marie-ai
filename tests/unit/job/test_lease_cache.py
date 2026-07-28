@@ -154,6 +154,24 @@ def test_get_or_refresh_does_not_replace_lease_after_transient_error(monkeypatch
     assert warning_record[2]["extra"]["renewal_result"] == "refresh_failed"
 
 
+def test_get_or_refresh_replaces_closed_channel_lease_after_client_recovery(
+    monkeypatch,
+):
+    now = [100.0]
+    monkeypatch.setattr("marie.job.lease_cache.time.monotonic", lambda: now[0])
+    etcd = FakeEtcd(refresh_error=RuntimeError("Cannot invoke RPC: Channel closed!"))
+    cache = LeaseCache(etcd, ttl=10, margin=1.0)
+
+    first = cache.get_or_refresh("node/depl")
+    now[0] = 109.0
+    etcd.refresh_error = None
+    second = cache.get_or_refresh("node/depl")
+
+    assert second is not first
+    assert second.id == 2
+    assert len(etcd.leases) == 2
+
+
 def test_get_or_refresh_grants_one_lease_under_concurrency():
     etcd = FakeEtcd()
     cache = LeaseCache(etcd, ttl=10, margin=1.0)

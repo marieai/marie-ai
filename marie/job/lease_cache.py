@@ -5,6 +5,19 @@ from typing import Any, Dict, Optional, Tuple
 import etcd3
 
 
+def is_poisoned_lease_client_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "cannot invoke rpc: channel closed",
+            "channel is closed",
+            "closed channel",
+            "transport is closing",
+        )
+    )
+
+
 class LeaseCache:
     def __init__(self, etcd_client, ttl=5, margin=1.0, logger=None):
         self.etcd = etcd_client
@@ -114,7 +127,10 @@ class LeaseCache:
                         "refresh_failed",
                         error,
                     )
-                    if not self._is_missing_lease_error(error):
+                    if not (
+                        self._is_missing_lease_error(error)
+                        or is_poisoned_lease_client_error(error)
+                    ):
                         raise
                 self._cache.pop(cache_key, None)
 

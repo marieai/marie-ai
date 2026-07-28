@@ -33,7 +33,7 @@ from marie.excepts import BadConfigSource, RuntimeTerminated
 from marie.helper import get_full_version, get_internal_ip
 from marie.importer import ImportExtensions
 from marie.job.common import JobInfoStorageClient, JobStatus
-from marie.job.lease_cache import LeaseCache
+from marie.job.lease_cache import LeaseCache, is_poisoned_lease_client_error
 from marie.proto import jina_pb2
 from marie.serve.discovery.base import ConnectionState
 from marie.serve.discovery.container import EtcdConfig
@@ -48,7 +48,6 @@ from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
 from marie.utils.network import get_ip_address
 from marie.utils.scheduler_trace import scheduler_trace
-from marie.utils.timing import exponential_backoff
 from marie.utils.types import strtobool
 
 if docarray_v2:
@@ -2010,91 +2009,42 @@ class WorkerRequestHandler:
         except Exception as exc:
             self.logger.error(f"Failed to reflect status '{name}' into /status: {exc}")
 
-    def setup_heartbeat(self):
-        """
-        Set up an asynchronous heartbeat process with connection state monitoring.
-        :return: None
-        """
+    def _reclaim_status(self) -> bool:
+        if self._etcd_client.get_connection_state() in (
+            ConnectionState.DISCONNECTED,
+            ConnectionState.RECONNECTING,
+            ConnectionState.FAILED,
+        ):
+            return False
+        if self._worker_state == HealthCheckResponse.ServingStatus.SERVING:
+            return self._claim_and_mark_serving()
+        return self._claim_and_mark_ready()
+
+    def _status_heartbeat_once(self) -> Optional[bool]:
+        connection_state = self._etcd_client.get_connection_state()
+        if connection_state in (
+            ConnectionState.DISCONNECTED,
+            ConnectionState.RECONNECTING,
+            ConnectionState.FAILED,
+        ):
+            self.logger.debug(
+                f"Skipping heartbeat - connection state: {connection_state.name}"
+            )
+            return None
+
+        ok = self._status_store.heartbeat(self._node, self._deployment, self._worker_id)
+        if not ok:
+            ok = self._reclaim_status()
+        if self._etcd_client.get_connection_state() not in (
+            ConnectionState.DISCONNECTED,
+            ConnectionState.RECONNECTING,
+            ConnectionState.FAILED,
+        ):
+            self._sem_renew_all_if_due()
+        return ok
+
+    def setup_heartbeat(self) -> None:
         self.logger.info("Calling heartbeat setup")
-
-        def _hb():
-            consecutive_failures = 0
-            max_consecutive_failures = 3
-
-            while not self._status_hb_stop.is_set():
-                try:
-                    # Heartbeat regardless of SERVING/NOT_SERVING, so the gateway
-                    # continuously knows the node is alive & ready when idle.
-                    ok = self._status_store.heartbeat(
-                        self._node, self._deployment, self._worker_id
-                    )
-                    if not ok:
-                        consecutive_failures += 1
-                        # Key missing or owner mismatch; re-claim and re-publish
-                        self.logger.debug(
-                            f"Status heartbeat: status doc missing or owner mismatch "
-                            f"(consecutive failures: {consecutive_failures}/{max_consecutive_failures})"
-                        )
-
-                        # Log diagnostic info after multiple failures
-                        if consecutive_failures >= max_consecutive_failures:
-                            try:
-                                current_status = self._status_store.read(
-                                    self._node, self._deployment
-                                )
-                                self.logger.error(
-                                    f"Repeated heartbeat failures. Current status in etcd: {current_status}, "
-                                    f"expected owner: {self._worker_id}"
-                                )
-                            except Exception as diag_err:
-                                self.logger.error(
-                                    f"Failed to read current status for diagnostics: {diag_err}"
-                                )
-
-                        try:
-                            if (
-                                self._worker_state
-                                == health_pb2.HealthCheckResponse.ServingStatus.SERVING
-                            ):
-                                self._claim_and_mark_serving()
-                            else:
-                                self._claim_and_mark_ready()
-                            consecutive_failures = 0  # Reset on successful recovery
-                        except Exception as e2:
-                            self.logger.error(f"status heartbeat recovery failed: {e2}")
-                    else:
-                        # Heartbeat succeeded, reset failure counter
-                        if consecutive_failures > 0:
-                            self.logger.info(
-                                f"Status heartbeat recovered after {consecutive_failures} failures"
-                            )
-                            consecutive_failures = 0
-
-                    # renew any active semaphore tickets
-                    try:
-                        self._sem_renew_all_if_due()
-                    except Exception as e:
-                        self.logger.error(f"[sem] renew loop error: {e}")
-                        raise e
-                except Exception as e:
-                    # If lease is missing/expired, attempt to re-claim and re-publish current state
-                    if _is_missing_lease_error(e):
-                        self.logger.warning(
-                            "Status heartbeat: lease missing/expired. Re-claiming and re-publishing status."
-                        )
-                        try:
-                            if (
-                                self._worker_state
-                                == health_pb2.HealthCheckResponse.ServingStatus.SERVING
-                            ):
-                                self._claim_and_mark_serving()
-                            else:
-                                self._claim_and_mark_ready()
-                        except Exception as e2:
-                            self.logger.error(f"status heartbeat recovery failed: {e2}")
-                    else:
-                        self.logger.error(f"status heartbeat error (non-fatal): {e}")
-                time.sleep(next_heartbeat_delay(self._base_heartbeat))
 
         self._etcd_client.add_connection_event_handler(
             ConnectionState.CONNECTED, self._on_etcd_connected
@@ -2109,72 +2059,77 @@ class WorkerRequestHandler:
             ConnectionState.FAILED, self._on_etcd_failed
         )
 
-        def _heartbeat_setup():
+        def _heartbeat_setup() -> None:
             self.logger.debug(
                 f"Starting heartbeat thread, interval: {self._heartbeat_time}s"
             )
+            consecutive_failures = 0
+            max_consecutive_failures = 3
 
-            failures = 0
-            max_failures = 5
-            initial_backoff = 2
-            max_backoff = 30
-
-            time.sleep(self._heartbeat_time)
+            if self._hb_supervisor_stop.wait(self._heartbeat_time):
+                return
 
             while not self._hb_supervisor_stop.is_set():
-                try:
-                    current_state = self._etcd_client.get_connection_state()
-                    if (
-                        current_state == ConnectionState.CONNECTED
-                        or current_state is None
+                if self._status_hb_stop.is_set():
+                    if self._hb_supervisor_stop.wait(
+                        next_heartbeat_delay(self._base_heartbeat)
                     ):
-                        _hb()
-                        failures = 0
-                    else:
-                        # Skip heartbeat but don't treat as failure
-                        self.logger.debug(
-                            f"Skipping heartbeat - connection state: {current_state.name}"
-                        )
-
-                except Exception as e:
-                    failures += 1
-                    current_state = self._etcd_client.get_connection_state()
-                    state_info = (
-                        f" (connection: {current_state.name})" if current_state else ""
-                    )
-
-                    self.logger.error(
-                        f"Error in heartbeat attempt {failures}/{max_failures}{state_info}: {e}"
-                    )
-                    self.logger.debug(f"Traceback: {traceback.format_exc()}")
-                    backoff_time = exponential_backoff(
-                        failures, initial_backoff, max_backoff
-                    )
-
-                    # Don't count failures during known disconnections
-                    if current_state in [
-                        ConnectionState.DISCONNECTED,
-                        ConnectionState.RECONNECTING,
-                        ConnectionState.FAILED,
-                    ]:
-                        failures = min(failures, max_failures - 1)
-                        backoff_time = self._heartbeat_time
-                        self.logger.debug("Not counting failure - connection is down")
-                    else:
-                        self.logger.warning(
-                            f"Retrying heartbeat in {backoff_time:.2f} seconds"
-                        )
-
-                    if failures >= max_failures:
-                        self.logger.error(
-                            f"Max failures reached ({max_failures}). Heartbeat process will stop."
-                        )
                         break
-
-                    time.sleep(backoff_time)
                     continue
 
-                time.sleep(next_heartbeat_delay(self._base_heartbeat))
+                try:
+                    ok = self._status_heartbeat_once()
+                    if ok is None:
+                        consecutive_failures = 0
+                    elif ok:
+                        if consecutive_failures:
+                            self.logger.info(
+                                f"Status heartbeat recovered after {consecutive_failures} failures"
+                            )
+                        consecutive_failures = 0
+                    else:
+                        consecutive_failures += 1
+                        self.logger.debug(
+                            "Status heartbeat: status doc missing or owner mismatch "
+                            f"(consecutive failures: {consecutive_failures}/"
+                            f"{max_consecutive_failures})"
+                        )
+                        if consecutive_failures >= max_consecutive_failures:
+                            current_status = self._status_store.read(
+                                self._node, self._deployment
+                            )
+                            self.logger.error(
+                                "Repeated heartbeat failures. Current status in etcd: "
+                                f"{current_status}, expected owner: {self._worker_id}"
+                            )
+                except Exception as error:
+                    if is_poisoned_lease_client_error(error):
+                        self._status_lease_invalidator()
+                        self.logger.warning(
+                            f"Status heartbeat discarded stale lease client: {error}"
+                        )
+                    elif _is_missing_lease_error(error):
+                        self._status_lease_invalidator()
+                        try:
+                            reclaimed = self._reclaim_status()
+                        except Exception as reclaim_error:
+                            self.logger.error(
+                                f"status heartbeat recovery failed: {reclaim_error}"
+                            )
+                        else:
+                            if not reclaimed:
+                                self.logger.warning(
+                                    "Status heartbeat could not reclaim status ownership"
+                                )
+                    else:
+                        self.logger.error(
+                            f"status heartbeat error (non-fatal): {error}"
+                        )
+
+                if self._hb_supervisor_stop.wait(
+                    next_heartbeat_delay(self._base_heartbeat)
+                ):
+                    break
 
         self._status_hb_thread = threading.Thread(target=_heartbeat_setup, daemon=True)
         self._status_hb_thread.start()
@@ -2187,25 +2142,23 @@ class WorkerRequestHandler:
         current_state = self._etcd_client.get_connection_state()
         self.logger.info(f"Event handler - connection state is now: {current_state}")
 
-        # ALWAYS re-claim on reconnect to refresh the lease.
-        # Even if the status key exists in ETCD, the lease may be dead/stale
-        # after a disconnect, so we must re-write with a fresh lease to
-        # trigger watch events for the gateway.
+        self._status_lease_invalidator()
         try:
-            if (
-                self._worker_state
-                == health_pb2.HealthCheckResponse.ServingStatus.SERVING
-            ):
-                self._claim_and_mark_serving()
+            reclaimed = self._reclaim_status()
+            if not reclaimed:
+                self.logger.warning(
+                    "Could not re-claim status after reconnect; another owner may hold it"
+                )
+            elif self._worker_state == HealthCheckResponse.ServingStatus.SERVING:
                 self.logger.info("Re-claimed status as SERVING after reconnect")
             else:
-                self._claim_and_mark_ready()
                 self.logger.info("Re-claimed status as NOT_SERVING after reconnect")
         except Exception as e:
             self.logger.warning(f"post-reconnect status reassert failed: {e}")
 
     def _on_etcd_disconnected(self, event):
         """Handle etcd connection lost."""
+        self._status_lease_invalidator()
         self.logger.warning(f"Request handler: etcd connection lost - {event.error}")
         current_state = self._etcd_client.get_connection_state()
         self.logger.info(f"Event handler - connection state is now: {current_state}")
