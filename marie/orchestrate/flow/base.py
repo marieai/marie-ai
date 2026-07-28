@@ -567,6 +567,8 @@ class Flow(
             self.logger = MarieLogger(self.__class__.__name__, **self._common_kwargs)
 
         self._client = None
+        self._etcd_registry = None
+        self.sd_state = 'stopped'
 
     def _update_args(self, args, **kwargs):
         from marie.helper import ArgNamespace
@@ -1820,6 +1822,7 @@ class Flow(
         return self.build(*args, **kwargs)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self._teardown_service_discovery()
         super().__exit__(exc_type, exc_val, exc_tb)
         if self._client:
             self._client.teardown_instrumentation()

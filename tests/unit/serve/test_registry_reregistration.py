@@ -142,3 +142,23 @@ def test_heartbeat_closed_channel_is_quiet_transient(registry, client, caplog):
     assert errors == []
     # and no re-registration attempt from THIS branch (put count unchanged)
     assert client.put.call_count == 1
+
+
+def test_shutdown_detaches_handlers_without_closing_injected_client(registry, client):
+    registry.shutdown()
+
+    assert client.remove_connection_event_handler.call_count == 4
+    client.close.assert_not_called()
+
+
+def test_shutdown_closes_registry_owned_client(mocker):
+    client = mocker.Mock(spec=EtcdClient)
+    mocker.patch(
+        "marie.serve.discovery.registry.get_etcd_client", return_value=client
+    )
+    close_client = mocker.patch("marie.serve.discovery.registry.close_etcd_client")
+    registry = EtcdServiceRegistry(etcd_host="localhost", etcd_port=2379)
+
+    registry.shutdown()
+
+    close_client.assert_called_once_with(client)

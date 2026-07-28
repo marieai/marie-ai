@@ -91,11 +91,13 @@ class DiscoveryServiceMixin:
 
         service_ttl, heartbeat_time = _discovery_lease_params(runtime_args)
 
-        etcd_registry = EtcdServiceRegistry(
+        self.sd_state = "starting"
+        self._etcd_registry = EtcdServiceRegistry(
             self.discovery_host,
             self.discovery_port,
             heartbeat_time=heartbeat_time,
         )
+        etcd_registry = self._etcd_registry
 
         # we are unrolling the deployments_addresses to register each deployment separately
         # this is to allow for FLOW deployments to be registered separately without the gateway
@@ -141,17 +143,20 @@ class DiscoveryServiceMixin:
                 )
                 self.logger.info(f"Lease ID: {lease.id}")
 
-        self.sd_state = "started"
+        self.sd_state = "ready"
 
     def _teardown_service_discovery(
         self,
     ) -> None:
-        """Teardown service discovery, by unregistering existing service from the catalog"""
-        if self.sd_state != "ready":
+        """Stop service discovery before deployments begin shutting down."""
+        registry = self._etcd_registry
+        if registry is None:
             return
         self.sd_state = "stopping"
         try:
-            # TODO - Implement service discovery teardown
-            pass
-        except Exception:
-            pass
+            registry.shutdown()
+        except Exception as exc:
+            self.logger.warning(f"Failed to stop service discovery: {exc}")
+        finally:
+            self._etcd_registry = None
+            self.sd_state = "stopped"

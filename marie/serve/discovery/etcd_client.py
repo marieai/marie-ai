@@ -268,7 +268,7 @@ class EtcdClient(object):
 
     def _attempt_immediate_reconnection(self):
         """Attempt reconnection with exponential backoff when disconnected"""
-        if self._in_recovery:
+        if self._shutting_down or self._in_recovery:
             return  # Don't cascade during recovery attempts
 
         if self._reconnect_attempts >= self._max_reconnect_attempts:
@@ -296,6 +296,8 @@ class EtcdClient(object):
 
     def _do_reconnection_attempt(self):
         """Execute reconnection attempt"""
+        if self._shutting_down:
+            return
         current_state = self.get_connection_state()
         if current_state != ConnectionState.DISCONNECTED:
             logger.debug(f"Skipping reconnection - state is {current_state.name}")
@@ -305,7 +307,8 @@ class EtcdClient(object):
             logger.info(
                 f"Attempting automatic reconnection #{self._reconnect_attempts}..."
             )
-            self.reconnect()
+            if not self.reconnect():
+                return
             self._last_successful_operation = time.time()
             logger.info("Reconnection successful")
 
@@ -321,6 +324,8 @@ class EtcdClient(object):
 
     def _schedule_recovery_attempt(self):
         """Schedule a recovery attempt from FAILED state with longer backoff."""
+        if self._shutting_down:
+            return
         if self._reconnect_timer and self._reconnect_timer.is_alive():
             return  # Already scheduled
 
@@ -336,7 +341,7 @@ class EtcdClient(object):
 
     def _do_recovery_attempt(self):
         """Execute recovery attempt - creates fresh client to reset internal state."""
-        if self.get_connection_state() != ConnectionState.FAILED:
+        if self._shutting_down or self.get_connection_state() != ConnectionState.FAILED:
             return
 
         try:
@@ -357,6 +362,10 @@ class EtcdClient(object):
 
             # Create fresh client directly (bypassing reconnect() state machine)
             self.client = self._create_client()
+
+            if self._shutting_down:
+                self.client.close()
+                return
 
             # Set up cluster reference
             if self._is_multi_endpoint:
@@ -389,6 +398,11 @@ class EtcdClient(object):
         """Get the current connection state"""
         with self._state_lock:
             return self._connection_state
+
+    @property
+    def is_closed(self) -> bool:
+        """Return whether intentional shutdown has made this client terminal."""
+        return self._shutting_down
 
     def _start_connection_monitor(self):
         """Start monitoring connection health"""
@@ -1402,6 +1416,9 @@ class EtcdClient(object):
         Reconnect to etcd with proper state management.
         This method is called when explicit reconnection is needed.
         """
+        if self._shutting_down:
+            return False
+
         try:
             self._in_recovery = True
             self._set_connection_state(ConnectionState.RECONNECTING)
@@ -1418,7 +1435,10 @@ class EtcdClient(object):
             # Pass flag to skip state management in connect() since we handle it here
             connected = self.connect(_from_reconnect=True)
             if not connected:
-                self._set_connection_state(ConnectionState.FAILED)
+                return False
+
+            if self._shutting_down:
+                self.client.close()
                 return False
 
             # Quick connectivity test
@@ -1448,6 +1468,9 @@ class EtcdClient(object):
             _from_reconnect: If True, skip state management as reconnect() handles it.
                            This prevents redundant state transitions.
         """
+        if self._shutting_down:
+            return False
+
         times = 0
         last_ex = None
         # Use fewer retries for reconnection (3) vs initial connection
@@ -1464,6 +1487,10 @@ class EtcdClient(object):
         while times < max_retries:
             try:
                 self.client = self._create_client()
+
+                if self._shutting_down:
+                    self.client.close()
+                    return False
 
                 if self._is_multi_endpoint:
                     logger.info(
@@ -1506,7 +1533,8 @@ class EtcdClient(object):
                         )
                         if not _from_reconnect:
                             self._set_connection_state(ConnectionState.RECONNECTING, e)
-                    time.sleep(backoff)
+                    if self._monitor_stop.wait(backoff):
+                        return False
                     continue
                 else:
                     if not _from_reconnect:
@@ -1528,7 +1556,8 @@ class EtcdClient(object):
                     )
                     if not _from_reconnect:
                         self._set_connection_state(ConnectionState.RECONNECTING, e)
-                time.sleep(backoff)
+                if self._monitor_stop.wait(backoff):
+                    return False
 
         if times >= max_retries:
             if not _from_reconnect:
@@ -1540,11 +1569,15 @@ class EtcdClient(object):
         logger.info(f'Connected to etcd with namespace "{self.ns}"')
         return True
 
-    def close(self):
+    def close(self) -> None:
         """Close the client"""
         try:
+            with self._state_lock:
+                if self._shutting_down:
+                    return
+                self._shutting_down = True
+
             logger.info("Closing EtcdClient...")
-            self._shutting_down = True
 
             with self._state_lock:
                 self._connection_state = ConnectionState.DISCONNECTED

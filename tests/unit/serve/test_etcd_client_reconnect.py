@@ -100,3 +100,22 @@ def test_monitor_pauses_during_reconnect_and_drops_stale_failures(monkeypatch):
 
     assert probe_calls == [0, 2]
     assert ConnectionState.DISCONNECTED not in state_changes
+
+
+def test_scheduled_reconnect_does_not_run_after_close():
+    client = _make_client(ConnectionState.DISCONNECTED)
+    client._shutting_down = True
+    client.reconnect = Mock()
+
+    client._do_reconnection_attempt()
+
+    client.reconnect.assert_not_called()
+
+
+def test_explicit_reconnect_does_not_reopen_closed_client():
+    client = _make_client(ConnectionState.DISCONNECTED)
+    client._shutting_down = True
+    client.connect = Mock()
+
+    assert client.reconnect() is False
+    client.connect.assert_not_called()

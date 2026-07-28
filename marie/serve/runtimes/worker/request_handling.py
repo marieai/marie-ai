@@ -37,7 +37,11 @@ from marie.job.lease_cache import LeaseCache, is_poisoned_lease_client_error
 from marie.proto import jina_pb2
 from marie.serve.discovery.base import ConnectionState
 from marie.serve.discovery.container import EtcdConfig
-from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
+from marie.serve.discovery.etcd_manager import (
+    close_etcd_client,
+    convert_to_etcd_args,
+    get_etcd_client,
+)
 from marie.serve.executors import BaseExecutor, __dry_run_endpoint__
 from marie.serve.instrumentation import MetricsTimer
 from marie.serve.networking.utils import host_is_local
@@ -983,7 +987,8 @@ class WorkerRequestHandler:
         self.logger.debug(f"Closing Request Handler")
         if self._hot_reload_task is not None:
             self._hot_reload_task.cancel()
-        if not self._is_closed:
+        close_etcd = not self._is_closed
+        if close_etcd:
             self.shutdown_heartbeat()
             self.logger.debug(f"Await closing all the batching queues")
             await asyncio.gather(*[q.close() for q in self._all_batch_queues()])
@@ -992,7 +997,11 @@ class WorkerRequestHandler:
                 await self._job_info_client.close()
             self._is_closed = True
 
-        self._sem_untrack_all(release=True)
+        try:
+            self._sem_untrack_all(release=True)
+        finally:
+            if close_etcd:
+                close_etcd_client(self._etcd_client)
         self.logger.debug(f"Request Handler closed")
 
     @staticmethod

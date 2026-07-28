@@ -7,7 +7,11 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.serve.discovery.address import JsonAddress, PlainAddress
 from marie.serve.discovery.base import ConnectionState, ServiceRegistry
 from marie.serve.discovery.etcd_client import EtcdClient
-from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
+from marie.serve.discovery.etcd_manager import (
+    close_etcd_client,
+    convert_to_etcd_args,
+    get_etcd_client,
+)
 from marie.serve.discovery.timeout_utils import OperationTimeoutError, run_with_timeout
 from marie.serve.discovery.util import form_service_key
 from marie.utils.timing import exponential_backoff
@@ -69,6 +73,7 @@ class EtcdServiceRegistry(ServiceRegistry):
             logger.warning(
                 "Both etcd_client and etcd_host/etcd_port are provided. Using etcd_client."
             )
+        self._owns_etcd_client = etcd_client is None
         if etcd_client:
             if not isinstance(etcd_client, EtcdClient):
                 raise TypeError("etcd_client must be an instance of EtcdClient.")
@@ -108,6 +113,8 @@ class EtcdServiceRegistry(ServiceRegistry):
 
     def _on_etcd_connected(self, event):
         """Handle etcd connection established - re-register all services."""
+        if self._shutdown_event.is_set():
+            return
         logger.info("Etcd connected - re-registering all services")
 
         with self._lock:
@@ -154,6 +161,8 @@ class EtcdServiceRegistry(ServiceRegistry):
             addr_cls,
             metadata,
         ) in services_to_reregister:
+            if self._shutdown_event.is_set():
+                return
             try:
                 self.register(
                     service_names,
@@ -307,6 +316,8 @@ class EtcdServiceRegistry(ServiceRegistry):
 
     def heartbeat(self, service_addr=None, service_ttl=None):
         """Service heartbeat with connection state awareness."""
+        if self._shutdown_event.is_set():
+            return
         if service_ttl is None:
             service_ttl = self._default_service_ttl
         logger.debug(f"Heartbeat service_addr : {service_addr}")
@@ -334,6 +345,8 @@ class EtcdServiceRegistry(ServiceRegistry):
                 registered_services = dict(self._services)
 
         for svc_addr, lease in leases:
+            if self._shutdown_event.is_set():
+                return
             registered = registered_services.get(svc_addr)
             if not registered:
                 continue
@@ -483,7 +496,8 @@ class EtcdServiceRegistry(ServiceRegistry):
             initial_backoff = 2
             max_backoff = 30
 
-            time.sleep(self._heartbeat_time)
+            if self._shutdown_event.wait(self._heartbeat_time):
+                return
 
             while not self._shutdown_event.is_set():
                 try:
@@ -556,10 +570,22 @@ class EtcdServiceRegistry(ServiceRegistry):
         )
         self._heartbeat_thread.start()
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         self._shutdown_event.set()
+
+        for state, handler in (
+            (ConnectionState.CONNECTED, self._on_etcd_connected),
+            (ConnectionState.DISCONNECTED, self._on_etcd_disconnected),
+            (ConnectionState.RECONNECTING, self._on_etcd_reconnecting),
+            (ConnectionState.FAILED, self._on_etcd_failed),
+        ):
+            self._etcd_client.remove_connection_event_handler(state, handler)
+
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
             logger.debug("Waiting for heartbeat thread to stop...")
             self._heartbeat_thread.join(timeout=self._heartbeat_time + 1)
             if self._heartbeat_thread.is_alive():
                 logger.warning("Heartbeat thread did not stop gracefully")
+
+        if self._owns_etcd_client:
+            close_etcd_client(self._etcd_client)

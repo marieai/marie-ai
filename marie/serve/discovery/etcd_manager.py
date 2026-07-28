@@ -34,3 +34,8 @@ def convert_to_etcd_args(_args: Dict) -> Dict[str, Any]:
 def get_etcd_client(args: dict = None) -> EtcdClient:
     """Get the shared EtcdClient instance."""
     return EtcdServiceContainer.get_client(args)
+
+
+def close_etcd_client(client: EtcdClient) -> None:
+    """Close a process-local shared client and allow a later clean start."""
+    EtcdServiceContainer.close_client(client)

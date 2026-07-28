@@ -57,7 +57,11 @@ from marie.scheduler.models import DEFAULT_RETRY_POLICY, JobSubmissionModel, Wor
 from marie.scheduler.state import WorkState
 from marie.scheduler.util import available_slots_by_executor
 from marie.serve.discovery import JsonAddress
-from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
+from marie.serve.discovery.etcd_manager import (
+    close_etcd_client,
+    convert_to_etcd_args,
+    get_etcd_client,
+)
 from marie.serve.discovery.registry import _is_known_connection_error
 from marie.serve.discovery.resolver import EtcdServiceResolver
 from marie.serve.instrumentation import MetricsTimer
@@ -1689,6 +1693,14 @@ class MarieServerGateway(CompositeServer):
                 return
             self._background_services_shutdown = True
 
+            resolver = self.resolver
+            if resolver is not None:
+                try:
+                    resolver.stop()
+                except Exception as exc:
+                    self.logger.error("Failed stopping service resolver: %s", exc)
+                self.resolver = None
+
             try:
                 await self.job_scheduler.stop()
             except Exception as exc:
@@ -1709,6 +1721,13 @@ class MarieServerGateway(CompositeServer):
                 await self.llm_dispatch_runtime.stop()
             except Exception as exc:
                 self.logger.error("Failed stopping LLM dispatch runtime: %s", exc)
+
+            etcd_client = self.etcd_client
+            if etcd_client is not None:
+                try:
+                    close_etcd_client(etcd_client)
+                except Exception as exc:
+                    self.logger.error("Failed closing etcd client: %s", exc)
 
     async def shutdown(self):
         self.logger.debug("Shutting down Marie gateway")

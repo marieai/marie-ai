@@ -204,6 +204,15 @@ class EtcdServiceContainer:
             cls._client = None
             cls._args = None
 
+    @classmethod
+    def close_client(cls, client: EtcdClient) -> None:
+        """Close and detach a shared client during process shutdown."""
+        with cls._lock:
+            if cls._client is client:
+                cls._client = None
+                cls._args = None
+        client.close()
+
 
 # Global container instance
 etcd_container = EtcdServiceContainer()

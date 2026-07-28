@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from marie.serve.discovery import (
     DEFAULT_DISCOVERY_HEARTBEAT_SEC,
     DEFAULT_DISCOVERY_LEASE_SEC,
+    DiscoveryServiceMixin,
     _discovery_lease_params,
 )
 
@@ -30,3 +31,19 @@ def test_none_values_fall_back():
         DEFAULT_DISCOVERY_LEASE_SEC,
         DEFAULT_DISCOVERY_HEARTBEAT_SEC,
     )
+
+
+def test_teardown_stops_owned_registry():
+    registry = SimpleNamespace(shutdown=lambda: None)
+    owner = SimpleNamespace(
+        _etcd_registry=registry,
+        sd_state="ready",
+        logger=SimpleNamespace(warning=lambda *_args: None),
+    )
+    registry.shutdown = lambda: setattr(registry, "stopped", True)
+
+    DiscoveryServiceMixin._teardown_service_discovery(owner)
+
+    assert registry.stopped is True
+    assert owner._etcd_registry is None
+    assert owner.sd_state == "stopped"

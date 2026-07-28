@@ -664,8 +664,16 @@ async def test_gateway_background_shutdown_is_idempotent():
             self.order.append(self.name)
 
     order: list[str] = []
+
+    class _Resolver:
+        def stop(self) -> None:
+            order.append("resolver")
+
     gateway = object.__new__(MarieServerGateway)
     gateway.logger = _Logger()
+    gateway.resolver = _Resolver()
+    gateway.etcd_client = mock.MagicMock()
+    gateway.etcd_client.close.side_effect = lambda: order.append("etcd")
     gateway.job_scheduler = _AsyncStopper("scheduler", order)
     gateway.job_manager = _AsyncStopper("job-manager", order)
     gateway.grpc_broker = _AsyncStopper("broker", order)
@@ -680,7 +688,7 @@ async def test_gateway_background_shutdown_is_idempotent():
     assert gateway.job_manager.calls == 1
     assert gateway.grpc_broker.calls == 1
     assert gateway.llm_dispatch_runtime.calls == 1
-    assert order == ["scheduler", "job-manager", "broker", "llm"]
+    assert order == ["resolver", "scheduler", "job-manager", "broker", "llm", "etcd"]
 
 
 @pytest.mark.asyncio
@@ -718,6 +726,8 @@ async def test_gateway_shutdown_drains_pending_job_events_before_unsubscribe():
     gateway.job_manager = _JobManager()
     gateway.job_scheduler = _Scheduler()
     gateway.grpc_broker = None
+    gateway.resolver = None
+    gateway.etcd_client = mock.MagicMock()
     gateway.llm_dispatch_runtime = _Stopper()
     gateway._background_services_shutdown = False
     gateway._background_services_lock = asyncio.Lock()
