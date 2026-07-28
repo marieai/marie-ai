@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 
 from docarray import DocList
 from docarray.documents import TextDoc
-
 from marie.agent.backends.base import (
     AgentBackend,
     AgentResult,
@@ -39,9 +38,10 @@ from marie.agent.coordination import (
 from marie.agent.message import ContentItem, Message
 from marie.agent.state.conversation import ConversationStore
 from marie.agent.tools.base import AgentTool
+from marie.engine.output_parser import parse_json_markdown
+
 from marie.api import AssetKeyDoc
 from marie.constants import DEFAULT_DAEMON_ADDR
-from marie.engine.output_parser import parse_json_markdown
 from marie.executor.agent.plugin_models import (
     AgentPluginRequest,
     AgentPluginResponse,

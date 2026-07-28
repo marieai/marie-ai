@@ -7,6 +7,13 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, TypeVar
 
+from marie.agent.agents import ReactAgent
+from marie.agent.llm import OpenAICompatibleWrapper
+from marie.agent.messages import ContentItem, Message
+from marie.agent.tools.filesystem import FileReadTool
+from marie.engine.output_parser import parse_json_markdown
+from pydantic import BaseModel
+
 from marie_longextract.agents.repair import (
     PageLeafRepairDecision,
     RepairDecision,
@@ -24,13 +31,6 @@ from marie_longextract.ops.repair import (
     apply_row_leaf_patches,
     infer_section_heading_patches,
 )
-from pydantic import BaseModel
-
-from marie.agent.agents import ReactAgent
-from marie.agent.llm import OpenAICompatibleWrapper
-from marie.agent.messages import ContentItem, Message
-from marie.agent.tools.filesystem import FileReadTool
-from marie.engine.output_parser import parse_json_markdown
 
 _RAW_ANNOTATOR = 'longextract-unit-extract'
 _POLICY_ANNOTATOR = 'longextract-aggregation-policy'

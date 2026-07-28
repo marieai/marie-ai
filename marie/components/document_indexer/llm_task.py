@@ -1,9 +1,9 @@
-import json
 import os
 import re
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
+from marie.engine.output_parser import JSONOutputParserError, parse_json_markdown
 from pydantic import BaseModel, Field
 
 from marie.logging_core.predefined import default_logger as logger
@@ -52,39 +52,23 @@ def md_wrap(preformatted_text, format_type: str = None):
     return f"```{ft}\n{preformatted_text}\n```"
 
 
-def parse_markdown_json(markdown_json_str: str):
-    """
-    Extract and parse JSON from a Markdown code block.
-
-    Args:
-        markdown_json_str (str): A string that may contain a JSON code block,
-                                 typically wrapped in triple backticks with a "json" language tag.
-
-    Returns:
-        tuple: (parsed_data, success_flag)
-            - parsed_data (dict/list): Parsed JSON data if successful, None otherwise.
-            - fail_flag (bool): True if JSON parsing failed, False otherwise.
-    """
-    # Extract the JSON content between the ```json and ``` markers using a regex.
-    match = re.search(r'```json\s*(.*?)\s*```', markdown_json_str, re.DOTALL)
-    if match:
-        json_content = match.group(1)
-    else:
-        logger.warning("JSON not surrounded by Markdown formatting")
-        json_content = markdown_json_str
-
+def parse_markdown_json(
+    markdown_json_str: str,
+) -> tuple[dict[str, Any] | list[Any], bool]:
     try:
-        return json.loads(json_content), False
-    except json.JSONDecodeError:
-        logger.warning(f"Cannot Convert to JSON:\n{json_content}")
+        return parse_json_markdown(markdown_json_str), False
+    except JSONOutputParserError:
         return {"value": "ERROR", "reason": "JSON CONVERSION FAILURE"}, True
 
 
-def parse_json_output(json_output: str):
-    try:
-        return json.loads(json_output), False
-    except json.JSONDecodeError:
-        return parse_markdown_json(json_output)
+def parse_json_output(
+    json_output: str,
+) -> tuple[dict[str, Any] | list[Any], bool]:
+    return parse_markdown_json(json_output)
+
+
+def parse_text_output(text_output: str) -> tuple[str, bool]:
+    return text_output, False
 
 
 PROMPT_STRATEGIES = {
@@ -94,7 +78,7 @@ PROMPT_STRATEGIES = {
 }
 
 CONVERSION_STRATEGIES = {
-    "text": identity,
+    "text": parse_text_output,
     "json": parse_json_output,
 }
 

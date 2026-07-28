@@ -1,65 +1,134 @@
 import json
+import re
 from typing import Any
 
+import json5
 import json_repair
-import yaml
+
+_JSON_FENCE_START = re.compile(r"```[ \t]*json\b", re.IGNORECASE)
+_JSON_FENCE = re.compile(
+    r"```[ \t]*json\b[ \t]*(?:\r?\n)?(.*?)```",
+    re.IGNORECASE | re.DOTALL,
+)
+_BARE_FENCE = re.compile(r"```[ \t]*\r?\n(.*?)```", re.DOTALL)
+_CONTAINER_PAIRS = {"{": "}", "[": "]"}
+_JSON_CONTAINERS = (dict, list)
 
 
-def _marshal_llm_to_json(output: str) -> str:
-    """
-    Extract a substring containing valid JSON or array from a string.
-
-    Args:
-        output: A string that may contain a valid JSON object or array surrounded by
-        extraneous characters or information.
-
-    Returns:
-        A string containing a valid JSON object or array.
-    """
-    output = output.strip()
-
-    left_square = output.find("[")
-    left_brace = output.find("{")
-
-    if left_square < left_brace and left_square != -1:
-        left = left_square
-        right = output.rfind("]")
-    else:
-        left = left_brace
-        right = output.rfind("}")
-
-    return output[left : right + 1]
+class JSONOutputParserError(ValueError):
+    """Raised when model output cannot be decoded into one JSON container."""
 
 
-def parse_json_markdown(text: str) -> Any:
-    if "```json" in text:
-        text = text.split("```json")[1].strip().strip("```").strip()
+def _fenced_sections(text: str) -> list[str]:
+    sections = _JSON_FENCE.findall(text)
+    if sections:
+        return sections
+    return _BARE_FENCE.findall(text) or [text]
 
-    json_string = _marshal_llm_to_json(text)
 
+def _container_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
+    stack: list[str] = []
+    start: int | None = None
+    quote: str | None = None
+    escaped = False
+
+    for index, char in enumerate(text):
+        if not stack:
+            if char in _CONTAINER_PAIRS:
+                start = index
+                stack.append(char)
+            continue
+
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+
+        if char in ('"', "'"):
+            quote = char
+        elif char in _CONTAINER_PAIRS:
+            stack.append(char)
+        elif char == _CONTAINER_PAIRS[stack[-1]]:
+            stack.pop()
+            if not stack and start is not None:
+                candidates.append(text[start : index + 1])
+                start = None
+
+    if start is not None:
+        candidates.append(text[start:])
+
+    return candidates
+
+
+def _parse_candidate(candidate: str, expected_type: type | tuple[type, ...]) -> Any:
     try:
-        json_obj = json_repair.loads(json_string)
-    except json.JSONDecodeError as e_json:
+        value = json.loads(candidate)
+    except json.JSONDecodeError:
         try:
-            import json5
-
-            return json5.loads(text)
+            value = json5.loads(candidate)
         except ValueError:
             try:
-                # NOTE: parsing again with pyyaml
-                #       pyyaml is less strict, and allows for trailing commas
-                #       right now we rely on this since guidance program generates
-                #       trailing commas
-                json_obj = yaml.safe_load(json_string)
-            except yaml.YAMLError as e_yaml:
-                raise Exception(
-                    f"Got invalid JSON object. Error: {e_json} {e_yaml}. "
-                    f"Got JSON string: {json_string}"
-                )
-            except NameError as exc:
-                raise ImportError("Please uv add PyYAML.") from exc
+                value = json_repair.loads(candidate, strict=True)
+            except ValueError as exc:
+                raise JSONOutputParserError("JSON repair failed") from exc
 
-    return json_obj
+    if not isinstance(value, expected_type):
+        raise JSONOutputParserError(
+            f"JSON output has unsupported root type {type(value).__name__}"
+        )
+    return value
+
+
+def parse_json_markdown(
+    text: str,
+    *,
+    expected_type: type | tuple[type, ...] = _JSON_CONTAINERS,
+) -> Any:
+    """Parse one JSON object or array from plain, fenced, or damaged model output."""
+    if not text.strip():
+        raise JSONOutputParserError("JSON output is empty")
+
+    values: list[Any] = []
+    last_error: JSONOutputParserError | None = None
+
+    for section in _fenced_sections(text):
+        section = section.strip()
+        if not section:
+            continue
+
+        try:
+            value = json.loads(section)
+        except json.JSONDecodeError:
+            candidates = _container_candidates(section)
+        else:
+            if isinstance(value, expected_type):
+                values.append(value)
+            else:
+                last_error = JSONOutputParserError(
+                    f"JSON output has unsupported root type {type(value).__name__}"
+                )
+            continue
+
+        for candidate in candidates:
+            try:
+                values.append(_parse_candidate(candidate, expected_type))
+            except JSONOutputParserError as exc:
+                last_error = exc
+
+    if not values:
+        if last_error:
+            raise last_error
+        raise JSONOutputParserError(
+            "JSON output does not contain a valid object or array"
+        )
+    if len(values) > 1:
+        raise JSONOutputParserError("JSON output contains multiple candidate values")
+    return values[0]
 
 
 def parse_markdown_markdown(text: str, return_content=True) -> str:
@@ -93,7 +162,7 @@ def check_content_type(text: str) -> str:
     if not text:
         return "none"
 
-    if "```json" in text:
+    if _JSON_FENCE_START.search(text):
         return "json"
     elif "```markdown" in text:
         return "markdown"
