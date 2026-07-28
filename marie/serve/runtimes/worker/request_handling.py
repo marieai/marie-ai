@@ -67,6 +67,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from marie.types_core.request import Request
 
 
+STATUS_HEARTBEAT_WRITE_INTERVAL_S = 10.0
+
+
 def _is_missing_lease_error(exc: Exception) -> bool:
     """
     Return True if 'exc' indicates that the etcd lease is missing/expired (NOT_FOUND or equivalent).
@@ -271,8 +274,11 @@ class WorkerRequestHandler:
         self._status_log_interval = 60.0  # seconds
         self._readiness_update_tasks: set[asyncio.Task] = set()
 
-        # Status writes refresh the etcd lease; keep the write interval below TTL.
+        # The fast loop maintains the status lease and semaphore tickets. Persist
+        # heartbeat_at less frequently to avoid redundant etcd document writes.
         self._base_heartbeat = self._heartbeat_time
+        self._status_heartbeat_write_interval = STATUS_HEARTBEAT_WRITE_INTERVAL_S
+        self._last_status_heartbeat_write = 0.0
         self._status_hb_thread = None
         self._status_hb_stop = threading.Event()
         self._hb_supervisor_stop = threading.Event()
@@ -2053,7 +2059,19 @@ class WorkerRequestHandler:
             )
             return None
 
-        ok = self._status_store.heartbeat(self._node, self._deployment, self._worker_id)
+        now = time.monotonic()
+        persist_timestamp = (
+            now - self._last_status_heartbeat_write
+            >= self._status_heartbeat_write_interval
+        )
+        ok = self._status_store.heartbeat(
+            self._node,
+            self._deployment,
+            self._worker_id,
+            persist_timestamp=persist_timestamp,
+        )
+        if ok and persist_timestamp:
+            self._last_status_heartbeat_write = now
         if not ok:
             ok = self._reclaim_status()
         connection_state = self._etcd_client.get_connection_state()
@@ -2219,6 +2237,7 @@ class WorkerRequestHandler:
         )
 
     def _status_lease_invalidator(self):
+        self._last_status_heartbeat_write = 0.0
         self._status_lease_cache.invalidate(f"{self._node}/{self._deployment}")
 
     def _claim_and_mark(
@@ -2308,7 +2327,10 @@ class WorkerRequestHandler:
         self._status_hb_stop.clear()
 
         try:
-            self._status_store.heartbeat(self._node, self._deployment, self._worker_id)
+            if self._status_store.heartbeat(
+                self._node, self._deployment, self._worker_id
+            ):
+                self._last_status_heartbeat_write = time.monotonic()
         except Exception as e:
             self.logger.warning(f"one-shot status heartbeat failed (non-fatal): {e}")
 

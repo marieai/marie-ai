@@ -3276,8 +3276,6 @@ class MarieServerGateway(CompositeServer):
         # Atomic swap to preserve old behavior
         self.deployments = new_deployments
         ClusterState.deployments = new_deployments
-        slots = available_slots_by_executor(self.semaphore_store)
-        self.logger.debug(f"Rebuilt deployments; slot summary: {slots}")
 
     async def _start_state_watch(self):
         """

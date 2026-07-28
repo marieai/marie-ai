@@ -587,10 +587,20 @@ class StatusStore(BaseStore):
             details,
         )
 
-    def heartbeat(self, node: str, depl: str, worker_id: str) -> bool:
+    def heartbeat(
+        self,
+        node: str,
+        depl: str,
+        worker_id: str,
+        *,
+        persist_timestamp: bool = True,
+    ) -> bool:
         """
-        CAS heartbeat: only the current owner may update heartbeat_at.
-        If the lease vanished, surface False; caller can reacquire/claim.
+        Validate ownership and keep the status lease current.
+
+        Persist heartbeat_at when requested or when the live lease differs from
+        the lease attached to the status key. If the key vanished, surface
+        False so the caller can reacquire ownership.
         """
         k = self._status_key(node, depl)
         for _ in range(8):
@@ -600,9 +610,14 @@ class StatusStore(BaseStore):
             st = StatusDoc.from_json(val)
             if st.owner != worker_id:
                 return False
-            st.heartbeat_at = _now_iso()
 
             lease_id = self._lease_id()
+            attached_lease_id = getattr(meta, "lease_id", 0) or 0
+            current_lease_id = lease_id or 0
+            if not persist_timestamp and attached_lease_id == current_lease_id:
+                return True
+
+            st.heartbeat_at = _now_iso()
             if self._update_if_unchanged_with_lease(
                 k, json.dumps(asdict(st)), meta.mod_revision, lease_id
             ):

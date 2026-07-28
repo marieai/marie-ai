@@ -22,7 +22,7 @@ def _handler(connection_state: ConnectionState) -> WorkerRequestHandler:
     handler._desired_store = MagicMock()
     handler._desired_store.get.return_value = SimpleNamespace(phase="SCHEDULED")
     handler._status_store = MagicMock()
-    handler._status_lease_invalidator = MagicMock()
+    handler._status_lease_cache = MagicMock()
     handler._claim_and_mark_ready = MagicMock(return_value=True)
     handler._claim_and_mark_serving = MagicMock(return_value=True)
     handler._sem_renew_all_if_due = MagicMock()
@@ -31,13 +31,17 @@ def _handler(connection_state: ConnectionState) -> WorkerRequestHandler:
     handler._status_hb_thread = None
     handler._heartbeat_time = 60.0
     handler._base_heartbeat = 60.0
+    handler._status_heartbeat_write_interval = 10.0
+    handler._last_status_heartbeat_write = 0.0
     return handler
 
 
 def test_reconnect_invalidates_status_lease_before_reclaim() -> None:
     handler = _handler(ConnectionState.CONNECTED)
     calls: list[str] = []
-    handler._status_lease_invalidator.side_effect = lambda: calls.append("invalidate")
+    handler._status_lease_cache.invalidate.side_effect = lambda _key: calls.append(
+        "invalidate"
+    )
     handler._claim_and_mark_ready.side_effect = lambda: calls.append("reclaim") or True
 
     handler._on_etcd_connected(SimpleNamespace())
@@ -50,7 +54,18 @@ def test_disconnect_invalidates_status_lease() -> None:
 
     handler._on_etcd_disconnected(SimpleNamespace(error=RuntimeError("offline")))
 
-    handler._status_lease_invalidator.assert_called_once_with()
+    handler._status_lease_cache.invalidate.assert_called_once_with(
+        f"{handler._node}/{handler._deployment}"
+    )
+
+
+def test_status_lease_invalidation_forces_next_timestamp_write() -> None:
+    handler = _handler(ConnectionState.CONNECTED)
+    handler._last_status_heartbeat_write = 100.0
+
+    handler._status_lease_invalidator()
+
+    assert handler._last_status_heartbeat_write == 0.0
 
 
 def test_reconnect_does_not_log_success_when_reclaim_is_rejected() -> None:
@@ -113,10 +128,68 @@ def test_missing_status_is_reclaimed_after_connectivity_returns() -> None:
 
     assert handler._status_heartbeat_once() is True
     handler._status_store.heartbeat.assert_called_once_with(
-        handler._node, handler._deployment, handler._worker_id
+        handler._node,
+        handler._deployment,
+        handler._worker_id,
+        persist_timestamp=True,
     )
     handler._claim_and_mark_ready.assert_called_once_with()
     handler._sem_renew_all_if_due.assert_called_once_with()
+
+
+def test_status_heartbeat_skips_redundant_timestamp_write(monkeypatch) -> None:
+    handler = _handler(ConnectionState.CONNECTED)
+    handler._last_status_heartbeat_write = 100.0
+    handler._status_store.heartbeat.return_value = True
+    monkeypatch.setattr(
+        "marie.serve.runtimes.worker.request_handling.time.monotonic", lambda: 105.0
+    )
+
+    assert handler._status_heartbeat_once() is True
+
+    handler._status_store.heartbeat.assert_called_once_with(
+        handler._node,
+        handler._deployment,
+        handler._worker_id,
+        persist_timestamp=False,
+    )
+    assert handler._last_status_heartbeat_write == 100.0
+    handler._sem_renew_all_if_due.assert_called_once_with()
+
+
+def test_status_heartbeat_persists_after_write_interval(monkeypatch) -> None:
+    handler = _handler(ConnectionState.CONNECTED)
+    handler._last_status_heartbeat_write = 100.0
+    handler._status_store.heartbeat.return_value = True
+    monkeypatch.setattr(
+        "marie.serve.runtimes.worker.request_handling.time.monotonic", lambda: 111.0
+    )
+
+    assert handler._status_heartbeat_once() is True
+
+    handler._status_store.heartbeat.assert_called_once_with(
+        handler._node,
+        handler._deployment,
+        handler._worker_id,
+        persist_timestamp=True,
+    )
+    assert handler._last_status_heartbeat_write == 111.0
+
+
+def test_failed_persisted_heartbeat_does_not_advance_write_time(
+    monkeypatch,
+) -> None:
+    handler = _handler(ConnectionState.CONNECTED)
+    handler._last_status_heartbeat_write = 100.0
+    handler._status_store.heartbeat.return_value = False
+    monkeypatch.setattr(
+        "marie.serve.runtimes.worker.request_handling.time.monotonic", lambda: 111.0
+    )
+
+    assert handler._status_heartbeat_once() is True
+
+    assert handler._last_status_heartbeat_write == 100.0
+    handler._claim_and_mark_ready.assert_called_once_with()
 
 
 def test_missing_status_without_desired_state_is_dormant() -> None:
@@ -133,7 +206,7 @@ def test_missing_status_without_desired_state_is_dormant() -> None:
 def test_status_reclaim_is_skipped_if_connection_drops_during_heartbeat() -> None:
     handler = _handler(ConnectionState.CONNECTED)
 
-    def disconnect_during_heartbeat(*_args) -> bool:
+    def disconnect_during_heartbeat(*_args, **_kwargs) -> bool:
         handler._etcd_client.get_connection_state.return_value = (
             ConnectionState.DISCONNECTED
         )

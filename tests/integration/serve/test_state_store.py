@@ -42,6 +42,7 @@ def _mk_ids() -> Dict[str, str]:
 
 # ---------------- DesiredStore tests ----------------
 
+
 def test_desired_set_and_get(desired_store: DesiredStore):
     ids = _mk_ids()
     params = {"p": 1}
@@ -158,13 +159,18 @@ def test_desired_update_phase_keeps_epoch(desired_store: DesiredStore):
 
 # ---------------- StatusStore tests ----------------
 
+
 def test_status_claim_first_time(status_store: StatusStore):
     ids = _mk_ids()
     owner = f"worker-{uuid.uuid4()}"
     epoch = 1
 
     ok = status_store.claim(
-        ids["node"], ids["depl"], worker_id=owner, epoch=epoch, initial_status=HealthCheckResponse.NOT_SERVING
+        ids["node"],
+        ids["depl"],
+        worker_id=owner,
+        epoch=epoch,
+        initial_status=HealthCheckResponse.NOT_SERVING,
     )
     assert ok is True
 
@@ -181,12 +187,16 @@ def test_status_claim_idempotent_same_owner_epoch(status_store: StatusStore):
     owner = f"worker-{uuid.uuid4()}"
     epoch = 2
 
-    ok1 = status_store.claim(ids["node"], ids["depl"], owner, epoch, HealthCheckResponse.NOT_SERVING)
+    ok1 = status_store.claim(
+        ids["node"], ids["depl"], owner, epoch, HealthCheckResponse.NOT_SERVING
+    )
     assert ok1 is True
     time_before = status_store.read(ids["node"], ids["depl"]).updated_at
 
     # idempotent re-claim
-    ok2 = status_store.claim(ids["node"], ids["depl"], owner, epoch, HealthCheckResponse.NOT_SERVING)
+    ok2 = status_store.claim(
+        ids["node"], ids["depl"], owner, epoch, HealthCheckResponse.NOT_SERVING
+    )
     assert ok2 is True
     st = status_store.read(ids["node"], ids["depl"])
     assert st.owner == owner and st.epoch == epoch
@@ -198,8 +208,18 @@ def test_status_claim_roll_forward_same_owner(status_store: StatusStore):
     ids = _mk_ids()
     owner = f"worker-{uuid.uuid4()}"
 
-    assert status_store.claim(ids["node"], ids["depl"], owner, 1, HealthCheckResponse.NOT_SERVING) is True
-    assert status_store.claim(ids["node"], ids["depl"], owner, 2, HealthCheckResponse.SERVING) is True
+    assert (
+        status_store.claim(
+            ids["node"], ids["depl"], owner, 1, HealthCheckResponse.NOT_SERVING
+        )
+        is True
+    )
+    assert (
+        status_store.claim(
+            ids["node"], ids["depl"], owner, 2, HealthCheckResponse.SERVING
+        )
+        is True
+    )
 
     st = status_store.read(ids["node"], ids["depl"])
     assert st.owner == owner
@@ -214,9 +234,19 @@ def test_status_claim_fencing_different_owner(status_store: StatusStore):
     owner1 = f"worker-{uuid.uuid4()}"
     owner2 = f"worker-{uuid.uuid4()}"
 
-    assert status_store.claim(ids["node"], ids["depl"], owner1, 5, HealthCheckResponse.NOT_SERVING) is True
+    assert (
+        status_store.claim(
+            ids["node"], ids["depl"], owner1, 5, HealthCheckResponse.NOT_SERVING
+        )
+        is True
+    )
     # other owner with same epoch should be rejected
-    assert status_store.claim(ids["node"], ids["depl"], owner2, 5, HealthCheckResponse.NOT_SERVING) is False
+    assert (
+        status_store.claim(
+            ids["node"], ids["depl"], owner2, 5, HealthCheckResponse.NOT_SERVING
+        )
+        is False
+    )
 
     st = status_store.read(ids["node"], ids["depl"])
     assert st.owner == owner1
@@ -227,7 +257,12 @@ def test_status_set_statuses(status_store: StatusStore):
     ids = _mk_ids()
     owner = f"worker-{uuid.uuid4()}"
 
-    assert status_store.claim(ids["node"], ids["depl"], owner, 1, HealthCheckResponse.NOT_SERVING) is True
+    assert (
+        status_store.claim(
+            ids["node"], ids["depl"], owner, 1, HealthCheckResponse.NOT_SERVING
+        )
+        is True
+    )
 
     # set SERVING
     assert status_store.set_serving(ids["node"], ids["depl"], owner) is True
@@ -262,7 +297,12 @@ def test_status_heartbeat_updates(status_store: StatusStore):
     assert status_store.heartbeat(ids["node"], ids["depl"], owner) is False
 
     # claim then heartbeat
-    assert status_store.claim(ids["node"], ids["depl"], owner, 1, HealthCheckResponse.NOT_SERVING) is True
+    assert (
+        status_store.claim(
+            ids["node"], ids["depl"], owner, 1, HealthCheckResponse.NOT_SERVING
+        )
+        is True
+    )
     st1 = status_store.read(ids["node"], ids["depl"])
     assert st1 is not None
 
@@ -273,6 +313,66 @@ def test_status_heartbeat_updates(status_store: StatusStore):
     assert st2 is not None
     # compare ISO strings lexicographically is not reliable; ensure they exist and changed
     assert isinstance(st2.heartbeat_at, str) and len(st2.heartbeat_at) > 0
+
+
+def test_status_heartbeat_can_validate_without_rewriting(
+    status_store: StatusStore,
+) -> None:
+    ids = _mk_ids()
+    owner = f"worker-{uuid.uuid4()}"
+    key = status_store._status_key(ids["node"], ids["depl"])
+
+    assert status_store.claim(
+        ids["node"],
+        ids["depl"],
+        owner,
+        1,
+        HealthCheckResponse.NOT_SERVING,
+    )
+    _, before = status_store.etcd.get(key, metadata=True, serializable=False)
+
+    assert status_store.heartbeat(
+        ids["node"],
+        ids["depl"],
+        owner,
+        persist_timestamp=False,
+    )
+    _, after = status_store.etcd.get(key, metadata=True, serializable=False)
+
+    assert after.mod_revision == before.mod_revision
+
+
+def test_status_heartbeat_reattaches_replacement_lease(
+    etcd_client: EtcdClient,
+) -> None:
+    ids = _mk_ids()
+    owner = f"worker-{uuid.uuid4()}"
+    lease = etcd_client.lease(30)
+    status_store = StatusStore(etcd_client, lease_getter=lambda: lease)
+    key = status_store._status_key(ids["node"], ids["depl"])
+
+    assert status_store.claim(
+        ids["node"],
+        ids["depl"],
+        owner,
+        1,
+        HealthCheckResponse.NOT_SERVING,
+    )
+    _, before = etcd_client.get(key, metadata=True, serializable=False)
+    replacement_lease = etcd_client.lease(30)
+    lease = replacement_lease
+
+    assert status_store.heartbeat(
+        ids["node"],
+        ids["depl"],
+        owner,
+        persist_timestamp=False,
+    )
+    _, after = etcd_client.get(key, metadata=True, serializable=False)
+
+    assert before.lease_id != replacement_lease.id
+    assert after.lease_id == replacement_lease.id
+    assert after.mod_revision > before.mod_revision
 
 
 def test_status_read_missing_returns_none(status_store: StatusStore):
