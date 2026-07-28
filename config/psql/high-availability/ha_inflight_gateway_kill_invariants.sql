@@ -69,8 +69,7 @@ SELECT
     j.run_lease_expires_at,
     ja.gateway_instance_id,
     ja.scheduler_lease_owner,
-    ja.dispatch_started_at,
-    ja.dispatch_confirmed_at
+    ja.activated_at
 FROM marie_scheduler.job j
 JOIN marie_scheduler.job_attempt ja
   ON ja.run_attempt_id = j.run_attempt_id
@@ -79,21 +78,22 @@ ORDER BY j.started_on DESC NULLS LAST
 LIMIT 25;
 
 -- Query: summarize attempts by gateway/scheduler for the test window. After a
--- kill test, this should show the killed gateway's dispatched work and the
+-- kill test, this should show the killed gateway's activated work and the
 -- surviving gateway's later completions/recoveries, depending on the scenario.
 SELECT
     gateway_instance_id,
     scheduler_lease_owner,
     COUNT(*) AS attempts,
-    COUNT(*) FILTER (WHERE dispatch_confirmed_at IS NOT NULL) AS dispatched,
     COUNT(*) FILTER (WHERE terminal_accepted IS TRUE) AS terminal_accepted,
     COUNT(*) FILTER (WHERE terminal_accepted IS FALSE) AS terminal_rejected,
     COUNT(*) FILTER (WHERE recovery_state IS NOT NULL) AS recovered,
     COUNT(*) FILTER (
-        WHERE dispatch_confirmed_at IS NOT NULL
+        WHERE COALESCE(executor, '') NOT IN (
+                  'noop', 'branch', 'switch', 'merger'
+              )
           AND terminal_accepted IS DISTINCT FROM TRUE
           AND recovery_state IS NULL
-    ) AS dispatched_missing_terminal_or_recovery
+    ) AS activated_missing_terminal_or_recovery
 FROM ha_kill_attempts
 GROUP BY gateway_instance_id, scheduler_lease_owner
 ORDER BY attempts DESC, gateway_instance_id;
@@ -104,7 +104,6 @@ SELECT
     gateway_instance_id,
     scheduler_lease_owner,
     COUNT(*) AS attempts,
-    COUNT(*) FILTER (WHERE dispatch_confirmed_at IS NOT NULL) AS dispatched,
     COUNT(*) FILTER (WHERE terminal_accepted IS TRUE) AS terminal_accepted,
     COUNT(*) FILTER (WHERE terminal_accepted IS FALSE) AS terminal_rejected,
     COUNT(*) FILTER (WHERE recovery_state IS NOT NULL) AS recovered
@@ -211,7 +210,7 @@ WHERE COALESCE(started_on, created_on) >= (
 ORDER BY run_lease_expires_at
 LIMIT 50;
 
--- Query: detail rows for dispatched attempts that have neither terminal audit
+-- Query: detail rows for activated attempts that have neither terminal audit
 -- nor recovery audit. This should be empty after the workload drains.
 SELECT
     a.job_id,
@@ -219,18 +218,17 @@ SELECT
     j.state::text AS current_job_state,
     a.gateway_instance_id,
     a.scheduler_lease_owner,
-    a.dispatch_started_at,
-    a.dispatch_confirmed_at,
+    a.activated_at,
     a.terminal_accepted,
     a.terminal_reject_reason,
     a.recovery_state,
     a.recovery_reason
 FROM ha_kill_attempts a
 JOIN marie_scheduler.job j ON j.id = a.job_id
-WHERE a.dispatch_confirmed_at IS NOT NULL
-  AND a.terminal_accepted IS DISTINCT FROM TRUE
+WHERE a.terminal_accepted IS DISTINCT FROM TRUE
+  AND COALESCE(a.executor, '') NOT IN ('noop', 'branch', 'switch', 'merger')
   AND a.recovery_state IS NULL
-ORDER BY a.dispatch_confirmed_at DESC NULLS LAST
+ORDER BY a.activated_at DESC
 LIMIT 50;
 
 -- Query: detail rows for duplicate accepted completed terminals. This should
@@ -291,7 +289,6 @@ SELECT
     a.job_id,
     j.state::text AS current_job_state,
     COUNT(*) AS attempts,
-    COUNT(*) FILTER (WHERE a.dispatch_confirmed_at IS NOT NULL) AS dispatched,
     COUNT(*) FILTER (WHERE a.terminal_accepted IS TRUE) AS accepted_terminals,
     COUNT(*) FILTER (WHERE a.terminal_accepted IS FALSE) AS rejected_terminals,
     COUNT(*) FILTER (WHERE a.recovery_state IS NOT NULL) AS recovered,

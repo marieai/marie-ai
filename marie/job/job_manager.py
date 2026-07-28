@@ -112,6 +112,7 @@ class JobManager:
         self._terminal_notifications: dict[str, JobStatus] = {}
         self._terminal_wake_events: dict[str, asyncio.Event] = {}
         self._published_terminal_events: dict[str, tuple[JobStatus, Optional[str]]] = {}
+        self._committed_terminal_events: dict[str, tuple[JobStatus, Optional[str]]] = {}
         self._active_run_attempts: dict[str, Optional[str]] = {}
 
         try:
@@ -176,6 +177,7 @@ class JobManager:
             run_attempt_id,
             'postgres_notify',
         )
+        self._committed_terminal_events[job_id] = (status, run_attempt_id)
 
     async def _publish_terminal_event(
         self,
@@ -227,6 +229,8 @@ class JobManager:
             run_attempt_id=run_attempt_id,
             source=source,
         )
+        if source == 'job_info_proxy':
+            self._committed_terminal_events[job_id] = signature
         asyncio.get_running_loop().call_later(
             60.0,
             self._forget_terminal_publication,
@@ -235,11 +239,21 @@ class JobManager:
         )
         return True
 
+    def get_committed_terminal_status(
+        self, job_id: str, run_attempt_id: Optional[str]
+    ) -> Optional[JobStatus]:
+        terminal = self._committed_terminal_events.get(job_id)
+        if terminal is None or terminal[1] != run_attempt_id:
+            return None
+        return terminal[0]
+
     def _forget_terminal_publication(
         self, job_id: str, signature: tuple[JobStatus, Optional[str]]
     ) -> None:
         if self._published_terminal_events.get(job_id) == signature:
             self._published_terminal_events.pop(job_id, None)
+        if self._committed_terminal_events.get(job_id) == signature:
+            self._committed_terminal_events.pop(job_id, None)
         if self._active_run_attempts.get(job_id) == signature[1]:
             self._active_run_attempts.pop(job_id, None)
 
@@ -309,11 +323,13 @@ class JobManager:
 
         while is_alive:
             try:
+                job_info: Optional[JobInfo] = None
                 job_status = self._terminal_notifications.pop(job_id, None)
                 observation_source = 'postgres_notify'
                 if job_status is None:
                     observation_source = 'postgres_poll'
-                    job_status = await self._job_info_client.get_status(job_id)
+                    job_info = await self._job_info_client.get_info(job_id)
+                    job_status = job_info.status if job_info is not None else None
                 if job_status is None:
                     self.logger.warning(
                         f"Job {job_id} does not exist in the job info client."
@@ -349,7 +365,7 @@ class JobManager:
                     # Compare the current time with the job start time.
                     # If the job is still pending, we will set the status
                     # to FAILED.
-                    job_info = await self._job_info_client.get_info(job_id)
+                    assert job_info is not None
 
                     if time.time() - job_info.start_time / 1000 > timeout:
                         err_msg = (
@@ -529,6 +545,7 @@ class JobManager:
         if submission_id is None:
             submission_id = generate_job_id()
         self._published_terminal_events.pop(submission_id, None)
+        self._committed_terminal_events.pop(submission_id, None)
         self._terminal_notifications.pop(submission_id, None)
         self._active_run_attempts[submission_id] = run_attempt_id
 
@@ -589,6 +606,7 @@ class JobManager:
                 desired_state_executor=self._desired_state_executor,
                 confirmation_event=confirmation_event,
                 terminal_event_callback=self._publish_terminal_event,
+                committed_terminal_lookup=self.get_committed_terminal_status,
             )
 
             task = asyncio.create_task(
@@ -632,7 +650,10 @@ class JobManager:
         try:
             await self.event_publisher.stop()
         finally:
-            self._desired_state_executor.shutdown()
+            try:
+                await self._job_info_client.close()
+            finally:
+                self._desired_state_executor.shutdown()
 
     def stop_job(self, job_id) -> bool:
         """Request a job to exit, fire and forget.

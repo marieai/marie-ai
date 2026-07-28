@@ -286,6 +286,7 @@ class AsyncPostgresConnectionPool(AsyncPostgresPool):
     def __new__(cls) -> AsyncPostgresConnectionPool:
         instance = object.__new__(cls)
         instance._pool = None
+        instance._trace_name = "async_scheduler"
         return instance
 
     async def initialize(
@@ -294,9 +295,11 @@ class AsyncPostgresConnectionPool(AsyncPostgresPool):
         *,
         row_factory: AsyncRowFactory[Any] = dict_row,
         autocommit: bool = False,
+        trace_name: str = "async_scheduler",
     ) -> None:
         if self._pool is not None:
             return
+        self._trace_name = trace_name
         minimum, maximum = _sizes(config)
         kwargs = _connection_kwargs(config)
         kwargs["row_factory"] = row_factory
@@ -324,14 +327,14 @@ class AsyncPostgresConnectionPool(AsyncPostgresPool):
             async with self._pool.connection() as connection:
                 scheduler_trace(
                     "postgres_pool_acquire_wait_done",
-                    pool="async_scheduler",
+                    pool=self._trace_name,
                     elapsed_ms=(time.perf_counter() - started) * 1000.0,
                 )
                 yield AsyncPostgresConnection(connection)
         except PoolTimeout:
             scheduler_trace(
                 "postgres_pool_acquire_timeout",
-                pool="async_scheduler",
+                pool=self._trace_name,
                 elapsed_ms=(time.perf_counter() - started) * 1000.0,
             )
             raise

@@ -62,9 +62,9 @@ contract(check_name, category, expectation) AS (
             'Attempt job, queue, DAG, and owner identity must agree.'
         ),
         (
-            'dispatched_missing_terminal_or_recovery',
+            'activated_missing_terminal_or_recovery',
             'terminals',
-            'Confirmed dispatches must have accepted terminal or recovery audit after drain.'
+            'Activated attempts must have accepted terminal or recovery audit after drain.'
         ),
         (
             'duplicate_accepted_completed_terminal_by_job',
@@ -87,9 +87,9 @@ contract(check_name, category, expectation) AS (
             'Terminal jobs must retain no acquisition or run lease identity.'
         ),
         (
-            'dispatched_without_gateway_instance',
+            'activated_without_gateway_instance',
             'attempts',
-            'Every confirmed dispatch must record its activating gateway.'
+            'Every activated attempt must record its activating gateway.'
         ),
         (
             'accepted_terminal_missing_terminal_gateway',
@@ -146,10 +146,12 @@ violations(check_name, entity_id) AS MATERIALIZED (
        OR attempt.scheduler_lease_owner <> attempt.run_owner
 
     UNION ALL
-    SELECT 'dispatched_missing_terminal_or_recovery', attempt.run_attempt_id::TEXT
+    SELECT 'activated_missing_terminal_or_recovery', attempt.run_attempt_id::TEXT
     FROM scoped_attempts attempt
-    WHERE attempt.dispatch_confirmed_at IS NOT NULL
-      AND attempt.dispatch_confirmed_at <= COALESCE(_settle_deadline, NOW())
+    WHERE attempt.activated_at <= COALESCE(_settle_deadline, NOW())
+      AND COALESCE(attempt.executor, '') NOT IN (
+          'noop', 'branch', 'switch', 'merger'
+      )
       AND attempt.terminal_accepted IS DISTINCT FROM TRUE
       AND attempt.recovery_state IS NULL
 
@@ -193,10 +195,9 @@ violations(check_name, entity_id) AS MATERIALIZED (
       )
 
     UNION ALL
-    SELECT 'dispatched_without_gateway_instance', attempt.run_attempt_id::TEXT
+    SELECT 'activated_without_gateway_instance', attempt.run_attempt_id::TEXT
     FROM scoped_attempts attempt
-    WHERE attempt.dispatch_confirmed_at IS NOT NULL
-      AND attempt.gateway_instance_id IS NULL
+    WHERE attempt.gateway_instance_id IS NULL
 
     UNION ALL
     SELECT 'accepted_terminal_missing_terminal_gateway', attempt.run_attempt_id::TEXT

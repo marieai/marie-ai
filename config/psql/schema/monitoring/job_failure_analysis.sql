@@ -16,8 +16,13 @@ SELECT
     j.id AS job_id,
     j.dag_id,
     j.name AS queue_name,
-    j.data->'metadata'->>'ref_type' AS ref_type,
-    j.data->'metadata'->>'ref_id' AS ref_id,
+    d.submission_name,
+    d.planner,
+    d.project_id,
+    COALESCE(d.ref_type, j.data #>> '{metadata,ref_type}') AS ref_type,
+    COALESCE(d.ref_id, j.data #>> '{metadata,ref_id}') AS ref_id,
+    d.priority,
+    d.task_count,
     j.state::text AS scheduler_state,
     j.retry_count,
     j.retry_limit,
@@ -35,6 +40,8 @@ SELECT
 FROM target t
 LEFT JOIN marie_scheduler.job j
     ON j.id = t.job_id
+LEFT JOIN marie_scheduler.dag d
+    ON d.id = j.dag_id
 LEFT JOIN marie_scheduler.kv_store_worker kv
     ON kv.namespace = 'job'
    AND kv.key = 'marie_internal/job_info_' || t.job_id::text
@@ -125,13 +132,11 @@ WITH target(job_id) AS (
     SELECT
         COALESCE(
             ja.terminal_at,
-            ja.dispatch_confirmed_at,
-            ja.dispatch_started_at,
             ja.activated_at
         ),
         'job_attempt',
         ja.attempt_state,
-        COALESCE(ja.dispatch_error, ja.terminal_reject_reason),
+        ja.terminal_reject_reason,
         jsonb_strip_nulls(jsonb_build_object(
             'run_attempt_id', ja.run_attempt_id,
             'terminal_status', ja.terminal_status,

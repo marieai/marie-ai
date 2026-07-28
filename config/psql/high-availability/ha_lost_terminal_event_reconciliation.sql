@@ -22,7 +22,7 @@
 
 -- Setup: define the test parameters.
 -- For the first run, leave target_job_id NULL and enable_mutation FALSE. The
--- script will show the latest active dispatched job that can be used.
+-- script will show the latest active attempt that can be used.
 --
 -- To inject the mismatch, set marie.ha_enable_mutation TRUE and set the exact
 -- marie.ha_target_job_id. Mutation with no exact target selects no row.
@@ -70,7 +70,7 @@ FROM ha_lost_event_params;
 --
 -- With target_job_id set, this selects that job in any state so the same file
 -- can be rerun for verification after reconciliation. With target_job_id NULL,
--- this selects the newest active dispatched job.
+-- this selects the newest active attempt.
 DROP TABLE IF EXISTS pg_temp.ha_lost_event_target;
 
 CREATE TEMP TABLE ha_lost_event_target AS
@@ -84,8 +84,7 @@ SELECT
     j.run_lease_expires_at,
     ja.gateway_instance_id AS activated_gateway_instance_id,
     ja.scheduler_lease_owner,
-    ja.dispatch_started_at,
-    ja.dispatch_confirmed_at,
+    ja.activated_at,
     ja.terminal_source,
     ja.terminal_accepted,
     ja.terminal_gateway_instance_id,
@@ -103,18 +102,17 @@ WHERE (
         p.target_job_id IS NULL
         AND p.enable_mutation IS FALSE
         AND j.state::text = 'active'
-        AND ja.dispatch_confirmed_at IS NOT NULL
         AND j.run_owner IS NOT NULL
         AND j.run_attempt_id IS NOT NULL
     )
 ORDER BY
     CASE WHEN p.target_job_id IS NOT NULL THEN 0 ELSE 1 END,
-    ja.dispatch_confirmed_at DESC NULLS LAST,
+    ja.activated_at DESC,
     j.started_on DESC NULLS LAST
 LIMIT 1;
 
 -- Query: show the selected target. For mutation, this must be one active
--- dispatched job with run_owner and run_attempt_id populated.
+-- job attempt with run_owner and run_attempt_id populated.
 SELECT *
 FROM ha_lost_event_target;
 

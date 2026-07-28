@@ -154,6 +154,7 @@ def build_scheduler(
 ) -> PostgreSQLJobScheduler:
     scheduler = object.__new__(PostgreSQLJobScheduler)
     scheduler.logger = FakeLogger()
+    scheduler.runtime = SchedulerRuntime(scheduler.logger)
     scheduler.running = True
     scheduler.repository = repository
     scheduler.frontier = frontier
@@ -220,6 +221,7 @@ def build_scheduler(
         run_ttl_seconds=scheduler.run_ttl_seconds,
         gateway_instance_id=scheduler.gateway_instance_id,
         notify_callback=notify_event,
+        runtime=scheduler.runtime,
     )
     scheduler.attempt_lifecycle_service = AttemptLifecycleService(
         repository=repository,
@@ -571,12 +573,12 @@ async def test_handle_dispatch_failure_marks_job_for_retry_and_releases_semaphor
                 "output_metadata": output_metadata or {},
             }
         )
-        return 1, WorkState.RETRY.value
+        return True, WorkState.RETRY.value
 
     async def fake_resolve_dag_status(*args, **kwargs):
         pytest.fail("retry path should not resolve DAG status")
 
-    repository.fail_job = fake_fail
+    repository.transition_job_attempt_terminal = fake_fail
     scheduler.dag_service.resolve_dag_status_with_retry = fake_resolve_dag_status
 
     await scheduler._handle_dispatch_failure(
@@ -632,13 +634,13 @@ async def test_handle_dispatch_failure_marks_job_failed_and_resolves_dag():
                 "output_metadata": output_metadata or {},
             }
         )
-        return 1, WorkState.FAILED.value
+        return True, WorkState.FAILED.value
 
     async def fake_resolve_dag_status(job_id: str, wi: WorkInfo, *args, **kwargs):
         resolve_calls.append((job_id, wi.dag_id))
         return True
 
-    repository.fail_job = fake_fail
+    repository.transition_job_attempt_terminal = fake_fail
     scheduler.dag_service.resolve_dag_status_with_retry = fake_resolve_dag_status
 
     await scheduler._handle_dispatch_failure(
@@ -699,7 +701,7 @@ async def test_sync_terminal_job_state_succeeded_unblocks_children_and_notifies(
         output_metadata: dict | None = None,
         force: bool = False,
         **_kwargs,
-    ) -> int:
+    ) -> tuple[bool, str]:
         complete_calls.append(
             {
                 "job_id": job_id,
@@ -707,14 +709,14 @@ async def test_sync_terminal_job_state_succeeded_unblocks_children_and_notifies(
                 "force": force,
             }
         )
-        return 1
+        return True, WorkState.COMPLETED.value
 
     async def fake_resolve_dag_status(job_id: str, wi: WorkInfo, *args, **kwargs):
         resolve_calls.append((job_id, wi.dag_id))
         return False
 
     repository.get_job_by_id = get_job_by_id
-    repository.complete_job = fake_complete
+    repository.transition_job_attempt_terminal = fake_complete
     scheduler.dag_service.resolve_dag_status_with_retry = fake_resolve_dag_status
     old_end = int(
         (datetime.now(timezone.utc) - timedelta(minutes=10)).timestamp() * 1000
@@ -881,7 +883,7 @@ async def test_late_success_for_old_run_attempt_updates_zero_rows(monkeypatch):
         queue_name: str,
         output_metadata: dict | None = None,
         **kwargs,
-    ) -> int:
+    ) -> tuple[bool, None]:
         complete_calls.append(
             {
                 "job_id": job_id,
@@ -890,12 +892,12 @@ async def test_late_success_for_old_run_attempt_updates_zero_rows(monkeypatch):
                 "run_attempt_id": kwargs.get("run_attempt_id"),
             }
         )
-        return 0
+        return False, None
 
     async def on_job_completed(job_id: str):
         completed_calls.append(job_id)
 
-    repository.complete_job = complete
+    repository.transition_job_attempt_terminal = complete
     scheduler.frontier.on_job_completed = on_job_completed
     monkeypatch.setattr(
         scheduler_psql,
@@ -952,7 +954,7 @@ async def test_late_failure_for_old_run_attempt_updates_zero_rows(monkeypatch):
         queue_name: str,
         output_metadata: dict | None = None,
         **kwargs,
-    ) -> tuple[int, str | None]:
+    ) -> tuple[bool, str | None]:
         fail_calls.append(
             {
                 "job_id": job_id,
@@ -962,12 +964,12 @@ async def test_late_failure_for_old_run_attempt_updates_zero_rows(monkeypatch):
                 "run_attempt_id": kwargs.get("run_attempt_id"),
             }
         )
-        return 0, None
+        return False, None
 
     async def on_job_failed(job_id: str):
         failed_calls.append(job_id)
 
-    repository.fail_job = fail
+    repository.transition_job_attempt_terminal = fail
     scheduler.frontier.on_job_failed = on_job_failed
     monkeypatch.setattr(
         scheduler_psql,
@@ -1552,6 +1554,7 @@ async def test_process_control_flow_node_notifies_after_unblocking_children(
 ):
     service = object.__new__(ControlFlowExecutionService)
     service.logger = FakeLogger()
+    service._runtime = SchedulerRuntime(service.logger)
     service.dag_service = SimpleNamespace(
         active_dags={"dag-cf": object()},
         resolve_dag_status_with_retry=None,
@@ -1632,6 +1635,7 @@ async def test_process_control_flow_node_notifies_after_unblocking_children(
     )
 
     await service.process_node(work_item)
+    await asyncio.sleep(0)
 
     assert order == [
         "complete:noop-root",

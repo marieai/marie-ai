@@ -179,6 +179,9 @@ class JobInfoStorageClient:
     def __init__(self, storage: StorageArea):
         self.storage = storage
 
+    async def close(self) -> None:
+        await self.storage.close()
+
     async def put_info(
         self, job_id: str, job_info: JobInfo, overwrite: bool = True
     ) -> bool:
@@ -228,7 +231,7 @@ class JobInfoStorageClient:
         message: Optional[str] = None,
         jobinfo_replace_kwargs: Optional[Dict[str, Any]] = None,
         force: bool = False,
-    ):
+    ) -> JobInfo:
         """Puts or updates job status.  Sets end_time if status is terminal.
 
         Args:
@@ -257,6 +260,7 @@ class JobInfoStorageClient:
             new_info.end_time = int(time.time() * 1000)
 
         await self.put_info(job_id, new_info)
+        return new_info
 
     async def get_status(self, job_id: str) -> Optional[JobStatus]:
         job_info = await self.get_info(job_id)

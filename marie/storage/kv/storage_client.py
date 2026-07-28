@@ -104,3 +104,6 @@ class StorageArea(abc.ABC):
     @abc.abstractmethod
     def debug_info(self) -> str:
         """Returns debug information about this client."""
+
+    async def close(self) -> None:
+        """Release storage resources."""

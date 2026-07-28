@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -185,7 +186,11 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
         in schema_query
     )
     assert "VALUES ('default')" in schema_query
-    assert "VALUES ('75')" in schema_query
+    assert "VALUES ('76')" in schema_query
+    assert "priority INTEGER NOT NULL DEFAULT 0" in schema_query
+    assert "task_count INTEGER NOT NULL DEFAULT 0" in schema_query
+    assert "backfill_dag_projection_on_job_insert" not in schema_query
+    assert "CREATE INDEX IF NOT EXISTS dag_admission_order_idx" in schema_query
     assert "job_expired_acquisition_lease_idx" in schema_query
     assert "job_expired_run_lease_idx" in schema_query
     assert "FOR UPDATE OF j SKIP LOCKED" in schema_query
@@ -317,6 +322,13 @@ async def test_create_dag_with_jobs_uses_bounded_batch_statements(
 ) -> None:
     dag_id = "00000000-0000-0000-0000-000000000099"
     jobs = [build_dag_job(dag_id, index + 1) for index in range(node_count)]
+    jobs[0].data["metadata"].update(
+        {
+            "project_id": "project-1",
+            "ref_type": "document",
+        }
+    )
+    jobs[0].policy = "REJECT_DUPLICATE"
     connection = FakeConnection(fetchrow=[(dag_id,)])
     repository = build_repository(connection)
 
@@ -334,6 +346,24 @@ async def test_create_dag_with_jobs_uses_bounded_batch_statements(
         "execute",
     ]
     assert connection.transactions[0].error is None
+
+    _, dag_query, dag_params = connection.calls[0]
+    assert "%s::uuid" in dag_query
+    assert "priority" in dag_query
+    assert "submission_name" in dag_query
+    assert dag_params[0] == dag_id
+    assert dag_params[1] == f"{dag_id}_dag"
+    assert dag_params[2].obj == QueryPlan(nodes=[]).model_dump()
+    assert dag_params[5] == "test-planner"
+    assert dag_params[6:] == (
+        jobs[0].priority,
+        jobs[0].name,
+        "project-1",
+        "document",
+        "document-1",
+        "REJECT_DUPLICATE",
+        node_count,
+    )
 
     _, job_query, job_params = connection.calls[1]
     job_batch = job_params[0].obj
@@ -410,6 +440,148 @@ async def test_resolve_dag_state_raises_on_db_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_terminal_database_operations_trace_component_timings(
+    monkeypatch,
+) -> None:
+    job_id = "00000000-0000-0000-0000-000000000001"
+    dag_id = "00000000-0000-0000-0000-000000000010"
+    attempt_id = "00000000-0000-0000-0000-00000000000a"
+    connection = FakeConnection(
+        fetchrow=[(attempt_id,)],
+        fetchval=[1, "active"],
+    )
+    repository = build_repository(connection)
+    trace = MagicMock()
+    monkeypatch.setattr(
+        "marie.scheduler.repository.async_job_repository.scheduler_trace",
+        trace,
+    )
+
+    assert (
+        await repository.complete_job(
+            job_id,
+            "extract",
+            run_owner="worker-1",
+            run_attempt_id=attempt_id,
+        )
+        == 1
+    )
+    await repository.record_job_attempt_terminal(
+        job_id=job_id,
+        job_name="extract",
+        dag_id=dag_id,
+        run_owner="worker-1",
+        run_attempt_id=attempt_id,
+        scheduler_lease_owner="scheduler-1",
+        gateway_instance_id="gateway-1",
+        terminal_status="SUCCEEDED",
+        terminal_work_state="completed",
+        source="job_event",
+        accepted=True,
+    )
+    assert await repository.resolve_dag_state(dag_id) == "active"
+
+    events = [call.kwargs for call in trace.call_args_list]
+    assert [event["operation"] for event in events] == [
+        "job_complete",
+        "attempt_terminal_audit",
+        "dag_resolve",
+    ]
+    for event in events:
+        assert event["pool_wait_ms"] >= 0
+        assert event["sql_ms"] >= 0
+        assert event["total_ms"] >= event["sql_ms"]
+    assert events[0]["autocommit"] is True
+    assert events[0]["commit_ms"] is None
+    assert events[1]["autocommit"] is False
+    assert events[1]["commit_ms"] >= 0
+    assert events[1]["updated_existing"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("terminal_status", "final_state", "expected_sql"),
+    [
+        ("SUCCEEDED", WorkState.COMPLETED.value, "output = %s::jsonb"),
+        ("FAILED", WorkState.RETRY.value, "dead_lettered AS"),
+        ("STOPPED", WorkState.CANCELLED.value, "run_attempt_id = NULL"),
+    ],
+)
+async def test_terminal_transition_updates_job_and_attempt_in_one_statement(
+    monkeypatch,
+    terminal_status: str,
+    final_state: str,
+    expected_sql: str,
+) -> None:
+    job_id = "00000000-0000-0000-0000-000000000001"
+    dag_id = "00000000-0000-0000-0000-000000000010"
+    attempt_id = "00000000-0000-0000-0000-00000000000a"
+    connection = FakeConnection(fetchrow=[(True, final_state)])
+    repository = build_repository(connection)
+    trace = MagicMock()
+    monkeypatch.setattr(
+        "marie.scheduler.repository.async_job_repository.scheduler_trace",
+        trace,
+    )
+
+    result = await repository.transition_job_attempt_terminal(
+        job_id=job_id,
+        queue_name="extract",
+        dag_id=dag_id,
+        run_owner="worker-1",
+        run_attempt_id=attempt_id,
+        scheduler_lease_owner="scheduler-1",
+        gateway_instance_id="gateway-1",
+        terminal_status=terminal_status,
+        source="job_event",
+        output_metadata={"result": "test"},
+    )
+
+    assert result == (True, final_state)
+    assert len(connection.calls) == 1
+    method, query, params = connection.calls[0]
+    assert method == "fetchrow"
+    assert "UPDATE marie_scheduler.job AS job" in query
+    assert "INSERT INTO marie_scheduler.job_attempt AS existing" in query
+    assert "ON CONFLICT (run_attempt_id) DO UPDATE" in query
+    assert expected_sql in query
+    assert query.count("%s") == len(params)
+    assert connection.transactions == []
+
+    event = trace.call_args.kwargs
+    assert event["operation"] == "job_terminal_transition"
+    assert event["terminal_status"] == terminal_status
+    assert event["accepted"] is True
+    assert event["final_state"] == final_state
+    assert event["autocommit"] is True
+    assert event["commit_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_stale_terminal_transition_records_rejected_attempt_atomically() -> None:
+    connection = FakeConnection(fetchrow=[(False, None)])
+    repository = build_repository(connection)
+
+    result = await repository.transition_job_attempt_terminal(
+        job_id="00000000-0000-0000-0000-000000000001",
+        queue_name="extract",
+        dag_id="00000000-0000-0000-0000-000000000010",
+        run_owner="old-worker",
+        run_attempt_id="00000000-0000-0000-0000-00000000000a",
+        scheduler_lease_owner="scheduler-1",
+        gateway_instance_id="gateway-1",
+        terminal_status="SUCCEEDED",
+        source="job_event",
+    )
+
+    assert result == (False, None)
+    _, query, _ = connection.calls[0]
+    assert "ELSE 'terminal_rejected'" in query
+    assert "ELSE 'db_update_zero_rows'" in query
+    assert connection.transactions == []
+
+
+@pytest.mark.asyncio
 async def test_get_active_dag_ids_raises_on_db_error() -> None:
     repository = build_repository(FakeConnection(error=RuntimeError("db busy")))
 
@@ -438,11 +610,14 @@ async def test_discover_admission_candidates_uses_database_function_contract() -
     connection = FakeConnection(fetch=[[]])
     repository = build_repository(connection)
 
-    assert await repository.discover_admission_candidates(
-        limit=25,
-        sla_interval_seconds=900,
-        excluded_dag_ids=[excluded],
-    ) == []
+    assert (
+        await repository.discover_admission_candidates(
+            limit=25,
+            sla_interval_seconds=900,
+            excluded_dag_ids=[excluded],
+        )
+        == []
+    )
 
     _, query, params = connection.calls[0]
     assert "FROM marie_scheduler.admission_candidate_dags(" in query
@@ -490,7 +665,6 @@ async def test_dag_activation_diagnostic_includes_root_failure() -> None:
                     {"error_message": "processor crashed"},
                     attempt_id,
                     "failed",
-                    None,
                     "job_event",
                     "failed",
                     None,
@@ -537,7 +711,6 @@ async def test_dag_activation_diagnostic_includes_root_failure() -> None:
             "output": {"error_message": "processor crashed"},
             "run_attempt_id": attempt_id,
             "attempt_state": "failed",
-            "dispatch_error": None,
             "terminal_source": "job_event",
             "terminal_work_state": "failed",
             "recovery_reason": None,
@@ -608,46 +781,41 @@ async def test_activate_from_lease_returns_empty_mapping() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dispatch_result_preserves_terminal_attempt_state() -> None:
-    connection = FakeConnection()
+async def test_complete_job_attempts_fences_batch_by_attempt() -> None:
+    first_job = "00000000-0000-0000-0000-000000000001"
+    second_job = "00000000-0000-0000-0000-000000000002"
+    first_attempt = "00000000-0000-0000-0000-000000000011"
+    second_attempt = "00000000-0000-0000-0000-000000000012"
+    connection = FakeConnection(fetch=[[(first_job,), (second_job,)]])
     repository = build_repository(connection)
 
-    await repository.record_job_attempt_dispatch_result(
-        run_attempt_id="00000000-0000-0000-0000-000000000003",
-        confirmed=True,
-    )
-
-    method, query, _ = connection.calls[0]
-    assert method == "execute"
-    assert "WHEN terminal_at IS NOT NULL OR recovery_at IS NOT NULL" in query
-
-
-@pytest.mark.asyncio
-async def test_dispatch_start_does_not_regress_attempt_state() -> None:
-    connection = FakeConnection()
-    repository = build_repository(connection)
-
-    await repository.record_job_attempt_dispatch_started(
-        job_id="00000000-0000-0000-0000-000000000001",
-        job_name="extract",
-        dag_id="00000000-0000-0000-0000-000000000002",
+    completed = await repository.complete_job_attempts(
+        {
+            first_job: ("extract", first_attempt),
+            second_job: ("classify", second_attempt),
+        },
         run_owner="scheduler-1",
-        run_attempt_id="00000000-0000-0000-0000-000000000003",
-        scheduler_lease_owner="scheduler-1",
-        gateway_instance_id="gateway-1",
-        executor="extractor",
     )
 
-    method, query, _ = connection.calls[0]
-    assert method == "execute"
-    assert "WHEN job_attempt.attempt_state = 'activated'" in query
+    assert completed == {first_job, second_job}
+    assert len(connection.calls) == 1
+    method, query, params = connection.calls[0]
+    assert method == "fetch"
+    assert "FROM unnest(%s::uuid[], %s::text[], %s::uuid[])" in query
+    assert "job.run_attempt_id = requested.run_attempt_id" in query
+    assert params[:4] == (
+        [first_job, second_job],
+        ["extract", "classify"],
+        [first_attempt, second_attempt],
+        WorkState.COMPLETED.value,
+    )
+    assert params[5:] == (WorkState.ACTIVE.value, "scheduler-1")
 
 
 def test_activate_from_lease_sql_owns_attempt_audit_atomically() -> None:
     project_root = Path(__file__).parents[4]
     sql = (
-        project_root
-        / "config/psql/schema/lease/015_activate_from_lease.sql"
+        project_root / "config/psql/schema/lease/015_activate_from_lease.sql"
     ).read_text()
 
     functions = sql.split("CREATE OR REPLACE FUNCTION {schema}.activate_from_lease(")[
@@ -661,6 +829,8 @@ def test_activate_from_lease_sql_owns_attempt_audit_atomically() -> None:
     assert "UPDATE {schema}.job" in core
     assert "run_attempt_id        = ok.run_attempt_id" in core
     assert "INSERT INTO {schema}.job_attempt" in core
+    assert "split_part(j.data #>> '{metadata,on}', '://', 1)" in core
+    assert "executor = COALESCE(EXCLUDED.executor, existing.executor)" in core
     assert "FROM activated" in core
     assert "JOIN audited" in core
     assert "gen_random_uuid()" in table_wrapper
@@ -693,6 +863,7 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
             True,
             True,
             True,
+            True,
             (
                 "run_attempt_id lease_owner = _run_owner INSERT INTO "
                 "marie_scheduler.job_attempt _gateway_instance_id "
@@ -706,13 +877,17 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
 
     await repository.validate_durable_scheduler_schema()
 
-    _, function_query, function_params = connection.calls[3]
+    _, projection_query, projection_params = connection.calls[3]
+    assert "SELECT COUNT(*) = 14" in projection_query
+    assert projection_params[0] == "marie_scheduler"
+
+    _, function_query, function_params = connection.calls[4]
     assert "to_regprocedure" in function_query
     assert function_params == (
         "marie_scheduler.admission_candidate_dags(integer,integer,uuid[])",
     )
 
-    _, activation_query, _ = connection.calls[4]
+    _, activation_query, _ = connection.calls[5]
     assert "p.pronargs = 5" in activation_query
     assert all(
         "scheduler_attempt_invariant_checks" not in query

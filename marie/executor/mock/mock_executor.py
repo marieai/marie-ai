@@ -166,10 +166,10 @@ class IntegrationExecutorMock(MarieExecutor):
                 raise random.choice(failure_types)
 
         # Normal processing - simulate work
+        process_time = 0  # TESTING
         self.logger.info(f"Processing for {process_time:.2f} seconds : {time.time()}")
         await asyncio.sleep(process_time)
         self.logger.info(f"Processing complete : {time.time()}")
-        time.sleep(process_time)  # TSTIN ASYNC FAILURE
 
         result = {
             "parameters": parameters,

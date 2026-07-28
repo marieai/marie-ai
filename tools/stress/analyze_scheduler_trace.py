@@ -31,6 +31,10 @@ EVENTS = (
     "scheduler_selection_cap_completed",
     "scheduler_selection_take_completed",
     "scheduler_selection_completed",
+    "scheduler_dispatch_wait_completed",
+    "scheduler_dispatch_cycle_started",
+    "scheduler_dispatch_capacity_snapshot",
+    "scheduler_dispatch_candidate_capture_completed",
     "scheduler_control_flow_peek_completed",
     "candidate_built",
     "planner_selected",
@@ -56,7 +60,9 @@ EVENTS = (
     "job_supervisor_worker_ack_wait_failed",
     "job_supervisor_send_failed",
     "job_supervisor_send_task_completed",
+    "job_supervisor_terminal_status_cache_hit",
     "job_supervisor_terminal_status_read",
+    "job_supervisor_terminal_info_read",
     "job_monitor_status_observed",
     "job_monitor_terminal_observed",
     "job_monitor_sleep_started",
@@ -89,9 +95,15 @@ EVENTS = (
     "job_run_attempt_started",
     "job_terminal_attempt_accepted",
     "job_terminal_attempt_rejected",
+    "terminal_job_lock_acquired",
+    "terminal_db_operation_completed",
+    "terminal_dag_lock_acquired",
     "terminal_dag_resolution_started",
     "terminal_dag_resolution_completed",
     "terminal_scheduler_wake_completed",
+    "postgres_notification_handler_completed",
+    "gateway_event_loop_lag",
+    "postgres_kv_operation_completed",
     "scheduler_priority_refresh_requested",
     "scheduler_priority_refresh_due",
     "scheduler_priority_refresh_start",
@@ -242,6 +254,16 @@ LEGACY_SCHEDULER_DISPATCH_PATH = (
 EXECUTOR_HANDOFF_PATH = (
     "dispatch_to_executor",
     "executor_start_record",
+)
+
+TERMINAL_DB_OPERATIONS = (
+    "job_terminal_transition",
+    "job_complete",
+    "job_fail",
+    "job_cancel",
+    "attempt_terminal_audit",
+    "dag_resolve",
+    "control_flow_batch_complete",
 )
 
 DISPATCH_BOTTLENECK_STAGES = (
@@ -1739,12 +1761,30 @@ def _print_terminal_handoff_report(
             "terminal_to_scheduler_event_processed",
         ),
     )
-    if not any(_numeric_values(summaries, key) for _, key in handoff_keys):
+    worker_counts = Counter(
+        str(row["worker_id"])
+        for row in rows
+        if row.get("event") == "job_status_event_dequeued"
+        and isinstance(row.get("worker_id"), (int, str))
+    )
+    has_handoff = any(_numeric_values(summaries, key) for _, key in handoff_keys)
+    if not has_handoff and not worker_counts:
         return
 
     print("\nTerminal Status Event Handoff")
     for label, key in handoff_keys:
         _print_distribution(label, _numeric_values(summaries, key))
+    if worker_counts:
+        worker_summary = ", ".join(
+            f"{worker_id}={worker_counts[worker_id]}"
+            for worker_id in sorted(
+                worker_counts, key=lambda value: (len(value), value)
+            )
+        )
+        print(
+            f"status publisher workers observed: {len(worker_counts)} "
+            f"({worker_summary})"
+        )
     _print_count_distribution(
         "status publisher total queue depth",
         _numeric_event_field(rows, "job_status_event_enqueued", "queue_size"),
@@ -1771,6 +1811,256 @@ def _print_terminal_handoff_report(
         "configured monitor poll sleep",
         _numeric_event_field(rows, "job_monitor_sleep_started", "wait_ms"),
     )
+
+
+def _print_terminal_critical_path_report(rows: list[dict[str, Any]]) -> None:
+    detail_events = {
+        "terminal_job_lock_acquired",
+        "terminal_db_operation_completed",
+        "terminal_dag_lock_acquired",
+        "postgres_notification_handler_completed",
+        "job_supervisor_terminal_status_cache_hit",
+        "job_supervisor_terminal_info_read",
+    }
+    if not any(row.get("event") in detail_events for row in rows):
+        return
+
+    print("\nTerminal Critical Path Detail")
+    for event, label in (
+        ("terminal_job_lock_acquired", "terminal job lock"),
+        ("terminal_dag_lock_acquired", "terminal DAG lock"),
+    ):
+        lock_rows = [row for row in rows if row.get("event") == event]
+        if not lock_rows:
+            continue
+        contended = sum(row.get("contended") is True for row in lock_rows)
+        print(
+            f"{label}: acquisitions={len(lock_rows)} "
+            f"contended={contended} "
+            f"contended_pct={(contended / len(lock_rows)) * 100.0:.1f}%"
+        )
+        _print_distribution(
+            f"{label} wait",
+            [
+                float(row["wait_ms"])
+                for row in lock_rows
+                if isinstance(row.get("wait_ms"), (int, float))
+            ],
+        )
+
+    db_rows = [
+        row for row in rows if row.get("event") == "terminal_db_operation_completed"
+    ]
+    for operation in TERMINAL_DB_OPERATIONS:
+        operation_rows = [row for row in db_rows if row.get("operation") == operation]
+        if not operation_rows:
+            continue
+        print(f"terminal database {operation}: count={len(operation_rows)}")
+        for field, label in (
+            ("pool_wait_ms", "pool wait"),
+            ("sql_ms", "SQL"),
+            ("commit_ms", "commit"),
+            ("total_ms", "total"),
+        ):
+            _print_distribution(
+                f"  {label}",
+                [
+                    float(row[field])
+                    for row in operation_rows
+                    if isinstance(row.get(field), (int, float))
+                ],
+            )
+
+    _print_distribution(
+        "notification driver receipt to handler dispatch",
+        _numeric_event_field(
+            rows,
+            "postgres_notification_handler_completed",
+            "driver_to_dispatch_ms",
+        ),
+    )
+    _print_distribution(
+        "notification handler",
+        _numeric_event_field(
+            rows,
+            "postgres_notification_handler_completed",
+            "handler_ms",
+        ),
+    )
+    _print_distribution(
+        "supervisor terminal status KV read",
+        _numeric_event_field(
+            rows,
+            "job_supervisor_terminal_status_read",
+            "elapsed_ms",
+        ),
+    )
+    cache_hits = sum(
+        row.get("event") == "job_supervisor_terminal_status_cache_hit" for row in rows
+    )
+    fallback_reads = sum(
+        row.get("event") == "job_supervisor_terminal_status_read" for row in rows
+    )
+    if cache_hits or fallback_reads:
+        print(
+            "supervisor terminal status resolution: "
+            f"cache_hits={cache_hits} kv_fallback_reads={fallback_reads}"
+        )
+    _print_distribution(
+        "supervisor terminal info KV read",
+        _numeric_event_field(
+            rows,
+            "job_supervisor_terminal_info_read",
+            "elapsed_ms",
+        ),
+    )
+
+
+def _print_gateway_runtime_diagnostics(rows: list[dict[str, Any]]) -> None:
+    loop_rows = [row for row in rows if row.get("event") == "gateway_event_loop_lag"]
+    kv_rows = [
+        row for row in rows if row.get("event") == "postgres_kv_operation_completed"
+    ]
+    if not loop_rows and not kv_rows:
+        return
+
+    print("\nGateway Runtime Diagnostics")
+    _print_distribution(
+        "event loop lag",
+        [
+            float(row["lag_ms"])
+            for row in loop_rows
+            if isinstance(row.get("lag_ms"), (int, float))
+        ],
+    )
+    _print_count_distribution(
+        "pending asyncio tasks",
+        [
+            float(row["task_count"])
+            for row in loop_rows
+            if isinstance(row.get("task_count"), (int, float))
+        ],
+    )
+    task_count_rows = [
+        row for row in loop_rows if isinstance(row.get("task_count"), (int, float))
+    ]
+    if task_count_rows:
+        first_count = int(task_count_rows[0]["task_count"])
+        last_count = int(task_count_rows[-1]["task_count"])
+        print(
+            "asyncio task trend: "
+            f"first={first_count} last={last_count} "
+            f"delta={last_count - first_count:+d}"
+        )
+
+    named_task_rows = [
+        row for row in loop_rows if isinstance(row.get("task_names"), dict)
+    ]
+    if named_task_rows:
+        latest = named_task_rows[-1]
+        latest_names = {
+            str(name): int(count)
+            for name, count in latest["task_names"].items()
+            if isinstance(count, (int, float))
+        }
+        latest_pieces = [
+            f"{name}={count}"
+            for name, count in sorted(
+                latest_names.items(), key=lambda item: (-item[1], item[0])
+            )
+        ]
+        latest_other = latest.get("task_names_other")
+        if isinstance(latest_other, (int, float)) and latest_other:
+            latest_pieces.append(f"other={int(latest_other)}")
+        print("latest asyncio task groups: " + ", ".join(latest_pieces))
+
+        peak_counts: dict[str, int] = {}
+        for row in named_task_rows:
+            for name, count in row["task_names"].items():
+                if isinstance(count, (int, float)):
+                    key = str(name)
+                    peak_counts[key] = max(peak_counts.get(key, 0), int(count))
+        peak_pieces = [
+            f"{name}={count}"
+            for name, count in sorted(
+                peak_counts.items(), key=lambda item: (-item[1], item[0])
+            )[:10]
+        ]
+        print("peak asyncio task groups: " + ", ".join(peak_pieces))
+
+    gateway_pids = {
+        row.get("pid") for row in loop_rows if isinstance(row.get("pid"), int)
+    }
+    scoped_rows: list[tuple[str | None, list[dict[str, Any]]]] = []
+    if gateway_pids:
+        gateway_rows = [row for row in kv_rows if row.get("pid") in gateway_pids]
+        executor_rows = [row for row in kv_rows if row.get("pid") not in gateway_pids]
+        if gateway_rows:
+            scoped_rows.append(("gateway", gateway_rows))
+        if executor_rows:
+            scoped_rows.append(("executor", executor_rows))
+    else:
+        scoped_rows.append((None, kv_rows))
+
+    for scope, scope_rows in scoped_rows:
+        modes = sorted(
+            {
+                "async" if row.get("mode") == "async" else "threaded"
+                for row in scope_rows
+            }
+        )
+        for mode in modes:
+            mode_rows = [
+                row
+                for row in scope_rows
+                if ("async" if row.get("mode") == "async" else "threaded") == mode
+            ]
+            operations = sorted(
+                {
+                    str(row.get("operation"))
+                    for row in mode_rows
+                    if row.get("operation") is not None
+                }
+            )
+            for operation in operations:
+                operation_rows = [
+                    row for row in mode_rows if row.get("operation") == operation
+                ]
+                process_count = len(
+                    {
+                        row.get("pid")
+                        for row in operation_rows
+                        if isinstance(row.get("pid"), int)
+                    }
+                )
+                scope_label = f" {scope}" if scope else ""
+                print(
+                    f"postgres KV{scope_label} {operation} ({mode}): "
+                    f"count={len(operation_rows)} processes={process_count}"
+                )
+                fields = (
+                    (
+                        ("pool_wait_ms", "pool wait"),
+                        ("database_operation_ms", "database/transaction"),
+                        ("total_ms", "total"),
+                    )
+                    if mode == "async"
+                    else (
+                        ("executor_queue_wait_ms", "executor queue wait"),
+                        ("blocking_operation_ms", "blocking connection/SQL"),
+                        ("event_loop_resume_ms", "event loop resume"),
+                        ("total_ms", "total"),
+                    )
+                )
+                for field, label in fields:
+                    _print_distribution(
+                        f"  {label}",
+                        [
+                            float(row[field])
+                            for row in operation_rows
+                            if isinstance(row.get(field), (int, float))
+                        ],
+                    )
 
 
 def _print_terminal_feedback_report(
@@ -1906,6 +2196,86 @@ def _print_selection_report(rows: list[dict[str, Any]]) -> None:
         "frontier full scans: "
         f"control_flow_peek={len(control_flow_peek)} "
         f"selection_capture={len(selection_total)}"
+    )
+
+
+def _print_dispatch_cycle_report(rows: list[dict[str, Any]]) -> None:
+    events = _event_counts(rows)
+    started = events.get("scheduler_dispatch_cycle_started", 0)
+    capacity = events.get("scheduler_dispatch_capacity_snapshot", 0)
+    captured = events.get("scheduler_dispatch_candidate_capture_completed", 0)
+    if not started and not capacity and not captured:
+        return
+
+    print("\nScheduler Dispatch Cycle")
+    print(f"phases: started={started} capacity={capacity} candidates={captured}")
+    triggers = Counter(
+        str(row.get("trigger"))
+        for row in rows
+        if row.get("event") == "scheduler_dispatch_cycle_started"
+    )
+    if triggers:
+        print(
+            "triggers: "
+            + ", ".join(f"{name}={triggers[name]}" for name in sorted(triggers))
+        )
+    _print_distribution(
+        "event wake wait",
+        [
+            float(row["elapsed_ms"])
+            for row in rows
+            if row.get("event") == "scheduler_dispatch_wait_completed"
+            and row.get("outcome") == "wake"
+            and isinstance(row.get("elapsed_ms"), (int, float))
+        ],
+    )
+    _print_distribution(
+        "wake/timeout to cycle start",
+        _numeric_event_field(
+            rows,
+            "scheduler_dispatch_cycle_started",
+            "wait_to_cycle_ms",
+        ),
+    )
+    _print_distribution(
+        "capacity snapshot operation",
+        _numeric_event_field(
+            rows,
+            "scheduler_dispatch_capacity_snapshot",
+            "elapsed_ms",
+        ),
+    )
+    _print_distribution(
+        "cycle start to capacity snapshot",
+        _numeric_event_field(
+            rows,
+            "scheduler_dispatch_capacity_snapshot",
+            "cycle_elapsed_ms",
+        ),
+    )
+    _print_distribution(
+        "candidate selection call",
+        _numeric_event_field(
+            rows,
+            "scheduler_dispatch_candidate_capture_completed",
+            "elapsed_ms",
+        ),
+    )
+    _print_distribution(
+        "capacity snapshot to candidate capture",
+        _numeric_event_field(
+            rows,
+            "scheduler_dispatch_candidate_capture_completed",
+            "capacity_to_capture_ms",
+        ),
+    )
+    _print_distribution(
+        "cycle start to candidate capture",
+        _numeric_event_field(
+            rows,
+            "scheduler_dispatch_candidate_capture_completed",
+            "cycle_elapsed_ms",
+        ),
     )
 
 
@@ -2196,10 +2566,21 @@ def _print_postgres_pool_report(rows: list[dict[str, Any]]) -> None:
         if count:
             print(f"{event} {count}")
 
-    waits = _numeric_event_field(rows, "postgres_pool_acquire_wait_done", "elapsed_ms")
-    if waits:
+    wait_rows = [
+        row
+        for row in rows
+        if row.get("event") == "postgres_pool_acquire_wait_done"
+        and isinstance(row.get("elapsed_ms"), (int, float))
+    ]
+    pools = sorted({str(row.get("pool") or "legacy") for row in wait_rows})
+    for pool in pools:
+        waits = [
+            float(row["elapsed_ms"])
+            for row in wait_rows
+            if str(row.get("pool") or "legacy") == pool
+        ]
         print(
-            "acquire-wait "
+            f"acquire-wait[{pool}] "
             f"{len(waits)} "
             f"{_fmt(_avg(waits))} "
             f"{_fmt(_percentile(waits, 0.50))} "
@@ -2583,6 +2964,7 @@ def print_report(
     )
 
     _print_dispatch_efficiency_report(rows, summaries, rates)
+    _print_dispatch_cycle_report(rows)
     _print_selection_report(rows)
     _print_pressure_report(rows)
     _print_slot_idle_report(rows)
@@ -2591,6 +2973,8 @@ def print_report(
     _print_dag_sync_report(rows)
     _print_postgres_pool_report(rows)
     _print_terminal_handoff_report(rows, summaries)
+    _print_terminal_critical_path_report(rows)
+    _print_gateway_runtime_diagnostics(rows)
     _print_terminal_feedback_report(rows, summaries)
     _print_latency_report(summaries)
     _print_findings(rates, summaries, events, rows)

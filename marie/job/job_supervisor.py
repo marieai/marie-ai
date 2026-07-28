@@ -27,6 +27,7 @@ from marie.utils.scheduler_trace import scheduler_trace
 TerminalEventCallback = Callable[
     [str, JobStatus, Optional[str], Optional[str], str], Awaitable[bool]
 ]
+CommittedTerminalLookup = Callable[[str, Optional[str]], Optional[JobStatus]]
 
 
 class JobSupervisor:
@@ -50,6 +51,7 @@ class JobSupervisor:
         desired_state_executor: DesiredStateExecutor,
         confirmation_event: asyncio.Event,
         terminal_event_callback: Optional[TerminalEventCallback] = None,
+        committed_terminal_lookup: Optional[CommittedTerminalLookup] = None,
     ):
         self.logger = MarieLogger(self.__class__.__name__)
         self._job_id = job_id
@@ -61,6 +63,7 @@ class JobSupervisor:
         self.request_info = None
         self.confirmation_event = confirmation_event  # we need to make sure that this is per job confirmation event
         self._terminal_event_callback = terminal_event_callback
+        self._committed_terminal_lookup = committed_terminal_lookup
         self._active_tasks = set()
         self._loop = get_or_reuse_loop()
         self._current_job_epoch: Optional[int] = None
@@ -470,24 +473,50 @@ class JobSupervisor:
                         f"Job processed successfully in {elapsed:.2f}s for job {self._job_id}"
                     )
 
-                    status_read_started = time.perf_counter()
-                    current_status = await self._job_info_client.get_status(
-                        self._job_id
-                    )
-                    scheduler_trace(
-                        "job_supervisor_terminal_status_read",
-                        job_id=self._job_id,
-                        status=str(current_status)
-                        if current_status is not None
-                        else None,
-                        found=current_status is not None,
-                        terminal=(
-                            current_status.is_terminal()
-                            if current_status is not None
-                            else False
-                        ),
-                        elapsed_ms=(time.perf_counter() - status_read_started) * 1000.0,
-                    )
+                    current_info = None
+                    current_status = None
+                    if self._committed_terminal_lookup is not None:
+                        current_status = self._committed_terminal_lookup(
+                            self._job_id,
+                            job_info.run_attempt_id,
+                        )
+
+                    terminal_cache_hit = current_status is not None
+                    info_read_elapsed_ms = 0.0
+                    if terminal_cache_hit:
+                        scheduler_trace(
+                            "job_supervisor_terminal_status_cache_hit",
+                            job_id=self._job_id,
+                            status=current_status.value,
+                            run_attempt_id=job_info.run_attempt_id,
+                        )
+                    else:
+                        info_read_started = time.perf_counter()
+                        current_info = await self._job_info_client.get_info(
+                            self._job_id
+                        )
+                        current_status = (
+                            current_info.status if current_info is not None else None
+                        )
+                        info_read_elapsed_ms = (
+                            time.perf_counter() - info_read_started
+                        ) * 1000.0
+                        scheduler_trace(
+                            "job_supervisor_terminal_status_read",
+                            job_id=self._job_id,
+                            status=(
+                                str(current_status)
+                                if current_status is not None
+                                else None
+                            ),
+                            found=current_status is not None,
+                            terminal=(
+                                current_status.is_terminal()
+                                if current_status is not None
+                                else False
+                            ),
+                            elapsed_ms=info_read_elapsed_ms,
+                        )
                     if current_status is None:
                         self.logger.warning(
                             "Job %s status not found on finalize", self._job_id
@@ -496,33 +525,41 @@ class JobSupervisor:
 
                     if response.status.code == jina_pb2.StatusProto.SUCCESS:
                         if current_status.is_terminal():
-                            current_info = await self._job_info_client.get_info(
-                                self._job_id
-                            )
-                            run_owner = current_info.run_owner if current_info else None
-                            run_attempt_id = (
-                                current_info.run_attempt_id if current_info else None
-                            )
-                            if self._terminal_event_callback is not None:
-                                await self._terminal_event_callback(
-                                    self._job_id,
-                                    current_status,
-                                    run_owner,
-                                    run_attempt_id,
-                                    'supervisor_finalize',
+                            if not terminal_cache_hit:
+                                scheduler_trace(
+                                    "job_supervisor_terminal_info_read",
+                                    job_id=self._job_id,
+                                    found=True,
+                                    elapsed_ms=info_read_elapsed_ms,
                                 )
-                            else:
-                                await self._event_publisher.publish(
-                                    current_status,
-                                    {
-                                        "job_id": self._job_id,
-                                        "status": current_status,
-                                        "message": f"Job {self._job_id} already completed with status {current_status}.",
-                                        "jobinfo_replace_kwargs": False,
-                                        "run_owner": run_owner,
-                                        "run_attempt_id": run_attempt_id,
-                                    },
+                                run_owner = (
+                                    current_info.run_owner if current_info else None
                                 )
+                                run_attempt_id = (
+                                    current_info.run_attempt_id
+                                    if current_info
+                                    else None
+                                )
+                                if self._terminal_event_callback is not None:
+                                    await self._terminal_event_callback(
+                                        self._job_id,
+                                        current_status,
+                                        run_owner,
+                                        run_attempt_id,
+                                        'supervisor_finalize',
+                                    )
+                                else:
+                                    await self._event_publisher.publish(
+                                        current_status,
+                                        {
+                                            "job_id": self._job_id,
+                                            "status": current_status,
+                                            "message": f"Job {self._job_id} already completed with status {current_status}.",
+                                            "jobinfo_replace_kwargs": False,
+                                            "run_owner": run_owner,
+                                            "run_attempt_id": run_attempt_id,
+                                        },
+                                    )
                         else:
                             await self._job_info_client.put_status(
                                 self._job_id, JobStatus.SUCCEEDED

@@ -190,6 +190,43 @@ async def test_dispatch_cycle_returns_short_poll_without_waiting(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_cycle_traces_capacity_through_candidate_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = build_scheduler()
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        scheduler_psql,
+        "available_slots_by_executor",
+        lambda _sem: {"extract": 3},
+    )
+    monkeypatch.setattr(
+        scheduler_psql,
+        "scheduler_trace",
+        lambda event, **fields: events.append((event, fields)),
+    )
+
+    await scheduler.run_dispatch_cycle(cycle_index=7)
+
+    capacity = next(
+        fields
+        for event, fields in events
+        if event == "scheduler_dispatch_capacity_snapshot"
+    )
+    captured = next(
+        fields
+        for event, fields in events
+        if event == "scheduler_dispatch_candidate_capture_completed"
+    )
+    assert capacity["cycle_index"] == 7
+    assert capacity["available_slots"] == 3
+    assert capacity["cycle_elapsed_ms"] >= capacity["elapsed_ms"] >= 0.0
+    assert captured["cycle_index"] == 7
+    assert captured["candidates"] == 0
+    assert captured["cycle_elapsed_ms"] >= captured["elapsed_ms"] >= 0.0
+
+
+@pytest.mark.asyncio
 async def test_dispatch_cycle_plans_leases_activates_and_dispatches_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -746,8 +783,8 @@ async def test_control_flow_batch_separates_outcomes_from_reconciliation() -> No
     scheduler.frontier.take.return_value = jobs
     scheduler._lease_jobs_db.return_value = {"completed", "refused", "failed"}
     scheduler.control_flow_service = SimpleNamespace(
-        process_node=AsyncMock(
-            side_effect=[
+        process_nodes=AsyncMock(
+            return_value=[
                 ControlFlowExecutionOutcome.COMPLETED,
                 ControlFlowExecutionOutcome.ACTIVATION_REFUSED,
                 ControlFlowExecutionOutcome.FAILED,
@@ -803,7 +840,7 @@ async def test_control_flow_batch_releases_group_after_lease_error() -> None:
         {classify_job.id},
     ]
     scheduler.control_flow_service = SimpleNamespace(
-        process_node=AsyncMock(return_value=ControlFlowExecutionOutcome.COMPLETED)
+        process_nodes=AsyncMock(return_value=[ControlFlowExecutionOutcome.COMPLETED])
     )
 
     result = await scheduler._process_control_flow_candidates(
@@ -949,6 +986,45 @@ async def test_poll_drains_scheduled_cycles_before_waiting_again() -> None:
         2,
     ]
     assert scheduler._fetch_counter == 3
+
+
+@pytest.mark.asyncio
+async def test_poll_traces_wait_and_cycle_trigger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = build_scheduler()
+    scheduler._wait_for_dispatch_wake = AsyncMock(return_value=True)
+    scheduler.run_dispatch_cycle = AsyncMock()
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(scheduler_psql, "scheduler_trace_enabled", lambda: True)
+    monkeypatch.setattr(
+        scheduler_psql,
+        "scheduler_trace",
+        lambda event, **fields: events.append((event, fields)),
+    )
+
+    async def stop_after_cycle(_cycle_index: int) -> DispatchCycleResult:
+        scheduler.running = False
+        return DispatchCycleResult(scheduled=False)
+
+    scheduler.run_dispatch_cycle.side_effect = stop_after_cycle
+
+    await scheduler._poll()
+
+    wait_event = next(
+        fields
+        for event, fields in events
+        if event == "scheduler_dispatch_wait_completed"
+    )
+    cycle_event = next(
+        fields
+        for event, fields in events
+        if event == "scheduler_dispatch_cycle_started"
+    )
+    assert wait_event["outcome"] == "wake"
+    assert wait_event["elapsed_ms"] >= 0.0
+    assert cycle_event["trigger"] == "wake"
+    assert cycle_event["wait_to_cycle_ms"] >= 0.0
 
 
 @pytest.mark.asyncio

@@ -707,7 +707,17 @@ class DAGManagementService:
             )
             return False
 
-        async with self._dag_resolution_lock[dag_id]:
+        lock = self._dag_resolution_lock[dag_id]
+        lock_wait_started = time.perf_counter()
+        contended = lock.locked()
+        async with lock:
+            scheduler_trace(
+                "terminal_dag_lock_acquired",
+                job_id=job_id,
+                dag_id=dag_id,
+                contended=contended,
+                wait_ms=(time.perf_counter() - lock_wait_started) * 1000.0,
+            )
             dag_state = await self.repository.resolve_dag_state(dag_id)
             if dag_state not in {"completed", "failed"}:
                 return False

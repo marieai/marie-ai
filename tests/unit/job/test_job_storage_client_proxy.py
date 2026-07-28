@@ -25,9 +25,11 @@ async def test_terminal_status_uses_deduplicating_callback() -> None:
             run_attempt_id='attempt-1',
         ),
     )
+    storage.internal_kv_get = AsyncMock(wraps=storage.internal_kv_get)
 
     await client.put_status('job-1', JobStatus.SUCCEEDED)
 
+    storage.internal_kv_get.assert_awaited_once()
     terminal_event_callback.assert_awaited_once_with(
         'job-1',
         JobStatus.SUCCEEDED,

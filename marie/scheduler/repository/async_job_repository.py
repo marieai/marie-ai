@@ -4,6 +4,7 @@ import glob
 import os
 import random
 import re
+import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -41,10 +42,11 @@ from marie.scheduler.repository.plans import (
 from marie.scheduler.search_documents import build_job_search_documents
 from marie.scheduler.state import WorkState
 from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
+from marie.utils.scheduler_trace import scheduler_trace
 
 DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
-SCHEDULER_SCHEMA_VERSION = 75
+SCHEDULER_SCHEMA_VERSION = 76
 
 
 class _GuardrailRouteConflict(RuntimeError):
@@ -681,85 +683,6 @@ class AsyncJobRepository:
             )
         return {str(row[0]): str(row[1]) for row in rows}
 
-    async def record_job_attempt_dispatch_started(
-        self,
-        *,
-        job_id: str,
-        job_name: str,
-        dag_id: str,
-        run_owner: str,
-        run_attempt_id: str,
-        scheduler_lease_owner: str,
-        gateway_instance_id: str | None,
-        executor: str | None,
-    ) -> None:
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                f"""
-                INSERT INTO {DEFAULT_SCHEMA}.job_attempt (
-                    run_attempt_id, job_id, job_name, dag_id, run_owner,
-                    scheduler_lease_owner, gateway_instance_id, executor,
-                    attempt_state, dispatch_started_at, updated_on
-                )
-                VALUES (%s::uuid, %s::uuid, %s, %s::uuid, %s, %s, %s, %s,
-                        'dispatching', NOW(), NOW())
-                ON CONFLICT (run_attempt_id) DO UPDATE
-                SET executor = COALESCE(EXCLUDED.executor, job_attempt.executor),
-                    gateway_instance_id = COALESCE(
-                        EXCLUDED.gateway_instance_id,
-                        job_attempt.gateway_instance_id
-                    ),
-                    scheduler_lease_owner = EXCLUDED.scheduler_lease_owner,
-                    attempt_state = CASE
-                        WHEN job_attempt.attempt_state = 'activated'
-                        THEN 'dispatching'
-                        ELSE job_attempt.attempt_state
-                    END,
-                    dispatch_started_at = COALESCE(
-                        job_attempt.dispatch_started_at, NOW()
-                    ),
-                    updated_on = NOW()
-                """,
-                run_attempt_id,
-                job_id,
-                job_name,
-                dag_id,
-                run_owner,
-                scheduler_lease_owner,
-                gateway_instance_id,
-                executor,
-            )
-
-    async def record_job_attempt_dispatch_result(
-        self,
-        *,
-        run_attempt_id: str,
-        confirmed: bool,
-        error: str | None = None,
-    ) -> None:
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                f"""
-                UPDATE {DEFAULT_SCHEMA}.job_attempt
-                SET attempt_state = CASE
-                        WHEN terminal_at IS NOT NULL OR recovery_at IS NOT NULL
-                        THEN attempt_state
-                        ELSE %s
-                    END,
-                    dispatch_confirmed_at = CASE
-                        WHEN %s THEN COALESCE(dispatch_confirmed_at, NOW())
-                        ELSE dispatch_confirmed_at
-                    END,
-                    dispatch_error = %s,
-                    updated_on = NOW()
-                WHERE run_attempt_id = %s::uuid
-                """,
-                "dispatched" if confirmed else "dispatch_failed",
-                confirmed,
-                error,
-                run_attempt_id,
-            )
-
     async def record_job_attempt_terminal(
         self,
         *,
@@ -779,8 +702,13 @@ class AsyncJobRepository:
         attempt_state = terminal_work_state or (
             "terminal_rejected" if not accepted else terminal_status.lower()
         )
+        operation_started = time.perf_counter()
+        pool_wait_started = time.perf_counter()
         async with self._pool.acquire() as conn:
+            acquired_at = time.perf_counter()
+            transaction_started = time.perf_counter()
             async with conn.transaction():
+                sql_started = time.perf_counter()
                 row = await conn.fetchrow(
                     f"""
                     UPDATE {DEFAULT_SCHEMA}.job_attempt
@@ -840,25 +768,215 @@ class AsyncJobRepository:
                     reject_reason,
                     run_attempt_id,
                 )
-                if row is not None:
-                    return
-                await conn.execute(
-                    f"""
-                    INSERT INTO {DEFAULT_SCHEMA}.job_attempt (
-                        run_attempt_id, job_id, job_name, dag_id, run_owner,
-                        scheduler_lease_owner, gateway_instance_id, attempt_state,
-                        terminal_at, terminal_status, terminal_work_state,
-                        terminal_source, terminal_gateway_instance_id,
-                        terminal_scheduler_lease_owner, terminal_accepted,
-                        terminal_reject_reason, metadata, updated_on
+                updated_existing = row is not None
+                if row is None:
+                    await conn.execute(
+                        f"""
+                        INSERT INTO {DEFAULT_SCHEMA}.job_attempt (
+                            run_attempt_id, job_id, job_name, dag_id, run_owner,
+                            scheduler_lease_owner, gateway_instance_id, attempt_state,
+                            terminal_at, terminal_status, terminal_work_state,
+                            terminal_source, terminal_gateway_instance_id,
+                            terminal_scheduler_lease_owner, terminal_accepted,
+                            terminal_reject_reason, metadata, updated_on
+                        )
+                        VALUES (
+                            %s::uuid, %s::uuid, %s, %s::uuid, %s, %s, %s, %s,
+                            NOW(), %s, %s, %s, %s, %s, %s, %s,
+                            jsonb_build_object('missing_activation_audit', TRUE), NOW()
+                        )
+                        ON CONFLICT (run_attempt_id) DO NOTHING
+                        """,
+                        run_attempt_id,
+                        job_id,
+                        job_name,
+                        dag_id,
+                        run_owner,
+                        scheduler_lease_owner,
+                        gateway_instance_id,
+                        attempt_state,
+                        terminal_status,
+                        terminal_work_state,
+                        source,
+                        gateway_instance_id,
+                        scheduler_lease_owner,
+                        accepted,
+                        reject_reason,
                     )
-                    VALUES (
-                        %s::uuid, %s::uuid, %s, %s::uuid, %s, %s, %s, %s,
-                        NOW(), %s, %s, %s, %s, %s, %s, %s,
-                        jsonb_build_object('missing_activation_audit', TRUE), NOW()
+                sql_ms = (time.perf_counter() - sql_started) * 1000.0
+            transaction_ms = (time.perf_counter() - transaction_started) * 1000.0
+        scheduler_trace(
+            "terminal_db_operation_completed",
+            operation="attempt_terminal_audit",
+            job_id=job_id,
+            dag_id=dag_id,
+            run_attempt_id=run_attempt_id,
+            accepted=accepted,
+            updated_existing=updated_existing,
+            pool_wait_ms=(acquired_at - pool_wait_started) * 1000.0,
+            sql_ms=sql_ms,
+            commit_ms=max(0.0, transaction_ms - sql_ms),
+            autocommit=False,
+            total_ms=(time.perf_counter() - operation_started) * 1000.0,
+        )
+
+    async def transition_job_attempt_terminal(
+        self,
+        *,
+        job_id: str,
+        queue_name: str,
+        dag_id: str,
+        run_owner: str,
+        run_attempt_id: str,
+        scheduler_lease_owner: str,
+        gateway_instance_id: str | None,
+        terminal_status: str,
+        source: str,
+        output_metadata: Optional[dict] = None,
+        schema: str = DEFAULT_SCHEMA,
+    ) -> tuple[bool, Optional[str]]:
+        if terminal_status == "SUCCEEDED":
+            transition_ctes = f"""
+                transitioned AS (
+                    UPDATE {schema}.{DEFAULT_JOB_TABLE} AS job
+                    SET completed_on = NOW(),
+                        state = %s::{schema}.job_state,
+                        output = %s::jsonb,
+                        lease_owner = NULL,
+                        lease_expires_at = NULL,
+                        run_owner = NULL,
+                        run_lease_expires_at = NULL
+                    WHERE job.name = %s
+                      AND job.id = %s::uuid
+                      AND job.state = %s::{schema}.job_state
+                      AND job.run_owner = %s
+                      AND job.run_attempt_id = %s::uuid
+                    RETURNING job.state::text AS final_state
+                )
+            """
+            transition_params: tuple[Any, ...] = (
+                WorkState.COMPLETED.value,
+                Jsonb({"on_complete": "done", **(output_metadata or {})}),
+                queue_name,
+                job_id,
+                WorkState.ACTIVE.value,
+                run_owner,
+                run_attempt_id,
+            )
+        elif terminal_status == "FAILED":
+            transition_ctes = f"""
+                transitioned AS (
+                    UPDATE {schema}.{DEFAULT_JOB_TABLE} AS job
+                    SET state = CASE
+                            WHEN job.retry_count < job.retry_limit
+                            THEN %s::{schema}.job_state
+                            ELSE %s::{schema}.job_state
+                        END,
+                        completed_on = CASE
+                            WHEN job.retry_count < job.retry_limit THEN NULL
+                            ELSE NOW()
+                        END,
+                        start_after = CASE
+                            WHEN job.retry_count = job.retry_limit
+                            THEN job.start_after
+                            WHEN NOT job.retry_backoff
+                            THEN NOW() + job.retry_delay * INTERVAL '1 second'
+                            ELSE {schema}.exponential_backoff(
+                                job.retry_delay,
+                                job.retry_count
+                            )
+                        END,
+                        output = %s::jsonb,
+                        lease_owner = NULL,
+                        lease_expires_at = NULL,
+                        run_owner = NULL,
+                        run_attempt_id = CASE
+                            WHEN job.retry_count < job.retry_limit THEN NULL
+                            ELSE job.run_attempt_id
+                        END,
+                        run_lease_expires_at = NULL
+                    WHERE job.name = %s
+                      AND job.id = %s::uuid
+                      AND job.state = %s::{schema}.job_state
+                      AND job.run_owner = %s
+                      AND job.run_attempt_id = %s::uuid
+                    RETURNING job.name, job.data, job.output, job.retry_limit,
+                              job.keep_until, job.start_after, job.dead_letter,
+                              job.state::text AS final_state
+                ),
+                dead_lettered AS (
+                    INSERT INTO {schema}.{DEFAULT_JOB_TABLE} (
+                        name,
+                        data,
+                        output,
+                        retry_limit,
+                        keep_until
                     )
-                    ON CONFLICT (run_attempt_id) DO NOTHING
-                    """,
+                    SELECT
+                        transitioned.dead_letter,
+                        transitioned.data,
+                        transitioned.output,
+                        transitioned.retry_limit,
+                        transitioned.keep_until + (
+                            transitioned.keep_until - transitioned.start_after
+                        )
+                    FROM transitioned
+                    WHERE transitioned.final_state = %s
+                      AND transitioned.dead_letter IS NOT NULL
+                      AND transitioned.name <> transitioned.dead_letter
+                    RETURNING id
+                )
+            """
+            transition_params = (
+                WorkState.RETRY.value,
+                WorkState.FAILED.value,
+                Jsonb({"on_complete": "failed", **(output_metadata or {})}),
+                queue_name,
+                job_id,
+                WorkState.ACTIVE.value,
+                run_owner,
+                run_attempt_id,
+                WorkState.FAILED.value,
+            )
+        elif terminal_status == "STOPPED":
+            transition_ctes = f"""
+                transitioned AS (
+                    UPDATE {schema}.{DEFAULT_JOB_TABLE} AS job
+                    SET completed_on = NOW(),
+                        state = %s::{schema}.job_state,
+                        lease_owner = NULL,
+                        lease_expires_at = NULL,
+                        run_owner = NULL,
+                        run_attempt_id = NULL,
+                        run_lease_expires_at = NULL
+                    WHERE job.name = %s
+                      AND job.id = %s::uuid
+                      AND job.state = %s::{schema}.job_state
+                      AND job.run_owner = %s
+                      AND job.run_attempt_id = %s::uuid
+                    RETURNING job.state::text AS final_state
+                )
+            """
+            transition_params = (
+                WorkState.CANCELLED.value,
+                queue_name,
+                job_id,
+                WorkState.ACTIVE.value,
+                run_owner,
+                run_attempt_id,
+            )
+        else:
+            raise ValueError(f"Unsupported terminal status: {terminal_status}")
+
+        query = f"""
+            WITH {transition_ctes},
+            outcome AS (
+                SELECT
+                    EXISTS(SELECT 1 FROM transitioned) AS accepted,
+                    (SELECT final_state FROM transitioned LIMIT 1) AS final_state
+            ),
+            audited AS (
+                INSERT INTO {schema}.job_attempt AS existing (
                     run_attempt_id,
                     job_id,
                     job_name,
@@ -867,14 +985,152 @@ class AsyncJobRepository:
                     scheduler_lease_owner,
                     gateway_instance_id,
                     attempt_state,
+                    terminal_at,
                     terminal_status,
                     terminal_work_state,
-                    source,
-                    gateway_instance_id,
-                    scheduler_lease_owner,
-                    accepted,
-                    reject_reason,
+                    terminal_source,
+                    terminal_gateway_instance_id,
+                    terminal_scheduler_lease_owner,
+                    terminal_accepted,
+                    terminal_reject_reason,
+                    metadata,
+                    updated_on
                 )
+                SELECT
+                    %s::uuid,
+                    %s::uuid,
+                    %s,
+                    %s::uuid,
+                    %s,
+                    %s,
+                    %s,
+                    CASE
+                        WHEN outcome.accepted THEN outcome.final_state
+                        ELSE 'terminal_rejected'
+                    END,
+                    NOW(),
+                    %s,
+                    CASE
+                        WHEN outcome.accepted THEN outcome.final_state
+                        ELSE NULL
+                    END,
+                    %s,
+                    %s,
+                    %s,
+                    outcome.accepted,
+                    CASE
+                        WHEN outcome.accepted THEN NULL
+                        ELSE 'db_update_zero_rows'
+                    END,
+                    jsonb_build_object('missing_activation_audit', TRUE),
+                    NOW()
+                FROM outcome
+                ON CONFLICT (run_attempt_id) DO UPDATE
+                SET attempt_state = CASE
+                        WHEN (
+                            existing.terminal_accepted IS TRUE
+                            OR existing.recovery_at IS NOT NULL
+                        )
+                        AND EXCLUDED.terminal_accepted IS FALSE
+                        THEN existing.attempt_state
+                        ELSE EXCLUDED.attempt_state
+                    END,
+                    terminal_at = COALESCE(
+                        existing.terminal_at,
+                        EXCLUDED.terminal_at
+                    ),
+                    terminal_status = CASE
+                        WHEN existing.terminal_accepted IS TRUE
+                         AND EXCLUDED.terminal_accepted IS FALSE
+                        THEN existing.terminal_status
+                        ELSE EXCLUDED.terminal_status
+                    END,
+                    terminal_work_state = CASE
+                        WHEN existing.terminal_accepted IS TRUE
+                         AND EXCLUDED.terminal_accepted IS FALSE
+                        THEN existing.terminal_work_state
+                        ELSE EXCLUDED.terminal_work_state
+                    END,
+                    terminal_source = CASE
+                        WHEN existing.terminal_accepted IS TRUE
+                         AND EXCLUDED.terminal_accepted IS FALSE
+                        THEN existing.terminal_source
+                        ELSE EXCLUDED.terminal_source
+                    END,
+                    terminal_gateway_instance_id = CASE
+                        WHEN existing.terminal_accepted IS TRUE
+                         AND EXCLUDED.terminal_accepted IS FALSE
+                        THEN existing.terminal_gateway_instance_id
+                        ELSE EXCLUDED.terminal_gateway_instance_id
+                    END,
+                    terminal_scheduler_lease_owner = CASE
+                        WHEN existing.terminal_accepted IS TRUE
+                         AND EXCLUDED.terminal_accepted IS FALSE
+                        THEN existing.terminal_scheduler_lease_owner
+                        ELSE EXCLUDED.terminal_scheduler_lease_owner
+                    END,
+                    terminal_accepted = CASE
+                        WHEN existing.terminal_accepted IS TRUE
+                         AND EXCLUDED.terminal_accepted IS FALSE
+                        THEN TRUE
+                        ELSE EXCLUDED.terminal_accepted
+                    END,
+                    terminal_reject_reason = CASE
+                        WHEN existing.terminal_accepted IS TRUE
+                         AND EXCLUDED.terminal_accepted IS FALSE
+                        THEN existing.terminal_reject_reason
+                        ELSE EXCLUDED.terminal_reject_reason
+                    END,
+                    updated_on = NOW()
+                RETURNING existing.run_attempt_id
+            )
+            SELECT outcome.accepted, outcome.final_state
+            FROM outcome
+            JOIN audited ON TRUE
+        """
+        audit_params = (
+            run_attempt_id,
+            job_id,
+            queue_name,
+            dag_id,
+            run_owner,
+            scheduler_lease_owner,
+            gateway_instance_id,
+            terminal_status,
+            source,
+            gateway_instance_id,
+            scheduler_lease_owner,
+        )
+        operation_started = time.perf_counter()
+        pool_wait_started = time.perf_counter()
+        async with self._pool.acquire() as conn:
+            acquired_at = time.perf_counter()
+            sql_started = time.perf_counter()
+            row = await conn.fetchrow(
+                query,
+                *transition_params,
+                *audit_params,
+            )
+            sql_ms = (time.perf_counter() - sql_started) * 1000.0
+
+        accepted = bool(row[0])
+        final_state = str(row[1]) if row[1] is not None else None
+        scheduler_trace(
+            "terminal_db_operation_completed",
+            operation="job_terminal_transition",
+            job_id=job_id,
+            dag_id=dag_id,
+            run_attempt_id=run_attempt_id,
+            terminal_status=terminal_status,
+            accepted=accepted,
+            final_state=final_state,
+            pool_wait_ms=(acquired_at - pool_wait_started) * 1000.0,
+            sql_ms=sql_ms,
+            commit_ms=None,
+            autocommit=True,
+            total_ms=(time.perf_counter() - operation_started) * 1000.0,
+        )
+        return accepted, final_state
 
     async def cancel_job_attempt(
         self,
@@ -884,7 +1140,11 @@ class AsyncJobRepository:
         run_attempt_id: str,
         schema: str = DEFAULT_SCHEMA,
     ) -> set[str]:
+        operation_started = time.perf_counter()
+        pool_wait_started = time.perf_counter()
         async with self._pool.acquire() as conn:
+            acquired_at = time.perf_counter()
+            sql_started = time.perf_counter()
             row = await conn.fetchrow(
                 f"""
                 UPDATE {schema}.{DEFAULT_JOB_TABLE}
@@ -909,6 +1169,18 @@ class AsyncJobRepository:
                 run_owner,
                 run_attempt_id,
             )
+            sql_ms = (time.perf_counter() - sql_started) * 1000.0
+        scheduler_trace(
+            "terminal_db_operation_completed",
+            operation="job_cancel",
+            job_id=job_id,
+            run_attempt_id=run_attempt_id,
+            pool_wait_ms=(acquired_at - pool_wait_started) * 1000.0,
+            sql_ms=sql_ms,
+            commit_ms=None,
+            autocommit=True,
+            total_ms=(time.perf_counter() - operation_started) * 1000.0,
+        )
         return {str(row[0])} if row else set()
 
     async def cancel_job(
@@ -960,9 +1232,94 @@ class AsyncJobRepository:
             )
         else:
             query = complete_jobs(schema, queue_name, [job_id], output)
+        operation_started = time.perf_counter()
+        pool_wait_started = time.perf_counter()
         async with self._pool.acquire() as conn:
+            acquired_at = time.perf_counter()
+            sql_started = time.perf_counter()
             count = await conn.fetchval(query)
+            sql_ms = (time.perf_counter() - sql_started) * 1000.0
+        scheduler_trace(
+            "terminal_db_operation_completed",
+            operation="job_complete",
+            job_id=job_id,
+            run_attempt_id=run_attempt_id,
+            pool_wait_ms=(acquired_at - pool_wait_started) * 1000.0,
+            sql_ms=sql_ms,
+            commit_ms=None,
+            autocommit=True,
+            total_ms=(time.perf_counter() - operation_started) * 1000.0,
+        )
         return int(count or 0)
+
+    async def complete_job_attempts(
+        self,
+        attempts: dict[str, tuple[str, str]],
+        *,
+        run_owner: str,
+        output_metadata: Optional[dict] = None,
+        schema: str = DEFAULT_SCHEMA,
+    ) -> set[str]:
+        """Complete several fenced job attempts in one statement."""
+        if not attempts:
+            return set()
+
+        job_ids = list(attempts)
+        queue_names = [attempts[job_id][0] for job_id in job_ids]
+        run_attempt_ids = [attempts[job_id][1] for job_id in job_ids]
+        output = {"on_complete": "done", **(output_metadata or {})}
+        operation_started = time.perf_counter()
+        pool_wait_started = time.perf_counter()
+        async with self._pool.acquire() as conn:
+            acquired_at = time.perf_counter()
+            sql_started = time.perf_counter()
+            rows = await conn.fetch(
+                f"""
+                WITH requested(job_id, queue_name, run_attempt_id) AS (
+                    SELECT *
+                    FROM unnest(%s::uuid[], %s::text[], %s::uuid[])
+                ), completed AS (
+                    UPDATE {schema}.{DEFAULT_JOB_TABLE} AS job
+                    SET completed_on = NOW(),
+                        state = %s::{schema}.job_state,
+                        output = %s::jsonb,
+                        lease_owner = NULL,
+                        lease_expires_at = NULL,
+                        run_owner = NULL,
+                        run_lease_expires_at = NULL
+                    FROM requested
+                    WHERE job.id = requested.job_id
+                      AND job.name = requested.queue_name
+                      AND job.state = %s::{schema}.job_state
+                      AND job.run_owner = %s
+                      AND job.run_attempt_id = requested.run_attempt_id
+                    RETURNING job.id
+                )
+                SELECT id FROM completed
+                """,
+                job_ids,
+                queue_names,
+                run_attempt_ids,
+                WorkState.COMPLETED.value,
+                Jsonb(output),
+                WorkState.ACTIVE.value,
+                run_owner,
+            )
+            sql_ms = (time.perf_counter() - sql_started) * 1000.0
+
+        completed_ids = {str(row[0]) for row in rows}
+        scheduler_trace(
+            "terminal_db_operation_completed",
+            operation="control_flow_batch_complete",
+            jobs=len(job_ids),
+            completed=len(completed_ids),
+            pool_wait_ms=(acquired_at - pool_wait_started) * 1000.0,
+            sql_ms=sql_ms,
+            commit_ms=None,
+            autocommit=True,
+            total_ms=(time.perf_counter() - operation_started) * 1000.0,
+        )
+        return completed_ids
 
     async def fail_job(
         self,
@@ -985,8 +1342,24 @@ class AsyncJobRepository:
             )
         else:
             query = fail_jobs_by_id(schema, queue_name, [job_id], output)
+        operation_started = time.perf_counter()
+        pool_wait_started = time.perf_counter()
         async with self._pool.acquire() as conn:
+            acquired_at = time.perf_counter()
+            sql_started = time.perf_counter()
             row = await conn.fetchrow(query)
+            sql_ms = (time.perf_counter() - sql_started) * 1000.0
+        scheduler_trace(
+            "terminal_db_operation_completed",
+            operation="job_fail",
+            job_id=job_id,
+            run_attempt_id=run_attempt_id,
+            pool_wait_ms=(acquired_at - pool_wait_started) * 1000.0,
+            sql_ms=sql_ms,
+            commit_ms=None,
+            autocommit=True,
+            total_ms=(time.perf_counter() - operation_started) * 1000.0,
+        )
         if row is None:
             return 0, None
         return int(row[0]), row[1]
@@ -1027,10 +1400,25 @@ class AsyncJobRepository:
         return skipped_ids
 
     async def resolve_dag_state(self, dag_id: str) -> Optional[str]:
+        operation_started = time.perf_counter()
+        pool_wait_started = time.perf_counter()
         async with self._pool.acquire() as conn:
+            acquired_at = time.perf_counter()
+            sql_started = time.perf_counter()
             value = await conn.fetchval(
                 f"SELECT {DEFAULT_SCHEMA}.resolve_dag_state(%s::uuid)", dag_id
             )
+            sql_ms = (time.perf_counter() - sql_started) * 1000.0
+        scheduler_trace(
+            "terminal_db_operation_completed",
+            operation="dag_resolve",
+            dag_id=dag_id,
+            pool_wait_ms=(acquired_at - pool_wait_started) * 1000.0,
+            sql_ms=sql_ms,
+            commit_ms=None,
+            autocommit=True,
+            total_ms=(time.perf_counter() - operation_started) * 1000.0,
+        )
         return str(value) if value is not None else None
 
     async def update_monitor_time(
@@ -1085,22 +1473,28 @@ class AsyncJobRepository:
         work_info: WorkInfo,
     ) -> Tuple[bool, Optional[str]]:
         dag_name = f"{dag_id}_dag"
-        planner = work_info.data.get("metadata", {}).get("planner")
+        metadata = work_info.data.get("metadata", {})
+        planner = metadata.get("planner")
         search_documents = build_job_search_documents(
             plan=plan, dag_nodes=dag_nodes, planner=planner
         )
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
-                    insert_dag(
-                        DEFAULT_SCHEMA,
-                        dag_id,
-                        dag_name,
-                        plan.model_dump(),
-                        work_info.soft_sla,
-                        work_info.hard_sla,
-                        planner,
-                    )
+                    insert_dag(DEFAULT_SCHEMA),
+                    dag_id,
+                    dag_name,
+                    Jsonb(plan.model_dump()),
+                    work_info.soft_sla,
+                    work_info.hard_sla,
+                    planner,
+                    work_info.priority,
+                    work_info.name,
+                    metadata.get("project_id"),
+                    metadata.get("ref_type"),
+                    metadata.get("ref_id"),
+                    work_info.policy,
+                    len(dag_nodes),
                 )
                 if row is None:
                     return False, None
@@ -1155,15 +1549,15 @@ class AsyncJobRepository:
                 f"""
                 SELECT j.id, j.name, j.state::text, j.retry_count, j.retry_limit,
                        j.completed_on, j.output, j.run_attempt_id,
-                       attempt.attempt_state, attempt.dispatch_error,
-                       attempt.terminal_source, attempt.terminal_work_state,
+                       attempt.attempt_state, attempt.terminal_source,
+                       attempt.terminal_work_state,
                        attempt.recovery_reason, attempt.gateway_instance_id,
                        attempt.executor, attempt.terminal_gateway_instance_id,
                        attempt.terminal_reject_reason
                 FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE} j
                 LEFT JOIN LATERAL (
-                    SELECT a.attempt_state, a.dispatch_error,
-                           a.terminal_source, a.terminal_work_state,
+                    SELECT a.attempt_state, a.terminal_source,
+                           a.terminal_work_state,
                            a.recovery_reason, a.gateway_instance_id,
                            a.executor, a.terminal_gateway_instance_id,
                            a.terminal_reject_reason
@@ -1227,14 +1621,13 @@ class AsyncJobRepository:
                 "output": blocker[6],
                 "run_attempt_id": str(blocker[7]) if blocker[7] else None,
                 "attempt_state": blocker[8],
-                "dispatch_error": blocker[9],
-                "terminal_source": blocker[10],
-                "terminal_work_state": blocker[11],
-                "recovery_reason": blocker[12],
-                "gateway_instance_id": blocker[13],
-                "executor": blocker[14],
-                "terminal_gateway_instance_id": blocker[15],
-                "terminal_reject_reason": blocker[16],
+                "terminal_source": blocker[9],
+                "terminal_work_state": blocker[10],
+                "recovery_reason": blocker[11],
+                "gateway_instance_id": blocker[12],
+                "executor": blocker[13],
+                "terminal_gateway_instance_id": blocker[14],
+                "terminal_reject_reason": blocker[15],
             }
             for blocker in blocker_rows
         ]
@@ -1575,6 +1968,28 @@ class AsyncJobRepository:
                 """,
                 (schema,),
                 f"{schema}.job_attempt is missing",
+            ),
+            (
+                """
+                SELECT COUNT(*) = 14
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND table_name IN ('dag', 'dag_history')
+                  AND column_name = ANY(%s)
+                """,
+                (
+                    schema,
+                    [
+                        "priority",
+                        "submission_name",
+                        "project_id",
+                        "ref_type",
+                        "ref_id",
+                        "policy",
+                        "task_count",
+                    ],
+                ),
+                f"{schema} DAG admission projection is incomplete",
             ),
             (
                 "SELECT to_regprocedure(%s) IS NOT NULL",

@@ -106,11 +106,16 @@ def test_scheduler_config_preserves_heartbeat_migration_error() -> None:
         'deploy/helm/charts/marie/charts/server/files/service/marie-gateway-4.0.0.yml',
     ],
 )
-def test_shipped_scheduler_config_uses_supported_keys(relative_path: str) -> None:
+def test_shipped_gateway_config_is_valid_and_uses_ten_kv_connections(
+    relative_path: str,
+) -> None:
     with (REPOSITORY_ROOT / relative_path).open() as stream:
         document = JAML.load_no_tags(stream)
 
     PostgreSQLSchedulerConfig.from_dict(document['with']['job_scheduler_kwargs'])
+    kv_store = document['with']['kv_store_kwargs']
+    assert kv_store['max_pool_size'] == 10
+    assert kv_store['max_connections'] == 10
 
 
 def test_scheduler_config_can_enable_priority_refresh() -> None:

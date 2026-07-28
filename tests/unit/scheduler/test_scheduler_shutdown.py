@@ -154,6 +154,36 @@ async def test_deployment_update_requests_durable_admission(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
+async def test_event_loop_lag_watchdog_traces_runtime_delay(monkeypatch) -> None:
+    scheduler = _scheduler_for_stop()
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        'marie.scheduler.psql.scheduler_trace',
+        lambda event, **fields: events.append((event, fields)),
+    )
+
+    watchdog = asyncio.create_task(
+        scheduler._event_loop_lag_watchdog(interval_seconds=0.001)
+    )
+    async with asyncio.timeout(1):
+        while len(events) < 10:
+            await asyncio.sleep(0)
+    scheduler.running = False
+    await watchdog
+
+    event, fields = events[9]
+    assert event == 'gateway_event_loop_lag'
+    assert fields['lag_ms'] >= 0.0
+    assert fields['interval_ms'] == 1.0
+    assert fields['task_count'] >= 1
+    assert len(fields['task_names']) <= 10
+    assert (
+        sum(fields['task_names'].values()) + fields['task_names_other']
+        == fields['task_count']
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure_stage", ["admission", "initial_wake"])
 async def test_start_rolls_back_partial_startup(failure_stage: str) -> None:
     scheduler = _scheduler_for_start()
@@ -496,6 +526,7 @@ async def test_close_runtime_resources_closes_async_pool() -> None:
 
 def test_scheduler_services_rebuild_with_current_runtime_resources() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.runtime = SchedulerRuntime(MagicMock())
     scheduler.repository = MagicMock()
     scheduler.frontier = MagicMock()
     scheduler.dag_service = MagicMock()

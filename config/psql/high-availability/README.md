@@ -5,9 +5,9 @@ scheduler high availability after an active-active gateway run.
 
 The checks are focused on correctness:
 
-- which gateway activated and dispatched each job attempt
+- which gateway activated each job attempt
 - which gateway accepted terminal events
-- whether dispatched attempts have terminal audit records after the workload drains
+- whether activated attempts have terminal audit records after the workload drains
 - whether active jobs still have valid run attempt identity and run leases
 - whether duplicate successful completions were accepted for the same job
 
@@ -25,7 +25,7 @@ config/psql/schema/065_job_attempt.sql
 
 Restart all gateways after applying the schema. New HA runs should populate
 `marie_scheduler.job_attempt` with `gateway_instance_id`,
-`scheduler_lease_owner`, dispatch timestamps, and terminal audit fields.
+`scheduler_lease_owner`, activation identity, and terminal audit fields.
 
 Install the optional invariant helper before running the shared HA checks or
 `scheduler_correctness.py`:
@@ -110,7 +110,7 @@ Expected post-kill DB invariant results:
 
 - `active_missing_attempt_identity = PASS`
 - `expired_active_run_leases = PASS`
-- `dispatched_missing_terminal_or_recovery = PASS`
+- `activated_missing_terminal_or_recovery = PASS`
 - `duplicate_accepted_completed_terminal_by_job = PASS`
 - `accepted_terminal_missing_terminal_gateway = PASS`
 - `recovered_attempt_still_expired_active = PASS`
@@ -208,13 +208,12 @@ section.
 
 Expected pass conditions after drain:
 
-- `active_active_gateway_count` passes when at least two gateways dispatched work.
-- `dispatched_missing_terminal` is `0`.
-- `completed_dispatched_missing_terminal` is `0`.
+- `active_active_gateway_count` passes when at least two gateways activated work.
+- `activated_missing_terminal` is `0`.
 - `active_missing_attempt_identity` is `0`.
 - `expired_active_run_leases` is `0`.
 - `duplicate_completed_terminal_by_job` is `0`.
-- `dispatched_without_gateway_instance` is `0`.
+- `activated_without_gateway_instance` is `0`.
 - `terminal_rejected` is `0` for normal no-fault runs.
 
 Some non-zero values can be expected in fault-injection runs. For example,
@@ -224,9 +223,8 @@ rejection matches the scenario.
 
 ## Interpreting Common Results
 
-`attempts` can be greater than `dispatched`. An attempt row is created at
-activation. It becomes dispatched only after the scheduler confirms the dispatch
-path. Always use a scoped run window.
+An attempt row is created atomically when a leased job becomes active. Always
+use a scoped run window when comparing gateway ownership or terminal outcomes.
 
 Rows with `terminal_source = job_state_backfill` are acceptable only for
 historical repair or rolling-upgrade validation. Fresh HA runs should normally
@@ -236,7 +234,7 @@ Uneven distribution across gateways is not a correctness failure. It can point
 to load balancer stickiness, gateway startup timing, executor routing, or one
 scheduler loop being more productive than another.
 
-If `dispatched_missing_terminal` is non-zero after the workload drained, inspect
+If `activated_missing_terminal` is non-zero after the workload drained, inspect
 the detail section. Completed jobs without terminal audit are a bug in terminal
 recording or a schema/version mismatch.
 
@@ -280,7 +278,6 @@ SELECT
     gateway_instance_id,
     scheduler_lease_owner,
     COUNT(*) AS attempts,
-    COUNT(*) FILTER (WHERE dispatch_confirmed_at IS NOT NULL) AS dispatched,
     COUNT(*) FILTER (WHERE terminal_accepted IS TRUE) AS terminal_accepted,
     COUNT(*) FILTER (WHERE recovery_state IS NOT NULL) AS recovered
 FROM marie_scheduler.job_attempt
@@ -297,7 +294,7 @@ WHERE state::text = 'active'
   AND run_lease_expires_at < now();
 ```
 
-Dispatched attempts missing terminal audit:
+Activated attempts missing terminal audit:
 
 ```sql
 SELECT
@@ -305,15 +302,15 @@ SELECT
     ja.run_attempt_id,
     j.state::text AS job_state,
     ja.gateway_instance_id,
-    ja.dispatch_confirmed_at,
+    ja.activated_at,
     ja.terminal_accepted,
     ja.terminal_reject_reason,
     ja.recovery_state
 FROM marie_scheduler.job_attempt ja
 JOIN marie_scheduler.job j ON j.id = ja.job_id
-WHERE ja.dispatch_confirmed_at IS NOT NULL
-  AND ja.terminal_accepted IS DISTINCT FROM TRUE
+WHERE ja.terminal_accepted IS DISTINCT FROM TRUE
+  AND COALESCE(ja.executor, '') NOT IN ('noop', 'branch', 'switch', 'merger')
   AND ja.recovery_state IS NULL
-ORDER BY ja.dispatch_confirmed_at DESC
+ORDER BY ja.activated_at DESC
 LIMIT 50;
 ```

@@ -142,8 +142,8 @@ with:
     database: postgres
     schema: marie_scheduler
     default_table: kv_store_worker
-    max_pool_size: 5
-    max_connections: 5
+    max_pool_size: 10
+    max_connections: 10
 
   discovery_kwargs:
     endpoints: 127.0.0.1:2379,192.168.1.1:2379

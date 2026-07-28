@@ -41,6 +41,12 @@ def build_scheduler(
     scheduler.get_job = AsyncMock(return_value=work_item)
     scheduler.repository = SimpleNamespace(
         get_job_by_id=AsyncMock(return_value=work_item),
+        transition_job_attempt_terminal=AsyncMock(
+            return_value=(
+                bool(cancelled_ids),
+                WorkState.CANCELLED.value if cancelled_ids else None,
+            )
+        ),
         cancel_job=AsyncMock(return_value=1),
         cancel_job_attempt=AsyncMock(return_value=cancelled_ids),
         record_job_attempt_terminal=AsyncMock(),
@@ -81,7 +87,7 @@ async def test_stopped_event_requires_attempt_identity() -> None:
 
     await scheduler.handle_job_event(JobStatus.STOPPED.value, {"job_id": JOB_ID})
 
-    scheduler.repository.cancel_job_attempt.assert_not_awaited()
+    scheduler.repository.transition_job_attempt_terminal.assert_not_awaited()
     assert work_item.state == WorkState.ACTIVE
     assert scheduler._job_cache == {}
     scheduler.frontier.on_job_cancelled.assert_not_awaited()
@@ -120,11 +126,16 @@ async def test_stale_stopped_event_does_not_cancel_current_attempt() -> None:
         },
     )
 
-    scheduler.repository.cancel_job_attempt.assert_awaited_once_with(
+    scheduler.repository.transition_job_attempt_terminal.assert_awaited_once_with(
         job_id=JOB_ID,
         queue_name="extract",
+        dag_id="00000000-0000-0000-0000-000000000010",
         run_owner="owner-a",
         run_attempt_id=ATTEMPT_A,
+        scheduler_lease_owner="scheduler",
+        gateway_instance_id="gateway",
+        terminal_status=JobStatus.STOPPED.value,
+        source="job_event",
         schema="marie_scheduler",
     )
     assert work_item.state == WorkState.ACTIVE
@@ -133,10 +144,7 @@ async def test_stale_stopped_event_does_not_cancel_current_attempt() -> None:
     assert scheduler._job_cache == {}
     scheduler.frontier.on_job_cancelled.assert_not_awaited()
     scheduler.dag_service.resolve_dag_status_with_retry.assert_not_awaited()
-    assert (
-        scheduler.repository.record_job_attempt_terminal.await_args.kwargs["accepted"]
-        is False
-    )
+    scheduler.repository.record_job_attempt_terminal.assert_not_awaited()
     scheduler._scheduler_counter.assert_called_once()
 
 
@@ -159,10 +167,7 @@ async def test_current_stopped_event_cancels_after_committed_match() -> None:
     assert work_item.run_attempt_id is None
     assert scheduler._job_cache == {JOB_ID: work_item}
     scheduler.frontier.on_job_cancelled.assert_awaited_once_with(JOB_ID)
-    assert (
-        scheduler.repository.record_job_attempt_terminal.await_args.kwargs["accepted"]
-        is True
-    )
+    scheduler.repository.record_job_attempt_terminal.assert_not_awaited()
     scheduler.dag_service.resolve_dag_status_with_retry.assert_awaited_once()
     scheduler.notify_event.assert_awaited_once_with()
 
@@ -171,7 +176,9 @@ async def test_current_stopped_event_cancels_after_committed_match() -> None:
 async def test_stopped_event_database_failure_leaves_memory_unchanged() -> None:
     work_item = build_work_item()
     scheduler = build_scheduler(work_item, set())
-    scheduler.repository.cancel_job_attempt.side_effect = RuntimeError("database down")
+    scheduler.repository.transition_job_attempt_terminal.side_effect = RuntimeError(
+        "database down"
+    )
 
     with pytest.raises(RuntimeError, match="database down"):
         await scheduler.handle_job_event(

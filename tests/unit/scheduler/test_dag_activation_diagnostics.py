@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -48,3 +49,31 @@ async def test_hydrated_dag_activation_failure_logs_database_reason() -> None:
     assert "dag_state=completed" in message
     assert "processor crashed" in message
     service.logger.warning.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_terminal_dag_resolution_traces_lock_wait(monkeypatch) -> None:
+    repository = SimpleNamespace(resolve_dag_state=AsyncMock(return_value="active"))
+    service = DAGManagementService(
+        repository=repository,
+        frontier=MagicMock(),
+        active_dags={},
+    )
+    trace = MagicMock()
+    monkeypatch.setattr(
+        "marie.scheduler.services.dag_management_service.scheduler_trace",
+        trace,
+    )
+
+    resolved = await service.resolve_dag_status(
+        "job-1",
+        SimpleNamespace(dag_id="dag-1"),
+    )
+
+    assert resolved is False
+    event = trace.call_args_list[0]
+    assert event.args[0] == "terminal_dag_lock_acquired"
+    assert event.kwargs["job_id"] == "job-1"
+    assert event.kwargs["dag_id"] == "dag-1"
+    assert event.kwargs["contended"] is False
+    assert event.kwargs["wait_ms"] >= 0

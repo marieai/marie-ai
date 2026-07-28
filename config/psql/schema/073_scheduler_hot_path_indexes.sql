@@ -13,3 +13,12 @@ CREATE INDEX IF NOT EXISTS job_expired_run_lease_idx
       AND run_owner IS NOT NULL
       AND run_attempt_id IS NOT NULL
       AND run_lease_expires_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS dag_admission_order_idx
+    ON {schema}.dag (
+        priority DESC,
+        (COALESCE(soft_sla, hard_sla)),
+        created_on,
+        id
+    )
+    WHERE state IN ('created', 'active');

@@ -42,11 +42,11 @@ These tables are defined here and also used by Marie-Studio:
 | Table | File | Description |
 |-------|------|-------------|
 | `job` | 005_job.sql | Main job queue (partitioned) |
-| `dag` | 007_dag.sql | DAG workflow definitions |
+| `dag` | 007_dag.sql | DAG workflow definitions and admission projection |
 | `queue` | 004_queue.sql | Queue configuration |
 | `job_dependencies` | 017_job_dependencies.sql | Job dependency tracking |
 | `job_history` | 006_job_history.sql | Job state change history |
-| `dag_history` | 008_dag_history.sql | DAG state change history |
+| `dag_history` | 008_dag_history.sql | DAG state and admission projection history |
 | `schedule` | 009_schedule.sql | Cron-based scheduling |
 | `subscription` | 010_subscription.sql | Event subscriptions |
 | `archive` | 011_archive.sql | Archived jobs |
@@ -78,9 +78,15 @@ These tables are defined here and also used by Marie-Studio:
 
 ### Modifying Existing Tables
 
-1. **Never** modify existing migration files once deployed
-2. Create a new migration file with `ALTER TABLE` statements
-3. Use idempotent patterns (IF NOT EXISTS, EXCEPTION handling)
+1. Update the base table definition when the release includes a coordinated,
+   complete database migration.
+2. Update dependent triggers, functions, indexes, and shared ORM definitions in
+   the same change.
+3. Use a forward `ALTER TABLE` migration when older application versions must
+   remain deployable during a rolling upgrade.
+4. Remember that `CREATE TABLE IF NOT EXISTS` does not alter an existing table;
+   production databases still require the coordinated migration before the new
+   application starts.
 
 ## Sync with Marie-Studio
 
@@ -111,13 +117,14 @@ parallel `schema-v*` or environment-specific schema directories.
 
 Deployed SQL history is immutable. When a function must replace a definition
 from an earlier artifact, add a new forward SQL file instead of editing the old
-file. Schema version 75 gives each logical function its own final artifact:
+file. Schema version 76 gives each logical function its own final artifact:
 
 - `lease/012_job_update_trigger_function.sql`
 - `lease/013_resolve_dag_state.sql`
 - `lease/014_release_expired_leases.sql`
 - `lease/015_activate_from_lease.sql` for the overload family
 - `lease/016_hydrate_frontier_jobs.sql`
+- `lease/017_admission_candidate_dags.sql`
 
 Tests and reviews should use those files as the current contracts. The earlier
 definitions remain only because existing deployments may already have applied

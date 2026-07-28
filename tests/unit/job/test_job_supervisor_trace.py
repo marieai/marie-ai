@@ -116,10 +116,11 @@ async def test_finalize_traces_send_completion_before_terminal_event_enqueue(
         SimpleNamespace(status=SimpleNamespace(code=jina_pb2.StatusProto.SUCCESS))
     )
     job_info_client = SimpleNamespace(
-        get_status=AsyncMock(return_value=JobStatus.SUCCEEDED),
         get_info=AsyncMock(
             return_value=SimpleNamespace(
-                run_owner="owner-1", run_attempt_id="attempt-1"
+                status=JobStatus.SUCCEEDED,
+                run_owner="owner-1",
+                run_attempt_id="attempt-1",
             )
         ),
     )
@@ -154,9 +155,13 @@ async def test_finalize_traces_send_completion_before_terminal_event_enqueue(
     assert [event for event, _ in events] == [
         "job_supervisor_send_task_completed",
         "job_supervisor_terminal_status_read",
+        "job_supervisor_terminal_info_read",
     ]
     assert events[1][1]["status"] == "SUCCEEDED"
     assert events[1][1]["terminal"] is True
+    assert events[2][1]["found"] is True
+    assert events[2][1]["elapsed_ms"] >= 0
+    job_info_client.get_info.assert_awaited_once_with("test-job-id")
     event_publisher.publish.assert_awaited_once()
 
 
@@ -167,10 +172,11 @@ async def test_finalize_uses_terminal_event_callback() -> None:
         SimpleNamespace(status=SimpleNamespace(code=jina_pb2.StatusProto.SUCCESS))
     )
     job_info_client = SimpleNamespace(
-        get_status=AsyncMock(return_value=JobStatus.SUCCEEDED),
         get_info=AsyncMock(
             return_value=SimpleNamespace(
-                run_owner="owner-1", run_attempt_id="attempt-1"
+                status=JobStatus.SUCCEEDED,
+                run_owner="owner-1",
+                run_attempt_id="attempt-1",
             )
         ),
     )
@@ -206,4 +212,58 @@ async def test_finalize_uses_terminal_event_callback() -> None:
         "attempt-1",
         "supervisor_finalize",
     )
+    job_info_client.get_info.assert_awaited_once_with("test-job-id")
     event_publisher.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_finalize_reuses_committed_terminal_status(monkeypatch) -> None:
+    send_task = asyncio.get_running_loop().create_future()
+    send_task.set_result(
+        SimpleNamespace(status=SimpleNamespace(code=jina_pb2.StatusProto.SUCCESS))
+    )
+    job_info_client = SimpleNamespace(get_info=AsyncMock())
+    job_distributor = SimpleNamespace(send_nowait=AsyncMock(return_value=send_task))
+    event_publisher = SimpleNamespace(publish=AsyncMock())
+    terminal_event_callback = AsyncMock()
+    committed_terminal_lookup = Mock(return_value=JobStatus.SUCCEEDED)
+    supervisor = JobSupervisor(
+        job_id="test-job-id",
+        job_info_client=job_info_client,
+        job_distributor=job_distributor,
+        event_publisher=event_publisher,
+        etcd_client=Mock(),
+        desired_state_executor=SimpleNamespace(schedule_new_epoch=AsyncMock()),
+        confirmation_event=asyncio.Event(),
+        terminal_event_callback=terminal_event_callback,
+        committed_terminal_lookup=committed_terminal_lookup,
+    )
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "marie.job.job_supervisor.scheduler_trace",
+        lambda event, **fields: events.append((event, fields)),
+    )
+
+    await supervisor._submit_job_in_background(
+        JobInfo(
+            status=JobStatus.PENDING,
+            entrypoint="mock_executor_a:///document/extract",
+            run_owner="owner-1",
+            run_attempt_id="attempt-1",
+        )
+    )
+    for _ in range(10):
+        if any(
+            event == "job_supervisor_terminal_status_cache_hit" for event, _ in events
+        ):
+            break
+        await asyncio.sleep(0)
+
+    committed_terminal_lookup.assert_called_once_with("test-job-id", "attempt-1")
+    job_info_client.get_info.assert_not_awaited()
+    terminal_event_callback.assert_not_awaited()
+    event_publisher.publish.assert_not_awaited()
+    assert [event for event, _ in events] == [
+        "job_supervisor_send_task_completed",
+        "job_supervisor_terminal_status_cache_hit",
+    ]

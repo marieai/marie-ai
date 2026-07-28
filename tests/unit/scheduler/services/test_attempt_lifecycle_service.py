@@ -26,6 +26,9 @@ def build_service(*, work_state: WorkState = WorkState.ACTIVE) -> SimpleNamespac
         run_attempt_id=ATTEMPT_ID,
     )
     repository = SimpleNamespace(
+        transition_job_attempt_terminal=AsyncMock(
+            return_value=(True, WorkState.COMPLETED.value)
+        ),
         complete_job=AsyncMock(return_value=1),
         fail_job=AsyncMock(return_value=(1, WorkState.FAILED.value)),
         cancel_job_attempt=AsyncMock(return_value={JOB_ID}),
@@ -90,13 +93,18 @@ async def test_success_uses_the_same_fenced_transition_for_each_source(
     )
 
     assert accepted is True
-    context.repository.complete_job.assert_awaited_once_with(
+    context.repository.transition_job_attempt_terminal.assert_awaited_once_with(
         job_id=JOB_ID,
         queue_name="extract",
-        output_metadata={"synced": source == "storage_sync"},
-        schema="marie_scheduler",
+        dag_id=DAG_ID,
         run_owner="worker-1",
         run_attempt_id=ATTEMPT_ID,
+        scheduler_lease_owner="scheduler-1",
+        gateway_instance_id="gateway-1",
+        terminal_status=JobStatus.SUCCEEDED.value,
+        source=source,
+        output_metadata={"synced": source == "storage_sync"},
+        schema="marie_scheduler",
     )
     assert context.work_item.state == WorkState.COMPLETED
     assert context.job_cache == {JOB_ID: context.work_item}
@@ -112,10 +120,7 @@ async def test_success_uses_the_same_fenced_transition_for_each_source(
         "executor_capacity_released"
     )
     context.notify.assert_awaited_once_with()
-    audit = context.repository.record_job_attempt_terminal.await_args.kwargs
-    assert audit["source"] == source
-    assert audit["accepted"] is True
-    assert audit["terminal_work_state"] == WorkState.COMPLETED.value
+    context.repository.record_job_attempt_terminal.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -124,7 +129,10 @@ async def test_retry_reconciles_memory_and_wakes_without_resolving_dag(
     source: str,
 ) -> None:
     context = build_service()
-    context.repository.fail_job.return_value = (1, WorkState.RETRY.value)
+    context.repository.transition_job_attempt_terminal.return_value = (
+        True,
+        WorkState.RETRY.value,
+    )
 
     accepted = await context.service.transition_terminal(
         JOB_ID,
@@ -141,7 +149,7 @@ async def test_retry_reconciles_memory_and_wakes_without_resolving_dag(
     )
 
     assert accepted is True
-    failure = context.repository.fail_job.await_args.kwargs
+    failure = context.repository.transition_job_attempt_terminal.await_args.kwargs
     assert failure["output_metadata"] == {
         "failure_source": source,
         "error_message": "processor crashed",
@@ -155,6 +163,7 @@ async def test_retry_reconciles_memory_and_wakes_without_resolving_dag(
         "executor_capacity_released"
     )
     context.notify.assert_awaited_once_with()
+    context.repository.record_job_attempt_terminal.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -163,7 +172,7 @@ async def test_stale_attempt_is_audited_and_does_not_change_memory(
     source: str,
 ) -> None:
     context = build_service()
-    context.repository.complete_job.return_value = 0
+    context.repository.transition_job_attempt_terminal.return_value = (False, None)
 
     accepted = await context.service.transition_terminal(
         JOB_ID,
@@ -181,10 +190,7 @@ async def test_stale_attempt_is_audited_and_does_not_change_memory(
     context.dag_service.resolve_dag_status_with_retry.assert_not_awaited()
     context.dag_service.request_admission.assert_not_awaited()
     context.notify.assert_not_awaited()
-    audit = context.repository.record_job_attempt_terminal.await_args.kwargs
-    assert audit["accepted"] is False
-    assert audit["reject_reason"] == "db_update_zero_rows"
-    assert audit["source"] == source
+    context.repository.record_job_attempt_terminal.assert_not_awaited()
     context.counter.assert_called_once_with(
         TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
         job_id=JOB_ID,
@@ -199,6 +205,10 @@ async def test_stale_attempt_is_audited_and_does_not_change_memory(
 @pytest.mark.asyncio
 async def test_stopped_attempt_clears_attempt_identity_after_commit() -> None:
     context = build_service()
+    context.repository.transition_job_attempt_terminal.return_value = (
+        True,
+        WorkState.CANCELLED.value,
+    )
 
     accepted = await context.service.transition_terminal(
         JOB_ID,
@@ -219,6 +229,7 @@ async def test_stopped_attempt_clears_attempt_identity_after_commit() -> None:
         "executor_capacity_released"
     )
     context.notify.assert_awaited_once_with()
+    context.repository.record_job_attempt_terminal.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -245,14 +256,19 @@ async def test_terminal_transition_traces_resolution_before_scheduler_wake(
     assert accepted is True
     events = [item.args[0] for item in trace.call_args_list]
     assert events == [
+        "terminal_job_lock_acquired",
         "job_terminal_attempt_accepted",
         "terminal_dag_resolution_started",
         "terminal_dag_resolution_completed",
         "terminal_scheduler_wake_completed",
     ]
-    resolution = trace.call_args_list[2].kwargs
+    lock = trace.call_args_list[0].kwargs
+    assert lock["status"] == JobStatus.SUCCEEDED.value
+    assert lock["contended"] is False
+    assert lock["wait_ms"] >= 0
+    resolution = trace.call_args_list[3].kwargs
     assert resolution["dag_resolved"] is True
     assert resolution["elapsed_ms"] >= 0
-    wake = trace.call_args_list[3].kwargs
+    wake = trace.call_args_list[4].kwargs
     assert wake["wake_queued"] is True
     assert wake["terminal"] is True

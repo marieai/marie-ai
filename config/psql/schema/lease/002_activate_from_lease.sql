@@ -32,7 +32,14 @@ $$
         lease_expires_at      = NULL
     FROM ok
     WHERE j.id = ok.id
-    RETURNING j.id AS job_id, j.name AS job_name, j.dag_id, j.run_attempt_id
+    RETURNING j.id AS job_id,
+              j.name AS job_name,
+              j.dag_id,
+              j.run_attempt_id,
+              NULLIF(
+                split_part(j.data #>> '{metadata,on}', '://', 1),
+                ''
+              ) AS executor
   ), audited AS (
     INSERT INTO {schema}.job_attempt AS existing (
       run_attempt_id,
@@ -42,6 +49,7 @@ $$
       run_owner,
       scheduler_lease_owner,
       gateway_instance_id,
+      executor,
       attempt_state,
       activated_at,
       updated_on
@@ -54,6 +62,7 @@ $$
       _run_owner,
       _run_owner,
       _gateway_instance_id,
+      activated.executor,
       'activated',
       NOW(),
       NOW()
@@ -68,6 +77,7 @@ $$
           EXCLUDED.gateway_instance_id,
           existing.gateway_instance_id
         ),
+        executor = COALESCE(EXCLUDED.executor, existing.executor),
         attempt_state = 'activated',
         updated_on = NOW()
     RETURNING existing.run_attempt_id AS audited_attempt_id

@@ -21,6 +21,13 @@ CREATE TABLE IF NOT EXISTS {schema}.dag_history (
     hard_sla TIMESTAMP WITH TIME ZONE,
     sla_miss_logged BOOLEAN,
     planner VARCHAR(250),  -- Name of the planner that created this DAG
+    priority INTEGER NOT NULL DEFAULT 0,
+    submission_name TEXT,
+    project_id TEXT,
+    ref_type TEXT,
+    ref_id TEXT,
+    policy TEXT,
+    task_count INTEGER NOT NULL DEFAULT 0,
     history_created_on TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 

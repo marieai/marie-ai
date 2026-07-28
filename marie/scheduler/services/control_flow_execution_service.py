@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -26,6 +28,7 @@ from marie.scheduler.models import WorkInfo
 from marie.scheduler.planner_util import get_node_from_dag
 from marie.scheduler.repository import JobRepository
 from marie.scheduler.services.dag_management_service import DAGManagementService
+from marie.scheduler.services.scheduler_runtime import SchedulerRuntime
 from marie.scheduler.state import WorkState
 from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.utils import current_milli_time
@@ -86,6 +89,7 @@ class ControlFlowExecutionService:
         run_ttl_seconds: int,
         gateway_instance_id: str,
         notify_callback: Callable[[], Awaitable[bool]],
+        runtime: SchedulerRuntime,
     ) -> None:
         self.logger = MarieLogger(ControlFlowExecutionService.__name__)
         self.repository = repository
@@ -98,6 +102,7 @@ class ControlFlowExecutionService:
         self._run_ttl_seconds = run_ttl_seconds
         self._gateway_instance_id = gateway_instance_id
         self._notify_callback = notify_callback
+        self._runtime = runtime
         self._branch_evaluator = BranchEvaluator()
 
     @staticmethod
@@ -173,15 +178,17 @@ class ControlFlowExecutionService:
         skipped_job_ids = exclusive_skip_closure(dag_plan, list(unselected_targets))
 
         async with self._status_update_lock[job_id]:
-            committed, skipped_ids, reject_reason = (
-                await self.repository.commit_guardrail_route(
-                    job_id=job_id,
-                    queue_name=work_item.name,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                    branch_metadata=route_metadata,
-                    skipped_job_ids=skipped_job_ids,
-                )
+            (
+                committed,
+                skipped_ids,
+                reject_reason,
+            ) = await self.repository.commit_guardrail_route(
+                job_id=job_id,
+                queue_name=work_item.name,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                branch_metadata=route_metadata,
+                skipped_job_ids=skipped_job_ids,
             )
 
         if committed:
@@ -210,121 +217,428 @@ class ControlFlowExecutionService:
 
     async def process_node(self, work_item: WorkInfo) -> ControlFlowExecutionOutcome:
         """Execute a scheduler-local control-flow node."""
-        durably_completed = False
         try:
-            dag_id = work_item.dag_id
-            entrypoint = work_item.data.get('metadata', {}).get('on', '')
-            node_type = entrypoint.split('://', 1)[0].lower()
-            scheduler_trace(
-                'control_flow_started',
-                job_id=work_item.id,
-                dag_id=dag_id,
-                node_type=node_type,
-                job_name=work_item.name,
-                job_level=work_item.job_level,
-            )
-
-            self.logger.debug(
-                f"[CONTROL_FLOW] Processing {node_type} node: "
-                f"{work_item.id} in DAG {dag_id}"
-            )
-
-            if dag_id not in self.dag_service.active_dags:
-                dag = await self.dag_service.get_dag(dag_id)
-                if not dag:
-                    self.logger.error(
-                        f"[CONTROL_FLOW] Missing DAG {dag_id} for "
-                        f"{node_type} node {work_item.id}"
-                    )
-                    await self._release_lease(work_item.id)
-                    return ControlFlowExecutionOutcome.CLEANED_UP
-
-                admitted = await self.dag_service.admit_dag(
-                    dag_id, dag, source=f"control_flow:{node_type}"
-                )
-                if not admitted:
-                    await self._release_lease(work_item.id)
-                    return ControlFlowExecutionOutcome.ADMISSION_REFUSED
+            node_type = self._trace_started(work_item)
+            admission_outcome = await self._admit_node(work_item, node_type)
+            if admission_outcome is not None:
+                return admission_outcome
 
             if not await self._activate(work_item):
                 await self._release_lease(work_item.id)
                 return ControlFlowExecutionOutcome.ACTIVATION_REFUSED
 
-            _, job_levels = self._topology_cache.get_sorted_nodes_and_levels(
-                self.dag_service.active_dags[dag_id], dag_id
+            return await self._process_activated_node(
+                work_item,
+                node_type,
+                notify=True,
+            )
+        except Exception as error:
+            return await self._handle_node_error(work_item, error)
+
+    async def process_nodes(
+        self, work_items: list[WorkInfo]
+    ) -> list[ControlFlowExecutionOutcome]:
+        """Execute one leased control-flow batch with batched persistence."""
+        if not work_items:
+            return []
+
+        outcomes: dict[str, ControlFlowExecutionOutcome] = {}
+        candidates: list[WorkInfo] = []
+        node_types: dict[str, str] = {}
+
+        for work_item in work_items:
+            try:
+                node_type = self._trace_started(work_item)
+                node_types[work_item.id] = node_type
+                admission_outcome = await self._admit_node(work_item, node_type)
+                if admission_outcome is None:
+                    candidates.append(work_item)
+                else:
+                    outcomes[work_item.id] = admission_outcome
+            except Exception as error:
+                outcomes[work_item.id] = await self._handle_node_error(work_item, error)
+
+        activated, activation_outcomes = await self._activate_nodes(candidates)
+        outcomes.update(activation_outcomes)
+
+        simple_nodes = [
+            work_item
+            for work_item in activated
+            if node_types[work_item.id] in {'noop', 'merger'}
+        ]
+        dynamic_nodes = [
+            work_item
+            for work_item in activated
+            if node_types[work_item.id] not in {'noop', 'merger'}
+        ]
+
+        outcomes.update(await self._process_simple_nodes(simple_nodes, node_types))
+        if dynamic_nodes:
+            dynamic_outcomes = await asyncio.gather(
+                *(
+                    self._process_activated_node(
+                        work_item,
+                        node_types[work_item.id],
+                        notify=False,
+                    )
+                    for work_item in dynamic_nodes
+                )
+            )
+            outcomes.update(
+                (work_item.id, outcome)
+                for work_item, outcome in zip(dynamic_nodes, dynamic_outcomes)
             )
 
-            if work_item.job_level == max(job_levels.values()):
-                metadata = work_item.data.get('metadata', {})
-                await mark_as_started_toast(
-                    api_key=work_item.data.get('api_key'),
-                    job_id=dag_id,
-                    event_name=work_item.data.get('name', work_item.name),
-                    job_tag=metadata.get('ref_type'),
-                    status='OK',
-                    timestamp=current_milli_time(),
-                    payload=metadata,
+        ordered = [outcomes[work_item.id] for work_item in work_items]
+        if any(outcome.made_progress for outcome in ordered):
+            try:
+                await self._notify_callback()
+            except Exception as error:
+                scheduler_trace(
+                    'control_flow_batch_notify_failed',
+                    jobs=len(work_items),
+                    error=repr(error),
                 )
-
-            if not await self._complete_attempt(work_item):
-                return ControlFlowExecutionOutcome.COMPLETION_REJECTED
-            durably_completed = True
-
-            if node_type in ('branch', 'switch'):
-                await self._evaluate_and_mark_branch_paths(
-                    work_item.id,
-                    work_item,
-                    self.dag_service.active_dags[dag_id],
+                self.logger.error(
+                    "[CONTROL_FLOW] Failed to notify after completing batch: %s",
+                    error,
+                    exc_info=True,
                 )
-            elif node_type not in ('noop', 'merger'):
-                self.logger.warning(
-                    f"[CONTROL_FLOW] Unknown control flow type: "
-                    f"{node_type} for {work_item.id}"
+        return ordered
+
+    def _trace_started(self, work_item: WorkInfo) -> str:
+        entrypoint = work_item.data.get('metadata', {}).get('on', '')
+        node_type = entrypoint.split('://', 1)[0].lower()
+        scheduler_trace(
+            'control_flow_started',
+            job_id=work_item.id,
+            dag_id=work_item.dag_id,
+            node_type=node_type,
+            job_name=work_item.name,
+            job_level=work_item.job_level,
+        )
+        self.logger.debug(
+            f"[CONTROL_FLOW] Processing {node_type} node: "
+            f"{work_item.id} in DAG {work_item.dag_id}"
+        )
+        return node_type
+
+    async def _admit_node(
+        self, work_item: WorkInfo, node_type: str
+    ) -> ControlFlowExecutionOutcome | None:
+        dag_id = work_item.dag_id
+        if dag_id in self.dag_service.active_dags:
+            return None
+
+        dag = await self.dag_service.get_dag(dag_id)
+        if not dag:
+            self.logger.error(
+                f"[CONTROL_FLOW] Missing DAG {dag_id} for "
+                f"{node_type} node {work_item.id}"
+            )
+            await self._release_lease(work_item.id)
+            return ControlFlowExecutionOutcome.CLEANED_UP
+
+        admitted = await self.dag_service.admit_dag(
+            dag_id, dag, source=f"control_flow:{node_type}"
+        )
+        if admitted:
+            return None
+        await self._release_lease(work_item.id)
+        return ControlFlowExecutionOutcome.ADMISSION_REFUSED
+
+    async def _activate_nodes(
+        self, work_items: list[WorkInfo]
+    ) -> tuple[list[WorkInfo], dict[str, ControlFlowExecutionOutcome]]:
+        active: list[WorkInfo] = []
+        pending: list[WorkInfo] = []
+        outcomes: dict[str, ControlFlowExecutionOutcome] = {}
+
+        for work_item in work_items:
+            if (
+                work_item.state == WorkState.ACTIVE
+                and work_item.run_owner == self._lease_owner
+                and work_item.run_attempt_id
+            ):
+                active.append(work_item)
+            else:
+                pending.append(work_item)
+
+        activated: dict[str, str] = {}
+        if pending:
+            try:
+                activated = await self.repository.activate_from_lease(
+                    job_ids=[work_item.id for work_item in pending],
+                    owner=self._lease_owner,
+                    run_ttl_seconds=self._run_ttl_seconds,
+                    gateway_instance_id=self._gateway_instance_id,
                 )
+            except Exception as error:
+                for work_item in pending:
+                    outcomes[work_item.id] = await self._handle_node_error(
+                        work_item, error
+                    )
+                pending = []
 
-            self.frontier.leased_until.pop(work_item.id, None)
-            await self.frontier.on_job_completed(work_item.id)
-            await self._notify_callback()
-
-            if job_levels.get(work_item.id, -1) == min(job_levels.values()):
-                await self.dag_service.resolve_dag_status_with_retry(
-                    work_item.id,
-                    work_item,
-                    source='control_flow',
+        for work_item in pending:
+            run_attempt_id = activated.get(work_item.id)
+            if run_attempt_id is None:
+                self.logger.error(
+                    f"[CONTROL_FLOW] Failed to mark control flow node "
+                    f"{work_item.id} active"
                 )
+                await self._release_lease(work_item.id)
+                outcomes[work_item.id] = ControlFlowExecutionOutcome.ACTIVATION_REFUSED
+                continue
 
-            scheduler_trace(
-                'control_flow_completed',
-                job_id=work_item.id,
-                dag_id=dag_id,
-                node_type=node_type,
-                job_name=work_item.name,
-                job_level=work_item.job_level,
+            work_item.run_owner = self._lease_owner
+            work_item.run_attempt_id = run_attempt_id
+            work_item.state = WorkState.ACTIVE
+            active.append(work_item)
+
+        for work_item in active:
+            self._job_cache[work_item.id] = work_item
+            await self.frontier.update_job_state(work_item.id, WorkState.ACTIVE)
+
+        return active, outcomes
+
+    async def _process_simple_nodes(
+        self,
+        work_items: list[WorkInfo],
+        node_types: dict[str, str],
+    ) -> dict[str, ControlFlowExecutionOutcome]:
+        outcomes: dict[str, ControlFlowExecutionOutcome] = {}
+        attempts: dict[str, tuple[str, str]] = {}
+        job_levels: dict[str, dict[str, int]] = {}
+
+        for work_item in work_items:
+            if not work_item.run_attempt_id:
+                self._trace_missing_attempt(work_item)
+                outcomes[work_item.id] = ControlFlowExecutionOutcome.COMPLETION_REJECTED
+                continue
+            try:
+                levels = self._job_levels(work_item)
+                job_levels[work_item.id] = levels
+                self._schedule_started_toast(work_item, levels)
+                attempts[work_item.id] = (work_item.name, work_item.run_attempt_id)
+            except Exception as error:
+                outcomes[work_item.id] = await self._handle_node_error(work_item, error)
+
+        completed_ids: set[str] = set()
+        if attempts:
+            try:
+                async with AsyncExitStack() as stack:
+                    for job_id in sorted(attempts):
+                        await stack.enter_async_context(
+                            self._status_update_lock[job_id]
+                        )
+                    completed_ids = await self.repository.complete_job_attempts(
+                        attempts,
+                        run_owner=self._lease_owner,
+                        output_metadata={},
+                    )
+            except Exception as error:
+                for work_item in work_items:
+                    if work_item.id in attempts:
+                        outcomes[work_item.id] = await self._handle_node_error(
+                            work_item, error
+                        )
+                return outcomes
+
+        completed_work_items: list[WorkInfo] = []
+        for work_item in work_items:
+            if work_item.id in outcomes:
+                continue
+            if work_item.id not in completed_ids:
+                outcomes[work_item.id] = ControlFlowExecutionOutcome.COMPLETION_REJECTED
+                continue
+            completed_work_items.append(work_item)
+
+        if completed_work_items:
+            completed_outcomes = await asyncio.gather(
+                *(
+                    self._finish_precompleted_node(
+                        work_item,
+                        node_types[work_item.id],
+                        job_levels[work_item.id],
+                    )
+                    for work_item in completed_work_items
+                )
+            )
+            outcomes.update(
+                (work_item.id, outcome)
+                for work_item, outcome in zip(completed_work_items, completed_outcomes)
+            )
+        return outcomes
+
+    async def _finish_precompleted_node(
+        self,
+        work_item: WorkInfo,
+        node_type: str,
+        job_levels: dict[str, int],
+    ) -> ControlFlowExecutionOutcome:
+        try:
+            await self._finish_completed_node(
+                work_item,
+                node_type,
+                job_levels,
+                notify=False,
             )
             return ControlFlowExecutionOutcome.COMPLETED
         except Exception as error:
-            scheduler_trace(
-                'control_flow_failed',
-                job_id=work_item.id,
-                dag_id=work_item.dag_id,
-                job_name=work_item.name,
-                error=repr(error),
+            return await self._handle_node_error(
+                work_item,
+                error,
+                durably_completed=True,
             )
+
+    async def _process_activated_node(
+        self,
+        work_item: WorkInfo,
+        node_type: str,
+        *,
+        notify: bool,
+    ) -> ControlFlowExecutionOutcome:
+        durably_completed = False
+        try:
+            job_levels = self._job_levels(work_item)
+            self._schedule_started_toast(work_item, job_levels)
+            if not await self._complete_attempt(work_item):
+                return ControlFlowExecutionOutcome.COMPLETION_REJECTED
+            durably_completed = True
+            await self._finish_completed_node(
+                work_item,
+                node_type,
+                job_levels,
+                notify=notify,
+            )
+            return ControlFlowExecutionOutcome.COMPLETED
+        except Exception as error:
+            return await self._handle_node_error(
+                work_item,
+                error,
+                durably_completed=durably_completed,
+            )
+
+    def _job_levels(self, work_item: WorkInfo) -> dict[str, int]:
+        _, job_levels = self._topology_cache.get_sorted_nodes_and_levels(
+            self.dag_service.active_dags[work_item.dag_id],
+            work_item.dag_id,
+        )
+        return job_levels
+
+    def _schedule_started_toast(
+        self, work_item: WorkInfo, job_levels: dict[str, int]
+    ) -> None:
+        if work_item.job_level != max(job_levels.values()):
+            return
+
+        metadata = work_item.data.get('metadata', {})
+        task = asyncio.create_task(
+            mark_as_started_toast(
+                api_key=work_item.data.get('api_key'),
+                job_id=work_item.dag_id,
+                event_name=work_item.data.get('name', work_item.name),
+                job_tag=metadata.get('ref_type'),
+                status='OK',
+                timestamp=current_milli_time(),
+                payload=metadata,
+            ),
+            name=f"control-flow-toast-{work_item.dag_id}",
+        )
+        self._runtime.track_event_task(task)
+        task.add_done_callback(self._toast_done)
+
+    def _toast_done(self, task: asyncio.Task[Any]) -> None:
+        self._runtime.discard_event_task(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            self.logger.warning("Control-flow started notification failed: %s", error)
+
+    async def _finish_completed_node(
+        self,
+        work_item: WorkInfo,
+        node_type: str,
+        job_levels: dict[str, int],
+        *,
+        notify: bool,
+    ) -> None:
+        dag_id = work_item.dag_id
+        if node_type in ('branch', 'switch'):
+            await self._evaluate_and_mark_branch_paths(
+                work_item.id,
+                work_item,
+                self.dag_service.active_dags[dag_id],
+            )
+        elif node_type not in ('noop', 'merger'):
+            self.logger.warning(
+                f"[CONTROL_FLOW] Unknown control flow type: "
+                f"{node_type} for {work_item.id}"
+            )
+
+        self.frontier.leased_until.pop(work_item.id, None)
+        await self.frontier.on_job_completed(work_item.id)
+        if notify:
+            await self._notify_callback()
+
+        if job_levels.get(work_item.id, -1) == min(job_levels.values()):
+            await self.dag_service.resolve_dag_status_with_retry(
+                work_item.id,
+                work_item,
+                source='control_flow',
+            )
+
+        scheduler_trace(
+            'control_flow_completed',
+            job_id=work_item.id,
+            dag_id=dag_id,
+            node_type=node_type,
+            job_name=work_item.name,
+            job_level=work_item.job_level,
+        )
+
+    def _trace_missing_attempt(self, work_item: WorkInfo) -> None:
+        self.logger.error(
+            f"[CONTROL_FLOW] Missing run attempt for control flow node {work_item.id}"
+        )
+        scheduler_trace(
+            'control_flow_terminal_rejected',
+            job_id=work_item.id,
+            dag_id=work_item.dag_id,
+            reason='missing_attempt',
+        )
+
+    async def _handle_node_error(
+        self,
+        work_item: WorkInfo,
+        error: Exception,
+        *,
+        durably_completed: bool = False,
+    ) -> ControlFlowExecutionOutcome:
+        scheduler_trace(
+            'control_flow_failed',
+            job_id=work_item.id,
+            dag_id=work_item.dag_id,
+            job_name=work_item.name,
+            error=repr(error),
+        )
+        self.logger.error(
+            f"[CONTROL_FLOW] Error processing control flow node "
+            f"{work_item.id}: {error}",
+            exc_info=True,
+        )
+        try:
+            await self._release_lease(work_item.id)
+        except Exception as cleanup_error:
             self.logger.error(
-                f"[CONTROL_FLOW] Error processing control flow node "
-                f"{work_item.id}: {error}",
-                exc_info=True,
+                f"[CONTROL_FLOW] Error during cleanup for "
+                f"{work_item.id}: {cleanup_error}"
             )
-            try:
-                await self._release_lease(work_item.id)
-            except Exception as cleanup_error:
-                self.logger.error(
-                    f"[CONTROL_FLOW] Error during cleanup for "
-                    f"{work_item.id}: {cleanup_error}"
-                )
-            if durably_completed:
-                return ControlFlowExecutionOutcome.COMPLETED_WITH_ERROR
-            return ControlFlowExecutionOutcome.FAILED
+        if durably_completed:
+            return ControlFlowExecutionOutcome.COMPLETED_WITH_ERROR
+        return ControlFlowExecutionOutcome.FAILED
 
     async def _activate(self, work_item: WorkInfo) -> bool:
         if (
@@ -344,8 +658,7 @@ class ControlFlowExecutionService:
         )
         if work_item.id not in activated:
             self.logger.error(
-                f"[CONTROL_FLOW] Failed to mark control flow node "
-                f"{work_item.id} active"
+                f"[CONTROL_FLOW] Failed to mark control flow node {work_item.id} active"
             )
             return False
 
@@ -411,8 +724,7 @@ class ControlFlowExecutionService:
             branch_node = get_node_from_dag(branch_node_id, dag_plan)
             if not branch_node or not self._is_branch_node(branch_node):
                 self.logger.warning(
-                    f"Node {branch_node_id} is not a branch node, "
-                    'skipping evaluation'
+                    f"Node {branch_node_id} is not a branch node, skipping evaluation"
                 )
                 return
 
@@ -504,7 +816,7 @@ class ControlFlowExecutionService:
                 skip_reason = SkipReason(
                     branch_node_id=branch_node_id,
                     reason=(
-                        'Branch condition not met. ' f"Active paths: {active_path_ids}"
+                        f'Branch condition not met. Active paths: {active_path_ids}'
                     ),
                     evaluated_condition={'active_paths': active_path_ids},
                     selected_paths=active_path_ids,

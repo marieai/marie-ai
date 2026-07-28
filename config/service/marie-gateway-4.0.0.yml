@@ -89,8 +89,8 @@ with:
     <<: *psql_conf_shared
     schema: marie_scheduler
     default_table: kv_store_worker
-    max_pool_size: 5
-    max_connections: 5
+    max_pool_size: 10
+    max_connections: 10
 
     # Job Scheduler
   job_scheduler_kwargs:

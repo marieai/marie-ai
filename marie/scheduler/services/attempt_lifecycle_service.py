@@ -124,19 +124,39 @@ class AttemptLifecycleService:
             )
         )
         if guardrail_commit is None:
-            async with self._status_update_lock[job_id]:
-                completed = await self.repository.complete_job(
+            lock = self._status_update_lock[job_id]
+            lock_wait_started = time.perf_counter()
+            contended = lock.locked()
+            async with lock:
+                scheduler_trace(
+                    'terminal_job_lock_acquired',
+                    job_id=job_id,
+                    dag_id=work_item.dag_id,
+                    status=JobStatus.SUCCEEDED.value,
+                    source=source,
+                    contended=contended,
+                    wait_ms=(time.perf_counter() - lock_wait_started) * 1000.0,
+                )
+                accepted, _ = await self.repository.transition_job_attempt_terminal(
                     job_id=job_id,
                     queue_name=work_item.name,
-                    output_metadata=output_metadata,
-                    schema=DEFAULT_SCHEMA,
+                    dag_id=str(work_item.dag_id),
                     run_owner=run_owner,
                     run_attempt_id=run_attempt_id,
+                    scheduler_lease_owner=self._scheduler_lease_owner,
+                    gateway_instance_id=self._gateway_instance_id,
+                    terminal_status=JobStatus.SUCCEEDED.value,
+                    source=source,
+                    output_metadata=output_metadata,
+                    schema=DEFAULT_SCHEMA,
                 )
+            completed = int(accepted)
             reject_reason = 'db_update_zero_rows'
+            audit_recorded = True
         else:
             committed, _, reject_reason = guardrail_commit
             completed = int(committed)
+            audit_recorded = False
 
         if completed <= 0:
             await self._reject(
@@ -147,6 +167,7 @@ class AttemptLifecycleService:
                 run_attempt_id,
                 source,
                 reject_reason or 'db_update_zero_rows',
+                audit_recorded=audit_recorded,
             )
             return False
 
@@ -160,6 +181,7 @@ class AttemptLifecycleService:
             run_attempt_id,
             WorkState.COMPLETED,
             source,
+            audit_recorded=audit_recorded,
         )
         if guardrail_commit is None:
             await self.control_flow_service.handle_successful_job_completion(
@@ -181,17 +203,37 @@ class AttemptLifecycleService:
             f'Job failure received: job_id={job_id} '
             f'dag_id={work_item.dag_id} details={output_metadata}'
         )
-        async with self._status_update_lock[job_id]:
-            _, final_state = await self.repository.fail_job(
+        lock = self._status_update_lock[job_id]
+        lock_wait_started = time.perf_counter()
+        contended = lock.locked()
+        async with lock:
+            scheduler_trace(
+                'terminal_job_lock_acquired',
+                job_id=job_id,
+                dag_id=work_item.dag_id,
+                status=JobStatus.FAILED.value,
+                source=source,
+                contended=contended,
+                wait_ms=(time.perf_counter() - lock_wait_started) * 1000.0,
+            )
+            (
+                accepted,
+                final_state,
+            ) = await self.repository.transition_job_attempt_terminal(
                 job_id=job_id,
                 queue_name=work_item.name,
-                output_metadata=output_metadata,
-                schema=DEFAULT_SCHEMA,
+                dag_id=str(work_item.dag_id),
                 run_owner=run_owner,
                 run_attempt_id=run_attempt_id,
+                scheduler_lease_owner=self._scheduler_lease_owner,
+                gateway_instance_id=self._gateway_instance_id,
+                terminal_status=JobStatus.FAILED.value,
+                source=source,
+                output_metadata=output_metadata,
+                schema=DEFAULT_SCHEMA,
             )
 
-        if final_state is None:
+        if not accepted or final_state is None:
             await self._reject(
                 job_id,
                 work_item,
@@ -200,6 +242,7 @@ class AttemptLifecycleService:
                 run_attempt_id,
                 source,
                 'db_update_zero_rows',
+                audit_recorded=True,
             )
             return False
 
@@ -214,6 +257,7 @@ class AttemptLifecycleService:
             run_attempt_id,
             work_state,
             source,
+            audit_recorded=True,
         )
         if work_state == WorkState.RETRY:
             await self.frontier.on_job_retry(job_id, work_item)
@@ -235,16 +279,36 @@ class AttemptLifecycleService:
         run_attempt_id: str,
         source: str,
     ) -> bool:
-        async with self._status_update_lock[job_id]:
-            cancelled_ids = await self.repository.cancel_job_attempt(
+        lock = self._status_update_lock[job_id]
+        lock_wait_started = time.perf_counter()
+        contended = lock.locked()
+        async with lock:
+            scheduler_trace(
+                'terminal_job_lock_acquired',
+                job_id=job_id,
+                dag_id=work_item.dag_id,
+                status=JobStatus.STOPPED.value,
+                source=source,
+                contended=contended,
+                wait_ms=(time.perf_counter() - lock_wait_started) * 1000.0,
+            )
+            (
+                accepted,
+                final_state,
+            ) = await self.repository.transition_job_attempt_terminal(
                 job_id=job_id,
                 queue_name=work_item.name,
+                dag_id=str(work_item.dag_id),
                 run_owner=run_owner,
                 run_attempt_id=run_attempt_id,
+                scheduler_lease_owner=self._scheduler_lease_owner,
+                gateway_instance_id=self._gateway_instance_id,
+                terminal_status=JobStatus.STOPPED.value,
+                source=source,
                 schema=DEFAULT_SCHEMA,
             )
 
-        if job_id not in cancelled_ids:
+        if not accepted or final_state is None:
             await self._reject(
                 job_id,
                 work_item,
@@ -253,6 +317,7 @@ class AttemptLifecycleService:
                 run_attempt_id,
                 source,
                 'db_update_zero_rows',
+                audit_recorded=True,
             )
             return False
 
@@ -268,6 +333,7 @@ class AttemptLifecycleService:
             run_attempt_id,
             WorkState.CANCELLED,
             source,
+            audit_recorded=True,
         )
         await self.frontier.on_job_cancelled(job_id)
         await self._finish(job_id, work_item, source, terminal=True)
@@ -324,17 +390,20 @@ class AttemptLifecycleService:
         run_attempt_id: str,
         work_state: WorkState,
         source: str,
+        *,
+        audit_recorded: bool = False,
     ) -> None:
-        await self._record_audit(
-            job_id=job_id,
-            work_item=work_item,
-            status=status,
-            run_owner=run_owner,
-            run_attempt_id=run_attempt_id,
-            terminal_work_state=work_state.value,
-            source=source,
-            accepted=True,
-        )
+        if not audit_recorded:
+            await self._record_audit(
+                job_id=job_id,
+                work_item=work_item,
+                status=status,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                terminal_work_state=work_state.value,
+                source=source,
+                accepted=True,
+            )
         scheduler_trace(
             'job_terminal_attempt_accepted',
             job_id=job_id,
@@ -356,6 +425,8 @@ class AttemptLifecycleService:
         run_attempt_id: str,
         source: str,
         reason: str,
+        *,
+        audit_recorded: bool = False,
     ) -> None:
         scheduler_trace(
             'job_terminal_attempt_rejected',
@@ -368,17 +439,18 @@ class AttemptLifecycleService:
             source=source,
             **self._ha_trace_fields(),
         )
-        await self._record_audit(
-            job_id=job_id,
-            work_item=work_item,
-            status=status,
-            run_owner=run_owner,
-            run_attempt_id=run_attempt_id,
-            terminal_work_state=None,
-            source=source,
-            accepted=False,
-            reject_reason=reason,
-        )
+        if not audit_recorded:
+            await self._record_audit(
+                job_id=job_id,
+                work_item=work_item,
+                status=status,
+                run_owner=run_owner,
+                run_attempt_id=run_attempt_id,
+                terminal_work_state=None,
+                source=source,
+                accepted=False,
+                reject_reason=reason,
+            )
         self._counter_callback(
             TERMINAL_EVENT_STALE_ATTEMPT_TOTAL,
             job_id=job_id,

@@ -50,21 +50,21 @@ WHERE activated_at >= (SELECT run_start FROM ha_check_params)
 SELECT COUNT(*) AS scoped_attempts
 FROM ha_scoped_attempts;
 
--- Query: show which gateway/scheduler pair activated, dispatched, completed,
--- or recovered attempts. This is the primary "who processed what" view.
+-- Query: show which gateway/scheduler pair activated, completed, or recovered
+-- attempts. This is the primary "who processed what" view.
 SELECT
     gateway_instance_id,
     scheduler_lease_owner,
     COUNT(*) AS attempts,
-    COUNT(*) FILTER (WHERE dispatch_started_at IS NOT NULL) AS dispatch_started,
-    COUNT(*) FILTER (WHERE dispatch_confirmed_at IS NOT NULL) AS dispatched,
     COUNT(*) FILTER (WHERE terminal_accepted IS TRUE) AS terminal_accepted,
     COUNT(*) FILTER (WHERE recovery_state IS NOT NULL) AS recovered,
     COUNT(*) FILTER (
-        WHERE dispatch_confirmed_at IS NOT NULL
+        WHERE COALESCE(executor, '') NOT IN (
+                  'noop', 'branch', 'switch', 'merger'
+              )
           AND terminal_accepted IS DISTINCT FROM TRUE
           AND recovery_state IS NULL
-    ) AS dispatched_missing_terminal
+    ) AS activated_missing_terminal
 FROM ha_scoped_attempts
 GROUP BY gateway_instance_id, scheduler_lease_owner
 ORDER BY attempts DESC, gateway_instance_id;
@@ -93,8 +93,8 @@ WHERE terminal_at IS NOT NULL
 GROUP BY gateway_instance_id, terminal_gateway_instance_id
 ORDER BY terminal_events DESC, activated_gateway, terminal_gateway;
 
--- Query: summarize attempt lifecycle states across activation, dispatch,
--- terminal handling, and recovery.
+-- Query: summarize attempt lifecycle states across activation, terminal
+-- handling, and recovery.
 SELECT
     attempt_state,
     terminal_status,
@@ -119,7 +119,6 @@ SELECT
     j.state::text AS job_state,
     COUNT(DISTINCT a.job_id) AS jobs,
     COUNT(*) AS attempts,
-    COUNT(*) FILTER (WHERE a.dispatch_confirmed_at IS NOT NULL) AS dispatched_attempts,
     COUNT(*) FILTER (WHERE a.terminal_accepted IS TRUE) AS terminal_accepted_attempts,
     COUNT(*) FILTER (WHERE a.recovery_state IS NOT NULL) AS recovered_attempts
 FROM ha_scoped_attempts a
@@ -144,17 +143,15 @@ WITH shared_checks AS (
     SELECT
         'active_active_gateway_count' AS check_name,
         COUNT(DISTINCT gateway_instance_id) FILTER (
-            WHERE dispatch_confirmed_at IS NOT NULL
-              AND gateway_instance_id IS NOT NULL
+            WHERE gateway_instance_id IS NOT NULL
         ) AS observed_count,
         CASE
             WHEN COUNT(DISTINCT gateway_instance_id) FILTER (
-                WHERE dispatch_confirmed_at IS NOT NULL
-                  AND gateway_instance_id IS NOT NULL
+                WHERE gateway_instance_id IS NOT NULL
             ) >= 2 THEN 0
             ELSE 1
         END AS bad_rows,
-        'At least two gateway instances dispatched work during an active-active HA test.' AS expectation
+        'At least two gateway instances activated work during an active-active HA test.' AS expectation
     FROM ha_scoped_attempts
 
     UNION ALL
@@ -189,7 +186,7 @@ ORDER BY
     CASE WHEN bad_rows = 0 THEN 1 ELSE 0 END,
     check_name;
 
--- Query: detail rows for confirmed dispatches that still have no accepted
+-- Query: detail rows for activated attempts that still have no accepted
 -- terminal audit and no recovery marker. This should be empty after drain.
 SELECT
     a.job_id,
@@ -199,20 +196,19 @@ SELECT
     a.gateway_instance_id,
     a.scheduler_lease_owner,
     a.executor,
-    a.dispatch_started_at,
-    a.dispatch_confirmed_at,
+    a.activated_at,
     a.attempt_state,
     a.terminal_at,
     a.terminal_accepted,
     a.terminal_reject_reason,
     a.recovery_state,
-    a.dispatch_error
+    a.recovery_reason
 FROM ha_scoped_attempts a
 JOIN marie_scheduler.job j ON j.id = a.job_id
-WHERE a.dispatch_confirmed_at IS NOT NULL
-  AND a.terminal_accepted IS DISTINCT FROM TRUE
+WHERE a.terminal_accepted IS DISTINCT FROM TRUE
+  AND COALESCE(a.executor, '') NOT IN ('noop', 'branch', 'switch', 'merger')
   AND a.recovery_state IS NULL
-ORDER BY a.dispatch_confirmed_at DESC NULLS LAST
+ORDER BY a.activated_at DESC
 LIMIT 50;
 
 -- Query: detail rows for jobs that accepted more than one completed terminal
@@ -277,7 +273,6 @@ SELECT
     a.job_id,
     j.state::text AS job_state,
     COUNT(*) AS attempts,
-    COUNT(*) FILTER (WHERE a.dispatch_confirmed_at IS NOT NULL) AS dispatched,
     COUNT(*) FILTER (WHERE a.terminal_accepted IS TRUE) AS terminal_accepted,
     COUNT(*) FILTER (WHERE a.recovery_state IS NOT NULL) AS recovered,
     array_agg(a.run_attempt_id ORDER BY a.activated_at) AS run_attempt_ids

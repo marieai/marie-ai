@@ -32,7 +32,28 @@ CREATE TABLE IF NOT EXISTS {schema}.dag (
     hard_sla TIMESTAMP WITH TIME ZONE,
     sla_miss_logged BOOLEAN NOT NULL DEFAULT FALSE,
     planner VARCHAR(250),  -- Name of the planner that created this DAG
+    priority INTEGER NOT NULL DEFAULT 0,
+    submission_name TEXT,
+    project_id TEXT,
+    ref_type TEXT,
+    ref_id TEXT,
+    policy TEXT,
+    task_count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (id)
 );
 
 COMMENT ON TABLE {schema}.dag IS 'DAG workflow definitions and execution state';
+COMMENT ON COLUMN {schema}.dag.priority IS
+    'Operator priority shared by the DAG and all of its jobs';
+COMMENT ON COLUMN {schema}.dag.submission_name IS
+    'Original submitted event name';
+COMMENT ON COLUMN {schema}.dag.project_id IS
+    'Project identifier supplied with the submission';
+COMMENT ON COLUMN {schema}.dag.ref_type IS
+    'External reference type supplied with the submission';
+COMMENT ON COLUMN {schema}.dag.ref_id IS
+    'External reference identifier supplied with the submission';
+COMMENT ON COLUMN {schema}.dag.policy IS
+    'Duplicate or replacement policy supplied with the submission';
+COMMENT ON COLUMN {schema}.dag.task_count IS
+    'Number of tasks created for the DAG';

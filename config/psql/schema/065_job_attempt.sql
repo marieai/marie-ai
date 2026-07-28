@@ -51,7 +51,14 @@ CREATE INDEX IF NOT EXISTS job_attempt_terminal_gateway_idx
     ON {schema}.job_attempt (terminal_gateway_instance_id);
 
 COMMENT ON TABLE {schema}.job_attempt IS
-    'Durable audit record for each scheduler run attempt, used to answer which gateway activated, dispatched, recovered, or terminally handled a job.';
+    'Durable audit record for each scheduler run attempt, used to answer which gateway activated, recovered, or terminally handled a job.';
+
+COMMENT ON COLUMN {schema}.job_attempt.dispatch_started_at IS
+    'Legacy rolling-upgrade field; current gateways use scheduler trace events for dispatch diagnostics.';
+COMMENT ON COLUMN {schema}.job_attempt.dispatch_confirmed_at IS
+    'Legacy rolling-upgrade field; current gateways use scheduler trace events for dispatch diagnostics.';
+COMMENT ON COLUMN {schema}.job_attempt.dispatch_error IS
+    'Legacy rolling-upgrade field; current gateways use scheduler trace events for dispatch diagnostics.';
 
 -- Backfill currently visible attempts so rolling upgrades have an audit row for
 -- active or recently terminal work that already has a run_attempt_id.

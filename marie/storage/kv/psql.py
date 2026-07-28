@@ -1,8 +1,8 @@
 import asyncio
 import json
 import time
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional
+from collections.abc import Awaitable, Callable
+from typing import Any, Dict, List, Optional, TypeVar
 
 import psycopg
 from uuid_extensions import uuid7str
@@ -12,14 +12,17 @@ from marie.constants import (
     JOB_STATUS_NOTIFICATION_CHANNEL,
     KV_NAMESPACE_JOB,
 )
-from marie.helper import get_or_reuse_loop
 from marie.logging_core.logger import MarieLogger
 from marie.storage.database.postgres import PostgresqlMixin
+from marie.storage.database.postgres_pool import (
+    AsyncPostgresConnection,
+    AsyncPostgresConnectionPool,
+)
 from marie.storage.kv.storage_client import StorageArea
 from marie.utils.scheduler_trace import scheduler_trace
 
-
 _TERMINAL_JOB_STATUSES = frozenset({'FAILED', 'STOPPED', 'SUCCEEDED'})
+_T = TypeVar('_T')
 
 
 def _terminal_job_notification(
@@ -63,18 +66,72 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         super().__init__()
         self.logger = MarieLogger(self.__class__.__name__)
         self.running = False
-        self.max_workers = 1
-        self._db_executor = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="kv-db-executor"
-        )
-        self.logger.info(
-            f"Using ThreadPoolExecutor for database operations with : {self.max_workers} workers."
-        )
+        self._config = dict(config)
+        self._async_pool = AsyncPostgresConnectionPool()
+        self._async_pool_lock = asyncio.Lock()
+        self._async_pool_initialized = False
+        self._closed = False
         self._setup_storage(
             config,
             create_table_callback=self.create_table_callback,
             reset_table_callback=self.internal_kv_reset if reset else None,
         )
+        self.postgreSQL_pool.close()
+
+    async def _ensure_async_pool(self) -> None:
+        if self._closed:
+            raise RuntimeError("PostgreSQLKV is closed")
+        if self._async_pool_initialized:
+            return
+        async with self._async_pool_lock:
+            if self._closed:
+                raise RuntimeError("PostgreSQLKV is closed")
+            if self._async_pool_initialized:
+                return
+            await self._async_pool.initialize(
+                self._config,
+                autocommit=True,
+                trace_name="async_kv",
+            )
+            self._async_pool_initialized = True
+
+    async def _run_db_operation(
+        self,
+        operation: str,
+        function: Callable[[AsyncPostgresConnection], Awaitable[_T]],
+        *,
+        job_id: str | None = None,
+    ) -> _T:
+        await self._ensure_async_pool()
+        started_at = time.perf_counter()
+        acquired_at: float | None = None
+        succeeded = False
+        try:
+            async with self._async_pool.acquire() as connection:
+                acquired_at = time.perf_counter()
+                result = await function(connection)
+            succeeded = True
+            return result
+        finally:
+            completed_at = time.perf_counter()
+            scheduler_trace(
+                'postgres_kv_operation_completed',
+                mode='async',
+                operation=operation,
+                job_id=job_id,
+                succeeded=succeeded,
+                pool_wait_ms=(
+                    (acquired_at - started_at) * 1000.0
+                    if acquired_at is not None
+                    else None
+                ),
+                database_operation_ms=(
+                    (completed_at - acquired_at) * 1000.0
+                    if acquired_at is not None
+                    else None
+                ),
+                total_ms=(completed_at - started_at) * 1000.0,
+            )
 
     def create_table_callback(self, table_name: str):
         """
@@ -147,26 +204,23 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         if namespace is None:
             namespace = b"DEFAULT"
 
-        def _get_blocking():
-            cursor = None
-            conn = None
-            try:
-                conn = self._get_connection()
-                query = f"SELECT key, value FROM {self.qualified_table} WHERE key = %s AND namespace = %s AND is_deleted = FALSE"
-                cursor = self._execute_sql_gracefully(
-                    query, data=(key.decode(), namespace.decode()), return_cursor=True, connection=conn
-                )
-                result = cursor.fetchone()
+        async def get(connection: AsyncPostgresConnection) -> Any | None:
+            row = await connection.fetchrow(
+                f"SELECT value FROM {self.qualified_table} "
+                "WHERE key = $1 AND namespace = $2 AND is_deleted = FALSE",
+                key.decode(),
+                namespace.decode(),
+            )
+            return row['value'] if row is not None else None
 
-                if result and (result[0] is not None):
-                    return result[1]
-                return None
-            finally:
-                self._close_cursor(cursor)
-                self._close_connection(conn)
-
-        loop = get_or_reuse_loop()
-        return await loop.run_in_executor(self._db_executor, _get_blocking)
+        key_text = key.decode()
+        job_id = (
+            key_text[len(JOB_INFO_KEY_PREFIX) :]
+            if namespace == KV_NAMESPACE_JOB
+            and key_text.startswith(JOB_INFO_KEY_PREFIX)
+            else None
+        )
+        return await self._run_db_operation('get', get, job_id=job_id)
 
     async def internal_kv_multi_get(
         self,
@@ -192,7 +246,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         if namespace is None:
             namespace = b"DEFAULT"
 
-        def _put_blocking():
+        async def put(connection: AsyncPostgresConnection) -> int:
             uid = uuid7str()
             shard = 0
 
@@ -215,49 +269,39 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
                 """
                 params.append(v)
 
-            cursor = None
-            conn = None
-            try:
-                conn = self._get_connection()
-                cursor = self._execute_sql_gracefully(
-                    insert_q,
-                    data=tuple(params),
-                    return_cursor=True,
-                    connection=conn,
-                    commit=terminal_notification is None,
-                )
-
-                if cursor is None:
+            insert_q += " RETURNING id"
+            notify_started: float | None = None
+            async with connection.transaction():
+                row = await connection.fetchrow(insert_q, *params)
+                if row is None:
                     return 0
-                rowcount = cursor.rowcount
                 if terminal_notification is not None:
-                    self._close_cursor(cursor)
-                    cursor = None
                     notify_started = time.perf_counter()
                     scheduler_trace(
                         'job_terminal_notification_emit_started',
                         **terminal_notification,
                     )
-                    self._execute_sql_gracefully(
-                        'SELECT pg_notify(%s, %s)',
-                        data=(
-                            JOB_STATUS_NOTIFICATION_CHANNEL,
-                            json.dumps(terminal_notification),
-                        ),
-                        connection=conn,
+                    await connection.execute(
+                        'SELECT pg_notify($1, $2)',
+                        JOB_STATUS_NOTIFICATION_CHANNEL,
+                        json.dumps(terminal_notification),
                     )
-                    scheduler_trace(
-                        'job_terminal_notification_emitted',
-                        **terminal_notification,
-                        elapsed_ms=(time.perf_counter() - notify_started) * 1000.0,
-                    )
-                return rowcount
-            finally:
-                self._close_cursor(cursor)
-                self._close_connection(conn)
+            if terminal_notification is not None and notify_started is not None:
+                scheduler_trace(
+                    'job_terminal_notification_emitted',
+                    **terminal_notification,
+                    elapsed_ms=(time.perf_counter() - notify_started) * 1000.0,
+                )
+            return 1
 
-        loop = get_or_reuse_loop()
-        return await loop.run_in_executor(self._db_executor, _put_blocking)
+        key_text = key.decode()
+        job_id = (
+            key_text[len(JOB_INFO_KEY_PREFIX) :]
+            if namespace == KV_NAMESPACE_JOB
+            and key_text.startswith(JOB_INFO_KEY_PREFIX)
+            else None
+        )
+        return await self._run_db_operation('put', put, job_id=job_id)
 
     async def internal_kv_del(
         self,
@@ -274,24 +318,16 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             raise NotImplementedError
         else:
 
-            def _del_blocking():
-                query = f"DELETE FROM {self.qualified_table} WHERE key = %s AND namespace = %s"
-                cursor = None
-                conn = None
+            async def delete(connection: AsyncPostgresConnection) -> int:
+                row = await connection.fetchrow(
+                    f"DELETE FROM {self.qualified_table} "
+                    "WHERE key = $1 AND namespace = $2 RETURNING id",
+                    key.decode(),
+                    namespace.decode(),
+                )
+                return int(row is not None)
 
-                try:
-                    conn = self._get_connection()
-                    cursor = self._execute_sql_gracefully(
-                        query, data=(key.decode(), namespace.decode()), return_cursor=True, connection=conn
-                    )
-                    if cursor is not None:
-                        return 1
-                finally:
-                    self._close_cursor(cursor)
-                    self._close_connection(conn)
-                return 0
-            loop = get_or_reuse_loop()
-            return await loop.run_in_executor(self._db_executor, _del_blocking)
+            return await self._run_db_operation('delete', delete)
 
     async def internal_kv_exists(
         self, key: bytes, namespace: Optional[bytes], timeout: Optional[float] = None
@@ -304,48 +340,63 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         if namespace is None:
             namespace = b"DEFAULT"
 
-        def _keys_blocking():
-            result = []
-            cursor = None
-            conn = None
+        async def keys(connection: AsyncPostgresConnection) -> List[str]:
             try:
-                conn = self._get_connection()
-                query = f"SELECT key FROM {self.qualified_table} WHERE namespace = %s AND is_deleted = FALSE"
-                cursor = self._execute_sql_gracefully(
-                    query, data=(namespace.decode(),), return_cursor=True, connection=conn
+                rows = await connection.fetch(
+                    f"SELECT key FROM {self.qualified_table} "
+                    "WHERE namespace = $1 AND is_deleted = FALSE",
+                    namespace.decode(),
                 )
-
-                for record in cursor:
-                    result.append(record[0])
             except psycopg.Error as error:
                 self.logger.error(f"Error executing sql statement: {error}")
-            finally:
-                self._close_cursor(cursor)
-                self._close_connection(conn)
-            return result
+                return []
+            return [row['key'] for row in rows]
 
-        loop = get_or_reuse_loop()
-        return await loop.run_in_executor(self._db_executor, _keys_blocking)
+        return await self._run_db_operation('keys', keys)
 
     def internal_kv_reset(self) -> None:
         qualified = self.qualified_table
         safe_name = self.table.replace(".", "_")
         self.logger.info(f"internal_kv_reset : {qualified}")
+        statements = (
+            f"DROP TABLE IF EXISTS {qualified}",
+            f"DROP TABLE IF EXISTS {qualified}_history",
+            f"DROP FUNCTION IF EXISTS log_changes_{safe_name} CASCADE",
+        )
+        if self.postgreSQL_pool.closed:
+            with psycopg.connect(
+                host=self._config.get('hostname', self._config.get('host')),
+                port=int(self._config['port']),
+                user=self._config.get('username', self._config.get('user')),
+                password=self._config['password'],
+                dbname=self._config['database'],
+                options='-c timezone=UTC -c statement_timeout=120000',
+                application_name=self._config.get(
+                    'application_name', 'marie_scheduler'
+                ),
+            ) as connection:
+                for statement in statements:
+                    connection.execute(statement)
+            return
+
         conn = None
         try:
             conn = self._get_connection()
-            self._execute_sql_gracefully(
-                f"DROP TABLE IF EXISTS {qualified}", connection=conn
-            )
-            self._execute_sql_gracefully(
-                f"DROP TABLE IF EXISTS {qualified}_history", connection=conn
-            )
-            self._execute_sql_gracefully(
-                f"DROP FUNCTION IF EXISTS log_changes_{safe_name} CASCADE",
-                connection=conn,
-            )
+            for statement in statements:
+                self._execute_sql_gracefully(statement, connection=conn)
         finally:
             self._close_connection(conn)
+
+    async def close(self) -> None:
+        async with self._async_pool_lock:
+            if self._closed:
+                return
+            self._closed = True
+            if self._async_pool_initialized:
+                await self._async_pool.close()
+                self._async_pool_initialized = False
+            if not self.postgreSQL_pool.closed:
+                self.postgreSQL_pool.close()
 
     def debug_info(self) -> str:
         return "PostgreSQLKV"

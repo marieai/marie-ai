@@ -194,6 +194,33 @@ def test_scheduler_trace_compact_writes_priority_refresh_completion(
     assert row["elapsed_ms"] == 12.5
 
 
+def test_scheduler_trace_compact_keeps_terminal_diagnostics(monkeypatch, tmp_path):
+    trace_path = tmp_path / "scheduler-trace.jsonl"
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_ENABLED", "true")
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PATH", str(trace_path))
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PROFILE", "compact")
+    events = [
+        "terminal_job_lock_acquired",
+        "terminal_db_operation_completed",
+        "terminal_dag_lock_acquired",
+        "postgres_notification_handler_completed",
+        "job_supervisor_terminal_info_read",
+        "gateway_event_loop_lag",
+        "postgres_kv_operation_completed",
+        "scheduler_dispatch_wait_completed",
+        "scheduler_dispatch_cycle_started",
+        "scheduler_dispatch_capacity_snapshot",
+        "scheduler_dispatch_candidate_capture_completed",
+    ]
+
+    for event in events:
+        scheduler_trace(event, job_id="job-1", elapsed_ms=1.0)
+    flush_trace()
+
+    rows = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [row["event"] for row in rows] == events
+
+
 def test_scheduler_trace_reuses_writer_file_descriptor(monkeypatch, tmp_path):
     trace_path = tmp_path / "scheduler-trace.jsonl"
     monkeypatch.setenv("MARIE_SCHEDULER_TRACE_ENABLED", "true")

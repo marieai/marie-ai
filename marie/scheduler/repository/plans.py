@@ -1,29 +1,9 @@
-from datetime import datetime, timezone
 from typing import Any, Dict
 
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from marie.scheduler.state import WorkState
-
-
-def to_timestamp_with_tz(dt: datetime):
-    """
-    Convert a datetime object to a timestamp with timezone.
-    If the datetime is naive (no timezone), it is assumed to be in UTC.
-    :param dt: datetime object (timezone-aware or naive), or None
-    :return: ISO format string with timezone (Z suffix), or None if input is None
-    """
-    if dt is None:
-        return None
-
-    # If naive, assume UTC; if aware, convert to UTC
-    if dt.tzinfo is None:
-        dt_utc = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt_utc = dt.astimezone(timezone.utc)
-
-    return dt_utc.isoformat().replace('+00:00', 'Z')
 
 
 def try_set_maintenance_time(schema: str, maintenance_state_interval_seconds: int):
@@ -137,27 +117,7 @@ def insert_jobs(schema: str) -> str:
     """
 
 
-def insert_dag(
-    schema: str,
-    dag_id: str,
-    dag_name: str,
-    serialized_dag: dict,
-    soft_sla: datetime = None,
-    hard_sla: datetime = None,
-    planner: str = None,
-) -> str:
-    soft_sla_str = (
-        f"CAST('{to_timestamp_with_tz(soft_sla)}' as timestamptz)"
-        if soft_sla
-        else "NULL"
-    )
-    hard_sla_str = (
-        f"CAST('{to_timestamp_with_tz(hard_sla)}' as timestamptz)"
-        if hard_sla
-        else "NULL"
-    )
-    planner_str = f"'{planner}'" if planner else "NULL"
-
+def insert_dag(schema: str) -> str:
     return f"""
         INSERT INTO {schema}.dag (
             id,
@@ -166,16 +126,30 @@ def insert_dag(
             serialized_dag,
             soft_sla,
             hard_sla,
-            planner
+            planner,
+            priority,
+            submission_name,
+            project_id,
+            ref_type,
+            ref_id,
+            policy,
+            task_count
             )
         VALUES (
-            '{dag_id}'::uuid,
-            '{dag_name}'::text,
+            %s::uuid,
+            %s,
             '{WorkState.CREATED.value}',
-            {_jsonb_literal(serialized_dag)},
-            {soft_sla_str},
-            {hard_sla_str},
-            {planner_str}
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s
             )
         ON CONFLICT DO NOTHING
     RETURNING id

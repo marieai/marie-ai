@@ -1,4 +1,6 @@
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -243,8 +245,9 @@ async def test_lossless_publisher_settings_are_observable() -> None:
 
 
 async def test_job_manager_blocks_publish_without_subscriber_timeout() -> None:
+    storage = SimpleNamespace(close=AsyncMock())
     manager = JobManager(
-        storage=object(),
+        storage=storage,
         job_distributor=object(),
         etcd_client=object(),
         job_event_worker_count=3,
@@ -257,6 +260,7 @@ async def test_job_manager_blocks_publish_without_subscriber_timeout() -> None:
         assert manager.event_publisher.subscriber_timeout_s == 0
     finally:
         await manager.shutdown()
+    storage.close.assert_awaited_once()
 
 
 async def test_nonblocking_publish_drops_when_worker_queue_is_full(

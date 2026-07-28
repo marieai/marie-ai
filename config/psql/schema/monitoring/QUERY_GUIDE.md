@@ -47,15 +47,65 @@ exports in an access-controlled incident location.
 
 ## Submitted job lookup
 
+Schema version 76 stores immutable submission identity and durable admission
+ordering directly on the DAG. When the gateway submission UUID is known, start
+with the inexpensive current-row lookup:
+
+```sql
+SELECT
+    id AS submission_id,
+    submission_name,
+    planner,
+    project_id,
+    ref_type,
+    ref_id,
+    policy,
+    priority,
+    task_count,
+    state,
+    created_on,
+    started_on,
+    completed_on
+FROM marie_scheduler.dag
+WHERE id = '<submission-id>'::uuid;
+```
+
+Search by the external document identity when the submission UUID is unknown:
+
+```sql
+SELECT
+    id AS submission_id,
+    submission_name,
+    planner,
+    priority,
+    task_count,
+    state,
+    created_on,
+    started_on,
+    completed_on
+FROM marie_scheduler.dag
+WHERE project_id = '<project-id>'
+  AND ref_type = '<reference-type>'
+  AND ref_id = '<reference-id>'
+ORDER BY created_on DESC
+LIMIT 100;
+```
+
+Schema version 76 stores these fields atomically with each new submission.
+Identity fields remain `NULL` when the submitter did not supply them. A
+deployment upgrading from an older schema must complete its managed database
+migration before starting the version 76 gateway.
+
 Use `submission_lifecycle_analysis.sql` when the gateway logged `Job submitted
 with id ...` but a lookup in `kv_store_worker_history` returned no rows.
 
 Replace the UUID in the `target` CTE, then execute the statement in any SQL
 client. It does not use `psql` variables or metacommands. The result combines:
 
-- the current DAG and DAG history;
+- the current DAG and DAG history, including submission identity, admission
+  priority, and task count;
 - every current task and scheduler state transition in that DAG;
-- durable activation, dispatch, terminal, and recovery attempts; and
+- durable activation, terminal, and recovery attempts; and
 - current and historical worker status for every generated task ID.
 
 The UUID returned by the gateway is the submission/DAG ID. A query planner may
@@ -69,9 +119,7 @@ Interpret the first matching layer:
 | --- | --- |
 | `dag.current` or `job.current` | The submission was durably persisted. Inspect task state and attempts next. |
 | `job.current` with `created` and no `attempt` | The task has not been admitted or activated. Check dependencies, `start_after`, scheduler leadership, and capacity. |
-| `attempt` without `dispatch_started_at` | The task was activated but dispatch did not begin. |
-| `attempt` with dispatch start but no confirmation | Inspect `dispatch_error`, gateway routing, and executor readiness. |
-| Confirmed dispatch without worker records | Inspect the executor request path and worker status-store writes. |
+| `attempt` without worker records | Inspect gateway dispatch trace events, executor readiness, and worker status-store writes. |
 | `worker.current` or `worker.history` | The executor observed the task; use its task `job_id` for worker-specific investigation. |
 | `not_found` | No durable scheduler or worker layer contains the UUID in this database. |
 
@@ -147,6 +195,10 @@ The measurement units are intentionally different:
 `job.data.metadata.name` is the task name from the query plan.
 `job.data.metadata.on` is the executor endpoint. `dag.planner` is the
 authoritative query-plan name.
+
+`dag.task_count` is the number of tasks created for a plan, not a completion
+metric. Throughput must continue to count terminal `job` rows so failed,
+skipped, and completed work remain distinguishable.
 
 The current clock-hour row is marked `partial`. Compare completed clock hours
 when looking for regressions. The `window_total` row reports rates normalized

@@ -9,6 +9,7 @@ from psycopg import sql
 
 from marie.excepts import RuntimeFailToStart
 from marie.logging_core.logger import MarieLogger
+from marie.utils.scheduler_trace import scheduler_trace
 
 
 class NotificationService:
@@ -34,6 +35,8 @@ class NotificationService:
         self._listen_connection: Optional[psycopg.AsyncConnection] = None
         self._listener_task: Optional[asyncio.Task] = None
         self._pending_notifications: deque[psycopg.Notify] = deque()
+        self._pending_notification_received_at: deque[float] = deque()
+        self._driver_received_at: float | None = None
 
         # Map of channel names to handler callbacks
         self._handlers: Dict[str, Callable] = {}
@@ -222,12 +225,42 @@ class NotificationService:
                             )
                             if channel in self._handlers:
                                 handler = self._handlers[channel]
+                                handler_started = time.perf_counter()
+                                driver_to_dispatch_ms = (
+                                    (handler_started - self._driver_received_at)
+                                    * 1000.0
+                                    if self._driver_received_at is not None
+                                    else None
+                                )
+                                succeeded = False
                                 try:
                                     await handler(payload)
+                                    succeeded = True
                                 except Exception as e:
                                     self.logger.error(
                                         f"Error in handler for channel '{channel}': {e}",
                                         exc_info=True,
+                                    )
+                                finally:
+                                    scheduler_trace(
+                                        "postgres_notification_handler_completed",
+                                        channel=channel,
+                                        job_id=(
+                                            payload.get("job_id")
+                                            if isinstance(payload, dict)
+                                            else None
+                                        ),
+                                        dag_id=(
+                                            payload.get("dag_id")
+                                            if isinstance(payload, dict)
+                                            else None
+                                        ),
+                                        succeeded=succeeded,
+                                        driver_to_dispatch_ms=driver_to_dispatch_ms,
+                                        handler_ms=(
+                                            time.perf_counter() - handler_started
+                                        )
+                                        * 1000.0,
                                     )
                             else:
                                 self.logger.warning(
@@ -274,6 +307,7 @@ class NotificationService:
 
     async def _next_notification(self) -> Optional[psycopg.Notify]:
         if self._pending_notifications:
+            self._driver_received_at = self._pending_notification_received_at.popleft()
             return self._pending_notifications.popleft()
         if self._listen_connection is None or self._listen_connection.closed:
             raise RuntimeError("LISTEN connection is closed")
@@ -282,8 +316,11 @@ class NotificationService:
             stop_after=1,
         ):
             self._pending_notifications.append(notify)
+            self._pending_notification_received_at.append(time.perf_counter())
         if self._pending_notifications:
+            self._driver_received_at = self._pending_notification_received_at.popleft()
             return self._pending_notifications.popleft()
+        self._driver_received_at = None
         return None
 
     async def send_notification(self, channel: str, payload: Dict[str, Any]) -> bool:

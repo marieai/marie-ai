@@ -161,6 +161,13 @@ WITH params AS (
 SELECT
     r.id AS job_id,
     r.dag_id,
+    d.submission_name,
+    d.planner,
+    d.project_id,
+    d.ref_type,
+    d.ref_id,
+    d.priority,
+    d.task_count,
     r.name AS queue_name,
     r.state,
     r.retry_count,
@@ -185,6 +192,8 @@ SELECT
     env #>> '{error,type}' AS executor_error_type,
     env #>> '{error,message}' AS executor_error_message
 FROM recent r
+LEFT JOIN marie_scheduler.dag d
+    ON d.id = r.dag_id
 LEFT JOIN marie_scheduler.kv_store_worker kv
     ON kv.namespace = 'job'
    AND kv.key = 'marie_internal/job_info_' || r.id::text
@@ -238,6 +247,13 @@ WITH params AS (
 SELECT
     o.id AS job_id,
     o.dag_id,
+    d.submission_name,
+    d.planner,
+    d.project_id,
+    d.ref_type,
+    d.ref_id,
+    d.priority,
+    d.task_count,
     o.name AS queue_name,
     o.state,
     CASE
@@ -258,7 +274,6 @@ SELECT
         THEN 'delayed_until_start_after'
         ELSE 'ready_or_waiting_capacity'
     END AS outstanding_reason,
-    o.priority,
     o.job_level,
     o.retry_count,
     o.retry_limit,
@@ -279,6 +294,8 @@ SELECT
     env #>> '{error,type}' AS last_error_type,
     env #>> '{error,message}' AS last_error_message
 FROM outstanding o
+LEFT JOIN marie_scheduler.dag d
+    ON d.id = o.dag_id
 LEFT JOIN marie_scheduler.kv_store_worker kv
     ON kv.namespace = 'job'
    AND kv.key = 'marie_internal/job_info_' || o.id::text

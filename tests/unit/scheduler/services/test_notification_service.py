@@ -149,6 +149,54 @@ async def test_next_notification_preserves_all_notifications_from_receive_batch(
 
 
 @pytest.mark.asyncio
+async def test_listener_traces_driver_and_handler_time(monkeypatch, config) -> None:
+    notification = psycopg.Notify(
+        "job_terminal",
+        '{"job_id":"job-1","status":"SUCCEEDED"}',
+        1,
+    )
+
+    class SingleNotificationConnection(FakeConnection):
+        async def notifies(self, **_kwargs):
+            yield notification
+
+    service = NotificationService(config)
+
+    async def handler(_payload):
+        service.running = False
+
+    service.register_handler("job_terminal", handler)
+    service.running = True
+    connection = SingleNotificationConnection()
+    events: list[tuple[str, dict]] = []
+
+    async def fake_setup():
+        service._listen_connection = connection
+
+    async def fake_close():
+        service._listen_connection = None
+
+    monkeypatch.setattr(service, "_setup_connection", fake_setup)
+    monkeypatch.setattr(service, "_close_connection", fake_close)
+    monkeypatch.setattr(
+        notification_service_module,
+        "scheduler_trace",
+        lambda event, **fields: events.append((event, fields)),
+    )
+
+    await service._listen_for_notifications()
+
+    assert [event for event, _fields in events] == [
+        "postgres_notification_handler_completed"
+    ]
+    fields = events[0][1]
+    assert fields["job_id"] == "job-1"
+    assert fields["succeeded"] is True
+    assert fields["driver_to_dispatch_ms"] >= 0
+    assert fields["handler_ms"] >= 0
+
+
+@pytest.mark.asyncio
 async def test_send_notification_uses_async_connection_and_closes_it(
     monkeypatch, config
 ):

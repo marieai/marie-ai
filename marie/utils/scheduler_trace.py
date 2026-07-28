@@ -34,6 +34,8 @@ _COMPACT_EVENTS = {
     "gateway_dispatch_confirmed",
     "job_supervisor_dispatch_admitted",
     "job_supervisor_send_task_completed",
+    "job_supervisor_terminal_status_cache_hit",
+    "job_supervisor_terminal_info_read",
     "job_supervisor_worker_ack_wait_completed",
     "job_monitor_terminal_observed",
     "job_monitor_woken_by_notification",
@@ -47,6 +49,10 @@ _COMPACT_EVENTS = {
     "executor_failed_recorded",
     "candidate_built",
     "planner_selected",
+    "scheduler_dispatch_wait_completed",
+    "scheduler_dispatch_cycle_started",
+    "scheduler_dispatch_capacity_snapshot",
+    "scheduler_dispatch_candidate_capture_completed",
     "scheduler_control_flow_peek_completed",
     "scheduler_selection_completed",
     "dispatch_batch_start",
@@ -55,6 +61,9 @@ _COMPACT_EVENTS = {
     "job_attempt_audit_failed",
     "job_terminal_attempt_accepted",
     "job_terminal_attempt_rejected",
+    "terminal_job_lock_acquired",
+    "terminal_db_operation_completed",
+    "terminal_dag_lock_acquired",
     "job_status_event_enqueued",
     "job_status_event_dequeued",
     "job_status_event_dispatch_completed",
@@ -63,6 +72,9 @@ _COMPACT_EVENTS = {
     "terminal_dag_resolution_started",
     "terminal_dag_resolution_completed",
     "terminal_scheduler_wake_completed",
+    "postgres_notification_handler_completed",
+    "gateway_event_loop_lag",
+    "postgres_kv_operation_completed",
     "semaphore_reserve_batch_done",
     "slot_unavailable",
     "slot_reserve_failed",
@@ -94,6 +106,11 @@ _COMPACT_DROP_FIELDS = {
 
 def _profile() -> str:
     return os.getenv("MARIE_SCHEDULER_TRACE_PROFILE", _DEFAULT_PROFILE).strip().lower()
+
+
+def scheduler_trace_enabled() -> bool:
+    """Return whether scheduler tracing is enabled for this process."""
+    return to_bool(os.getenv("MARIE_SCHEDULER_TRACE_ENABLED"), default=False)
 
 
 def _compact_fields(event: str, fields: dict[str, Any]) -> dict[str, Any] | None:
@@ -229,7 +246,7 @@ def _shutdown_trace_writer() -> None:
 
 
 def scheduler_trace(event: str, **fields: Any) -> None:
-    if not to_bool(os.getenv("MARIE_SCHEDULER_TRACE_ENABLED"), default=False):
+    if not scheduler_trace_enabled():
         return
 
     fields = {

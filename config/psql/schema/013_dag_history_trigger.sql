@@ -19,12 +19,18 @@ BEGIN
         INSERT INTO {schema}.dag_history (
             id, name, state, root_dag_id, is_subdag, default_view, serialized_dag,
             started_on, completed_on, created_on, updated_on,
-            duration, sla_interval, soft_sla, hard_sla, sla_miss_logged, planner
+            duration, sla_interval, soft_sla, hard_sla, sla_miss_logged, planner,
+            priority, submission_name, project_id, ref_type, ref_id,
+            policy, task_count
         )
         VALUES (
-            OLD.id, OLD.name, OLD.state, OLD.root_dag_id, OLD.is_subdag, OLD.default_view,
-            OLD.serialized_dag, OLD.started_on, OLD.completed_on, OLD.created_on, OLD.updated_on,
-            OLD.duration, OLD.sla_interval, OLD.soft_sla, OLD.hard_sla, OLD.sla_miss_logged, OLD.planner
+            OLD.id, OLD.name, OLD.state, OLD.root_dag_id, OLD.is_subdag,
+            OLD.default_view, OLD.serialized_dag, OLD.started_on,
+            OLD.completed_on, OLD.created_on, OLD.updated_on, OLD.duration,
+            OLD.sla_interval, OLD.soft_sla, OLD.hard_sla,
+            OLD.sla_miss_logged, OLD.planner, OLD.priority,
+            OLD.submission_name, OLD.project_id, OLD.ref_type, OLD.ref_id,
+            OLD.policy, OLD.task_count
         );
         RETURN OLD;
     END IF;
@@ -33,12 +39,18 @@ BEGIN
     INSERT INTO {schema}.dag_history (
         id, name, state, root_dag_id, is_subdag, default_view, serialized_dag,
         started_on, completed_on, created_on, updated_on,
-        duration, sla_interval, soft_sla, hard_sla, sla_miss_logged, planner
+        duration, sla_interval, soft_sla, hard_sla, sla_miss_logged, planner,
+        priority, submission_name, project_id, ref_type, ref_id,
+        policy, task_count
     )
     VALUES (
-        NEW.id, NEW.name, NEW.state, NEW.root_dag_id, NEW.is_subdag, NEW.default_view,
-        NEW.serialized_dag, NEW.started_on, NEW.completed_on, NEW.created_on, NEW.updated_on,
-        NEW.duration, NEW.sla_interval, NEW.soft_sla, NEW.hard_sla, NEW.sla_miss_logged, NEW.planner
+        NEW.id, NEW.name, NEW.state, NEW.root_dag_id, NEW.is_subdag,
+        NEW.default_view, NEW.serialized_dag, NEW.started_on,
+        NEW.completed_on, NEW.created_on, NEW.updated_on, NEW.duration,
+        NEW.sla_interval, NEW.soft_sla, NEW.hard_sla,
+        NEW.sla_miss_logged, NEW.planner, NEW.priority,
+        NEW.submission_name, NEW.project_id, NEW.ref_type, NEW.ref_id,
+        NEW.policy, NEW.task_count
     );
     RETURN NEW;
 END;

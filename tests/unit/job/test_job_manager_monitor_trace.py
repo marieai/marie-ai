@@ -1,8 +1,9 @@
 import asyncio
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-from marie.job.common import JobStatus
+from marie.job.common import JobInfo, JobStatus
 from marie.job.job_manager import JobManager
 
 
@@ -14,7 +15,12 @@ async def test_monitor_trace_records_poll_sleep_and_terminal_observation(
     manager._terminal_notifications = {}
     manager._terminal_wake_events = {}
     manager._job_info_client = SimpleNamespace(
-        get_status=AsyncMock(side_effect=[JobStatus.RUNNING, JobStatus.SUCCEEDED])
+        get_info=AsyncMock(
+            side_effect=[
+                JobInfo(entrypoint='test', status=JobStatus.RUNNING),
+                JobInfo(entrypoint='test', status=JobStatus.SUCCEEDED),
+            ]
+        )
     )
     supervisor = SimpleNamespace(ping=AsyncMock())
     sleep = AsyncMock()
@@ -47,6 +53,7 @@ async def test_terminal_notification_publishes_and_wakes_monitor(monkeypatch) ->
     manager._terminal_notifications = {}
     manager._terminal_wake_events = {}
     manager._published_terminal_events = {}
+    manager._committed_terminal_events = {}
     manager._active_run_attempts = {"job-1": "attempt-1"}
     events: list[tuple[str, dict]] = []
     monkeypatch.setattr(
@@ -65,6 +72,11 @@ async def test_terminal_notification_publishes_and_wakes_monitor(monkeypatch) ->
 
     assert manager._terminal_notifications == {"job-1": JobStatus.SUCCEEDED}
     assert manager._terminal_wake_events["job-1"].is_set()
+    assert (
+        manager.get_committed_terminal_status("job-1", "attempt-1")
+        == JobStatus.SUCCEEDED
+    )
+    assert manager.get_committed_terminal_status("job-1", "attempt-2") is None
     manager.event_publisher.publish.assert_awaited_once()
     assert [event for event, _ in events] == [
         "job_terminal_notification_received",
@@ -91,6 +103,7 @@ async def test_terminal_notification_rejects_stale_run_attempt(monkeypatch) -> N
     manager._terminal_notifications = {}
     manager._terminal_wake_events = {}
     manager._published_terminal_events = {}
+    manager._committed_terminal_events = {}
     manager._active_run_attempts = {"job-1": "attempt-2"}
     events: list[tuple[str, dict]] = []
     monkeypatch.setattr(
@@ -108,6 +121,7 @@ async def test_terminal_notification_rejects_stale_run_attempt(monkeypatch) -> N
 
     assert manager._terminal_notifications == {}
     assert manager._terminal_wake_events == {}
+    assert manager._committed_terminal_events == {}
     manager.event_publisher.publish.assert_not_awaited()
     assert events == [
         (
@@ -131,7 +145,7 @@ async def test_monitor_consumes_terminal_notification_without_database_read(
     manager.logger = Mock()
     manager._terminal_notifications = {"job-1": JobStatus.SUCCEEDED}
     manager._terminal_wake_events = {"job-1": asyncio.Event()}
-    manager._job_info_client = SimpleNamespace(get_status=AsyncMock())
+    manager._job_info_client = SimpleNamespace(get_info=AsyncMock())
     supervisor = SimpleNamespace(ping=AsyncMock())
     events: list[tuple[str, dict]] = []
     monkeypatch.setattr(
@@ -141,7 +155,7 @@ async def test_monitor_consumes_terminal_notification_without_database_read(
 
     await manager._monitor_job_internal("job-1", supervisor)
 
-    manager._job_info_client.get_status.assert_not_awaited()
+    manager._job_info_client.get_info.assert_not_awaited()
     supervisor.ping.assert_not_awaited()
     assert events[-1] == (
         "job_monitor_terminal_observed",
@@ -151,3 +165,30 @@ async def test_monitor_consumes_terminal_notification_without_database_read(
             "source": "postgres_notify",
         },
     )
+
+
+async def test_monitor_reuses_polled_pending_job_info(monkeypatch) -> None:
+    manager = object.__new__(JobManager)
+    manager.logger = Mock()
+    manager._terminal_notifications = {}
+    manager._terminal_wake_events = {}
+    manager._job_info_client = SimpleNamespace(
+        get_info=AsyncMock(
+            return_value=JobInfo(
+                entrypoint='test',
+                status=JobStatus.PENDING,
+                start_time=int(time.time() * 1000),
+            )
+        )
+    )
+    supervisor = SimpleNamespace(ping=AsyncMock())
+
+    async def finish_during_sleep(_delay: float) -> None:
+        manager._terminal_notifications['job-1'] = JobStatus.SUCCEEDED
+
+    monkeypatch.setattr('marie.job.job_manager.asyncio.sleep', finish_during_sleep)
+
+    await manager._monitor_job_internal('job-1', supervisor)
+
+    manager._job_info_client.get_info.assert_awaited_once_with('job-1')
+    supervisor.ping.assert_awaited_once()

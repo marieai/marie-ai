@@ -119,29 +119,13 @@ def dispatch_contract_cases() -> dict[str, DispatchContractCase]:
 class RaceRepository:
     def __init__(self) -> None:
         self.job_state = WorkState.ACTIVE
-        self.dispatch_results: list[dict[str, Any]] = []
-        self.dispatch_result_started = asyncio.Event()
-        self.dispatch_result_release: asyncio.Event | None = None
         self.fail_calls: list[dict[str, Any]] = []
-        self.terminal_audits: list[dict[str, Any]] = []
 
-    async def record_job_attempt_dispatch_started(self, **_fields: Any) -> None:
-        return None
-
-    async def record_job_attempt_dispatch_result(self, **fields: Any) -> None:
-        self.dispatch_results.append(fields)
-        self.dispatch_result_started.set()
-        if self.dispatch_result_release is not None:
-            await self.dispatch_result_release.wait()
-
-    async def fail_job(self, **fields: Any) -> tuple[int, None]:
+    async def transition_job_attempt_terminal(self, **fields: Any) -> tuple[bool, None]:
         self.fail_calls.append(fields)
         if self.job_state == WorkState.COMPLETED:
-            return 0, None
+            return False, None
         raise AssertionError(f'Unexpected job state: {self.job_state}')
-
-    async def record_job_attempt_terminal(self, **fields: Any) -> None:
-        self.terminal_audits.append(fields)
 
 
 class LateConfirmingJobManager:
@@ -169,18 +153,6 @@ class LateConfirmingJobManager:
         confirmation_event.set()
         self.repository.job_state = WorkState.COMPLETED
         self.completed.set()
-
-
-class ImmediateConfirmingJobManager:
-    async def submit_job(
-        self,
-        *,
-        submission_id: str,
-        confirmation_event: asyncio.Event,
-        **_fields: Any,
-    ) -> str:
-        confirmation_event.set()
-        return submission_id
 
 
 class RecordingSemaphoreStore:
@@ -242,7 +214,6 @@ async def test_late_confirmation_reproduces_false_dispatch_cleanup_race() -> Non
     scheduler.gateway_instance_id = 'reproducer-gateway'
     scheduler.notify_event = AsyncMock(return_value=True)
     scheduler.runtime = SchedulerRuntime(scheduler.logger)
-    scheduler._attempt_audit_semaphore = asyncio.Semaphore(2)
 
     counters: list[tuple[str, dict[str, Any]]] = []
     scheduler.attempt_lifecycle_service = AttemptLifecycleService(
@@ -288,13 +259,6 @@ async def test_late_confirmation_reproduces_false_dispatch_cleanup_race() -> Non
         run_attempt_id=run_attempt_id,
     )
 
-    assert repository.dispatch_results == [
-        {
-            'run_attempt_id': run_attempt_id,
-            'confirmed': False,
-            'error': 'dispatch_timeout',
-        }
-    ]
     assert repository.fail_calls[0]['output_metadata'] == {
         'dispatch_failed': True,
         'dispatch_error': 'False',
@@ -302,8 +266,7 @@ async def test_late_confirmation_reproduces_false_dispatch_cleanup_race() -> Non
         'failure_source': 'dispatch_failure',
         'error_message': 'False',
     }
-    assert repository.terminal_audits[0]['accepted'] is False
-    assert repository.terminal_audits[0]['reject_reason'] == 'db_update_zero_rows'
+    assert repository.fail_calls[0]['terminal_status'] == 'FAILED'
     assert semaphore_store.releases == [
         ('patient_indexing_executor', work_item.id, work_item.id, run_attempt_id)
     ]
@@ -315,35 +278,6 @@ async def test_late_confirmation_reproduces_false_dispatch_cleanup_race() -> Non
         f'run_attempt_id={run_attempt_id}'
     )
     assert counters[0][0] == 'terminal_event_stale_attempt_total'
-
-
-@pytest.mark.asyncio
-async def test_dispatch_confirmation_does_not_wait_for_attempt_audit() -> None:
-    repository = RaceRepository()
-    repository.dispatch_result_release = asyncio.Event()
-    scheduler = object.__new__(PostgreSQLJobScheduler)
-    scheduler.logger = MagicMock()
-    scheduler.repository = repository
-    scheduler.job_manager = ImmediateConfirmingJobManager()
-    scheduler.run_ttl_seconds = 1
-    scheduler.lease_owner = 'reproducer-scheduler'
-    scheduler.gateway_instance_id = 'reproducer-gateway'
-    scheduler.runtime = SchedulerRuntime(scheduler.logger)
-    scheduler._attempt_audit_semaphore = asyncio.Semaphore(2)
-
-    enqueue_task = asyncio.create_task(
-        scheduler.enqueue(
-            build_work_item(),
-            run_owner=scheduler.lease_owner,
-            run_attempt_id='e72e442c-a836-45a4-b66d-a4a460c3b04e',
-        )
-    )
-
-    await repository.dispatch_result_started.wait()
-    assert await asyncio.wait_for(enqueue_task, timeout=0.1) is True
-
-    repository.dispatch_result_release.set()
-    await asyncio.gather(*scheduler.runtime.tasks())
 
 
 TARGET_CONTRACT_PENDING = pytest.mark.xfail(
@@ -386,9 +320,7 @@ def test_unknown_later_admitted_becomes_dispatched(
 def test_unknown_later_rejected_before_rpc_becomes_failure(
     dispatch_contract_cases: dict[str, DispatchContractCase],
 ) -> None:
-    _fail_pending_contract(
-        dispatch_contract_cases['unknown_later_rejected_before_rpc']
-    )
+    _fail_pending_contract(dispatch_contract_cases['unknown_later_rejected_before_rpc'])
 
 
 @TARGET_CONTRACT_PENDING

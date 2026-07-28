@@ -6,7 +6,6 @@ import traceback
 import uuid as _uuid
 from asyncio import Queue
 from collections import Counter, defaultdict
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -23,8 +22,6 @@ from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import mark_as_complete as mark_as_complete_toast
 from marie.messaging import mark_as_failed as mark_as_failed_toast
-
-# from marie.messaging import mark_as_started as mark_as_started_toast
 from marie.query_planner.base import (
     QueryPlan,
 )
@@ -72,7 +69,7 @@ from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.state.semaphore_store import SemaphoreStore
 from marie.state.slot_capacity_manager import SlotCapacityManager
 from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
-from marie.utils.scheduler_trace import scheduler_trace
+from marie.utils.scheduler_trace import scheduler_trace, scheduler_trace_enabled
 from marie.utils.utils import current_milli_time
 
 INIT_POLL_PERIOD = 0.5  # initial idle wait before the first scheduler wake
@@ -84,12 +81,44 @@ MAX_POLL_PERIOD = 8
 CONTROL_FLOW_DRAIN_MAX_PASSES = 8
 
 SYNC_POLL_PERIOD = 60.0  # 60s — safety net, not primary dispatch path
+EVENT_LOOP_LAG_INTERVAL_SECONDS = 0.1
+EVENT_LOOP_TASK_SAMPLE_INTERVAL = 10
+EVENT_LOOP_TASK_GROUP_LIMIT = 10
+
+_DYNAMIC_TASK_NAME_PREFIXES = (
+    'finalize:',
+    'job:',
+    'scheduler-dispatch-',
+    'supervisor:',
+)
 
 DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
 RUN_LEASE_EXTEND_STALE_ATTEMPT_TOTAL = "run_lease_extend_stale_attempt_total"
 RUN_LEASE_RECOVERED_RETRY_TOTAL = "run_lease_recovered_retry_total"
 RUN_LEASE_RECOVERED_FAILED_TOTAL = "run_lease_recovered_failed_total"
+
+
+def _task_group_name(task: asyncio.Task[Any]) -> str:
+    name = task.get_name()
+    for prefix in _DYNAMIC_TASK_NAME_PREFIXES:
+        if name.startswith(prefix):
+            return f'{prefix}*'
+    if name.startswith('Task-') and name[5:].isdigit():
+        coroutine = task.get_coro()
+        return str(getattr(coroutine, '__qualname__', type(coroutine).__qualname__))
+    return name
+
+
+def _bounded_task_name_counts(
+    tasks: set[asyncio.Task[Any]],
+    limit: int = EVENT_LOOP_TASK_GROUP_LIMIT,
+) -> tuple[dict[str, int], int]:
+    counts = Counter(_task_group_name(task) for task in tasks)
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    selected = dict(ranked[:limit])
+    other = sum(count for _, count in ranked[limit:])
+    return selected, other
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,7 +235,6 @@ class PostgreSQLJobScheduler(JobScheduler):
             scheduler_config.dispatch_confirmation_max_in_flight
         )
         self._pending_dispatches: dict[str, asyncio.Task[None]] = {}
-        self._attempt_audit_semaphore = asyncio.Semaphore(2)
         self._db_pool = AsyncPostgresConnectionPool()
         self.repository = JobRepository(
             config,
@@ -396,6 +424,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             run_ttl_seconds=self.run_ttl_seconds,
             gateway_instance_id=self.gateway_instance_id,
             notify_callback=self.notify_event,
+            runtime=self.runtime,
         )
 
     def _build_attempt_lifecycle_service(self) -> AttemptLifecycleService:
@@ -642,7 +671,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         if not control_flow_jobs:
             return ControlFlowBatchResult()
 
-        tasks: list[asyncio.Task[ControlFlowExecutionOutcome]] = []
+        processable_jobs: list[WorkInfo] = []
         reconciled_count = 0
 
         requested_ids = [wi.id for wi in control_flow_jobs]
@@ -676,9 +705,7 @@ class PostgreSQLJobScheduler(JobScheduler):
 
             for wi in jobs:
                 if wi.id in leased_ids:
-                    tasks.append(
-                        asyncio.create_task(self.control_flow_service.process_node(wi))
-                    )
+                    processable_jobs.append(wi)
                     continue
 
                 db_wi = await self.repository.get_job_by_id(wi.id)
@@ -694,30 +721,16 @@ class PostgreSQLJobScheduler(JobScheduler):
                     and db_wi.run_attempt_id
                 ):
                     await self.frontier.update_job_state(wi.id, WorkState.ACTIVE)
-                    tasks.append(
-                        asyncio.create_task(
-                            self.control_flow_service.process_node(db_wi)
-                        )
-                    )
+                    processable_jobs.append(db_wi)
                     continue
 
                 reconciled = await self._reconcile_control_flow_lease_miss(wi, db_wi)
                 reconciled_count += int(reconciled)
 
-        if not tasks:
+        if not processable_jobs:
             return ControlFlowBatchResult(reconciled=reconciled_count)
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        outcomes: list[ControlFlowExecutionOutcome] = []
-        for result in results:
-            if isinstance(result, Exception):
-                self.logger.error(
-                    f"[WORK_DIST] Control flow drain task failed: {result}",
-                    exc_info=(type(result), result, result.__traceback__),
-                )
-                outcomes.append(ControlFlowExecutionOutcome.FAILED)
-            else:
-                outcomes.append(result)
+        outcomes = await self.control_flow_service.process_nodes(processable_jobs)
 
         return ControlFlowBatchResult(
             outcomes=tuple(outcomes),
@@ -865,11 +878,42 @@ class PostgreSQLJobScheduler(JobScheduler):
             self.__monitor_deployment_updates(),
             name="scheduler-deployment-monitor",
         )
+        if scheduler_trace_enabled():
+            self.runtime.create_task(
+                self._event_loop_lag_watchdog(),
+                name="gateway-event-loop-lag",
+            )
 
         await self.notify_event()
 
+    async def _event_loop_lag_watchdog(
+        self,
+        interval_seconds: float = EVENT_LOOP_LAG_INTERVAL_SECONDS,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        sample_count = 0
+        while self.running:
+            expected_at = loop.time() + interval_seconds
+            await asyncio.sleep(interval_seconds)
+            observed_at = loop.time()
+            sample_count += 1
+            trace_fields: dict[str, Any] = {
+                "lag_ms": max(0.0, observed_at - expected_at) * 1000.0,
+                "interval_ms": interval_seconds * 1000.0,
+            }
+            if sample_count % EVENT_LOOP_TASK_SAMPLE_INTERVAL == 0:
+                tasks = asyncio.all_tasks(loop)
+                task_names, other = _bounded_task_name_counts(tasks)
+                trace_fields.update(
+                    task_count=len(tasks),
+                    task_names=task_names,
+                    task_names_other=other,
+                )
+            scheduler_trace("gateway_event_loop_lag", **trace_fields)
+
     async def run_dispatch_cycle(self, cycle_index: int) -> DispatchCycleResult:
         """Run one candidate, lease, activation, and dispatch attempt."""
+        cycle_phase_started = time.perf_counter()
         batch_size = self.frontier_batch_size
         max_concurrent_dags = self.max_concurrent_dags
         lease_ttl = self.lease_ttl_seconds
@@ -917,6 +961,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                         )
                     return DispatchCycleResult(scheduled=False)
 
+                capacity_started = time.perf_counter()
                 slots_by_executor = available_slots_by_executor(
                     self._semaphore_store
                 ).copy()
@@ -934,6 +979,19 @@ class PostgreSQLJobScheduler(JobScheduler):
                     slots_by_executor = {executor: 0 for executor in slots_by_executor}
 
                 no_executor_slots = not any(slots_by_executor.values())
+                capacity_captured_at = time.perf_counter()
+                scheduler_trace(
+                    "scheduler_dispatch_capacity_snapshot",
+                    cycle_index=cycle_index,
+                    elapsed_ms=(capacity_captured_at - capacity_started) * 1000.0,
+                    cycle_elapsed_ms=(capacity_captured_at - cycle_phase_started)
+                    * 1000.0,
+                    slots_by_executor=dict(slots_by_executor),
+                    available_slots=sum(slots_by_executor.values()),
+                    dispatch_capacity=dispatch_capacity,
+                    pending_dispatches=len(self._pending_dispatches),
+                    active_dags=len(self.active_dags),
+                )
                 self.logger.debug(f"[WORK_DIST] Available slots: {slots_by_executor}")
 
                 # Fetch candidates from frontier. Even when no executor slots
@@ -1058,6 +1116,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                     )
                 }
 
+                selection_started = time.perf_counter()
                 selection = await self.scheduling_engine.select_ready(
                     slots_by_executor=slots_by_executor.copy(),
                     batch_size=batch_size,
@@ -1066,8 +1125,25 @@ class PostgreSQLJobScheduler(JobScheduler):
                     resident_dag_ids=set(self.active_dags),
                     max_resident_dags=max_concurrent_dags,
                 )
+                candidates_captured_at = time.perf_counter()
                 candidate_window = selection.candidate_window
                 regular_candidates = list(selection.candidates)
+                scheduler_trace(
+                    "scheduler_dispatch_candidate_capture_completed",
+                    cycle_index=cycle_index,
+                    elapsed_ms=(candidates_captured_at - selection_started) * 1000.0,
+                    capacity_to_capture_ms=(
+                        candidates_captured_at - capacity_captured_at
+                    )
+                    * 1000.0,
+                    cycle_elapsed_ms=(candidates_captured_at - cycle_phase_started)
+                    * 1000.0,
+                    candidate_window=candidate_window,
+                    candidates=len(regular_candidates),
+                    control_flow_seen=control_flow_seen_total,
+                    control_flow_drain_passes=control_flow_drain_passes,
+                    no_executor_slots=no_executor_slots,
+                )
 
                 if (
                     no_ready_candidates
@@ -1606,10 +1682,13 @@ class PostgreSQLJobScheduler(JobScheduler):
         cycle_stats_started_at = time.perf_counter()
         cycle_total_samples: list[float] = []
         cycle_active_samples: list[float] = []
+        trace_dispatch_cycles = scheduler_trace_enabled()
 
         while self.running:
             cycle_started_at = time.perf_counter()
             active_started_at: float | None = None
+            wake_completed_at: float | None = None
+            cycle_trigger = "drain"
             try:
                 if not drain_ready:
                     effective_wait_time = wait_time
@@ -1623,12 +1702,40 @@ class PostgreSQLJobScheduler(JobScheduler):
                         f"Queue size: {self._event_queue.qsize()} — "
                         f"Idle streak: {idle_streak}"
                     )
+                    wait_started_at = (
+                        time.perf_counter() if trace_dispatch_cycles else None
+                    )
                     woke = await self._wait_for_dispatch_wake(effective_wait_time)
+                    cycle_trigger = "wake" if woke else "timeout"
+                    if trace_dispatch_cycles:
+                        wake_completed_at = time.perf_counter()
+                        scheduler_trace(
+                            "scheduler_dispatch_wait_completed",
+                            cycle_index=cycle_index,
+                            outcome=cycle_trigger,
+                            elapsed_ms=(wake_completed_at - wait_started_at) * 1000.0,
+                            requested_wait_ms=effective_wait_time * 1000.0,
+                            queue_size=self._event_queue.qsize(),
+                        )
                     if woke:
                         idle_streak = 0
                         wait_time = MIN_POLL_PERIOD
 
                 active_started_at = time.perf_counter()
+                if trace_dispatch_cycles:
+                    trace_fields: dict[str, Any] = {
+                        "cycle_index": cycle_index,
+                        "trigger": cycle_trigger,
+                        "queue_size": self._event_queue.qsize(),
+                    }
+                    if wake_completed_at is not None:
+                        trace_fields["wait_to_cycle_ms"] = (
+                            active_started_at - wake_completed_at
+                        ) * 1000.0
+                    scheduler_trace(
+                        "scheduler_dispatch_cycle_started",
+                        **trace_fields,
+                    )
                 self._fetch_counter += 1
                 result = await self.run_dispatch_cycle(cycle_index)
                 drain_ready = result.scheduled
@@ -1894,22 +2001,6 @@ class PostgreSQLJobScheduler(JobScheduler):
 
         try:
             dispatch_started = time.perf_counter()
-            executor = entrypoint.split("://", 1)[0]
-            if run_owner and run_attempt_id:
-                self._record_attempt_audit_later(
-                    lambda: self.repository.record_job_attempt_dispatch_started(
-                        job_id=submission_id,
-                        job_name=work_info.name,
-                        dag_id=str(work_info.dag_id),
-                        run_owner=run_owner,
-                        run_attempt_id=run_attempt_id,
-                        scheduler_lease_owner=self.lease_owner,
-                        gateway_instance_id=self.gateway_instance_id,
-                        executor=executor,
-                    ),
-                    run_attempt_id=run_attempt_id,
-                    action="dispatch start",
-                )
             scheduler_trace(
                 "gateway_dispatch_start",
                 job_id=submission_id,
@@ -1977,11 +2068,6 @@ class PostgreSQLJobScheduler(JobScheduler):
 
             dispatch_timeout = max(0.1, float(self.run_ttl_seconds) - 1.0)
             await asyncio.wait_for(_submit_and_confirm(), timeout=dispatch_timeout)
-            if run_attempt_id:
-                self._record_dispatch_result_later(
-                    run_attempt_id=run_attempt_id,
-                    confirmed=True,
-                )
             self.logger.debug(f"Dispatch confirmed for job: {submission_id}")
             return True
 
@@ -1996,12 +2082,6 @@ class PostgreSQLJobScheduler(JobScheduler):
                 run_attempt_id=run_attempt_id,
                 **self._ha_trace_fields(),
             )
-            if run_attempt_id:
-                self._record_dispatch_result_later(
-                    run_attempt_id=run_attempt_id,
-                    confirmed=False,
-                    error="dispatch_timeout",
-                )
             self.logger.error(
                 f"Timeout waiting for dispatch confirmation for job {submission_id}"
             )
@@ -2017,59 +2097,10 @@ class PostgreSQLJobScheduler(JobScheduler):
                 run_attempt_id=run_attempt_id,
                 **self._ha_trace_fields(),
             )
-            if run_attempt_id:
-                self._record_dispatch_result_later(
-                    run_attempt_id=run_attempt_id,
-                    confirmed=False,
-                    error=repr(e),
-                )
             self.logger.error(
                 f"Failed to dispatch job {submission_id}: {e}", exc_info=True
             )
             return False
-
-    def _record_dispatch_result_later(
-        self,
-        *,
-        run_attempt_id: str,
-        confirmed: bool,
-        error: str | None = None,
-    ) -> None:
-        self._record_attempt_audit_later(
-            lambda: self.repository.record_job_attempt_dispatch_result(
-                run_attempt_id=run_attempt_id,
-                confirmed=confirmed,
-                error=error,
-            ),
-            run_attempt_id=run_attempt_id,
-            action="dispatch result",
-        )
-
-    def _record_attempt_audit_later(
-        self,
-        record: Callable[[], Awaitable[None]],
-        *,
-        run_attempt_id: str,
-        action: str,
-    ) -> None:
-        async def run() -> None:
-            try:
-                async with self._attempt_audit_semaphore:
-                    await record()
-            except Exception as audit_error:
-                self.logger.warning(
-                    "Failed to record %s for attempt %s: %s",
-                    action,
-                    run_attempt_id,
-                    audit_error,
-                )
-
-        task = asyncio.create_task(
-            run(),
-            name=f"attempt-audit-{run_attempt_id}-{action.replace(' ', '-')}",
-        )
-        self.runtime.track_event_task(task)
-        task.add_done_callback(self.runtime.discard_event_task)
 
     async def get_job(self, job_id: str) -> Optional[WorkInfo]:
         """Get a job from the active projection or PostgreSQL."""

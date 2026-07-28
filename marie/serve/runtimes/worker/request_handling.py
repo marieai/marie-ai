@@ -988,6 +988,8 @@ class WorkerRequestHandler:
             self.logger.debug(f"Await closing all the batching queues")
             await asyncio.gather(*[q.close() for q in self._all_batch_queues()])
             self._executor.close()
+            if self._job_info_client is not None:
+                await self._job_info_client.close()
             self._is_closed = True
 
         self._sem_untrack_all(release=True)
