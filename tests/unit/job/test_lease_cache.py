@@ -46,6 +46,9 @@ class FakeLogger:
     def debug(self, *args, **kwargs):
         self.records.append(("debug", args, kwargs))
 
+    def info(self, *args, **kwargs):
+        self.records.append(("info", args, kwargs))
+
     def warning(self, *args, **kwargs):
         self.records.append(("warning", args, kwargs))
 
@@ -83,13 +86,18 @@ def test_get_or_refresh_renews_cached_lease_near_expiry(monkeypatch):
         "lease_ttl": 9,
         "renewal_result": "refreshed",
     }
+    assert logger.records[-1][1] == (
+        "Status lease renewal state: result=refreshed cache_key=node/depl "
+        "lease_id=1 lease_ttl=9",
+    )
 
 
 def test_get_or_refresh_replaces_zero_ttl_lease(monkeypatch):
     now = [100.0]
     monkeypatch.setattr("marie.job.lease_cache.time.monotonic", lambda: now[0])
     etcd = FakeEtcd(refresh_ttl=0)
-    cache = LeaseCache(etcd, ttl=10, margin=1.0)
+    logger = FakeLogger()
+    cache = LeaseCache(etcd, ttl=10, margin=1.0, logger=logger)
 
     first = cache.get_or_refresh("node/depl")
     now[0] = 109.0
@@ -98,6 +106,14 @@ def test_get_or_refresh_replaces_zero_ttl_lease(monkeypatch):
     assert second is not first
     assert second.id == 2
     assert len(etcd.leases) == 2
+    replacement_record = next(
+        record for record in logger.records if record[0] == "info"
+    )
+    assert replacement_record[1] == (
+        "Status lease renewal state: result=expired_replaced cache_key=node/depl "
+        "lease_id=1 lease_ttl=0",
+    )
+    assert replacement_record[2]["extra"]["renewal_result"] == "expired_replaced"
 
 
 def test_get_or_refresh_replaces_missing_lease(monkeypatch):
@@ -120,7 +136,8 @@ def test_get_or_refresh_does_not_replace_lease_after_transient_error(monkeypatch
     now = [100.0]
     monkeypatch.setattr("marie.job.lease_cache.time.monotonic", lambda: now[0])
     etcd = FakeEtcd(refresh_error=RuntimeError("temporarily unavailable"))
-    cache = LeaseCache(etcd, ttl=10, margin=1.0)
+    logger = FakeLogger()
+    cache = LeaseCache(etcd, ttl=10, margin=1.0, logger=logger)
 
     cache.get_or_refresh("node/depl")
     now[0] = 109.0
@@ -129,6 +146,12 @@ def test_get_or_refresh_does_not_replace_lease_after_transient_error(monkeypatch
         cache.get_or_refresh("node/depl")
 
     assert len(etcd.leases) == 1
+    warning_record = next(record for record in logger.records if record[0] == "warning")
+    assert warning_record[1] == (
+        "Status lease renewal state: result=refresh_failed cache_key=node/depl "
+        "lease_id=1 lease_ttl=None error=RuntimeError: temporarily unavailable",
+    )
+    assert warning_record[2]["extra"]["renewal_result"] == "refresh_failed"
 
 
 def test_get_or_refresh_grants_one_lease_under_concurrency():

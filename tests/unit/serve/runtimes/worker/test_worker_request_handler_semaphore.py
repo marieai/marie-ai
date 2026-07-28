@@ -1,9 +1,10 @@
 import threading
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
+from marie.serve.discovery.etcd_client import ConnectionState
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 from marie.state.semaphore_store import SemaphoreReleaseResult
 
@@ -58,6 +59,47 @@ class ContendedReleaseSemaphore:
     def renew(self, *_args, **_kwargs) -> bool:
         self.renew_calls += 1
         return True
+
+
+@pytest.mark.asyncio
+async def test_close_stops_heartbeat_before_releasing_semaphores() -> None:
+    handler = object.__new__(WorkerRequestHandler)
+    handler.logger = MagicMock()
+    handler._hot_reload_task = None
+    handler._is_closed = False
+    handler._job_info_client = None
+    handler._executor = MagicMock()
+    handler._all_batch_queues = MagicMock(return_value=[])
+
+    shutdown_order: list[str] = []
+    handler.shutdown_heartbeat = lambda: shutdown_order.append("heartbeat")
+    handler._sem_untrack_all = lambda **_kwargs: shutdown_order.append("semaphores")
+
+    await handler.close()
+
+    assert shutdown_order == ["heartbeat", "semaphores"]
+    assert handler._is_closed is True
+
+
+def test_shutdown_heartbeat_unregisters_etcd_handlers() -> None:
+    handler = object.__new__(WorkerRequestHandler)
+    handler._status_hb_stop = threading.Event()
+    handler._hb_supervisor_stop = threading.Event()
+    handler._status_hb_thread = MagicMock()
+    handler._status_hb_thread.is_alive.return_value = True
+    handler._etcd_client = MagicMock()
+
+    handler.shutdown_heartbeat()
+
+    assert handler._status_hb_stop.is_set()
+    assert handler._hb_supervisor_stop.is_set()
+    handler._status_hb_thread.join.assert_called_once_with(timeout=2.0)
+    assert handler._etcd_client.remove_connection_event_handler.call_args_list == [
+        call(ConnectionState.CONNECTED, handler._on_etcd_connected),
+        call(ConnectionState.DISCONNECTED, handler._on_etcd_disconnected),
+        call(ConnectionState.RECONNECTING, handler._on_etcd_reconnecting),
+        call(ConnectionState.FAILED, handler._on_etcd_failed),
+    ]
 
 
 def test_terminal_release_cannot_be_resurrected_by_concurrent_renewal() -> None:

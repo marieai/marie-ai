@@ -979,12 +979,13 @@ class WorkerRequestHandler:
                     requests[0].routes.append(route)
                     existing_executor_routes.append(route.executor)
 
-    async def close(self):
+    async def close(self) -> None:
         """Close the data request handler, by closing the executor and the batch queues."""
         self.logger.debug(f"Closing Request Handler")
         if self._hot_reload_task is not None:
             self._hot_reload_task.cancel()
         if not self._is_closed:
+            self.shutdown_heartbeat()
             self.logger.debug(f"Await closing all the batching queues")
             await asyncio.gather(*[q.close() for q in self._all_batch_queues()])
             self._executor.close()
@@ -2180,6 +2181,8 @@ class WorkerRequestHandler:
 
     def _on_etcd_connected(self, event):
         """Handle etcd connection established."""
+        if self._hb_supervisor_stop.is_set():
+            return
         self.logger.info("Request handler: etcd connection established")
         current_state = self._etcd_client.get_connection_state()
         self.logger.info(f"Event handler - connection state is now: {current_state}")
@@ -2324,9 +2327,21 @@ class WorkerRequestHandler:
     def _stop_status_heartbeat(self):
         self._status_hb_stop.set()
 
-    def shutdown_heartbeat(self):
+    def shutdown_heartbeat(self) -> None:
         self._stop_status_heartbeat()
         self._hb_supervisor_stop.set()
+        self._etcd_client.remove_connection_event_handler(
+            ConnectionState.CONNECTED, self._on_etcd_connected
+        )
+        self._etcd_client.remove_connection_event_handler(
+            ConnectionState.DISCONNECTED, self._on_etcd_disconnected
+        )
+        self._etcd_client.remove_connection_event_handler(
+            ConnectionState.RECONNECTING, self._on_etcd_reconnecting
+        )
+        self._etcd_client.remove_connection_event_handler(
+            ConnectionState.FAILED, self._on_etcd_failed
+        )
         if self._status_hb_thread and self._status_hb_thread.is_alive():
             self._status_hb_thread.join(timeout=2.0)
 

@@ -37,8 +37,15 @@ class LeaseCache:
         if error:
             extra["error_type"] = type(error).__name__
             extra["error_message"] = str(error)
+        message = (
+            "Status lease renewal state: "
+            f"result={result} cache_key={cache_key} "
+            f"lease_id={extra['lease_id']} lease_ttl={lease_ttl}"
+        )
+        if error:
+            message = f"{message} error={type(error).__name__}: {error}"
         getattr(self.logger, level)(
-            "Status lease renewal state",
+            message,
             extra=extra,
         )
 
@@ -79,6 +86,8 @@ class LeaseCache:
             if lease is not None and now < (exp - self.margin):
                 return lease
 
+            expired_lease: Optional[etcd3.Lease] = None
+            expired_ttl: Optional[int] = None
             if lease is not None:
                 try:
                     refreshed_ttl = self._ttl_from_refresh(lease.refresh())
@@ -94,13 +103,8 @@ class LeaseCache:
                             "refreshed",
                         )
                         return lease
-                    self._log_renewal(
-                        "warning",
-                        cache_key,
-                        lease,
-                        refreshed_ttl,
-                        "expired",
-                    )
+                    expired_lease = lease
+                    expired_ttl = refreshed_ttl
                 except Exception as error:
                     self._log_renewal(
                         "warning",
@@ -116,6 +120,14 @@ class LeaseCache:
 
             new_lease = self.etcd.lease(effective_ttl)
             self._cache[cache_key] = (new_lease, now + effective_ttl)
+            if expired_lease is not None:
+                self._log_renewal(
+                    "info",
+                    cache_key,
+                    expired_lease,
+                    expired_ttl,
+                    "expired_replaced",
+                )
             self._log_renewal("debug", cache_key, new_lease, effective_ttl, "created")
             return new_lease
 
