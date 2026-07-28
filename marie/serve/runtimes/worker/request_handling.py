@@ -2009,18 +2009,30 @@ class WorkerRequestHandler:
         except Exception as exc:
             self.logger.error(f"Failed to reflect status '{name}' into /status: {exc}")
 
-    def _reclaim_status(self) -> bool:
-        if self._etcd_client.get_connection_state() in (
-            ConnectionState.DISCONNECTED,
-            ConnectionState.RECONNECTING,
-            ConnectionState.FAILED,
-        ):
-            return False
-        if self._worker_state == HealthCheckResponse.ServingStatus.SERVING:
-            return self._claim_and_mark_serving()
-        return self._claim_and_mark_ready()
+    def _reclaim_status(self) -> Optional[bool]:
+        with self._lease_reacquire_lock:
+            if self._hb_supervisor_stop.is_set():
+                return None
+            if self._etcd_client.get_connection_state() in (
+                ConnectionState.DISCONNECTED,
+                ConnectionState.RECONNECTING,
+                ConnectionState.FAILED,
+            ):
+                return None
+
+            desired = self._desired_store.get(self._node, self._deployment)
+            if not desired or desired.phase != "SCHEDULED":
+                return None
+
+            if self._hb_supervisor_stop.is_set():
+                return None
+            if self._worker_state == HealthCheckResponse.ServingStatus.SERVING:
+                return self._claim_and_mark_serving()
+            return self._claim_and_mark_ready()
 
     def _status_heartbeat_once(self) -> Optional[bool]:
+        if self._hb_supervisor_stop.is_set():
+            return None
         connection_state = self._etcd_client.get_connection_state()
         if connection_state in (
             ConnectionState.DISCONNECTED,
@@ -2035,7 +2047,8 @@ class WorkerRequestHandler:
         ok = self._status_store.heartbeat(self._node, self._deployment, self._worker_id)
         if not ok:
             ok = self._reclaim_status()
-        if self._etcd_client.get_connection_state() not in (
+        connection_state = self._etcd_client.get_connection_state()
+        if not self._hb_supervisor_stop.is_set() and connection_state not in (
             ConnectionState.DISCONNECTED,
             ConnectionState.RECONNECTING,
             ConnectionState.FAILED,
@@ -2094,7 +2107,7 @@ class WorkerRequestHandler:
                             f"(consecutive failures: {consecutive_failures}/"
                             f"{max_consecutive_failures})"
                         )
-                        if consecutive_failures >= max_consecutive_failures:
+                        if consecutive_failures == max_consecutive_failures:
                             current_status = self._status_store.read(
                                 self._node, self._deployment
                             )
@@ -2103,21 +2116,32 @@ class WorkerRequestHandler:
                                 f"{current_status}, expected owner: {self._worker_id}"
                             )
                 except Exception as error:
+                    if self._hb_supervisor_stop.is_set():
+                        break
                     if is_poisoned_lease_client_error(error):
                         self._status_lease_invalidator()
-                        self.logger.warning(
-                            f"Status heartbeat discarded stale lease client: {error}"
+                        self.logger.debug(
+                            f"Status heartbeat waiting for etcd reconnect: {error}"
                         )
                     elif _is_missing_lease_error(error):
                         self._status_lease_invalidator()
                         try:
                             reclaimed = self._reclaim_status()
                         except Exception as reclaim_error:
-                            self.logger.error(
-                                f"status heartbeat recovery failed: {reclaim_error}"
-                            )
+                            if self._hb_supervisor_stop.is_set():
+                                break
+                            if is_poisoned_lease_client_error(reclaim_error):
+                                self._status_lease_invalidator()
+                                self.logger.debug(
+                                    "Status heartbeat waiting for etcd reconnect: "
+                                    f"{reclaim_error}"
+                                )
+                            else:
+                                self.logger.error(
+                                    f"status heartbeat recovery failed: {reclaim_error}"
+                                )
                         else:
-                            if not reclaimed:
+                            if reclaimed is False:
                                 self.logger.warning(
                                     "Status heartbeat could not reclaim status ownership"
                                 )
@@ -2145,7 +2169,9 @@ class WorkerRequestHandler:
         self._status_lease_invalidator()
         try:
             reclaimed = self._reclaim_status()
-            if not reclaimed:
+            if reclaimed is None:
+                return
+            if reclaimed is False:
                 self.logger.warning(
                     "Could not re-claim status after reconnect; another owner may hold it"
                 )

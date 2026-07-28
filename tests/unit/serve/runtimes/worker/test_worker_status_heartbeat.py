@@ -16,8 +16,11 @@ def _handler(connection_state: ConnectionState) -> WorkerRequestHandler:
     handler._deployment = "mock_executor"
     handler._worker_id = "mock_executor/rep-0@worker-1:5000"
     handler._worker_state = HealthCheckResponse.ServingStatus.NOT_SERVING
+    handler._lease_reacquire_lock = threading.Lock()
     handler._etcd_client = MagicMock()
     handler._etcd_client.get_connection_state.return_value = connection_state
+    handler._desired_store = MagicMock()
+    handler._desired_store.get.return_value = SimpleNamespace(phase="SCHEDULED")
     handler._status_store = MagicMock()
     handler._status_lease_invalidator = MagicMock()
     handler._claim_and_mark_ready = MagicMock(return_value=True)
@@ -64,6 +67,22 @@ def test_reconnect_does_not_log_success_when_reclaim_is_rejected() -> None:
     assert success_messages == []
 
 
+def test_reconnect_without_desired_state_is_dormant() -> None:
+    handler = _handler(ConnectionState.CONNECTED)
+    handler._desired_store.get.return_value = None
+
+    handler._on_etcd_connected(SimpleNamespace())
+
+    handler.logger.warning.assert_not_called()
+    handler._claim_and_mark_ready.assert_not_called()
+    success_messages = [
+        call.args[0]
+        for call in handler.logger.info.call_args_list
+        if call.args and "Re-claimed status" in call.args[0]
+    ]
+    assert success_messages == []
+
+
 @pytest.mark.parametrize(
     "connection_state",
     [
@@ -100,6 +119,17 @@ def test_missing_status_is_reclaimed_after_connectivity_returns() -> None:
     handler._sem_renew_all_if_due.assert_called_once_with()
 
 
+def test_missing_status_without_desired_state_is_dormant() -> None:
+    handler = _handler(ConnectionState.CONNECTED)
+    handler._desired_store.get.return_value = None
+    handler._status_store.heartbeat.return_value = False
+
+    assert handler._status_heartbeat_once() is None
+    handler._claim_and_mark_ready.assert_not_called()
+    handler._claim_and_mark_serving.assert_not_called()
+    handler._sem_renew_all_if_due.assert_called_once_with()
+
+
 def test_status_reclaim_is_skipped_if_connection_drops_during_heartbeat() -> None:
     handler = _handler(ConnectionState.CONNECTED)
 
@@ -111,7 +141,7 @@ def test_status_reclaim_is_skipped_if_connection_drops_during_heartbeat() -> Non
 
     handler._status_store.heartbeat.side_effect = disconnect_during_heartbeat
 
-    assert handler._status_heartbeat_once() is False
+    assert handler._status_heartbeat_once() is None
     handler._claim_and_mark_ready.assert_not_called()
     handler._sem_renew_all_if_due.assert_not_called()
 
@@ -126,3 +156,27 @@ def test_shutdown_interrupts_heartbeat_wait() -> None:
     handler.shutdown_heartbeat()
 
     assert not handler._status_hb_thread.is_alive()
+
+
+def test_shutdown_suppresses_in_flight_recovery_error() -> None:
+    handler = _handler(ConnectionState.CONNECTED)
+    recovery_started = threading.Event()
+
+    def fail_during_shutdown(*_args) -> bool:
+        recovery_started.set()
+        assert handler._hb_supervisor_stop.wait(timeout=1.0)
+        raise ValueError("Cannot invoke RPC: Channel closed!")
+
+    handler._heartbeat_time = 0.01
+    handler._status_store.heartbeat.side_effect = RuntimeError(
+        "requested lease not found"
+    )
+    handler._desired_store.get.side_effect = fail_during_shutdown
+    handler.setup_heartbeat()
+    assert recovery_started.wait(timeout=1.0)
+
+    handler.shutdown_heartbeat()
+
+    assert not handler._status_hb_thread.is_alive()
+    handler.logger.warning.assert_not_called()
+    handler.logger.error.assert_not_called()
