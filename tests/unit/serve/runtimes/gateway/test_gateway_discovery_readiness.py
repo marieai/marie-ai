@@ -1,7 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -9,6 +9,7 @@ from marie.serve.discovery import JsonAddress
 from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (  # noqa: F401
     GatewayLlmDispatchRuntime,
 )
+from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.serve.runtimes.servers.marie_gateway import (
     SERVICE_SNAPSHOT_COMPLETE,
     EventKind,
@@ -32,7 +33,6 @@ def _gateway(worker_count: int = 2) -> MarieServerGateway:
     gateway._service_retry_attempts = {}
     gateway._service_readiness = {}
     gateway._debounce_s = 0
-    gateway._rebuild_deployments_projection = Mock()
     gateway.update_gateway_streamer = AsyncMock()
     gateway._publish_capacity_event = AsyncMock()
     gateway.gateway_server_offline = AsyncMock(return_value=False)
@@ -78,6 +78,20 @@ def _keys_for_different_workers(worker_count: int) -> tuple[str, str]:
         if len(keys_by_worker) == 2:
             return tuple(keys_by_worker.values())
     raise AssertionError("could not find keys for different workers")
+
+
+@pytest.mark.asyncio
+async def test_refresh_discovery_routing_notifies_scheduler(monkeypatch) -> None:
+    gateway = _gateway()
+    gateway.deployment_nodes = {"extract_executor": [{"address": "grpc://node:5000"}]}
+    monkeypatch.setattr(ClusterState, "_deployment_nodes", {})
+
+    with patch.object(ClusterState, "notify_deployment_update") as notify:
+        await gateway._refresh_discovery_routing(True)
+
+    assert ClusterState.deployment_nodes == gateway.deployment_nodes
+    notify.assert_called_once_with()
+    gateway.update_gateway_streamer.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

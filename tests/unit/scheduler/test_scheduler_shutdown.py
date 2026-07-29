@@ -139,8 +139,7 @@ async def test_deployment_update_requests_durable_admission(monkeypatch) -> None
         scheduler._PostgreSQLJobScheduler__monitor_deployment_updates()
     )
     await asyncio.sleep(0)
-    deployment_update.set()
-    deployment_update.clear()
+    ClusterState.notify_deployment_update()
     async with asyncio.timeout(1):
         while scheduler.dag_service.request_admission.await_count == 0:
             await asyncio.sleep(0)

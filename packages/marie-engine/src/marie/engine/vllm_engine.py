@@ -312,8 +312,8 @@ class VLLMEngine(EngineLM):
             batch_outputs = self.llm.generate(
                 batch_inputs, sampling_params=sampling_params
             )
-        except Exception as e:
-            self.logger.error(f"❌ Batch inference failed: {e}")
+        except Exception:
+            self.logger.exception("❌ Batch inference failed")
             return ["ERROR: Batch Inference failed"] * len(batch_content)
 
         ordered_outputs = [

@@ -29,7 +29,6 @@ from marie._core.definitions.metadata import JsonMetadataValue
 from marie.auth.api_key_manager import APIKeyManager
 from marie.auth.auth_bearer import TokenBearer
 from marie.constants import (
-    DEPLOYMENT_STATUS_PREFIX,
     __cache_path__,
     __config_dir__,
     __marie_home__,
@@ -55,7 +54,6 @@ from marie.sandbox.blueprints.gateway_routes import register_blueprint_routes
 from marie.scheduler import PostgreSQLJobScheduler
 from marie.scheduler.models import DEFAULT_RETRY_POLICY, JobSubmissionModel, WorkInfo
 from marie.scheduler.state import WorkState
-from marie.scheduler.util import available_slots_by_executor
 from marie.serve.discovery import JsonAddress
 from marie.serve.discovery.etcd_manager import (
     close_etcd_client,
@@ -305,8 +303,6 @@ class MarieServerGateway(CompositeServer):
         self.logger.info(f"Setting up MarieServerGateway")
         self._loop = get_or_reuse_loop()
         self.deployment_nodes = {}
-        self.deployments = {}
-        self._deployments_lock = asyncio.Lock()
         self.event_queue = asyncio.Queue(maxsize=512)
         self.ready_event = asyncio.Event()
         configured_gateway_instance_id = kwargs.get("gateway_instance_id")
@@ -890,7 +886,7 @@ class MarieServerGateway(CompositeServer):
             )
             async def get_deployments():
                 """
-                Get all deployments information including status and nodes.
+                Get registered deployment nodes.
                 :return:
                 """
                 self.logger.info(
@@ -900,7 +896,6 @@ class MarieServerGateway(CompositeServer):
                     return {
                         "status": "OK",
                         "result": {
-                            "deployments": self.deployments,
                             "deployment_nodes": self.deployment_nodes,
                         },
                     }
@@ -2129,7 +2124,7 @@ class MarieServerGateway(CompositeServer):
                 while self._rebuild_requested:
                     await asyncio.sleep(self._debounce_s)
                     self._rebuild_requested = False
-                    await self._refresh_discovery_projection(update_gateway)
+                    await self._refresh_discovery_routing(update_gateway)
             except asyncio.CancelledError:
                 raise
             except Exception as ex:
@@ -2142,11 +2137,11 @@ class MarieServerGateway(CompositeServer):
 
         self._rebuild_task = asyncio.create_task(_rebuilder())
 
-    async def _refresh_discovery_projection(self, update_gateway: bool) -> None:
+    async def _refresh_discovery_routing(self, update_gateway: bool) -> None:
         async with self._streamer_update_lock:
-            self.logger.debug("Rebuilding deployments projection...")
+            self.logger.debug("Refreshing deployment routing...")
             ClusterState.deployment_nodes = self._routable_deployment_nodes()
-            self._rebuild_deployments_projection()
+            ClusterState.notify_deployment_update()
             if update_gateway:
                 await self.update_gateway_streamer()
 
@@ -2174,7 +2169,7 @@ class MarieServerGateway(CompositeServer):
                 event: ServiceEvent = await self.service_events_queue.get()
                 try:
                     if event.ev_type == SERVICE_SNAPSHOT_COMPLETE:
-                        await self._refresh_discovery_projection(True)
+                        await self._refresh_discovery_routing(True)
                         await self._publish_capacity_event()
                         if not self.ready_event.is_set():
                             self.ready_event.set()
@@ -2401,6 +2396,7 @@ class MarieServerGateway(CompositeServer):
             ev: StateEvent = await self.state_events_queue.get()
             try:
                 routing_nodes_before = self._routable_deployment_nodes()
+                status_changed = False
                 if ev.kind == EventKind.DESIRED:
                     if ev.ev_type == "delete":
                         self.desired_map.pop((ev.node, ev.deployment), None)
@@ -2413,22 +2409,27 @@ class MarieServerGateway(CompositeServer):
                     ClusterState.desired = self.desired_map
 
                 elif ev.kind == EventKind.STATUS:
+                    key = (ev.node, ev.deployment)
+                    previous_status = self.status_map.get(key)
                     if ev.ev_type == "delete":
-                        self.status_map.pop((ev.node, ev.deployment), None)
+                        self.status_map.pop(key, None)
+                        current_status = None
                     else:
-                        self.status_map[(ev.node, ev.deployment)] = (
-                            self._normalize_status_event(
-                                ev.node, ev.deployment, ev.value or {}
-                            )
+                        current_status = self._normalize_status_event(
+                            ev.node, ev.deployment, ev.value or {}
                         )
+                        self.status_map[key] = current_status
+                    status_changed = self._status_identity(
+                        previous_status
+                    ) != self._status_identity(current_status)
                     ClusterState.status = self.status_map
 
                 else:
                     self.logger.warning(f"Ignoring unexpected state kind: {ev.kind}")
                     raise ValueError(f"Unexpected state kind : {ev.kind}")
 
-                # Keep legacy projections in sync
-                self._rebuild_deployments_projection()
+                if status_changed:
+                    ClusterState.notify_deployment_update()
                 if routing_nodes_before != self._routable_deployment_nodes():
                     self._schedule_rebuild(True)
                     await self._publish_capacity_event()
@@ -2513,18 +2514,23 @@ class MarieServerGateway(CompositeServer):
             details=payload.get("details"),
         )
 
-    def parse_deployment_details(self, address: str, ev_value: dict) -> dict:
-        # get the first executor from ev_value, we might have multiple executors in the future
-        worked_node = list(ev_value.keys())[0]
-        worker_info = ev_value[worked_node]
-        executor, status = next(iter(worker_info.items()))
-
-        return {
-            "prefix": DEPLOYMENT_STATUS_PREFIX,
-            "address": address,
-            "executor": executor,
-            "status": status,
-        }
+    @staticmethod
+    def _status_identity(status: StatusDoc | dict | None) -> tuple[object, ...]:
+        if status is None:
+            return ()
+        if isinstance(status, StatusDoc):
+            return (
+                status.status_code,
+                status.status_name,
+                status.owner,
+                status.epoch,
+            )
+        return (
+            status.get("status_code"),
+            status.get("status_name"),
+            status.get("owner"),
+            status.get("epoch"),
+        )
 
     async def gateway_server_online(
         self, service: str, event_value: dict[str, Any]
@@ -2712,10 +2718,6 @@ class MarieServerGateway(CompositeServer):
             for outgoing in node.outgoing_nodes:
                 self.logger.debug(f"\t{outgoing}")
 
-        # FIXME : this was a bad idea, we need to use the same deployment
-        ClusterState.deployments = self.deployments
-        ClusterState.deployment_nodes = routing_nodes
-
     def _can_update_incrementally(self, new_graph: dict) -> bool:
         """
         Check if we can update incrementally (same topology, different addresses).
@@ -2827,27 +2829,6 @@ class MarieServerGateway(CompositeServer):
             self.logger.debug(f"No nodes found for offline gateway {ctrl_address}")
 
         return removed_count > 0
-
-    async def deployment_changed(self, ev_key: str, ev_type: str, ev_value: dict):
-        self.logger.info(f"Deployment changed : {ev_key}, {ev_type}, {ev_value}")
-        if ev_key == DEPLOYMENT_STATUS_PREFIX:
-            return  # ignore the root key
-
-        suffix = ev_key[len(DEPLOYMENT_STATUS_PREFIX) :].lstrip("/")
-        address = suffix.split("/", 1)[0]
-
-        # serialize all update
-        async with self._deployments_lock:
-            new_deployments = self.deployments.copy()
-            if ev_type == "delete":
-                new_deployments.pop(address, None)
-            else:
-                new_deployments[address] = self.parse_deployment_details(
-                    address, ev_value
-                )
-
-            self.deployments = new_deployments
-            ClusterState.deployments = new_deployments
 
     def _parse_kv_key(self, key: str) -> tuple[str, str]:
         # returns (node, deployment)
@@ -3236,46 +3217,6 @@ class MarieServerGateway(CompositeServer):
                     self.logger.error(f"Reconcile loop error: {e}", exc_info=True)
             finally:
                 await asyncio.sleep(interval_s)
-
-    def _rebuild_deployments_projection(self) -> None:
-        """
-        Recreate self.deployments with the legacy format:
-          { "<host:port>": { 'prefix': 'deployments/status',
-                             'address': '<host:port>',
-                             'executor': '<executor>',
-                             'status': '<STATUS_NAME>' } }
-        """
-        new_deployments: dict[str, dict] = {}
-        for executor, nodes in self.deployment_nodes.items():
-            # Many nodes share same address but different endpoints; we want 1 entry per address.
-            seen_addrs = set()
-            for n in nodes:
-                addr_raw = n.get("address", "")
-                hostport = _netloc(addr_raw)
-                if not hostport or hostport in seen_addrs:
-                    continue
-                seen_addrs.add(hostport)
-
-                status = self.status_map.get((hostport, executor))
-                if self._desired_params(hostport, executor).get(STATUS_DEGRADED_SINCE):
-                    status_name = "SERVICE_UNKNOWN"
-                elif isinstance(status, StatusDoc):
-                    status_name = status.status_name
-                elif isinstance(status, dict):
-                    status_name = str(status.get("status_name") or "SERVICE_UNKNOWN")
-                else:
-                    status_name = "SERVICE_UNKNOWN"
-
-                new_deployments[hostport] = {
-                    "prefix": "deployments/status",  # keep this literal to match expectations
-                    "address": hostport,
-                    "executor": executor,
-                    "status": status_name,
-                }
-
-        # Atomic swap to preserve old behavior
-        self.deployments = new_deployments
-        ClusterState.deployments = new_deployments
 
     async def _start_state_watch(self):
         """

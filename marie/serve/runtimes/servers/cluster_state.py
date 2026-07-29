@@ -1,32 +1,15 @@
 import asyncio
-import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 
 @dataclass
 class _ClusterState:
-    """_ClusterState include fields for deployments and nodes."""
+    """Shared deployment routing state."""
 
-    _deployments: Optional[Dict[str, Any]] = None
     _deployment_nodes: Optional[Dict[str, Any]] = None
-    _deployments_last_updated: Optional[float] = -1
 
     deployment_update_event = asyncio.Event()  # Event to signal deployment updates
-
-    @property
-    def deployments(self) -> Dict[str, Any]:
-        """Get or initialize a dictionary of deployments (e.g., their metadata)."""
-        if self._deployments is None:
-            self._deployments = {}
-        return self._deployments
-
-    @deployments.setter
-    def deployments(self, value: Dict[str, Any]) -> None:
-        self._deployments = value
-        self._deployments_last_updated = time.time()
-        self.deployment_update_event.set()  # Set the event to signal an update
-        self.deployment_update_event.clear()  # Immediately clear it to act as a pulse
 
     @property
     def deployment_nodes(self) -> Dict[str, Any]:
@@ -35,14 +18,13 @@ class _ClusterState:
             self._deployment_nodes = {}
         return self._deployment_nodes
 
-    @property
-    def deployments_last_updated(self) -> float:
-        return self._deployments_last_updated
-
     @deployment_nodes.setter
     def deployment_nodes(self, value: Dict[str, Any]) -> None:
         self._deployment_nodes = value
-        self._deployments_last_updated = time.time()
+
+    def notify_deployment_update(self) -> None:
+        self.deployment_update_event.set()
+        self.deployment_update_event.clear()
 
 
 ClusterState = _ClusterState()

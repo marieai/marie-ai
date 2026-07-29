@@ -7,6 +7,7 @@ from grpc_health.v1.health_pb2 import HealthCheckResponse
 from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (  # noqa: F401
     GatewayLlmDispatchRuntime,
 )
+from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.serve.runtimes.servers.marie_gateway import (
     MAX_AGE_S,
     MAX_MISSES,
@@ -244,53 +245,6 @@ def test_degraded_registration_is_excluded_from_routing():
     }
 
 
-def test_deployment_projection_uses_each_address_status():
-    gateway = _gateway(
-        DesiredDoc(
-            phase="SCHEDULED",
-            epoch=10,
-            params={},
-            updated_at="2026-05-14T17:02:00Z",
-        )
-    )
-    gateway.deployment_nodes = {
-        "extract_executor": [
-            {"address": "grpc://node-a:5000"},
-            {"address": "grpc://node-b:5000"},
-        ]
-    }
-    gateway.desired_map = {}
-    gateway.status_map = {
-        ("node-a:5000", "extract_executor"): StatusDoc(
-            status_code=HealthCheckResponse.SERVING,
-            status_name="SERVING",
-            owner="worker-a",
-            epoch=10,
-            updated_at="2026-05-14T17:03:00Z",
-            heartbeat_at="2026-05-14T17:03:00Z",
-            details=None,
-        ),
-        ("node-b:5000", "extract_executor"): StatusDoc(
-            status_code=HealthCheckResponse.NOT_SERVING,
-            status_name="NOT_SERVING",
-            owner="worker-b",
-            epoch=11,
-            updated_at="2026-05-14T17:03:00Z",
-            heartbeat_at="2026-05-14T17:03:00Z",
-            details=None,
-        ),
-    }
-
-    with mock.patch(
-        "marie.serve.runtimes.servers.marie_gateway.available_slots_by_executor",
-        return_value={},
-    ):
-        gateway._rebuild_deployments_projection()
-
-    assert gateway.deployments["node-a:5000"]["status"] == "SERVING"
-    assert gateway.deployments["node-b:5000"]["status"] == "NOT_SERVING"
-
-
 @pytest.mark.asyncio
 async def test_quarantine_and_recovery_refresh_routing_and_capacity():
     gateway = _gateway(
@@ -311,7 +265,6 @@ async def test_quarantine_and_recovery_refresh_routing_and_capacity():
         )
     }
     gateway.state_events_queue = asyncio.Queue()
-    gateway._rebuild_deployments_projection = mock.Mock()
     gateway._schedule_rebuild = mock.Mock()
     gateway._publish_capacity_event = mock.AsyncMock()
     processor = asyncio.create_task(gateway.process_state_events())
@@ -371,6 +324,82 @@ async def test_quarantine_and_recovery_refresh_routing_and_capacity():
 
 
 @pytest.mark.asyncio
+async def test_status_updates_notify_only_for_admission_state_changes():
+    gateway = _gateway(
+        DesiredDoc(
+            phase="SCHEDULED",
+            epoch=10,
+            params={},
+            updated_at="2026-05-14T17:02:00Z",
+        )
+    )
+    gateway.status_map = {
+        ("node:1", "extract_executor"): StatusDoc(
+            status_code=HealthCheckResponse.SERVING,
+            status_name="SERVING",
+            owner="worker-a",
+            epoch=10,
+            updated_at="2026-05-14T17:03:00Z",
+            heartbeat_at="2026-05-14T17:03:00Z",
+            details=None,
+        )
+    }
+    gateway.state_events_queue = asyncio.Queue()
+    gateway._schedule_rebuild = mock.Mock()
+    gateway._publish_capacity_event = mock.AsyncMock()
+
+    def status_event(
+        status_code: int, status_name: str, heartbeat_at: str
+    ) -> StateEvent:
+        return StateEvent(
+            kind=EventKind.STATUS,
+            node="node:1",
+            deployment="extract_executor",
+            ev_type="put",
+            value={
+                "node:1": {
+                    "extract_executor": {
+                        "status": {
+                            "status_code": status_code,
+                            "status_name": status_name,
+                            "owner": "worker-a",
+                            "epoch": 10,
+                            "updated_at": heartbeat_at,
+                            "heartbeat_at": heartbeat_at,
+                        }
+                    }
+                }
+            },
+            key="deployments/node:1/extract_executor/status",
+        )
+
+    with mock.patch.object(ClusterState, "notify_deployment_update") as notify:
+        processor = asyncio.create_task(gateway.process_state_events())
+        await gateway.state_events_queue.put(
+            status_event(
+                HealthCheckResponse.SERVING,
+                "SERVING",
+                "2026-05-14T17:04:00Z",
+            )
+        )
+        await asyncio.wait_for(gateway.state_events_queue.join(), timeout=1)
+        notify.assert_not_called()
+
+        await gateway.state_events_queue.put(
+            status_event(
+                HealthCheckResponse.NOT_SERVING,
+                "NOT_SERVING",
+                "2026-05-14T17:05:00Z",
+            )
+        )
+        await asyncio.wait_for(gateway.state_events_queue.join(), timeout=1)
+        notify.assert_called_once_with()
+
+        processor.cancel()
+        await asyncio.gather(processor, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_gateway_streamer_receives_only_routable_nodes():
     gateway = _gateway(
         DesiredDoc(
@@ -394,7 +423,6 @@ async def test_gateway_streamer_receives_only_routable_nodes():
             updated_at="2026-05-14T17:03:00Z",
         )
     }
-    gateway.deployments = {}
     gateway._can_update_incrementally = mock.Mock(return_value=True)
     gateway._apply_incremental_updates = mock.AsyncMock()
     gateway.streamer = mock.Mock()

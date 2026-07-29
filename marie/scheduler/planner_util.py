@@ -223,8 +223,6 @@ async def debug_candidates_and_plan(
     try:
         with open(debug_file_path, 'w') as debug_file:
             # debug_file.write("Nodes:\n")
-            # debug_file.write(json.dumps(ClusterState.deployments, indent=4))
-
             debug_file.write("\n\n")
             debug_file.write("Slots:\n")
             debug_file.write(json.dumps(pick_slots, indent=4))

@@ -358,7 +358,6 @@ Response:
 {
   "status": "OK",
   "result": {
-    "deployments": {...},
     "deployment_nodes": {...}
   }
 }
