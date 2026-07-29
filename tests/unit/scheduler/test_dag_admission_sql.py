@@ -9,6 +9,7 @@ def test_admission_candidate_function_uses_dag_projection_ordering() -> None:
     normalized = " ".join(sql.lower().split())
 
     assert "create or replace function {schema}.admission_candidate_dags(" in normalized
+    assert "stable set jit = off" in normalized
     assert "d.priority desc" in normalized
     assert "coalesce(d.soft_sla, d.hard_sla) asc nulls last" in normalized
     assert "d.created_on, d.id" in normalized

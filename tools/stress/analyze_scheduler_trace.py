@@ -36,6 +36,7 @@ EVENTS = (
     "scheduler_dispatch_capacity_snapshot",
     "scheduler_dispatch_candidate_capture_completed",
     "scheduler_control_flow_peek_completed",
+    "scheduler_control_flow_batch_completed",
     "candidate_built",
     "planner_selected",
     "frontier_taken",
@@ -2162,7 +2163,12 @@ def _print_selection_report(rows: list[dict[str, Any]]) -> None:
         "scheduler_control_flow_peek_completed",
         "elapsed_ms",
     )
-    if not selection_total and not control_flow_peek:
+    control_flow_batches = [
+        row
+        for row in rows
+        if row.get("event") == "scheduler_control_flow_batch_completed"
+    ]
+    if not selection_total and not control_flow_peek and not control_flow_batches:
         return
 
     print("\nIn-Memory Selection")
@@ -2172,6 +2178,30 @@ def _print_selection_report(rows: list[dict[str, Any]]) -> None:
     _print_distribution("capacity cap", _selection_metric(rows, "cap_ms"))
     _print_distribution("frontier take", _selection_metric(rows, "take_ms"))
     _print_distribution("control-flow frontier peek", control_flow_peek)
+    _print_count_distribution(
+        "control-flow batch size",
+        [
+            float(row["jobs"])
+            for row in control_flow_batches
+            if isinstance(row.get("jobs"), (int, float))
+        ],
+    )
+    _print_distribution(
+        "control-flow batch processing",
+        [
+            float(row["elapsed_ms"])
+            for row in control_flow_batches
+            if isinstance(row.get("elapsed_ms"), (int, float))
+        ],
+    )
+    if control_flow_batches:
+        no_progress = sum(
+            row.get("made_progress") is False for row in control_flow_batches
+        )
+        print(
+            "control-flow batches: "
+            f"count={len(control_flow_batches)} no_progress={no_progress}"
+        )
 
     ready_heap = _selection_metric(rows, "ready_heap_entries")
     ready_set = _selection_metric(rows, "ready_set_entries")

@@ -54,6 +54,7 @@ _COMPACT_EVENTS = {
     "scheduler_dispatch_capacity_snapshot",
     "scheduler_dispatch_candidate_capture_completed",
     "scheduler_control_flow_peek_completed",
+    "scheduler_control_flow_batch_completed",
     "scheduler_selection_completed",
     "dispatch_batch_start",
     "dispatch_batch_complete",

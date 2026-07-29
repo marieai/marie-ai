@@ -6,6 +6,7 @@ import pytest
 
 import marie.scheduler.psql as scheduler_psql
 from marie.scheduler.in_memory_scheduling_engine import InMemorySelection
+from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.psql import (
     SLOT_POLL_INTERVAL,
     ControlFlowBatchResult,
@@ -604,8 +605,57 @@ async def test_dispatch_cycle_preserves_control_flow_progress(
     scheduler._process_control_flow_candidates.assert_awaited_once_with(
         [control_flow], 5
     )
+    control_filter = scheduler.frontier.peek_ready.await_args.kwargs["filter_fn"]
+    assert control_filter(control_flow) is True
+    assert control_filter(regular) is False
     scheduler._activate_and_enqueue_job.assert_not_awaited()
     scheduler.notify_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_cycle_preserves_control_progress_when_regular_plan_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = build_scheduler()
+    regular = SimpleNamespace(
+        id="job-1",
+        dag_id="dag-1",
+        name="extract",
+        data={"metadata": {"on": "extract://default"}},
+        state=WorkState.CREATED,
+    )
+    control_flow = SimpleNamespace(
+        id="noop-1",
+        dag_id="dag-1",
+        name="extract",
+        data={"metadata": {"on": "noop://default"}},
+        state=WorkState.CREATED,
+    )
+    scheduler.active_dags[regular.dag_id] = object()
+    scheduler.frontier.peek_ready.return_value = [control_flow]
+    scheduler.scheduling_engine.select_ready.return_value = selection_result(
+        [regular],
+        ranked=[],
+        requested=[],
+        selected=[],
+        slots={"extract": 1},
+    )
+    scheduler._process_control_flow_candidates = AsyncMock(
+        return_value=ControlFlowBatchResult(
+            outcomes=(ControlFlowExecutionOutcome.COMPLETED,)
+        )
+    )
+    monkeypatch.setattr(
+        scheduler_psql,
+        "available_slots_by_executor",
+        lambda _sem: {"extract": 1},
+    )
+    monkeypatch.setattr(scheduler_psql, "debug_candidates_and_plan", AsyncMock())
+
+    result = await scheduler.run_dispatch_cycle(cycle_index=1)
+
+    assert result == DispatchCycleResult(scheduled=True, wait_interval=0.0)
+    scheduler._lease_jobs_db.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -649,6 +699,108 @@ async def test_dispatch_cycle_drains_control_flow_with_zero_executor_slots(
         resident_dag_ids={control_flow.dag_id},
         max_resident_dags=16,
     )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_cycle_does_not_repeat_failed_control_flow_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = build_scheduler()
+    control_flow = SimpleNamespace(
+        id="noop-1",
+        dag_id="dag-1",
+        name="extract",
+        data={"metadata": {"on": "noop://default"}},
+        state=WorkState.CREATED,
+    )
+    scheduler.active_dags[control_flow.dag_id] = object()
+    scheduler.frontier.peek_ready.return_value = [control_flow]
+    scheduler._process_control_flow_candidates = AsyncMock(
+        return_value=ControlFlowBatchResult(
+            outcomes=(ControlFlowExecutionOutcome.FAILED,)
+        )
+    )
+    monkeypatch.setattr(
+        scheduler_psql,
+        "available_slots_by_executor",
+        lambda _sem: {"extract": 1},
+    )
+
+    result = await scheduler.run_dispatch_cycle(cycle_index=1)
+
+    assert result == DispatchCycleResult(
+        scheduled=False,
+        wait_interval=scheduler_psql.SHORT_POLL_INTERVAL,
+    )
+    scheduler._process_control_flow_candidates.assert_awaited_once_with(
+        [control_flow], 5
+    )
+    scheduler.frontier.peek_ready.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_cycles_drain_one_hundred_chained_control_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = build_scheduler()
+    frontier = MemoryFrontier()
+    jobs = [
+        SimpleNamespace(
+            id=f"noop-{index}",
+            dag_id="dag-chain",
+            name="chain",
+            priority=0,
+            data={"metadata": {"on": "noop://default"}},
+            state=WorkState.CREATED,
+            start_after=None,
+            dependencies=[] if index == 0 else [f"noop-{index - 1}"],
+            job_level=100 - index,
+            soft_sla=None,
+            hard_sla=None,
+        )
+        for index in range(100)
+    ]
+    await frontier.add_dag(None, jobs)
+    scheduler.frontier = frontier
+    scheduler.active_dags["dag-chain"] = object()
+    processed: list[str] = []
+
+    async def complete_control_flow_wave(
+        candidates: list[SimpleNamespace], lease_ttl: float
+    ) -> ControlFlowBatchResult:
+        taken = await frontier.take(
+            [candidate.id for candidate in candidates],
+            lease_ttl=lease_ttl,
+        )
+        for work_item in taken:
+            processed.append(work_item.id)
+            await frontier.on_job_completed(work_item.id)
+        return ControlFlowBatchResult(
+            outcomes=tuple(ControlFlowExecutionOutcome.COMPLETED for _ in taken)
+        )
+
+    scheduler._process_control_flow_candidates = AsyncMock(
+        side_effect=complete_control_flow_wave
+    )
+    monkeypatch.setattr(
+        scheduler_psql,
+        "available_slots_by_executor",
+        lambda _sem: {"extract": 0},
+    )
+
+    for cycle_index in range(100):
+        result = await scheduler.run_dispatch_cycle(cycle_index=cycle_index + 1)
+        assert result == DispatchCycleResult(scheduled=True, wait_interval=0.0)
+
+    idle = await scheduler.run_dispatch_cycle(cycle_index=101)
+
+    assert idle == DispatchCycleResult(
+        scheduled=False,
+        wait_interval=scheduler_psql.SLOT_POLL_INTERVAL,
+    )
+    assert processed == [f"noop-{index}" for index in range(100)]
+    assert scheduler._process_control_flow_candidates.await_count == 100
+    assert all(job.state == WorkState.COMPLETED for job in jobs)
 
 
 @pytest.mark.asyncio

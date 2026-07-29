@@ -5,6 +5,7 @@ import numpy as np
 import psutil
 import pytest
 
+import marie.helper as helper
 from marie.clients.helper import _safe_callback, pprint_routes
 from marie.constants import __default_endpoint__
 from marie.excepts import BadClientCallback, NotSupportedError
@@ -259,6 +260,16 @@ def test_random_port_unique(config):
         assert port not in generated_ports
         assert int(os.environ['JINA_RANDOM_PORT_MIN']) <= port <= 65535
         generated_ports.add(port)
+
+
+def test_random_port_avoids_ephemeral_range_by_default(monkeypatch):
+    monkeypatch.delenv('JINA_RANDOM_PORT_MIN', raising=False)
+    monkeypatch.delenv('JINA_RANDOM_PORT_MAX', raising=False)
+    monkeypatch.setattr(helper, '_ephemeral_port_range', lambda: (49153, 62000))
+
+    reset_ports()
+
+    assert 62001 <= random_port() <= 65535
 
 
 @pytest.fixture

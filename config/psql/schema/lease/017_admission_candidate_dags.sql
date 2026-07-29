@@ -11,6 +11,7 @@ RETURNS TABLE
         )
 LANGUAGE sql
 STABLE
+SET jit = off
 AS
 $$
 SELECT

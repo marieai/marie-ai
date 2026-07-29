@@ -1395,62 +1395,6 @@ async def test_submission_priority_refresh_request_wakes_when_due():
     assert scheduler.notify_calls == []
 
 
-def test_regular_candidates_cover_available_slots_requires_enough_per_executor():
-    dag_id = "dag-coverage"
-    now = datetime.now(timezone.utc)
-
-    def make_job(job_id: str, endpoint: str) -> WorkInfo:
-        return WorkInfo(
-            id=job_id,
-            dag_id=dag_id,
-            name="extract",
-            priority=0,
-            data={"metadata": {"on": endpoint}},
-            state=WorkState.CREATED,
-            retry_limit=1,
-            retry_delay=0,
-            retry_backoff=False,
-            start_after=now,
-            expire_in_seconds=3600,
-            keep_until=now + timedelta(days=1),
-            dependencies=[],
-            job_level=1,
-        )
-
-    assert (
-        scheduler_psql.regular_candidates_cover_available_slots(
-            [
-                make_job("extract-1", "extract_executor://document/extract"),
-                make_job("extract-2", "extract_executor://document/extract"),
-            ],
-            {"extract_executor": 3},
-        )
-        is False
-    )
-    assert (
-        scheduler_psql.regular_candidates_cover_available_slots(
-            [
-                make_job("extract-1", "extract_executor://document/extract"),
-                make_job("extract-2", "extract_executor://document/extract"),
-                make_job("extract-3", "extract_executor://document/extract"),
-            ],
-            {"extract_executor": 3},
-        )
-        is True
-    )
-    assert (
-        scheduler_psql.regular_candidates_cover_available_slots(
-            [
-                make_job("extract-1", "extract_executor://document/extract"),
-                make_job("extract-2", "extract_executor://document/extract"),
-                make_job("parser-1", "annotator_parser://document/parse"),
-            ],
-            {"extract_executor": 2, "annotator_parser": 2},
-        )
-        is False
-    )
-
-
 def test_repository_record_to_work_info_normalizes_uuid_fields():
     repository = object.__new__(JobRepository)
     now = datetime.now(timezone.utc)

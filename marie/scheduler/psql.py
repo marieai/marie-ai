@@ -60,7 +60,6 @@ from marie.scheduler.util import (
     convert_job_status_to_work_state,
     executor_name,
     frontier_candidate_window,
-    frontier_slot_filter,
     is_control_flow_entrypoint,
     ordered_leased_jobs,
 )
@@ -78,7 +77,6 @@ SLOT_POLL_INTERVAL = 0.100  # busy wait while executor work is blocked only by s
 
 MIN_POLL_PERIOD = 0.250
 MAX_POLL_PERIOD = 8
-CONTROL_FLOW_DRAIN_MAX_PASSES = 8
 
 SYNC_POLL_PERIOD = 60.0  # 60s — safety net, not primary dispatch path
 EVENT_LOOP_LAG_INTERVAL_SECONDS = 0.1
@@ -168,27 +166,6 @@ class PriorityRefreshResult:
     @property
     def succeeded(self) -> bool:
         return self.error is None
-
-
-def regular_candidates_cover_available_slots(
-    candidates: List[WorkInfo], slots_by_executor: Dict[str, int]
-) -> bool:
-    remaining = {
-        executor: max(0, int(count))
-        for executor, count in slots_by_executor.items()
-        if int(count) > 0
-    }
-    if not remaining:
-        return bool(candidates)
-
-    for wi in candidates:
-        metadata = wi.data.get("metadata", {}) if isinstance(wi.data, dict) else {}
-        entrypoint = metadata.get("on", "") if isinstance(metadata, dict) else ""
-        executor = entrypoint.split("://", 1)[0]
-        if remaining.get(executor, 0) > 0:
-            remaining[executor] -= 1
-
-    return all(count <= 0 for count in remaining.values())
 
 
 # FIXME : Today we are tracking at the executor level, however that might not be the best
@@ -994,22 +971,15 @@ class PostgreSQLJobScheduler(JobScheduler):
                 )
                 self.logger.debug(f"[WORK_DIST] Available slots: {slots_by_executor}")
 
-                # Fetch candidates from frontier. Even when no executor slots
-                # are available we must still peek so that control flow nodes
-                # (NOOP/BRANCH/SWITCH) -- which do not consume slots -- can be
-                # dispatched. Skipping the peek causes a deadlock where control
-                # flow starves while all executor slots are occupied.
+                # Control-flow work does not consume executor slots. Process one
+                # ready wave before regular selection; another ready wave causes
+                # the poll loop to run an immediate drain cycle.
                 candidate_window = frontier_candidate_window(
                     batch_size, slots_by_executor
                 )
-                slot_filter = frontier_slot_filter(slots_by_executor)
 
-                regular_candidates: list[WorkInfo] = []
-                control_flow_seen_total = 0
                 control_flow_outcomes: Counter[ControlFlowExecutionOutcome] = Counter()
                 control_flow_reconciled_total = 0
-                control_flow_drain_passes = 0
-                no_ready_candidates = False
 
                 def dag_admission_filter(wi: WorkInfo) -> bool:
                     return (
@@ -1017,89 +987,80 @@ class PostgreSQLJobScheduler(JobScheduler):
                         or len(self.active_dags) < max_concurrent_dags
                     )
 
-                def schedulable_slot_filter(wi: WorkInfo) -> bool:
-                    return dag_admission_filter(wi) and slot_filter(wi)
-
-                for drain_pass in range(CONTROL_FLOW_DRAIN_MAX_PASSES):
-                    if regular_candidates_cover_available_slots(
-                        regular_candidates, slots_by_executor
-                    ):
-                        break
-
-                    control_flow_drain_passes = drain_pass + 1
-                    peek_started = time.perf_counter()
-                    visible_jobs = await self.frontier.peek_ready(
-                        candidate_window,
-                        filter_fn=schedulable_slot_filter,
+                def control_flow_filter(wi: WorkInfo) -> bool:
+                    metadata = (
+                        wi.data.get("metadata", {}) if isinstance(wi.data, dict) else {}
                     )
-                    scheduler_trace(
-                        "scheduler_control_flow_peek_completed",
-                        elapsed_ms=(time.perf_counter() - peek_started) * 1000.0,
-                        drain_pass=control_flow_drain_passes,
-                        candidate_window=candidate_window,
-                        visible_jobs=len(visible_jobs),
-                        no_executor_slots=no_executor_slots,
+                    entrypoint = (
+                        metadata.get("on", "") if isinstance(metadata, dict) else ""
+                    )
+                    return dag_admission_filter(wi) and is_control_flow_entrypoint(
+                        entrypoint
                     )
 
-                    if not visible_jobs:
-                        no_ready_candidates = True
-                        break
+                peek_started = time.perf_counter()
+                visible_control_flow = await self.frontier.peek_ready(
+                    candidate_window,
+                    filter_fn=control_flow_filter,
+                )
+                control_flow_jobs = [
+                    wi
+                    for wi in visible_control_flow
+                    if is_control_flow_entrypoint(
+                        wi.data.get("metadata", {}).get("on", "")
+                    )
+                ]
+                scheduler_trace(
+                    "scheduler_control_flow_peek_completed",
+                    elapsed_ms=(time.perf_counter() - peek_started) * 1000.0,
+                    candidate_window=candidate_window,
+                    visible_jobs=len(control_flow_jobs),
+                    no_executor_slots=no_executor_slots,
+                )
 
-                    control_flow_jobs: list[WorkInfo] = []
-                    current_regular_candidates: list[WorkInfo] = []
+                if control_flow_jobs:
+                    admission_slots = max(
+                        0, max_concurrent_dags - len(self.active_dags)
+                    )
+                    selected_control_flow: list[WorkInfo] = []
+                    selected_new_dags: set[str] = set()
 
-                    for wi in visible_jobs:
-                        ep = wi.data.get("metadata", {}).get("on", "")
-                        if not ep:
-                            self.logger.error(
-                                f"[WORK_DIST] Job without entrypoint 'on': {wi.id}"
-                            )
+                    for wi in control_flow_jobs:
+                        if wi.dag_id in self.active_dags:
+                            selected_control_flow.append(wi)
                             continue
 
-                        if is_control_flow_entrypoint(ep):
-                            control_flow_jobs.append(wi)
-                        else:
-                            current_regular_candidates.append(wi)
+                        if admission_slots > 0 and wi.dag_id not in selected_new_dags:
+                            selected_control_flow.append(wi)
+                            selected_new_dags.add(wi.dag_id)
+                            admission_slots -= 1
 
-                    regular_candidates = current_regular_candidates
-                    control_flow_seen_total += len(control_flow_jobs)
+                    control_flow_jobs = selected_control_flow
 
-                    if control_flow_jobs:
-                        admission_slots = max(
-                            0, max_concurrent_dags - len(self.active_dags)
-                        )
-                        selected_control_flow: list[WorkInfo] = []
-                        selected_new_dags: set[str] = set()
-
-                        for wi in control_flow_jobs:
-                            if wi.dag_id in self.active_dags:
-                                selected_control_flow.append(wi)
-                                continue
-
-                            if (
-                                admission_slots > 0
-                                and wi.dag_id not in selected_new_dags
-                            ):
-                                selected_control_flow.append(wi)
-                                selected_new_dags.add(wi.dag_id)
-                                admission_slots -= 1
-
-                        control_flow_jobs = selected_control_flow
-
-                    if control_flow_jobs:
-                        self.logger.debug(
-                            f"[WORK_DIST] Draining {len(control_flow_jobs)} control flow nodes "
-                            f"(pass {control_flow_drain_passes}/{CONTROL_FLOW_DRAIN_MAX_PASSES})"
-                        )
-                        batch_result = await self._process_control_flow_candidates(
-                            control_flow_jobs, lease_ttl
-                        )
-                        control_flow_outcomes.update(batch_result.outcomes)
-                        control_flow_reconciled_total += batch_result.reconciled
-                        scheduled_any = scheduled_any or batch_result.made_progress
-
-                    if not control_flow_jobs:
-                        break
+                if control_flow_jobs:
+                    self.logger.debug(
+                        f"[WORK_DIST] Processing {len(control_flow_jobs)} ready control flow nodes"
+                    )
+                    control_flow_started = time.perf_counter()
+                    batch_result = await self._process_control_flow_candidates(
+                        control_flow_jobs, lease_ttl
+                    )
+                    control_flow_outcomes.update(batch_result.outcomes)
+                    control_flow_reconciled_total += batch_result.reconciled
+                    scheduled_any = scheduled_any or batch_result.made_progress
+                    scheduler_trace(
+                        "scheduler_control_flow_batch_completed",
+                        jobs=len(control_flow_jobs),
+                        completed=batch_result.completed,
+                        reconciled=batch_result.reconciled,
+                        made_progress=batch_result.made_progress,
+                        outcomes={
+                            outcome.value: count
+                            for outcome, count in Counter(batch_result.outcomes).items()
+                        },
+                        elapsed_ms=(time.perf_counter() - control_flow_started)
+                        * 1000.0,
+                    )
 
                 control_flow_completed_total = sum(
                     count
@@ -1140,16 +1101,12 @@ class PostgreSQLJobScheduler(JobScheduler):
                     * 1000.0,
                     candidate_window=candidate_window,
                     candidates=len(regular_candidates),
-                    control_flow_seen=control_flow_seen_total,
-                    control_flow_drain_passes=control_flow_drain_passes,
+                    control_flow_seen=len(control_flow_jobs),
+                    control_flow_batch=bool(control_flow_jobs),
                     no_executor_slots=no_executor_slots,
                 )
 
-                if (
-                    no_ready_candidates
-                    and not regular_candidates
-                    and control_flow_progress_total == 0
-                ):
+                if not regular_candidates and control_flow_progress_total == 0:
                     if no_executor_slots:
                         self.logger.debug(
                             f"[WORK_DIST] No available executor slots and no control flow nodes. Backing off. "
@@ -1178,8 +1135,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 self.logger.debug(
                     f"[WORK_DIST] Built {len(regular_candidates)} planner candidates "
                     f"(+{control_flow_completed_total} completed, {control_flow_reconciled_total} reconciled "
-                    f"of {control_flow_seen_total} control flow nodes; outcomes={control_flow_outcome_counts} "
-                    f"over {control_flow_drain_passes} drain pass(es)). "
+                    f"of {len(control_flow_jobs)} control flow nodes; outcomes={control_flow_outcome_counts}). "
                     f"Executors needed: {set(ep for ep, _ in selection.ranked)}"
                 )
                 scheduler_trace(
@@ -1190,8 +1146,8 @@ class PostgreSQLJobScheduler(JobScheduler):
                     control_flow_completed=control_flow_completed_total,
                     control_flow_reconciled=control_flow_reconciled_total,
                     control_flow_outcomes=control_flow_outcome_counts,
-                    control_flow_seen=control_flow_seen_total,
-                    control_flow_drain_passes=control_flow_drain_passes,
+                    control_flow_seen=len(control_flow_jobs),
+                    control_flow_batch=bool(control_flow_jobs),
                     executors=sorted(
                         {ep.split("://", 1)[0] for ep, _ in selection.ranked}
                     ),
@@ -1209,9 +1165,8 @@ class PostgreSQLJobScheduler(JobScheduler):
                 if not regular_candidates:
                     self.logger.debug(
                         f"[WORK_DIST] No regular jobs to plan ({control_flow_completed_total} completed, "
-                        f"{control_flow_reconciled_total} reconciled of {control_flow_seen_total} "
-                        f"control flow nodes; outcomes={control_flow_outcome_counts} over "
-                        f"{control_flow_drain_passes} drain pass(es))"
+                        f"{control_flow_reconciled_total} reconciled of {len(control_flow_jobs)} "
+                        f"control flow nodes; outcomes={control_flow_outcome_counts})"
                     )
                     return DispatchCycleResult(
                         scheduled=scheduled_any,
@@ -1261,8 +1216,8 @@ class PostgreSQLJobScheduler(JobScheduler):
                         f"Active DAGs: {active_dag_count}/{max_concurrent_dags}"
                     )
                     return DispatchCycleResult(
-                        scheduled=False,
-                        wait_interval=SHORT_POLL_INTERVAL,
+                        scheduled=scheduled_any,
+                        wait_interval=(0.0 if scheduled_any else SHORT_POLL_INTERVAL),
                     )
 
                 self.logger.debug(
@@ -1338,8 +1293,8 @@ class PostgreSQLJobScheduler(JobScheduler):
                         f"Job names: {list(ids_by_job_name.keys())}"
                     )
                     return DispatchCycleResult(
-                        scheduled=False,
-                        wait_interval=SHORT_POLL_INTERVAL,
+                        scheduled=scheduled_any,
+                        wait_interval=(0.0 if scheduled_any else SHORT_POLL_INTERVAL),
                     )
 
                 leased_jobs: list[tuple[str, WorkInfo]] = ordered_leased_jobs(
@@ -2583,7 +2538,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         """
         wait_time = SYNC_POLL_PERIOD
         job_info_client = self.job_manager.job_info_client()
-        min_sync_interval_seconds = 300  # 5 minutes in seconds
+        min_sync_interval_seconds = 300
 
         while self.running:
             self.logger.info(f"Syncing job status every {wait_time} seconds")

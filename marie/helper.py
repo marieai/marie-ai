@@ -465,6 +465,20 @@ DEFAULT_MIN_PORT = 49153
 MAX_PORT = 65535
 
 
+def _ephemeral_port_range() -> Optional[Tuple[int, int]]:
+    if not sys.platform.startswith("linux"):
+        return None
+
+    try:
+        with open(
+            "/proc/sys/net/ipv4/ip_local_port_range", encoding="ascii"
+        ) as range_file:
+            start, end = range_file.read().split()
+        return int(start), int(end)
+    except (OSError, ValueError):
+        return None
+
+
 def reset_ports():
     def _get_unassigned_ports():
         # if we are running out of ports, lower default minimum port
@@ -475,7 +489,15 @@ def reset_ports():
                 os.environ.get("JINA_RANDOM_PORT_MIN", str(DEFAULT_MIN_PORT))
             )
         max_port = int(os.environ.get("JINA_RANDOM_PORT_MAX", str(MAX_PORT)))
-        return set(range(min_port, max_port + 1)) - set(assigned_ports)
+        candidates = set(range(min_port, max_port + 1)) - set(assigned_ports)
+
+        if "JINA_RANDOM_PORT_MIN" not in os.environ:
+            ephemeral_range = _ephemeral_port_range()
+            if ephemeral_range is not None:
+                ephemeral_start, ephemeral_end = ephemeral_range
+                candidates.difference_update(range(ephemeral_start, ephemeral_end + 1))
+
+        return candidates
 
     unassigned_ports.clear()
     assigned_ports.clear()

@@ -17,6 +17,7 @@ services:
   psql:
     container_name: marie-psql-server
     init: true
+    shm_size: 1gb
     image: ghcr.io/ferretdb/postgres-documentdb:17-0.103.0
     command: >
       postgres

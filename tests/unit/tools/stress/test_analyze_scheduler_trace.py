@@ -91,6 +91,15 @@ def test_selection_report_exposes_phase_and_heap_measurements(capsys) -> None:
             elapsed_ms=4.0,
         ),
         trace_row(
+            "scheduler_control_flow_batch_completed",
+            1.05,
+            jobs=3,
+            completed=3,
+            reconciled=0,
+            made_progress=True,
+            elapsed_ms=12.0,
+        ),
+        trace_row(
             "scheduler_selection_completed",
             1.1,
             outcome="completed",
@@ -111,6 +120,9 @@ def test_selection_report_exposes_phase_and_heap_measurements(capsys) -> None:
     assert "In-Memory Selection" in output
     assert "frontier capture: count=1" in output
     assert "control-flow frontier peek: count=1" in output
+    assert "control-flow batch size: count=1" in output
+    assert "control-flow batch processing: count=1" in output
+    assert "control-flow batches: count=1 no_progress=0" in output
     assert "ready heap entries: count=1" in output
     assert "stale heap share: count=1 avg=25.0%" in output
     assert "frontier full scans: control_flow_peek=1 selection_capture=1" in output
