@@ -1,7 +1,8 @@
 import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-
 from marie.engine.batch_processor import BatchProcessor, BatchResult
 from marie.engine.circuit_breaker import (
     CircuitBreaker,
@@ -13,6 +14,8 @@ from marie.engine.completion_contract import (
     RequestContext,
     build_completion_call,
 )
+from marie.engine.llm_queue.config import LlmQueueConfig
+
 from marie.excepts import BatchExecutionError, CircuitOpenError
 
 
@@ -54,12 +57,18 @@ def _build_processor(
     processor.default_completion_params = {}
     processor._shared_request_semaphore = None
     processor._shared_request_semaphore_loop = None
+    processor._direct_runner = None
+    processor._direct_runner_lock = threading.Lock()
     processor._circuit_breaker = CircuitBreaker(
         config=CircuitBreakerConfig(),
         logger=_Logger(),
     )
     processor._gate_lock = None
     processor._gate_lock_loop = None
+    processor._queue_client = None
+    processor._queued_executor = None
+    processor._queue_config = LlmQueueConfig.from_env(enabled=False)
+    processor._queue_mode_logged = False
     return processor
 
 
@@ -105,6 +114,50 @@ def test_load_batched_completion_calls_shares_concurrency_limit_across_overlappi
     asyncio.run(run())
 
 
+def test_batch_generate_calls_shares_concurrency_limit_across_caller_threads():
+    processor = _build_processor(max_concurrency=2)
+    active = 0
+    peak = 0
+    loop_ids = set()
+    lock = threading.Lock()
+
+    async def fake_completion(**kwargs):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            loop_ids.add(id(asyncio.get_running_loop()))
+        try:
+            await asyncio.sleep(0.02)
+            task_id = kwargs["task_id"]
+            return task_id, f"response:{task_id}"
+        finally:
+            with lock:
+                active -= 1
+
+    processor.acompletion_call_with_retry = fake_completion
+
+    def run_batch(request_id: str):
+        return processor.batch_generate_calls(
+            calls=[_call("a"), _call("b"), _call("c")],
+            request_id=request_id,
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            results = list(executor.map(run_batch, ["req-1", "req-2", "req-3"]))
+    finally:
+        processor.close()
+
+    assert results == [
+        ["response:req-1_task_0", "response:req-1_task_1", "response:req-1_task_2"],
+        ["response:req-2_task_0", "response:req-2_task_1", "response:req-2_task_2"],
+        ["response:req-3_task_0", "response:req-3_task_1", "response:req-3_task_2"],
+    ]
+    assert peak == 2
+    assert len(loop_ids) == 1
+
+
 # ---------------------------------------------------------------------------
 # Test: SDK retries disabled (max_retries=0)
 # ---------------------------------------------------------------------------
@@ -114,11 +167,14 @@ def test_openai_sdk_retries_disabled():
     import unittest.mock as mock
 
     with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
-        with mock.patch(
-            "marie.engine.openai_engine.build_async_openai_client"
-        ) as mock_builder, mock.patch(
-            "marie.engine.batch_processor.AsyncOpenAI",
-            new=object,
+        with (
+            mock.patch(
+                "marie.engine.openai_engine.build_async_openai_client"
+            ) as mock_builder,
+            mock.patch(
+                "marie.engine.batch_processor.AsyncOpenAI",
+                new=object,
+            ),
         ):
             mock_client = mock.MagicMock()
             mock_client.models.list.return_value = []
@@ -145,11 +201,14 @@ def test_openai_engine_normalizes_calls_before_strategy_split():
     captured = {}
 
     with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
-        with mock.patch(
-            "marie.engine.openai_engine.build_async_openai_client"
-        ) as mock_builder, mock.patch(
-            "marie.engine.batch_processor.AsyncOpenAI",
-            new=object,
+        with (
+            mock.patch(
+                "marie.engine.openai_engine.build_async_openai_client"
+            ) as mock_builder,
+            mock.patch(
+                "marie.engine.batch_processor.AsyncOpenAI",
+                new=object,
+            ),
         ):
             mock_client = mock.MagicMock()
             mock_client.models.list.return_value = []
@@ -356,10 +415,13 @@ def test_batch_generate_calls_raises_batch_execution_error_on_failure():
 
     processor.acompletion_call_with_retry = failing_completion
 
-    with pytest.raises(BatchExecutionError) as exc_info:
-        processor.batch_generate_calls(
-            calls=[_call("msg1"), _call("msg2")],
-        )
+    try:
+        with pytest.raises(BatchExecutionError) as exc_info:
+            processor.batch_generate_calls(
+                calls=[_call("msg1"), _call("msg2")],
+            )
+    finally:
+        processor.close()
 
     err = exc_info.value
     assert err.request_id  # Should have a request_id
@@ -487,13 +549,13 @@ def test_process_batch_uses_async_sleep_on_retry():
     source = inspect.getsource(util.process_batch)
 
     # Should NOT contain time.sleep
-    assert (
-        "time.sleep" not in source
-    ), "process_batch still uses blocking time.sleep for retry backoff"
+    assert "time.sleep" not in source, (
+        "process_batch still uses blocking time.sleep for retry backoff"
+    )
     # Should contain asyncio.sleep
-    assert (
-        "asyncio.sleep" in source
-    ), "process_batch should use asyncio.sleep for retry backoff"
+    assert "asyncio.sleep" in source, (
+        "process_batch should use asyncio.sleep for retry backoff"
+    )
 
 
 # ---------------------------------------------------------------------------

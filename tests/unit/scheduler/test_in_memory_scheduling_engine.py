@@ -166,10 +166,21 @@ async def test_select_ready_traces_actual_phase_boundaries(
     assert completed_trace["cap_ms"] >= 0
     assert completed_trace["take_ms"] >= 0
     assert completed_trace["job_ids"] == ["job-1"]
+    diagnostics = engine.diagnostics()
+    assert diagnostics["sample_count"] == 1
+    assert diagnostics["totals"] == {
+        "candidates": 1,
+        "requested": 1,
+        "selected": 1,
+    }
+    assert diagnostics["latency_ms"]["p95"] >= 0
+    assert (
+        diagnostics["last"]["candidate_window"] == completed_trace["candidate_window"]
+    )
 
 
 @pytest.mark.asyncio
-async def test_select_ready_reports_requested_and_selected_jobs_after_take_loss() -> None:
+async def test_select_ready_reports_requested_and_selected_after_take_loss() -> None:
     first = make_job("job-1", "extract://default", priority=2)
     second = make_job("job-2", "extract://default", priority=1)
     frontier = SimpleNamespace(

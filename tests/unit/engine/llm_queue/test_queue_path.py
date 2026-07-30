@@ -5,7 +5,6 @@ from copy import deepcopy
 from unittest import mock
 
 import pytest
-
 from marie.engine.batch_processor import BatchProcessor
 from marie.engine.completion_contract import (
     COMPLETION_QUEUE_CONTRACT_VERSION,
@@ -240,12 +239,15 @@ def _build_processor(
     processor.default_completion_params = {}
     processor._shared_request_semaphore = None
     processor._shared_request_semaphore_loop = None
+    processor._direct_runner = None
+    processor._direct_runner_lock = threading.Lock()
     processor._circuit_breaker = _CircuitBreaker()
     processor._gate_lock = None
     processor._gate_lock_loop = None
     processor._queue_client = queue_client
     processor._queued_executor = None
     processor._queue_config = _queue_config(enabled=queue_enabled)
+    processor._queue_mode_logged = False
     return processor
 
 
@@ -739,9 +741,7 @@ def test_dispatcher_records_openinference_input_and_output(monkeypatch):
     )
     recorded_io = []
 
-    def record_llm_io(
-        span, *, input_messages=None, output_messages=None, context=None
-    ):
+    def record_llm_io(span, *, input_messages=None, output_messages=None, context=None):
         recorded_io.append(
             {
                 "input_messages": input_messages,
@@ -794,6 +794,7 @@ def test_batch_processor_uses_queued_executor_when_enabled(monkeypatch):
     processor._queue_client = None
     processor._queued_executor = None
     processor._queue_config = _queue_config()
+    processor._queue_mode_logged = False
 
     class _QueuedExecutor:
         def execute(self, **kwargs):
@@ -1342,6 +1343,7 @@ def test_batch_processor_forwards_guided_json_to_queued_executor(monkeypatch):
     processor._queue_client = None
     processor._queued_executor = None
     processor._queue_config = _queue_config()
+    processor._queue_mode_logged = False
 
     captured = {}
 
@@ -1376,11 +1378,6 @@ def test_direct_and_queued_paths_return_same_text_for_same_completion_payload():
 
     with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
         direct_processor = _build_processor(client=_Client(), queue_enabled=False)
-        direct_responses = direct_processor.batch_generate_calls(
-            calls=calls,
-            request_id="direct-batch",
-        )
-
         queue_client = InMemoryListQueueClient()
         queued_processor = _build_processor(
             client=_Client(),
@@ -1390,12 +1387,17 @@ def test_direct_and_queued_paths_return_same_text_for_same_completion_payload():
         dispatcher = queued_processor.build_queue_dispatcher()
         dispatcher.start()
         try:
+            direct_responses = direct_processor.batch_generate_calls(
+                calls=calls,
+                request_id="direct-batch",
+            )
             queued_responses = queued_processor.batch_generate_calls(
                 calls=calls,
                 request_id="queued-batch",
             )
         finally:
             dispatcher.stop()
+            direct_processor.close()
             queued_processor.close()
 
     assert direct_responses == ["final answer"]

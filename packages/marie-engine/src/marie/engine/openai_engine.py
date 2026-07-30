@@ -5,9 +5,6 @@ import traceback
 from typing import Callable, Dict, List, Optional, Union
 
 import diskcache as dc
-from PIL import Image
-from pydantic import BaseModel
-
 from marie.engine.base import EngineLM
 from marie.engine.batch_processor import BatchProcessor
 from marie.engine.completion_contract import (
@@ -22,6 +19,8 @@ from marie.engine.engine_utils import (
     open_ai_like_formatting,
 )
 from marie.engine.openai_compat import build_async_openai_client
+from PIL import Image
+from pydantic import BaseModel
 
 MISSING_API_KEY_ERROR_MESSAGE = """No API key found for LLM.
 E.g. to use openai Please set the OPENAI_API_KEY environment variable or \
@@ -106,7 +105,6 @@ class OpenAIEngine(EngineLM):
         # Derive backend address for the circuit breaker key
         backend_address = base_url or "https://api.openai.com"
 
-        self.client.models.list()
         self.model_string = model_name
 
         self.batch_processor = BatchProcessor(
@@ -132,20 +130,16 @@ class OpenAIEngine(EngineLM):
     def build_queue_dispatcher(self):
         return self.batch_processor.build_queue_dispatcher()
 
+    def close(self) -> None:
+        if self.batch_processor is not None:
+            self.batch_processor.close()
+        self.client = None
+
     def __del__(self):
-        """Detach client to prevent cleanup errors during GC."""
         try:
-            if hasattr(self, "batch_processor") and self.batch_processor is not None:
-                close = getattr(self.batch_processor, "close", None)
-                if callable(close):
-                    close()
-            if hasattr(self, "client") and self.client is not None:
-                # Detach internal httpx client to prevent async cleanup issues
-                if hasattr(self.client, "_client"):
-                    self.client._client = None
-                self.client = None
+            self.close()
         except Exception:
-            pass  # Never raise in __del__
+            pass
 
     def _generate_from_single_prompt(
         self,

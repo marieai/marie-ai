@@ -45,8 +45,32 @@ from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
 from marie.utils.scheduler_trace import scheduler_trace
 
 DEFAULT_SCHEMA = "marie_scheduler"
-DEFAULT_JOB_TABLE = "job"
-SCHEDULER_SCHEMA_VERSION = 76
+SCHEDULER_SCHEMA_VERSION = 82
+
+OPERATIONAL_JOB_ATTENTION = {
+    "any",
+    "queued_too_long",
+    "running_too_long",
+    "stale_update",
+    "retrying",
+    "failed",
+    "terminal_mismatch",
+}
+OPERATIONAL_SORTS = {"attention", "newest", "oldest", "updated"}
+OPERATIONAL_JOB_SORTS = OPERATIONAL_SORTS | {"timeline"}
+OPERATIONAL_QUEUED_TOO_LONG_SECONDS = 300
+OPERATIONAL_RUNNING_TOO_LONG_SECONDS = 900
+OPERATIONAL_STALE_UPDATE_SECONDS = 600
+OPERATIONAL_ATTEMPT_ATTENTION = {
+    "any",
+    "active_too_long",
+    "stale_update",
+    "recovered",
+    "terminal_rejected",
+    "terminal_mismatch",
+    "owner_mismatch",
+}
+OPERATIONAL_EVENT_SEVERITIES = {"info", "warning", "bad"}
 
 
 class _GuardrailRouteConflict(RuntimeError):
@@ -90,7 +114,7 @@ class AsyncJobRepository:
                    expire_in, data, retry_delay, retry_backoff, keep_until,
                    dag_id, job_level, soft_sla, hard_sla,
                    run_owner, run_attempt_id, branch_metadata
-            FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+            FROM {DEFAULT_SCHEMA}.job
             WHERE id = %s
         """
         async with self._pool.acquire() as conn:
@@ -103,7 +127,7 @@ class AsyncJobRepository:
                    expire_in, data, retry_delay, retry_backoff, keep_until,
                    dag_id, job_level, soft_sla, hard_sla,
                    run_owner, run_attempt_id, branch_metadata
-            FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+            FROM {DEFAULT_SCHEMA}.job
             WHERE data->'metadata'->>'ref_type' = %s
               AND data->'metadata'->>'ref_id' = %s
         """
@@ -146,7 +170,7 @@ class AsyncJobRepository:
                    expire_in, data, retry_delay, retry_backoff, keep_until,
                    dag_id, job_level, soft_sla, hard_sla,
                    run_owner, run_attempt_id, branch_metadata
-            FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+            FROM {DEFAULT_SCHEMA}.job
             {where_sql}
             ORDER BY created_on DESC
             {limit_sql}
@@ -154,6 +178,1207 @@ class AsyncJobRepository:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(query, *params)
         return [self._record_to_work_info(row) for row in rows]
+
+    async def list_operational_jobs(
+        self,
+        *,
+        limit: int = 25,
+        offset: int = 0,
+        states: Sequence[str] | None = None,
+        attention: str = "any",
+        queue: str | None = None,
+        search: str | None = None,
+        sort: str = "attention",
+        dag_id: str | None = None,
+    ) -> Dict[str, Any]:
+        """Return a bounded, payload-free page for operational consoles."""
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        if attention not in OPERATIONAL_JOB_ATTENTION:
+            raise ValueError(f"unsupported attention preset: {attention}")
+        if sort not in OPERATIONAL_JOB_SORTS:
+            raise ValueError(f"unsupported sort: {sort}")
+
+        state_values = [WorkState(state.lower()).value for state in states or []]
+        query = f"""
+            SELECT *
+            FROM {DEFAULT_SCHEMA}.list_operational_jobs(
+                %s, %s, %s::text[], %s, %s, %s, %s, %s::uuid, %s, %s, %s
+            )
+        """
+        started = time.perf_counter()
+        async with self._pool.acquire() as conn:
+            result_rows = await conn.fetch(
+                query,
+                limit,
+                offset,
+                state_values or None,
+                attention,
+                queue,
+                search,
+                sort,
+                dag_id,
+                OPERATIONAL_QUEUED_TOO_LONG_SECONDS,
+                OPERATIONAL_RUNNING_TOO_LONG_SECONDS,
+                OPERATIONAL_STALE_UPDATE_SECONDS,
+            )
+        total = int(result_rows[0][0]) if result_rows else 0
+        queues = [str(name) for name in result_rows[0][1]] if result_rows else []
+        rows = [row[2:] for row in result_rows if row[2] is not None]
+        query_ms = (time.perf_counter() - started) * 1_000.0
+        return {
+            "schema_version": "1.0",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "window_seconds": OPERATIONAL_RUNNING_TOO_LONG_SECONDS,
+            "query_ms": query_ms,
+            "page": {
+                "limit": limit,
+                "offset": offset,
+                "total": total,
+                "has_next": offset + len(rows) < total,
+            },
+            "filters": {
+                "states": state_values,
+                "attention": attention,
+                "queue": queue,
+                "search": search,
+                "sort": sort,
+            },
+            "thresholds": self._operational_thresholds(),
+            "facets": {"queues": queues},
+            "items": [self._operational_job_from_row(row) for row in rows],
+        }
+
+    async def get_operational_job(self, job_id: str) -> Dict[str, Any] | None:
+        """Return safe lifecycle and attempt metadata for one job."""
+        last_update = (
+            "COALESCE(ja.updated_on, j.completed_on, j.started_on, j.created_on)"
+        )
+        query = f"""
+            SELECT
+                j.id::text,
+                j.name,
+                j.state::text,
+                j.dag_id::text,
+                d.name,
+                d.planner,
+                j.priority,
+                j.job_level,
+                j.retry_count,
+                j.retry_limit,
+                j.created_on,
+                j.started_on,
+                j.completed_on,
+                {last_update},
+                EXTRACT(EPOCH FROM (NOW() - j.created_on)),
+                EXTRACT(EPOCH FROM (NOW() - {last_update})),
+                j.run_owner,
+                j.run_attempt_id::text,
+                ja.executor,
+                ja.activated_at,
+                ja.terminal_at,
+                ja.terminal_status,
+                ja.terminal_work_state,
+                ja.terminal_source,
+                ja.terminal_accepted
+            FROM {DEFAULT_SCHEMA}.job AS j
+            LEFT JOIN {DEFAULT_SCHEMA}.dag AS d ON d.id = j.dag_id
+            LEFT JOIN {DEFAULT_SCHEMA}.job_attempt AS ja
+              ON ja.run_attempt_id = j.run_attempt_id
+            WHERE j.id = %s::uuid
+            LIMIT 1
+        """
+        history_query = f"""
+            SELECT state::text, history_created_on
+            FROM (
+                SELECT state, history_created_on
+                FROM {DEFAULT_SCHEMA}.job_history
+                WHERE id = %s::uuid
+                ORDER BY history_created_on DESC
+                LIMIT 32
+            ) AS recent
+            ORDER BY history_created_on ASC
+        """
+        attempts_query = f"""
+            SELECT
+                run_attempt_id::text,
+                run_owner,
+                scheduler_lease_owner,
+                gateway_instance_id,
+                executor,
+                attempt_state,
+                activated_at,
+                terminal_at,
+                terminal_status,
+                terminal_work_state,
+                terminal_source,
+                terminal_accepted,
+                recovery_at,
+                recovery_state,
+                created_on,
+                updated_on
+            FROM {DEFAULT_SCHEMA}.job_attempt
+            WHERE job_id = %s::uuid
+            ORDER BY activated_at DESC
+            LIMIT 10
+        """
+        started = time.perf_counter()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(query, job_id)
+            if row is None:
+                return None
+            history_rows = await conn.fetch(history_query, job_id)
+            attempt_rows = await conn.fetch(attempts_query, job_id)
+        item = self._operational_job_from_row(row)
+        lifecycle = [
+            {"state": str(history[0]), "at": self._iso_timestamp(history[1])}
+            for history in history_rows
+        ]
+        if not lifecycle or lifecycle[-1]["state"] != item["state"]:
+            lifecycle.append(
+                {
+                    "state": item["state"],
+                    "at": item["last_updated_at"],
+                }
+            )
+        item.update(
+            {
+                "query_ms": (time.perf_counter() - started) * 1_000.0,
+                "thresholds": self._operational_thresholds(),
+                "lifecycle": lifecycle,
+                "attempts": [
+                    {
+                        "run_attempt_id": attempt[0],
+                        "run_owner": attempt[1],
+                        "scheduler_lease_owner": attempt[2],
+                        "gateway_instance_id": attempt[3],
+                        "executor": attempt[4],
+                        "state": attempt[5],
+                        "activated_at": self._iso_timestamp(attempt[6]),
+                        "terminal_at": self._iso_timestamp(attempt[7]),
+                        "terminal_status": attempt[8],
+                        "terminal_work_state": attempt[9],
+                        "terminal_source": attempt[10],
+                        "terminal_accepted": attempt[11],
+                        "recovery_at": self._iso_timestamp(attempt[12]),
+                        "recovery_state": attempt[13],
+                        "created_at": self._iso_timestamp(attempt[14]),
+                        "updated_at": self._iso_timestamp(attempt[15]),
+                    }
+                    for attempt in attempt_rows
+                ],
+                "output_suppressed": True,
+            }
+        )
+        return item
+
+    async def list_operational_execution_history(
+        self,
+        *,
+        job_id: str | None = None,
+        dag_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Dict[str, Any] | None:
+        """Return bounded worker lifecycle and structured error details."""
+        if (job_id is None) == (dag_id is None):
+            raise ValueError("provide exactly one of job_id or dag_id")
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+
+        query = f"""
+            SELECT *
+            FROM {DEFAULT_SCHEMA}.list_operational_execution_history(
+                %s::uuid, %s::uuid, %s, %s
+            )
+        """
+        started = time.perf_counter()
+        async with self._pool.acquire() as conn:
+            result_rows = await conn.fetch(query, job_id, dag_id, limit, offset)
+        if not result_rows:
+            return None
+        total = int(result_rows[0][0])
+        scope_dag_id = str(result_rows[0][1]) if result_rows[0][1] else None
+        rows = [row[2:] for row in result_rows if row[2] is not None]
+        return {
+            "schema_version": "1.0",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "query_ms": (time.perf_counter() - started) * 1_000.0,
+            "scope": {
+                "job_id": job_id,
+                "dag_id": scope_dag_id,
+            },
+            "page": {
+                "limit": limit,
+                "offset": offset,
+                "total": total,
+                "has_next": offset + len(rows) < total,
+            },
+            "items": [
+                self._operational_execution_history_from_row(row) for row in rows
+            ],
+            "raw_runtime_environment_suppressed": True,
+            "traceback_suppressed": True,
+        }
+
+    async def list_operational_attempts(
+        self,
+        *,
+        limit: int = 25,
+        offset: int = 0,
+        states: Sequence[str] | None = None,
+        attention: str = "any",
+        gateway: str | None = None,
+        executor: str | None = None,
+        search: str | None = None,
+        sort: str = "attention",
+    ) -> Dict[str, Any]:
+        """Return a bounded, payload-free execution-attempt page."""
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        if attention not in OPERATIONAL_ATTEMPT_ATTENTION:
+            raise ValueError(f"unsupported attempt attention preset: {attention}")
+        if sort not in OPERATIONAL_SORTS:
+            raise ValueError(f"unsupported sort: {sort}")
+
+        state_values = [
+            state.strip().lower() for state in states or [] if state.strip()
+        ]
+        started = time.perf_counter()
+        async with self._pool.acquire() as conn:
+            result_rows = await conn.fetch(
+                f"""
+                SELECT *
+                FROM {DEFAULT_SCHEMA}.list_operational_attempts(
+                    %s, %s, %s::text[], %s, %s, %s, %s, %s, %s, %s
+                )
+                """,
+                limit,
+                offset,
+                state_values or None,
+                attention,
+                gateway,
+                executor,
+                search,
+                sort,
+                OPERATIONAL_RUNNING_TOO_LONG_SECONDS,
+                OPERATIONAL_STALE_UPDATE_SECONDS,
+            )
+        total = int(result_rows[0][0]) if result_rows else 0
+        gateways = [str(value) for value in result_rows[0][1]] if result_rows else []
+        executors = [str(value) for value in result_rows[0][2]] if result_rows else []
+        rows = [row[3:] for row in result_rows if row[3] is not None]
+        return {
+            "schema_version": "1.0",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "query_ms": (time.perf_counter() - started) * 1_000.0,
+            "page": {
+                "limit": limit,
+                "offset": offset,
+                "total": total,
+                "has_next": offset + len(rows) < total,
+            },
+            "filters": {
+                "states": state_values,
+                "attention": attention,
+                "gateway": gateway,
+                "executor": executor,
+                "search": search,
+                "sort": sort,
+            },
+            "thresholds": {
+                "active_too_long_seconds": OPERATIONAL_RUNNING_TOO_LONG_SECONDS,
+                "stale_update_seconds": OPERATIONAL_STALE_UPDATE_SECONDS,
+            },
+            "facets": {"gateways": gateways, "executors": executors},
+            "items": [self._operational_attempt_from_row(row) for row in rows],
+        }
+
+    async def list_operational_events(
+        self,
+        *,
+        limit: int = 25,
+        before_at: datetime | None = None,
+        before_id: str | None = None,
+        window_seconds: int = 900,
+        severity: str | None = None,
+        component: str | None = None,
+        search: str | None = None,
+    ) -> Dict[str, Any]:
+        """Return cursor-paged scheduler lifecycle events."""
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        if not 60 <= window_seconds <= 86_400:
+            raise ValueError("window_seconds must be between 60 and 86400")
+        if severity is not None and severity not in OPERATIONAL_EVENT_SEVERITIES:
+            raise ValueError(f"unsupported event severity: {severity}")
+        if (before_at is None) != (before_id is None):
+            raise ValueError("before_at and before_id must be provided together")
+
+        started = time.perf_counter()
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT *
+                FROM {DEFAULT_SCHEMA}.list_operational_events(
+                    %s, %s::timestamptz, %s, %s, %s, %s, %s
+                )
+                """,
+                limit,
+                before_at,
+                before_id,
+                window_seconds,
+                severity,
+                component,
+                search,
+            )
+        has_next = len(rows) > limit
+        page_rows = rows[:limit]
+        next_before_at = self._iso_timestamp(page_rows[-1][1]) if has_next else None
+        next_before_id = str(page_rows[-1][0]) if has_next else None
+        return {
+            "schema_version": "1.0",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "window_seconds": window_seconds,
+            "query_ms": (time.perf_counter() - started) * 1_000.0,
+            "page": {
+                "limit": limit,
+                "has_next": has_next,
+                "next_before_at": next_before_at,
+                "next_before_id": next_before_id,
+            },
+            "filters": {
+                "severity": severity,
+                "component": component,
+                "search": search,
+            },
+            "facets": {
+                "severities": sorted(OPERATIONAL_EVENT_SEVERITIES),
+                "components": [
+                    "scheduler.attempt",
+                    "scheduler.dag",
+                    "scheduler.job",
+                ],
+            },
+            "items": [self._operational_event_from_row(row) for row in page_rows],
+        }
+
+    async def get_operational_flow(
+        self,
+        *,
+        window_seconds: int = 900,
+        queue: str | None = None,
+        queue_limit: int = 25,
+    ) -> Dict[str, Any]:
+        """Return a bounded scheduler flow-pressure snapshot."""
+        if not 60 <= window_seconds <= 86_400:
+            raise ValueError("window_seconds must be between 60 and 86400")
+        if not 1 <= queue_limit <= 100:
+            raise ValueError("queue_limit must be between 1 and 100")
+
+        started = time.perf_counter()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT * FROM {DEFAULT_SCHEMA}.get_operational_flow(%s, %s, %s)",
+                window_seconds,
+                queue,
+                queue_limit,
+            )
+        if row is None:
+            raise RuntimeError("operational flow query returned no row")
+
+        arrivals = int(row[1])
+        terminals = int(row[5])
+        ready = int(row[7])
+        seconds = float(window_seconds)
+        arrival_rate = arrivals / seconds
+        terminal_rate = terminals / seconds
+        delta_rate = arrival_rate - terminal_rate
+        queues = [
+            self._operational_flow_queue(item, seconds) for item in (row[16] or [])
+        ]
+        return {
+            "schema_version": "1.0",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "observed_at": self._iso_timestamp(row[0]),
+            "window_seconds": window_seconds,
+            "query_ms": (time.perf_counter() - started) * 1_000.0,
+            "scope": {"queue": queue},
+            "rates": {
+                "arrival_per_second": arrival_rate,
+                "ready_per_second": int(row[2]) / seconds,
+                "attempt_activation_per_second": int(row[3]) / seconds,
+                "start_per_second": int(row[4]) / seconds,
+                "terminal_per_second": terminal_rate,
+                "failure_per_second": int(row[6]) / seconds,
+                "lease_per_second": None,
+                "dispatch_per_second": None,
+            },
+            "pressure": {
+                "state": self._flow_state(delta_rate),
+                "backlog_delta_per_second": delta_rate,
+                "ready": ready,
+                "active": int(row[8]),
+                "oldest_ready_seconds": self._optional_float(row[9]),
+                "drain_seconds": ready / -delta_rate
+                if delta_rate < 0 and ready
+                else None,
+            },
+            "stages": [
+                self._flow_stage("ready_to_running", row[10], row[11], row[12]),
+                self._flow_stage("running_to_terminal", row[13], row[14], row[15]),
+            ],
+            "queues": queues,
+        }
+
+    async def get_operational_database_health(self) -> Dict[str, Any]:
+        """Return safe PostgreSQL activity and connection-pool pressure."""
+        started = time.perf_counter()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT * FROM {DEFAULT_SCHEMA}.get_operational_database_health()"
+            )
+        stats_method = getattr(self._pool, "stats", None)
+        stats = stats_method() if callable(stats_method) else {}
+        pool_size = int(stats.get("pool_size", 0))
+        pool_available = int(stats.get("pool_available", 0))
+        return {
+            "reachable": True,
+            "latency_ms": (time.perf_counter() - started) * 1_000.0,
+            "schema_version": SCHEDULER_SCHEMA_VERSION,
+            "pool": {
+                "minimum": stats.get("pool_min"),
+                "maximum": stats.get("pool_max"),
+                "size": stats.get("pool_size"),
+                "available": stats.get("pool_available"),
+                "used": max(0, pool_size - pool_available),
+                "waiters": stats.get("requests_waiting"),
+            },
+            "active_sessions": int(row[0]) if row else None,
+            "blocked_sessions": int(row[1]) if row else None,
+            "oldest_transaction_seconds": self._optional_float(row[2]) if row else None,
+        }
+
+    async def list_operational_dags(
+        self,
+        *,
+        limit: int = 25,
+        offset: int = 0,
+        states: Sequence[str] | None = None,
+        attention: str = "any",
+        queue: str | None = None,
+        search: str | None = None,
+        sort: str = "attention",
+    ) -> Dict[str, Any]:
+        """Return a bounded DAG page with database-side job rollups."""
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        if attention not in OPERATIONAL_JOB_ATTENTION:
+            raise ValueError(f"unsupported attention preset: {attention}")
+        if sort not in OPERATIONAL_SORTS:
+            raise ValueError(f"unsupported sort: {sort}")
+
+        state_values = [WorkState(state.lower()).value for state in states or []]
+        where = []
+        params: list[Any] = []
+        if state_values:
+            where.append("LOWER(COALESCE(d.state, 'created')) = ANY(%s::text[])")
+            params.append(state_values)
+        if queue:
+            where.append(
+                f"EXISTS (SELECT 1 FROM {DEFAULT_SCHEMA}.job AS qj "
+                "WHERE qj.dag_id = d.id AND qj.name = %s)"
+            )
+            params.append(queue)
+        if search:
+            pattern = f"%{search}%"
+            where.append(
+                "(d.id::text ILIKE %s OR d.name ILIKE %s OR "
+                "COALESCE(d.planner, '') ILIKE %s)"
+            )
+            params.extend([pattern] * 3)
+        dag_attention = self._operational_dag_attention_sql()
+        if attention != "any":
+            where.append(dag_attention[attention])
+        where_sql = "WHERE " + " AND ".join(where) if where else ""
+        cte = self._operational_dag_stats_cte()
+        from_sql = f"""
+            FROM {DEFAULT_SCHEMA}.dag AS d
+            LEFT JOIN job_stats AS js ON js.dag_id = d.id
+            {where_sql}
+        """
+        order_sql = self._operational_dag_order_sql(sort, dag_attention)
+        item_query = f"""
+            {cte}
+            SELECT
+                d.id::text,
+                d.name,
+                LOWER(COALESCE(d.state, 'created')),
+                d.planner,
+                d.priority,
+                d.task_count,
+                d.created_on,
+                d.started_on,
+                d.completed_on,
+                d.updated_on,
+                EXTRACT(EPOCH FROM (NOW() - d.created_on)),
+                EXTRACT(EPOCH FROM (
+                    NOW() - GREATEST(d.updated_on, COALESCE(js.last_updated_on, d.updated_on))
+                )),
+                COALESCE(js.total, 0),
+                COALESCE(js.created, 0),
+                COALESCE(js.retry, 0),
+                COALESCE(js.active, 0),
+                COALESCE(js.completed, 0),
+                COALESCE(js.skipped, 0),
+                COALESCE(js.expired, 0),
+                COALESCE(js.cancelled, 0),
+                COALESCE(js.failed, 0),
+                COALESCE(js.queues, ARRAY[]::text[]),
+                COALESCE(js.queued_too_long, 0),
+                COALESCE(js.running_too_long, 0),
+                COALESCE(js.stale_update, 0),
+                COALESCE(js.retrying, 0),
+                COALESCE(js.failed_attention, 0),
+                COALESCE(js.terminal_mismatch, 0)
+            {from_sql}
+            {order_sql}
+            LIMIT %s OFFSET %s
+        """
+        started = time.perf_counter()
+        async with self._pool.acquire() as conn:
+            total = int(
+                await conn.fetchval(f"{cte} SELECT COUNT(*) {from_sql}", *params) or 0
+            )
+            rows = await conn.fetch(item_query, *params, limit, offset)
+            queue_rows = await conn.fetch(
+                f"SELECT name FROM {DEFAULT_SCHEMA}.queue ORDER BY name"
+            )
+        return {
+            "schema_version": "1.0",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "window_seconds": OPERATIONAL_RUNNING_TOO_LONG_SECONDS,
+            "query_ms": (time.perf_counter() - started) * 1_000.0,
+            "page": {
+                "limit": limit,
+                "offset": offset,
+                "total": total,
+                "has_next": offset + len(rows) < total,
+            },
+            "filters": {
+                "states": state_values,
+                "attention": attention,
+                "queue": queue,
+                "search": search,
+                "sort": sort,
+            },
+            "thresholds": self._operational_thresholds(),
+            "facets": {"queues": [str(row[0]) for row in queue_rows]},
+            "items": [self._operational_dag_from_row(row) for row in rows],
+        }
+
+    async def get_operational_dag(
+        self,
+        dag_id: str,
+        *,
+        job_limit: int = 25,
+        job_offset: int = 0,
+    ) -> Dict[str, Any] | None:
+        """Return safe DAG metadata plus one bounded child-job page."""
+        query = f"""
+            SELECT *
+            FROM {DEFAULT_SCHEMA}.get_operational_dag(%s::uuid, %s, %s, %s)
+        """
+        started = time.perf_counter()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                query,
+                dag_id,
+                OPERATIONAL_QUEUED_TOO_LONG_SECONDS,
+                OPERATIONAL_RUNNING_TOO_LONG_SECONDS,
+                OPERATIONAL_STALE_UPDATE_SECONDS,
+            )
+            if row is None:
+                return None
+        jobs = await self.list_operational_jobs(
+            limit=job_limit,
+            offset=job_offset,
+            sort="timeline",
+            dag_id=dag_id,
+        )
+        item = self._operational_dag_from_row(row)
+        item.update(
+            {
+                "query_ms": (time.perf_counter() - started) * 1_000.0,
+                "thresholds": self._operational_thresholds(),
+                "lifecycle": row[28],
+                "job_page": jobs,
+                "data_suppressed": True,
+            }
+        )
+        return item
+
+    async def get_operational_throughput(
+        self,
+        *,
+        lookback_hours: int = 24,
+        planner: str | None = None,
+        planner_limit: int = 25,
+        task_limit: int = 25,
+    ) -> Dict[str, Any]:
+        """Return bounded scheduler completion-throughput reports."""
+        if not 1 <= lookback_hours <= 720:
+            raise ValueError("lookback_hours must be between 1 and 720")
+        if not 1 <= planner_limit <= 100:
+            raise ValueError("planner_limit must be between 1 and 100")
+        if not 1 <= task_limit <= 100:
+            raise ValueError("task_limit must be between 1 and 100")
+
+        planner_name = planner.strip() if planner and planner.strip() else None
+        system_query = f"""
+            SELECT *
+            FROM {DEFAULT_SCHEMA}.monitor_system_throughput(%s, %s)
+        """
+        planner_query = f"""
+            SELECT *
+            FROM {DEFAULT_SCHEMA}.monitor_planner_throughput(%s, %s)
+            WHERE period = 'window_total'
+            ORDER BY executor_tasks_completed DESC, plans_completed DESC, planner
+            LIMIT %s
+        """
+        task_query = f"""
+            SELECT *
+            FROM {DEFAULT_SCHEMA}.monitor_task_throughput(%s, %s)
+            WHERE period = 'window_total'
+            ORDER BY tasks_completed DESC, tasks_failed DESC, planner, queue_name,
+                     task_name, endpoint
+            LIMIT %s
+        """
+        started = time.perf_counter()
+        async with self._pool.acquire() as conn:
+            system_rows = await conn.fetch(system_query, lookback_hours, planner_name)
+            planner_rows = await conn.fetch(
+                planner_query, lookback_hours, planner_name, planner_limit
+            )
+            task_rows = await conn.fetch(
+                task_query, lookback_hours, planner_name, task_limit
+            )
+
+        system = [self._system_throughput_from_row(row) for row in system_rows]
+        summary = next((row for row in system if row["period"] == "window_total"), None)
+        return {
+            "schema_version": "1.0",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "query_ms": (time.perf_counter() - started) * 1_000.0,
+            "lookback_hours": lookback_hours,
+            "planner": planner_name,
+            "system": {
+                "summary": summary,
+                "hourly": [row for row in system if row["period"] == "hour"],
+            },
+            "planners": [
+                self._planner_throughput_from_row(row) for row in planner_rows
+            ],
+            "tasks": [self._task_throughput_from_row(row) for row in task_rows],
+            "limits": {
+                "planners": planner_limit,
+                "tasks": task_limit,
+            },
+        }
+
+    @classmethod
+    def _system_throughput_from_row(cls, row: Sequence[Any]) -> Dict[str, Any]:
+        return {
+            "period": str(row[0]),
+            "period_start_utc": cls._iso_timestamp(row[1]),
+            "period_end_utc": cls._iso_timestamp(row[2]),
+            "partial": bool(row[3]),
+            "plans_submitted": int(row[4]),
+            "plans_completed": int(row[5]),
+            "plans_failed": int(row[6]),
+            "plans_expired": int(row[7]),
+            "plans_cancelled": int(row[8]),
+            "plan_success_rate_pct": cls._optional_float(row[9]),
+            "tasks_completed": int(row[10]),
+            "executor_tasks_completed": int(row[11]),
+            "tasks_failed": int(row[12]),
+            "tasks_expired": int(row[13]),
+            "tasks_cancelled": int(row[14]),
+            "tasks_skipped": int(row[15]),
+            "task_success_rate_pct": cls._optional_float(row[16]),
+            "avg_completed_plans_per_hour": cls._optional_float(row[17]),
+            "avg_completed_executor_tasks_per_hour": cls._optional_float(row[18]),
+        }
+
+    @classmethod
+    def _planner_throughput_from_row(cls, row: Sequence[Any]) -> Dict[str, Any]:
+        return {
+            "period": str(row[0]),
+            "bucket_start_utc": cls._iso_timestamp(row[1]),
+            "planner": str(row[2]),
+            "plans_submitted": int(row[3]),
+            "plans_completed": int(row[4]),
+            "plans_failed": int(row[5]),
+            "plans_expired": int(row[6]),
+            "plans_cancelled": int(row[7]),
+            "executor_tasks_completed": int(row[8]),
+            "tasks_failed": int(row[9]),
+            "tasks_expired": int(row[10]),
+            "tasks_cancelled": int(row[11]),
+        }
+
+    @classmethod
+    def _task_throughput_from_row(cls, row: Sequence[Any]) -> Dict[str, Any]:
+        return {
+            "period": str(row[0]),
+            "bucket_start_utc": cls._iso_timestamp(row[1]),
+            "planner": str(row[2]),
+            "queue_name": str(row[3]),
+            "task_name": row[4],
+            "endpoint": row[5],
+            "executor_backed": bool(row[6]),
+            "tasks_completed": int(row[7]),
+            "tasks_failed": int(row[8]),
+            "tasks_expired": int(row[9]),
+            "tasks_cancelled": int(row[10]),
+            "tasks_skipped": int(row[11]),
+            "avg_execution_seconds": cls._optional_float(row[12]),
+            "p95_execution_seconds": cls._optional_float(row[13]),
+        }
+
+    @staticmethod
+    def _optional_float(value: Any) -> float | None:
+        return None if value is None else float(value)
+
+    @staticmethod
+    def _operational_thresholds() -> Dict[str, int]:
+        return {
+            "queued_too_long_seconds": OPERATIONAL_QUEUED_TOO_LONG_SECONDS,
+            "running_too_long_seconds": OPERATIONAL_RUNNING_TOO_LONG_SECONDS,
+            "stale_update_seconds": OPERATIONAL_STALE_UPDATE_SECONDS,
+        }
+
+    @classmethod
+    def _operational_job_from_row(cls, row: Sequence[Any]) -> Dict[str, Any]:
+        state = str(row[2])
+        age_seconds = float(row[14] or 0.0)
+        last_update_age_seconds = float(row[15] or 0.0)
+        started_at = cls._iso_timestamp(row[11])
+        attention = []
+
+        def add_attention(
+            code: str, severity: str, message: str, age: float | None = None
+        ) -> None:
+            attention.append(
+                {
+                    "code": code,
+                    "severity": severity,
+                    "message": message,
+                    "age_seconds": age,
+                }
+            )
+
+        terminal_states = {"completed", "skipped", "failed", "expired", "cancelled"}
+        if (
+            row[17]
+            and state in terminal_states
+            and (row[24] is False or (row[22] is not None and str(row[22]) != state))
+        ):
+            add_attention(
+                "TERMINAL_MISMATCH",
+                "bad",
+                "job and current attempt disagree on terminal state",
+                last_update_age_seconds,
+            )
+        if state in {"failed", "expired", "cancelled"}:
+            add_attention("FAILED", "bad", f"job is {state}", last_update_age_seconds)
+        if (
+            state in {"active", "retry"}
+            and last_update_age_seconds > OPERATIONAL_STALE_UPDATE_SECONDS
+        ):
+            add_attention(
+                "STALE_UPDATE",
+                "bad",
+                "job has not recorded a recent operational update",
+                last_update_age_seconds,
+            )
+        if state == "active" and row[11] is not None:
+            running_seconds = cls._seconds_since(row[11])
+            if running_seconds > OPERATIONAL_RUNNING_TOO_LONG_SECONDS:
+                add_attention(
+                    "RUNNING_TOO_LONG",
+                    "warning",
+                    "job has exceeded the running threshold",
+                    running_seconds,
+                )
+        if (
+            state in {"created", "retry"}
+            and last_update_age_seconds > OPERATIONAL_QUEUED_TOO_LONG_SECONDS
+        ):
+            add_attention(
+                "QUEUED_TOO_LONG",
+                "warning",
+                "job has exceeded the queue threshold",
+                last_update_age_seconds,
+            )
+        if state == "retry":
+            add_attention("RETRYING", "warning", "job is waiting for another attempt")
+        return {
+            "id": str(row[0]),
+            "queue": str(row[1]),
+            "state": state,
+            "dag_id": str(row[3]),
+            "dag_name": row[4],
+            "planner": row[5],
+            "priority": int(row[6]),
+            "job_level": int(row[7]),
+            "retry_count": int(row[8]),
+            "retry_limit": int(row[9]),
+            "created_at": cls._iso_timestamp(row[10]),
+            "started_at": started_at,
+            "completed_at": cls._iso_timestamp(row[12]),
+            "last_updated_at": cls._iso_timestamp(row[13]),
+            "age_seconds": age_seconds,
+            "last_update_age_seconds": last_update_age_seconds,
+            "run_owner": row[16],
+            "run_attempt_id": str(row[17]) if row[17] else None,
+            "executor": row[18],
+            "attempt_activated_at": cls._iso_timestamp(row[19]),
+            "attempt_terminal_at": cls._iso_timestamp(row[20]),
+            "terminal_status": row[21],
+            "terminal_work_state": row[22],
+            "terminal_source": row[23],
+            "terminal_accepted": row[24],
+            "attention": attention,
+        }
+
+    @classmethod
+    def _operational_attempt_from_row(cls, row: Sequence[Any]) -> Dict[str, Any]:
+        messages = {
+            "TERMINAL_REJECTED": ("bad", "terminal update was rejected"),
+            "TERMINAL_MISMATCH": ("bad", "terminal status and work state disagree"),
+            "OWNER_MISMATCH": ("warning", "activation and terminal owners differ"),
+            "RECOVERED": ("warning", "attempt entered recovery"),
+            "ACTIVE_TOO_LONG": ("warning", "attempt exceeded the active threshold"),
+            "STALE_UPDATE": ("bad", "attempt has not recorded a recent update"),
+        }
+        attention = [
+            {
+                "code": str(code),
+                "severity": messages[str(code)][0],
+                "message": messages[str(code)][1],
+                "age_seconds": float(row[22] or 0.0),
+            }
+            for code in row[23] or []
+        ]
+        return {
+            "run_attempt_id": str(row[0]),
+            "job_id": str(row[1]),
+            "queue": str(row[2]),
+            "dag_id": str(row[3]),
+            "run_owner": str(row[4]),
+            "scheduler_lease_owner": str(row[5]),
+            "gateway_instance_id": row[6],
+            "executor": row[7],
+            "state": str(row[8]),
+            "activated_at": cls._iso_timestamp(row[9]),
+            "terminal_at": cls._iso_timestamp(row[10]),
+            "terminal_status": row[11],
+            "terminal_work_state": row[12],
+            "terminal_source": row[13],
+            "terminal_gateway_instance_id": row[14],
+            "terminal_scheduler_lease_owner": row[15],
+            "terminal_accepted": row[16],
+            "recovery_at": cls._iso_timestamp(row[17]),
+            "recovery_state": row[18],
+            "created_at": cls._iso_timestamp(row[19]),
+            "updated_at": cls._iso_timestamp(row[20]),
+            "age_seconds": float(row[21] or 0.0),
+            "last_update_age_seconds": float(row[22] or 0.0),
+            "attention": attention,
+        }
+
+    @classmethod
+    def _operational_event_from_row(cls, row: Sequence[Any]) -> Dict[str, Any]:
+        return {
+            "event_id": str(row[0]),
+            "occurred_at": cls._iso_timestamp(row[1]),
+            "severity": str(row[2]),
+            "component": str(row[3]),
+            "code": str(row[4]),
+            "affected_type": str(row[5]),
+            "affected_id": str(row[6]),
+            "job_id": str(row[7]) if row[7] else None,
+            "dag_id": str(row[8]) if row[8] else None,
+            "run_attempt_id": str(row[9]) if row[9] else None,
+            "executor": row[10],
+            "gateway_instance_id": row[11],
+            "summary": str(row[12]),
+        }
+
+    @classmethod
+    def _operational_execution_history_from_row(
+        cls, row: Sequence[Any]
+    ) -> Dict[str, Any]:
+        return {
+            "history_id": int(row[0]),
+            "job_id": str(row[1]),
+            "queue": str(row[2]),
+            "changed_at": cls._iso_timestamp(row[3]),
+            "operation": row[4],
+            "status": row[5],
+            "worker_message": row[6],
+            "run_attempt_id": row[7],
+            "executor": row[8],
+            "runtime_name": row[9],
+            "executor_host": row[10],
+            "endpoint": row[11],
+            "error": (
+                {
+                    "type": row[12],
+                    "message": row[13],
+                    "file": row[14],
+                    "function": row[15],
+                    "line": row[16],
+                }
+                if any(value is not None for value in row[12:17])
+                else None
+            ),
+        }
+
+    @staticmethod
+    def _flow_state(delta_per_second: float) -> str:
+        if delta_per_second > 0.01:
+            return "growing"
+        if delta_per_second < -0.01:
+            return "draining"
+        return "stable"
+
+    @classmethod
+    def _operational_flow_queue(
+        cls, item: Dict[str, Any], window_seconds: float
+    ) -> Dict[str, Any]:
+        arrivals = int(item["arrivals"])
+        terminals = int(item["terminals"])
+        ready = int(item["ready"])
+        delta = (arrivals - terminals) / window_seconds
+        return {
+            "name": str(item["name"]),
+            "arrival_per_second": arrivals / window_seconds,
+            "terminal_per_second": terminals / window_seconds,
+            "failure_per_second": int(item["failures"]) / window_seconds,
+            "backlog_delta_per_second": delta,
+            "state": cls._flow_state(delta),
+            "ready": ready,
+            "active": int(item["active"]),
+            "oldest_ready_seconds": cls._optional_float(
+                item.get("oldest_ready_seconds")
+            ),
+            "drain_seconds": ready / -delta if delta < 0 and ready else None,
+        }
+
+    @classmethod
+    def _flow_stage(cls, name: str, p50: Any, p95: Any, maximum: Any) -> Dict[str, Any]:
+        return {
+            "name": name,
+            "p50_seconds": cls._optional_float(p50),
+            "p95_seconds": cls._optional_float(p95),
+            "max_seconds": cls._optional_float(maximum),
+        }
+
+    @staticmethod
+    def _operational_dag_stats_cte() -> str:
+        last_update = (
+            "COALESCE(ja.updated_on, j.completed_on, j.started_on, j.created_on)"
+        )
+        return f"""
+            WITH job_stats AS (
+                SELECT
+                    j.dag_id,
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE j.state::text = 'created') AS created,
+                    COUNT(*) FILTER (WHERE j.state::text = 'retry') AS retry,
+                    COUNT(*) FILTER (WHERE j.state::text = 'active') AS active,
+                    COUNT(*) FILTER (WHERE j.state::text = 'completed') AS completed,
+                    COUNT(*) FILTER (WHERE j.state::text = 'skipped') AS skipped,
+                    COUNT(*) FILTER (WHERE j.state::text = 'expired') AS expired,
+                    COUNT(*) FILTER (WHERE j.state::text = 'cancelled') AS cancelled,
+                    COUNT(*) FILTER (WHERE j.state::text = 'failed') AS failed,
+                    ARRAY_AGG(DISTINCT j.name ORDER BY j.name) AS queues,
+                    MAX({last_update}) AS last_updated_on,
+                    COUNT(*) FILTER (WHERE
+                        j.state::text IN ('created', 'retry') AND
+                        EXTRACT(EPOCH FROM (NOW() - {last_update})) >
+                            {OPERATIONAL_QUEUED_TOO_LONG_SECONDS}
+                    ) AS queued_too_long,
+                    COUNT(*) FILTER (WHERE
+                        j.state::text = 'active' AND j.started_on IS NOT NULL AND
+                        EXTRACT(EPOCH FROM (NOW() - j.started_on)) >
+                            {OPERATIONAL_RUNNING_TOO_LONG_SECONDS}
+                    ) AS running_too_long,
+                    COUNT(*) FILTER (WHERE
+                        j.state::text IN ('active', 'retry') AND
+                        EXTRACT(EPOCH FROM (NOW() - {last_update})) >
+                            {OPERATIONAL_STALE_UPDATE_SECONDS}
+                    ) AS stale_update,
+                    COUNT(*) FILTER (WHERE j.state::text = 'retry') AS retrying,
+                    COUNT(*) FILTER (WHERE
+                        j.state::text IN ('failed', 'expired', 'cancelled')
+                    ) AS failed_attention,
+                    COUNT(*) FILTER (WHERE
+                        j.run_attempt_id IS NOT NULL AND
+                        j.state::text IN (
+                            'completed', 'skipped', 'failed', 'expired', 'cancelled'
+                        ) AND (
+                            ja.terminal_accepted IS FALSE OR (
+                                ja.terminal_work_state IS NOT NULL AND
+                                ja.terminal_work_state <> j.state::text
+                            )
+                        )
+                    ) AS terminal_mismatch
+                FROM {DEFAULT_SCHEMA}.job AS j
+                LEFT JOIN {DEFAULT_SCHEMA}.job_attempt AS ja
+                  ON ja.run_attempt_id = j.run_attempt_id
+                GROUP BY j.dag_id
+            )
+        """
+
+    @staticmethod
+    def _operational_dag_attention_sql() -> Dict[str, str]:
+        return {
+            "queued_too_long": "(COALESCE(js.queued_too_long, 0) > 0)",
+            "running_too_long": (
+                "(COALESCE(js.running_too_long, 0) > 0 OR ("
+                "LOWER(COALESCE(d.state, 'created')) = 'active' AND "
+                "d.started_on IS NOT NULL AND EXTRACT(EPOCH FROM "
+                f"(NOW() - d.started_on)) > {OPERATIONAL_RUNNING_TOO_LONG_SECONDS}))"
+            ),
+            "stale_update": (
+                "(COALESCE(js.stale_update, 0) > 0 OR ("
+                "LOWER(COALESCE(d.state, 'created')) IN ('active', 'retry') AND "
+                "EXTRACT(EPOCH FROM (NOW() - GREATEST(d.updated_on, "
+                "COALESCE(js.last_updated_on, d.updated_on)))) > "
+                f"{OPERATIONAL_STALE_UPDATE_SECONDS}))"
+            ),
+            "retrying": (
+                "(LOWER(COALESCE(d.state, 'created')) = 'retry' OR "
+                "COALESCE(js.retrying, 0) > 0)"
+            ),
+            "failed": (
+                "(LOWER(COALESCE(d.state, 'created')) IN "
+                "('failed', 'expired', 'cancelled') OR "
+                "COALESCE(js.failed_attention, 0) > 0)"
+            ),
+            "terminal_mismatch": "(COALESCE(js.terminal_mismatch, 0) > 0)",
+        }
+
+    @staticmethod
+    def _operational_dag_order_sql(sort: str, attention_sql: Dict[str, str]) -> str:
+        if sort == "newest":
+            return "ORDER BY d.created_on DESC, d.id"
+        if sort == "oldest":
+            return "ORDER BY d.created_on ASC, d.id"
+        if sort == "updated":
+            return (
+                "ORDER BY GREATEST(d.updated_on, "
+                "COALESCE(js.last_updated_on, d.updated_on)) DESC, d.id"
+            )
+        return f"""
+            ORDER BY CASE
+                WHEN {attention_sql['terminal_mismatch']} THEN 0
+                WHEN {attention_sql['failed']} THEN 1
+                WHEN {attention_sql['stale_update']} THEN 2
+                WHEN {attention_sql['running_too_long']} THEN 3
+                WHEN {attention_sql['queued_too_long']} THEN 4
+                WHEN {attention_sql['retrying']} THEN 5
+                ELSE 6
+            END,
+            d.created_on DESC,
+            d.id
+        """
+
+    @classmethod
+    def _operational_dag_from_row(cls, row: Sequence[Any]) -> Dict[str, Any]:
+        state = str(row[2])
+        attention = []
+
+        def add_attention(code: str, severity: str, count: int) -> None:
+            attention.append(
+                {
+                    "code": code,
+                    "severity": severity,
+                    "count": count,
+                }
+            )
+
+        if int(row[27]) > 0:
+            add_attention("TERMINAL_MISMATCH", "bad", int(row[27]))
+        failed_count = int(row[26])
+        if state in {"failed", "expired", "cancelled"}:
+            failed_count = max(1, failed_count)
+        if failed_count > 0:
+            add_attention("FAILED", "bad", failed_count)
+        if int(row[24]) > 0:
+            add_attention("STALE_UPDATE", "bad", int(row[24]))
+        if int(row[23]) > 0:
+            add_attention("RUNNING_TOO_LONG", "warning", int(row[23]))
+        if int(row[22]) > 0:
+            add_attention("QUEUED_TOO_LONG", "warning", int(row[22]))
+        retry_count = int(row[25])
+        if state == "retry":
+            retry_count = max(1, retry_count)
+        if retry_count > 0:
+            add_attention("RETRYING", "warning", retry_count)
+        return {
+            "id": str(row[0]),
+            "name": str(row[1]),
+            "state": state,
+            "planner": row[3],
+            "priority": int(row[4]),
+            "task_count": int(row[5]),
+            "created_at": cls._iso_timestamp(row[6]),
+            "started_at": cls._iso_timestamp(row[7]),
+            "completed_at": cls._iso_timestamp(row[8]),
+            "updated_at": cls._iso_timestamp(row[9]),
+            "age_seconds": float(row[10] or 0.0),
+            "last_update_age_seconds": float(row[11] or 0.0),
+            "jobs": {
+                "total": int(row[12]),
+                "created": int(row[13]),
+                "retry": int(row[14]),
+                "active": int(row[15]),
+                "completed": int(row[16]),
+                "skipped": int(row[17]),
+                "expired": int(row[18]),
+                "cancelled": int(row[19]),
+                "failed": int(row[20]),
+            },
+            "queues": [str(queue) for queue in row[21]],
+            "attention": attention,
+        }
+
+    @staticmethod
+    def _iso_timestamp(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return str(value)
+
+    @staticmethod
+    def _seconds_since(value: Any) -> float:
+        if not isinstance(value, datetime):
+            return 0.0
+        current = datetime.now(value.tzinfo or timezone.utc)
+        return max(0.0, (current - value).total_seconds())
 
     async def create_job(self, work_info: WorkInfo) -> bool:
         try:
@@ -171,7 +1396,7 @@ class AsyncJobRepository:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 f"""
-                DELETE FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                DELETE FROM {DEFAULT_SCHEMA}.job
                 WHERE id = %s::uuid
                 RETURNING id
                 """,
@@ -202,7 +1427,7 @@ class AsyncJobRepository:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 f"""
-                UPDATE {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                UPDATE {DEFAULT_SCHEMA}.job
                 SET {', '.join(fields)}
                 WHERE id = %s::uuid
                 RETURNING id
@@ -228,7 +1453,7 @@ class AsyncJobRepository:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 f"""
-                UPDATE {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                UPDATE {DEFAULT_SCHEMA}.job
                 SET {', '.join(fields)}
                 WHERE name = %s AND id = %s::uuid
                 RETURNING id
@@ -252,7 +1477,7 @@ class AsyncJobRepository:
         rows = await conn.fetch(
             f"""
             SELECT name, array_agg(id)
-            FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+            FROM {DEFAULT_SCHEMA}.job
             WHERE id = ANY(%s::uuid[])
             GROUP BY name
             """,
@@ -359,7 +1584,7 @@ class AsyncJobRepository:
         if not job_ids:
             return {}
         query = f"""
-            SELECT id, priority FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+            SELECT id, priority FROM {DEFAULT_SCHEMA}.job
             WHERE id = ANY(%s::uuid[])
         """
         async with self._pool.acquire() as conn:
@@ -467,7 +1692,7 @@ class AsyncJobRepository:
                         )
                         updated = await conn.fetchrow(
                             f"""
-                            UPDATE {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                            UPDATE {DEFAULT_SCHEMA}.job
                             SET state = 'retry', start_after = %s,
                                 completed_on = NULL, output = %s,
                                 lease_owner = NULL, lease_expires_at = NULL,
@@ -490,7 +1715,7 @@ class AsyncJobRepository:
                         start_after = None
                         updated = await conn.fetchrow(
                             f"""
-                            UPDATE {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                            UPDATE {DEFAULT_SCHEMA}.job
                             SET state = 'failed', completed_on = now(), output = %s,
                                 lease_owner = NULL, lease_expires_at = NULL,
                                 run_lease_expires_at = NULL
@@ -629,7 +1854,7 @@ class AsyncJobRepository:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 f"""
-                UPDATE {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                UPDATE {DEFAULT_SCHEMA}.job
                 SET start_after = NOW() + %s::interval,
                     lease_owner = NULL,
                     lease_expires_at = NULL
@@ -838,7 +2063,7 @@ class AsyncJobRepository:
         if terminal_status == "SUCCEEDED":
             transition_ctes = f"""
                 transitioned AS (
-                    UPDATE {schema}.{DEFAULT_JOB_TABLE} AS job
+                    UPDATE {schema}.job AS job
                     SET completed_on = NOW(),
                         state = %s::{schema}.job_state,
                         output = %s::jsonb,
@@ -866,7 +2091,7 @@ class AsyncJobRepository:
         elif terminal_status == "FAILED":
             transition_ctes = f"""
                 transitioned AS (
-                    UPDATE {schema}.{DEFAULT_JOB_TABLE} AS job
+                    UPDATE {schema}.job AS job
                     SET state = CASE
                             WHEN job.retry_count < job.retry_limit
                             THEN %s::{schema}.job_state
@@ -905,7 +2130,7 @@ class AsyncJobRepository:
                               job.state::text AS final_state
                 ),
                 dead_lettered AS (
-                    INSERT INTO {schema}.{DEFAULT_JOB_TABLE} (
+                    INSERT INTO {schema}.job (
                         name,
                         data,
                         output,
@@ -941,7 +2166,7 @@ class AsyncJobRepository:
         elif terminal_status == "STOPPED":
             transition_ctes = f"""
                 transitioned AS (
-                    UPDATE {schema}.{DEFAULT_JOB_TABLE} AS job
+                    UPDATE {schema}.job AS job
                     SET completed_on = NOW(),
                         state = %s::{schema}.job_state,
                         lease_owner = NULL,
@@ -1147,7 +2372,7 @@ class AsyncJobRepository:
             sql_started = time.perf_counter()
             row = await conn.fetchrow(
                 f"""
-                UPDATE {schema}.{DEFAULT_JOB_TABLE}
+                UPDATE {schema}.job
                 SET completed_on = NOW(),
                     state = %s::{schema}.job_state,
                     lease_owner = NULL,
@@ -1279,7 +2504,7 @@ class AsyncJobRepository:
                     SELECT *
                     FROM unnest(%s::uuid[], %s::text[], %s::uuid[])
                 ), completed AS (
-                    UPDATE {schema}.{DEFAULT_JOB_TABLE} AS job
+                    UPDATE {schema}.job AS job
                     SET completed_on = NOW(),
                         state = %s::{schema}.job_state,
                         output = %s::jsonb,
@@ -1376,7 +2601,7 @@ class AsyncJobRepository:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
-                UPDATE {schema}.{DEFAULT_JOB_TABLE}
+                UPDATE {schema}.job
                 SET state = 'skipped',
                     completed_on = NOW(),
                     output = %s,
@@ -1538,7 +2763,7 @@ class AsyncJobRepository:
             state_rows = await conn.fetch(
                 f"""
                 SELECT state::text, COUNT(*)
-                FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE}
+                FROM {DEFAULT_SCHEMA}.job
                 WHERE dag_id = %s::uuid
                 GROUP BY state
                 ORDER BY state
@@ -1554,7 +2779,7 @@ class AsyncJobRepository:
                        attempt.recovery_reason, attempt.gateway_instance_id,
                        attempt.executor, attempt.terminal_gateway_instance_id,
                        attempt.terminal_reject_reason
-                FROM {DEFAULT_SCHEMA}.{DEFAULT_JOB_TABLE} j
+                FROM {DEFAULT_SCHEMA}.job j
                 LEFT JOIN LATERAL (
                     SELECT a.attempt_state, a.terminal_source,
                            a.terminal_work_state,
@@ -1776,7 +3001,7 @@ class AsyncJobRepository:
 
                 completed = await conn.fetchrow(
                     f"""
-                    UPDATE {schema}.{DEFAULT_JOB_TABLE}
+                    UPDATE {schema}.job
                     SET completed_on = NOW(),
                         state = 'completed',
                         output = %s,
@@ -1807,7 +3032,7 @@ class AsyncJobRepository:
                 if skipped_job_ids:
                     rows = await conn.fetch(
                         f"""
-                        UPDATE {schema}.{DEFAULT_JOB_TABLE}
+                        UPDATE {schema}.job
                         SET completed_on = NOW(),
                             state = 'skipped',
                             output = %s,
@@ -1890,6 +3115,15 @@ class AsyncJobRepository:
         migrations.extend(
             (os.path.relpath(path, schema_dir), create_sql_from_file(schema, path))
             for path in sorted(glob.glob(os.path.join(lease_dir, "*.sql")))
+        )
+        migrations.append(
+            (
+                "monitoring/throughput_analysis.sql",
+                create_sql_from_file(
+                    schema,
+                    os.path.join(schema_dir, "monitoring", "throughput_analysis.sql"),
+                ),
+            )
         )
         migrations.append(
             (
@@ -1996,6 +3230,68 @@ class AsyncJobRepository:
                 (f"{schema}.admission_candidate_dags(integer,integer,uuid[])",),
                 f"{schema}.admission_candidate_dags is missing",
             ),
+            (
+                "SELECT to_regprocedure(%s) IS NOT NULL",
+                (f"{schema}.monitor_system_throughput(integer,text)",),
+                f"{schema}.monitor_system_throughput is missing",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NOT NULL",
+                (f"{schema}.monitor_planner_throughput(integer,text)",),
+                f"{schema}.monitor_planner_throughput is missing",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NOT NULL",
+                (f"{schema}.monitor_task_throughput(integer,text)",),
+                f"{schema}.monitor_task_throughput is missing",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NOT NULL",
+                (f"{schema}.get_operational_dag(uuid,integer,integer,integer)",),
+                f"{schema}.get_operational_dag is missing",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NOT NULL",
+                (
+                    f"{schema}.list_operational_jobs(integer,integer,text[],text,"
+                    "text,text,text,uuid,integer,integer,integer)",
+                ),
+                f"{schema}.list_operational_jobs is missing",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NOT NULL",
+                (
+                    f"{schema}.list_operational_attempts(integer,integer,text[],"
+                    "text,text,text,text,text,integer,integer)",
+                ),
+                f"{schema}.list_operational_attempts is missing",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NOT NULL",
+                (
+                    f"{schema}.list_operational_events(integer,timestamptz,text,"
+                    "integer,text,text,text)",
+                ),
+                f"{schema}.list_operational_events is missing",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NOT NULL",
+                (f"{schema}.get_operational_flow(integer,text,integer)",),
+                f"{schema}.get_operational_flow is missing",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NOT NULL",
+                (f"{schema}.get_operational_database_health()",),
+                f"{schema}.get_operational_database_health is missing",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NOT NULL",
+                (
+                    f"{schema}.list_operational_execution_history(uuid,uuid,"
+                    "integer,integer)",
+                ),
+                f"{schema}.list_operational_execution_history is missing",
+            ),
         )
         async with self._pool.acquire() as conn:
             for query, params, message in checks:
@@ -2038,7 +3334,7 @@ class AsyncJobRepository:
                 )
             rows = await conn.fetch(
                 f"""
-                SELECT id FROM {schema}.{DEFAULT_JOB_TABLE}
+                SELECT id FROM {schema}.job
                 WHERE state::text = 'active' AND run_attempt_id IS NULL
                 LIMIT 10
                 """

@@ -709,6 +709,371 @@ class MarieServerGateway(CompositeServer):
                         "result": f"Failed to unpause scheduler: {str(e)}",
                     }
 
+            def _operational_states(value: Optional[str]) -> list[str] | None:
+                if value is None:
+                    return None
+                states = [state.strip().lower() for state in value.split(",")]
+                if not states or any(not state for state in states):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="state must be a comma-separated list of job states",
+                    )
+                invalid = [
+                    state
+                    for state in states
+                    if state not in {work_state.value for work_state in WorkState}
+                ]
+                if invalid:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"unsupported state: {', '.join(invalid)}",
+                    )
+                return states
+
+            def _operational_attempt_states(value: Optional[str]) -> list[str] | None:
+                if value is None:
+                    return None
+                states = [state.strip().lower() for state in value.split(",")]
+                if not states or any(not state for state in states):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="state must be a comma-separated list of attempt states",
+                    )
+                return states
+
+            @app.get(
+                "/api/operations/events",
+                summary="List cursor-paged operational lifecycle events",
+            )
+            async def list_operational_events(
+                limit: int = Query(default=25, ge=1, le=100),
+                before_at: Optional[datetime] = Query(default=None),
+                before_id: Optional[str] = Query(default=None, max_length=160),
+                window_seconds: int = Query(default=900, ge=60, le=86_400),
+                severity: Optional[Literal["info", "warning", "bad"]] = Query(
+                    default=None
+                ),
+                component: Optional[str] = Query(default=None, max_length=128),
+                search: Optional[str] = Query(default=None, max_length=128),
+            ):
+                try:
+                    result = await self.job_scheduler.diagnostics.events(
+                        limit=limit,
+                        before_at=before_at,
+                        before_id=before_id,
+                        window_seconds=window_seconds,
+                        severity=severity,
+                        component=component.strip() if component else None,
+                        search=search.strip() if search else None,
+                    )
+                    return {"status": "OK", "result": result}
+                except ValueError as error:
+                    raise HTTPException(status_code=400, detail=str(error)) from error
+                except Exception as error:
+                    self.logger.error(
+                        f"Operational event query failed: {error}", exc_info=True
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Operational event data is unavailable",
+                    ) from error
+
+            @app.get(
+                "/api/operations/attempts",
+                summary="List a bounded page of execution attempts",
+            )
+            async def list_operational_attempts(
+                limit: int = Query(default=25, ge=1, le=100),
+                offset: int = Query(default=0, ge=0),
+                state: Optional[str] = Query(default=None, max_length=256),
+                attention: Literal[
+                    "any",
+                    "active_too_long",
+                    "stale_update",
+                    "recovered",
+                    "terminal_rejected",
+                    "terminal_mismatch",
+                    "owner_mismatch",
+                ] = "any",
+                gateway: Optional[str] = Query(default=None, max_length=256),
+                executor: Optional[str] = Query(default=None, max_length=256),
+                search: Optional[str] = Query(default=None, max_length=128),
+                sort: Literal["attention", "newest", "oldest", "updated"] = (
+                    "attention"
+                ),
+            ):
+                try:
+                    result = await self.job_scheduler.diagnostics.attempts(
+                        limit=limit,
+                        offset=offset,
+                        states=_operational_attempt_states(state),
+                        attention=attention,
+                        gateway=gateway.strip() if gateway else None,
+                        executor=executor.strip() if executor else None,
+                        search=search.strip() if search else None,
+                        sort=sort,
+                    )
+                    return {"status": "OK", "result": result}
+                except HTTPException:
+                    raise
+                except ValueError as error:
+                    raise HTTPException(status_code=400, detail=str(error)) from error
+                except Exception as error:
+                    self.logger.error(
+                        f"Operational attempt query failed: {error}", exc_info=True
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Operational attempt data is unavailable",
+                    ) from error
+
+            @app.get(
+                "/api/operations/flow",
+                summary="Get scheduler flow pressure and stage latency",
+            )
+            async def get_operational_flow(
+                window_seconds: int = Query(default=900, ge=60, le=86_400),
+                queue: Optional[str] = Query(default=None, max_length=128),
+                queue_limit: int = Query(default=25, ge=1, le=100),
+            ):
+                try:
+                    result = await self.job_scheduler.diagnostics.flow(
+                        window_seconds=window_seconds,
+                        queue=queue.strip() if queue else None,
+                        queue_limit=queue_limit,
+                    )
+                    return {"status": "OK", "result": result}
+                except ValueError as error:
+                    raise HTTPException(status_code=400, detail=str(error)) from error
+                except Exception as error:
+                    self.logger.error(
+                        f"Operational flow query failed: {error}", exc_info=True
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Operational flow data is unavailable",
+                    ) from error
+
+            @app.get(
+                "/api/operations/health",
+                summary="Get read-only runtime dependency health",
+            )
+            async def get_operational_health():
+                return {
+                    "status": "OK",
+                    "result": await self._operational_health_snapshot(),
+                }
+
+            @app.get(
+                "/api/operations/jobs",
+                summary="List a bounded page of operational job metadata",
+            )
+            async def list_operational_jobs(
+                limit: int = Query(default=25, ge=1, le=100),
+                offset: int = Query(default=0, ge=0),
+                state: Optional[str] = Query(default=None, max_length=128),
+                attention: Literal[
+                    "any",
+                    "queued_too_long",
+                    "running_too_long",
+                    "stale_update",
+                    "retrying",
+                    "failed",
+                    "terminal_mismatch",
+                ] = "any",
+                queue: Optional[str] = Query(default=None, max_length=128),
+                search: Optional[str] = Query(default=None, max_length=128),
+                sort: Literal["attention", "newest", "oldest", "updated"] = (
+                    "attention"
+                ),
+            ):
+                try:
+                    result = await self.job_scheduler.diagnostics.jobs(
+                        limit=limit,
+                        offset=offset,
+                        states=_operational_states(state),
+                        attention=attention,
+                        queue=queue.strip() if queue else None,
+                        search=search.strip() if search else None,
+                        sort=sort,
+                    )
+                    return {"status": "OK", "result": result}
+                except HTTPException:
+                    raise
+                except ValueError as error:
+                    raise HTTPException(status_code=400, detail=str(error)) from error
+                except Exception as error:
+                    self.logger.error(
+                        f"Operational job list query failed: {error}", exc_info=True
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Operational job data is unavailable",
+                    ) from error
+
+            @app.get(
+                "/api/operations/jobs/{job_id}",
+                summary="Get payload-free lifecycle details for one job",
+            )
+            async def get_operational_job(job_id: uuid.UUID):
+                try:
+                    result = await self.job_scheduler.diagnostics.job(str(job_id))
+                    if result is None:
+                        raise HTTPException(status_code=404, detail="Job not found")
+                    return {"status": "OK", "result": result}
+                except HTTPException:
+                    raise
+                except Exception as error:
+                    self.logger.error(
+                        f"Operational job detail query failed: {error}", exc_info=True
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Operational job data is unavailable",
+                    ) from error
+
+            @app.get(
+                "/api/operations/execution-history",
+                summary="List bounded worker execution history for a job or DAG",
+            )
+            async def list_operational_execution_history(
+                job_id: Optional[uuid.UUID] = Query(default=None),
+                dag_id: Optional[uuid.UUID] = Query(default=None),
+                limit: int = Query(default=50, ge=1, le=100),
+                offset: int = Query(default=0, ge=0),
+            ):
+                try:
+                    result = await self.job_scheduler.diagnostics.execution_history(
+                        job_id=str(job_id) if job_id else None,
+                        dag_id=str(dag_id) if dag_id else None,
+                        limit=limit,
+                        offset=offset,
+                    )
+                    if result is None:
+                        raise HTTPException(
+                            status_code=404,
+                            detail="Job or DAG not found",
+                        )
+                    return {"status": "OK", "result": result}
+                except HTTPException:
+                    raise
+                except ValueError as error:
+                    raise HTTPException(status_code=400, detail=str(error)) from error
+                except Exception as error:
+                    self.logger.error(
+                        f"Operational execution history query failed: {error}",
+                        exc_info=True,
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Operational execution history is unavailable",
+                    ) from error
+
+            @app.get(
+                "/api/operations/dags",
+                summary="List a bounded page of operational DAG metadata",
+            )
+            async def list_operational_dags(
+                limit: int = Query(default=25, ge=1, le=100),
+                offset: int = Query(default=0, ge=0),
+                state: Optional[str] = Query(default=None, max_length=128),
+                attention: Literal[
+                    "any",
+                    "queued_too_long",
+                    "running_too_long",
+                    "stale_update",
+                    "retrying",
+                    "failed",
+                    "terminal_mismatch",
+                ] = "any",
+                queue: Optional[str] = Query(default=None, max_length=128),
+                search: Optional[str] = Query(default=None, max_length=128),
+                sort: Literal["attention", "newest", "oldest", "updated"] = (
+                    "attention"
+                ),
+            ):
+                try:
+                    result = await self.job_scheduler.diagnostics.dags(
+                        limit=limit,
+                        offset=offset,
+                        states=_operational_states(state),
+                        attention=attention,
+                        queue=queue.strip() if queue else None,
+                        search=search.strip() if search else None,
+                        sort=sort,
+                    )
+                    return {"status": "OK", "result": result}
+                except HTTPException:
+                    raise
+                except ValueError as error:
+                    raise HTTPException(status_code=400, detail=str(error)) from error
+                except Exception as error:
+                    self.logger.error(
+                        f"Operational DAG list query failed: {error}", exc_info=True
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Operational DAG data is unavailable",
+                    ) from error
+
+            @app.get(
+                "/api/operations/dags/{dag_id}",
+                summary="Get a DAG and one bounded page of child jobs",
+            )
+            async def get_operational_dag(
+                dag_id: uuid.UUID,
+                job_limit: int = Query(default=25, ge=1, le=100),
+                job_offset: int = Query(default=0, ge=0),
+            ):
+                try:
+                    result = await self.job_scheduler.diagnostics.dag(
+                        str(dag_id),
+                        job_limit=job_limit,
+                        job_offset=job_offset,
+                    )
+                    if result is None:
+                        raise HTTPException(status_code=404, detail="DAG not found")
+                    return {"status": "OK", "result": result}
+                except HTTPException:
+                    raise
+                except Exception as error:
+                    self.logger.error(
+                        f"Operational DAG detail query failed: {error}", exc_info=True
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Operational DAG data is unavailable",
+                    ) from error
+
+            @app.get(
+                "/api/operations/throughput",
+                summary="Get bounded scheduler completion-throughput reports",
+            )
+            async def get_operational_throughput(
+                lookback_hours: int = Query(default=24, ge=1, le=720),
+                planner: Optional[str] = Query(default=None, max_length=250),
+                planner_limit: int = Query(default=25, ge=1, le=100),
+                task_limit: int = Query(default=25, ge=1, le=100),
+            ):
+                try:
+                    result = await self.job_scheduler.diagnostics.throughput(
+                        lookback_hours=lookback_hours,
+                        planner=planner,
+                        planner_limit=planner_limit,
+                        task_limit=task_limit,
+                    )
+                    return {"status": "OK", "result": result}
+                except ValueError as error:
+                    raise HTTPException(status_code=400, detail=str(error)) from error
+                except Exception as error:
+                    self.logger.error(
+                        f"Operational throughput query failed: {error}", exc_info=True
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Operational throughput data is unavailable",
+                    ) from error
+
             async def list_jobs_handler(request: Request):
                 try:
                     self.logger.info(
@@ -2382,6 +2747,159 @@ class MarieServerGateway(CompositeServer):
             "observed_at": _now_iso(),
             "summary": summary,
             "gateways": gateways,
+        }
+
+    async def _operational_health_snapshot(self) -> dict[str, Any]:
+        observed_at = _now_iso()
+        dependencies: list[dict[str, Any]] = []
+
+        try:
+            database = await self.job_scheduler.diagnostics.database_health()
+            pool = database["pool"]
+            waiters = pool.get("waiters") or 0
+            blocked = database.get("blocked_sessions") or 0
+            database_state = "degraded" if waiters or blocked else "ok"
+            dependencies.append(
+                {
+                    "name": "postgresql",
+                    "state": database_state,
+                    "latency_ms": database["latency_ms"],
+                    "observed_at": observed_at,
+                    "summary": (
+                        "connection pool or database sessions are waiting"
+                        if database_state == "degraded"
+                        else "scheduler database is reachable"
+                    ),
+                    "details": {
+                        "schema_version": database["schema_version"],
+                        "pool_used": pool.get("used"),
+                        "pool_size": pool.get("size"),
+                        "pool_maximum": pool.get("maximum"),
+                        "pool_waiters": pool.get("waiters"),
+                        "active_sessions": database.get("active_sessions"),
+                        "blocked_sessions": database.get("blocked_sessions"),
+                        "oldest_transaction_seconds": database.get(
+                            "oldest_transaction_seconds"
+                        ),
+                    },
+                }
+            )
+        except Exception as error:
+            self.logger.warning(
+                "Operational PostgreSQL health probe failed: %s", type(error).__name__
+            )
+            dependencies.append(
+                {
+                    "name": "postgresql",
+                    "state": "bad",
+                    "latency_ms": None,
+                    "observed_at": observed_at,
+                    "summary": "scheduler database health probe failed",
+                    "details": {},
+                }
+            )
+
+        etcd_state_value = getattr(
+            self.etcd_client.get_connection_state(), "value", None
+        )
+        etcd_state = str(etcd_state_value or "unknown").lower()
+        watch_stats = self.etcd_client.get_watch_stats()
+        etcd_health = {
+            "connected": "ok",
+            "reconnecting": "degraded",
+            "disconnected": "degraded",
+            "failed": "bad",
+        }.get(etcd_state, "degraded")
+        dependencies.append(
+            {
+                "name": "etcd",
+                "state": etcd_health,
+                "latency_ms": None,
+                "observed_at": observed_at,
+                "summary": f"etcd client is {etcd_state}",
+                "details": {
+                    "connection_state": etcd_state,
+                    "active_watches": watch_stats.get("active_watches"),
+                    "event_queue_size": watch_stats.get("event_queue_size"),
+                    "reconnect_attempts": getattr(
+                        self.etcd_client, "_reconnect_attempts", None
+                    ),
+                    "last_success_age_seconds": max(
+                        0.0,
+                        time.time()
+                        - float(
+                            getattr(
+                                self.etcd_client,
+                                "_last_successful_operation",
+                                time.time(),
+                            )
+                        ),
+                    ),
+                },
+            }
+        )
+
+        discovery = self._discovery_readiness_snapshot()
+        discovery_summary = discovery["summary"]
+        discovery_state = {
+            "ready": "ok",
+            "degraded": "degraded",
+            "initializing": "degraded",
+        }.get(discovery["readiness"], "bad")
+        dependencies.append(
+            {
+                "name": "discovery",
+                "state": discovery_state,
+                "latency_ms": None,
+                "observed_at": discovery["observed_at"],
+                "summary": f"service discovery is {discovery['readiness']}",
+                "details": {
+                    "control_plane_ready": discovery["control_plane_ready"],
+                    "registered": discovery_summary["registered"],
+                    "ready": discovery_summary["ready"],
+                    "unready": discovery_summary["unready"],
+                    "checking": discovery_summary["checking"],
+                    "retrying": discovery_summary["retrying"],
+                    "errors": discovery_summary["error"],
+                },
+            }
+        )
+
+        gateway_state = "ok"
+        if not self.job_scheduler.running:
+            gateway_state = "bad"
+        elif not self.ready_event.is_set() or self.job_scheduler.paused:
+            gateway_state = "degraded"
+        dependencies.append(
+            {
+                "name": "gateway",
+                "state": gateway_state,
+                "latency_ms": None,
+                "observed_at": observed_at,
+                "summary": (
+                    "gateway control plane is ready"
+                    if gateway_state == "ok"
+                    else "gateway control plane is not fully available"
+                ),
+                "details": {
+                    "gateway_instance_id": self.gateway_instance_id,
+                    "control_plane_ready": self.ready_event.is_set(),
+                    "scheduler_running": self.job_scheduler.running,
+                    "scheduler_paused": self.job_scheduler.paused,
+                    "service_event_queue_size": self.service_events_queue.qsize(),
+                    "state_event_queue_size": self.state_events_queue.qsize(),
+                },
+            }
+        )
+
+        rank = {"ok": 0, "degraded": 1, "bad": 2}
+        overall = max(dependencies, key=lambda item: rank[item["state"]])["state"]
+        return {
+            "schema_version": "1.0",
+            "generated_at": observed_at,
+            "overall_state": overall,
+            "partial": any(item["state"] == "bad" for item in dependencies),
+            "dependencies": dependencies,
         }
 
     def _cancel_service_retry(self, key: str) -> None:

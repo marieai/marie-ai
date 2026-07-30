@@ -1,6 +1,8 @@
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from marie.scheduler.execution_planner import FlatJob
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
@@ -42,6 +44,19 @@ class InMemorySelection:
         return tuple(wi.id for _, wi in self.requested)
 
 
+@dataclass(frozen=True, slots=True)
+class _SelectionSample:
+    observed_at: float
+    elapsed_ms: float
+    outcome: str
+    reason: str | None
+    candidate_window: int
+    dispatch_capacity: int
+    candidates: int
+    requested: int
+    selected: int
+
+
 class InMemorySchedulingEngine:
     """Own regular-job capture, ranking, capacity capping, and local take."""
 
@@ -54,6 +69,90 @@ class InMemorySchedulingEngine:
         self._frontier = frontier
         self._planner = GlobalPriorityExecutionPlanner(
             sla_priority_interval_seconds=sla_priority_interval_seconds
+        )
+        self._selection_samples: deque[_SelectionSample] = deque(maxlen=256)
+
+    def diagnostics(self, window_seconds: float = 300.0) -> dict[str, Any]:
+        """Return bounded rolling selection latency and volume diagnostics."""
+        now = time.time()
+        samples = [
+            sample
+            for sample in self._selection_samples
+            if now - sample.observed_at <= window_seconds
+        ]
+        if not samples:
+            return {
+                "window_seconds": window_seconds,
+                "sample_count": 0,
+                "observed_seconds": 0.0,
+                "cycles_per_second": None,
+                "selected_per_second": None,
+                "totals": {"candidates": 0, "requested": 0, "selected": 0},
+                "latency_ms": {"p50": None, "p95": None, "max": None},
+                "last": None,
+            }
+
+        observed_seconds = max(0.0, samples[-1].observed_at - samples[0].observed_at)
+        rate_window = observed_seconds if observed_seconds >= 1.0 else None
+        latencies = sorted(sample.elapsed_ms for sample in samples)
+        selected = sum(sample.selected for sample in samples)
+        last = samples[-1]
+        return {
+            "window_seconds": window_seconds,
+            "sample_count": len(samples),
+            "observed_seconds": observed_seconds,
+            "cycles_per_second": (
+                len(samples) / rate_window if rate_window is not None else None
+            ),
+            "selected_per_second": (
+                selected / rate_window if rate_window is not None else None
+            ),
+            "totals": {
+                "candidates": sum(sample.candidates for sample in samples),
+                "requested": sum(sample.requested for sample in samples),
+                "selected": selected,
+            },
+            "latency_ms": {
+                "p50": _percentile(latencies, 0.50),
+                "p95": _percentile(latencies, 0.95),
+                "max": latencies[-1],
+            },
+            "last": {
+                "age_seconds": max(0.0, now - last.observed_at),
+                "outcome": last.outcome,
+                "reason": last.reason,
+                "candidate_window": last.candidate_window,
+                "dispatch_capacity": last.dispatch_capacity,
+                "candidates": last.candidates,
+                "requested": last.requested,
+                "selected": last.selected,
+            },
+        }
+
+    def _record_selection(
+        self,
+        *,
+        elapsed_ms: float,
+        outcome: str,
+        reason: str | None,
+        candidate_window: int,
+        dispatch_capacity: int,
+        candidates: int,
+        requested: int,
+        selected: int,
+    ) -> None:
+        self._selection_samples.append(
+            _SelectionSample(
+                observed_at=time.time(),
+                elapsed_ms=elapsed_ms,
+                outcome=outcome,
+                reason=reason,
+                candidate_window=candidate_window,
+                dispatch_capacity=dispatch_capacity,
+                candidates=candidates,
+                requested=requested,
+                selected=selected,
+            )
         )
 
     async def select_ready(
@@ -89,11 +188,12 @@ class InMemorySchedulingEngine:
             reason = (
                 "dispatch_capacity" if dispatch_capacity <= 0 else "executor_capacity"
             )
+            elapsed_ms = (time.perf_counter() - selection_started) * 1000.0
             scheduler_trace(
                 "scheduler_selection_completed",
                 outcome="skipped",
                 reason=reason,
-                elapsed_ms=(time.perf_counter() - selection_started) * 1000.0,
+                elapsed_ms=elapsed_ms,
                 candidate_window=candidate_window,
                 dispatch_capacity=dispatch_capacity,
                 slots_by_executor=dict(slot_items),
@@ -102,6 +202,16 @@ class InMemorySchedulingEngine:
                 requested=0,
                 selected=0,
                 job_ids=[],
+            )
+            self._record_selection(
+                elapsed_ms=elapsed_ms,
+                outcome="skipped",
+                reason=reason,
+                candidate_window=candidate_window,
+                dispatch_capacity=dispatch_capacity,
+                candidates=0,
+                requested=0,
+                selected=0,
             )
             return InMemorySelection(
                 (), (), (), (), candidate_window, slot_items, (), (), (), ()
@@ -195,11 +305,12 @@ class InMemorySchedulingEngine:
             selected=len(selected),
             job_ids=[wi.id for wi in selected],
         )
+        elapsed_ms = (time.perf_counter() - selection_started) * 1000.0
         scheduler_trace(
             "scheduler_selection_completed",
             outcome="completed",
             started_ts_unix=selection_started_at,
-            elapsed_ms=(time.perf_counter() - selection_started) * 1000.0,
+            elapsed_ms=elapsed_ms,
             capture_ms=capture_ms,
             rank_ms=rank_ms,
             cap_ms=cap_ms,
@@ -214,6 +325,16 @@ class InMemorySchedulingEngine:
             stale_heap_entries=capture.stale_heap_entries,
             job_ids=[wi.id for wi in selected],
         )
+        self._record_selection(
+            elapsed_ms=elapsed_ms,
+            outcome="completed",
+            reason=None,
+            candidate_window=candidate_window,
+            dispatch_capacity=dispatch_capacity,
+            candidates=len(candidates),
+            requested=len(requested),
+            selected=len(selected),
+        )
         return InMemorySelection(
             candidates=candidates,
             ranked=ranked,
@@ -226,6 +347,11 @@ class InMemorySchedulingEngine:
             eligible_by_dag=tuple(sorted(capture.eligible_by_dag.items())),
             captured_by_dag=tuple(sorted(capture.captured_by_dag.items())),
         )
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    index = min(len(values) - 1, max(0, round(percentile * (len(values) - 1))))
+    return values[index]
 
 
 def _limit_to_slots(

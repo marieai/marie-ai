@@ -186,7 +186,47 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
         in schema_query
     )
     assert "VALUES ('default')" in schema_query
-    assert "VALUES ('76')" in schema_query
+    assert "VALUES ('82')" in schema_query
+    assert (
+        "CREATE OR REPLACE FUNCTION marie_scheduler.monitor_system_throughput("
+        in schema_query
+    )
+    assert (
+        "CREATE OR REPLACE FUNCTION marie_scheduler.monitor_planner_throughput("
+        in schema_query
+    )
+    assert (
+        "CREATE OR REPLACE FUNCTION marie_scheduler.monitor_task_throughput("
+        in schema_query
+    )
+    assert (
+        "CREATE OR REPLACE FUNCTION marie_scheduler.get_operational_dag("
+        in schema_query
+    )
+    assert (
+        "CREATE OR REPLACE FUNCTION marie_scheduler.list_operational_jobs("
+        in schema_query
+    )
+    assert (
+        "CREATE OR REPLACE FUNCTION marie_scheduler.list_operational_attempts("
+        in schema_query
+    )
+    assert (
+        "CREATE OR REPLACE FUNCTION marie_scheduler.list_operational_events("
+        in schema_query
+    )
+    assert (
+        "CREATE OR REPLACE FUNCTION marie_scheduler.get_operational_flow("
+        in schema_query
+    )
+    assert (
+        "CREATE OR REPLACE FUNCTION marie_scheduler.get_operational_database_health()"
+        in schema_query
+    )
+    assert (
+        "CREATE OR REPLACE FUNCTION "
+        "marie_scheduler.list_operational_execution_history(" in schema_query
+    )
     assert "priority INTEGER NOT NULL DEFAULT 0" in schema_query
     assert "task_count INTEGER NOT NULL DEFAULT 0" in schema_query
     assert "backfill_dag_projection_on_job_insert" not in schema_query
@@ -864,6 +904,16 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
             True,
             True,
             True,
+            True,
+            True,
+            True,
+            True,
+            True,
+            True,
+            True,
+            True,
+            True,
+            True,
             (
                 "run_attempt_id lease_owner = _run_owner INSERT INTO "
                 "marie_scheduler.job_attempt _gateway_instance_id "
@@ -887,7 +937,47 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
         "marie_scheduler.admission_candidate_dags(integer,integer,uuid[])",
     )
 
-    _, activation_query, _ = connection.calls[5]
+    throughput_functions = [
+        call[2][0] for call in connection.calls[5:8]
+    ]
+    assert throughput_functions == [
+        "marie_scheduler.monitor_system_throughput(integer,text)",
+        "marie_scheduler.monitor_planner_throughput(integer,text)",
+        "marie_scheduler.monitor_task_throughput(integer,text)",
+    ]
+
+    _, operational_query, operational_params = connection.calls[8]
+    assert "to_regprocedure" in operational_query
+    assert operational_params == (
+        "marie_scheduler.get_operational_dag(uuid,integer,integer,integer)",
+    )
+
+    _, jobs_query, jobs_params = connection.calls[9]
+    assert "to_regprocedure" in jobs_query
+    assert jobs_params == (
+        "marie_scheduler.list_operational_jobs(integer,integer,text[],text,"
+        "text,text,text,uuid,integer,integer,integer)",
+    )
+
+    assert connection.calls[10][2] == (
+        "marie_scheduler.list_operational_attempts(integer,integer,text[],text,"
+        "text,text,text,text,integer,integer)",
+    )
+    assert connection.calls[11][2] == (
+        "marie_scheduler.list_operational_events(integer,timestamptz,text,integer,"
+        "text,text,text)",
+    )
+    assert connection.calls[12][2] == (
+        "marie_scheduler.get_operational_flow(integer,text,integer)",
+    )
+    assert connection.calls[13][2] == (
+        "marie_scheduler.get_operational_database_health()",
+    )
+    assert connection.calls[14][2] == (
+        "marie_scheduler.list_operational_execution_history(uuid,uuid,integer,integer)",
+    )
+
+    _, activation_query, _ = connection.calls[15]
     assert "p.pronargs = 5" in activation_query
     assert all(
         "scheduler_attempt_invariant_checks" not in query

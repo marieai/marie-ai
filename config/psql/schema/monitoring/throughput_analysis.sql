@@ -5,15 +5,16 @@
 --   task throughput          completed jobs (one job is one query-plan task)
 --   executor task throughput completed jobs excluding scheduler-local control nodes
 --
--- Install this file once, then call the functions with ordinary SQL:
---   SELECT * FROM marie_scheduler.monitor_system_throughput(24, NULL);
---   SELECT * FROM marie_scheduler.monitor_planner_throughput(24, NULL);
---   SELECT * FROM marie_scheduler.monitor_task_throughput(24, NULL);
+-- Scheduler schema bootstrap installs this file idempotently. Call the
+-- functions with ordinary SQL:
+--   SELECT * FROM {schema}.monitor_system_throughput(24, NULL);
+--   SELECT * FROM {schema}.monitor_planner_throughput(24, NULL);
+--   SELECT * FROM {schema}.monitor_task_throughput(24, NULL);
 
 -- Overall and hourly system throughput. The window_total row contains average
 -- hourly rates. Hour rows contain actual counts; the current hour is marked as
 -- partial and should not be compared directly with a completed clock hour.
-CREATE OR REPLACE FUNCTION marie_scheduler.monitor_system_throughput(
+CREATE OR REPLACE FUNCTION {schema}.monitor_system_throughput(
     p_lookback_hours integer DEFAULT 24,
     p_planner_name text DEFAULT NULL
 )
@@ -77,7 +78,7 @@ WITH params AS (
         0::bigint AS tasks_expired,
         0::bigint AS tasks_cancelled,
         0::bigint AS tasks_skipped
-    FROM marie_scheduler.dag d
+    FROM {schema}.dag d
     CROSS JOIN bounds b
     WHERE d.created_on >= b.window_start
       AND d.created_on < b.observed_at
@@ -98,7 +99,7 @@ WITH params AS (
         0,
         0,
         0
-    FROM marie_scheduler.dag d
+    FROM {schema}.dag d
     CROSS JOIN bounds b
     WHERE d.completed_on >= b.window_start
       AND d.completed_on < b.observed_at
@@ -131,8 +132,8 @@ WITH params AS (
         CASE WHEN j.state::text = 'expired' THEN 1 ELSE 0 END,
         CASE WHEN j.state::text = 'cancelled' THEN 1 ELSE 0 END,
         CASE WHEN j.state::text = 'skipped' THEN 1 ELSE 0 END
-    FROM marie_scheduler.job j
-    JOIN marie_scheduler.dag d ON d.id = j.dag_id
+    FROM {schema}.job j
+    JOIN {schema}.dag d ON d.id = j.dag_id
     CROSS JOIN bounds b
     WHERE j.completed_on >= b.window_start
       AND j.completed_on < b.observed_at
@@ -294,7 +295,7 @@ $function$;
 
 -- Window-total and hourly throughput by query planner. Missing hours are
 -- omitted for planners with no activity in that hour.
-CREATE OR REPLACE FUNCTION marie_scheduler.monitor_planner_throughput(
+CREATE OR REPLACE FUNCTION {schema}.monitor_planner_throughput(
     p_lookback_hours integer DEFAULT 24,
     p_planner_name text DEFAULT NULL
 )
@@ -342,7 +343,7 @@ WITH params AS (
         0::bigint AS tasks_failed,
         0::bigint AS tasks_expired,
         0::bigint AS tasks_cancelled
-    FROM marie_scheduler.dag d
+    FROM {schema}.dag d
     CROSS JOIN bounds b
     WHERE d.created_on >= b.window_start
       AND d.created_on < b.observed_at
@@ -362,7 +363,7 @@ WITH params AS (
         0,
         0,
         0
-    FROM marie_scheduler.dag d
+    FROM {schema}.dag d
     CROSS JOIN bounds b
     WHERE d.completed_on >= b.window_start
       AND d.completed_on < b.observed_at
@@ -394,8 +395,8 @@ WITH params AS (
         CASE WHEN j.state::text = 'failed' THEN 1 ELSE 0 END,
         CASE WHEN j.state::text = 'expired' THEN 1 ELSE 0 END,
         CASE WHEN j.state::text = 'cancelled' THEN 1 ELSE 0 END
-    FROM marie_scheduler.job j
-    JOIN marie_scheduler.dag d ON d.id = j.dag_id
+    FROM {schema}.job j
+    JOIN {schema}.dag d ON d.id = j.dag_id
     CROSS JOIN bounds b
     WHERE j.completed_on >= b.window_start
       AND j.completed_on < b.observed_at
@@ -445,7 +446,7 @@ $function$;
 -- Window-total and hourly query-plan task throughput. Task name comes from
 -- metadata.name and endpoint comes from metadata.on; queue name is included
 -- to expose routing.
-CREATE OR REPLACE FUNCTION marie_scheduler.monitor_task_throughput(
+CREATE OR REPLACE FUNCTION {schema}.monitor_task_throughput(
     p_lookback_hours integer DEFAULT 24,
     p_planner_name text DEFAULT NULL
 )
@@ -505,8 +506,8 @@ WITH params AS (
         j.state::text AS terminal_state,
         EXTRACT(EPOCH FROM (j.completed_on - j.started_on))
             AS execution_seconds
-    FROM marie_scheduler.job j
-    JOIN marie_scheduler.dag d ON d.id = j.dag_id
+    FROM {schema}.job j
+    JOIN {schema}.dag d ON d.id = j.dag_id
     CROSS JOIN bounds b
     WHERE j.completed_on >= b.window_start
       AND j.completed_on < b.observed_at

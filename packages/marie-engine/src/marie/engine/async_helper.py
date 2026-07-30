@@ -2,6 +2,54 @@ import asyncio
 import contextvars
 import queue
 import threading
+from typing import Any, Coroutine, TypeVar
+
+T = TypeVar("T")
+
+
+class AsyncLoopRunner:
+    """Run coroutines on one long-lived event loop."""
+
+    def __init__(self, name: str) -> None:
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._ready = threading.Event()
+        self._closed = False
+        self._thread = threading.Thread(target=self._run_loop, name=name, daemon=True)
+        self._thread.start()
+        self._ready.wait()
+
+    def run(self, coroutine: Coroutine[Any, Any, T]) -> T:
+        if self._closed or self._loop is None:
+            coroutine.close()
+            raise RuntimeError("Async loop runner is closed")
+        return asyncio.run_coroutine_threadsafe(coroutine, self._loop).result()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        if threading.current_thread() is not self._thread:
+            self._thread.join()
+
+    def _run_loop(self) -> None:
+        loop = asyncio.new_event_loop()
+        self._loop = loop
+        asyncio.set_event_loop(loop)
+        self._ready.set()
+        try:
+            loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
 
 
 def run_coroutine_in_current_loop(coroutine):

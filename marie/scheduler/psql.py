@@ -1913,11 +1913,21 @@ class PostgreSQLJobScheduler(JobScheduler):
 
     async def debug_info(self) -> Dict[str, Any]:
         """Return a diagnostic snapshot of the scheduler runtime."""
-        return await self.diagnostics.snapshot(
+        snapshot = await self.diagnostics.snapshot(
             running=self.running,
             paused=self._paused,
             fetch_counter=self._fetch_counter,
         )
+        pending = len(self._pending_dispatches)
+        limit = self.dispatch_confirmation_max_in_flight
+        snapshot['dispatch'] = {
+            'pending_confirmations': pending,
+            'confirmation_limit': limit,
+            'available_confirmations': max(0, limit - pending),
+            'utilization_pct': pending / limit * 100.0 if limit > 0 else None,
+            'counters': dict(sorted(self._scheduler_counters.items())),
+        }
+        return snapshot
 
     async def enqueue(
         self,

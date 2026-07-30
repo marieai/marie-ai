@@ -364,6 +364,11 @@ class AsyncPostgresConnectionPool(AsyncPostgresPool):
             await self._pool.close()
             self._pool = None
 
+    def stats(self) -> dict[str, int]:
+        if self._pool is None:
+            return {}
+        return {str(name): int(value) for name, value in self._pool.get_stats().items()}
+
     async def initialize_dsn(
         self, dsn: str, *, min_size: int = 1, max_size: int = 10
     ) -> None:

@@ -47,6 +47,150 @@ class SchedulerDiagnostics:
         self._job_state_counts: dict[str, Any] = {'queues': {}}
         self._dag_state_counts: dict[str, Any] = {'queues': {}}
 
+    async def jobs(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        states: list[str] | None,
+        attention: str,
+        queue: str | None,
+        search: str | None,
+        sort: str,
+    ) -> dict[str, Any]:
+        return await self.repository.list_operational_jobs(
+            limit=limit,
+            offset=offset,
+            states=states,
+            attention=attention,
+            queue=queue,
+            search=search,
+            sort=sort,
+        )
+
+    async def job(self, job_id: str) -> dict[str, Any] | None:
+        return await self.repository.get_operational_job(job_id)
+
+    async def execution_history(
+        self,
+        *,
+        job_id: str | None = None,
+        dag_id: str | None = None,
+        limit: int,
+        offset: int,
+    ) -> dict[str, Any] | None:
+        return await self.repository.list_operational_execution_history(
+            job_id=job_id,
+            dag_id=dag_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def attempts(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        states: list[str] | None,
+        attention: str,
+        gateway: str | None,
+        executor: str | None,
+        search: str | None,
+        sort: str,
+    ) -> dict[str, Any]:
+        return await self.repository.list_operational_attempts(
+            limit=limit,
+            offset=offset,
+            states=states,
+            attention=attention,
+            gateway=gateway,
+            executor=executor,
+            search=search,
+            sort=sort,
+        )
+
+    async def events(
+        self,
+        *,
+        limit: int,
+        before_at: datetime | None,
+        before_id: str | None,
+        window_seconds: int,
+        severity: str | None,
+        component: str | None,
+        search: str | None,
+    ) -> dict[str, Any]:
+        return await self.repository.list_operational_events(
+            limit=limit,
+            before_at=before_at,
+            before_id=before_id,
+            window_seconds=window_seconds,
+            severity=severity,
+            component=component,
+            search=search,
+        )
+
+    async def flow(
+        self,
+        *,
+        window_seconds: int,
+        queue: str | None,
+        queue_limit: int,
+    ) -> dict[str, Any]:
+        return await self.repository.get_operational_flow(
+            window_seconds=window_seconds,
+            queue=queue,
+            queue_limit=queue_limit,
+        )
+
+    async def database_health(self) -> dict[str, Any]:
+        return await self.repository.get_operational_database_health()
+
+    async def dags(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        states: list[str] | None,
+        attention: str,
+        queue: str | None,
+        search: str | None,
+        sort: str,
+    ) -> dict[str, Any]:
+        return await self.repository.list_operational_dags(
+            limit=limit,
+            offset=offset,
+            states=states,
+            attention=attention,
+            queue=queue,
+            search=search,
+            sort=sort,
+        )
+
+    async def dag(
+        self, dag_id: str, *, job_limit: int, job_offset: int
+    ) -> dict[str, Any] | None:
+        return await self.repository.get_operational_dag(
+            dag_id,
+            job_limit=job_limit,
+            job_offset=job_offset,
+        )
+
+    async def throughput(
+        self,
+        *,
+        lookback_hours: int,
+        planner: str | None,
+        planner_limit: int,
+        task_limit: int,
+    ) -> dict[str, Any]:
+        return await self.repository.get_operational_throughput(
+            lookback_hours=lookback_hours,
+            planner=planner,
+            planner_limit=planner_limit,
+            task_limit=task_limit,
+        )
+
     async def snapshot(
         self,
         *,
@@ -95,6 +239,12 @@ class SchedulerDiagnostics:
             'job_state_counts': self._job_state_counts,
             'dag_state_counts': self._dag_state_counts,
         }
+        selection_diagnostics = getattr(self.scheduling_engine, 'diagnostics', None)
+        if callable(selection_diagnostics):
+            try:
+                debug_data['selection'] = selection_diagnostics()
+            except Exception as error:
+                debug_data['selection_error'] = type(error).__name__
         if job_error:
             debug_data['job_state_counts_error'] = job_error
         if dag_error:

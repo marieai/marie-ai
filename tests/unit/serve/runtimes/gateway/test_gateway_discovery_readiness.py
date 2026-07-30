@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -261,6 +262,56 @@ async def test_unready_registration_is_exposed_with_retry_details():
 
     processor.cancel()
     await asyncio.gather(processor, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_operational_health_combines_live_dependencies_without_secrets() -> None:
+    gateway = _gateway()
+    gateway.ready_event.set()
+    gateway.state_events_queue = asyncio.Queue()
+    gateway.gateway_instance_id = "gateway-1"
+    gateway.job_scheduler = SimpleNamespace(
+        running=True,
+        paused=False,
+        diagnostics=SimpleNamespace(
+            database_health=AsyncMock(
+                return_value={
+                    "latency_ms": 12.0,
+                    "schema_version": 80,
+                    "pool": {
+                        "used": 8,
+                        "size": 10,
+                        "maximum": 10,
+                        "waiters": 1,
+                    },
+                    "active_sessions": 7,
+                    "blocked_sessions": 0,
+                    "oldest_transaction_seconds": 4.0,
+                }
+            )
+        ),
+    )
+    gateway.etcd_client = SimpleNamespace(
+        get_connection_state=lambda: SimpleNamespace(value="connected"),
+        get_watch_stats=lambda: {"active_watches": 3, "event_queue_size": 0},
+        _reconnect_attempts=0,
+        _last_successful_operation=time.time(),
+    )
+
+    snapshot = await gateway._operational_health_snapshot()
+
+    assert snapshot["overall_state"] == "degraded"
+    assert [item["name"] for item in snapshot["dependencies"]] == [
+        "postgresql",
+        "etcd",
+        "discovery",
+        "gateway",
+    ]
+    assert snapshot["dependencies"][0]["details"]["pool_waiters"] == 1
+    serialized = repr(snapshot)
+    assert "password" not in serialized
+    assert "query" not in serialized
+    assert "connection_string" not in serialized
 
 
 @pytest.mark.asyncio

@@ -1,34 +1,12 @@
 import asyncio
 import logging
 import os
+import threading
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from openai import (
-    APIConnectionError,
-    APIError,
-    APITimeoutError,
-    AsyncOpenAI,
-    AuthenticationError,
-    RateLimitError,
-)
-from openai.types.chat import ChatCompletion
-from openinference.semconv.trace import SpanAttributes
-from opentelemetry import context as otel_context
-from opentelemetry import trace as otel_trace
-from opentelemetry.trace import StatusCode
-from PIL import Image
-from pydantic import BaseModel
-from tenacity import (
-    retry,
-    retry_if_exception,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
-
-from marie.engine.async_helper import run_coroutine_in_current_loop
+from marie.engine.async_helper import AsyncLoopRunner
 from marie.engine.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
@@ -59,6 +37,28 @@ from marie.instrumentation import (
     start_span,
 )
 from marie.instrumentation.openinference import infer_llm_system
+from openai import (
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    AsyncOpenAI,
+    AuthenticationError,
+    RateLimitError,
+)
+from openai.types.chat import ChatCompletion
+from openinference.semconv.trace import SpanAttributes
+from opentelemetry import context as otel_context
+from opentelemetry import trace as otel_trace
+from opentelemetry.trace import StatusCode
+from PIL import Image
+from pydantic import BaseModel
+from tenacity import (
+    retry,
+    retry_if_exception,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 logger = logging.getLogger(__name__)
 _tracer = get_tracer("marie.engine.batch_processor")
@@ -173,6 +173,8 @@ class BatchProcessor:
         self.default_completion_params = _fallbacks
         self._shared_request_semaphore: Optional[asyncio.Semaphore] = None
         self._shared_request_semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._direct_runner: AsyncLoopRunner | None = None
+        self._direct_runner_lock = threading.Lock()
 
         # Circuit breaker keyed by backend_address
         self._circuit_breaker = CircuitBreaker(
@@ -192,30 +194,23 @@ class BatchProcessor:
         )
         self._queue_mode_logged = False
 
-    def _queue_enabled(self) -> bool:
-        config = getattr(self, "_queue_config", None)
-        return bool(config and config.enabled)
-
     def _log_queue_mode_once(self) -> None:
-        if getattr(self, "_queue_mode_logged", False):
+        if self._queue_mode_logged:
             return
         self._queue_mode_logged = True
-        config = getattr(self, "_queue_config", None)
-        if config is None:
-            return
-        if config.enabled:
+        if self._queue_config.enabled:
             self.logger.info(
                 "LLM dispatch queue enabled: pool=%s valkey_configured=%s max_inline_payload_bytes=%s",
-                config.pool_id,
-                bool(config.valkey_url),
-                config.max_inline_payload_bytes,
+                self._queue_config.pool_id,
+                bool(self._queue_config.valkey_url),
+                self._queue_config.max_inline_payload_bytes,
             )
         else:
             env_enabled = os.getenv("LLM_QUEUE_ENABLED")
             self.logger.info(
                 "LLM dispatch queue disabled: env LLM_QUEUE_ENABLED=%r pool=%s",
                 env_enabled,
-                config.pool_id,
+                self._queue_config.pool_id,
             )
 
     def _get_queue_client(self) -> ListQueueClient:
@@ -258,19 +253,28 @@ class BatchProcessor:
         )
 
     def close(self) -> None:
-        queued_executor = getattr(self, "_queued_executor", None)
-        if queued_executor is not None:
-            close = getattr(queued_executor, "close", None)
-            if callable(close):
-                close()
+        if self._queued_executor is not None:
+            self._queued_executor.close()
             self._queued_executor = None
 
-        queue_client = getattr(self, "_queue_client", None)
-        if queue_client is not None:
-            close = getattr(queue_client, "close", None)
-            if callable(close):
-                close()
+        if self._queue_client is not None:
+            self._queue_client.close()
             self._queue_client = None
+
+        if isinstance(self.client, AsyncOpenAI) and not self.client.is_closed():
+            runner = self._direct_runner or self._get_direct_runner()
+            runner.run(self.client.close())
+        if self._direct_runner is not None:
+            self._direct_runner.close()
+            self._direct_runner = None
+
+    def _get_direct_runner(self) -> AsyncLoopRunner:
+        with self._direct_runner_lock:
+            if self._direct_runner is None:
+                self._direct_runner = AsyncLoopRunner(
+                    name=f"openai-client-{self.model_string}"
+                )
+            return self._direct_runner
 
     def _get_request_semaphore(self) -> asyncio.Semaphore:
         loop = asyncio.get_running_loop()
@@ -679,7 +683,7 @@ class BatchProcessor:
 
         try:
             self._log_queue_mode_once()
-            if self._queue_enabled():
+            if self._queue_config.enabled:
                 effective_pool_id = _resolve_effective_queue_pool_id(
                     self._queue_config.pool_id,
                     metadata,
@@ -703,7 +707,7 @@ class BatchProcessor:
                     request_id,
                     len(calls),
                 )
-                batch_results = run_coroutine_in_current_loop(
+                batch_results = self._get_direct_runner().run(
                     self.load_batched_completion_calls(
                         calls=calls,
                         request_id=request_id,
