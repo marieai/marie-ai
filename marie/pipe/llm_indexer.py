@@ -1,4 +1,3 @@
-from abc import ABC
 from collections import defaultdict
 from typing import List, Optional
 
@@ -9,7 +8,7 @@ from marie.logging_core.logger import MarieLogger
 from marie.pipe.base import PipelineComponent, PipelineContext, PipelineResult
 
 
-class LLMIndexerPipelineComponent(PipelineComponent, ABC):
+class LLMIndexerPipelineComponent(PipelineComponent):
     def __init__(
         self,
         name: str,
@@ -17,6 +16,7 @@ class LLMIndexerPipelineComponent(PipelineComponent, ABC):
         llm_tasks: list,
         logger: MarieLogger = None,
         silence_exceptions: bool = False,
+        root_asset_path: str = None,
     ) -> None:
         """
         Initialize the IndexerPipelineComponent.
@@ -32,6 +32,7 @@ class LLMIndexerPipelineComponent(PipelineComponent, ABC):
             raise ValueError("document_indexers must be a dictionary")
         self.document_indexers = document_indexers
         self.llm_tasks = llm_tasks
+        self.root_asset_path = root_asset_path
 
     def predict(
         self,
@@ -93,31 +94,25 @@ class LLMIndexerPipelineComponent(PipelineComponent, ABC):
                     boxes=boxes,
                     lines=lines,
                     tasks=self.llm_tasks,
+                    root_asset_path=self.root_asset_path,
                 )
 
                 task_meta = defaultdict(list)
                 for idx, document in enumerate(results):
                     assert DOC_KEY_INDEXER in document.tags
-                    assert all(
-                        task_name in document.tags[DOC_KEY_INDEXER]
-                        for task_name in self.llm_tasks
-                    )
 
-                    indexed_values_by_task = document.tags[DOC_KEY_INDEXER]
-                    for task_name, (
-                        indexed_values,
-                        error_data,
-                    ) in indexed_values_by_task.items():
+                    indexing_by_task = document.tags[DOC_KEY_INDEXER]
+                    for task_name, indexed_result in indexing_by_task.items():
                         if task_name not in self.llm_tasks:
                             continue
-
                         page_task_meta = {
-                            "page": str(idx),
-                            "indexing": indexed_values,
                             "indexer": key,
+                            "page": indexed_result.page,
                         }
-                        if error_data:
-                            page_task_meta["error"] = error_data
+                        if indexed_result.error:
+                            page_task_meta["error"] = indexed_result.value
+                        else:
+                            page_task_meta["indexing"] = indexed_result.value
                         task_meta[task_name].append(page_task_meta)
 
                 for task_name, meta in task_meta.items():
