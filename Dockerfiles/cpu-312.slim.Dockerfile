@@ -47,6 +47,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     /opt/venv/bin/marie gateway --help >/dev/null && \
     /opt/venv/bin/python -c 'from marie.serve.runtimes.gateway.marie import MarieGateway; assert MarieGateway.__name__ == "MarieGateway"' && \
     /opt/venv/bin/python -c 'import sys; from marie.api.routes import create_mcp_router; assert callable(create_mcp_router); assert "marie.agent" not in sys.modules' && \
+    /opt/venv/bin/python -c 'from rtree import index; index.Index()' && \
     /opt/venv/bin/python -c 'import importlib.util; blocked = ("albumentations", "cv2", "imagecodecs", "matplotlib", "networkx", "pandas", "pdf2image", "PIL", "pyarrow", "skimage", "torch", "torchvision", "wand"); assert not [name for name in blocked if importlib.util.find_spec(name)]'
 
 

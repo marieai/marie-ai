@@ -115,6 +115,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu24.04
 
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /bin/uv
+
 ARG TZ="Etc/UTC"
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown

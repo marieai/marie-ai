@@ -52,6 +52,64 @@ log_prompt() {
     exec 2>&2 # flush
 }
 
+check_remote_drift() {
+    local branch
+    local upstream
+    local counts
+    local local_ahead
+    local remote_ahead
+    local local_sha
+    local upstream_sha
+
+    if ! command -v git &> /dev/null; then
+        log_warn "Git is not available; remote source drift could not be verified"
+        return
+    fi
+
+    if ! git rev-parse --is-inside-work-tree &> /dev/null; then
+        log_warn "Not running in a Git worktree; remote source drift could not be verified"
+        return
+    fi
+
+    branch=$(git branch --show-current)
+    if [[ -z "$branch" ]]; then
+        log_warn "Detached HEAD; remote source drift could not be verified"
+        return
+    fi
+
+    if ! upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null); then
+        log_warn "Branch ${branch} has no upstream; remote source drift could not be verified"
+        return
+    fi
+
+    log_info "Refreshing Git upstream: ${upstream}"
+    if ! git fetch --quiet; then
+        log_warn "Failed to refresh ${upstream}; remote source drift could not be verified"
+        return
+    fi
+
+    if ! counts=$(git rev-list --left-right --count "HEAD...@{upstream}" 2>/dev/null); then
+        log_warn "Failed to compare HEAD with ${upstream}; remote source drift could not be verified"
+        return
+    fi
+    read -r local_ahead remote_ahead <<< "$counts"
+
+    if (( remote_ahead == 0 )); then
+        log_info "Git source is current with ${upstream}"
+        return
+    fi
+
+    local_sha=$(git rev-parse --short HEAD)
+    upstream_sha=$(git rev-parse --short '@{upstream}')
+    if (( local_ahead > 0 )); then
+        log_warn "Git branch ${branch} has diverged from ${upstream}: ${local_ahead} local and ${remote_ahead} remote commit(s)"
+    else
+        log_warn "Git branch ${branch} is behind ${upstream} by ${remote_ahead} commit(s)"
+    fi
+    log_warn "Local HEAD ${local_sha}; remote tip ${upstream_sha}. Building now may produce a stale image or version"
+    log_warn "Review missing commits with: git log --oneline HEAD..${upstream}"
+}
+
 show_profiles() {
     echo >&2
     log_info "Marie AI Docker Builder (Version: ${VERSION})"
@@ -410,6 +468,7 @@ main() {
         esac
     done
 
+    check_remote_drift
     check_prerequisites
 #    execute_post_commit_hook
 
