@@ -3,19 +3,55 @@ import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
-from marie.engine.output_parser import JSONOutputParserError, parse_json_markdown
 from pydantic import BaseModel, Field
 
+from marie.engine.output_parser import JSONOutputParserError, parse_json_markdown
 from marie.logging_core.predefined import default_logger as logger
-
-from ...utils.json import deserialize_value, load_json_file, to_json
-
-
-def identity(x, *args, **kwargs) -> str:
-    return x
+from marie.utils.json import load_json_file
 
 
-def append_ocr_lines(
+class LLMOutputModifier(BaseModel):
+    pattern: str
+    substitute: str | None
+
+
+class PageFilter(BaseModel):
+    task: str
+    pattern: dict | str
+
+
+class LLMTask(BaseModel):
+    name: str
+    prompt: str
+    prompt_mod_strategy: Optional[str] = "prompt_identity"
+    guided_json_schema: Optional[str] = None
+    chained_tasks: Optional[List[str]] = []
+    output_type: Optional[str] = "text"
+    store_results: Optional[bool] = True
+    output_mod: Optional[LLMOutputModifier] = None
+    page_filter: Optional[PageFilter] = None
+
+
+class LLMConfig(BaseModel):
+    name_or_path: str = Field(alias="_name_or_path")
+    engine_provider: Optional[str] = "vllm"
+    max_tokens: Optional[int] = 4096 * 2
+    multimodal: bool = True
+    tasks: List[LLMTask]
+    debug: Optional[Dict] = None
+
+
+class PageResult(BaseModel):
+    value: Any
+    page: int = 0
+    error: bool = False
+
+
+def md_wrap(preformatted_text, format_type: str = None):
+    ft = "" if format_type is None else format_type
+    return f"```{ft}\n{preformatted_text}\n```"
+
+def _append_ocr_lines(
     prompt: str, words: List[str] = None, lines: List[int] = None, **kwargs
 ) -> str:
     """
@@ -42,69 +78,22 @@ def append_ocr_lines(
     ]
     return f"{prompt}\n{md_wrap('\n'.join(numbered_lines))}"
 
-
-def append_text(prompt, text="", **kwargs) -> str:
-    return f"{prompt}\n{text}"
-
-
-def md_wrap(preformatted_text, format_type: str = None):
-    ft = "" if format_type is None else format_type
-    return f"```{ft}\n{preformatted_text}\n```"
-
-
-def parse_markdown_json(
-    markdown_json_str: str,
-) -> tuple[dict[str, Any] | list[Any], bool]:
+def parse_json_output(json_output: str) -> PageResult:
     try:
-        return parse_json_markdown(markdown_json_str), False
+        return PageResult(value=parse_json_markdown(json_output))
     except JSONOutputParserError:
-        return {"value": "ERROR", "reason": "JSON CONVERSION FAILURE"}, True
-
-
-def parse_json_output(
-    json_output: str,
-) -> tuple[dict[str, Any] | list[Any], bool]:
-    return parse_markdown_json(json_output)
-
-
-def parse_text_output(text_output: str) -> tuple[str, bool]:
-    return text_output, False
-
+        return PageResult(value={"value": "ERROR", "reason": "JSON CONVERSION FAILURE"}, error=True)
 
 PROMPT_STRATEGIES = {
-    "prompt_identity": identity,
-    "append_ocr_lines": append_ocr_lines,
-    "append_chained_output": append_text,
+    "prompt_identity": lambda prompt, *args, **kwargs: prompt,
+    "append_chained_output": lambda prompt, text="", **kwargs: f"{prompt}\n{text}",
+    "append_ocr_lines": _append_ocr_lines,
 }
 
 CONVERSION_STRATEGIES = {
-    "text": parse_text_output,
+    "text": lambda text: PageResult(value=text),
     "json": parse_json_output,
 }
-
-
-class LLMOutputModifier(BaseModel):
-    pattern: str
-    substitute: str | None
-
-
-class LLMTask(BaseModel):
-    name: str
-    prompt: str
-    prompt_mod_strategy: Optional[str] = "prompt_identity"
-    guided_json_schema: Optional[str] = None
-    chained_tasks: Optional[List[str]] = None
-    output_type: Optional[str] = "text"
-    store_results: Optional[bool] = True
-    output_mod: Optional[LLMOutputModifier] = None
-
-
-class LLMConfig(BaseModel):
-    name_or_path: str = Field(alias="_name_or_path")
-    engine_provider: Optional[str] = "vllm"
-    tasks: List[LLMTask]
-    debug: Optional[Dict] = None
-
 
 def initialize_tasks(tasks: List[LLMTask], task_files_path: str):
     # TODO: Ensure tasks can execute in current or ensure it with an execution graph
@@ -140,17 +129,8 @@ def initialize_tasks(tasks: List[LLMTask], task_files_path: str):
             raise NotImplementedError(f"Unknown output type {task.output_type}")
 
 
-def parse_task_output(task_outputs: List[str], output_type):
-    extract_predictions = []
-    for task_output in task_outputs:
-        prediction, conversion_failure = CONVERSION_STRATEGIES[output_type](task_output)
-        error_data = None
-        if conversion_failure:
-            prediction, error_data = None, prediction
-
-        extract_predictions.append((prediction, error_data))
-
-    return extract_predictions
+def parse_task_output(task_outputs: List[str], output_type) -> List[PageResult]:
+    return [CONVERSION_STRATEGIES[output_type](task_output) for task_output in task_outputs]
 
 
 def modify_task(task, pattern, substitute):
@@ -180,12 +160,52 @@ def modify_task_dict(task_dict: Dict, pattern, substitute):
 
 
 def modify_outputs(
-    task_outputs: List[str | Dict | List], task_output_mod: LLMOutputModifier = None
-):
+    task_outputs: List[PageResult],
+    task_output_mod: Optional[LLMOutputModifier] = None
+) -> List[PageResult]:
     if task_output_mod is None:
         return task_outputs
+
     pattern, substitute = task_output_mod.pattern, task_output_mod.substitute
-    return [
-        (modify_task(task_output, pattern, substitute), error_data)
-        for task_output, error_data in task_outputs
-    ]
+    for task_output in task_outputs:
+        task_output.value = modify_task(task_output.value, pattern, substitute)
+    return task_outputs
+
+
+def filter_pages(pattern: Any, page_output: dict[int, Any], page_subset=None):
+    """
+    Filters pages that match a given pattern from a provided page output dictionary.
+
+    This function processes a given pattern and filters the pages from a page output dictionary.
+    It checks the presence of the pattern in the content of the page's dictionary output and
+    returns a sorted list of matching page numbers. A subset of pages to filter can optionally
+    be provided.
+
+    Arguments:
+        pattern: Any
+            The pattern to match against the page output. Currently, must be a dictionary.
+        page_output: dict[int, Any]
+            A dictionary where keys are page numbers and values are tuples of page-specific
+            data and an error indicator.
+        page_subset: Optional[Iterable[int]]
+            An optional subset of page numbers to filter from. If None, all pages are considered.
+
+    Returns:
+        list[int]: A sorted list of page numbers that match the given pattern.
+    """
+    if isinstance(pattern, dict):
+        matching_pages = set()
+        pages = page_subset or page_output.keys()
+        for page_num, (page_output, error) in page_output.items():
+            if page_num not in pages:
+                continue
+            if not isinstance(page_output, dict):
+                continue
+            if all(page_output.get(k) == v for k, v in pattern.items()):
+                matching_pages.add(page_num)
+        return sorted(matching_pages)
+    # NOTE: Add other filtering methods as needed
+    # elif isinstance(pattern, str):
+    #     pass
+
+    return sorted(page_output.keys())

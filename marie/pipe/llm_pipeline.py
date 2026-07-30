@@ -14,6 +14,7 @@ from marie.ocr.util import get_known_ocr_engines
 from marie.pipe.base_pipeline import BasePipeline
 from marie.pipe.components import (
     burst_frames,
+    is_component_enabled,
     load_pipeline,
     ocr_frames,
     update_existing_meta,
@@ -164,7 +165,7 @@ class LLMPipeline(BasePipeline):
 
         # Track pipline execution time for metrics
         with TimeContext(f"### {self.pipeline_name} LLMPipeline info") as tc:
-            self.execute_llm_pipeline(frames, metadata, ocr_results, runtime_conf)
+            self.execute_llm_pipeline(frames, metadata, ocr_results, runtime_conf, root_asset_dir)
             metadata[f"delta_time_{self.pipeline_name}"] = tc.now()
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
@@ -172,7 +173,7 @@ class LLMPipeline(BasePipeline):
 
         return metadata
 
-    def execute_llm_pipeline(self, frames, metadata, ocr_results, runtime_conf: dict):
+    def execute_llm_pipeline(self, frames, metadata, ocr_results, runtime_conf: dict, root_asset_dir: str = None):
         if self.classifier_groups:
             if "classifications" not in metadata:
                 metadata["classifications"] = []
@@ -183,29 +184,43 @@ class LLMPipeline(BasePipeline):
         processing_group_pipeline = defaultdict(list)
         grouped_sub_classifiers = defaultdict(dict)
 
-        for group, classifier_group in self.classifier_groups.items():
-            classifier_component, sub_classifiers = self.build_classifier_component(
-                classifier_group, group
-            )
-            processing_group_pipeline[group].append(classifier_component)
-            grouped_sub_classifiers[group] = sub_classifiers
+        page_classifier_enabled = runtime_conf.get("page_classifier", {}).get(
+            "enabled",
+            is_component_enabled(
+                self.default_pipeline_config.get("page_classifier"), True
+            ),
+        )
+
+        if page_classifier_enabled:
+            for group, classifier_group in self.classifier_groups.items():
+                classifier_component, sub_classifiers = self.build_classifier_component(
+                    classifier_group, group
+                )
+                processing_group_pipeline[group].append(classifier_component)
+                grouped_sub_classifiers[group] = sub_classifiers
 
         llm_task_config = runtime_conf.get("llm_tasks", {})
         for group, indexer_group in self.indexer_groups.items():
             self.logger.info(
                 f"Processing llm pipeline/group :  {self.pipeline_name}, {group}"
             )
+            group_llm_tasks = []
+            for task, enabled in indexer_group.get("llm_tasks", {}).items():
+                runtime_task = llm_task_config.get(task, {})
+                if not runtime_task and enabled:
+                    self.logger.info(f"Using Default Task {task}")
+                    group_llm_tasks.append(task)
+                elif runtime_task.get("enabled", enabled):
+                    group_llm_tasks.append(task)
+                else:
+                    self.logger.info(f"Skipping Task {task} as it is disabled")
+
             processing_group_pipeline[group].append(
                 LLMIndexerPipelineComponent(
                     name="mmllm_pipeline_component",
                     document_indexers=indexer_group["indexers"],
-                    llm_tasks=[
-                        task
-                        for task in indexer_group.get("llm_tasks", [])
-                        if llm_task_config.get(task, {"enabled": True}).get(
-                            "enabled", True
-                        )
-                    ],
+                    llm_tasks=group_llm_tasks,
+                    root_asset_path=root_asset_dir,
                 )
             )
 

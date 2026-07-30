@@ -21,6 +21,7 @@ from marie.ocr.util import get_known_ocr_engines
 from marie.pipe.base_pipeline import BasePipeline
 from marie.pipe.components import (
     burst_frames,
+    is_component_enabled,
     load_pipeline,
     ocr_frames,
     setup_document_boundary,
@@ -288,19 +289,36 @@ class ExtractPipeline(BasePipeline):
         )
         self.logger.info(f"Executing pipeline runtime_conf : {runtime_conf}")
 
+        # Default to defaults set in the default pipeline config
         page_classifier_enabled = runtime_conf.get("page_classifier", {}).get(
-            "enabled", True
+            "enabled",
+            is_component_enabled(
+                self.default_pipeline_config.get("page_classifier"), True
+            ),
         )
-
-        page_indexer_enabled = runtime_conf.get("page_indexer", {}).get("enabled", True)
+        page_indexer_enabled = runtime_conf.get("page_indexer", {}).get(
+            "enabled",
+            is_component_enabled(
+                self.default_pipeline_config.get("page_indexer"), True
+            ),
+        )
         page_cleaner_enabled = runtime_conf.get("page_cleaner", {}).get(
-            "enabled", False
+            "enabled",
+            is_component_enabled(
+                self.default_pipeline_config.get("page_cleaner"), False
+            ),
         )  # default to False, client should enable
         page_boundary_enabled = runtime_conf.get("page_boundary", {}).get(
-            "enabled", True
+            "enabled",
+            is_component_enabled(
+                self.default_pipeline_config.get("page_boundary"), True
+            ),
         )
         template_matching_enabled = runtime_conf.get("template_matching", {}).get(
-            "enabled", True
+            "enabled",
+            is_component_enabled(
+                self.default_pipeline_config.get("template_matching"), True
+            ),
         )
 
         self.logger.info(f"Feature : classifier enabled : {page_classifier_enabled}")
