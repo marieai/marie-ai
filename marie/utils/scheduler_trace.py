@@ -83,7 +83,6 @@ _COMPACT_EVENTS = {
     "hydrated_dag_activation_failed",
     "postgres_pool_acquire_wait_done",
     "postgres_pool_acquire_timeout",
-    "postgres_operation",
     "scheduler_dag_sync_cycle_done",
     "scheduler_dag_sync_cycle_failed",
     "scheduler_dag_sync_cycle_skipped",

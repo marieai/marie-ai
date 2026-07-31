@@ -107,6 +107,18 @@ def test_scheduler_trace_compact_drops_noisy_events(monkeypatch, tmp_path):
     assert not trace_path.exists()
 
 
+def test_scheduler_trace_compact_drops_raw_postgres_operations(monkeypatch, tmp_path):
+    trace_path = tmp_path / "scheduler-trace.jsonl"
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_ENABLED", "true")
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PATH", str(trace_path))
+    monkeypatch.setenv("MARIE_SCHEDULER_TRACE_PROFILE", "compact")
+
+    scheduler_trace("postgres_operation", operation="execute", elapsed_ms=1.0)
+    flush_trace()
+
+    assert not trace_path.exists()
+
+
 def test_scheduler_trace_compact_keeps_full_batch_job_ids(monkeypatch, tmp_path):
     trace_path = tmp_path / "scheduler-trace.jsonl"
     monkeypatch.setenv("MARIE_SCHEDULER_TRACE_ENABLED", "true")

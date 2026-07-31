@@ -1,3 +1,4 @@
+import json
 from collections import Counter
 
 from tools.stress.analyze_scheduler_trace import (
@@ -17,12 +18,105 @@ from tools.stress.analyze_scheduler_trace import (
     _priority_refresh_success_count,
     _refresh_attempt_status,
     _workload_executors,
+    load_trace_window,
+    sample_whole_trace,
     summarize_job,
 )
 
 
 def trace_row(event: str, ts: float, **fields) -> dict:
     return {"event": event, "ts_unix": ts, **fields}
+
+
+def test_load_trace_window_reads_only_newest_events(tmp_path) -> None:
+    trace_path = tmp_path / "scheduler-trace.jsonl"
+    trace_path.write_text(
+        "\n".join(
+            json.dumps(
+                trace_row("candidate_built", float(index), job_id=f"job-{index}")
+            )
+            for index in range(5)
+        ),
+        encoding="utf-8",
+    )
+
+    grouped, rows, truncated = load_trace_window(trace_path, tail_events=2)
+
+    assert truncated is True
+    assert [row["job_id"] for row in rows] == ["job-3", "job-4"]
+    assert set(grouped) == {"job-3", "job-4"}
+
+
+def test_load_trace_window_reads_small_file_without_truncation(tmp_path) -> None:
+    trace_path = tmp_path / "scheduler-trace.jsonl"
+    trace_path.write_text(
+        json.dumps(trace_row("candidate_built", 1.0, job_id="job-1")) + "\n",
+        encoding="utf-8",
+    )
+
+    _, rows, truncated = load_trace_window(trace_path, tail_events=2)
+
+    assert truncated is False
+    assert [row["job_id"] for row in rows] == ["job-1"]
+
+
+def test_sample_whole_trace_scans_all_rows_with_bounded_samples(tmp_path) -> None:
+    trace_path = tmp_path / "scheduler-trace.jsonl"
+    trace_path.write_text(
+        "\n".join(
+            json.dumps(
+                trace_row(
+                    "gateway_dispatch_start",
+                    float(index),
+                    job_id=f"job-{index}",
+                )
+            )
+            for index in range(10)
+        ),
+        encoding="utf-8",
+    )
+
+    grouped, rows = sample_whole_trace(
+        trace_path,
+        event_sample_size=2,
+        group_sample_size=3,
+    )
+
+    assert rows.total_rows == 10
+    assert rows.event_counts["gateway_dispatch_start"] == 10
+    assert rows.rate_stats["gateway_dispatch_start"] == (10, 10 / 9, 9)
+    assert len(rows) == 2
+    assert len(grouped) == 3
+
+
+def test_sampled_trace_coverage_uses_exact_event_counts(tmp_path, capsys) -> None:
+    trace_path = tmp_path / "scheduler-trace.jsonl"
+    rows = [
+        trace_row("gateway_dispatch_start", float(index), job_id=f"job-{index}")
+        for index in range(10)
+    ] + [
+        trace_row(
+            "scheduler_job_event_received",
+            float(index) + 0.5,
+            job_id=f"job-{index}",
+            status="SUCCEEDED",
+        )
+        for index in range(10)
+    ]
+    trace_path.write_text(
+        "\n".join(json.dumps(row) for row in rows),
+        encoding="utf-8",
+    )
+    _, sampled_rows = sample_whole_trace(
+        trace_path,
+        event_sample_size=2,
+        group_sample_size=3,
+    )
+
+    _print_trace_coverage(sampled_rows)
+
+    output = capsys.readouterr().out
+    assert "scheduler: dispatch=10 admission=0 terminal_handler=10" in output
 
 
 def test_summary_reports_direct_durable_submission_latency() -> None:
